@@ -61,7 +61,7 @@ export function ImagePreview({ workdir, relPath, size, mtimeMs, sessionId }: Ima
       {lightboxOpen ? (
         <ImageLightbox src={src} sessionId={sessionId} onClose={() => setLightboxOpen(false)} />
       ) : null}
-      <div className="shrink-0 text-xs text-[#737373] dark:text-[#a3a3a3]">
+      <div className="shrink-0 text-xs text-[var(--text-secondary)]">
         {name} · {formatBytes(size)} ·{' '}
         {t('ccAgent.workdirBrowse.unrenderable.modifiedAt', { time: formatMtime(mtimeMs) })}
       </div>

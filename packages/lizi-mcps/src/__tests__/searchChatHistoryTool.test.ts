@@ -54,6 +54,14 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('search_chat_history tool', () => {
+  it('超长 query → INVALID_ARGS (zod)', async () => {
+    const { registry, searchChatHistory } = setup(makeResult());
+    const res = await registry.call('search_chat_history', { query: '边'.repeat(257) });
+    expect(res.isError).toBe(true);
+    expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(searchChatHistory).not.toHaveBeenCalled();
+  });
+
   it('缺 query → INVALID_ARGS (zod)', async () => {
     const { registry, searchChatHistory } = setup(makeResult());
     const res = await registry.call('search_chat_history', {});
@@ -76,11 +84,40 @@ describe('search_chat_history tool', () => {
     expect(args.fromMs).toBeNull();
   });
 
+  it('unwraps XML-style {item:[...]} folded session_ids and roles arrays', async () => {
+    // glm 兼容层把数组参数序列化成 <item> 重复标签(同 #6369/images 病),不得报 INVALID_ARGS。
+    const { registry, searchChatHistory } = setup(makeResult());
+    const res = await registry.call('search_chat_history', {
+      query: '登录报错',
+      session_ids: { item: ['s-1', 's-2'] },
+      roles: { item: ['user'] },
+    });
+    expect(res.isError).toBeFalsy();
+    const args = searchChatHistory.mock.calls[0][0];
+    expect(args.sessionIds).toEqual(['s-1', 's-2']);
+    expect(args.roles).toEqual(['user']);
+  });
+
   it('非法 from ISO → INVALID_ARGS, 不调 host', async () => {
     const { registry, searchChatHistory } = setup(makeResult());
     const res = await registry.call('search_chat_history', { query: 'x', from: 'not-a-date' });
     expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(searchChatHistory).not.toHaveBeenCalled();
+  });
+
+  it('日历上不存在的日期 → INVALID_ARGS, 不静默滚到下个月; 合法闰日照常查询', async () => {
+    const { registry, searchChatHistory } = setup(makeResult());
+    // new Date('2024-02-30') 会被归一化成 2024-03-01, 查询范围静默偏移。
+    for (const from of ['2024-02-30', ' 2024-02-30']) {
+      const res = await registry.call('search_chat_history', { query: 'x', from });
+      expect(parse(res)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(searchChatHistory).not.toHaveBeenCalled();
+
+    await registry.call('search_chat_history', { query: 'x', to: '2024-02-29T23:59:59Z' });
+    expect(searchChatHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ toMs: Date.parse('2024-02-29T23:59:59Z') }),
+    );
   });
 
   it('payload 整形: createdAt→ISO, snippet/技术字段 omit-when-null, isHit, 诊断字段', async () => {

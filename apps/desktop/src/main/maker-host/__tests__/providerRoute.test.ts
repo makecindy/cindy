@@ -1,3 +1,12 @@
+import { createServer } from 'node:http';
+import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
+import { loadCatalogWithSource, type ModelRegistry } from '@cindy/model-providers';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { setLocalCatalogOverrides } from '../active-catalog.js';
+import { EMPTY_MODEL_CATALOG_OVERRIDES } from '../model-plane/localCatalogOverrides.js';
+import { configureSessionModelInterfaceStorage, sessionModelInterface } from '../session-model-interface.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -20,13 +29,19 @@ import {
   beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
+  getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
+  resolveCodexLocalAuthPolicy,
+  captureCodexLocalAuthPolicy,
   resolveSessionRouteDecision,
+  resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
+  setCustomProviderHeaderReader,
+  setOAuthTokenReader,
   setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
@@ -42,6 +57,7 @@ import {
   setAnthropicDiscoveredModels,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setManagedProviders,
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
@@ -76,6 +92,7 @@ const CODEX_ACCOUNT_HEADER_DELETE = [
 afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
+  setOAuthTokenReader(() => null);
   setPendingCredentialSwitchReader(() => undefined);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
@@ -84,6 +101,63 @@ afterEach(() => {
   setXdGatewayModels([]);
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
+  setCustomProviderHeaderReader(() => null);
+});
+
+describe('Codex local auth policy', () => {
+  it('uses the actual custom route even without image generation capabilities', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'plain-key', name: 'Plain API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'plain-model', name: 'Plain' }] } },
+    })]);
+    try {
+      expect(await resolveCodexLocalAuthPolicy('plain-key', 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy(undefined, 'plain-model')).toBe('isolated');
+      expect(await resolveCodexLocalAuthPolicy('missing-provider', 'plain-model')).toBe('legacy-shared');
+    } finally {
+      setCustomProviders([]);
+    }
+  });
+
+  it('waits through nested route mutations before selecting an API key policy', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'pending-key', name: 'Pending API',
+      runtimes: { codex: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses', models: [{ id: 'pending-model', name: 'Pending' }] } },
+    })]);
+    const finish = beginProviderRouteMutation('pending-key');
+    const nested = beginProviderRouteMutation('pending-key');
+    let settled = false;
+    const policy = resolveCodexLocalAuthPolicy('pending-key', 'pending-model').then((value) => { settled = true; return value; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    finish.commit();
+    finish();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    nested();
+    await expect(policy).resolves.toBe('isolated');
+  });
+
+  it('invalidates a captured selection when a Desktop mutation starts, even without a core guard', async () => {
+    const before = await captureCodexLocalAuthPolicy('pending-key', 'pending-model');
+    expect(before.isCurrent()).toBe(true);
+    const finish = beginProviderRouteMutation('pending-key');
+    try {
+      expect(before.isCurrent()).toBe(false);
+      const abort = new AbortController();
+      const pending = captureCodexLocalAuthPolicy('pending-key', 'pending-model', abort.signal);
+      abort.abort(new Error('fixture cancelled'));
+      await expect(pending).rejects.toThrow('fixture cancelled');
+    } finally { finish(); }
+    expect(before.isCurrent()).toBe(false);
+    expect((await captureCodexLocalAuthPolicy('pending-key', 'pending-model')).isCurrent()).toBe(true);
+  });
+
+  it('isolates gateway routes while retaining official and third-party OAuth compatibility', async () => {
+    expect(await resolveCodexLocalAuthPolicy('openai', 'gpt-5.4')).toBe('legacy-shared');
+    expect(await resolveCodexLocalAuthPolicy('xd', 'gpt-5.4')).toBe('isolated');
+    expect(await resolveCodexLocalAuthPolicy('xai', 'xai/grok-4.3')).toBe('legacy-shared');
+  });
 });
 
 describe('Pi per-model protocol routing', () => {
@@ -169,7 +243,7 @@ describe('Pi per-model protocol routing', () => {
 });
 
 describe('implicit local bridge resume routing', () => {
-  it('keeps the connected source when a running session model becomes retired', async () => {
+  it('never resolves a Codex session to the Claude subscription, even for a retired Claude model', async () => {
     setAnthropicDiscoveredModels([
       {
         id: 'claude-retired-live',
@@ -184,10 +258,7 @@ describe('implicit local bridge resume routing', () => {
 
     await expect(
       resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex'),
-    ).resolves.toMatchObject({
-      providerId: 'anthropic',
-      routing: { wireProtocol: 'anthropic-messages' },
-    });
+    ).resolves.toBeNull();
   });
 });
 
@@ -268,23 +339,10 @@ describe('codex: buildRouteDecision no-break 基线', () => {
     );
   });
 
-  it('Anthropic subscription → Claude.ai bearer + OAuth beta,不透传 Codex 账号头', () => {
-    const fromCatalog = buildRouteDecision(
-      descriptor('anthropic', 'codex'),
-      KEY,
-      'codex',
-      null,
-      'claude-subscription-token',
-    );
-    expect(fromCatalog).toEqual({
-      upstreamOverride: 'https://api.anthropic.com',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
+  it('Claude 订阅没有 Codex 路由(订阅只归内置 Claude Code CLI)', () => {
+    const anthropic = getActiveCatalog().providers.find((provider) => provider.id === 'anthropic');
+    expect(anthropic?.routing.codex).toBeUndefined();
+    expect(anthropic?.routing.pi).toBeUndefined();
   });
 });
 
@@ -300,22 +358,14 @@ describe('pi: provider-aware Anthropic wire routing', () => {
     });
   });
 
-  it('Anthropic injects the host OAuth token and required OAuth beta headers', async () => {
+  it('Pi 会话选 Claude 订阅 → 无路由(不注入 host OAuth,调用方本地拒绝)', async () => {
     setSessionProvider('s-pi', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('claude-live-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('claude-live-token'));
+    setProviderOAuthTokenReader(tokenReader);
     await expect(
       Promise.resolve(resolveSessionRouteDecision('s-pi', 'pi', KEY, 'claude-opus-5')),
-    ).resolves.toEqual({
-      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-        authorization: 'Bearer claude-live-token',
-      },
-      headerDelete: ['x-api-key'],
-    });
+    ).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
   });
 });
 
@@ -454,37 +504,13 @@ describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fa
     setProviderOAuthTokenReader(() => null);
   });
 
-  it('codex 会话选 Anthropic → 本地桥读取 Claude.ai OAuth，缺失时也 fail closed', async () => {
+  it('codex 会话选 Claude 订阅 → 无本地桥路由,也不读 Claude.ai token', async () => {
     setSessionProvider('s-anthropic-codex', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'codex'
-        ? Promise.resolve('claude-subscription-token')
-        : null,
-    );
-    const route = await resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5');
-    expect(route).toMatchObject({
-      providerId: 'anthropic',
-      providerSource: 'builtin',
-      oauthToken: 'claude-subscription-token',
-      routing: {
-        wireProtocol: 'anthropic-messages',
-        authStrategy: 'provider-oauth-header',
-      },
-    });
-    expect(buildLocalHandlerHeaders(route!, 'codex')).toEqual({
-      headers: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-        authorization: 'Bearer claude-subscription-token',
-      },
-      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
-    });
-
+    const tokenReader = vi.fn(() => Promise.resolve('claude-subscription-token'));
+    setProviderOAuthTokenReader(tokenReader);
+    await expect(resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5')).resolves.toBeNull();
+    expect(tokenReader).not.toHaveBeenCalled();
     setProviderOAuthTokenReader(() => null);
-    const missing = await resolveSessionRoute('s-anthropic-codex', 'codex', 'claude-opus-5');
-    expect(buildLocalHandlerHeaders(missing!, 'codex').headers.authorization).toBe(
-      'Bearer xdt-missing-provider-oauth-token',
-    );
   });
 
   it('按 catalog modelIdRewrite 剥 xAI 内部前缀', () => {
@@ -850,6 +876,47 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 });
 
 describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 key)', () => {
+  it('routes independent Claude accounts with their own bearer and removes the CLI API key', async () => {
+    setCustomProviders(['anthropic-a', 'anthropic-b'].map(id => buildUserProvider({
+      id, name: 'Claude subscription', auth: { method: 'oauth', native: 'claude' },
+      runtimes: { 'claude-code': { baseUrl: ANTHROPIC_DIRECT_UPSTREAM, models: [] } },
+    })));
+    const readToken = vi.fn(async (id: string) => `test-token-${id}`);
+    setProviderOAuthTokenReader(readToken);
+    for (const id of ['anthropic-a', 'anthropic-b', 'anthropic-a']) {
+      setSessionProvider('s-user', id);
+      expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toEqual({
+        upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+        headerOverride: { authorization: `Bearer test-token-${id}` },
+        headerDelete: ['x-api-key'],
+      });
+      expect(readToken).toHaveBeenLastCalledWith(id, 'claude-code');
+    }
+    setProviderOAuthTokenReader(() => null);
+    expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toMatchObject({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
+      headerDelete: ['x-api-key'],
+    });
+  });
+
+  it('routes A → B → A by connection id despite identical provider and model names', () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: 'Same provider', runtimes: { codex: {
+        baseUrl: `https://${id}.example/v1`,
+        models: [{ id: 'same-model', name: 'Same model' }],
+      } },
+    })));
+    setCustomProviderKeyReader(id => `test-key-${id}`);
+    for (const id of ['account-a', 'account-b', 'account-a']) {
+      setSessionProvider('s-user', id);
+      expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'same-model')).toEqual({
+        upstreamOverride: `https://${id}.example/v1`,
+        headerOverride: { authorization: `Bearer test-key-${id}` },
+        headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+      });
+    }
+  });
   afterEach(() => {
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
@@ -1191,6 +1258,236 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('keeps frozen image routes and credentials on one generation and closes async read races', async () => {
+    const providerId = 'image-route-generation';
+    const makeProvider = (baseUrl: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Route Generation',
+        runtimes: {
+          codex: {
+            baseUrl,
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('https://old-images.example/v1');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => 'old-key');
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const oldRouting = oldProvider.routing.codex!;
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://old-images.example/v1',
+        headerOverride: { authorization: 'Bearer old-key' },
+      },
+    });
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    setCustomProviders([makeProvider('https://new-images.example/v1')]);
+    setCustomProviderKeyReader(() => 'new-key');
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    const newRevision = getProviderRouteCredentialRevision(providerId);
+    const newProvider = makeProvider('https://new-images.example/v1');
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        newProvider.routing.codex!,
+        newRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://new-images.example/v1',
+        headerOverride: { authorization: 'Bearer new-key' },
+      },
+    });
+
+    let finishTokenRead!: (token: string) => void;
+    setProviderOAuthTokenReader(
+      () =>
+        new Promise<string>((resolve) => {
+          finishTokenRead = resolve;
+        }),
+    );
+    const asyncRouting = {
+      ...newProvider.routing.codex!,
+      authStrategy: 'provider-oauth-header' as const,
+    };
+    const pending = resolveFrozenProviderRouteDecision(
+      providerId,
+      asyncRouting,
+      newRevision,
+      'codex',
+      KEY,
+    );
+    await vi.waitFor(() => expect(finishTokenRead).toBeTypeOf('function'));
+    const finishTokenMutation = beginProviderRouteMutation(providerId);
+    finishTokenMutation.commit();
+    finishTokenMutation();
+    finishTokenRead('new-oauth-token');
+    await expect(pending).resolves.toBeNull();
+
+    // Recreating the same stored id cannot revive an older Host snapshot (ABA).
+    setCustomProviders([]);
+    const finishDelete = beginProviderRouteMutation(providerId);
+    finishDelete.commit();
+    finishDelete();
+    setCustomProviders([oldProvider]);
+    const finishRecreate = beginProviderRouteMutation(providerId);
+    finishRecreate.commit();
+    finishRecreate();
+    expect(getProviderRouteCredentialRevision(providerId)).not.toBe(newRevision);
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+  });
+
+  it('reads custom headers at request time and rejects a stale frozen route after header mutation', async () => {
+    const providerId = 'image-header-generation';
+    const makeProvider = (header: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Header Generation',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://header-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            headers: { Authorization: header, 'x-vendor-token': header },
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('Bearer old-header-secret');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => null);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer old-header-secret',
+      'x-vendor-token': 'old-header-secret',
+    }));
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const frozenRouting = { ...oldProvider.routing.codex! };
+    delete frozenRouting.headerOverride;
+
+    const oldDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      frozenRouting,
+      oldRevision,
+      'codex',
+      KEY,
+    );
+    expect(oldDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer old-header-secret',
+          'x-vendor-token': 'old-header-secret',
+        },
+      },
+    });
+    expect(oldDecision?.routing).not.toHaveProperty('headerOverride');
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(true);
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(false);
+    setCustomProviders([makeProvider('Bearer new-header-secret')]);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer new-header-secret',
+      'x-vendor-token': 'new-header-secret',
+    }));
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    const newProvider = makeProvider('Bearer new-header-secret');
+    const newFrozenRouting = { ...newProvider.routing.codex! };
+    delete newFrozenRouting.headerOverride;
+    const newDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      newFrozenRouting,
+      getProviderRouteCredentialRevision(providerId),
+      'codex',
+      KEY,
+    );
+    expect(newDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer new-header-secret',
+          'x-vendor-token': 'new-header-secret',
+        },
+      },
+    });
+    expect(newDecision?.routing).not.toHaveProperty('headerOverride');
+  });
+
+  it('does not inject stale personal headers into organization-managed routes', async () => {
+    const providerId = 'byok-header-isolation';
+    const routing: RoutingDescriptor = {
+      upstream: 'https://gateway.example.invalid/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'openai-responses',
+    };
+    setManagedProviders([{
+      id: providerId, name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['codex'],
+      models: { codex: [] }, routing: { codex: routing },
+    }]);
+    setCustomProviderKeyReader(() => 'managed-member-key');
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer stale-personal-key',
+      'x-personal-tenant': 'must-not-leak',
+    }));
+
+    try {
+      const resolved = await resolveFrozenProviderRouteDecision(
+        providerId,
+        routing,
+        getProviderRouteCredentialRevision(providerId),
+        'codex',
+        KEY,
+      );
+      expect(resolved?.decision).toMatchObject({
+        upstreamOverride: 'https://gateway.example.invalid/v1',
+        headerOverride: { authorization: 'Bearer managed-member-key' },
+      });
+      expect(resolved?.decision?.headerOverride).not.toHaveProperty('x-personal-tenant');
+    } finally {
+      setManagedProviders([]);
+      setCustomProviderKeyReader(() => null);
+      setCustomProviderHeaderReader(() => null);
+    }
+  });
+
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {
     setCustomProviders([
       buildUserProvider({
@@ -1427,6 +1724,33 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     expect(resolveVisionBackendRoute('openrouter', 'qwen/qwen-vl-max', null)).toBeNull();
   });
 
+  it('目录预设身份随路由返回：改地址后视觉直连仍能识别 OpenCode Go', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'opencode-go-mirror',
+        name: 'OpenCode Go (mirror)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://mirror.example/v1',
+            wireProtocol: 'openai-chat',
+            catalogPresetId: 'opencode-go',
+            models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader((id) => (id === 'opencode-go-mirror' ? 'sk-go' : null));
+    try {
+      const routed = resolveVisionBackendRoute('opencode-go-mirror', 'deepseek-v4.1-flash', null);
+      expect(routed).not.toBeNull();
+      expect(routed?.catalogPresetId).toBe('opencode-go');
+      expect(routed?.upstream).toBe('https://mirror.example/v1');
+    } finally {
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+    }
+  });
+
   it('gateway-key 无动态端点 → null（网关不可用）', () => {
     setVisionGatewayKeyReader(() => KEY);
     expect(resolveVisionBackendRoute('xd', 'codex/gpt-5.6-luna', null)).toBeNull();
@@ -1654,4 +1978,99 @@ describe('resolveVisionBackendRoute（视觉桥复用统一路由器）', () => 
     setCustomProviderKeyReader(() => null);
     expect(resolveVisionBackendRoute('nokey-provider', 'nokey-model', null)).toBeNull();
   });
+});
+
+// Tier: integration. Persisted transport must survive catalog refresh + process
+// restart, while retirement blocks dispatch. No credentials enter the snapshot.
+describe('task interface snapshot', () => {
+  it('pins across restart and refuses retired profiles without falling back', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'cindy-interface-'));
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const config = { id: 'snapshot-kimi', name: 'Kimi', runtimes: { codex: {
+      catalogPresetId: 'moonshot-kimi-code', baseUrl: 'https://api.kimi.com/coding/v1',
+      wireProtocol: 'openai-chat' as const, models: [{ id: 'k3.1-pro', name: 'Kimi' }],
+    } } };
+    try {
+      configureSessionModelInterfaceStorage(() => directory);
+      const initial = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      const first = sessionModelInterface('task', config.id, 'codex', initial, registry)!;
+      expect(first.api).toBe('openai-responses');
+      expect(first.defaults).toMatchObject({ contextWindow: 262144, maxOutputTokens: 262144 });
+      registry.models.flatMap(e => e.routes).find(r => r.providerId === 'moonshot-kimi-code' && r.modelId === 'k3.1-pro')!.preferredInterfaces!.codex = ['moonshot-kimi-code-openai-completions'];
+      const next = buildUserProvider(config, { modelRegistry: registry }).models.codex![0];
+      configureSessionModelInterfaceStorage(() => directory); // real disk restore
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      expect(sessionModelInterface('new-task', config.id, 'codex', next, registry)?.api).toBe('openai-completions');
+      // Explicit image edits override pinned metadata, never the saved interface.
+      // Reset removes the override rather than permanently rewriting the snapshot.
+      for (const value of [false, true]) {
+        setLocalCatalogOverrides({ ...EMPTY_MODEL_CATALOG_OVERRIDES, patches: {
+          'snapshot-kimi:k3.1-pro': { perAgent: { codex: { supportsImageInput: value } } },
+        } });
+        configureSessionModelInterfaceStorage(() => directory);
+        const edited = sessionModelInterface('task', config.id, 'codex', next, registry)!;
+        expect(edited.defaults.supportsImageInput).toBe(value);
+        expect(edited.route).toEqual(first.route);
+        expect(edited.api).toBe(first.api);
+      }
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      expect(sessionModelInterface('task', config.id, 'codex', next, registry)).toEqual(first);
+      registry.interfaceProfiles!.find(p => p.id === first.profileId)!.retired = true;
+      expect(() => sessionModelInterface('task', config.id, 'codex', next, registry)).toThrow('MODEL_INTERFACE_RETIRED');
+    } finally {
+      setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
+      configureSessionModelInterfaceStorage(() => null);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+// Tier: integration. Fixed production loader + resolver + proxy, real HTTP on
+// both sides. Only the served registry changes between calls; no client rebuild.
+it('dispatches a newly delivered model through all three existing HTTP interfaces', async () => {
+  let delivered: unknown;
+  const received: Array<{ url: string; body: Record<string, unknown>; auth?: string }> = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.url?.startsWith('/api/model-catalog/catalog')) {
+      res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(delivered)); return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, body: JSON.parse(Buffer.concat(chunks).toString()), auth: req.headers.authorization });
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const port = (upstream.address() as { port: number }).port;
+  const base = `http://127.0.0.1:${port}`;
+  let decision: ReturnType<typeof buildRouteDecision>;
+  const proxy = await createAnthropicCompatProxy({ upstream: base, routingTransform: () => decision });
+  try {
+    for (const [index, api] of ['anthropic-messages', 'openai-responses', 'openai-completions'].entries()) {
+      const wire = api === 'openai-completions' ? 'openai-chat' : api;
+      const requestPath = ['/v1/messages', '/responses', '/chat/completions'][index];
+      const modelId = `future-model-${index}`;
+      const registry: ModelRegistry = { schemaVersion: 6, updatedAt: `2099-01-0${index + 1}T00:00:00.000Z`,
+        interfaceProfiles: ['anthropic-messages', 'openai-responses', 'openai-completions'].map((api, i) => ({ id: `fixture-api-${i}`, providerId: 'fixture', api, baseUrl: base, inputBaseUrls: [base], requestPath: ['/v1/messages', '/responses', '/chat/completions'][i] })),
+        models: [{ id: modelId, name: 'Future', routes: [{ providerId: 'fixture', modelId, agents: ['codex'],
+          defaults: { contextWindow: 32768, maxOutputTokens: 1024 }, interfaces: [{ profileId: `fixture-api-${index}`, wireModelId: `wire-${index}` }], preferredInterfaces: { codex: [`fixture-api-${index}`] } }] }],
+      };
+      delivered = { version: '2', providers: BUNDLED_CATALOG.providers, modelRegistry: registry };
+      const loaded = await loadCatalogWithSource({ baseUrl: base }, { fetchText: async url => (await fetch(url)).text() });
+      expect(loaded.source).toBe('remote');
+      const provider = buildUserProvider({ id: 'http-account', name: 'HTTP', runtimes: { codex: {
+        catalogPresetId: 'fixture', baseUrl: base, wireProtocol: 'openai-chat', models: [{ id: modelId, name: 'Future' }],
+      } } }, { modelRegistry: loaded.catalog.modelRegistry });
+      const routing = providerRoutingForModel(provider, 'codex', modelId)!;
+      expect(routing.wireProtocol).toBe(wire);
+      decision = buildRouteDecision(routing, null, 'codex', 'fixture-key');
+      decision = { ...decision!, pathOverride: routing.requestPath };
+      const response = await fetch(`${proxy.url}/responses`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: modelId, stream: false }) });
+      expect(await response.json()).toEqual({ ok: true });
+      expect(received.at(-1)).toMatchObject({ url: requestPath, body: { model: `wire-${index}` }, auth: 'Bearer fixture-key' });
+    }
+  } finally {
+    await proxy.dispose();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
+  }
 });

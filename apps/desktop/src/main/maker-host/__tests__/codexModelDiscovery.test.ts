@@ -23,18 +23,162 @@ import {
 // 取自本机 ~/.codex/models_cache.json 的真实结构(裁剪到关键字段)。
 const SAMPLE = {
   models: [
-    { slug: 'gpt-5.5', display_name: 'GPT-5.5', description: 'Frontier model.', visibility: 'list', supported_in_api: true, context_window: 272000, default_reasoning_level: 'medium', priority: 7, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' }], service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }] },
-    { slug: 'gpt-5.4', display_name: 'GPT-5.4', visibility: 'list', supported_in_api: true, context_window: 272000, default_reasoning_level: 'medium', priority: 16, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' }], service_tiers: [] },
+    {
+      slug: 'gpt-5.5',
+      display_name: 'GPT-5.5',
+      description: 'Frontier model.',
+      visibility: 'list',
+      supported_in_api: true,
+      context_window: 272000,
+      default_reasoning_level: 'medium',
+      priority: 7,
+      supported_reasoning_levels: [
+        { effort: 'low' },
+        { effort: 'medium' },
+        { effort: 'high' },
+        { effort: 'xhigh' },
+      ],
+      service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }],
+    },
+    {
+      slug: 'gpt-5.4',
+      display_name: 'GPT-5.4',
+      visibility: 'list',
+      supported_in_api: true,
+      context_window: 272000,
+      default_reasoning_level: 'medium',
+      priority: 16,
+      supported_reasoning_levels: [
+        { effort: 'low' },
+        { effort: 'medium' },
+        { effort: 'high' },
+        { effort: 'xhigh' },
+      ],
+      service_tiers: [],
+    },
     // 未来新模型:应被自动纳入(这正是 live 发现要解决的"下周出 5.6")
-    { slug: 'gpt-5.6', display_name: 'GPT-5.6', visibility: 'list', supported_in_api: true, context_window: 400000, default_reasoning_level: 'high', priority: 3, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }, { effort: 'xhigh' }, { effort: 'max' }, { effort: 'ultra' }] },
+    {
+      slug: 'gpt-5.6',
+      display_name: 'GPT-5.6',
+      visibility: 'list',
+      supported_in_api: true,
+      context_window: 400000,
+      default_reasoning_level: 'high',
+      priority: 3,
+      supported_reasoning_levels: [
+        { effort: 'low' },
+        { effort: 'high' },
+        { effort: 'xhigh' },
+        { effort: 'max' },
+        { effort: 'ultra' },
+      ],
+    },
     // 隐藏 / 非 api 的内部货:应被过滤
-    { slug: 'gpt-5.3-codex-spark', display_name: 'Spark', visibility: 'list', supported_in_api: false, context_window: 128000, supported_reasoning_levels: [{ effort: 'high' }] },
-    { slug: 'codex-auto-review', display_name: 'Auto Review', visibility: 'hide', supported_in_api: true, context_window: 272000, supported_reasoning_levels: [{ effort: 'medium' }] },
+    {
+      slug: 'gpt-5.3-codex-spark',
+      display_name: 'Spark',
+      visibility: 'list',
+      supported_in_api: false,
+      context_window: 128000,
+      supported_reasoning_levels: [{ effort: 'high' }],
+    },
+    {
+      slug: 'codex-auto-review',
+      display_name: 'Auto Review',
+      visibility: 'hide',
+      supported_in_api: true,
+      context_window: 272000,
+      supported_reasoning_levels: [{ effort: 'medium' }],
+    },
   ],
 };
 const OAUTH_AUTH = JSON.stringify({ tokens: { access_token: 'oauth-token' } });
 
 describe('mapCodexModelsToCatalog', () => {
+  it.each([
+    { service_tiers: [{ id: 'priority' }, { id: 'ultrafast' }] },
+    { additional_speed_tiers: ['fast', 'ultrafast'] },
+  ])('reads both native cache speed declarations: %j', fields => {
+    const [model] = mapCodexModelsToCatalog({ models: [{ slug: 'gpt-6.1-sol',
+      visibility: 'list', supported_in_api: true, ...fields }] });
+    expect(model).toMatchObject({ supportsFastMode: true, supportsUltrafastMode: true });
+    expect(model.discoveredMetadata?.supportsFastMode).toBe(true);
+  });
+
+  it('retains native maximum and explicit image capability separately from defaults', () => {
+    const [model] = mapCodexModelsToCatalog({
+      models: [
+        {
+          ...SAMPLE.models[0],
+          context_window: 272000,
+          max_context_window: 872000,
+          input_modalities: ['text', 'image'],
+        },
+      ],
+    });
+    expect(model).toMatchObject({
+      contextWindow: 272000,
+      contextWindowMax: 872000,
+      contextWindowVerified: true,
+      supportsImageInput: true,
+      discoveredMetadata: { supportsImageInput: true },
+    });
+    const [textOnly] = mapCodexModelsToCatalog({
+      models: [
+        {
+          ...SAMPLE.models[0],
+          input_modalities: ['text'],
+        },
+      ],
+    });
+    expect(textOnly.supportsImageInput).toBe(false);
+    expect(textOnly.discoveredMetadata?.supportsImageInput).toBe(false);
+    expect(textOnly.contextWindowMax).toBeUndefined();
+  });
+
+  it.each([undefined, 0, -1, NaN, Infinity, 2.5, 128000])(
+    'does not claim an invalid maximum (%s)',
+    (maximum) => {
+      const [model] = mapCodexModelsToCatalog({
+        models: [
+          {
+            ...SAMPLE.models[0],
+            max_context_window: maximum,
+          },
+        ],
+      });
+      expect(model.contextWindowMax).toBeUndefined();
+    },
+  );
+
+  it.each([0, -1, NaN, Infinity, 2.5])(
+    'does not mark an invalid working window verified (%s)',
+    (window) => {
+      const [model] = mapCodexModelsToCatalog({
+        models: [
+          {
+            ...SAMPLE.models[0],
+            context_window: window,
+          },
+        ],
+      });
+      expect(model.contextWindowVerified).toBeUndefined();
+    },
+  );
+
+  it('adapts a stale native default to supported efforts without selecting an unsupported tier', () => {
+    const [model] = mapCodexModelsToCatalog({
+      models: [
+        {
+          ...SAMPLE.models[0],
+          default_reasoning_level: 'ultra',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }],
+        },
+      ],
+    });
+    expect(model.defaultEffort).toBe('medium');
+  });
+
   it('只留 visibility:list && supported_in_api:true,保留规范 slug', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.4', 'gpt-5.6']);
@@ -106,21 +250,27 @@ describe('mapCodexModelsToCatalog', () => {
     expect(m56!.effortDisplayNames).toEqual({ xhigh: 'Extra High' });
   });
 
-  it('service_tiers 含 priority → supportsFastMode:true;空/缺省不标(数据驱动,不猜)', () => {
+  it('service_tiers distinguishes supported, explicitly unsupported, and unknown', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.find((m) => m.id === 'gpt-5.5')?.supportsFastMode).toBe(true);
-    expect(out.find((m) => m.id === 'gpt-5.4')?.supportsFastMode).toBeUndefined();
+    expect(out.find((m) => m.id === 'gpt-5.4')?.supportsFastMode).toBe(false);
     expect(out.find((m) => m.id === 'gpt-5.6')?.supportsFastMode).toBeUndefined();
   });
 
-  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),priority 对齐静态排序锚点', () => {
+  it('display name 保持纯净,保留模型自报的全部合法 effort(含 max/ultra),sortOrder 直接取 priority(账号顺序)', () => {
     const out = mapCodexModelsToCatalog(SAMPLE);
     expect(out.every((m) => !m.name.includes('订阅'))).toBe(true);
     // issue #352:max/ultra 是合法 Codex 档,不再被 CODEX_EFFORTS 白名单过滤掉。
-    expect(out.find((m) => m.id === 'gpt-5.6')?.efforts).toEqual(['low', 'high', 'xhigh', 'max', 'ultra']);
-    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(19);
-    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(20);
-    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(21);
+    expect(out.find((m) => m.id === 'gpt-5.6')?.efforts).toEqual([
+      'low',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+    ]);
+    expect(out.find((m) => m.id === 'gpt-5.6')?.sortOrder).toBe(3);
+    expect(out.find((m) => m.id === 'gpt-5.5')?.sortOrder).toBe(7);
+    expect(out.find((m) => m.id === 'gpt-5.4')?.sortOrder).toBe(16);
   });
 
   it('只放行 CODEX_EFFORTS 白名单内的档(含 max/ultra),未知 effort id 仍被过滤', () => {
@@ -145,24 +295,52 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out[0].efforts).toEqual(['high', 'max', 'ultra']);
   });
 
-  it('legacy 默认隐藏策略:gpt-5.4-mini defaultEnabled:false(旧目录可见性不因清单动态化漂移)', () => {
+  it('不再写死隐藏例外:gpt-5.4-mini 发现时同样默认可见(是否收起只看模型目录)', () => {
     const out = mapCodexModelsToCatalog({
       models: [
-        { slug: 'gpt-5.4-mini', display_name: 'GPT-5.4-Mini', visibility: 'list', supported_in_api: true, context_window: 272000, priority: 23, supported_reasoning_levels: [{ effort: 'high' }] },
+        {
+          slug: 'gpt-5.4-mini',
+          display_name: 'GPT-5.4-Mini',
+          visibility: 'list',
+          supported_in_api: true,
+          context_window: 272000,
+          priority: 23,
+          supported_reasoning_levels: [{ effort: 'high' }],
+        },
       ],
     });
-    expect(out[0].defaultEnabled).toBe(false);
+    expect(out[0].defaultEnabled).toBe(true);
   });
 
   it('坏输入(非对象 / 无 models / 空)→ 空数组,不抛', () => {
     expect(mapCodexModelsToCatalog(null)).toEqual([]);
     expect(mapCodexModelsToCatalog({})).toEqual([]);
     expect(mapCodexModelsToCatalog({ models: 'nope' })).toEqual([]);
-    expect(mapCodexModelsToCatalog({ models: [{ slug: 'x', visibility: 'list', supported_in_api: true }] })[0].efforts).toEqual([]);
+    expect(
+      mapCodexModelsToCatalog({
+        models: [{ slug: 'x', visibility: 'list', supported_in_api: true }],
+      })[0].efforts,
+    ).toEqual([]);
   });
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  // Account access must survive discovery without inferring it from a GPT model ID.
+  it('only exposes Ultrafast when the account advertises that tier', () => {
+    const base = {
+      id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra',
+      description: '', hidden: false, supportedReasoningEfforts: [],
+      defaultReasoningEffort: 'high', additionalSpeedTiers: [], isDefault: false,
+    };
+    const available = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [{ id: 'ultrafast', name: 'Ultrafast', description: '' }],
+    } as CodexModelListItem]);
+    const unavailable = mapCodexAppServerModelsToCatalog([{
+      ...base, serviceTiers: [],
+    } as CodexModelListItem]);
+    expect(available[0]?.supportsUltrafastMode).toBe(true);
+    expect(unavailable[0]?.supportsUltrafastMode).toBe(false);
+  });
   it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {
@@ -200,19 +378,40 @@ describe('mapCodexAppServerModelsToCatalog', () => {
         isDefault: true,
       },
       {
-        id: 'hidden', model: 'hidden', displayName: 'Hidden', description: '', hidden: true,
-        supportedReasoningEfforts: [], defaultReasoningEffort: 'medium', additionalSpeedTiers: [],
-        serviceTiers: [], isDefault: false,
+        id: 'hidden',
+        model: 'hidden',
+        displayName: 'Hidden',
+        description: '',
+        hidden: true,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: 'medium',
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        isDefault: false,
       },
       {
-        id: 'duplicate', model: 'gpt-5.6', displayName: 'Duplicate', description: '', hidden: false,
-        supportedReasoningEfforts: [], defaultReasoningEffort: 'medium', additionalSpeedTiers: [],
-        serviceTiers: [], isDefault: false,
+        id: 'duplicate',
+        model: 'gpt-5.6',
+        displayName: 'Duplicate',
+        description: '',
+        hidden: false,
+        supportedReasoningEfforts: [],
+        defaultReasoningEffort: 'medium',
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        isDefault: false,
       },
       {
-        id: 'gpt-5.4-mini', model: 'gpt-5.4-mini', displayName: 'GPT-5.4 Mini', description: '', hidden: false,
+        id: 'gpt-5.4-mini',
+        model: 'gpt-5.4-mini',
+        displayName: 'GPT-5.4 Mini',
+        description: '',
+        hidden: false,
         supportedReasoningEfforts: [{ reasoningEffort: 'high', description: '' }],
-        defaultReasoningEffort: 'high', additionalSpeedTiers: [], serviceTiers: [], isDefault: false,
+        defaultReasoningEffort: 'high',
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        isDefault: false,
       },
     ] as CodexModelListItem[]);
 
@@ -222,10 +421,10 @@ describe('mapCodexAppServerModelsToCatalog', () => {
       efforts: ['low', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: true,
-      sortOrder: 17,
+      sortOrder: 0,
     });
-    expect(out[1].defaultEnabled).toBe(false);
-    expect(out[1].sortOrder).toBe(17.003);
+    expect(out[1].defaultEnabled).toBe(true);
+    expect(out[1].sortOrder).toBe(3);
     // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
     // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。
     expect(out.every((model) => model.contextWindowVerified === undefined)).toBe(true);
@@ -277,4 +476,20 @@ describe('readCodexDiscoveredModelsForAuthRefresh', () => {
       readCodexDiscoveredModelsForAuthRefresh(vi.fn().mockResolvedValue(discovered)),
     ).resolves.toBe(discovered);
   });
+});
+
+it('does not put an unknown working default above an explicit smaller maximum', () => {
+  const [model] = mapCodexModelsToCatalog({
+    models: [
+      {
+        slug: 'small-test',
+        display_name: 'Small',
+        visibility: 'list',
+        supported_in_api: true,
+        max_context_window: 64_000,
+      },
+    ],
+  });
+  expect(model).toMatchObject({ contextWindow: 64_000, contextWindowMax: 64_000 });
+  expect(model.contextWindowVerified).not.toBe(true);
 });

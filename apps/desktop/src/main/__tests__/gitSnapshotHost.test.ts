@@ -1,17 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+vi.mock('electron', () => ({ app: { getPath: () => path.resolve('snapshot-profile') } }));
 
-import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host';
+import { createGitSnapshotCoordinator as createHost, type GitSnapshotCoordinatorHostDeps } from '../maker-host/git-snapshot-host';
+const journal = vi.hoisted(() => ({ generation: 1, record: vi.fn(async (_sessionId: string, anchor?: string) => ({ id: 'attempt-1', anchor })) }));
+vi.mock('../git-snapshot/snapshotAttemptStore', () => ({ SnapshotAttemptStore: class { record = journal.record; } }));
+vi.mock('../appSessionState', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../appSessionState')>(),
+  getActiveAppSession: () => ({ dataOwnerId: 'owner-1', generation: journal.generation }),
+  ownerScopedUserDataPath: () => '/test-owner',
+}));
+
+function createGitSnapshotCoordinator(maker: Parameters<typeof createHost>[0], deps: GitSnapshotCoordinatorHostDeps = {}) {
+  return createHost(maker, { getLatestUserMessage: async () => null, ...deps });
+}
 import type {
   CreateShadowSavepointInput,
   ShadowSavepointResult,
 } from '../git-snapshot/gitSnapshotService';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+beforeEach(() => { journal.record.mockClear(); journal.generation = 1; });
 
-function makeMaker(overrides: Partial<{
-  getSessionMeta: ReturnType<typeof vi.fn>;
-  oneShot: ReturnType<typeof vi.fn>;
-}> = {}) {
+function makeMaker(
+  overrides: Partial<{
+    getSessionMeta: ReturnType<typeof vi.fn>;
+    oneShot: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
   return {
     getSessionMeta: vi.fn().mockResolvedValue({
       id: 's1',
@@ -28,26 +44,78 @@ function makeMaker(overrides: Partial<{
 }
 
 describe('createGitSnapshotCoordinator', () => {
+  it('does not record or authorize a send after the owner changes during anchor lookup', async () => {
+    let entered!: () => void;
+    const lookupStarted = new Promise<void>((resolve) => { entered = resolve; });
+    let finish!: (value: null) => void;
+    const lookup = new Promise<null>((resolve) => { finish = resolve; });
+    const coordinator = createGitSnapshotCoordinator(makeMaker(), {
+      getLatestUserMessage: () => { entered(); return lookup; },
+    });
+    const starting = coordinator.onTurnStart('s1');
+    await lookupStarted;
+    journal.generation += 1;
+    finish(null);
+    await expect(starting).rejects.toThrow('owner changed');
+    expect(journal.record).not.toHaveBeenCalled();
+  });
+  it('refuses dispatch when durable intent storage fails before any Git lookup', async () => {
+    journal.record.mockRejectedValueOnce(new Error('ENOSPC'));
+    const maker = makeMaker();
+    const createShadowSavepoint = vi.fn();
+    const coordinator = createGitSnapshotCoordinator(maker, { createShadowSavepoint });
+    await expect(coordinator.onTurnStart('s1')).rejects.toThrow('ENOSPC');
+    expect(maker.getSessionMeta).not.toHaveBeenCalled();
+    expect(createShadowSavepoint).not.toHaveBeenCalled();
+  });
+  it.each(['source', 'worktrees/run', 'merge-worktrees/12345678-1234-1234-1234-123456789abc'])(
+    'never creates hidden commits in Cindy Make %s',
+    async (directory) => {
+      const maker = makeMaker({
+        getSessionMeta: vi.fn().mockResolvedValue({
+          agentKind: 'codex',
+          workDir: path.resolve('snapshot-profile/cindy-make', directory),
+        }),
+      });
+      const createShadowSavepoint = vi.fn();
+      const initializeProjectGit = vi.fn();
+      const coordinator = createGitSnapshotCoordinator(maker, {
+        readAutoSnapshotEnabled: () => true,
+        createShadowSavepoint,
+        initializeProjectGit,
+        logger,
+      });
+      await coordinator.onTurnStart('make');
+      await coordinator.onTurnEnd('make');
+      expect(createShadowSavepoint).not.toHaveBeenCalled();
+      expect(initializeProjectGit).not.toHaveBeenCalled();
+    },
+  );
   it('creates a local after-edit savepoint with anchor and prompt context', async () => {
     const maker = makeMaker();
     const getLatestUserMessage = vi.fn().mockResolvedValue({
       clientId: 'msg-1',
       text: 'please update login',
     });
-    const createShadowSavepoint = vi.fn().mockImplementation(
-      async (_repo: string, input: CreateShadowSavepointInput): Promise<ShadowSavepointResult> => {
-        if (typeof input.label === 'function') {
-          await input.label({ diffStat: ' src/a.ts | 1 +', diffText: '+x' });
-        }
-        return {
-          commit: 'hash123',
-          tree: 'tree123',
-          includedFiles: [],
-          skippedFiles: [],
-          skippedFingerprints: [],
-        };
-      },
-    );
+    const createShadowSavepoint = vi
+      .fn()
+      .mockImplementation(
+        async (
+          _repo: string,
+          input: CreateShadowSavepointInput,
+        ): Promise<ShadowSavepointResult> => {
+          if (typeof input.label === 'function') {
+            await input.label({ diffStat: ' src/a.ts | 1 +', diffText: '+x' });
+          }
+          return {
+            commit: 'hash123',
+            tree: 'tree123',
+            includedFiles: [],
+            skippedFiles: [],
+            skippedFingerprints: [],
+          };
+        },
+      );
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: () => true,
       detectRepoRoot: vi.fn().mockResolvedValue('/workspace/project'),
@@ -71,13 +139,19 @@ describe('createGitSnapshotCoordinator', () => {
       kind: 'after-edit',
       anchor: 'msg-1',
       baselineCommit: 'hash123',
+      attemptId: 'attempt-1',
     });
     expect(input.skipIfTreeEquals).toBe('hash123');
     expect(getLatestUserMessage).toHaveBeenCalledOnce();
-    expect(maker.oneShot).toHaveBeenCalledWith('codex', expect.stringContaining('please update login'), {
-      maxTokens: 80,
-      timeoutMs: 20_000,
-    });
+    expect(maker.oneShot).toHaveBeenCalledWith(
+      'codex',
+      expect.stringContaining('please update login'),
+      {
+        maxTokens: 80,
+        timeoutMs: 1_000,
+        signal: expect.any(AbortSignal),
+      },
+    );
   });
 
   it('skips remote sessions before repo detection', async () => {
@@ -133,6 +207,7 @@ describe('createGitSnapshotCoordinator', () => {
     } satisfies ShadowSavepointResult);
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: vi.fn(() => enabled),
+      readAutoInitProjectGit: () => true,
       detectRepoRoot: vi.fn().mockResolvedValue(null),
       initializeProjectGit,
       createShadowSavepoint,
@@ -149,7 +224,7 @@ describe('createGitSnapshotCoordinator', () => {
         workingDir: '/workspace/project',
         remoteHostId: undefined,
       }),
-      { autoSnapshotEnabled: true },
+      { autoSnapshotEnabled: true, autoInitProjectGit: true },
     );
     expect(createShadowSavepoint).toHaveBeenCalledWith(
       '/workspace/project',
@@ -165,6 +240,7 @@ describe('createGitSnapshotCoordinator', () => {
     const createShadowSavepoint = vi.fn();
 
     await createGitSnapshotCoordinator(maker, {
+      readAutoSnapshotEnabled: () => false,
       createShadowSavepoint,
       logger,
     }).onTurnEnd('s1');

@@ -1,16 +1,23 @@
 {
   "id": "ctrip-suggest",
-  "match": ["ctrip.com"],
-  "description": "携程目的地/城市/景区/酒店关键词联想搜索(排名/名称/类型/城市/点评分/链接)。走携程公开的联想接口 gaHotelSearchEngine,无需登录;先落到 m.ctrip.com 同源再 POST,规避跨域。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://m.ctrip.com/" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "items",
-      "fn": "async () => { const body = { keyword: '{{query|js}}', searchType: 'D', platform: 'online', pageID: '102001', head: { Locale: 'zh-CN', LocaleController: 'zh_cn', Currency: 'CNY', PageId: '102001', clientID: 'xdt-recipe', group: 'ctrip', Frontend: { sessionID: 1, pvid: 1 }, HotelExtension: { group: 'CTRIP', WebpSupport: false } } }; const r = await fetch('https://m.ctrip.com/restapi/soa2/21881/json/gaHotelSearchEngine', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('携程返回非 JSON(被风控挡),请在持久浏览器里正常访问 ctrip.com 后重试'); } const list = (d && d.Response && Array.isArray(d.Response.searchResults)) ? d.Response.searchResults : []; return list.slice(0, 15).map((it, i) => ({ rank: i + 1, name: String(it.displayName || it.word || it.cityName || '').replace(/\\s+/g, ' ').trim(), type: String(it.displayType || it.type || '').trim(), city: it.cityName || '', score: it.commentScore || it.cStar || '', country: it.countryName || '' })).filter(x => x.name); }"
-    }
+  "match": [
+    "ctrip.com"
   ],
-  "output": "{{items}}"
+  "description": "搜索携程目的地、景区、火车站和地标联想结果",
+  "access": "read",
+  "adapter": "ctrip/search",
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "Search keyword (city, scenic spot, landmark)"
+    },
+    "limit": {
+      "required": false,
+      "type": "str",
+      "default": 15,
+      "description": "Number of results (1-50)"
+    }
+  },
+  "steps": []
 }

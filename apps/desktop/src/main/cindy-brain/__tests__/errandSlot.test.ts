@@ -577,3 +577,19 @@ describe('可见任务自动切过去', () => {
     expect(reveal).not.toHaveBeenCalled();
   });
 });
+
+ describe('shared task model context through the legacy adapter', () => {
+   it('passes only the Host-resolved source, ignoring a plugin-claimed session', async () => {
+     const resolveSourceSessionId = vi.fn(() => 'actual-caller');
+     const { slot, runner } = makeSlot({ resolveSourceSessionId });
+     await slot.handleRequest('helper', { ...RUN, mode: 'wait', callId: 'active', sourceSessionId: 'foreign' });
+     expect(resolveSourceSessionId).toHaveBeenCalledWith('helper', 'active');
+     expect(runner).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'actual-caller' }), expect.anything());
+   });
+   it('a real panel gesture carries no arbitrary caller model or permission', async () => {
+     const { slot, runner } = makeSlot({ resolveSourceSessionId: () => undefined });
+     slot.noteUserGesture('helper');
+     await slot.handleRequest('helper', { ...RUN, mode: 'wait' });
+     expect(runner).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: undefined, origin: 'user-action' }), expect.anything());
+   });
+ });

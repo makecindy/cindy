@@ -210,9 +210,9 @@ describe('collapsed project attention wiring', () => {
   it('renders the aggregate status on the trailing slot while the project is collapsed', () => {
     const slotChrome = 'group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end';
     const gridChrome = 'grid h-6 grid-cols-[max-content] items-center justify-items-end';
-    expect(projectNodeSource).toContain('isCollapsed && collapsedAttentionTone ? (');
+    expect(projectNodeSource).toContain('isCollapsed && collapsedStatusTone ? (');
     expect(projectNodeSource).toContain(
-      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
+      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
     );
     expect(projectNodeSource).not.toContain('AttentionDot');
     expect(projectNodeSource).toContain(slotChrome);
@@ -224,7 +224,7 @@ describe('collapsed project attention wiring', () => {
     );
     const trailingSlot = projectNodeSource.indexOf(slotChrome);
     const indicator = projectNodeSource.indexOf(
-      '<SidebarRightStatusIndicator kind={collapsedAttentionTone} isActive={false} />',
+      '<SidebarRightStatusIndicator kind={collapsedStatusTone} isActive={false} />',
     );
     expect(nameSpan).toBeGreaterThan(0);
     expect(trailingSlot).toBeGreaterThan(nameSpan);
@@ -253,7 +253,7 @@ describe('collapsed project attention wiring', () => {
     expect(automationGroupSource).not.toMatch(/useRemoteSessionActivityRevision\s*\(/);
     expect(automationGroupSource).toMatch(/useSessionsAttentionKindMap\(groupSessionIds\)/);
     expect(automationGroupSource).toMatch(/useSessionsAttentionUrgencyIdSet\(groupSessionIds\)/);
-    expect(automationGroupSource).toMatch(/useRemoteSessionsPhaseMap\(groupSessionIds\)/);
+    expect(automationGroupSource).toMatch(/useRemoteSessionsPhaseMap\(group.sessions\)/);
   });
 
   it('opens the unread-failed session from a collapsed red group header', () => {

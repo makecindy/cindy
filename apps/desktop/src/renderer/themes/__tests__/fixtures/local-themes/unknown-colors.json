@@ -1,0 +1,12 @@
+{
+  "id": "ds2b-unknown-colors",
+  "name": "DS2b Unknown Colors",
+  "type": "dark",
+  "family": "ds2b-fake-family",
+  "colors": {
+    "surface": "#101010",
+    "text-primary": "#eeeeee",
+    "my-plugin-accent": "#112233",
+    "future-slot-xyz": "var(--text-secondary)"
+  }
+}

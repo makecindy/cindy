@@ -1,14 +1,25 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   args: [] as string[],
+  env: {} as Record<string, string | undefined>,
   binaryPath: '',
   ripgrepPath: '',
   userDataPath: '',
+}));
+
+// Skill discovery is covered by managed-skills.test.ts, not this runtime/auth fixture.
+vi.mock('../managed-skills.js', () => ({
+  listCindyManagedSkills: async () => [],
+  cindyManagedSkillRoots: async () => [],
+}));
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
 
 vi.mock('electron', () => ({
@@ -23,6 +34,8 @@ vi.mock('../../agent-binaries/index.js', () => ({
 
 vi.mock('../runtime-configs.js', () => ({
   getRipgrepBinaryPath: () => state.ripgrepPath,
+  // Cache route identities now resolve the real upstream even for local Pi.
+  claudeUpstreamEndpoint: () => 'https://upstream.test/v1',
 }));
 
 vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
@@ -39,8 +52,9 @@ vi.mock('../anthropic-compat-proxy-host.js', () => ({
   getClaudeEndpoint: () => 'http://127.0.0.1:9',
 }));
 
-vi.mock('../claude-credentials-store.js', () => ({
-  hasClaudeAiOAuth: () => false,
+vi.mock('../claude-native-auth.js', () => ({
+  hasClaudeNativeLogin: () => false,
+  hasClaudeNativeLoginUnbound: () => false,
 }));
 
 vi.mock('../grok-oauth-login.js', () => ({
@@ -91,8 +105,9 @@ vi.mock('../../logger.js', () => ({
 // args 经 createTransport → createPiStdioTransport 传递(不在 PiRpcProcess 构造
 // 参数里, 自轮 22 起); 测试从 stdio transport 的 opts 捕获 spawn args。
 vi.mock('../../../../../../packages/maker-core/src/agents/pi/transport.js', () => ({
-  createPiStdioTransport: (opts: { args: string[] }) => {
+  createPiStdioTransport: (opts: { args: string[]; env: Record<string, string | undefined> }) => {
     state.args = opts.args;
+    state.env = opts.env;
     return {} as never;
   },
 }));
@@ -143,6 +158,10 @@ describe('buildPiAgent roster prompt assembly', () => {
   beforeEach(() => {
     state.args = [];
     root = mkdtempSync(path.join(tmpdir(), 'pi-roster-assembly-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(root);
+    vi.stubEnv('PI_CODING_AGENT_DIR', path.join(root, 'native-pi-home'));
+    mkdirSync(process.env.PI_CODING_AGENT_DIR!);
+    writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'host global context canary');
     workingDir = path.join(root, 'workspace');
     state.userDataPath = path.join(root, 'user-data');
     state.binaryPath = path.join(root, 'pi');
@@ -160,11 +179,19 @@ describe('buildPiAgent roster prompt assembly', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     setXdGatewayModels([]);
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('forwards the host roster callback through real PiAgent startSession spawn args', async () => {
+  it.each(['default', 'override', 'tilde'])('forwards roster and %s user context through real PiAgent startup', async (source) => {
+    if (source !== 'override') {
+      const defaultHome = path.join(root, '.pi', 'agent');
+      mkdirSync(defaultHome, { recursive: true });
+      writeFileSync(path.join(defaultHome, 'AGENTS.md'), 'host global context canary');
+      vi.stubEnv('PI_CODING_AGENT_DIR', source === 'tilde' ? '~/.pi/agent' : undefined);
+    }
     const getGhostRosterPrompt = vi.fn(({ workingDir: cwd }: { workingDir?: string }) =>
       cwd ? '<ghost-roster>\n{"id":"art"}\n</ghost-roster>' : '',
     );
@@ -194,10 +221,12 @@ describe('buildPiAgent roster prompt assembly', () => {
     });
     const promptIndex = state.args.indexOf('--append-system-prompt');
     expect(promptIndex).toBeGreaterThan(-1);
-    expect(state.args[promptIndex + 1]).toContain(
+    expect(readFileSync(state.args[promptIndex + 1]!, 'utf8')).toContain(
       '<ghost-roster>\n{"id":"art"}\n</ghost-roster>',
     );
     expect(getGhostRosterPrompt).toHaveBeenCalledWith({ workingDir });
+    expect(readFileSync(path.join(state.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'utf8'))
+      .toBe('host global context canary');
     await handle.close();
   });
 });

@@ -14,10 +14,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import ts from 'typescript';
+import { EventEmitter } from 'node:events';
+
+const scanFork = vi.hoisted(() => vi.fn());
 
 // lifecycle.ts 里 import { app } from 'electron' —— 用最小 stub 喂给它。
 // 真实退出路径 (信号 / before-quit) 不在本文件覆盖。
 vi.mock('electron', () => ({
+  utilityProcess: { fork: scanFork },
   app: {
     on: vi.fn(),
     isReady: () => false,
@@ -29,7 +34,6 @@ vi.mock('electron', () => ({
 const nativePopupWebContentsIds = vi.hoisted(() => new Set<number>());
 const resourceUsageWebContentsIds = vi.hoisted(() => new Set<number>());
 const rsbWindowWebContentsIds = vi.hoisted(() => new Set<number>());
-const ghostPanelWebContentsIds = vi.hoisted(() => new Set<number>());
 const reviewArtifactConfirmWebContentsIds = vi.hoisted(() => new Set<number>());
 
 vi.mock('../rsb-browser-bridge/native-popup-surfaces', () => ({
@@ -46,10 +50,6 @@ vi.mock('../right-sidebar-window/registry.js', () => ({
   isRsbWindowWebContentsId: (webContentsId: number) => rsbWindowWebContentsIds.has(webContentsId),
 }));
 
-vi.mock('../ghost-panel-window/registry.js', () => ({
-  isGhostPanelWebContentsId: (webContentsId: number) =>
-    ghostPanelWebContentsIds.has(webContentsId),
-}));
 
 vi.mock('../reviewer/reviewArtifactConfirmWindowRegistry.js', () => ({
   isReviewArtifactConfirmWebContentsId: (webContentsId: number) =>
@@ -139,6 +139,43 @@ function snapshotProcessListeners(events: ProcessEventName[]) {
 }
 
 describe('runQuitDisposers', () => {
+  it('disposes pending Skill discovery through the real quit registry', async () => {
+    const lifecycle = await freshLifecycle();
+    const child = new EventEmitter();
+    const kill = vi.fn(() => true);
+    scanFork.mockReturnValue(Object.assign(child, { kill, postMessage: vi.fn() }));
+    const { scanLocalCustomizations } = await import('../skillhub/customizationScanHost');
+    const scan = scanLocalCustomizations('pi', {});
+    expect(kill).not.toHaveBeenCalled();
+    await lifecycle.runQuitDisposers();
+    expect((await scan).errors[0].message).toContain('stopped');
+    expect(kill).toHaveBeenCalledOnce();
+    expect((await scanLocalCustomizations('pi', {})).errors[0].message).toContain('stopped');
+    expect(scanFork).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the bootstrap quit budget open for an in-flight mode write and restoration', async () => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers, SHUTDOWN_HARD_KILL_GRACE_SECONDS } = await freshLifecycle();
+    const source = readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8');
+    const budget = Number(source.match(/installQuitHandler\((\d+)\);/)?.[1]);
+    expect(budget).toBeLessThan(SHUTDOWN_HARD_KILL_GRACE_SECONDS * 1000);
+    const events: string[] = [];
+    onQuit('remote-desktop-restore', async () => {
+      for (const step of ['in-flight-write', 'restore-mode', 'display-projection']) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        events.push(step);
+      }
+    }, 'async');
+    onQuit('after-restoration', () => { events.push('post-async'); }, 'post-async');
+    const quitting = runQuitDisposers(budget);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(events).toEqual(['in-flight-write', 'restore-mode']);
+    await vi.advanceTimersByTimeAsync(1);
+    await quitting;
+    expect(events).toEqual(['in-flight-write', 'restore-mode', 'display-projection', 'post-async']);
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
@@ -164,6 +201,42 @@ describe('runQuitDisposers', () => {
     await runQuitDisposers(1000);
 
     expect(log).toEqual(['a-sync', 'b-async', 'c-post']);
+  });
+
+  it.each([false, true])('keeps real bootstrap Codex and DB dependencies until Maker settles or times out (timeout=%s)', async (timesOut) => {
+    vi.useFakeTimers();
+    const { onQuit, runQuitDisposers } = await freshLifecycle();
+    // 读取真实注册顺序和 phase，避免测试中的手写编排与 bootstrap 漂移。
+    const source = ts.createSourceFile('bootstrap-electron.ts', readFileSync(join(__dirname, '../bootstrap-electron.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
+    const names = new Set(['shutdown-maker', 'lsp-pool', 'pi-subagent-final-sweep', 'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close']);
+    const registrations: Array<{ name: string; phase: 'sync' | 'async' | 'post-async' }> = [];
+    for (const node of source.statements) {
+      if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) continue;
+      const call = node.expression;
+      if (!ts.isIdentifier(call.expression) || call.expression.text !== 'onQuit') continue;
+      const [name, , phase] = call.arguments;
+      if (!name || !phase || !ts.isStringLiteral(name) || !ts.isStringLiteral(phase) || !names.has(name.text)) continue;
+      if (phase.text !== 'sync' && phase.text !== 'async' && phase.text !== 'post-async') throw new Error('invalid quit phase');
+      registrations.push({ name: name.text, phase: phase.text });
+    }
+    expect(registrations).toHaveLength(names.size);
+    const events: string[] = [];
+    let finish!: () => void;
+    const maker = new Promise<void>((resolve) => { finish = resolve; });
+    for (const { name, phase } of registrations) {
+      onQuit(name, name === 'shutdown-maker' ? async () => { await maker; events.push(name); } : () => { events.push(name); }, phase);
+    }
+    const quit = runQuitDisposers(100);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(events).toEqual(['lsp-pool']);
+    if (timesOut) await vi.advanceTimersByTimeAsync(100);
+    else finish();
+    await quit;
+    expect(events).toEqual([
+      'lsp-pool', ...(timesOut ? [] : ['shutdown-maker']), 'pi-subagent-final-sweep',
+      'codex-env', 'codex-proxy', 'remote-ssh-pool', 'db-client', 'local-db-close',
+    ]);
+    finish();
   });
 
   it('sync disposer that throws does not block subsequent disposers', async () => {
@@ -513,7 +586,6 @@ describe('installQuitHandler render-process-gone', () => {
     nativePopupWebContentsIds.clear();
     resourceUsageWebContentsIds.clear();
     rsbWindowWebContentsIds.clear();
-    ghostPanelWebContentsIds.clear();
     reviewArtifactConfirmWebContentsIds.clear();
   });
 
@@ -584,7 +656,7 @@ describe('installQuitHandler render-process-gone', () => {
     }
   });
 
-  it('resource usage renderer crash does NOT shut the app down', async () => {
+  it('recoverable auxiliary renderer crashes do NOT shut the app down', async () => {
     resourceUsageWebContentsIds.add(44);
     const { handler, app, restore } = await installAndGrabHandler();
     try {
@@ -595,6 +667,19 @@ describe('installQuitHandler render-process-gone', () => {
         expect.stringContaining('resource usage render-process-gone'),
       );
       expect(mocks.logger.error).not.toHaveBeenCalled();
+      // Unit regression for the real Windows direct-renderer crash: local
+      // cleanup ran, but the app-wide event still disposed DB/device-link.
+      // Other auxiliary tests never registered the transport factory's owner.
+      const { markCaptureWindowWebContents } = await import('../remote-desktop/captureWindowRegistry');
+      const capture = { id: 46, getType: () => 'window' };
+      markCaptureWindowWebContents(capture as unknown as Electron.WebContents);
+      handler(undefined, capture, { reason: 'crashed', exitCode: 5 });
+      await Promise.resolve();
+      expect(app.exit).not.toHaveBeenCalled();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('capture transport render-process-gone'),
+      );
     } finally {
       restore();
     }
@@ -609,21 +694,6 @@ describe('installQuitHandler render-process-gone', () => {
       expect(app.exit).not.toHaveBeenCalled();
       expect(mocks.logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('right sidebar render-process-gone'),
-      );
-    } finally {
-      restore();
-    }
-  });
-
-  it('ghost panel renderer crash does NOT shut the app down', async () => {
-    ghostPanelWebContentsIds.add(46);
-    const { handler, app, restore } = await installAndGrabHandler();
-    try {
-      handler(undefined, { id: 46, getType: () => 'window' }, { reason: 'crashed', exitCode: 5 });
-      await new Promise((r) => setTimeout(r, 20));
-      expect(app.exit).not.toHaveBeenCalled();
-      expect(mocks.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('ghost panel render-process-gone'),
       );
     } finally {
       restore();

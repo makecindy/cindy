@@ -7,6 +7,7 @@ export interface GetCurrentSessionIdDeps {
     sessionId?: string;
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;
+    vendorOptions?: Record<string, unknown>;
   };
 }
 
@@ -36,6 +37,7 @@ export function registerGetCurrentSessionIdTool(
         session_id: ctx.sessionId,
         agent_kind: ctx.agentKind,
         working_dir: ctx.workingDir,
+        ...(ctx.vendorOptions?.orcaRemoteLead ? { orca_remote_lead: ctx.vendorOptions.orcaRemoteLead } : {}),
       });
     },
   });

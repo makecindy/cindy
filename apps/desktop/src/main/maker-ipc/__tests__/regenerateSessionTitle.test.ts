@@ -11,7 +11,7 @@ const logger = vi.hoisted(() => ({
   debug: vi.fn(),
 }));
 
-vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
+vi.mock('electron', () => ({ app: { once: vi.fn() }, ipcMain: { handle: vi.fn() } }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => logger,
 }));
@@ -24,15 +24,17 @@ vi.mock('../../localDb/latestMessageText.js', () => ({
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../maker-host/title-one-shot.js', () => ({
-  generateTitleViaProvider: vi.fn(),
-  generateTitleViaProviderResult: vi.fn(),
-}));
-vi.mock('../../utility-model/auxiliary-model-settings-store.js', () => ({
-  readAuxiliaryModelSelection: vi.fn(() => null),
+vi.mock('../../maker-host/auxiliary-title-one-shot.js', () => ({
+  generateTitleWithAuxiliaryModel: vi.fn(),
+  generateTitleWithAuxiliaryModelResult: vi.fn(),
 }));
 vi.mock('../../i18n.js', () => ({
   getResolvedMainLocale: vi.fn(() => 'en'),
+}));
+// title.ts imports promptPrediction statically; this suite covers the
+// dependency-injected title flow and should not initialize maker-host.
+vi.mock('../promptPrediction.js', () => ({
+  generatePromptPrediction: vi.fn(),
 }));
 
 import {
@@ -40,10 +42,8 @@ import {
   regenerateMakerSessionTitle,
   type RegenerateTitleDeps,
 } from '../title.js';
-import {
-  generateTitleViaProvider,
-  type TitleOneShotResult,
-} from '../../maker-host/title-one-shot.js';
+import { generateTitleWithAuxiliaryModel } from '../../maker-host/auxiliary-title-one-shot.js';
+import type { TitleOneShotResult } from '../../maker-host/title-one-shot.js';
 import { getResolvedMainLocale } from '../../i18n.js';
 import type { RegenerateTitleMaterial } from '../../localDb/latestMessageText.js';
 
@@ -328,8 +328,28 @@ describe('regenerateMakerSessionTitle', () => {
     '这轮反馈刚查,改样式:\nAssistant: 再补一个回归测试',
     '# Codex 子代理',
     '根据对话内容，这是一个标题',
-    '这是一条超过二十个 Unicode 字符的标题文本',
   ])('模型返回明显 transcript/元文本时拒绝保存: %s', async (generated) => {
+    await expect(
+      regenerateMakerSessionTitle(
+        's1',
+        makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
+      ),
+    ).rejects.toThrow(/\[INTERNAL\]/);
+  });
+
+  it.each(['研究Deepseek Harness对比Cindy', '字'.repeat(40), '😀'.repeat(40)])(
+    '接受正常标题及 40 个 Unicode 字符的边界: %s',
+    async (generated) => {
+      await expect(
+        regenerateMakerSessionTitle(
+          's1',
+          makeDeps({ generateTitle: vi.fn(async () => generatedTitle(generated)) }),
+        ),
+      ).resolves.toBe(generated);
+    },
+  );
+
+  it.each(['字'.repeat(41), '😀'.repeat(41)])('防御性拒绝生成器违约返回超过 40 个字符的结果: %s', async (generated) => {
     await expect(
       regenerateMakerSessionTitle(
         's1',
@@ -371,21 +391,21 @@ describe('regenerateMakerSessionTitle', () => {
 
 describe('generateMakerSessionTitle', () => {
   it('空/全空白消息(如仅图片附件的首条输入)→ null 且不发标题请求', async () => {
-    vi.mocked(generateTitleViaProvider).mockClear();
+    vi.mocked(generateTitleWithAuxiliaryModel).mockClear();
 
     expect(await generateMakerSessionTitle('', 'claude-code', 's1')).toBeNull();
     expect(await generateMakerSessionTitle('   \n  ', 'codex', 's1')).toBeNull();
-    expect(generateTitleViaProvider).not.toHaveBeenCalled();
+    expect(generateTitleWithAuxiliaryModel).not.toHaveBeenCalled();
   });
 
   it('非空消息走 provider oneShot,prompt 使用 trim 后的消息', async () => {
-    vi.mocked(generateTitleViaProvider).mockClear();
-    vi.mocked(generateTitleViaProvider).mockResolvedValueOnce('登录失败排查');
+    vi.mocked(generateTitleWithAuxiliaryModel).mockClear();
+    vi.mocked(generateTitleWithAuxiliaryModel).mockResolvedValueOnce('登录失败排查');
 
     expect(await generateMakerSessionTitle('  帮我排查登录失败  ', 'claude-code', 's1')).toBe(
       '登录失败排查',
     );
-    const [request] = vi.mocked(generateTitleViaProvider).mock.calls[0] as [
+    const [request] = vi.mocked(generateTitleWithAuxiliaryModel).mock.calls[0] as [
       { sessionId: string; agentKind: string; prompt: string },
     ];
     expect(request.sessionId).toBe('s1');
@@ -401,12 +421,12 @@ describe('generateMakerSessionTitle', () => {
     ['ko', 'Korean'],
   ] as const)('界面语言 %s → auto-title prompt 明确要求 %s 标题', async (locale, language) => {
     vi.mocked(getResolvedMainLocale).mockReturnValue(locale);
-    vi.mocked(generateTitleViaProvider).mockClear();
-    vi.mocked(generateTitleViaProvider).mockResolvedValueOnce('title');
+    vi.mocked(generateTitleWithAuxiliaryModel).mockClear();
+    vi.mocked(generateTitleWithAuxiliaryModel).mockResolvedValueOnce('title');
 
     await generateMakerSessionTitle('message', 'claude-code', 's1');
 
-    const request = vi.mocked(generateTitleViaProvider).mock.calls[0]?.[0];
+    const request = vi.mocked(generateTitleWithAuxiliaryModel).mock.calls[0]?.[0];
     expect(request?.prompt).toContain(`Write the title in ${language}.`);
   });
 });

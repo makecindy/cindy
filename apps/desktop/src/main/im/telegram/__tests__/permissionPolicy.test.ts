@@ -52,3 +52,10 @@ describe('telegram guest turn permission policy(一群一会话的成员轮次�
     ).toBe(true);
   });
 });
+
+
+it('keeps trusted requester authority separate from message text', () => {
+  expect(createTelegramGuestTurnPermissionPolicy('message', true).autoReviewContext).toEqual({ requesterAuthority: 'owner', source: 'group' });
+  expect(createTelegramGuestTurnPermissionPolicy('message', false).autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+  expect(createTelegramGuestTurnPermissionPolicy('message').autoReviewContext?.requesterAuthority).toBe('unknown');
+});

@@ -4,7 +4,7 @@
  * os.tmpdir 临时目录(规则 23:生成物不落仓库工作区),零 Electron。
  * symlink 用例带能力探针(Windows 无特权时跳过;POSIX CI 实跑)。
  */
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -16,7 +16,11 @@ import {
   DEFAULT_LIBRARY_LIMITS,
   type LibraryVaultDeps,
   type LibraryLimits,
+  type LibraryFileIdentity,
+  type LibraryReadHandle,
 } from '../libraryVault.js';
+import { initCustomLibraryTree, openExistingCustomLibrary, parseExistingStdout, PROVABLE_STAGING_NAME } from '../libraryDirFd.js';
+import { relocateLibraryMetaOwner } from '../libraryBinding.js';
 
 const sha256Of = (s: string): string => createHash('sha256').update(s).digest('hex');
 
@@ -50,14 +54,48 @@ describe('LibraryVault', () => {
   let diskFree: number | null = 1024 ** 4; // 1 TiB:默认宽裕
   let limitsOverride: Partial<LibraryLimits> = {};
 
-  const makeVault = (): LibraryVault => {
+  const makeVault = (over: Partial<LibraryVaultDeps> = {}): LibraryVault => {
     const deps: LibraryVaultDeps = {
       rootDir: () => libraryRoot,
       ghostId: 'test-ghost',
       getDiskFreeBytes: async () => diskFree,
       locationKind: 'default',
+      limits: limitsOverride,
+      ...over,
     };
     return new LibraryVault(deps);
+  };
+
+  const identityStub = (
+    size: number,
+    isFile = true,
+    ino = 1,
+    dev = 1,
+  ): LibraryFileIdentity => ({
+    size: BigInt(size),
+    isFile: () => isFile,
+    ino: BigInt(ino),
+    dev: BigInt(dev),
+  });
+
+  const fakeReadHandle = (opts: {
+    statSize: number;
+    isFile?: boolean;
+    data?: Buffer;
+    ino?: number;
+    dev?: number;
+    readSpy?: () => void;
+  }): LibraryReadHandle => {
+    const data = opts.data ?? Buffer.alloc(opts.statSize);
+    return {
+      stat: async () => identityStub(opts.statSize, opts.isFile ?? true, opts.ino ?? 1, opts.dev ?? 1),
+      read: async (buffer, offset, length, position) => {
+        opts.readSpy?.();
+        const bytesRead = data.copy(buffer, offset, position, position + length);
+        return { bytesRead };
+      },
+      close: async () => undefined,
+    };
   };
 
   beforeEach(async () => {
@@ -65,7 +103,6 @@ describe('LibraryVault', () => {
     libraryRoot = path.join(tmpRoot, 'libraries', 'test-ghost');
     diskFree = 1024 ** 4;
     limitsOverride = {};
-    void limitsOverride; // 后续用例需要时经 makeVault 参数化;当前统一默认限额
   });
 
   afterEach(async () => {
@@ -73,6 +110,53 @@ describe('LibraryVault', () => {
   });
 
   describe('open / status / meta', () => {
+    it('does not open a default library whose persisted owner differs from the plugin', async () => {
+      const previous = makeVault({ ghostId: 'other-plugin' });
+      expect(await previous.open()).toMatchObject({ ok: true, state: 'ready' });
+      await fs.promises.writeFile(path.join(libraryRoot, 'keep.txt'), 'private');
+      const current = makeVault();
+      expect(await current.open()).toMatchObject({ ok: true, state: 'unavailable', reason: 'corrupt' });
+      expect(await fs.promises.readFile(path.join(libraryRoot, 'keep.txt'), 'utf8')).toBe('private');
+    });
+
+    it('opens a physically relocated library after its owner meta is migrated', async () => {
+      const original = path.join(tmpRoot, 'libraries', 'hello');
+      const previous = makeVault({ rootDir: () => original, ghostId: 'hello' });
+      expect(await previous.open()).toMatchObject({ ok: true, state: 'ready' });
+      await fs.promises.writeFile(path.join(original, 'keep.txt'), 'org');
+      const destination = path.join(tmpRoot, 'libraries', '_ns__acme__hello');
+      await fs.promises.rename(original, destination);
+      expect(await relocateLibraryMetaOwner(destination, 'hello', '_ns__acme__hello')).toBe(true);
+      const current = makeVault({ rootDir: () => destination, ghostId: '_ns__acme__hello' });
+      expect(await current.open()).toMatchObject({ ok: true, state: 'ready' });
+      expect(await fs.promises.readFile(path.join(destination, 'keep.txt'), 'utf8')).toBe('org');
+    });
+
+    it('does not open a custom library whose persisted owner differs from the plugin', async () => {
+      const parent = path.join(tmpRoot, 'picked-owner');
+      const custom = path.join(parent, 'test-ghost');
+      await fs.promises.mkdir(parent, { recursive: true });
+      // Seed the persisted tree without a native helper: this unit tests the
+      // vault's owner comparison, not cold PowerShell startup (15s under CI load).
+      // Real held-fd init/open coverage remains in the custom-tree tests below.
+      const previous = makeVault({ rootDir: () => custom, ghostId: 'other-plugin' });
+      expect(await previous.open()).toMatchObject({ ok: true, state: 'ready' });
+      const metaFile = path.join(custom, '.cindy-library', 'meta.json');
+      const persistedMeta = await fs.promises.readFile(metaFile, 'utf8');
+      const keepFile = path.join(custom, 'keep.txt');
+      await fs.promises.writeFile(keepFile, 'private');
+      const openExistingCustom = vi.fn(async () => ({
+        ok: true as const,
+        meta: JSON.parse(await fs.promises.readFile(metaFile, 'utf8')),
+        usage: null,
+      }));
+      const current = makeVault({ rootDir: () => custom, locationKind: 'custom', openExistingCustom });
+      expect(await current.open()).toMatchObject({ ok: true, state: 'unavailable', reason: 'binding-moved' });
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(await fs.promises.readFile(metaFile, 'utf8')).toBe(persistedMeta);
+      expect(await fs.promises.readFile(keepFile, 'utf8')).toBe('private');
+    });
+
     it('open 建骨架并写 meta;重复 open 幂等', async () => {
       const vault = makeVault();
       const first = await vault.open();
@@ -86,6 +170,334 @@ describe('LibraryVault', () => {
       // staging 目录存在(原子写的落点)。
       const stat = await fs.promises.stat(path.join(libraryRoot, '.cindy-library', 'tmp'));
       expect(stat.isDirectory()).toBe(true);
+    });
+
+    it('custom 已建过(allowCustomInit=false)且新 vault: ghost 子目录 MISSING 不得空库重建', async () => {
+      const parent = path.join(tmpRoot, 'picked-no-init');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(parent, { recursive: true });
+      // Unit contract: LibraryVault.open must not recreate an initialized custom
+      // library after existing-open reports MISSING. Under CI load the native
+      // PowerShell helper can hit its 15s timeout instead (CI #7829). Inject
+      // its result here; adjacent custom-tree cases retain real helper coverage.
+      const openExistingCustom = vi.fn(async () => ({ ok: false as const, code: 'MISSING' as const }));
+      const initCustomTree = vi.fn(async () => ({ ok: false as const, code: 'UNSUPPORTED' as const }));
+      const vault = makeVault({
+        rootDir: () => custom,
+        locationKind: 'custom',
+        allowCustomInit: false,
+        openExistingCustom,
+        initCustomTree,
+      });
+      const missing = await vault.open();
+      expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(openExistingCustom).toHaveBeenCalledOnce();
+      expect(initCustomTree).not.toHaveBeenCalled();
+      expect(fs.existsSync(custom)).toBe(false);
+      expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(false);
+    });
+
+    it('custom 已 open 后 ghost 子目录消失: 再 open 报 disk-missing 且不重建空库', async () => {
+      const parent = path.join(tmpRoot, 'picked-ghost-gone');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      await fs.promises.writeFile(path.join(custom, 'keep.txt'), 'keep-me');
+      const vault = makeVault({ rootDir: () => custom, locationKind: 'custom' });
+      expect(await vault.open()).toMatchObject({ ok: true, state: 'ready' });
+      await fs.promises.rename(custom, `${custom}.parked`);
+      const missing = await vault.open();
+      expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(fs.existsSync(custom)).toBe(false);
+      expect(fs.existsSync(path.join(parent, 'mivo-canvas', '.cindy-library', 'meta.json'))).toBe(false);
+      expect(fs.existsSync(path.join(`${custom}.parked`, 'keep.txt'))).toBe(true);
+    });
+    it('custom 用户父目录消失: open 报 disk-missing 且不重建空库; keep 仍在 rename 走的目录', async () => {
+      const parent = path.join(tmpRoot, 'picked');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      await fs.promises.writeFile(path.join(custom, 'keep.txt'), 'keep-me');
+      const first = makeVault({ rootDir: () => custom, locationKind: 'custom' });
+      const opened = await first.open();
+      expect(opened).toMatchObject({ ok: true, state: 'ready' });
+      await fs.promises.rename(parent, `${parent}.parked`);
+      const second = makeVault({ rootDir: () => custom, locationKind: 'custom' });
+      const missing = await second.open();
+      expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(fs.existsSync(parent)).toBe(false);
+      expect(fs.existsSync(custom)).toBe(false);
+      expect(fs.existsSync(path.join(`${parent}.parked`, 'mivo-canvas', 'keep.txt'))).toBe(true);
+    });
+
+    it('custom 最后一次 inspect 后、骨架 mkdir 前父目录被移走:不得 recursive 重建空库', async () => {
+      const parent = path.join(tmpRoot, 'picked-411');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      await fs.promises.writeFile(path.join(custom, 'keep.txt'), 'keep-me');
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const first = makeVault({ rootDir: () => custom, locationKind: 'custom', customParentGrant: grant });
+      expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
+      const parked = `${parent}.parked`;
+      let injected = false;
+      const raced = makeVault({
+        rootDir: () => custom,
+        locationKind: 'custom',
+        customParentGrant: grant,
+        openExistingCustom: async (req) => {
+          if (!injected) {
+            injected = true;
+            if (fs.existsSync(parent)) await fs.promises.rename(parent, parked);
+          }
+          return openExistingCustomLibrary(req);
+        },
+      });
+      const missing = await raced.open();
+      expect(injected).toBe(true);
+      expect(missing).toMatchObject({ ok: true, state: 'unavailable', reason: 'disk-missing' });
+      expect(fs.existsSync(parent)).toBe(false);
+      expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(false);
+      expect(fs.existsSync(path.join(parked, 'mivo-canvas', 'keep.txt'))).toBe(true);
+    });
+
+    it('最后一次成功 inspect 后、mkdir(root) 前换成同路径新 inode:不得在替换目录创建/写 meta', async () => {
+      if (process.platform === 'win32') return;
+      const parent = path.join(tmpRoot, 'picked-379');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      await fs.promises.writeFile(path.join(custom, 'keep.txt'), 'keep-me');
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const first = makeVault({ rootDir: () => custom, locationKind: 'custom', customParentGrant: grant });
+      expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
+      const parked = `${parent}.parked`;
+      let injected = false;
+      const raced = makeVault({
+        rootDir: () => custom,
+        locationKind: 'custom',
+        customParentGrant: grant,
+        openExistingCustom: async (req) => {
+          if (!injected) {
+            injected = true;
+            if (fs.existsSync(parent)) await fs.promises.rename(parent, parked);
+            await fs.promises.mkdir(parent);
+          }
+          return openExistingCustomLibrary(req);
+        },
+      });
+      const opened = await raced.open();
+      expect(injected).toBe(true);
+      expect(opened).toMatchObject({ ok: true, state: 'unavailable', reason: 'binding-moved' });
+      expect(fs.existsSync(custom)).toBe(false);
+      expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(false);
+      expect(fs.existsSync(path.join(parked, 'mivo-canvas', 'keep.txt'))).toBe(true);
+    });
+
+    it('D: initCustomLibraryTree 后 sweep readdir 换根不得写 replacement usage.json', async () => {
+      if (process.platform === 'win32') return;
+      const parent = path.join(tmpRoot, 'picked-D');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(parent);
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const parked = `${parent}.parked`;
+      let afterInit = false;
+      let swapped = false;
+      const origReaddir = fs.promises.readdir.bind(fs.promises);
+      const origRename = fs.promises.rename.bind(fs.promises);
+      const origMkdir = fs.promises.mkdir.bind(fs.promises);
+      const origWriteFile = fs.promises.writeFile.bind(fs.promises);
+      const readdirSpy = vi.spyOn(fs.promises, 'readdir').mockImplementation(async (target, options) => {
+        const dest = String(target);
+        if (afterInit && !swapped && dest.includes(`${path.sep}mivo-canvas${path.sep}.cindy-library${path.sep}tmp`)) {
+          swapped = true;
+          if (fs.existsSync(parent)) await origRename(parent, parked);
+          await origMkdir(parent);
+          await origMkdir(custom);
+          await origMkdir(path.join(custom, '.cindy-library'));
+          await origMkdir(path.join(custom, '.cindy-library', 'tmp'));
+          await origWriteFile(path.join(custom, '.cindy-library', 'meta.json'), JSON.stringify({
+            version: 1, ghostId: 'mivo-canvas', createdAt: 1,
+          }));
+          await origWriteFile(path.join(custom, 'user-keep.txt'), 'user');
+          await origWriteFile(path.join(custom, '.cindy-library', 'tmp', 'old.tmp'), 'stale');
+        }
+        return origReaddir(target, options);
+      });
+      const vault = makeVault({
+        rootDir: () => custom,
+        locationKind: 'custom',
+        customParentGrant: grant,
+        ghostId: 'mivo-canvas',
+        initCustomTree: async (req) => {
+          const r = await initCustomLibraryTree(req);
+          afterInit = true;
+          return r;
+        },
+      });
+      const opened = await vault.open();
+      readdirSpy.mockRestore();
+      expect(opened.ok).toBe(true);
+      expect(fs.existsSync(path.join(custom, '.cindy-library', 'usage.json'))).toBe(false);
+      if (swapped) {
+        expect(fs.existsSync(path.join(custom, 'user-keep.txt'))).toBe(true);
+        expect(opened).toMatchObject({ state: 'unavailable' });
+      } else {
+        expect(opened).toMatchObject({ state: 'ready' });
+        expect(fs.existsSync(path.join(parent, 'mivo-canvas', '.cindy-library', 'usage.json'))).toBe(false);
+      }
+    });
+
+    it('已有 custom 再 open 走 existing,不调用 create helper', async () => {
+      const parent = path.join(tmpRoot, 'picked-exist');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const first = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
+      const init = vi.fn(async () => ({ ok: false as const, code: 'UNSUPPORTED' as const }));
+      const second = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+        initCustomTree: init,
+      });
+      expect(await second.open()).toMatchObject({ ok: true, state: 'ready' });
+      expect(init).not.toHaveBeenCalled();
+    });
+
+    it('existing UNSUPPORTED 且无完整结构: permission 且不 mkdir', async () => {
+      const parent = path.join(tmpRoot, 'picked-win');
+      await fs.promises.mkdir(parent);
+      const custom = path.join(parent, 'mivo-canvas');
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const vault = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+        openExistingCustom: async () => ({ ok: false as const, code: 'UNSUPPORTED' as const }),
+        initCustomTree: async () => ({ ok: false as const, code: 'UNSUPPORTED' as const }),
+      });
+      const opened = await vault.open();
+      expect(opened).toMatchObject({ ok: true, state: 'unavailable', reason: 'permission' });
+      expect(fs.existsSync(custom)).toBe(false);
+    });
+
+    it('合法 usage.json 只读复用,不因 custom open 丢账本', async () => {
+      const parent = path.join(tmpRoot, 'picked-ledger');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const first = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
+      const w = await first.write({ path: 'keep.txt', content: 'abcdef' });
+      expect(w.ok).toBe(true);
+      const second = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      const opened = await second.open();
+      expect(opened).toMatchObject({ ok: true, state: 'ready', usedBytes: Buffer.byteLength('abcdef') });
+    });
+
+    it('existing-open payload: pretty 与 compact 合法 meta 都读, malformed 仍 CORRUPT', () => {
+      const compact = 'OK\n{"version":1,"ghostId":"mivo-canvas","createdAt":1}\n{"files":2,"bytes":10,"updatedAt":1,"mutations":0}';
+      const prettyMeta = JSON.stringify({ version: 1, ghostId: 'mivo-canvas', createdAt: 1 }, null, 2);
+      const prettyUsage = JSON.stringify({ files: 2, bytes: 10, updatedAt: 1, mutations: 0 }, null, 2);
+      const pretty = `OK\n${prettyMeta}\n${prettyUsage}`;
+      expect(parseExistingStdout(compact)).toMatchObject({
+        ok: true, meta: { version: 1, ghostId: 'mivo-canvas', createdAt: 1 }, usage: { files: 2, bytes: 10 },
+      });
+      expect(parseExistingStdout(pretty)).toMatchObject({
+        ok: true, meta: { version: 1, ghostId: 'mivo-canvas', createdAt: 1 }, usage: { files: 2, bytes: 10 },
+      });
+      expect(parseExistingStdout('OK\n{"version":1,"ghostId":"mivo-canvas","createdAt":1}')).toMatchObject({
+        ok: true, usage: null,
+      });
+      expect(parseExistingStdout('OK\n{not json')).toMatchObject({ ok: false, code: 'CORRUPT' });
+      expect(parseExistingStdout('OK\n{"version":2,"ghostId":"mivo-canvas","createdAt":1}')).toMatchObject({ ok: false, code: 'CORRUPT' });
+      expect(parseExistingStdout('OK\n{"version":1,"ghostId":"mivo-canvas","createdAt":1}\n{nope')).toMatchObject({ ok: false, code: 'CORRUPT' });
+      expect(parseExistingStdout('MISSING')).toMatchObject({ ok: false, code: 'MISSING' });
+    });
+
+    it('pretty-printed 落盘 meta 再 open 仍 ready,不降校验', async () => {
+      const parent = path.join(tmpRoot, 'picked-pretty');
+      const custom = path.join(parent, 'mivo-canvas');
+      await fs.promises.mkdir(custom, { recursive: true });
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const first = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      expect(await first.open()).toMatchObject({ ok: true, state: 'ready' });
+      const metaPath = path.join(custom, '.cindy-library', 'meta.json');
+      const compact = JSON.parse(await fs.promises.readFile(metaPath, 'utf8'));
+      await fs.promises.writeFile(metaPath, JSON.stringify(compact, null, 2));
+      const second = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      expect(await second.open()).toMatchObject({ ok: true, state: 'ready' });
+      await fs.promises.writeFile(metaPath, '{not json');
+      const third = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      expect(await third.open()).toMatchObject({ ok: true, state: 'unavailable', reason: 'corrupt' });
+    });
+
+    it('可证 staging 名只匹配 uuid.tmp/stream,不匹配 old.tmp 或原件', () => {
+      expect(PROVABLE_STAGING_NAME.test('25ae5922-06f7-46dd-99f1-6d914d53af33.tmp')).toBe(true);
+      expect(PROVABLE_STAGING_NAME.test('25ae5922-06f7-46dd-99f1-6d914d53af33.stream')).toBe(true);
+      expect(PROVABLE_STAGING_NAME.test('old.tmp')).toBe(false);
+      expect(PROVABLE_STAGING_NAME.test('keep.txt')).toBe(false);
+      expect(PROVABLE_STAGING_NAME.test('meta.json')).toBe(false);
+    });
+
+    it('Windows 新建 custom 走稳定 parent handle 首建 ready', async () => {
+      if (process.platform !== 'win32') return;
+      const parent = path.join(tmpRoot, 'picked-win-new');
+      await fs.promises.mkdir(parent);
+      const custom = path.join(parent, 'mivo-canvas');
+      const parentStat = await fs.promises.lstat(parent);
+      const grant = {
+        realPathAtGrant: await fs.promises.realpath(parent),
+        identity: { dev: parentStat.dev, ino: parentStat.ino },
+      };
+      const vault = makeVault({
+        rootDir: () => custom, locationKind: 'custom', customParentGrant: grant, ghostId: 'mivo-canvas',
+      });
+      const opened = await vault.open();
+      expect(opened).toMatchObject({ ok: true, state: 'ready' });
+      expect(fs.existsSync(path.join(custom, '.cindy-library', 'meta.json'))).toBe(true);
+    });
+
+    it('default 缺失根仍可首次创建', async () => {
+      const missing = path.join(tmpRoot, 'brand-new-default', 'ghost');
+      const vault = makeVault({ rootDir: () => missing, locationKind: 'default' });
+      const opened = await vault.open();
+      expect(opened).toMatchObject({ ok: true, state: 'ready' });
+      expect(fs.existsSync(path.join(missing, '.cindy-library', 'meta.json'))).toBe(true);
     });
 
     it('meta 损坏 → unavailable(corrupt),绝不静默重建空库', async () => {
@@ -240,6 +652,73 @@ describe('LibraryVault', () => {
       // staging 清空。
       const tmpEntries = await fs.promises.readdir(path.join(libraryRoot, '.cindy-library', 'tmp'));
       expect(tmpEntries).toEqual([]);
+      const dirSync = await vault.fsyncDir('assets');
+      expect(dirSync.ok).toBe(true);
+      if (dirSync.ok) {
+        if (process.platform === 'win32') expect(dirSync.fsynced).toBe(false);
+        else expect(dirSync.fsynced).toBe(true);
+      }
+      const residue = await vault.tmpResidueBytes();
+      expect(residue).toEqual({ ok: true, bytes: 0 });
+    });
+
+    it('fsyncCreatedAncestors 同步新建根的父目录项,只 fsync 根不等于根 entry 已耐久', async () => {
+      const nestedRoot = path.join(tmpRoot, 'owners', 'a', 'library-staging', 'test-ghost');
+      const vault = makeVault({ rootDir: () => nestedRoot });
+      const opened = await vault.open();
+      expect(opened.ok).toBe(true);
+      const parent = path.dirname(nestedRoot);
+      expect(fs.existsSync(parent)).toBe(true);
+      const synced = new Set<string>();
+      const origOpen = fs.promises.open.bind(fs.promises);
+      const spy = vi.spyOn(fs.promises, 'open').mockImplementation(async (file, flags, mode) => {
+        const handle = await origOpen(file, flags, mode);
+        if (typeof file === 'string' && flags === 'r') {
+          const origSync = handle.sync.bind(handle);
+          handle.sync = async () => {
+            synced.add(path.resolve(file));
+            return origSync();
+          };
+        }
+        return handle;
+      });
+      try {
+        const ok = await vault.fsyncCreatedAncestors();
+        expect(ok.ok).toBe(true);
+        if (process.platform === 'win32') {
+          if (ok.ok) expect(ok.fsynced).toBe(false);
+        } else {
+          if (ok.ok) expect(ok.fsynced).toBe(true);
+          expect(synced.has(path.resolve(parent))).toBe(true);
+        }
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('fsyncCreatedAncestors 父目录 fsync 失败则 INTERNAL,不得当耐久', async () => {
+      const nestedRoot = path.join(tmpRoot, 'owners', 'b', 'library-staging', 'test-ghost');
+      const vault = makeVault({ rootDir: () => nestedRoot });
+      await vault.open();
+      const parent = path.resolve(path.dirname(nestedRoot));
+      const origOpen = fs.promises.open.bind(fs.promises);
+      const spy = vi.spyOn(fs.promises, 'open').mockImplementation(async (file, flags, mode) => {
+        if (typeof file === 'string' && path.resolve(file) === parent && flags === 'r') {
+          throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        }
+        return origOpen(file, flags, mode);
+      });
+      try {
+        const failed = await vault.fsyncCreatedAncestors();
+        if (process.platform === 'win32') {
+          expect(failed).toEqual({ ok: true, fsynced: false });
+        } else {
+          expect(failed.ok).toBe(false);
+          if (!failed.ok) expect(failed.errorCode).toBe('INTERNAL');
+        }
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('sha256 声明不符 → STREAM_INVALID 且不留目标文件', async () => {
@@ -312,6 +791,8 @@ describe('LibraryVault', () => {
 
       const flat = await vault.list({ path: 'canvases/c1' });
       if (flat.ok) expect(flat.entries.map((e) => e.path)).toEqual(['canvases/c1/state.json']);
+      const compatible = await vault.list({ recursive: false });
+      expect(compatible.ok).toBe(true);
     });
   });
 
@@ -446,6 +927,107 @@ describe('LibraryVault', () => {
       expect(r.ok).toBe(false);
       const d = await vault.delete({ path: 'escape-door/anything' });
       expect(d.ok).toBe(false);
+      const compatible = await vault.list({ recursive: false });
+      expect(compatible.ok).toBe(true);
+      const strict = await vault.list({ recursive: false, strict: true });
+      expect(strict.ok).toBe(false);
+      if (!strict.ok) expect(strict.errorCode).toBe('LIBRARY_UNAVAILABLE');
+    });
+  });
+
+  describe('read 路径 O_NOFOLLOW + identity 复核', () => {
+    it('常规 blob 可读(真实 fs,正本 assets/<2>/<hash>/blob.ext)', async () => {
+      const vault = makeVault();
+      await vault.open();
+      const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
+      const body = 'pixel-bytes';
+      const w = await vault.write({ path: rel, content: body });
+      expect(w.ok).toBe(true);
+      const r = await vault.read({ path: rel });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.content).toBe(body);
+        expect(r.sha256).toBe(sha256Of(body));
+        expect(r.bytes).toBe(Buffer.byteLength(body));
+      }
+      const hashed = await vault.hashFile(rel);
+      expect(hashed).toEqual({ ok: true, path: rel, bytes: Buffer.byteLength(body), sha256: sha256Of(body) });
+    });
+
+    it('打开后目标 identity 变化 → INTERNAL 且不得返回字节', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/ab/deadbeefdeadbeefdeadbeefdeadbeef/blob.bin', content: 'secret' });
+      let readCalled = false;
+      const vaultSwap = makeVault({
+        lstatForRead: async () => identityStub(6, true, 1, 1),
+        openForRead: async () =>
+          fakeReadHandle({
+            statSize: 6,
+            data: Buffer.from('secret'),
+            ino: 999,
+            readSpy: () => {
+              readCalled = true;
+            },
+          }),
+      });
+      await vaultSwap.open();
+      const r = await vaultSwap.read({ path: 'assets/ab/deadbeefdeadbeefdeadbeefdeadbeef/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(readCalled).toBe(false);
+    });
+
+    it('ino=0 身份不可用 → fail-closed INTERNAL,不得返回字节', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/cd/cafecafecafecafecafecafecafecafe/blob.bin', content: 'leak' });
+      let readCalled = false;
+      const vaultZero = makeVault({
+        lstatForRead: async () => identityStub(4, true, 0, 1),
+        openForRead: async () =>
+          fakeReadHandle({
+            statSize: 4,
+            data: Buffer.from('leak'),
+            ino: 0,
+            readSpy: () => {
+              readCalled = true;
+            },
+          }),
+      });
+      await vaultZero.open();
+      const r = await vaultZero.read({ path: 'assets/cd/cafecafecafecafecafecafecafecafe/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(readCalled).toBe(false);
+    });
+
+    it('openForRead 收到 O_RDONLY|O_NOFOLLOW;失败不得回落无复核 read', async () => {
+      const vault = makeVault();
+      await vault.open();
+      await vault.write({ path: 'assets/ef/efefefefefefefefefefefefefefefef/blob.bin', content: 'payload' });
+      const seenFlags: number[] = [];
+      const vaultFlags = makeVault({
+        lstatForRead: async () => identityStub(7, true, 1, 1),
+        openForRead: async (_abs, flags) => {
+          seenFlags.push(flags);
+          const err = new Error('ELOOP') as NodeJS.ErrnoException;
+          err.code = 'ELOOP';
+          throw err;
+        },
+      });
+      await vaultFlags.open();
+      const r = await vaultFlags.read({ path: 'assets/ef/efefefefefefefefefefefefefefefef/blob.bin' });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errorCode).toBe('INTERNAL');
+      expect(r).not.toHaveProperty('content');
+      expect(seenFlags).toHaveLength(1);
+      expect(seenFlags[0] & fs.constants.O_RDONLY).toBe(fs.constants.O_RDONLY);
+      if (typeof fs.constants.O_NOFOLLOW === 'number') {
+        expect(seenFlags[0] & fs.constants.O_NOFOLLOW).toBe(fs.constants.O_NOFOLLOW);
+      }
     });
   });
 });

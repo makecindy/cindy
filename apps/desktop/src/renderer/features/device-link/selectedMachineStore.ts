@@ -1,3 +1,4 @@
+import { isOrdinaryTaskListSession } from '../../../shared/sessionSource';
 /**
  * selectedMachineStore —— 控制端「机器切换栏」当前选择态(device-link 远程机器切换)。
  * ---------------------------------------------------------------------------
@@ -205,10 +206,14 @@ export function selectVisibleSessions(
   remoteSessions: Session[],
   selection: MachineSelection,
 ): Session[] {
-  if (selection === MACHINE_ALL) return [...localSessions, ...remoteSessions];
+  // Attached task metadata remains readable in the mirror but has its own entry.
+  const isOrdinaryTask = isOrdinaryTaskListSession;
+  const visibleLocal = localSessions.filter(isOrdinaryTask);
+  const visibleRemote = remoteSessions.filter(isOrdinaryTask);
+  if (selection === MACHINE_ALL) return [...visibleLocal, ...visibleRemote];
   const set = new Set(selection);
-  const out = set.has(MACHINE_LOCAL) ? [...localSessions] : [];
-  for (const s of remoteSessions) {
+  const out = set.has(MACHINE_LOCAL) ? [...visibleLocal] : [];
+  for (const s of visibleRemote) {
     if (s.deviceLinkDeviceId && set.has(s.deviceLinkDeviceId)) out.push(s);
   }
   return out;

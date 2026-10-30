@@ -15,6 +15,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { MirrorCache } from '../mirrorCacheStore';
+import { decodeRemoteHistory, encodeRemoteHistory } from '../../../shared/remoteHistoryCache';
+import { projectHistoryView, type HistoryViewSnapshot } from '@cindy/maker-shared/message-window';
 import {
   createMirrorCache,
   MirrorCachePurgeError,
@@ -280,6 +282,7 @@ describe('coerceCachedSession', () => {
       attached: true,
       _count: { messages: 99 },
       extraDirs: ['/a', '/b'],
+      companion: { id: 'owner', role: 'channel', channel: 'feishu', secret: 'omit' },
     });
     expect(coerced).not.toBeNull();
     expect(coerced).not.toHaveProperty('deviceLinkConnectionStatus');
@@ -288,6 +291,7 @@ describe('coerceCachedSession', () => {
     expect(coerced).not.toHaveProperty('_count');
     expect(coerced).not.toHaveProperty('extraDirs');
     expect(coerced?.title).toBe('T');
+    expect(coerced?.companion).toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
   });
 
   it('长文本截断到上限', () => {
@@ -332,6 +336,90 @@ describe('normalizeDeviceSessions', () => {
 });
 
 describe('readMessages / writeMessages', () => {
+  // Regression: a delayed history write used to discard a newer list body.
+  // Existing cache fixture exercises the production guarded write/read path.
+  it('retains a list update through an older page write, then retires it after a newer read', async () => {
+    const c = rawCache();
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    const old = row('same', '2026-01-01T00:00:00Z', { content: 'old' });
+    const updated = { ...old, content: 'updated', cacheReceipt: { run: 'renderer', order: 2 } };
+    const snapshot: HistoryViewSnapshot<typeof old> = {
+      items: projectHistoryView([old], false), details: new Map(), expanded: new Set(),
+      nextCursor: null, hasMore: false, ready: true, loading: false, error: null, readReceipt: { run: 'renderer', order: 1 },
+    };
+    await c.writeMessages('dev', 'session', [updated], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    const cached = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(cached.messages).toEqual([updated]);
+    expect(decodeRemoteHistory(cached.historyView)?.readReceipt).toEqual({ run: 'renderer', order: 1 });
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter,
+      encodeRemoteHistory({ ...snapshot, readReceipt: { run: 'restarted-renderer', order: 1 } }));
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).messages).toEqual([]);
+  });
+
+  it('merges list arrivals under the page-write lock, preserving history and clear barriers', async () => {
+    const c = rawCache();
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    const rows = [row('old', '2026-01-01T00:00:00Z')];
+    const snapshot: HistoryViewSnapshot<typeof rows[number]> = {
+      items: projectHistoryView(rows, false), details: new Map(), expanded: new Set(),
+      nextCursor: 'older', hasMore: true, ready: true, loading: false, error: null,
+    };
+    const history = encodeRemoteHistory(snapshot);
+    const one = row('one', '2026-01-02T00:00:00Z');
+    const two = row('two', '2026-01-03T00:00:00Z');
+    await Promise.all([
+      c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, history),
+      c.writeMessages('dev', 'session', [one], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true),
+      c.writeMessages('dev', 'session', [two], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true),
+    ]);
+    const cached = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(cached.messages).toEqual([one, two]);
+    expect(decodeRemoteHistory(cached.historyView)?.items).toEqual(snapshot.items);
+    // An additive prefetch exceeding the file budget cannot delete usable history.
+    await c.writeMessages('dev', 'session', [row('huge', '2026-01-04', { content: 'x'.repeat(MAX_MESSAGE_FILE_BYTES) })],
+      token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    expect(await c.readMessagesWithInvalidation('dev', 'session')).toEqual(cached);
+    await c.writeMessages('dev', 'session', []);
+    await c.writeMessages('dev', 'session', [one], token.invalidation, token.ownerRoot, token.accountCounter, undefined, true);
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).messages).toEqual([]);
+  });
+
+  it('round-trips structured history in the existing guarded file and strips live/media data', async () => {
+    const c = rawCache();
+    const rows = [row('one', '2026-01-01T00:00:00Z', { isStreaming: true, images: [{ base64: 'secret-bytes', url: 'data:image/png;base64,secret' }], retryFiles: ['private'] })];
+    const snapshot: HistoryViewSnapshot<typeof rows[number]> = {
+      items: projectHistoryView(rows, false), details: new Map(), expanded: new Set(),
+      nextCursor: 'older', hasMore: true, ready: true, loading: false, error: null,
+    };
+    const token = await c.readMessagesWithInvalidation('dev', 'session');
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    const result = await c.readMessagesWithInvalidation('dev', 'session');
+    expect(result.messages).toEqual([]);
+    expect(result.historyView).not.toContain('secret');
+    expect(result.historyView).not.toContain('private');
+    const restored = decodeRemoteHistory(result.historyView)!;
+    expect(restored.hasMore).toBe(true);
+    expect(restored.nextCursor).toBe('older');
+    expect(JSON.stringify(restored.items)).toContain('body-one');
+    expect(JSON.stringify(restored.items)).toContain('"isStreaming":false');
+    // Explicit clear retires both forms, including a delayed structured write.
+    await c.writeMessages('dev', 'session', []);
+    await c.writeMessages('dev', 'session', [], token.invalidation, token.ownerRoot, token.accountCounter, encodeRemoteHistory(snapshot));
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).historyView).toBeUndefined();
+    const fresh = await c.readMessagesWithInvalidation('dev', 'session');
+    await c.writeMessages('dev', 'session', [], fresh.invalidation, fresh.ownerRoot, fresh.accountCounter, encodeRemoteHistory({ ...snapshot, items: [] }));
+    expect(decodeRemoteHistory((await c.readMessagesWithInvalidation('dev', 'session')).historyView)?.items).toEqual([]);
+    await c.writeMessages('dev', 'session', rows, fresh.invalidation, fresh.ownerRoot, fresh.accountCounter);
+    expect((await c.readMessagesWithInvalidation('dev', 'session')).historyView).toBeUndefined();
+  });
+
+  it('rejects corrupt structured message content instead of crashing the renderer', () => {
+    const text = JSON.stringify({ version: 1, items: [{ type: 'messages', key: 'm', messages: [row('m', '2026-01-01', { content: null })] }], details: [], expanded: [], hasMore: false, nextCursor: null });
+    expect(decodeRemoteHistory(text)).toBeNull();
+    expect(decodeRemoteHistory('{')).toBeNull();
+  });
+
   it('写入后可读回,内容与归一化结果一致', async () => {
     const c = cache();
     await c.writeMessages('dev-1', 'sess-1', [
@@ -667,6 +755,7 @@ describe('session list', () => {
             status: 'active',
             title: 'T',
             createdAt: '2026-01-01T00:00:00.000Z',
+            lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
           },
         ],
@@ -674,6 +763,7 @@ describe('session list', () => {
     ]);
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
+    expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 
@@ -1771,11 +1861,24 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   });
 
   it('清某设备期间,另一台设备的写入照常落盘', async () => {
-    const a = cache();
-    const b = cache();
+    // 同代际闸用例:用 rawCache + 清理前显式令牌。withAutoToken 在 writeMessages
+    // 调用时才异步补读,满载 CI 上补读会撞进另一台设备清理的墓碑窗口
+    // (hasPendingClears 不分设备,清理期间一律返回 -1),拿到 -1 的写入在提交时
+    // 与会话计数 0 比对失配被拒 —— 生产令牌在远端请求发起时捕获,早于任何清理,
+    // 这里等价地在清理前捕获。
+    const a = rawCache();
+    const b = rawCache();
+    const cap = await b.readMessagesWithInvalidation('dev-2', 'sess-9');
     await Promise.all([
       a.clearDevice('dev-1'),
-      b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
+      b.writeMessages(
+        'dev-2',
+        'sess-9',
+        [row('m9', '2026-01-01T00:00:00.000Z')],
+        cap.invalidation,
+        cap.ownerRoot,
+        cap.accountCounter,
+      ),
     ]);
     expect((await b.readMessages('dev-2', 'sess-9')).map((m) => m.id)).toEqual(['m9']);
   });

@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "中繼服務",
+    "currentLabel": "中繼服務",
+    "official": "{{appName}} 官方中繼",
+    "switchToOfficial": "切回官方中繼",
+    "officialHint": "裝置之間經 {{appName}} 官方中繼連線。要改用自建中繼，在中繼所在的電腦上顯示加入 QR 碼，用手機相機掃描加入。",
+    "selfHostedHint": "裝置之間經自建中繼 {{address}} 連線；登入、模型等仍使用 {{appName}} 官方服務。",
+    "removedHint": "這臺手機已被移出中繼，或中繼已停用。可以切回官方中繼，或在電腦上重新加入。",
+    "credentialMissingHint": "這臺手機上找不到中繼憑證。請在電腦上重新加入，或切回官方中繼。",
+    "confirmTitle": "切回官方中繼？",
+    "confirmBody": "這臺手機會退出「{{name}}」，改用 {{appName}} 官方中繼。之後要再用這個中繼，需要在電腦上重新加入。",
+    "confirmAction": "切回",
+    "switchFailed": "未能切回官方中繼，請稍後重試。",
+    "pushUnavailable": "使用自建中繼時，電腦上的任務通知不會推送到這臺手機。"
+  },
+  "issue": {
+    "removedTitle": "已移出中繼",
+    "removedHint": "這臺手機已被移出中繼，或中繼已停用。可以在設定裡切回官方中繼。"
+  },
+  "join": {
+    "title": "加入中繼",
+    "checking": "正在連線中繼…",
+    "body": "加入後，這臺手機經這個中繼連線你的電腦；登入、模型等仍使用 {{appName}} 官方服務。使用自建中繼時，這臺手機收不到電腦上的任務通知。",
+    "switchNote": "加入後會從「{{current}}」切換到這個中繼。",
+    "action": "加入",
+    "pairingCodeLabel": "配對碼",
+    "verifyHint": "請在中繼所在的電腦上核對這串數字並點同意。",
+    "waiting": "正在等待同意…",
+    "cancel": "取消",
+    "joinedTitle": "已加入中繼",
+    "joinedBody": "這臺手機現在經「{{name}}」連線你的電腦。",
+    "done": "完成",
+    "retry": "重試",
+    "signedOut": "請先登入 {{appName}}，再加入這個中繼。",
+    "signIn": "去登入",
+    "invalidLink": "加入連結無效或已失效，請在電腦上重新產生。",
+    "cancelled": "已取消加入。要加入這個中繼，請在電腦上重新產生加入連結。"
+  },
+  "errors": {
+    "unreachable": "連不上這個中繼。請確認手機和電腦在同一網路，或手機能存取這個位址。",
+    "insecureUnreachable": "連不上這個中繼。手機只能透過 https 加入中繼，請在電腦上為中繼設定憑證後重新產生加入連結。",
+    "notRelay": "這個位址不是 {{appName}} 中繼，請檢查加入連結。",
+    "incompatible": "這個中繼與目前版本的 {{appName}} 不相容，請把中繼和 {{appName}} 都更新到最新版本。",
+    "accountMismatch": "這個中繼屬於另一個 {{appName}} 帳號。",
+    "codeInvalid": "加入連結已失效，請在電腦上重新產生。",
+    "rateLimited": "嘗試次數太多，請稍後再試。",
+    "rejected": "電腦上拒絕了這次加入。",
+    "expired": "等待同意逾時，請在電腦上重新產生加入連結。",
+    "ownerMismatch": "中繼回傳的憑證不是加入連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。",
+    "failed": "未能加入中繼，請稍後重試。",
+    "saveFailed": "已獲同意，但未能在這臺手機上儲存中繼憑證。請在電腦上重新產生加入連結後再試。",
+    "credentialUnavailable": "這臺手機沒有可用的中繼憑證。請重新加入，或在設定裡切回官方中繼。"
+  }
+}

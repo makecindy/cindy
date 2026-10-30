@@ -87,6 +87,18 @@ interface WechatOutboxRow extends Omit<WechatOutboxRecord, 'contextToken'> {
   contextTag: string;
 }
 
+/** Queue metadata is available even when policy prevents loading credentials. */
+export async function countQueuedWechatTasks(db: DbClient, bindingEpoch: string): Promise<number> {
+  const row = await db.queryOne<{ count: number }>(
+    `SELECT COUNT(*) AS count
+     FROM wechat_inbox
+     WHERE binding_epoch = ?
+       AND status IN ('pending', 'dispatching', 'accepted_running', 'waiting_desktop')`,
+    [bindingEpoch],
+  );
+  return row?.count ?? 0;
+}
+
 export class WechatTaskStore {
   readonly #db: DbClient;
   readonly #dataKey: Buffer;
@@ -194,15 +206,8 @@ export class WechatTaskStore {
     return next;
   }
 
-  async countQueuedTasks(bindingEpoch: string): Promise<number> {
-    const row = await this.#db.queryOne<{ count: number }>(
-      `SELECT COUNT(*) AS count
-       FROM wechat_inbox
-       WHERE binding_epoch = ?
-         AND status IN ('pending', 'dispatching', 'accepted_running', 'waiting_desktop')`,
-      [bindingEpoch],
-    );
-    return row?.count ?? 0;
+  countQueuedTasks(bindingEpoch: string): Promise<number> {
+    return countQueuedWechatTasks(this.#db, bindingEpoch);
   }
 
   activateBindingEpoch(args: {

@@ -8,11 +8,13 @@ const cliTestExclude = parseVitestCliExclude(process.argv.slice(2));
 const desktopTestInclude = [
   'src/main/__tests__/**/*.test.ts',
   'src/main/**/__tests__/**/*.test.ts',
-  'src/renderer/__tests__/**/*.test.ts',
-  'src/renderer/**/__tests__/**/*.test.ts',
+  // Renderer tests may live in a feature test directory or beside the
+  // production module (for example src/renderer/lib/*.test.ts). Keep the
+  // pattern broad so a new test cannot silently fall outside the unit gate.
+  'src/renderer/**/*.test.ts',
   // renderer 组件测试(React,tsx):按文件头 `// @vitest-environment jsdom`
-  // 切 DOM 环境;此前 include 只收 .test.ts,tsx 用例根本不会被跑。
-  'src/renderer/**/__tests__/**/*.test.tsx',
+  // 切 DOM 环境；根目录和嵌套目录都由上面的模式覆盖。
+  'src/renderer/**/*.test.tsx',
   'src/preload/__tests__/**/*.test.ts',
   // shared 是 main/renderer 共用的纯函数层;此前漏配导致 src/shared/__tests__
   // 下的测试(如 workingDir.test.ts)从未跑过。
@@ -67,13 +69,15 @@ export default defineConfig({
     // Main-process tests do real IO (loopback HTTP servers, git subprocesses,
     // heavy module imports through the vite-node transform). On Windows those
     // are markedly slower and, under the full desktop suite's worker-pool
-    // contention, light tests intermittently blow past vitest's 5s default and
-    // time out non-deterministically (a different test each run). Give Windows
-    // a wider default so those pass reliably; keep the standard 5s on
-    // Linux/macOS/CI so genuine hangs still surface promptly. Tests that need
-    // even more (multi-step real-git orchestration) still set their own higher
-    // per-file timeout, which overrides this.
-    testTimeout: process.platform === 'win32' ? 20_000 : 5_000,
+    // contention, light tests and their filesystem hooks intermittently blow
+    // past vitest's defaults and time out non-deterministically (a different
+    // test each run). Give Windows a wider 60s default for both so those pass
+    // reliably; keep the standard defaults on Linux/macOS so genuine hangs
+    // still surface promptly. Tests that need even more (multi-step real-git
+    // orchestration) still set their own higher per-file timeout, which
+    // overrides this.
+    testTimeout: process.platform === 'win32' ? 60_000 : 5_000,
+    hookTimeout: process.platform === 'win32' ? 60_000 : 10_000,
     // Node 25 默认开启 webstorage,globalThis.localStorage 变成一个未配
     // --localstorage-file 时方法全缺的残缺对象:node 环境下骗过
     // `typeof localStorage !== 'undefined'` 探测,jsdom 环境下又因 key 已存在
@@ -112,7 +116,6 @@ export default defineConfig({
           name: 'git-integration',
           include: gitIntegrationTestInclude,
           exclude: cliTestExclude,
-          globalSetup: ['src/test/vitest/desktopTestResourceLock.ts'],
         },
       },
     ],

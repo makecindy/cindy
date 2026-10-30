@@ -39,6 +39,7 @@ const CN_MANIFEST = JSON.stringify({
   voiceApiBaseUrl: 'https://voice.example.invalid',
   githubApiBaseUrl: 'https://github-api.example.invalid',
   skillhubApiBaseUrl: 'https://skillhub.example.invalid',
+  cindySkillHubApiBaseUrl: 'https://cindy-skillhub.example.invalid',
   pluginApiBaseUrl: 'https://plugin.example.invalid',
   cdnBaseUrl: 'https://cdn.example.invalid/app',
   mobileUpdateBaseUrl: 'https://mobile-update.example.invalid',
@@ -61,6 +62,7 @@ test('localhost 八件套覆写,默认其余字段照抄 Global 正本,返回绝
   assert.equal(local.voiceApiBaseUrl, 'http://localhost:3342');
   assert.equal(local.githubApiBaseUrl, 'http://localhost:3336');
   assert.equal(local.skillhubApiBaseUrl, 'http://localhost:3341');
+  assert.equal(local.cindySkillHubApiBaseUrl, 'http://localhost:3345');
   assert.equal(local.pluginApiBaseUrl, 'http://localhost:3343');
   // 其余字段与正本一致(oauth broker 等本地不起的服务沿用远程值)
   assert.equal(local.oauthBrokerApiBaseUrl, 'https://oauth.global.example.invalid');
@@ -117,6 +119,7 @@ test('生成物能过客户端 parser 的 allowHttp 校验(与仓内正本同一
     'voiceApiBaseUrl',
     'githubApiBaseUrl',
     'skillhubApiBaseUrl',
+    'cindySkillHubApiBaseUrl',
     'pluginApiBaseUrl',
     'cdnBaseUrl',
     'mobileUpdateBaseUrl',

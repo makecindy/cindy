@@ -1,9 +1,17 @@
+import { TokenSpeedMeter } from '../shared/token-speed.js';
+
 const CLAUDE_GENERATION_HEARTBEAT_MS = 5_000;
 const CLAUDE_GENERATION_SUSPEND_GAP_MS = 30_000;
 
 export interface ClaudeGenerationState {
+  /** Live tok/s for the main thread (Pi extension algorithm). */
+  tokenSpeed: TokenSpeedMeter;
+  /** Main-thread content block index → tool name, for argument-delta counting. */
+  tokenSpeedToolByIndex: Map<number, string>;
   startedAt: number | null;
   durationMs: number;
+  /** Model time sampled with the latest parent output usage. */
+  outputDurationMs: number;
   pendingToolIds: Set<string>;
   /**
    * Pause ids that already resumed this generation. A later pause of the same
@@ -29,8 +37,11 @@ export interface ClaudeGenerationState {
 
 export function newClaudeGenerationState(): ClaudeGenerationState {
   return {
+    tokenSpeed: new TokenSpeedMeter(),
+    tokenSpeedToolByIndex: new Map(),
     startedAt: null,
     durationMs: 0,
+    outputDurationMs: 0,
     pendingToolIds: new Set(),
     settledPauseIds: new Set(),
     reliable: true,
@@ -54,6 +65,7 @@ function sampleHeartbeat(state: ClaudeGenerationState, now = Date.now()): void {
     now - previous > CLAUDE_GENERATION_HEARTBEAT_MS + CLAUDE_GENERATION_SUSPEND_GAP_MS
   ) {
     state.reliable = false;
+    state.tokenSpeed.invalidate();
   }
   state.heartbeatAt = now;
 }
@@ -74,6 +86,7 @@ function closeInterval(state: ClaudeGenerationState, endedAt: number): void {
   if (startedAt === null) return;
   if (endedAt < startedAt) {
     state.reliable = false;
+    state.tokenSpeed.invalidate();
     return;
   }
   state.durationMs += endedAt - startedAt;
@@ -81,10 +94,13 @@ function closeInterval(state: ClaudeGenerationState, endedAt: number): void {
 
 export function resetClaudeGenerationTiming(state: ClaudeGenerationState): void {
   stopHeartbeat(state);
+  state.tokenSpeed.reset();
+  state.tokenSpeedToolByIndex.clear();
   state.startedAt = null;
   state.pendingToolIds.clear();
   state.settledPauseIds.clear();
   state.durationMs = 0;
+  state.outputDurationMs = 0;
   state.reliable = true;
   state.sawSubagent = false;
   state.parentStreamedOutputIncomplete = false;
@@ -95,6 +111,22 @@ export function beginClaudeGeneration(state: ClaudeGenerationState, startedAt = 
     state.startedAt = startedAt;
     startHeartbeat(state);
   }
+}
+
+/**
+ * A new parent request can only be dispatched after every tool_result of the
+ * previous message reached the provider, so ids still pending here belong to
+ * tools whose results the SDK resolved without echoing (e.g. ToolSearch).
+ * Settle them instead of letting one phantom id freeze the clock for the rest
+ * of the turn while output keeps accruing (runaway live tok/s).
+ */
+export function beginClaudeGenerationAtRequestStart(
+  state: ClaudeGenerationState,
+  startedAt = Date.now(),
+): void {
+  for (const pauseId of state.pendingToolIds) state.settledPauseIds.add(pauseId);
+  state.pendingToolIds.clear();
+  beginClaudeGeneration(state, startedAt);
 }
 
 export function pauseClaudeGeneration(
@@ -123,6 +155,9 @@ export function resumeClaudeGeneration(
   pauseId: string,
   resumedAt = Date.now(),
 ): void {
+  // A late echo for an already-settled id (internally resolved at the next
+  // request boundary, or a duplicate result) is a no-op, not an imbalance.
+  if (state.settledPauseIds.has(pauseId)) return;
   if (!state.pendingToolIds.delete(pauseId)) {
     state.reliable = false;
     return;

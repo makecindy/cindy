@@ -10,6 +10,7 @@
 
 import { summarizeToolUseText } from '@cindy/maker-shared/message-presentation';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
+import { readTokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 
 /** Keep parity with the desktop/mobile running work preview. */
 export const MAX_VISIBLE_STEPS = 5;
@@ -58,6 +59,11 @@ export interface TurnActivityState {
    * 只由交互挂起/收口显式设置与清除, 进展事件一律不动它。
    */
   interactionNotice: string | null;
+  /**
+   * 宿主实测的当前输出速度(tok/s, 已取整), 与桌面运行状态栏同源(status 事件的
+   * tokenSpeed)。尚无可靠读数时为 null, 头部就不显示这一段。
+   */
+  tokenRate: number | null;
 }
 
 /** Replay/delta bookkeeping stays private and is never serialized with card state. */
@@ -83,6 +89,7 @@ export function createTurnActivity(startedAt: number): TurnActivityState {
     writing: false,
     notice: null,
     interactionNotice: null,
+    tokenRate: null,
   };
   internalStateByActivity.set(activity, {
     seenKeys: new Set(),
@@ -130,6 +137,51 @@ export function setInteractionNotice(
   if (activity.interactionNotice === next) return false;
   activity.interactionNotice = next;
   return true;
+}
+
+/**
+ * 设置 / 清除头部的 tok/s。非正数与非有限值一律视为"没有读数"。返回是否变化,
+ * 语义同 setActivityNotice; 速度只随 ticker 带出, 调用方不必为它单独刷帧。
+ */
+export function setActivityTokenRate(activity: TurnActivityState, rate: number | null): boolean {
+  const next = rate !== null && Number.isFinite(rate) && rate > 0 ? Math.round(rate) : null;
+  if (activity.tokenRate === next) return false;
+  activity.tokenRate = next;
+  return true;
+}
+
+/**
+ * 用一条 status 事件的 data 更新头部 tok/s —— 所有渠道路径(官方 bot、个人 IM、
+ * 自动任务转播)共用这一个判据。返回头部是否变化。
+ *
+ * - generationReliable === false: 隐藏, 与桌面运行状态栏同口径(不显示错数);
+ * - 占位帧 / 首个输出之前的 0 读数 / 坏数据: 保留上一个值, 避免工具执行间隙头部来回闪。
+ */
+export function applyStatusTokenRate(activity: TurnActivityState, data: unknown): boolean {
+  return setActivityTokenRate(activity, tokenRateFromStatus(data, activity.tokenRate));
+}
+
+/**
+ * applyStatusTokenRate 的纯判据: 给定上一个值与一条 status data, 返回下一个值。
+ * 还没有 activity 可写时(自动任务转播卡尚未开出)用它暂存读数。
+ */
+export function tokenRateFromStatus(data: unknown, previous: number | null): number | null {
+  if (!data || typeof data !== 'object') return previous;
+  const record = data as { generationReliable?: unknown; tokenSpeed?: unknown };
+  if (record.generationReliable === false) return null;
+  const speed = readTokenSpeedSnapshot(record.tokenSpeed);
+  if (!speed || speed.rate <= 0) return previous;
+  return Math.round(speed.rate);
+}
+
+/**
+ * 收口时清掉只在运行中才成立的指示(重试说明、当前 tok/s)。凡是会把过程区冻结进
+ * 终稿的收口路径都要调它, 否则失败卡片会永久显示"仍在重试"或一个已经不存在的速度。
+ * 「等你确认」那一行由交互收口自行负责, 这里不碰。
+ */
+export function clearRunningIndicators(activity: TurnActivityState): void {
+  activity.notice = null;
+  activity.tokenRate = null;
 }
 
 /** 有真实进展 = 上一条状态说明(如"正在重试")已过期。 */
@@ -238,10 +290,11 @@ export function renderActivity(activity: TurnActivityState, now: number): string
   if (activity.totalSteps === 0 && activity.notice === null && activity.interactionNotice === null)
     return '';
   const elapsed = formatElapsed(now - activity.startedAt);
+  const rate = activity.tokenRate !== null ? ` · ${activity.tokenRate} tok/s` : '';
   const lines = [
     activity.totalSteps > 0
-      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}`
-      : `⚙️ 工作中 · ${elapsed}`,
+      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}${rate}`
+      : `⚙️ 工作中 · ${elapsed}${rate}`,
   ];
   const last = activity.recentSteps.length - 1;
   activity.recentSteps.forEach((step, index) => {

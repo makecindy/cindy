@@ -13,8 +13,10 @@
   "voiceApiBaseUrl": "http://localhost:3342",
   "githubApiBaseUrl": "http://localhost:3336",
   "skillhubApiBaseUrl": "http://localhost:3341",
+  "cindySkillHubApiBaseUrl": "http://localhost:3345",
   "pluginApiBaseUrl": "http://localhost:3343",
   "cdnBaseUrl": "http://localhost:3345/cindy",
   "mobileUpdateBaseUrl": "http://localhost:3346",
-  "review": "0.1.0"
+  "review": "0.1.0",
+  "shareBaseUrl": "http://localhost:3350"
 }

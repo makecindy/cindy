@@ -22,8 +22,10 @@ describe('mobile top-level back buttons', () => {
     expect(backButtonStyle).not.toContain('borderColor');
     expect(backButtonStyle).not.toContain('borderWidth');
     expect(backButtonStyle).toContain('borderRadius: radius.pill');
-    expect(backButtonStyle).toContain('height: 44');
-    expect(backButtonStyle).toContain('width: 44');
+    // 尺寸收拢为具名常量 BACK_BUTTON_SIZE,仍是 44×44。
+    expect(primitives).toContain('const BACK_BUTTON_SIZE = 44;');
+    expect(backButtonStyle).toContain('height: BACK_BUTTON_SIZE');
+    expect(backButtonStyle).toContain('width: BACK_BUTTON_SIZE');
     expect(backButtonStyle).toContain('marginLeft: -spacing.sm');
     // chevron 与头部右侧 action 图标同档 20(用户定稿 2026-07-21,取代换肤期 md/medium)。
     expect(primitives).toContain('<ChevronLeft color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />');

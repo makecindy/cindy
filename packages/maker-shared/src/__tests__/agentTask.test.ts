@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAgentTaskUpdateEvent,
   buildAgentTaskCardModel,
+  buildSubagentRunStatusIndex,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
   isAgentTaskToolName,
+  isClaudeSubagentToolName,
+  isSubagentResultError,
   isSubagentSpawnToolName,
+  lookupSubagentRunStatus,
   mergeAgentTaskUpdate,
   PI_SUBAGENT_TOOL_NAME,
   normalizeAgentTaskUpdate,
@@ -16,6 +20,16 @@ import {
 } from '../agentTask.js';
 
 const NOW = '2026-06-24T00:00:00.000Z';
+
+/** Verbatim async launch receipt from Claude Code 2.1.280 (agent/output ids shortened). */
+const CLAUDE_2_1_280_ASYNC_RECEIPT = [
+  'Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)',
+  "agentId: aedc178c75c770875 (internal ID - do not mention to user. Use SendMessage with to: 'aedc178c75c770875', summary: '<5-10 word recap>' to continue this agent.)",
+  'The agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.',
+  "Do not duplicate this agent's work — avoid working with the same files or topics it is using.",
+  'output_file: /private/tmp/claude-501/project/session/tasks/aedc178c75c770875.output',
+  'Do NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you\'ll get a completion notification.',
+].join('\n');
 
 describe('isAgentTaskToolName', () => {
   it('matches Task / Agent / collab:* and nothing else', () => {
@@ -59,6 +73,18 @@ describe('subagentSpawnResultIndicatesRunning', () => {
     expect(subagentSpawnResultIndicatesRunning('Task', null)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('collab:spawnAgent', undefined)).toBe(false);
     expect(subagentSpawnResultIndicatesRunning('subagent', undefined)).toBe(false);
+  });
+
+  it('recognises the Claude Code 2.1.280 async launch receipt', () => {
+    expect(subagentSpawnResultIndicatesRunning('Agent', CLAUDE_2_1_280_ASYNC_RECEIPT)).toBe(true);
+    expect(subagentSpawnResultIndicatesRunning('Task', CLAUDE_2_1_280_ASYNC_RECEIPT)).toBe(true);
+  });
+
+  it('does not treat a final Agent answer that quotes the receipt opener as a launch', () => {
+    expect(subagentSpawnResultIndicatesRunning(
+      'Agent',
+      'Async agent launched successfully. That is what the log said; the fix is done.',
+    )).toBe(false);
   });
 
   it('recognises the durable PI launch receipt', () => {
@@ -112,6 +138,109 @@ describe('deriveAgentTaskStatus', () => {
     expect(deriveAgentTaskStatus(undefined, 'done', {
       persistedStatus: 'cancelled' as never,
     })).toBe('completed');
+  });
+
+
+  it('returns failed when resultIsError is true and result is non-empty', () => {
+    expect(deriveAgentTaskStatus(undefined, '<tool_use_error>Auth failed</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('failed');
+  });
+
+  it('returns failed even when updateStatus is running when resultIsError is true', () => {
+    expect(deriveAgentTaskStatus('running', '<tool_use_error>timeout</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('failed');
+  });
+
+  it('shared card model projects protocol error results as failed', () => {
+    expect(buildAgentTaskCardModel({
+      toolName: 'Task',
+      result: '<tool_use_error>launch failed</tool_use_error>',
+    }).status).toBe('failed');
+  });
+
+  it('persisted status wins over resultIsError', () => {
+    expect(deriveAgentTaskStatus(undefined, '<tool_use_error>fail</tool_use_error>', {
+      resultIsError: true,
+      persistedStatus: 'completed',
+    })).toBe('completed');
+  });
+
+  it('resultIsError is ignored when result is empty', () => {
+    expect(deriveAgentTaskStatus(undefined, '', {
+      resultIsError: true,
+    })).toBe('running');
+  });
+
+  it('explicit stopped / failed terminal status survives a paired error result', () => {
+    // live 用户中断 + SDK <tool_use_error> 回执:显式 stopped 不得被降级成 failed。
+    expect(deriveAgentTaskStatus('stopped', '<tool_use_error>Interrupted</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('stopped');
+    expect(deriveAgentTaskStatus('failed', '<tool_use_error>crash</tool_use_error>', {
+      resultIsError: true,
+    })).toBe('failed');
+  });
+
+  it('keeps a live running task running when the durable run is running, whatever the result text', () => {
+    expect(deriveAgentTaskStatus('running', 'Some future receipt wording', {
+      durableStatus: 'running',
+    })).toBe('running');
+  });
+
+  it('lets a durable terminal run outrank a stale running update and the result text', () => {
+    expect(deriveAgentTaskStatus('running', 'Some future receipt wording', {
+      durableStatus: 'failed',
+    })).toBe('failed');
+    expect(deriveAgentTaskStatus(undefined, 'receipt', { durableStatus: 'stopped' })).toBe('stopped');
+  });
+
+  it('does not let a durable running record pin a spinner without a live update', () => {
+    expect(deriveAgentTaskStatus(undefined, 'receipt', { durableStatus: 'running' })).toBe('completed');
+  });
+
+  it('lets a live terminal update close a durable run that has not caught up yet', () => {
+    expect(deriveAgentTaskStatus('completed', 'receipt', { durableStatus: 'running' })).toBe('completed');
+  });
+
+  it('keeps the persisted tool-call status above the durable run', () => {
+    expect(deriveAgentTaskStatus('running', 'x', {
+      persistedStatus: 'completed',
+      durableStatus: 'running',
+    })).toBe('completed');
+  });
+});
+
+describe('buildSubagentRunStatusIndex / lookupSubagentRunStatus', () => {
+  it('indexes a run under its parent tool-use id, logical id and aliases', () => {
+    const index = buildSubagentRunStatusIndex([{
+      parentToolUseId: 'toolu_1',
+      logicalAgentId: 'agent-1',
+      identityAliases: ['alias-1'],
+      status: 'running',
+      updatedAt: 1,
+    }]);
+    expect(lookupSubagentRunStatus(index, 'toolu_1')).toBe('running');
+    expect(lookupSubagentRunStatus(index, undefined, { taskId: 'agent-1' })).toBe('running');
+    expect(lookupSubagentRunStatus(index, undefined, { taskId: 'x', parentToolUseId: 'alias-1' }))
+      .toBe('running');
+    expect(lookupSubagentRunStatus(index, 'toolu_other')).toBeUndefined();
+    expect(lookupSubagentRunStatus(undefined, 'toolu_1')).toBeUndefined();
+  });
+
+  it('keeps the most recently updated run when two runs share an alias', () => {
+    const index = buildSubagentRunStatusIndex([
+      { parentToolUseId: 'toolu_1', status: 'running', updatedAt: 20 },
+      { parentToolUseId: 'toolu_1', status: 'completed', updatedAt: 10 },
+    ]);
+    expect(lookupSubagentRunStatus(index, 'toolu_1')).toBe('running');
+  });
+
+  it('skips runs with an unknown status', () => {
+    const index = buildSubagentRunStatusIndex([{ parentToolUseId: 'toolu_1', status: 'queued' }]);
+    expect(index.size).toBe(0);
+
   });
 });
 
@@ -342,6 +471,51 @@ describe('findAgentTaskUpdate', () => {
 });
 
 describe('buildAgentTaskCardModel', () => {
+  // Review #3024 (head 954ed53) P1: the shared card model must narrow
+  // `<tool_use_error>` by tool name like the desktop callers — PI subagent /
+  // Codex collab work products may legitimately start with that marker.
+  it('does not project a PI subagent protocol-marker work product as failed', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'subagent',
+      toolInput: { prompt: 'write the report' },
+      result: '<tool_use_error>校验报告：3 处不一致</tool_use_error>',
+    });
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('pi');
+  });
+
+  it('does not project a Codex collab protocol-marker work product as failed', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      result: '<tool_use_error>errors: none</tool_use_error>',
+    });
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('codex');
+  });
+
+  it('still projects a Claude tool protocol-marker result as failed', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Task',
+      result: '<tool_use_error>launch failed</tool_use_error>',
+    });
+    expect(model.status).toBe('failed');
+  });
+
+  it('keeps the provider fallback (claude-code) for history replay without toolName', () => {
+    const model = buildAgentTaskCardModel({
+      result: '<tool_use_error>launch failed</tool_use_error>',
+    });
+    expect(model.status).toBe('failed');
+  });
+
+  it('history replay with an explicit non-Claude provider stays completed', () => {
+    const model = buildAgentTaskCardModel({
+      result: '<tool_use_error>报告正文</tool_use_error>',
+      update: { provider: 'codex', taskId: 'c1', parentToolUseId: 'c1', status: 'running' },
+    });
+    expect(model.status).toBe('completed');
+  });
+
   it('REPRO: treats a paired final result as terminal when the live update is stale running', () => {
     const model = buildAgentTaskCardModel({
       toolName: 'collab:spawnAgent',
@@ -381,6 +555,40 @@ describe('buildAgentTaskCardModel', () => {
         provider: 'claude-code',
         taskId: 'agent-1',
         parentToolUseId: 'agent-1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+  });
+
+  it('REPRO: keeps a Claude Code 2.1.280 async Agent running and hides its receipt', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { prompt: 'keep working' },
+      result: CLAUDE_2_1_280_ASYNC_RECEIPT,
+      update: {
+        provider: 'claude-code',
+        taskId: 'aedc178c75c770875',
+        parentToolUseId: 'toolu_1',
+        status: 'running',
+      },
+    });
+
+    expect(model.status).toBe('running');
+    expect(model.summary).toBeUndefined();
+  });
+
+  it('keeps an async Agent running from the durable run even if the receipt wording changes again', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'Agent',
+      toolInput: { prompt: 'keep working' },
+      result: 'Background agent queued. id=abc',
+      durableStatus: 'running',
+      update: {
+        provider: 'claude-code',
+        taskId: 'abc',
+        parentToolUseId: 'toolu_1',
         status: 'running',
       },
     });
@@ -484,7 +692,8 @@ describe('buildAgentTaskCardModel', () => {
       toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
       result: '/root/survey_startup',
     });
-    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    expect(model.spawnedAgentName).toBe('survey_startup');
+    expect(model.title).toBe('survey_startup');
     // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
     expect(model.summary).toBeUndefined();
     expect(model.status).toBe('completed');
@@ -513,6 +722,23 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.totalTokens).toBe(1200);
     expect(model.toolUses).toBe(3);
     expect(model.durationMs).toBe(4200);
+    expect(model.title).toBe('survey_startup');
+  });
+
+  it('strips nested Codex addresses before truncation without changing the source', () => {
+    const update: AgentTaskUpdate = {
+      provider: 'codex', taskId: 'nested', status: 'running',
+      title: `/root/${'parent_'.repeat(24)}/cache_rules`,
+    };
+    expect(buildAgentTaskCardModel({ update }).title).toBe('cache_rules');
+    expect(update.title).toContain('/root/');
+    for (const provider of ['claude-code', 'pi'] as const) {
+      expect(buildAgentTaskCardModel({ update: { ...update, provider, title: '/root/cache_rules' } }).title)
+        .toBe('/root/cache_rules');
+    }
+    for (const title of ['检查缓存规则', 'Read /root/cache_rules', '/tmp/cache_rules']) {
+      expect(buildAgentTaskCardModel({ update: { ...update, title } }).title).toBe(title);
+    }
   });
 
   it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
@@ -523,5 +749,59 @@ describe('buildAgentTaskCardModel', () => {
     });
     expect(model.spawnedAgentName).toBeUndefined();
     expect(model.summary).toBe('thread-2: done');
+  });
+});
+
+describe('isSubagentResultError', () => {
+  it('returns false for empty/undefined/null', () => {
+    expect(isSubagentResultError(undefined)).toBe(false);
+    expect(isSubagentResultError('')).toBe(false);
+    expect(isSubagentResultError('   ')).toBe(false);
+  });
+
+  it('returns true for Claude protocol <tool_use_error>', () => {
+    expect(isSubagentResultError('<tool_use_error>Authentication failed</tool_use_error>')).toBe(true);
+  });
+
+  it('returns false for generic <error> prefix (too generic for work product)', () => {
+    // A subagent returning <error>校验报告</error> as valid output must not be
+    // misclassified as failure. Only <tool_use_error> is a reliable protocol marker.
+    expect(isSubagentResultError('<error>Transport failure</error>')).toBe(false);
+    expect(isSubagentResultError('<error>校验报告</error>')).toBe(false);
+  });
+
+  it('returns false for JSON with error-looking fields (authority boundary)', () => {
+    // Subagent result content is arbitrary user work product.
+    // Fields like "errors", "status", "stderr" are data, not execution signals.
+    expect(isSubagentResultError('{"errors":["not found"]}')).toBe(false);
+    expect(isSubagentResultError('{"status":"failed"}')).toBe(false);
+    expect(isSubagentResultError('{"stderr":"something went wrong"}')).toBe(false);
+    expect(isSubagentResultError('{"error":"custom message"}')).toBe(false);
+    expect(isSubagentResultError('{"success":false}')).toBe(false);
+    expect(isSubagentResultError('{"ok":false}')).toBe(false);
+  });
+
+  it('returns false for natural language error phrases', () => {
+    expect(isSubagentResultError('failed to launch')).toBe(false);
+    expect(isSubagentResultError('unable to start the service')).toBe(false);
+    expect(isSubagentResultError('Error: something happened')).toBe(false);
+  });
+});
+
+describe('isClaudeSubagentToolName', () => {
+  it('accepts only Claude subagent tools', () => {
+    expect(isClaudeSubagentToolName('Agent')).toBe(true);
+    expect(isClaudeSubagentToolName('Task')).toBe(true);
+  });
+
+  it('rejects tools whose successful output may legitimately start with <tool_use_error>', () => {
+    // 后台 Bash 把该标记当搜索命中打印、PI subagent / Codex collab 透传工作产物时,
+    // 按 Claude 协议收口会把成功任务误标成 failed。
+    expect(isClaudeSubagentToolName('Bash')).toBe(false);
+    expect(isClaudeSubagentToolName(PI_SUBAGENT_TOOL_NAME)).toBe(false);
+    expect(isClaudeSubagentToolName('collab:spawn')).toBe(false);
+    expect(isClaudeSubagentToolName('collab:spawnAgent')).toBe(false);
+    expect(isClaudeSubagentToolName('Workflow')).toBe(false);
+    expect(isClaudeSubagentToolName(undefined)).toBe(false);
   });
 });

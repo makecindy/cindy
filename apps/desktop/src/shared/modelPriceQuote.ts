@@ -1,6 +1,7 @@
 import {
   resolveModelReferencePrice,
   type AgentKind,
+  type CatalogModel,
   type ModelRegistry,
 } from '@cindy/model-providers';
 
@@ -28,6 +29,34 @@ function normalizedCostDiscount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
     ? value
     : undefined;
+}
+
+/** Catalog display prices for platform and enterprise Gateway models; quotes retain list prices. */
+export function effectiveGatewayModelCost(model: Pick<ModelAccessGatewayModel,
+  'inputCostPerToken' | 'outputCostPerToken' | 'cacheReadInputTokenCost' |
+  'cacheCreationInputTokenCost' | 'costDiscount'>): CatalogModel['cost'] | undefined {
+  const input = model.inputCostPerToken;
+  const output = model.outputCostPerToken;
+  if (
+    typeof input !== 'number' ||
+    !Number.isFinite(input) ||
+    input < 0 ||
+    typeof output !== 'number' ||
+    !Number.isFinite(output) ||
+    output < 0
+  ) {
+    return undefined;
+  }
+  const discount = normalizedCostDiscount(model.costDiscount) ?? 0;
+  const multiplier = 1 - discount;
+  const cacheRead = perMtok(model.cacheReadInputTokenCost);
+  const cacheWrite = perMtok(model.cacheCreationInputTokenCost);
+  return {
+    input: input * 1_000_000 * multiplier,
+    output: output * 1_000_000 * multiplier,
+    ...(cacheRead !== undefined ? { cacheRead: cacheRead * multiplier } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite: cacheWrite * multiplier } : {}),
+  };
 }
 
 function gatewayInputTokenPriceBands(
@@ -122,6 +151,7 @@ export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   fallbackCurrency: MoneyCurrency,
   fallbackIsInferred = false,
+  options: { allowFreeModel?: boolean } = {},
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -136,6 +166,7 @@ export function gatewayModelPriceQuote(
   const priorityCacheReadPerMtok = perMtok(model.cacheReadInputTokenCostPriority);
   const priorityInputTokenPriceBands = gatewayPriorityInputTokenPriceBands(model);
   if (
+    !options.allowFreeModel &&
     inputPerMtok === 0 &&
     outputPerMtok === 0 &&
     (cacheReadPerMtok === undefined || cacheReadPerMtok === 0) &&
@@ -247,16 +278,41 @@ function referencePriceCalendarDate(value: string | Date | undefined): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Selects a dated provider reference tariff, optionally for a specific agent/input size. */
+interface ReferencePriceOptions {
+  officialOnly?: boolean;
+  agent?: AgentKind;
+  inputTokens?: number;
+  at?: string | Date;
+  variant?: 'standard' | 'priority' | 'batch' | 'fast';
+}
+
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,
   registry: ModelRegistry | null | undefined,
-  options: {
-    agent?: AgentKind;
-    inputTokens?: number;
-    at?: string | Date;
-    variant?: 'standard' | 'priority' | 'batch' | 'fast';
-  } = {},
+  options: ReferencePriceOptions = {},
+): ModelPriceQuote | undefined {
+  const quote = referencePriceQuoteForVariant(providerId, modelId, registry, options);
+  if (!quote || (options.variant ?? 'standard') !== 'standard') return quote;
+  // Usage segments call Fast "priority". Keep the standard quote for display,
+  // and project the independently declared Fast tariff for the cost calculator.
+  const fast =
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'fast' }) ??
+    referencePriceQuoteForVariant(providerId, modelId, registry, { ...options, variant: 'priority' });
+  if (!fast || fast.currency !== quote.currency) return quote;
+  const { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands } = fast;
+  return {
+    ...quote,
+    priority: { inputPerMtok, outputPerMtok, cacheReadPerMtok, cacheCreatePerMtok, inputTokenPriceBands },
+  };
+}
+
+function referencePriceQuoteForVariant(
+  providerId: string,
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  options: ReferencePriceOptions = {},
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
@@ -267,7 +323,7 @@ export function providerReferencePriceQuote(
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
-  const inputTokenPriceBands = resolved.route.referencePrices
+  const inputTokenPriceBands = resolved.prices
     ?.filter(
       (price) =>
         price.variant === variant &&
@@ -394,9 +450,9 @@ export function subscriptionDirectPriceQuote(
   const routedId = exclusiveXaiCatalogModelId(modelId) ?? modelId;
   let quote: ModelPriceQuote | undefined;
   if (routedId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('openai', routedId, registry, { agent, at, officialOnly: true });
   } else if (routedId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at });
+    quote = providerReferencePriceQuote('xai', routedId, registry, { agent, at, officialOnly: true });
   }
   return quote
     ? {

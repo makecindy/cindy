@@ -49,7 +49,7 @@ Firefox 早已按规范放行，只有 Safari 没跟，而 Safari 是 macOS 默�
    而是在签发处直接按 client_state 寄存进 Redis
 ⑤ 302 到结果展示页（URL 既不含 code 也不含 state）
 ⑥ 客户端自②起持续轮询 poll 接口，取到 code 后照常 POST /api/auth/token 完成 PKCE 兑换
-⑦ 用户在展示页点「回到 Cindy」→ cindy://focus/desktop-login
+⑦ 成功结果页显示 3 秒倒计时，结束时自动关闭并移除倒计时文字；失败页仍可点「回到 Cindy」→ cindy://focus/desktop-login
 ```
 
 关键点：`redirect_uri` 是「auth-server 完事后往哪跳」，**不是 provider 的回调地址**。
@@ -190,6 +190,9 @@ pnpm --filter desktop run export:login-callback-template
 - 每份 HTML 自带 light / dark（`prefers-color-scheme`），不按主题拆分；
 - 失败页含 `{{ERROR_DETAIL}}` 一个占位符，替换错误码前按 HTML 文本节点转义；无错误码
   时连同它所在的 `<p class="detail">` 一并删除；
+- 成功页不显示返回按钮，使用 560×500 的紧凑内容流布局，正文告知登录已成功并可关闭当前页面；页面底部显示
+  `3秒后自动关闭` 并倒计时到 0，随后先移除倒计时文字再调用 `window.close()`；浏览器不允许时不
+  留任何关闭提示或残留文案，失败页仍保留回到 Cindy 的按钮；
 - 页面自包含（立绘是构建期内嵌的 webp data URI），无外链依赖；
 - 客户端改文案后需重新导出同步，**不要在服务端侧手改 HTML**。
 
@@ -199,7 +202,8 @@ pnpm --filter desktop run export:login-callback-template
 loopback 与 mobile 共用的回调路径。两者不一致（如 app 设日语、浏览器为中文）只影响这张
 结果页的文案，不影响登录本身，故选择不动共用路径。缺省回落 `en`。
 
-**CSP 与内联脚本**：模板里有一段**布局必需**的内联脚本（整卡等比缩放 + 水平居中）。
+**CSP 与内联脚本**：模板里有一段内联脚本（整卡等比缩放 + 水平居中、成功页 3 秒倒计时，并在倒计时
+结束时先移除倒计时文字再自动关闭）。
 CSP 用 `script-src 'sha256-…'` 精确放行它，而不是放 `'unsafe-inline'`。
 
 **hash 由导出方算好写进 `manifest.json` 的 `pages[].scriptHashes`，服务端直接读取拼进
@@ -262,6 +266,8 @@ CodeQL 的 `js/bad-tag-filter` 判为不完整的标签过滤。
 
 - [ ] Safari 与 Chrome 各跑一次**真实 provider** 登录：地址栏全程
       `https://auth.<域名>/...`，唤起弹框显示的是域名而非 IP
+- [ ] Chrome 若允许脚本关闭，成功页在 3 秒倒计时后自动关闭；若不允许，倒计时文字会先消失，页面不留下
+      关闭提示且正文仍告知用户可手动关闭，无返回按钮
 - [ ] 四种语言各看一次（zh / en / ja / ko）
 - [ ] 用户中途关闭浏览器：客户端 5 分钟后按取消收场，不报错
 - [ ] 清空清单字段后回退 loopback 仍正常

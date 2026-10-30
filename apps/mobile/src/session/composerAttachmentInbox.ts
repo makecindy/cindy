@@ -19,6 +19,9 @@ export interface ComposerAnnotationSubmission {
   displayUri: string;
   strokes: AnnotationStroke[];
   mimeType?: string;
+  /** lightbox 已解码的图片尺寸(可选):仅供带笔迹 / 需光栅化时的烧录前预缩决策。 */
+  naturalWidth?: number;
+  naturalHeight?: number;
   /**
    * 处理失败后的回投次数(消费方维护):提交失败(槽满 / 读源失败 / 烧录失败)
    * 时把 submission 回投信箱等下次 focus 重试,用户画的笔迹不静默丢;达到上限

@@ -12,37 +12,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { pickIconKind } from '../components/new-chat/AttachmentTypeThumb';
 
 const src = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'AttachmentTypeThumb.tsx'),
   'utf8',
 ).replace(/\r\n/g, '\n');
 
-describe('AttachmentTypeThumb — 自绘图标的类型分派', () => {
-  it('表格 / 幻灯片 / 文档 / 代码 / PDF 各归各的类型', () => {
-    expect(pickIconKind('.xlsx', 'office')).toBe('sheet');
-    expect(pickIconKind('.pptx', 'office')).toBe('slide');
-    expect(pickIconKind('.docx', 'office')).toBe('doc');
-    expect(pickIconKind('.ts', 'text')).toBe('code');
-    expect(pickIconKind('.pdf', 'pdf')).toBe('pdf');
-  });
-
-  it('大写扩展名同样命中(拖进来的文件名可能是 .PDF / .XLSX)', () => {
-    expect(pickIconKind('.XLSX', 'office')).toBe('sheet');
-    expect(pickIconKind('.PDF', 'pdf')).toBe('pdf');
-  });
-
-  it('无扩展名 / 未知类型回落中性纸张,不崩', () => {
-    expect(pickIconKind('', 'file')).toBe('plain');
-    expect(pickIconKind('.zzz', 'file')).toBe('plain');
-    expect(pickIconKind('', 'text')).toBe('text');
-  });
-
-  it('category 为 pdf 但扩展名缺失时仍算 PDF', () => {
-    expect(pickIconKind('', 'pdf')).toBe('pdf');
-  });
-});
+const tileSrc = readFileSync(resolve(__dirname, '..', 'components', 'ui', 'file-type-tile.tsx'), 'utf8');
 
 describe('AttachmentTypeThumb — 缩略图取用契约', () => {
   it('按 2x 边长要图,retina 下不糊', () => {
@@ -126,13 +102,15 @@ describe('AttachmentTypeThumb — 缩略图取用契约', () => {
 
   it('角标标签渲染尺寸不低于 10px(DESIGN.md §3 Micro Label 下限)', () => {
     // viewBox 32 + width 32 → 1:1,fontSize 10 即屏幕 10px。
-    expect(src).toMatch(/<svg width="32" height="32" viewBox="0 0 32 32"/);
-    expect(src).toMatch(/fontSize="10"/);
+    expect(tileSrc).toMatch(/<svg width="32" height="32" viewBox="0 0 32 32"/);
+    expect(tileSrc).toMatch(/fontSize="10"/);
   });
 
-  it('图标型缩略图不裁切也不描边,内容型才裁切填满并描边', () => {
+  it('保留系统缩略图,无缩略图时使用统一文件卡', () => {
     // dmg / zip 这类系统只给类型图标:图标四周本来就是透明的,再套一圈边框
     // 等于在图标外面画个空方框(2026-07-27 Dash 指出)。
+    expect(src).toContain('if (thumb)');
+    expect(src).toContain('<FileTypeTile name={file.name} mimeType={file.mimeType} />');
     expect(src).toMatch(/objectFit: thumb\.isIcon \? 'contain' : 'cover'/);
     expect(src).toMatch(/outline: thumb\.isIcon \? undefined : '1px solid var\(--border-default\)'/);
     // DESIGN.md §6:in-page 元素只能用 1px Board 边框区分,阴影只留给 token 化的浮层。
@@ -144,7 +122,7 @@ describe('AttachmentTypeThumb — 缩略图取用契约', () => {
   });
 
   it('图标型判定采样四边中点与四角,解码失败按内容图处理', () => {
-    const fn = src.slice(src.indexOf('async function looksLikeIconBitmap'), src.indexOf('// ── 自绘文件图标'));
+    const fn = src.slice(src.indexOf('async function looksLikeIconBitmap'), src.indexOf('// ── 组件'));
     // 8 个采样点:四边中点 + 四角。少采会把「上白下花」的内容图误判成图标。
     expect((fn.match(/\[[^\]]*\],/g) ?? []).length).toBeGreaterThanOrEqual(4);
     expect(fn).toMatch(/samples\.every\(\(\[x, y\]\) => alphaAt\(x, y\) < 8\)/);
@@ -154,21 +132,21 @@ describe('AttachmentTypeThumb — 缩略图取用契约', () => {
 
   it('自绘图标的颜色全部走注册 token,组件里不写死任何 hex', () => {
     // 纸张本体 / 描边 / 正文线必须是 token,否则 Dark 模式会失配。
-    expect(src).toMatch(/fill="var\(--surface-elevated\)"/);
-    expect(src).toMatch(/stroke="var\(--text-placeholder\)"/);
+    expect(tileSrc).toMatch(/fill="var\(--surface-elevated\)"/);
+    expect(tileSrc).toMatch(/stroke="var\(--text-placeholder\)"/);
     // 角标色是 theme-invariant 例外族,但同样得走注册 token —— DESIGN.md §10:
     // 「Never freestyle these semantic colors as hardcoded hex」。
-    const accentBlock = src.slice(src.indexOf('const KIND_ACCENT'), src.indexOf('/** 角标里的短标签'));
+    const accentBlock = tileSrc;
     expect(accentBlock).toMatch(/pdf: 'var\(--file-badge-pdf\)'/);
     expect(accentBlock).toMatch(/code: 'var\(--file-badge-code\)'/);
-    expect(src).toMatch(/fill="var\(--file-badge-fg\)"/);
+    expect(tileSrc).toContain("'var(--file-badge-fg)'");
     // 整个组件不得出现硬编码色值(注释里引用取值说明不算,这里只查代码字面量)。
-    const literals = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    const literals = tileSrc.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
     expect(literals.match(/#[0-9A-Fa-f]{3,8}\b/g) ?? []).toEqual([]);
   });
 
   it('角标字重不超过 500(DESIGN.md §3 Weight restraint:No bold)', () => {
-    expect(src).toMatch(/fontWeight="500"/);
-    expect(src).not.toMatch(/fontWeight="[6-9]\d\d"/);
+    expect(tileSrc).toMatch(/fontWeight="500"/);
+    expect(tileSrc).not.toMatch(/fontWeight="[6-9]\d\d"/);
   });
 });

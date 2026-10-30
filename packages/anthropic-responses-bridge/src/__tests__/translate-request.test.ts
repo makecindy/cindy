@@ -508,3 +508,20 @@ describe('translateRequest', () => {
     expect(normal.service_tier).toBeUndefined();
   });
 });
+
+it('round-trips bare-model native tool state with thinking disabled without accepting another connection', async () => {
+  const { SseTranslator } = await import('../translate-sse.js');
+  const namespace = 'cindy-provider-fixture/';
+  const translator = new SseTranslator('bare-model', 'default', namespace);
+  const events = [
+    { type: 'response.created', response: { id: 'resp_native', model: 'bare-model' } },
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [] } },
+    { type: 'response.output_item.done', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [], encrypted_content: 'opaque-tool-state' } },
+  ].flatMap(event => translator.push(event));
+  const block = events.find(event => event.event === 'content_block_start')!.data.content_block;
+  const request = { model: 'bare-model', messages: [{ role: 'assistant', content: [block] }] } as AnthropicMessagesRequest;
+  const settings = { model: 'bare-model', reasoningEffort: 'none' as const, providerPrefix: namespace, preserveReasoningState: true };
+  expect(translateRequest(request, settings).input).toEqual([{ type: 'reasoning', id: 'rs_native', summary: [], encrypted_content: 'opaque-tool-state' }]);
+  expect(translateRequest(request, { ...settings, providerPrefix: 'another-connection/' }).input).toEqual([]);
+  expect(translateRequest(request, { ...settings, preserveReasoningState: false }).input).toEqual([]);
+});

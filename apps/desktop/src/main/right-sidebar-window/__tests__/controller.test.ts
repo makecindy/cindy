@@ -175,6 +175,31 @@ const ctx = { sessionId: 's1', workdir: '/w', remoteHostId: null, available: tru
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
+// PR #6939 discussion_r4357929340：点击来源必须跨即刻投递/切任务排队保持一致。
+// unit：真实 routeCommand，旧上下文 → 排队 → 目标上下文；原覆盖没有插件来源字段。
+describe('plugin task focus intent', () => {
+  it.each([true, false, undefined])('preserves explicit intent through queued adoption: %s', async (userInitiated) => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    // 即使 command 自报 true，也只能沿用信封里显式给出的来源。
+    const command = { type: 'open-plugin-task' as const, sessionId: 's1', instanceId: 'sim', userInitiated: true };
+    await expect(h.controller.routeCommand({ command, allowOpen: true, userInitiated })).resolves.toBe('queued');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    h.controller.setContext(ctx);
+    const expected = [
+      { channel: 'cmd-channel', payload: { ...command, userInitiated: userInitiated === true } },
+    ];
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual(expected);
+    // 同一来源在宿主已就绪的直接投递路径不能得到另一套语义。
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand({ command, allowOpen: true, userInitiated })).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual(expected);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // prewarm: 后台预热
 // ═══════════════════════════════════════════════════════════════════════
@@ -712,16 +737,58 @@ describe('userInitiated:false', () => {
     expect(win.focus).not.toHaveBeenCalled();
   });
 
-  it('not-ready window: automated open fallback shows without focusing', () => {
+  it('not-ready window: open fallback invalidates and rebuilds with bounded recovery', () => {
     const h = makeHarness();
     h.controller.open({ userInitiated: false });
-    const win = h.windows[0];
+    const win1 = h.windows[0];
 
     vi.advanceTimersByTime(5000);
 
+    // 窗口规则 §3.1:shell 未就绪不得展示空白窗口;作废缓存并重建重开(有界恢复)。
+    expect(win1.isDestroyed()).toBe(true);
+    expect(h.windows).toHaveLength(2);
+    expect(h.windows[1].show).not.toHaveBeenCalled();
+    expect(h.windows[1].showInactive).not.toHaveBeenCalled();
+
+    // 恢复额度耗尽:重建窗口再次超时后不再重建,也不展示。
+    vi.advanceTimersByTime(5000);
+    expect(h.windows).toHaveLength(2);
+    expect(h.windows[1].show).not.toHaveBeenCalled();
+    expect(h.windows[1].showInactive).not.toHaveBeenCalled();
+  });
+
+  it('renderer-ready but presentation-pending: open fallback shows the mounted shell', () => {
+    const h = makeHarness();
+    h.controller.open({ userInitiated: false });
+    const win = h.windows[0];
+    h.controller.markRendererReady(win.webContents as unknown as WebContents);
+
+    vi.advanceTimersByTime(5000);
+
+    // 仅 shell 就绪、内容未到:展示已挂载的 Loading 壳(基线允许)。
     expect(win.showInactive).toHaveBeenCalledTimes(1);
     expect(win.show).not.toHaveBeenCalled();
     expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it('late automation waiter keeps the window alive until its own deadline', async () => {
+    const h = makeHarness({ detached: true });
+    const first = h.controller.ensureOpenForAutomation();
+    const firstSettled = first.catch(() => 'rejected');
+
+    vi.advanceTimersByTime(5000); // 首次超时:waiter1 在场 → 顺延
+    expect(h.windows[0].isDestroyed()).toBe(false);
+
+    const second = h.controller.ensureOpenForAutomation(); // 6s:新 waiter(期限 14s),重排 fallback 到 11s
+    const secondSettled = second.catch(() => 'rejected');
+    vi.advanceTimersByTime(5000); // 11s fallback:新 waiter 在场 → 再次顺延
+    expect(h.windows[0].isDestroyed()).toBe(false);
+
+    vi.advanceTimersByTime(3000); // 14s:waiter 按自身期限拒绝,窗口未被提前拆掉
+    await expect(secondSettled).resolves.toBe('rejected');
+
+    vi.advanceTimersByTime(2000); // 16s:waiters 已空 → 作废回收,不无限顺延
+    expect(h.windows[0].isDestroyed()).toBe(true);
   });
 
   it('not-ready window: later user open upgrades pending show to focused', () => {
@@ -1105,6 +1172,59 @@ describe('setContext / routeCommand', () => {
     });
     h.controller.close();
     expect(h.controller.getState().hostSessionId).toBe('s1');
+  });
+
+  it('refreshes cached canonical Bot ownership before adopting an old session', async () => {
+    const lookup = vi.fn(() => ({ ...ctx, botOwner: { botId: 'bot-1', canonical: false } }));
+    const h = makeHarness({ detached: true }, { resolveHostContext: lookup });
+    h.controller.setContext({ ...ctx, botOwner: { botId: 'bot-1', canonical: true } });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.routeCommand(terminalRequest());
+    await expect(pending).resolves.toBe('routed');
+    expect(lookup).toHaveBeenCalledWith('s1');
+    expect(h.controller.getContext()?.botOwner).toEqual({ botId: 'bot-1', canonical: false });
+  });
+
+  it('refreshes a cached null Bot owner sent before profiles hydrated', async () => {
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => ({ ...ctx, botOwner: { botId: 'bot-1', canonical: true } }),
+    });
+    h.controller.setContext({ ...ctx, botOwner: null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()?.botOwner).toEqual({ botId: 'bot-1', canonical: true });
+  });
+
+  it('does not trust cached Bot ownership when the authoritative lookup misses', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, botOwner: { botId: 'bot-1', canonical: true } });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()?.botOwner).toBeUndefined();
+  });
+
+  it('retries a transient Bot owner lookup failure without keeping stale ownership', async () => {
+    const fresh = { ...ctx, botOwner: { botId: 'bot-1', canonical: false } };
+    const lookup = vi.fn()
+      .mockRejectedValueOnce(new Error('DB worker restarting'))
+      .mockResolvedValue(fresh);
+    const h = makeHarness({ detached: true }, { resolveHostContext: lookup });
+    h.controller.setContext({ ...ctx, botOwner: { botId: 'bot-1', canonical: true } });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.routeCommand(terminalRequest());
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()?.botOwner).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(h.controller.getContext()?.botOwner).toEqual(fresh.botOwner);
   });
 
   it('does not forge a local host when resolve misses', async () => {
@@ -1722,13 +1842,13 @@ describe('crash recovery', () => {
     vi.advanceTimersByTime(10);
     expect(h.windows).toHaveLength(2);
 
-    // Wait for stability period
-    vi.advanceTimersByTime(30_000);
-
-    // Recovery creates win2; need to open (request visibility) before second crash.
+    // 恢复出的 win2 先正常就绪(基线:shell 超时未就绪的窗口会被作废回收,
+    // 活下来的窗口都走健康路径);open() 会清零恢复额度并取消稳定期计时器,
+    // 必须等稳定期自然过期后再崩溃,才能真实验证额度重置(greptile P2)。
     const win2 = h.windows[1];
     markReady(h.controller, win2);
-    h.controller.open();
+    vi.advanceTimersByTime(30_000);
+
     win2.emitWebContentsEvent('render-process-gone', {}, { reason: 'crashed' });
     vi.advanceTimersByTime(10);
     expect(h.windows).toHaveLength(3); // recovery quota reset allows third window

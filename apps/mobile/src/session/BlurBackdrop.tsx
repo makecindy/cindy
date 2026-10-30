@@ -30,6 +30,13 @@ import { BlurView } from 'expo-blur';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useTheme } from '@/theme';
 
+/**
+ * Frosting for chrome that floats over scrolling content (session header and
+ * composer edge blur, composer activity pills). Pair with a transparent
+ * overlay so every floating surface reads as the same glass.
+ */
+export const FLOATING_CHROME_BLUR_INTENSITY = 55;
+
 export interface BlurBackdropProps {
   /** iOS BlurView intensity(R1 模式1 ≈ 50;模式3 浮层可传更低)。默认 50。 */
   intensity?: number;

@@ -1,0 +1,149 @@
+diff --git a/build/src/start/doctor/apple/SimulatorAppPrerequisite.js b/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
+index 6d9de9f08cc0fda6b828ecdf996785b331a3880c..cd41a0595b5f10b25284b6dbc0e5779f69d5702d 100644
+--- a/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
++++ b/build/src/start/doctor/apple/SimulatorAppPrerequisite.js
+@@ -8,13 +8,7 @@ Object.defineProperty(exports, "SimulatorAppPrerequisite", {
+         return SimulatorAppPrerequisite;
+     }
+ });
+-function _osascript() {
+-    const data = require("@expo/osascript");
+-    _osascript = function() {
+-        return data;
+-    };
+-    return data;
+-}
++exports.getSimulatorAppAsync = getSimulatorAppAsync;
+ function _spawnasync() {
+     const data = /*#__PURE__*/ _interop_require_default(require("@expo/spawn-async"));
+     _spawnasync = function() {
+@@ -43,27 +37,7 @@ const XCODE_SIMULATOR_PATH = './Applications/Simulator.app/Contents/Info.plist';
+ class SimulatorAppPrerequisite extends _Prerequisite.Prerequisite {
+     static #_ = this.instance = new SimulatorAppPrerequisite();
+     async assertImplementation() {
+-        // Xcode 27 replaces Simulator with DeviceHub
+-        // See: https://developer.apple.com/documentation/xcode/device-hub
+-        // TODO(cedric): once Xcode 27 stable is released, resolve DeviceHub first
+-        let appId = await (0, _osascript().safeIdOfAppAsync)('Simulator').then((appId)=>{
+-            return appId || (0, _osascript().safeIdOfAppAsync)('DeviceHub');
+-        });
+-        if (!appId) {
+-            const xcodePath = await getXcodeSelectPath();
+-            debug('Xcode select path: %s', xcodePath);
+-            if (xcodePath) {
+-                appId = await getXcodeInfoPlistBundleId(_nodepath().default.join(xcodePath, XCODE_SIMULATOR_PATH)).then((appId)=>{
+-                    return appId || getXcodeInfoPlistBundleId(_nodepath().default.join(xcodePath, XCODE_DEVICE_HUB_PATH));
+-                });
+-            }
+-        }
+-        if (!appId) {
+-            throw new _Prerequisite.PrerequisiteCommandError('SIMULATOR_APP', "Can't determine id of Device Hub or Simulator app; the Device Hub or Simulator is most likely not installed on this machine. Run `sudo xcode-select -s /Applications/Xcode.app`");
+-        }
+-        if (appId !== 'com.apple.dt.Devices' && appId !== 'com.apple.iphonesimulator' && appId !== 'com.apple.CoreSimulator.SimulatorTrampoline') {
+-            throw new _Prerequisite.PrerequisiteCommandError('SIMULATOR_APP', `Device Hub or Simulator is installed but is identified as '${appId}'; don't know what that is.`);
+-        }
++        const { appId } = await getSimulatorAppAsync();
+         debug('Xcode simulator app id: %s', appId);
+         try {
+             // make sure we can run simctl
+@@ -77,15 +51,21 @@ class SimulatorAppPrerequisite extends _Prerequisite.Prerequisite {
+         }
+     }
+ }
+-async function getXcodeSelectPath() {
+-    try {
+-        const result = await (0, _spawnasync().default)('xcode-select', [
+-            '--print-path'
+-        ]);
+-        return result.stdout.trim() || null;
+-    } catch  {
+-        return null;
++// Resolve from the same toolchain as simctl (including DEVELOPER_DIR), without
++// AppleScript name lookup: a missing app name opens a modal application chooser.
++async function getSimulatorAppAsync() {
++    const result = await (0, _spawnasync().default)('xcrun', ['--find', 'simctl']);
++    const xcodePath = _nodepath().default.resolve(result.stdout.trim(), '../../..');
++    for (const relativePath of [XCODE_DEVICE_HUB_PATH, XCODE_SIMULATOR_PATH]) {
++        const infoPlistPath = _nodepath().default.join(xcodePath, relativePath);
++        const appId = await getXcodeInfoPlistBundleId(infoPlistPath);
++        if (!appId) continue;
++        if (!['com.apple.dt.Devices', 'com.apple.iphonesimulator', 'com.apple.CoreSimulator.SimulatorTrampoline'].includes(appId)) {
++            throw new _Prerequisite.PrerequisiteCommandError('SIMULATOR_APP', `Unexpected simulator app identity '${appId}' at ${infoPlistPath}`);
++        }
++        return { appId, appPath: _nodepath().default.resolve(infoPlistPath, '../..') };
+     }
++    throw new _Prerequisite.PrerequisiteCommandError('SIMULATOR_APP', `Device Hub or Simulator is missing from the selected Xcode: ${xcodePath}`);
+ }
+ /**
+  * Read the Info.plist of an app within Xcode and return the bundle ID.
+diff --git a/build/src/start/platforms/ios/AppleDeviceManager.js b/build/src/start/platforms/ios/AppleDeviceManager.js
+index 21085b0d87f2e04e06f2e3d5b023a5f10f9f06a5..fb9e0d110bebb386cf057f1c82f894297b97fbf4 100644
+--- a/build/src/start/platforms/ios/AppleDeviceManager.js
++++ b/build/src/start/platforms/ios/AppleDeviceManager.js
+@@ -272,14 +272,7 @@ class AppleDeviceManager extends _DeviceManager.DeviceManager {
+         // If we're in interactive mode, we can attempt to focus the Simulator app.
+         // In non-interactive mode, we should assume this is an agent and not attempt to focus the Simulator app since it doesn't need focus.
+         if ((0, _interactive.isInteractive)()) {
+-            // TODO: Focus the individual window
+-            await (0, _osascript().spawnAsync)([
+-                `if application "Simulator" is running then`,
+-                `tell application "Simulator" to activate`,
+-                `else if application "DeviceHub" is running then`,
+-                `tell application "DeviceHub" to activate`,
+-                `end if`
+-            ]);
++            await (0, _ensureSimulatorAppRunning.openSimulatorAppAsync)(this.device);
+         }
+     }
+     getExpoGoAppId() {
+diff --git a/build/src/start/platforms/ios/ensureSimulatorAppRunning.js b/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
+index 0391f6caac7cc00de8993eeee133f54d3b57e08e..fb160713e1f33a76032c8360f44e50a107347905 100644
+--- a/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
++++ b/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
+@@ -25,6 +25,8 @@ function _spawnasync() {
+ const _log = /*#__PURE__*/ _interop_require_wildcard(require("../../../log"));
+ const _delay = require("../../../utils/delay");
+ const _errors = require("../../../utils/errors");
++const { getSimulatorAppAsync } = require("../../doctor/apple/SimulatorAppPrerequisite");
++exports.openSimulatorAppAsync = openSimulatorAppAsync;
+ function _interop_require_default(obj) {
+     return obj && obj.__esModule ? obj : {
+         default: obj
+@@ -108,30 +110,16 @@ async function isSimulatorAppRunningAsync() {
+     return true;
+ }
+ async function openSimulatorAppAsync(device) {
+-    try {
+-        const args = [
+-            '-a',
+-            'Simulator'
+-        ];
+-        if (device.udid) {
+-            // This has no effect if the app is already running.
++    const { appId, appPath } = await getSimulatorAppAsync();
++    const args = ['-a', appPath];
++    if (device.udid) {
++        if (appId === 'com.apple.dt.Devices') {
++            args.push(`devices://device/open?id=${encodeURIComponent(device.udid)}`);
++        } else {
+             args.push('--args', '-CurrentDeviceUDID', device.udid);
+         }
+-        await (0, _spawnasync().default)('open', args);
+-    } catch  {
+-        // Xcode 27+ replaces Simulator.app with DeviceHub, so `open -a Simulator` fails.
+-        // DeviceHub registers the `devices://` URL scheme, which lets us focus the right
+-        // device by its UDID — `open -a DeviceHub` can only bring the app forward.
+-        const deviceHubArgs = device.udid ? [
+-            `devices://device/open?id=${device.udid}`
+-        ] : [
+-            '-a',
+-            'DeviceHub'
+-        ];
+-        await (0, _spawnasync().default)('open', deviceHubArgs).catch(()=>{
+-        // Noop - we can't do much more here
+-        });
+     }
++    await (0, _spawnasync().default)('open', args);
+ }
+ 
+ //# sourceMappingURL=ensureSimulatorAppRunning.js.map

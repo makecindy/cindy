@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
 
 import { createGeminiImageChannel } from '../geminiImageClient';
 
@@ -50,6 +51,27 @@ describe('geminiImageClient', () => {
     await channel.generateImage({ model: 'gemini/gemini-3-pro-image', prompt: 'p' });
     const without = JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
     expect(without.generationConfig).toEqual({ responseModalities: ['TEXT', 'IMAGE'] });
+  });
+
+  it('transmits 4K image size for generation and editing, preserving cancellation', async () => {
+    const doFetch = fetchMock();
+    const channel = createGeminiImageChannel({ getApiKey: () => 'test-key', fetchImplementation: doFetch as typeof fetch });
+    const signal = new AbortController().signal;
+    const readFile = vi.spyOn(fs, 'readFile').mockResolvedValue(Buffer.from('reference image'));
+    try {
+    for (const edit of [false, true]) {
+      const params = { model: 'gemini/gemini-3-pro-image', prompt: 'p', aspectRatio: '16:9', resolution: '4K', signal };
+      if (edit) await channel.editImage({ ...params, imagePaths: ['/test/reference.png'] });
+      else await channel.generateImage(params);
+    }
+    for (const [, init] of doFetch.mock.calls) {
+      expect(JSON.parse(String(init?.body)).generationConfig.imageConfig).toEqual({ aspectRatio: '16:9', imageSize: '4K' });
+      expect(init?.signal).toBe(signal);
+    }
+    expect(JSON.parse(String(doFetch.mock.calls[1]?.[1]?.body)).contents[0].parts[1].inlineData).toMatchObject({ mimeType: 'image/png' });
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it('ready = key 已配置;null 或空白串均视为未配置(不出网)', async () => {

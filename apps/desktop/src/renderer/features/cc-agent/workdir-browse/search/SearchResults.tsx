@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * SearchResults — 文件搜索结果树
  *
@@ -39,7 +40,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronDown, ChevronRight, FileText } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
@@ -176,7 +177,7 @@ function FileHeader({ relPath, matchCount, collapsed, onToggle }: FileHeaderProp
       )}
     >
       <Chevron size={12} strokeWidth={2} className="shrink-0 text-sidebar-action-icon" />
-      <FileText size={14} strokeWidth={2} className="shrink-0 text-sidebar-action-icon" />
+      <FileTypeIcon name={fileName} size={14} className="shrink-0 text-sidebar-action-icon" />
       {/* fileName 优先显示完整, 极长时也允许 truncate. parentDir 在剩余空间里挤. */}
       <span className="min-w-0 truncate text-13 font-medium text-foreground">{fileName}</span>
       {parentDir && (

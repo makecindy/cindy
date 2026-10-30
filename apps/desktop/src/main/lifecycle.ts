@@ -50,9 +50,10 @@ import { noteQuitDisposersCompleted, noteShutdownBegin } from './startup-diagnos
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
+import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
-import { isGhostPanelWebContentsId } from './ghost-panel-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
+import { isCaptureWindowWebContents } from './remote-desktop/captureWindowRegistry.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -188,7 +189,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
 }
 
 /**
- * 外部硬杀 watchdog 的宽限期 (秒)。disposer 预算 6s 的 3 倍余量; 比更新脚本的
+ * 外部硬杀 watchdog 的宽限期 (秒)。大于 bootstrap 的 16s disposer 预算; 比更新脚本的
  * 120s (updateScriptMacOS) 激进得多 —— 这是常规退出路径, 用户在旁边等。
  */
 export const SHUTDOWN_HARD_KILL_GRACE_SECONDS = 20;
@@ -639,7 +640,14 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // 例外 3:RSB popup 虽然是 `window` 类型,但它是局部网页 surface；崩溃时由
   // native popup manager 回收并让对应 tab 展示恢复态,不能拖垮主窗口。
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
+  // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
   app.on('render-process-gone', (_event, webContents, details) => {
+    if (isCaptureWindowWebContents(webContents)) {
+      log.warn(
+        `capture transport render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
+      );
+      return;
+    }
     if (isGhostSandboxWebContentsId(webContents.id)) {
       log.warn(
         `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
@@ -658,7 +666,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
       );
       return;
     }
-    if (isResourceUsageWebContentsId(webContents.id)) {
+    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id)) {
       log.warn(
         `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
@@ -667,12 +675,6 @@ export function installQuitHandler(timeoutMs = 2000): void {
     if (isRsbWindowWebContentsId(webContents.id)) {
       log.warn(
         `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isGhostPanelWebContentsId(webContents.id)) {
-      log.warn(
-        `ghost panel render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
       );
       return;
     }

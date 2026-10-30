@@ -1,14 +1,11 @@
-// 隐私同意闸门(更新链路复用版)。
+// 非自建 EAS / TestFlight 手动更新的隐私同意闸门。
 //
-// 更新检查(manifest / OTA 资源)在用户同意《隐私政策》前不得联网:expo-updates
-// 原生层会在每次请求里携带稳定的 eas-client-id(可关联安装标识),属于「未经同意
-// 收集、传输个人信息」的隐私合规风险。同意状态的本机真相就是 analyticsConsentStore
-// 的 consent 字段(「用户是否明示同意过《隐私政策》」),这里只做语义别名,不新增
-// 存储、不重复维护第二份同意标记——同一台设备不该出现「统计已同意、更新却未同意」
-// 或反向的不一致。
+// 这些渠道仍由 expo-updates 携带单安装 eas-client-id，因此保留 #3359 的 consent 闸门。
+// 自建 OTA 已改由 otaRequestCoordinator 在每次网络事务前覆盖全设备共享 UUID，不再复用
+// analytics consent。TapDB 自身仍以 analyticsConsentStore 为唯一真相，本文件不修改它。
 //
-// 原生层已通过 checkAutomatically:'NEVER' 关闭自动联网,唯一的 /manifest 泄漏源是
-// JS 手动 checkForUpdateAsync();在 JS 层用本闸门前置拦截即可根治,无需动原生配置。
+// 这里只保留语义别名，不新增或修改任何 consent 存储；hydrate / subscribe 导出继续
+// 保持兼容，当前更新链只有设置页的非自建手动检查读取同步状态。
 
 import {
   getAnalyticsConsentState,
@@ -16,7 +13,7 @@ import {
   subscribeAnalyticsConsent,
 } from '@/analytics/analyticsConsentStore';
 
-/** 冷启动 hydrate 一次,返回是否已同意。读取失败一律 fail-closed 到 false。 */
+/** hydrate analytics consent，读取失败语义由底层 store 统一收敛。 */
 export async function hydratePrivacyConsent(): Promise<boolean> {
   await hydrateAnalyticsConsent();
   return getAnalyticsConsentState().consent;
@@ -27,11 +24,7 @@ export function hasPrivacyConsent(): boolean {
   return getAnalyticsConsentState().consent;
 }
 
-/**
- * 订阅同意状态变化(登录页 acceptPrivacyConsent 翻 true、登出 clearAnalyticsConsent
- * 翻 false 都会触发)。自建线「首启未同意 → 进程内同意」时,调用方需要据此补配置
- * OTA URL,否则设置页手动检查 / resume 静默检查会拿动态 true 却仍打占位地址。
- */
+/** 保留 analytics consent 的同源订阅，不维护第二份同意状态。 */
 export function subscribePrivacyConsent(listener: () => void): () => void {
   return subscribeAnalyticsConsent(listener);
 }

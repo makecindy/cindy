@@ -27,11 +27,11 @@ export function registerSshHostStatusTool(
     handler: async ({ host }) => {
       try {
         const pool = await deps.getPool();
-        const resolved = resolveHost(pool, host);
+        const resolved = resolveHost(pool, host, deps);
         if (!resolved.ok) return resolved.result;
         const s = resolved.snapshot;
         return okPayload({
-          host: hostBrief(s),
+          host: hostBrief(s, deps),
           statusChangedAt: new Date(s.statusChangedAt).toISOString(),
         });
       } catch (err) {

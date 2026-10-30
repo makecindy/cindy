@@ -3,21 +3,21 @@
  * current Electron session. Keyed by host id (the SSH alias).
  *
  * Phase A surface:
- *   - hydrate(): bulk-add hosts read from ~/.ssh/config
+ *   - hydrate(): bulk-add hosts discovered from OpenSSH config
  *   - add() / remove() / get() / list() — registry ops
  *   - connect() / disconnect() — convenience wrappers
  *   - onAnyStatus() — single subscription that fires for all hosts
  *   - dispose() — bulk disconnect on app quit
  *
- * The pool itself owns no persistence. Adding a host writes to
- * ~/.ssh/config via the IPC layer (sshConfig.upsertHost); the pool just
- * keeps the in-memory mirror.
+ * The pool itself owns no persistence. The IPC layer owns OpenSSH reads and
+ * narrowly-scoped managed writes; the pool only keeps the in-memory mirror.
  */
 
 import { EventEmitter } from 'node:events';
 
 import { RemoteHost, type RemoteHostDeps, type StatusListener } from './RemoteHost.js';
 import { FileHostKeyStore, type HostKeyStore } from './hostKeys.js';
+import { effectiveAuthenticationFingerprint } from './sshAuthentication.js';
 import type { HostConfig, HostSnapshot } from './types.js';
 
 export interface ConnectionPoolDeps {
@@ -48,10 +48,17 @@ export class ConnectionPool {
   /**
    * Bulk replace the registry with the given configs. Existing hosts that
    * still appear keep their live status; hosts removed from the input are
-   * disconnected and dropped. Used at startup after reading ~/.ssh/config.
+   * disconnected and dropped. Used after reading the effective SSH host graph.
    */
   async hydrate(configs: HostConfig[]): Promise<void> {
-    const incoming = new Set(configs.map((c) => c.id));
+    // Validate the complete replacement before mutating/disconnecting the
+    // current pool. A malformed refresh must leave the last valid snapshot
+    // usable rather than partially applying entries before throwing.
+    const incoming = new Set<string>();
+    for (const config of configs) {
+      if (incoming.has(config.id)) throw new Error(`duplicate host id: ${config.id}`);
+      incoming.add(config.id);
+    }
     // Drop hosts no longer present.
     for (const [id, host] of this.hosts) {
       if (!incoming.has(id)) {
@@ -63,6 +70,11 @@ export class ConnectionPool {
     for (const cfg of configs) {
       const existing = this.hosts.get(cfg.id);
       if (existing) {
+        if (connectionFieldsChanged(existing.config, cfg)) {
+          // Never publish a new endpoint while a live ssh2 connection still
+          // targets the old hostname/user/port/credential tuple.
+          await existing.disconnect();
+        }
         existing.updateConfig(cfg);
       } else {
         this.register(cfg);
@@ -132,4 +144,11 @@ export class ConnectionPool {
     if (!host) throw new Error(`unknown host: ${id}`);
     return host;
   }
+}
+
+function connectionFieldsChanged(left: HostConfig, right: HostConfig): boolean {
+  return left.hostname !== right.hostname
+    || left.port !== right.port
+    || left.user !== right.user
+    || effectiveAuthenticationFingerprint(left) !== effectiveAuthenticationFingerprint(right);
 }

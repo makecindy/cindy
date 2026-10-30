@@ -277,6 +277,60 @@ describe('describeImageWithProvider', () => {
     expect(body.messages[0].content[1].image_url.url).toBe('https://x/y.png');
   });
 
+  it('adds the OpenCode Go session header to the vision request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        id: 'opencode-go',
+        routing: {
+          'claude-code': {
+            wireProtocol: 'openai-chat',
+            upstream: 'https://opencode.ai/zen/go/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+      });
+    await describeImageWithProvider('opencode-go', 'vision-x', { imageUrl: 'https://x/y.png' }, d);
+    const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    expect(init.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('recognizes a preset-created vision provider after its id and endpoint changed', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+    } as unknown as Response);
+    const d = deps({ fetch: fetchMock as unknown as typeof globalThis.fetch });
+    d.getProviderById = () =>
+      fakeProvider({
+        id: 'opencode-go-mirror',
+        routing: {
+          'claude-code': {
+            wireProtocol: 'openai-chat',
+            upstream: 'https://mirror.example/v1',
+            authStrategy: 'api-key-header',
+          },
+        },
+        models: {
+          'claude-code': [{
+            id: 'vision-x',
+            name: 'Vision X',
+            contextWindow: 200000,
+            efforts: ['low'],
+            defaultEffort: null,
+            catalogPresetId: 'opencode-go',
+          }],
+        },
+      });
+    await describeImageWithProvider('opencode-go-mirror', 'vision-x', { imageUrl: 'https://x/y.png' }, d);
+    const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
+    expect(init.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
   it('propagates HTTP error as VisionBackendError', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

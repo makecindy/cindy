@@ -67,6 +67,21 @@ export function formatTurnDuration(durationMs: number, t?: TFunction): string | 
     }
   }
   const roundedSeconds = Math.round(seconds);
+  if (roundedSeconds >= 86_400) {
+    const days = Math.floor(roundedSeconds / 86_400);
+    const hours = Math.floor((roundedSeconds % 86_400) / 3_600);
+    const minutes = Math.floor((roundedSeconds % 3_600) / 60);
+    return t
+      ? t('usageDetails.durationDaysHoursMinutes', { days, hours, minutes })
+      : `${days}d ${hours}h ${minutes}m`;
+  }
+  if (roundedSeconds >= 3_600) {
+    const hours = Math.floor(roundedSeconds / 3_600);
+    const minutes = Math.floor((roundedSeconds % 3_600) / 60);
+    return t
+      ? t('usageDetails.durationHoursMinutes', { hours, minutes })
+      : `${hours}h ${minutes}m`;
+  }
   const minutes = Math.floor(roundedSeconds / 60);
   const remainder = roundedSeconds % 60;
   const paddedSeconds = String(remainder).padStart(2, '0');

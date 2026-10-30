@@ -1,11 +1,13 @@
 import { performance } from 'node:perf_hooks';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { i18n } from '@/i18n';
 import {
   buildSessionMessagePreviewIndex,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
+  createSessionListTranslator,
   buildSessionScheduleIndex,
   deviceSessionEmptyState,
   formatRemoteSessionSidebarTime,
@@ -21,6 +23,25 @@ import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
+});
+
+it('translates repeated list labels once per build and refreshes on language changes', async () => {
+  const spy = vi.spyOn(i18n, 't');
+  try {
+    const translate = createSessionListTranslator();
+    const first = translate('devices.detail.filter.active');
+    for (let i = 0; i < 1000; i++) expect(translate('devices.detail.filter.active')).toBe(first);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(translate('devices.presentation.sessionList.sessionCount', { count: 1 }))
+      .not.toBe(translate('devices.presentation.sessionList.sessionCount', { count: 2 }));
+    await i18n.changeLanguage('en');
+    const next = createSessionListTranslator();
+    expect(next('devices.detail.filter.active')).toBe(i18n.t('devices.detail.filter.active'));
+    expect(next('devices.detail.filter.active')).not.toBe(first);
+  } finally {
+    spy.mockRestore();
+    await i18n.changeLanguage('zh-CN');
+  }
 });
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
@@ -682,3 +703,28 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+it('schedule unread follows desktop: failed/interrupted are urgent, aborted is read', () => {
+  const index = buildSessionScheduleIndex([schedule('auto')], new Map([['auto', [
+    run('failed', 'auto', { sessionId: 's1', status: 'failed' }),
+    run('interrupted', 'auto', { sessionId: 's2', status: 'interrupted' }),
+    run('aborted', 'auto', { sessionId: 's3', status: 'aborted' }),
+    run('seen', 'auto', { sessionId: 's4', status: 'failed', readAt: 1 }),
+  ]]]));
+  expect(index.get('s1')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s2')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s3')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+  expect(index.get('s4')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+});
+
+it('collapsed errors open the failed run; expanded headers mirror the latest running row', () => {
+  const older = toRemoteSessionListItem(session('older'));
+  older.liveActivity = { sessionId: 'older', phase: 'error', attention: true, compactDetail: '' };
+  const latest = toRemoteSessionListItem(session('latest', { updatedAt: '2026-01-02T00:00:00.000Z' }));
+  const group = { ...older, automationGroup: {
+    key: 'g', baseKey: 'g', title: 'g', sessionIds: ['older', 'latest'], sessionCount: 2,
+    primarySessionId: 'older', children: [], items: [older, latest],
+  } };
+  expect(resolveMobileSessionRowStatus(group, true)).toEqual({ status: 'error', target: older });
+  expect(resolveMobileSessionRowStatus(group, true, true)).toEqual({ status: 'running', target: latest });
+});

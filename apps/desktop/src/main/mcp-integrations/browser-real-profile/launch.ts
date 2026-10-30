@@ -13,7 +13,12 @@ import type {
   BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
 
-import { FOREIGN_AGENT_BROWSER_ERROR } from '../../../shared/browserBackend.js';
+import {
+  FOREIGN_AGENT_BROWSER_ERROR,
+  isBrowserOpenForLoginErrorCode,
+  browserProfileCopyWarningsFromData,
+  type BrowserProfileCopyWarning,
+} from '../../../shared/browserBackend.js';
 
 import { resolveSourceBrowserFromOs } from './source.js';
 import { assertManagedBrowserStopped } from './runtime-stop.js';
@@ -140,6 +145,11 @@ export function annotateStatusData(
     enabled: hint.enabled,
     applied: hint.applied,
     source: hint.source,
+    ...(hint.warnings?.length
+      ? {
+          warnings: browserProfileCopyWarningsFromData({ realProfile: hint }),
+        }
+      : {}),
   };
   return next;
 }
@@ -149,6 +159,7 @@ export function wrapRuntimeWithRealProfile(
   deps: RealProfileLaunchDeps,
 ): Pick<BrowserControlRuntime, 'call'> {
   let lastApplied: ChromiumKind | null = null;
+  let lastWarnings: BrowserProfileCopyWarning[] = [];
 
   const resolveSource = deps.resolveSource ?? resolveSourceBrowserFromOs;
   const snapshot = deps.snapshot ?? snapshotRealProfile;
@@ -159,6 +170,7 @@ export function wrapRuntimeWithRealProfile(
     enabled: deps.isEnabled(),
     applied: deps.isEnabled() && lastApplied !== null,
     source: deps.isEnabled() ? lastApplied : null,
+    ...(deps.isEnabled() && lastApplied && lastWarnings.length ? { warnings: lastWarnings } : {}),
   });
 
   return {
@@ -167,21 +179,46 @@ export function wrapRuntimeWithRealProfile(
       // /start. Consent-on sessions must snapshot before those implicit
       // launches, or the next explicit start short-circuits on our live pid.
       if (shouldPrepareCopiedLogins(request.action, deps.isEnabled())) {
-        return startWithSnapshot(inner, request, {
+        let prepared = false;
+        const result = await startWithSnapshot(inner, request, {
           ...deps,
           resolveSource,
           snapshot,
           cleanup,
           platform,
           getLastApplied: () => lastApplied,
-          setLastApplied: (kind) => {
+          setLastApplied: (kind, warnings = []) => {
             lastApplied = kind;
+            lastWarnings = warnings;
+            prepared = kind !== null;
           },
         });
+        if (result.ok && hint().warnings?.length && (prepared || request.action === 'start')) {
+          const reasons = {
+            locked: 'database is locked by another process',
+            'permission-denied': 'read permission denied',
+            'copy-failed': 'database could not be copied',
+          };
+          return {
+            ...result,
+            data: annotateStatusData(result.data, hint()),
+            message: [
+              result.message,
+              `Browser login cookies were copied, but some saved passwords or autofill data were skipped: ${lastWarnings.map((warning) => `${warning.database} (${reasons[warning.reason]})`).join('; ')}. Browser use can continue; skipped data will not be available for autofill. This is a non-blocking diagnostic for the agent: continue the task without notifying the user unless sign-in actually requires their help.`,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          };
+        }
+        return result;
       }
 
       const result = await inner.call(withActiveBrowserProfile(request, deps.isEnabled()));
       if (request.action === 'status' && result.ok) {
+        // Do not treat vendored running:false as process-gone. Readiness can
+        // drop while Chrome is still alive after stop signals; proving gone is
+        // ExternalChromeBackend.resolveLiveness. Diagnostics stay until the
+        // next launch prep that does not see own-live occupancy.
         return {
           ...result,
           data: annotateStatusData(result.data, hint()),
@@ -227,11 +264,12 @@ async function startWithSnapshot(
     cleanup: typeof cleanupRealProfileSnapshots;
     platform: NodeJS.Platform;
     getLastApplied: () => ChromiumKind | null;
-    setLastApplied: (kind: ChromiumKind | null) => void;
+    setLastApplied: (kind: ChromiumKind | null, warnings?: BrowserProfileCopyWarning[]) => void;
   },
 ): Promise<BrowserControlResult> {
   const enabled = deps.isEnabled();
-  const status = await inner.call({ action: 'status' });
+  const managedProfile = activeManagedProfileName(enabled);
+  const status = await inner.call({ action: 'status', profile: managedProfile });
   const runtimeDir = deps.getRuntimeDir();
   const revertToIsolated = () => {
     if (runtimeDir) deps.cleanup(runtimeDir);
@@ -239,9 +277,13 @@ async function startWithSnapshot(
     deps.setLastApplied(null);
     return inner.call(withActiveBrowserProfile(request, false));
   };
-  if (isRunning(status.data) && isOwnLiveManagedBrowser(status.data, runtimeDir)) {
+  if (isOwnLiveManagedBrowser(status.data, runtimeDir)) {
     return inner.call(withActiveBrowserProfile(request, enabled));
   }
+
+  // No live browser is using the previous snapshot. Do not expose stale
+  // diagnostics while preparing a new launch, including early failure paths.
+  deps.setLastApplied(null);
 
   if (!enabled) {
     return revertToIsolated();
@@ -256,7 +298,7 @@ async function startWithSnapshot(
       rememberedCdpPort: readRemembered(runtimeDir),
     })
   ) {
-    const stop = await inner.call({ action: 'stop' });
+    const stop = await inner.call({ action: 'stop', profile: managedProfile });
     try {
       assertManagedBrowserStopped({ status, stop });
     } catch (err) {
@@ -266,6 +308,7 @@ async function startWithSnapshot(
   }
 
   let cdpPort = MANAGED_CDP_PORT;
+  let preparedSnapshot: SnapshotResult;
   try {
     const pick = deps.pickCdpPort ?? ((preferred: number) => pickManagedCdpPort(preferred));
     cdpPort = await pick(MANAGED_CDP_PORT);
@@ -301,7 +344,7 @@ async function startWithSnapshot(
       executablePath: source.executablePath,
       cdpPort,
     });
-    deps.setLastApplied(result.sourceKind);
+    preparedSnapshot = result;
     rememberCopiedLoginsCdpPort(runtimeDir, cdpPort);
   } catch (err) {
     deps.setLastApplied(null);
@@ -318,7 +361,40 @@ async function startWithSnapshot(
   if (!deps.isEnabled()) {
     return revertToIsolated();
   }
-  return inner.call(withActiveBrowserProfile(request, true));
+
+  // Snapshot state tracks this Cindy's live managed browser, not the original
+  // action result. Implicit open/tabs/snapshot can spawn Chrome and then fail;
+  // ExternalChromeBackend keeps that process. Publishing only on `launched.ok`
+  // would leave applied=false for the rest of the browser lifetime, so later
+  // calls reuse the live pid without restoring diagnostics.
+  const publishIfOwnLive = async () => {
+    if (!deps.isEnabled() || !runtimeDir) return;
+    const after = await inner.call({ action: 'status', profile: managedProfile });
+    if (isOwnLiveManagedBrowser(after.data, runtimeDir)) {
+      deps.setLastApplied(preparedSnapshot.sourceKind, preparedSnapshot.warnings);
+    }
+  };
+
+  try {
+    const launched = await inner.call(withActiveBrowserProfile(request, true));
+    if (launched.ok && deps.isEnabled()) {
+      deps.setLastApplied(preparedSnapshot.sourceKind, preparedSnapshot.warnings);
+    } else if (!launched.ok) {
+      try {
+        await publishIfOwnLive();
+      } catch {
+        // Keep the original action failure.
+      }
+    }
+    return launched;
+  } catch (err) {
+    try {
+      await publishIfOwnLive();
+    } catch {
+      // Keep the original launch error.
+    }
+    throw err;
+  }
 }
 
 function failure(
@@ -326,11 +402,11 @@ function failure(
   code: string,
   message: string,
 ): BrowserControlResult {
-  void code;
   return {
     ok: false,
     action,
     errorCode: 'BROWSER_RUNTIME_ACTION_FAILED',
+    ...(isBrowserOpenForLoginErrorCode(code) ? { data: { reason: code } } : {}),
     message,
   };
 }
@@ -341,7 +417,10 @@ export function realProfileErrorFromCode(code: string, message: string): RealPro
     code === 'PROFILE_LOCKED' ||
     code === 'NO_AUTH_DB' ||
     code === 'HEADLESS_FORBIDDEN' ||
-    code === 'COPY_FAILED'
+    code === 'COPY_FAILED' ||
+    code === 'STOP_FAILED' ||
+    code === 'REAL_PROFILE_READ_DENIED' ||
+    code === 'APP_BOUND_ENCRYPTION_UNSUPPORTED'
   ) {
     return new RealProfileError(code, message);
   }

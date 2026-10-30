@@ -20,12 +20,12 @@ import { getManagedWorktreeBasePath } from './managedWorktreePaths';
  */
 export function normalizeWorkingDirForStorage(raw: string | null | undefined): string | null {
   if (raw == null) return null;
-  const trimmed = String(raw).trim();
-  if (trimmed === '') return null;
+  const path = String(raw);
+  if (path.trim() === '') return null;
 
-  const withoutLongPathPrefix = stripWindowsLongPathPrefix(trimmed);
+  const withoutLongPathPrefix = stripWindowsLongPathPrefix(path);
   const outNeedsWindowsSeparatorRewrite =
-    isWindowsPathLike(trimmed) || isWindowsPathLike(withoutLongPathPrefix);
+    isWindowsPathLike(path) || isWindowsPathLike(withoutLongPathPrefix);
   let out = outNeedsWindowsSeparatorRewrite
     ? withoutLongPathPrefix.replace(/\\/g, '/')
     : withoutLongPathPrefix;
@@ -34,6 +34,34 @@ export function normalizeWorkingDirForStorage(raw: string | null | undefined): s
     out = out.slice(0, -1);
   }
   return out;
+}
+
+/**
+ * 两个工作目录是否指向同一位置。
+ *
+ * 先按 storage 规则归一化(Windows 分隔符 / 长路径前缀 / 尾部斜杠),Windows 盘符与
+ * UNC 路径再按大小写不敏感比较 —— Windows 文件系统大小写不敏感,而用户从目录选择器
+ * 拿到的拼写(盘符大小写、`\` vs `/`)常常与库里存的值不同。POSIX 下反斜杠是合法
+ * 文件名字符、大小写敏感,不折叠。
+ *
+ * `windows` 默认取当前进程平台;renderer 没有 `process` 时应由调用方传入
+ * (`window.electronAPI.platform === 'win32'`)。
+ */
+export function workingDirEquals(
+  left: string | null | undefined,
+  right: string | null | undefined,
+  options: { windows?: boolean } = {},
+): boolean {
+  const a = normalizeWorkingDirForStorage(left);
+  const b = normalizeWorkingDirForStorage(right);
+  if (a === null || b === null) return false;
+  if (a === b) return true;
+  const windows =
+    options.windows ?? (typeof process !== 'undefined' && process.platform === 'win32');
+  if (!windows) return false;
+  const caseFoldable = (value: string): boolean =>
+    /^[A-Za-z]:\//.test(value) || value.startsWith('//');
+  return caseFoldable(a) && caseFoldable(b) && a.toLowerCase() === b.toLowerCase();
 }
 
 /**
@@ -59,16 +87,22 @@ export function normalizeWorkingDirForProjectSettings(
 export function normalizeWorkingDirForGrouping(raw: string | null | undefined): string | null {
   const out = normalizeWorkingDirForProjectSettings(raw);
   if (out == null) return null;
-
   return collapseWorktreeDirForGrouping(out);
 }
 
-function stripWindowsLongPathPrefix(p: string): string {
+/** 搜索比较键：保留分组结果的原始拼写用于展示，只有比较时才折叠 Windows 大小写。 */
+export function normalizeWorkingDirForComparison(raw: string | null | undefined): string | null {
+  const collapsed = normalizeWorkingDirForGrouping(raw);
+  return collapsed && isWindowsPathLike(collapsed) ? collapsed.toLowerCase() : collapsed;
+}
+
+export function stripWindowsLongPathPrefix(p: string): string {
   if (p.startsWith('\\\\?\\UNC\\')) return `\\\\${p.slice('\\\\?\\UNC\\'.length)}`;
   if (p.startsWith('\\\\?\\')) return p.slice('\\\\?\\'.length);
   return p;
 }
 
-function isWindowsPathLike(p: string): boolean {
+/** 盘符路径或 UNC(`\\server` / `//server`)——按 Windows 规则归一的判据。 */
+export function isWindowsPathLike(p: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\') || p.startsWith('//');
 }

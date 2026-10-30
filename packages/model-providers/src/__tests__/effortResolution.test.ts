@@ -7,6 +7,8 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveEffort,
   resolveRequestedEffort,
+  resolveRemoteSwitchEffort,
+  composeAtomicModelSelection,
   resolveIntentReselectEffort,
   resolveProviderSwitchEffort,
   clampEffortToSupported,
@@ -166,6 +168,83 @@ describe('resolveRequestedEffort —— 面板/收藏显式档 vs 本端再查�
   });
 });
 
+describe('composeAtomicModelSelection —— 点选快照不能把 UI 占位写进运行时', () => {
+  it.each([
+    {
+      name: '有档 + 支持 Fast:原样带上 high 和 Fast',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: true },
+    },
+    {
+      name: '有档但不支持 Fast:Fast 必须关,不能带着上一个模型的插队状态',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+    {
+      name: '无档本地/BYOM:effort 写 null 而不是 UI 占位 low',
+      args: {
+        efforts: [] as const,
+        effort: 'low',
+        fastSupported: false,
+        requestedFast: false,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '无档但 resolveEffort 给了 high 占位:仍然 null,避免胶囊显示 thinking high',
+      args: {
+        efforts: [] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '收藏 Fast 关:显式 false 压过记忆里的开',
+      args: {
+        efforts: ['high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: false,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+  ])('$name', ({ args, want }) => {
+    expect(composeAtomicModelSelection(args)).toEqual(want);
+  });
+
+  it('目录暂缺时 resolveRequestedEffort 保住 high；传空 efforts 进原子快照则按无档写 null',
+    () => {
+      const requested = resolveRequestedEffort({
+        requested: 'high',
+        efforts: [],
+        defaultEffort: null,
+        activeEffort: 'low',
+      });
+      expect(requested).toBe('high');
+      expect(
+        composeAtomicModelSelection({
+          efforts: [],
+          effort: requested,
+          fastSupported: false,
+          requestedFast: false,
+        }),
+      ).toEqual({ effort: null, fastMode: false });
+    },
+  );
+});
+
 describe('resolveIntentReselectEffort —— 意图期改选不把空串回落成旧 high', () => {
   it('空串 = 目标明确无档,不继承旧意图 high', () => {
     expect(resolveIntentReselectEffort('', 'high')).toBeUndefined();
@@ -293,5 +372,21 @@ describe('clampEffortToSupported —— 未门控入口按模型能力 clamp(iss
     expect(clampEffortToSupported(null, XHIGH_MODEL)).toBeNull();
     // 空串:不在 EFFORT_ORDER 内,若不透传会被当"未知档"clamp 到模型最高受支持档(#456 review)。
     expect(clampEffortToSupported('', XHIGH_MODEL)).toBe('');
+  });
+});
+
+describe('resolveRemoteSwitchEffort —— 远程切模时目录未知不据占位档', () => {
+  // Bug:远程会话切到 pi 模型时镜像只聚合 cc+codex → efforts 空 → 占位 'low' 进乐观态与
+  // SET_MODEL 快照 → 被控端 effort 轴被清空 → 胶囊渲染「低」,而 DB/实跑仍是 max。
+  it('目录未知(efforts 空)→ 保留会话当前档,不拿占位 low', () => {
+    expect(resolveRemoteSwitchEffort({ efforts: [], requested: 'low', currentEffort: 'max' })).toBe(
+      'max',
+    );
+  });
+
+  it('目录已知 → 用解析出的目标档(真固定档模型仍会被下游 clamp 成 null 轴)', () => {
+    expect(
+      resolveRemoteSwitchEffort({ efforts: ['low', 'high'], requested: 'high', currentEffort: 'max' }),
+    ).toBe('high');
   });
 });

@@ -79,7 +79,7 @@ describe('DictationDictionaryAdvisor', () => {
       schemaName: 'dictation_dictionary_learning',
       model: 'test-model',
       user: {
-        promptVersion: 'dictation-dictionary-learning.zh.v3',
+        promptVersion: 'dictation-dictionary-learning.zh.v8-phonetic',
       },
     });
   });
@@ -123,7 +123,7 @@ describe('DictationDictionaryAdvisor', () => {
     });
   });
 
-  it('drops model actions that are not grounded in before/after text', async () => {
+  it('filters term and alias evidence independently', async () => {
     const { advisor } = makeAdvisor({
       actions: [
         {
@@ -155,7 +155,24 @@ describe('DictationDictionaryAdvisor', () => {
       afterText: '继续试一下 Vibe Coding。',
     });
 
-    expect(result.actions).toEqual([]);
+    expect(result.actions).toEqual([expect.objectContaining({ term: 'Vibe Coding', aliases: [] })]);
+  });
+
+  it.each([[], undefined])('keeps a learned name without an alias (%j)', async (aliases) => {
+    const { advisor } = makeAdvisor({ actions: [
+      { action: 'add_entry', term: 'Slack', aliases, type: 'product_name', confidence: 'high' },
+    ] });
+    const result = await advisor.advise({ beforeText: '检查一下机器人。', afterText: '检查一下 Slack 机器人。' });
+    expect(result.actions).toEqual([expect.objectContaining({ term: 'Slack', aliases: [] })]);
+  });
+
+  it('ignores malformed model strings without losing other valid vocabulary', async () => {
+    const { advisor } = makeAdvisor({ actions: [
+      { action: 'add_entry', term: 123, confidence: 'high' },
+      { action: 'add_entry', term: 'Slack', aliases: [null, {}, 123, 'Slate'], confidence: 'high' },
+    ] });
+    const result = await advisor.advise({ beforeText: '检查 Slate 机器人。', afterText: '检查 Slack 机器人。' });
+    expect(result.actions).toEqual([expect.objectContaining({ term: 'Slack', aliases: ['Slate'] })]);
   });
 
   it('keeps model ignore reason for empty debug decisions', async () => {

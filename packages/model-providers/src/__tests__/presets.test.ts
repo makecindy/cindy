@@ -261,6 +261,52 @@ describe('sanitizePresets', () => {
     }
   });
 
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'strips credential-bearing modelsUrl without dropping the preset: %s',
+    (userinfo) => {
+      const preset = {
+        ...VALID_PRESET,
+        runtimes: {
+          codex: {
+            baseUrl: 'https://x.example/v1',
+            models: [{ id: 'm', name: 'M' }],
+            modelsUrl: `https://${userinfo}x.example/v1/models`,
+          },
+        },
+      };
+      const out = sanitizePresets([preset]);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.runtimes.codex).toEqual({
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M' }],
+      });
+    },
+  );
+
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('removes only discovery sources with credentials in $field: $userinfo', ({ field, userinfo }) => {
+    const source = {
+      baseUrl: 'https://x.example/v1',
+      modelsUrl: 'https://x.example/v1/models',
+      wireProtocol: 'openai-responses',
+    };
+    const out = sanitizePresets([{
+      ...VALID_PRESET,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://x.example/v1',
+          models: [{ id: 'm', name: 'M' }],
+          modelDiscovery: [source, { ...source, [field]: `https://${userinfo}x.example/v1/models` }],
+        },
+      },
+    }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runtimes.codex?.modelDiscovery).toEqual([source]);
+  });
+
   it('modelDiscovery 只保留同源且协议合法的附加目录', () => {
     const source = {
       baseUrl: 'https://x.example/api/v1',
@@ -370,6 +416,60 @@ describe('sanitizePresets', () => {
         },
       },
     }])).toEqual([]);
+  });
+
+  it('图片生成能力只接受显式布尔值', () => {
+    const imagegen = {
+      id: 'imagegen',
+      name: 'Imagegen',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'image-chat', name: 'Image Chat' }],
+        },
+      },
+    };
+    expect(sanitizePresets([imagegen])).toEqual([imagegen]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              supportsImageGeneration: 'yes',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              wireProtocol: 'openai-chat',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            pi: {
+              ...imagegen.runtimes.codex,
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
@@ -786,7 +886,7 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
       expect(
         preset.runtimes.pi?.wireProtocol,
         `${preset.id} is missing the Pi default protocol`,
-      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses)$/);
+      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses|google-generative-ai)$/);
     }
   });
 });
@@ -807,16 +907,20 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
-    expect(preset?.runtimes['claude-code']?.models).toEqual([
-      { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
-    ]);
-    expect(preset?.runtimes.codex).toEqual({
+    // Match the complete ordered recommendation list and its capabilities. V6 adds
+    // resolved interface metadata; route selection is covered by providerInterfaceRoutes.
+    // toMatchObject on arrays still rejects missing/extra entries and reordered models.
+    const expected = [
+      { id: 'MiniMax-M3.1-Flash', name: 'MiniMax M3.1 Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'MiniMax-M3', name: 'MiniMax-M3', contextWindow: 1_000_000, supportsImageInput: true },
+      ...['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed',
+        'MiniMax-M2.1', 'MiniMax-M2.1-highspeed', 'MiniMax-M2'].map((id) => (
+        { id, name: id, contextWindow: 204_800, supportsImageInput: false })),
+    ];
+    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toMatchObject(expected);
+    expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
       baseUrl: codexBaseUrl,
-      models: [
-        { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
-        { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
-      ],
+      models: expected,
     });
   });
 });
@@ -858,13 +962,13 @@ describe('官方渠道预设契约', () => {
     });
   });
 
-  it('llama.cpp 与 vLLM 提供 Codex Chat 与 Pi，不含 Claude Code', () => {
+  it('llama.cpp 与 vLLM 的 Chat 端点供三个引擎使用', () => {
     for (const [id, baseUrl] of [
       ['llamacpp', 'http://127.0.0.1:8080/v1'],
       ['vllm', 'http://127.0.0.1:8000/v1'],
     ] as const) {
       const local = preset(id);
-      expect(local?.runtimes['claude-code']).toBeUndefined();
+      expect(local?.runtimes['claude-code']).toEqual(local?.runtimes.codex);
       expect(local?.runtimes.codex).toEqual({
         baseUrl,
         wireProtocol: 'openai-chat',
@@ -881,7 +985,7 @@ describe('官方渠道预设契约', () => {
   });
 
   it('LongCat 同时提供 Anthropic Messages、Codex 与 Pi Chat 端点', () => {
-    expect(preset('longcat')?.runtimes).toEqual({
+    expect(preset('longcat')?.runtimes).toMatchObject({
       'claude-code': {
         baseUrl: 'https://api.longcat.chat/anthropic',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
@@ -890,7 +994,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
@@ -904,14 +1008,14 @@ describe('官方渠道预设契约', () => {
   it('DeepSeek 的 Pi runtime 来自官方目录并保留逐模型推理档位', () => {
     const pi = preset('deepseek')?.runtimes.pi;
     expect(pi?.piCatalogProviderId).toBe('deepseek');
-    expect(pi?.models.find((model) => model.id === 'deepseek-v4-flash')).toMatchObject({
-      contextWindow: 1_000_000,
+    expect(pi?.models.find((model) => model.id === 'deepseek-flash')).toMatchObject({
+      contextWindow: 1_048_576,
       reasoning: true,
       reasoningEfforts: ['low', 'high', 'max'],
       reasoningDefaultEffort: 'high',
     });
     expect(pi?.models.find((model) => model.id === 'deepseek-v4-pro')).toMatchObject({
-      contextWindow: 1_000_000,
+      contextWindow: 1_048_576,
       reasoning: true,
       reasoningEfforts: ['high', 'max'],
       reasoningDefaultEffort: 'high',
@@ -981,35 +1085,47 @@ describe('官方渠道预设契约', () => {
     const codingPlan = preset('aliyun-bailian-coding');
     const personalTokenPlan = preset('aliyun-bailian-token-plan-cn');
     const teamTokenPlan = preset('aliyun-bailian-token-plan-team-cn');
+    // 官方套餐清单（2026-09-26 核对）；窗口取官方最大输入，默认开思考的取思考模式最大输入。
+    const qwen = (id: string, name: string, image: boolean) =>
+      ({ id, name, contextWindow: 983_616, supportsImageInput: image });
     const codingPlanModels = [
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus' },
-      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next' },
-      { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-plus', 'Qwen3.6-Plus', true),
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'glm-5', name: 'GLM-5', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 196_608, supportsImageInput: false },
+      { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next', contextWindow: 204_800, supportsImageInput: false },
+      { id: 'qwen3-coder-plus', name: 'Qwen3-Coder-Plus', contextWindow: 997_952, supportsImageInput: false },
     ];
     const personalTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
-      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
+      qwen('qwen3.8-max', 'Qwen3.8-Max', true),
+      qwen('qwen3.8-flash', 'Qwen3.8-Flash', true),
+      qwen('qwen3.7-max', 'Qwen3.7-Max', false),
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-flash', 'Qwen3.6-Flash', true),
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_048_576, supportsImageInput: false },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
     ];
     const teamTokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
-      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-plus', name: 'Qwen 3.6 Plus', contextWindow: 1_000_000 },
-      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
-      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
-      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', contextWindow: 131_072 },
-      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144 },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144 },
-      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 262_144 },
-      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
-      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 202_752 },
-      { id: 'glm-5', name: 'GLM-5', contextWindow: 202_752 },
-      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', contextWindow: 196_608 },
+      qwen('qwen3.8-max', 'Qwen3.8-Max', true),
+      qwen('qwen3.8-flash', 'Qwen3.8-Flash', true),
+      qwen('qwen3.7-max', 'Qwen3.7-Max', false),
+      qwen('qwen3.7-plus', 'Qwen3.7-Plus', true),
+      qwen('qwen3.6-plus', 'Qwen3.6-Plus', true),
+      qwen('qwen3.6-flash', 'Qwen3.6-Flash', true),
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', contextWindow: 1_000_000, supportsImageInput: true },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', contextWindow: 1_000_000, supportsImageInput: false },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 229_376, supportsImageInput: true },
+      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_048_576, supportsImageInput: false },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, supportsImageInput: false },
+      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'glm-5', name: 'GLM-5', contextWindow: 169_984, supportsImageInput: false },
+      { id: 'MiniMax-M2.5', name: 'MiniMax-M2.5', contextWindow: 196_608, supportsImageInput: false },
     ];
     const tokenPlanModelsUrl =
       'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models';
@@ -1032,44 +1148,67 @@ describe('官方渠道预设契约', () => {
       docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-team-overview',
       regionHint: 'cn',
     }));
-    expect(codingPlan?.runtimes['claude-code']).toEqual({
+    expect(codingPlan?.runtimes['claude-code']).toMatchObject({
       baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
       modelsUrl: 'https://coding.dashscope.aliyuncs.com/v1/models',
       models: codingPlanModels,
     });
-    expect(codingPlan?.runtimes.codex).toEqual({
+    // Codex 走 openai-chat 桥接：桥接未验证图片格式的型号在 Codex 下不声明图片输入。
+    const codexChatImages = (models: readonly { id: string; supportsImageInput?: boolean }[], unverified: string[]) =>
+      models.map((model) => (unverified.includes(model.id) ? { ...model, supportsImageInput: false } : model));
+    expect(codingPlan?.runtimes.codex).toMatchObject({
       baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
       wireProtocol: 'openai-chat',
-      models: codingPlanModels,
+      models: codexChatImages(codingPlanModels, ['kimi-k2.5']),
     });
     for (const [tokenPlan, models] of [
       [personalTokenPlan, personalTokenPlanModels],
       [teamTokenPlan, teamTokenPlanModels],
     ] as const) {
-      expect(tokenPlan?.runtimes['claude-code']).toEqual({
+      expect({ ...tokenPlan?.runtimes['claude-code'], models: tokenPlan?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
         modelsUrl: tokenPlanModelsUrl,
         models,
       });
-      expect(tokenPlan?.runtimes.codex).toEqual({
+      expect({ ...tokenPlan?.runtimes.codex, models: tokenPlan?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toMatchObject({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
         wireProtocol: 'openai-chat',
         modelsUrl: tokenPlanModelsUrl,
-        models,
+        models: codexChatImages(models, ['deepseek-v4.1-flash', 'kimi-k2.7-code', 'kimi-k2.6', 'kimi-k2.5']),
       });
     }
   });
 
   it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
-    '%s 的 Claude Code GLM-5.2 1M 入口保留完整窗口元数据',
+    '%s 只推荐官方支持的 GLM-5.3 / GLM-5.3-Flash（5.2、5.1 已路由到 5.3）',
     (id) => {
-      expect(
-        preset(id)?.runtimes['claude-code']?.models.find((model) => model.id === 'glm-5.2[1m]'),
-      ).toEqual({
-        id: 'glm-5.2[1m]',
-        name: 'GLM-5.2 (1M)',
+      const recommended = (agent: 'claude-code' | 'codex' | 'pi') =>
+        preset(id)?.runtimes[agent]?.models
+          .filter((model) => model.defaultEnabled !== false)
+          .map((model) => model.id);
+      expect(recommended('claude-code')).toEqual(['glm-5.3[1m]', 'glm-5.3-flash[1m]']);
+      expect(recommended('codex')).toEqual(['glm-5.3', 'glm-5.3-flash']);
+      expect(recommended('pi')).toEqual(['glm-5.3', 'glm-5.3-flash']);
+    },
+  );
+
+  it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
+    '%s 的 Claude Code 使用官方 [1m] 入口,与 Pi 的 glm-5.3 窗口一致 (#3883)',
+    (id) => {
+      const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
+      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toMatchObject({
+        id: 'glm-5.3[1m]',
+        name: 'GLM-5.3 (1M)',
         contextWindow: 1_000_000,
+        supportsImageInput: false,
       });
+      expect(claudeModels.find((model) => model.id === 'glm-5.3-flash[1m]')).toMatchObject({
+        contextWindow: 1_000_000,
+        supportsImageInput: true,
+      });
+      expect(
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
+      ).toBe(1_000_000);
     },
   );
 
@@ -1093,9 +1232,7 @@ describe('官方渠道预设契约', () => {
       wireProtocol: 'openai-chat',
       modelsUrl: 'https://opencode.ai/zen/go/v1/models',
     });
-    expect(piModels.map((model) => model.id)).toEqual([
-      ...new Set([...claudeModels, ...codexModels].map((model) => model.id)),
-    ]);
+    expect(new Set(piModels.map((model) => model.id))).toEqual(new Set([...claudeModels, ...codexModels].map((model) => model.id)));
 
     const expectedOverrides = new Map([
       ['minimax-m3', 'anthropic-messages'],
@@ -1119,7 +1256,7 @@ describe('官方渠道预设契约', () => {
         },
       });
     }
-    for (const model of piModels.filter((candidate) => !expectedOverrides.has(candidate.id))) {
+    for (const model of piModels.filter((candidate) => !candidate.api && !expectedOverrides.has(candidate.id))) {
       expect(model.piApi, model.id).toBeUndefined();
     }
   });
@@ -1138,7 +1275,7 @@ describe('官方渠道预设契约', () => {
 
   it('Google Gemini API 走公开 OpenAI Chat 兼容端点，不依赖 Gemini CLI 私有接口', () => {
     const gemini = preset('google-gemini-api');
-    expect(gemini?.runtimes['claude-code']).toBeUndefined();
+    expect(gemini?.runtimes['claude-code']).toEqual(gemini?.runtimes.codex);
     expect(gemini?.runtimes.codex).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

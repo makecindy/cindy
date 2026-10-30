@@ -279,8 +279,8 @@ function resolveToolChoice(
   return choice;
 }
 
-/** Responses 端点接受的 reasoning effort 档(codex / api.x.ai 通用)。 */
-export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+/** Responses reasoning effort 的并集；各通道只接受自身声明的档位。 */
+export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface TranslateRequestOptions {
   /** 发给上游的真实 model id(已 strip 掉 bridge 前缀)。 */
@@ -295,7 +295,7 @@ export interface TranslateRequestOptions {
   maxOutputTokensSupported?: boolean;
   /**
    * reasoning 档控制:
-   *   - 具体档('low'|'medium'|'high'|'xhigh')→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
+   *   - 具体档(由通道能力限定)→ 发 `reasoning: { effort, summary:'auto' }`(用户选的思维深度经此流入);
    *   - `'none'` → **完全不发** reasoning 字段(某些模型如 xAI grok-code-fast 会对 reasoningEffort 报 400);
    *   - 省略(undefined)→ 回退到按 thinking.budget_tokens 推断(默认 medium),与旧行为一致。
    */
@@ -311,6 +311,8 @@ export interface TranslateRequestOptions {
    * 省略 = 不回放任何带 signature 的 reasoning(保守:无法证明出处即不回放)。
    */
   providerPrefix?: string;
+  /** Preserve connection-scoped native tool state when thinking is disabled. */
+  preserveReasoningState?: boolean;
   /**
    * 上游自带的服务端工具声明(如 xAI 的 `{ type: 'x_search' }`),由 provider 配置按 model 决定。
    * 恒定追加在 function tools **之后**,顺序稳定,保证请求前缀在会话内逐轮一致。
@@ -338,7 +340,7 @@ export function translateRequest(
   const input: ResponsesInputItem[] = [];
   const reasoningReplay: ReasoningReplayOpts = {
     providerPrefix: opts.providerPrefix ?? '',
-    dropAll: opts.reasoningEffort === 'none',
+    dropAll: opts.reasoningEffort === 'none' && !opts.preserveReasoningState,
   };
   for (const msg of req.messages ?? []) {
     input.push(...messageToInputItems(msg, reasoningReplay));

@@ -27,12 +27,21 @@ import type {
   InstalledGhost,
 } from '../../shared/ghost.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS, isGhostPluginErrorCode } from '../../shared/ghost.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import type { GhostRuntimeState } from './runtime/GhostRuntime.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import { normalizeGhostModelImages } from './ghostModelImages.js';
+import type { PluginUsageOutcome } from '../../shared/pluginUsage.js';
+
+/** Internal observation only; no parameters or result bodies leave the dispatcher. */
+export interface GhostCallUsageObserver {
+  accepted(occurredAt: number): void;
+  settled(outcome: PluginUsageOutcome): void;
+}
 
 export interface PipeDispatcherDeps {
   /** 按 id 取已装意识(未装 → null)。 */
-  getGhost(id: string): InstalledGhost | null;
+  getGhost(id: string, namespace?: string | null): InstalledGhost | null;
   /** 当前运行时状态。 */
   runtimeStateOf(id: string): GhostRuntimeState;
   /** 拉起沙箱(幂等;fused/stopping 拒绝)。 */
@@ -40,6 +49,7 @@ export interface PipeDispatcherDeps {
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
   sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
   ownerScope?: GhostOwnerScope;
+  prepareUsage?(ghost: InstalledGhost, callId: string, toolName: string, sessionId?: string): GhostCallUsageObserver | null;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
   timeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
@@ -59,6 +69,10 @@ interface PendingBindingClaim {
 }
 
 interface PendingCall {
+  usage?: GhostCallUsageObserver | null;
+  usageAccepted?: boolean;
+  usageOutcome?: PluginUsageOutcome;
+  sessionId?: string;
   ghostId: string;
   tool: string;
   ownerScopeSnapshot: unknown;
@@ -76,6 +90,10 @@ interface PendingCall {
   deadlineAt: number;
   /** 在途代办 hold 计数(同一卷可并发多单代办,全部收工才收窗)。 */
   holds: number;
+  lifetime: AbortController;
+  sourceSignal?: AbortSignal;
+  cancellationBound?: boolean;
+  detachAbort?: () => void;
 }
 
 /**
@@ -120,6 +138,7 @@ export function toolNotFoundMessage(
 
 export class GhostPipeDispatcher {
   private readonly pending = new Map<string, PendingCall>();
+  private readonly sessionCalls = new Map<string, Set<AbortController>>();
 
   constructor(private readonly deps: PipeDispatcherDeps) {}
 
@@ -139,8 +158,34 @@ export class GhostPipeDispatcher {
    * 派活主入口(ghost 总机的 callGhostTool 回调)。
    * 永不 reject——一切失败都折叠成结构化 GhostToolCallResult。
    */
-  async callGhostTool(request: {
+  async callGhostTool(request: Parameters<GhostPipeDispatcher['dispatchCall']>[0]): Promise<GhostToolCallResult> {
+    // Remember Stop even while a sandbox starts, without changing legacy RPC
+    // completion. Only an explicit Node opt-in consumes this cancellation gate.
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    request.signal?.addEventListener('abort', abort, { once: true });
+    if (request.signal?.aborted) abort();
+    const sessionId = request.sessionId;
+    if (sessionId) {
+      const calls = this.sessionCalls.get(sessionId) ?? new Set<AbortController>();
+      calls.add(controller);
+      this.sessionCalls.set(sessionId, calls);
+    }
+    try {
+      return await this.dispatchCall({ ...request, signal: controller.signal });
+    } finally {
+      request.signal?.removeEventListener('abort', abort);
+      if (sessionId) {
+        const calls = this.sessionCalls.get(sessionId);
+        calls?.delete(controller);
+        if (calls?.size === 0) this.sessionCalls.delete(sessionId);
+      }
+    }
+  }
+
+  private async dispatchCall(request: {
     ghostId: string;
+    namespace?: string | null;
     tool: string;
     args: Record<string, unknown>;
     /**
@@ -150,11 +195,19 @@ export class GhostPipeDispatcher {
     callId?: string;
     /** 仅供可信宿主内部调用方收短等待时间；插件不能控制该值。 */
     timeoutMs?: number;
+    /** Trusted caller's MCP cancellation; not a plugin-controlled field. */
+    signal?: AbortSignal;
+    /** Trusted Host session attribution, never accepted from plugin input. */
+    sessionId?: string;
+    /** Host debug actions are explicitly excluded. Never exposed in plugin payloads. */
+    recordUsage?: false;
+    /** Native reader's explicit opening intent. Never sourced from tool args. */
+    mailReaderOpened?: true;
   }): Promise<GhostToolCallResult> {
-    const { ghostId, tool, args } = request;
+    const { ghostId, namespace, tool, args } = request;
 
     // ── 资格审 ─────────────────────────────────────────────────────────
-    const ghost = this.deps.getGhost(ghostId);
+    const ghost = this.deps.getGhost(ghostId, namespace);
     if (!ghost) {
       return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: `插件 ${ghostId} 未安装或已卸载` };
     }
@@ -165,7 +218,8 @@ export class GhostPipeDispatcher {
     if (!declared) {
       return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, ghost.manifest.tools) };
     }
-    if (this.deps.runtimeStateOf(ghostId) === 'fused') {
+    const storagePart = installedGhostStoragePart(ghost);
+    if (this.deps.runtimeStateOf(storagePart) === 'fused') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试` };
     }
     let ownerScopeSnapshot: unknown;
@@ -176,25 +230,35 @@ export class GhostPipeDispatcher {
     }
 
     // ── 按需拉起 ────────────────────────────────────────────────────────
-    if (this.deps.runtimeStateOf(ghostId) !== 'running') {
+    if (this.deps.runtimeStateOf(storagePart) !== 'running') {
       const spawned = await this.deps.spawn(ghost);
       if (!spawned.ok) {
         return { ok: false, errorCode: 'GHOST_CRASHED', message: `插件启动失败:${spawned.reason}` };
       }
     }
-    if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+    if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
     }
 
     // ── 派发 + 配对等待 ────────────────────────────────────────────────
     const callId = request.callId && request.callId.length > 0 ? request.callId : randomUUID();
-    const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args };
+    let toolArgs = args;
+    if (ghost.manifest.mail === true && ghost.manifest.mailReader?.tool === tool) {
+      toolArgs = { ...args };
+      delete toolArgs.markRead;
+      delete toolArgs.openDraft;
+      if (request.mailReaderOpened === true) toolArgs.openDraft = true;
+      if (request.mailReaderOpened === true && ghost.manifest.mailReader.markRead === true)
+        toolArgs.markRead = true;
+    }
+    const payload: GhostPipeToolCall = { type: 'tool-call', callId, tool, args: toolArgs };
 
     return new Promise<GhostToolCallResult>((resolve) => {
       const startedAt = Date.now();
       const baseTimeoutMs = this.baseTimeoutMs(request.timeoutMs);
       const entry: PendingCall = {
-        ghostId,
+        sessionId: request.sessionId,
+        ghostId: storagePart,
         tool,
         ownerScopeSnapshot,
         claimedBindings: new Map(),
@@ -205,20 +269,64 @@ export class GhostPipeDispatcher {
         timeoutExtensionsAllowed: request.timeoutMs === undefined,
         deadlineAt: startedAt + baseTimeoutMs,
         holds: 0,
+        lifetime: new AbortController(),
+        sourceSignal: request.signal,
       };
+      if (request.recordUsage !== false) {
+        this.observeUsage(() => { entry.usage = this.deps.prepareUsage?.(ghost, callId, tool, request.sessionId); });
+      }
       this.pending.set(callId, entry);
       this.armTimer(callId, entry);
 
-      if (!this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+      if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
         this.settle(callId, this.ownerBoundaryResult());
         return;
       }
-      if (!this.deps.sendToGhost(ghostId, payload)) {
+      if (!this.deps.sendToGhost(storagePart, payload)) {
         // 逻辑页不在线(拉起后瞬时死亡等):立即收卷。
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
+      } else {
+        entry.usageAccepted = true;
+        this.observeUsage(() => entry.usage?.accepted(Date.now()));
+        // A synchronous transport/test may already have returned the result.
+        if (entry.usageOutcome) this.observeUsage(() => entry.usage?.settled(entry.usageOutcome!));
       }
     });
   }
+
+  /** Cancel opt-in work and deny late opt-in; legacy completion remains unchanged. */
+  cancelSessionCalls(sessionId: string): void {
+    for (const controller of this.sessionCalls.get(sessionId) ?? []) controller.abort();
+  }
+
+  private cancelBoundCall(callId: string): void {
+    this.settle(callId, { ok: false, errorCode: 'INTERNAL', message: 'Plugin tool call cancelled' }, 'cancelled');
+  }
+
+  /** Called only for an explicit cancelWithCall Node request. Legacy tools keep their lifetime. */
+  getPendingCallSignal(ghostId: string, callId: string): AbortSignal | null {
+    const entry = this.pending.get(callId);
+    if (!entry || entry.ghostId !== ghostId || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
+    if (!entry.cancellationBound) {
+      entry.cancellationBound = true;
+      const abort = () => this.cancelBoundCall(callId);
+      entry.sourceSignal?.addEventListener('abort', abort, { once: true });
+      entry.detachAbort = () => entry.sourceSignal?.removeEventListener('abort', abort);
+    }
+    if (entry.sourceSignal?.aborted) {
+      this.cancelBoundCall(callId);
+      return null;
+    }
+    return entry.lifetime.signal;
+  }
+
+  getPendingCallSessionId(ghostId: string, callId: string): string | null {
+    const entry = this.pending.get(callId);
+    if (!entry?.cancellationBound || entry.ghostId !== ghostId || entry.lifetime.signal.aborted ||
+      entry.sourceSignal?.aborted || !this.ownerScopeUsable(ghostId, entry.ownerScopeSnapshot)) return null;
+    return entry.sessionId ?? null;
+  }
+
 
   /**
    * 认领真实在途 tool-call 的宿主能力绑定。
@@ -301,6 +409,9 @@ export class GhostPipeDispatcher {
     const setT = this.deps.setTimeoutFn ?? setTimeout;
     entry.timer = setT(() => {
       if (this.pending.delete(callId)) {
+        this.noteUsageOutcome(entry, 'timed-out');
+        entry.detachAbort?.();
+        entry.lifetime.abort();
         this.deps.log?.warn('ghost tool call timed out', {
           ghostId: entry.ghostId,
           tool: entry.tool,
@@ -405,6 +516,7 @@ export class GhostPipeDispatcher {
       callId?: unknown;
       ok?: unknown;
       result?: unknown;
+      images?: unknown;
       errorCode?: unknown;
       message?: unknown;
     };
@@ -428,8 +540,13 @@ export class GhostPipeDispatcher {
       this.settle(p.callId, this.ownerBoundaryResult());
       return { accepted: false, reason: '账号边界已变化' };
     }
+    // Images for the model ride next to `result`; invalid ones are dropped here.
+    const shown = p.ok ? normalizeGhostModelImages(p.images) : { images: [], dropped: 0 };
+    if (shown.dropped) {
+      this.deps.log?.warn('ghost tool result images dropped', { callId: p.callId, dropped: shown.dropped });
+    }
     const result: GhostToolCallResult = p.ok
-      ? { ok: true, result: p.result ?? null }
+      ? { ok: true, result: p.result ?? null, ...(shown.images.length ? { images: shown.images } : {}) }
       : {
           ok: false,
           errorCode: isGhostPluginErrorCode(p.errorCode) ? p.errorCode : 'INTERNAL',
@@ -457,11 +574,14 @@ export class GhostPipeDispatcher {
     }
   }
 
-  private settle(callId: string, result: GhostToolCallResult): void {
+  private settle(callId: string, result: GhostToolCallResult, outcome: PluginUsageOutcome = result.ok ? 'succeeded' : 'failed'): void {
     const entry = this.pending.get(callId);
     if (!entry) return;
     this.pending.delete(callId);
+    this.noteUsageOutcome(entry, outcome);
     (this.deps.clearTimeoutFn ?? clearTimeout)(entry.timer);
+    entry.detachAbort?.();
+    entry.lifetime.abort();
     this.deps.log?.info('ghost tool call completed', {
       ghostId: entry.ghostId,
       tool: entry.tool,
@@ -471,6 +591,15 @@ export class GhostPipeDispatcher {
       totalMs: Date.now() - entry.startedAt,
     });
     entry.resolve(result);
+  }
+
+  private noteUsageOutcome(entry: PendingCall, outcome: PluginUsageOutcome): void {
+    entry.usageOutcome = outcome;
+    if (entry.usageAccepted) this.observeUsage(() => entry.usage?.settled(outcome));
+  }
+
+  private observeUsage(fn: () => void): void {
+    try { fn(); } catch { this.deps.log?.warn('plugin usage observer unavailable'); }
   }
 
   private ownerScopeUsable(ghostId: string, captured: unknown): boolean {

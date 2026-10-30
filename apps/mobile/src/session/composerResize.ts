@@ -47,6 +47,25 @@ export const COMPOSER_RESIZE_AUTO_SNAP_THRESHOLD = 24;
 /** manual 模式上边界之上保留的屏幕空间（顶部导航 + 至少一部分消息内容可见）。 */
 export const COMPOSER_RESIZE_TOP_RESERVED_HEIGHT = 220;
 
+// ⚠️ 声明顺序即正确性(#4039):react-native-worklets 插件把每个 `'worklet'` 函数改写成
+// 模块求值时立即执行的工厂,并在那一刻把它引用的模块内标识符抓进 `__closure`。
+// 被其它 worklet 引用的辅助函数必须写在引用者**之前**,否则抓到的是尚未赋值的 `var`
+// (undefined),UI 线程一调用就是 `undefined is not a function`(Android release 崩溃)。
+// vitest 不跑该插件,靠 composerResizeWorklet.test.ts 用真实转译守住这条约束。
+function normalizeBounds(bounds: ComposerResizeBounds): ComposerResizeBounds {
+  'worklet';
+  const minContentHeight = Math.max(1, Math.round(bounds.minContentHeight));
+  return {
+    minContentHeight,
+    maxContentHeight: Math.max(minContentHeight, Math.round(bounds.maxContentHeight)),
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  'worklet';
+  return Math.min(Math.max(value, min), max);
+}
+
 export interface ResolveComposerInputHeightInput {
   /** TextInput 上报的内容高度（页面 state）。 */
   contentHeight: number;
@@ -108,6 +127,7 @@ export interface ApplyComposerResizeDragInput {
 }
 
 export function applyComposerResizeDrag(input: ApplyComposerResizeDragInput): number {
+  'worklet';
   const bounds = normalizeBounds(input.bounds);
   return clamp(
     Math.round(input.startContentHeight - input.translationY),
@@ -145,8 +165,32 @@ export function settleComposerResizeDrag(input: SettleComposerResizeDragInput): 
   return bounds.minContentHeight;
 }
 
-/** 松手时手势向下位移达到该值即可触发「下拉收起」（配合高度处于单行吸附区）。 */
+/**
+ * 输入框到一行后继续下拉、折叠工具栏所用的距离；松手时向下位移达到该值
+ * （且高度处于单行吸附区）即「下拉收起」。
+ */
 export const COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD = 24;
+
+/** 工具栏折叠完（看起来只剩一行）后，还要再往下拉这么多才不等松手直接收起。 */
+export const COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL = 40;
+
+/** After the editor reaches one line, consume the remaining pull by folding its chrome. */
+export function composerCollapseProgress(input: ApplyComposerResizeDragInput): number {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return clamp(remainingPull / COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD, 0, 1);
+}
+
+/**
+ * 拖动途中是否直接收起：先缩到一行、再折叠完工具栏，之后还要多拉
+ * COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL。把「看起来到一行」与「收键盘」错开，
+ * 用户能先看到收缩到底，再决定继续往下拉收起。
+ */
+export function shouldDismissComposerDuringDrag(input: ApplyComposerResizeDragInput): boolean {
+  'worklet';
+  const remainingPull = input.translationY - Math.max(0, input.startContentHeight - input.bounds.minContentHeight);
+  return remainingPull >= COMPOSER_RESIZE_DISMISS_PULL_THRESHOLD + COMPOSER_RESIZE_DRAG_DISMISS_EXTRA_PULL;
+}
 
 export interface ShouldDismissComposerOnReleaseInput {
   /** 松手时的拖拽内容高度（applyComposerResizeDrag 的结果）。 */
@@ -294,22 +338,10 @@ export function computeComposerResizeBounds(
   };
 }
 
-function normalizeBounds(bounds: ComposerResizeBounds): ComposerResizeBounds {
-  const minContentHeight = Math.max(1, Math.round(bounds.minContentHeight));
-  return {
-    minContentHeight,
-    maxContentHeight: Math.max(minContentHeight, Math.round(bounds.maxContentHeight)),
-  };
-}
-
 function normalizePositiveDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function normalizeNonNegativeDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }

@@ -1,8 +1,10 @@
 import type { Topic } from '@cindy/device-link';
 import type { RehydratePlan } from '@/device-link/topicRegistry';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
+import { SnapshotReadSupersededError } from '@/device-link/sessionSnapshotSingleFlight';
 
 export interface DeviceLinkRehydrateSendOptions {
+  subscriptionIdentity?: number | null;
   /** 同一设备的一轮快照 fan-out 共享一个响应性观测 cohort。 */
   responsivenessCohort?: number;
 }
@@ -86,7 +88,7 @@ export async function rehydrateDeviceLinkPeer(
     capturedPresenceEpoch: number,
     capturedResponseEvidenceEpoch: number,
     step: Promise<unknown>,
-  ): Promise<'succeeded' | 'failed' | 'unavailable'> => {
+  ): Promise<'succeeded' | 'failed' | 'retry' | 'unavailable'> => {
     try {
       await step;
       if (deps.isPresenceEpochCurrent(deviceId, capturedPresenceEpoch)) {
@@ -128,7 +130,11 @@ export async function rehydrateDeviceLinkPeer(
       ) {
         transientFailures += 1;
       }
-      return unavailable ? 'unavailable' : 'failed';
+      // A transport failure should yield to the peer's backoff rather than
+      // enqueue every remaining snapshot. Stale availability verdicts and
+      // unsupported optional topics retain the existing best-effort fallback.
+      return unavailable ? 'unavailable'
+        : !availabilityVerdict && isTransientRemoteError(err) ? 'retry' : 'failed';
     }
   };
 
@@ -146,7 +152,7 @@ export async function rehydrateDeviceLinkPeer(
       openLinkStep.capturedResponseEvidenceEpoch,
       openLinkStep.request,
     );
-    if (openResult === 'unavailable') {
+    if (openResult === 'unavailable' || openResult === 'retry') {
       return { linkOpened, transientFailures };
     }
     linkOpened = openResult === 'succeeded';
@@ -154,38 +160,40 @@ export async function rehydrateDeviceLinkPeer(
 
   if (plan.topics.length === 0) return { linkOpened, transientFailures };
   if (deps.isCancelled?.()) return { linkOpened, transientFailures };
-  if (
-    await track(
-      plan.deviceId,
-      deps.capturePresenceEpoch(plan.deviceId),
-      deps.captureResponseEvidenceEpoch(plan.deviceId),
-      deps.subscribe(plan.deviceId, plan.topics),
-    ) === 'unavailable'
-  ) {
+  const subscribeResult = await track(
+    plan.deviceId,
+    deps.capturePresenceEpoch(plan.deviceId),
+    deps.captureResponseEvidenceEpoch(plan.deviceId),
+    deps.subscribe(plan.deviceId, plan.topics),
+  );
+  if (subscribeResult === 'unavailable' || subscribeResult === 'retry') {
     return { linkOpened, transientFailures };
   }
 
-  for (const topic of plan.topics) {
+  // Restore the task the user is viewing before starting Home's list refresh.
+  // Both use the same reliable stream; a background list must not get ahead of
+  // the task's history/input confirmation after a reconnect.
+  for (const topic of plan.topics.filter((topic) => topic !== 'sessions')) {
     if (deps.isCancelled?.()) return { linkOpened, transientFailures };
-    if (topic === 'sessions') {
-      deps.requestSessionsReseed(plan.deviceId);
-      continue;
-    }
     const sessionId = readSessionTopic(topic);
     if (sessionId) {
       // 每个 session snapshot 自身包含四路 Promise.allSettled fan-out;只把
       // 同一批真正并发的请求合并,不要把多个串行 session 的超时压成一次观测。
-      if (await track(
+      const snapshotResult = await track(
         plan.deviceId,
         deps.capturePresenceEpoch(plan.deviceId),
         deps.captureResponseEvidenceEpoch(plan.deviceId),
         deps.rebuildSessionSnapshot(plan.deviceId, sessionId, {
           responsivenessCohort: deps.createDeviceSendCohort(plan.deviceId),
         }),
-      ) === 'unavailable') {
-        break;
+      );
+      if (snapshotResult === 'unavailable' || snapshotResult === 'retry') {
+        return { linkOpened, transientFailures };
       }
     }
+  }
+  if (!deps.isCancelled?.() && plan.topics.includes('sessions')) {
+    deps.requestSessionsReseed(plan.deviceId);
   }
   return { linkOpened, transientFailures };
 }
@@ -233,6 +241,12 @@ export function classifySnapshotBatchFailure(
       && !isRemoteDisabledError(result.reason),
   );
   if (availabilityRejections.length === 0) {
+    // A detail caller may invalidate a shared physical response while this peer's
+    // recovery is still current. Reuse the existing retry path rather than mark
+    // recovery complete or allow that old response to overwrite a fresh window.
+    if (rejections.some((result) => result.reason instanceof SnapshotReadSupersededError)) {
+      return { kind: 'partial-transient' };
+    }
     return otherTransient
       ? { kind: 'reject', error: otherTransient.reason }
       : { kind: 'none' };

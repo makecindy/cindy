@@ -14,9 +14,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSshMcpServer } from '../cindy_sshMcpServer.js';
 import { SshToolRegistry } from '../ssh/registry.js';
 import {
+  registerSshAddHostTool,
   registerSshExecTool,
   registerSshHostStatusTool,
   registerSshListHostsTool,
+  registerSshReloadConfigTool,
 } from '../ssh/index.js';
 import { OUTPUT_CAP_CHARS } from '../ssh/_shared.js';
 import type { SshHostSnapshotLike, SshMcpDeps, SshPoolLike } from '../types.js';
@@ -28,6 +30,9 @@ function snapshot(partial: {
   hostname?: string;
   status?: SshHostSnapshotLike['status'];
   lastError?: string;
+  identityFile?: string;
+  identityAgent?: string;
+  configuredIdentityFiles?: string[];
 }): SshHostSnapshotLike {
   return {
     config: {
@@ -36,6 +41,17 @@ function snapshot(partial: {
       port: 22,
       user: 'deploy',
       authMethod: 'agent',
+      ...(partial.identityFile ? { identityFile: partial.identityFile } : {}),
+      ...(partial.identityAgent || partial.configuredIdentityFiles
+        ? {
+            sshAuthentication: {
+              ...(partial.identityAgent ? { identityAgent: partial.identityAgent } : {}),
+              ...(partial.configuredIdentityFiles
+                ? { configuredIdentityFiles: partial.configuredIdentityFiles }
+                : {}),
+            },
+          }
+        : {}),
       source: 'manual',
     },
     status: partial.status ?? 'ready',
@@ -84,9 +100,28 @@ function makeDeps(
   const ensureReadyCalls: string[] = [];
   const deps: SshMcpDeps = {
     getPool: async () => pool,
+    redactSensitiveText: (snapshot, text) => {
+      const candidates = new Map<string, '<identity-agent>' | '<identity-file>'>();
+      for (const value of [
+        snapshot.config.identityFile,
+        ...(snapshot.config.sshAuthentication?.configuredIdentityFiles ?? []),
+      ]) {
+        if (value) candidates.set(value, '<identity-file>');
+      }
+      const identityAgent = snapshot.config.sshAuthentication?.identityAgent;
+      if (identityAgent) candidates.set(identityAgent, '<identity-agent>');
+      return Array.from(candidates, ([value, replacement]) => ({ value, replacement }))
+        .sort((left, right) => right.value.length - left.value.length)
+        .reduce(
+          (redacted, { value, replacement }) => redacted.split(value).join(replacement),
+          text,
+        );
+    },
     ensureReady: async (id) => {
       ensureReadyCalls.push(id);
     },
+    addHost: async () => {},
+    reloadConfig: async () => ({ diagnostic: null, warningCount: 0 }),
     ...overrides,
   };
   return { deps, ensureReadyCalls };
@@ -97,6 +132,8 @@ function makeRegistry(deps: SshMcpDeps): SshToolRegistry {
   registerSshListHostsTool(registry, deps);
   registerSshHostStatusTool(registry, deps);
   registerSshExecTool(registry, deps);
+  registerSshAddHostTool(registry, deps);
+  registerSshReloadConfigTool(registry, deps);
   return registry;
 }
 
@@ -141,6 +178,30 @@ describe('ssh_list_hosts', () => {
     expect(hosts[1]).toMatchObject({ id: 'db-1', status: 'failed', lastError: 'boom' });
   });
 
+  it('redacts local credential paths from model-visible host errors', async () => {
+    const identityFile = '/Users/alice/.ssh/client-prod';
+    const identityAgent = String.raw`C:\Users\alice\.ssh\agent.sock`;
+    const { pool } = makeFakePool([
+      snapshot({
+        id: 'private-paths',
+        status: 'failed',
+        identityFile,
+        identityAgent,
+        configuredIdentityFiles: [identityFile],
+        lastError: `IdentityFile ${identityFile} failed via ${identityAgent}`,
+      }),
+    ]);
+    const { deps } = makeDeps(pool);
+    const { payload } = await callParsed(makeRegistry(deps), 'ssh_list_hosts', {});
+
+    const [listed] = payload.hosts as Array<Record<string, unknown>>;
+    expect(listed.lastError).toBe(
+      'IdentityFile <identity-file> failed via <identity-agent>',
+    );
+    expect(JSON.stringify(payload)).not.toContain('alice');
+    expect(JSON.stringify(payload)).not.toContain('client-prod');
+  });
+
   it('empty pool returns ok with guidance hint', async () => {
     const { pool } = makeFakePool([]);
     const { deps } = makeDeps(pool);
@@ -149,7 +210,7 @@ describe('ssh_list_hosts', () => {
     expect(isError).toBe(false);
     expect(payload.ok).toBe(true);
     expect(payload.hosts).toEqual([]);
-    expect(String(payload.hint)).toContain('远程连接');
+    expect(String(payload.hint)).toContain('ssh_add_host');
   });
 });
 
@@ -192,7 +253,7 @@ describe('host resolution', () => {
     expect(isError).toBe(true);
     expect(payload.errorCode).toBe('HOST_NOT_FOUND');
     const data = payload.data as Record<string, unknown>;
-    expect(String(data.hint)).toContain('远程连接');
+    expect(String(data.hint)).toContain('ssh_add_host');
     const configured = data.configuredHosts as Array<Record<string, unknown>>;
     expect(configured.map((h) => h.id)).toEqual(['web-1', 'web-2', 'web-2b']);
   });
@@ -352,6 +413,100 @@ describe('ssh_exec', () => {
     expect(payload.errorCode).toBe('SSH_CONNECT_FAILED');
   });
 
+  it.each([
+    ['SSH_CONFIG_AUTH_UNSUPPORTED', 'IdentityAgent none'],
+    ['SSH_AGENT_UNAVAILABLE', '$SSH_AUTH_SOCK is not set'],
+  ])('ensureReady %s remains a deterministic actionable error', async (code, detail) => {
+    const { pool } = makeFakePool([snapshot({ id: 'web-1' })]);
+    const { deps } = makeDeps(pool, {
+      ensureReady: async () => {
+        throw new Error(`[${code}] ${detail}`);
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_exec', {
+      host: 'web-1',
+      command: 'true',
+    });
+    expect(isError).toBe(true);
+    expect(payload.errorCode).toBe(code);
+    expect(String((payload.data as Record<string, unknown>).hint)).toContain('重复');
+    if (code === 'SSH_CONFIG_AUTH_UNSUPPORTED') {
+      expect(String((payload.data as Record<string, unknown>).hint)).toContain('条件 Include');
+    }
+  });
+
+  it('redacts local credential paths from ensureReady errors', async () => {
+    const identityFile = '/Users/alice/.ssh/client-prod';
+    const host = snapshot({ id: 'web-1', identityFile });
+    const { pool } = makeFakePool([host]);
+    const { deps } = makeDeps(pool, {
+      ensureReady: async () => {
+        throw new Error(
+          `[SSH_CONFIG_AUTH_UNSUPPORTED] IdentityFile ${identityFile} has no public key`,
+        );
+      },
+    });
+    const { payload, rawText } = await callParsed(makeRegistry(deps), 'ssh_exec', {
+      host: 'web-1',
+      command: 'true',
+    });
+
+    expect(payload.errorCode).toBe('SSH_CONFIG_AUTH_UNSUPPORTED');
+    expect(String((payload.data as Record<string, unknown>).hint))
+      .toContain('IdentityFile <identity-file> has no public key');
+    expect(rawText).not.toContain('alice');
+    expect(rawText).not.toContain('client-prod');
+  });
+
+  it('redacts configured and resolved Agent endpoints from status and error payloads', async () => {
+    const literal = 'SSH_AUTH_SOCK';
+    const endpoint = '/private/tmp/com.apple.launchd.example/Listeners';
+    const host = snapshot({ id: 'web-1', identityAgent: literal });
+    host.lastError = `connect ${endpoint} failed via ${literal}`;
+    const { pool } = makeFakePool([host]);
+    const { deps } = makeDeps(pool, {
+      redactSensitiveText: (_snapshot, text) => text
+        .split(endpoint).join('<identity-agent>')
+        .split(literal).join('<identity-agent>'),
+      ensureReady: async () => {
+        throw new Error(`[SSH_AGENT_UNAVAILABLE] connect ${endpoint} failed via ${literal}`);
+      },
+    });
+    const registry = makeRegistry(deps);
+
+    const status = await callParsed(registry, 'ssh_host_status', { host: 'web-1' });
+    const execution = await callParsed(registry, 'ssh_exec', {
+      host: 'web-1',
+      command: 'true',
+    });
+    for (const rawText of [status.rawText, execution.rawText]) {
+      expect(rawText).not.toContain(endpoint);
+      expect(rawText).not.toContain(literal);
+      expect(rawText).toContain('<identity-agent>');
+    }
+  });
+
+  it('fails closed when the host redaction callback throws', async () => {
+    const endpoint = '/private/tmp/private-agent.sock';
+    const host = snapshot({ id: 'web-1' });
+    host.lastError = `connect ${endpoint} failed`;
+    const { pool } = makeFakePool([host]);
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn(), trace: vi.fn() };
+    const { deps } = makeDeps(pool, {
+      logger,
+      redactSensitiveText: () => {
+        throw new Error(`redaction failed for ${endpoint}`);
+      },
+    });
+
+    const { rawText } = await callParsed(makeRegistry(deps), 'ssh_host_status', {
+      host: 'web-1',
+    });
+    expect(rawText).toContain('SSH error details are unavailable.');
+    expect(rawText).not.toContain(endpoint);
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(endpoint);
+  });
+
   it('unprefixed unknown error falls back to SSH_CONNECT_FAILED', async () => {
     const { pool } = makeFakePool([snapshot({ id: 'web-1' })], async () => {
       throw new Error('socket hangup');
@@ -363,6 +518,117 @@ describe('ssh_exec', () => {
     });
     expect(isError).toBe(true);
     expect(payload.errorCode).toBe('SSH_CONNECT_FAILED');
+  });
+});
+
+// ── ssh_add_host / ssh_reload_config ────────────────────────────────────────
+
+describe('ssh_add_host', () => {
+  function makeAddDeps(overrides?: Partial<SshMcpDeps>) {
+    const hosts: SshHostSnapshotLike[] = [];
+    const { pool } = makeFakePool(hosts);
+    const added: unknown[] = [];
+    const { deps, ensureReadyCalls } = makeDeps(pool, {
+      addHost: async (input) => {
+        added.push(input);
+        hosts.push(snapshot({ id: input.id, hostname: input.hostname, status: 'disconnected' }));
+      },
+      ...overrides,
+    });
+    return { deps, added, ensureReadyCalls };
+  }
+
+  it('adds through the settings flow, then connects once', async () => {
+    const { deps, added, ensureReadyCalls } = makeAddDeps();
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+      port: 2222,
+    });
+    expect(isError).toBe(false);
+    expect(added).toEqual([{ id: 'nas', hostname: '192.168.68.51', user: 'dash', port: 2222 }]);
+    expect(ensureReadyCalls).toEqual(['nas']);
+    expect(payload).toMatchObject({ added: true, connected: true, host: { id: 'nas' } });
+  });
+
+  it('keeps the host and reports auth failure with password-login guidance', async () => {
+    const { deps } = makeAddDeps({
+      ensureReady: async () => {
+        throw new Error('[SSH_AUTH_FAILED] SSH agent has no key the remote accepts.');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(false);
+    expect(payload).toMatchObject({ added: true, connected: false });
+    const connectError = payload.connectError as { errorCode: string; hint: string };
+    expect(connectError.errorCode).toBe('SSH_AUTH_FAILED');
+    expect(connectError.hint).toContain('ssh-copy-id');
+  });
+
+  it('trims the alias once, so the pool lookup and connect use the saved name', async () => {
+    const { deps, added, ensureReadyCalls } = makeAddDeps();
+    const { payload } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: ' nas ',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(added).toEqual([{ id: 'nas', hostname: '192.168.68.51', user: 'dash' }]);
+    expect(ensureReadyCalls).toEqual(['nas']);
+    expect(payload).toMatchObject({ added: true, connected: true });
+  });
+
+  it('treats a failed display-name save as an added host, not a failed add', async () => {
+    const hosts: SshHostSnapshotLike[] = [];
+    const { pool } = makeFakePool(hosts);
+    const { deps, ensureReadyCalls } = makeDeps(pool, {
+      addHost: async (input) => {
+        hosts.push(snapshot({ id: input.id, status: 'disconnected' }));
+        throw new Error('[SSH_HOST_PREFS_WRITE_FAILED] local preferences were not saved');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(false);
+    expect(payload).toMatchObject({ added: true, connected: true });
+    expect(String(payload.warning)).toContain('无需重试');
+    expect(ensureReadyCalls).toEqual(['nas']);
+  });
+
+  it('maps an existing alias to HOST_ALREADY_EXISTS without connecting', async () => {
+    const { deps, ensureReadyCalls } = makeAddDeps({
+      addHost: async () => {
+        throw new Error('[ALREADY_EXISTS] host already exists: nas');
+      },
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_add_host', {
+      alias: 'nas',
+      hostname: '192.168.68.51',
+      user: 'dash',
+    });
+    expect(isError).toBe(true);
+    expect(payload.errorCode).toBe('HOST_ALREADY_EXISTS');
+    expect(ensureReadyCalls).toEqual([]);
+  });
+});
+
+describe('ssh_reload_config', () => {
+  it('returns the refreshed hosts and surfaces a config diagnostic', async () => {
+    const { pool } = makeFakePool([snapshot({ id: 'web-1' })]);
+    const { deps } = makeDeps(pool, {
+      reloadConfig: async () => ({ diagnostic: 'syntax', warningCount: 0 }),
+    });
+    const { payload, isError } = await callParsed(makeRegistry(deps), 'ssh_reload_config', {});
+    expect(isError).toBe(false);
+    expect((payload.hosts as Array<{ id: string }>).map((h) => h.id)).toEqual(['web-1']);
+    expect(payload.diagnostic).toBe('syntax');
   });
 });
 
@@ -379,6 +645,8 @@ describe('registry semantics', () => {
       'ssh_list_hosts',
       'ssh_host_status',
       'ssh_exec',
+      'ssh_add_host',
+      'ssh_reload_config',
     ]);
   });
 
@@ -478,7 +746,7 @@ describe('cindy_ssh MCP server (in-process smoke)', () => {
       (listResult.content as Array<{ type: string; text: string }>)[0].text,
     ) as { ok: boolean; categories: Array<{ name: string; tool_count: number }> };
     expect(listPayload.ok).toBe(true);
-    expect(listPayload.categories).toEqual([{ name: 'ssh', tool_count: 3 }]);
+    expect(listPayload.categories).toEqual([{ name: 'ssh', tool_count: 5 }]);
 
     const callResult = await client.callTool({
       name: 'call_tool',

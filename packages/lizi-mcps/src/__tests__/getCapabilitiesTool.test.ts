@@ -93,6 +93,17 @@ describe('capabilities data source', () => {
     expect(entry!.detail).toContain('实际故障环境按需写进正文');
   });
 
+  it('session-handoff 写明 send_to_session 发给已有任务时 target_session_id 必传, 省略即静默新建 (#4884)', () => {
+    const entry = findCapability('session-handoff');
+    expect(entry).toBeDefined();
+    expect(entry!.detail).toContain('target_session_id 必传');
+    expect(entry!.detail).toContain('list_sessions');
+    expect(entry!.detail).toContain('wake_kind=created');
+    // jump 撞忙已改为入队,旧的「本工具不排队」说法会误导 skill 自己 retry/backoff。
+    expect(entry!.detail).not.toContain('本工具不排队');
+    expect(entry!.detail).toContain('wake_kind=queued');
+  });
+
   it('collab-mode 明确 Pi 可作本地 Lead 和 Worker，且不扩大到 SSH 远程 Pi', () => {
     const entry = findCapability('collab-mode');
 
@@ -104,6 +115,36 @@ describe('capabilities data source', () => {
 });
 
 describe('get_capabilities tool', () => {
+  // Unit protocol regression: the public MCP schema must forward the page/filter
+  // rather than silently stripping them and returning the same oversized page.
+  it('forwards runtime tool search and pagination through the actual MCP entry', async () => {
+    const read = vi.fn(async (_ctx: unknown, query: unknown) => ({ ok: true, query, tools: [{ name: 'matching_tool' }] }));
+    const h = await connect(createXdtHelperMcpServer({ logger: makeLogger(), runtimeCapabilities: read }, sessionCtx));
+    try {
+      const result = parsePayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_capabilities', args: { scope: 'runtime', server: 'codex_apps', toolQuery: 'github', offset: 50 },
+      } }));
+      expect(result).toMatchObject({ ok: true, query: { server: 'codex_apps', toolQuery: 'github', offset: 50 }, tools: [{ name: 'matching_tool' }] });
+    } finally { await h.cleanup(); }
+  });
+
+  // 帮助文档原先只接给设置页帮助助手,Agent 被问「归档的任务在哪」时只能编造入口。
+  it('scope=help 先返回目录再按 key 返回整篇;宿主未注入时明确不可用', async () => {
+    const productHelpDocs = [{ id: 'sidebar', title: 'Sidebar', summary: 'Find sessions.', content: 'Status — active / archived / all.' }];
+    const call = async (server: McpServer, args: Record<string, unknown>) => {
+      const h = await connect(server);
+      try {
+        return parsePayload(await h.client.callTool({ name: 'call_tool', arguments: { name: 'get_capabilities', args } }));
+      } finally { await h.cleanup(); }
+    };
+    const make = () => createXdtHelperMcpServer({ logger: makeLogger(), productHelpDocs }, sessionCtx);
+
+    expect(await call(make(), { scope: 'help' })).toMatchObject({ ok: true, docs: [{ key: 'sidebar', title: 'Sidebar', summary: 'Find sessions.' }] });
+    expect(await call(make(), { scope: 'help', key: 'sidebar' })).toMatchObject({ ok: true, doc: { key: 'sidebar', content: 'Status — active / archived / all.' } });
+    expect(await call(make(), { scope: 'help', key: 'nope' })).toMatchObject({ ok: false, errorCode: 'UNKNOWN_KEY', data: { available: ['sidebar'] } });
+    expect(await call(createXdtHelperMcpServer({ logger: makeLogger() }, sessionCtx), { scope: 'help' })).toMatchObject({ ok: false, errorCode: 'HELP_UNAVAILABLE' });
+  });
+
   it('不传 key 时返回包含 about-cindy 的索引', async () => {
     const h = await connect(createXdtHelperMcpServer({ logger: makeLogger() }, sessionCtx));
     try {

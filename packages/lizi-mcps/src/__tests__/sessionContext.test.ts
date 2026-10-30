@@ -12,6 +12,8 @@ import {
 } from '../session-context.js';
 import type { OrcaMcpDeps } from '../orca/server.js';
 import type { LiziMcpSessionContext } from '../types.js';
+import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
+import { registerMergeQueuedMessagesTool } from '../xdt-helper/merge_queued_messages.js';
 import type { RenameSessionsDeps } from '../xdt-helper/rename_sessions.js';
 import type { SetCurrentSessionTitleDeps } from '../xdt-helper/set_current_session_title.js';
 
@@ -36,6 +38,29 @@ function tools(server: unknown) {
       >;
     }
   )._registeredTools;
+}
+
+function setupMergeRegistry() {
+  const mergeWorkerQueuedMessages = vi.fn(async () => ({
+    ok: true as const,
+    workerId: 'worker-1',
+    queuedMessageId: 'merged-1',
+    messages: [
+      {
+        queuedMessageId: 'merged-1',
+        position: 0,
+        source: 'user' as const,
+        content: 'merged',
+        consuming: false,
+      },
+    ],
+  }));
+  const registry = new XdtHelperToolRegistry();
+  registerMergeQueuedMessagesTool(registry, {
+    getSessionContext: () => ({ sessionId: 'lead-1' }),
+    mergeWorkerQueuedMessages,
+  });
+  return { registry, mergeWorkerQueuedMessages };
 }
 
 function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
@@ -95,9 +120,27 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       queuedMessageId: 'queued-1',
       messages: [],
     })),
+    steerWorkerQueuedMessage: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'queued-1',
+      delivery: 'steered' as const,
+    })),
+    moveWorkerQueuedMessage: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'queued-1',
+      position: 0,
+    })),
     idleWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
     endTeam: vi.fn(async () => ({ ok: true as const })),
     archiveWorker: vi.fn(async () => ({ ok: true as const, workerId: 'worker-1' })),
+    updateWorker: vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    })),
     listAvailableModels: vi.fn(async () => ({ ok: true as const })),
     getWorkspaceInfo: vi.fn(async () => ({
       ok: true as const,
@@ -128,13 +171,14 @@ function createOrcaDeps(overrides: Partial<OrcaMcpDeps> = {}): OrcaMcpDeps {
       idle_ms: 0,
       restored_from_storage: true,
       result: 'worker output',
+      turnError: null,
     })),
     ...overrides,
   };
 }
 
 describe('dynamic lizi MCP session context', () => {
-  it('keeps the 18-tool Orca manifest order stable across server construction', () => {
+  it('keeps the 21-tool Orca manifest order stable across server construction', () => {
     const context = {
       agentKind: 'codex' as const,
       workingDir: 'C:\\repo',
@@ -144,13 +188,17 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-    expect(first).toHaveLength(18);
+    // 18 个 team 工具 + 3 个只读诊断工具。
+    expect(first).toHaveLength(21);
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');
     expect(first).toContain('interrupt_worker');
     expect(first).toContain('get_worker_queue_status');
     expect(first).toContain('merge_queued_messages');
+    expect(first).toContain('steer_queued_message');
+    expect(first).toContain('move_queued_message');
+    expect(first).toContain('update_worker');
     expect(first).not.toContain('list_worker_queue');
   });
 
@@ -164,8 +212,296 @@ describe('dynamic lizi MCP session context', () => {
     const schemaKeys = Object.keys(
       tools(server).send_to_worker.inputSchema?.shape ?? {},
     );
-    expect(schemaKeys).toEqual(['target_session_id', 'message']);
+    expect(schemaKeys).toEqual(['target_session_id', 'message', 'delivery', 'images']);
     expect(schemaKeys).not.toContain('interrupt');
+  });
+
+  it('routes update_worker through the caller lead context and rejects an empty patch', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = await tools(server).update_worker.handler({
+      worker_id: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+    expect(parse(result as never)).toMatchObject({
+      ok: true,
+      worker_id: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+    expect(deps.updateWorker).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      workerId: 'worker-1',
+      role: 'reviewer',
+      label: 'reviewer-2',
+    });
+
+    const empty = await tools(server).update_worker.handler({ worker_id: 'worker-1' });
+    expect(parse(empty as never)).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.updateWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards explicit send_to_worker delivery and reports steered or fallback receipts', async () => {
+    const sendToWorker = vi.fn<OrcaMcpDeps['sendToWorker']>()
+      .mockResolvedValueOnce({
+        ok: true,
+        agentKind: 'codex',
+        wakeKind: 'steered',
+        targetTitle: null,
+        targetLastUserSendAt: null,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        agentKind: 'codex',
+        wakeKind: 'queued',
+        targetTitle: null,
+        targetLastUserSendAt: null,
+        queuedMessageId: 'queued-2',
+        steerFallbackReason: 'INPUT_BOUNDARY_BUSY',
+      });
+    const deps = createOrcaDeps({ sendToWorker });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const steered = parse(await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'fix: use the v2 endpoint',
+      delivery: 'steer',
+    }) as never);
+    expect(steered).toMatchObject({ ok: true, wake_kind: 'already-active', steered: true });
+    expect(steered).not.toHaveProperty('steer_fallback_reason');
+    expect(steered).not.toHaveProperty('queued_message_id');
+
+    const fallback = parse(await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'fix: use the v2 endpoint',
+      delivery: 'steer',
+    }) as never);
+    expect(fallback).toMatchObject({
+      ok: true,
+      wake_kind: 'queued',
+      queued_message_id: 'queued-2',
+      steer_fallback_reason: 'INPUT_BOUNDARY_BUSY',
+    });
+    expect(sendToWorker).toHaveBeenNthCalledWith(1, {
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: 'fix: use the v2 endpoint',
+      delivery: 'steer',
+    });
+    expect(tools(server).send_to_worker.description).toContain('delivery=steer');
+    expect(tools(server).send_to_worker.description).toContain('steer_fallback_reason');
+  });
+
+  it('omits delivery from sendToWorker when the caller does not choose one', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = parse(await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'next task',
+    }) as never);
+    expect(result).toMatchObject({ ok: true, wake_kind: 'already-active' });
+    expect(result).not.toHaveProperty('steer_fallback_reason');
+    expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).not.toHaveProperty('delivery');
+  });
+
+  it('forwards send_to_worker images to the host and omits them when absent', async () => {
+    const deps = createOrcaDeps();
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'review this',
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[0]?.[0]).toMatchObject({
+      images: ['/tmp/a.png', '/tmp/b.jpg'],
+    });
+
+    await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1',
+      message: 'text only',
+    } as never);
+    expect(vi.mocked(deps.sendToWorker).mock.calls[1]?.[0]).not.toHaveProperty('images');
+  });
+
+  it('reads the caller own input queue when get_worker_queue_status omits worker_id', async () => {
+    const deps = createOrcaDeps({
+      listWorkerQueuedMessages: vi.fn(async () => ({
+        ok: true as const,
+        workerId: null,
+        workerSessionId: 'lead-1',
+        status: 'running',
+        isWorking: true,
+        willQueue: true,
+        queuePaused: false,
+        messages: [
+          {
+            queuedMessageId: 'report-1',
+            position: 0,
+            source: 'worker' as const,
+            content: 'worker report',
+            consuming: false,
+          },
+        ],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const result = parse(await tools(server).get_worker_queue_status.handler({}) as never);
+    expect(result).toMatchObject({
+      ok: true,
+      worker_id: null,
+      worker_session_id: 'lead-1',
+      queued_count: 1,
+      queue: [{ queued_message_id: 'report-1', source: 'worker' }],
+    });
+    expect(vi.mocked(deps.listWorkerQueuedMessages).mock.calls[0]?.[0]).toEqual({
+      callerLeadSessionId: 'lead-1',
+    });
+  });
+
+  it('steers a queued message and reports a retained fallback with its reason', async () => {
+    const steerWorkerQueuedMessage = vi.fn<OrcaMcpDeps['steerWorkerQueuedMessage']>()
+      .mockResolvedValueOnce({
+        ok: true,
+        workerId: 'worker-1',
+        queuedMessageId: 'queued-1',
+        delivery: 'steered',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        workerId: null,
+        queuedMessageId: 'report-1',
+        delivery: 'queued',
+        reason: 'NO_ACTIVE_TURN',
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        errorCode: 'NOT_ORCA_MESSAGE',
+        message: 'not a worker report',
+      });
+    const deps = createOrcaDeps({ steerWorkerQueuedMessage });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    const steered = parse(await tools(server).steer_queued_message.handler({
+      worker_id: 'worker-1',
+      queued_message_id: 'queued-1',
+    }) as never);
+    expect(steered).toEqual({
+      ok: true,
+      worker_id: 'worker-1',
+      queued_message_id: 'queued-1',
+      delivery: 'steered',
+    });
+    expect(steerWorkerQueuedMessage).toHaveBeenNthCalledWith(1, {
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+      queuedMessageId: 'queued-1',
+    });
+
+    const retained = parse(await tools(server).steer_queued_message.handler({
+      queued_message_id: 'report-1',
+    }) as never);
+    expect(retained).toEqual({
+      ok: true,
+      worker_id: null,
+      queued_message_id: 'report-1',
+      delivery: 'queued',
+      reason: 'NO_ACTIVE_TURN',
+    });
+    expect(steerWorkerQueuedMessage).toHaveBeenNthCalledWith(2, {
+      callerLeadSessionId: 'lead-1',
+      queuedMessageId: 'report-1',
+    });
+
+    expect(parse(await tools(server).steer_queued_message.handler({
+      queued_message_id: 'user-1',
+    }) as never)).toMatchObject({ ok: false, errorCode: 'NOT_ORCA_MESSAGE' });
+    expect(Object.keys(tools(server).steer_queued_message.inputSchema?.shape ?? {})).toEqual([
+      'worker_id',
+      'queued_message_id',
+    ]);
+  });
+
+  it('moves a queued message and returns the final position', async () => {
+    const moveWorkerQueuedMessage = vi.fn<OrcaMcpDeps['moveWorkerQueuedMessage']>(async () => ({
+      ok: true as const,
+      workerId: null,
+      queuedMessageId: 'report-1',
+      position: 2,
+    }));
+    const deps = createOrcaDeps({ moveWorkerQueuedMessage });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex',
+      workingDir: '/repo',
+      sessionId: 'lead-1',
+      vendorOptions: { orcaRole: 'lead' },
+    });
+
+    expect(parse(await tools(server).move_queued_message.handler({
+      queued_message_id: 'report-1',
+      position: 99,
+    }) as never)).toEqual({
+      ok: true,
+      worker_id: null,
+      queued_message_id: 'report-1',
+      position: 2,
+    });
+    expect(moveWorkerQueuedMessage).toHaveBeenCalledWith({
+      callerLeadSessionId: 'lead-1',
+      queuedMessageId: 'report-1',
+      position: 99,
+    });
+
+    await tools(server).move_queued_message.handler({
+      worker_id: 'worker-1',
+      queued_message_id: 'queued-1',
+      position: 0,
+    });
+    expect(moveWorkerQueuedMessage).toHaveBeenLastCalledWith({
+      callerLeadSessionId: 'lead-1',
+      workerRef: 'worker-1',
+      queuedMessageId: 'queued-1',
+      position: 0,
+    });
+    expect(Object.keys(tools(server).move_queued_message.inputSchema?.shape ?? {})).toEqual([
+      'worker_id',
+      'queued_message_id',
+      'position',
+    ]);
   });
 
   it('exposes interrupt_worker as the sole interrupt contract', async () => {
@@ -272,6 +608,8 @@ describe('dynamic lizi MCP session context', () => {
           effort: 'high',
           focused: true,
           working_dir: '/repo',
+          owns_worktree: true,
+          worktree: { path: '/repo', branch: 'worker/dev' },
         }],
       })),
       listWorkerQueuedMessages: vi.fn(async () => ({
@@ -296,7 +634,7 @@ describe('dynamic lizi MCP session context', () => {
     const queue = parse(
       await tools(server).get_worker_queue_status.handler({ worker_id: 'worker-1' }) as never,
     );
-    expect(workspace).toMatchObject({ workers: [{ queued_count: 1 }] });
+    expect(workspace).toMatchObject({ workers: [{ queued_count: 1, owns_worktree: true, worktree: { path: '/repo', branch: 'worker/dev' } }] });
     expect(queue).toMatchObject({ queued_count: 1, queue: [{ consuming: true }] });
   });
 
@@ -338,10 +676,125 @@ describe('dynamic lizi MCP session context', () => {
     });
   });
 
+  it('flattens a one-level-nested queued_message_ids array instead of failing schema validation', async () => {
+    // 模型常见误传是多套一层([['q1','q2']]);接口要自愈而不是报参数错。
+    const { registry, mergeWorkerQueuedMessages } = setupMergeRegistry();
+    const result = await registry.call('merge_queued_messages', {
+      worker_id: 'worker-1',
+      queued_message_ids: [['q1', 'q2']],
+      message: 'merged',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(mergeWorkerQueuedMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ queuedMessageIds: ['q1', 'q2'] }),
+    );
+  });
+
+  it('unwraps the XML-style {item:[...]} wrapper for queued_message_ids', async () => {
+    // 实测形态: 模型/兼容层把数组参数输出成 {item:[...]}(与 images 参数同病)。
+    const { registry, mergeWorkerQueuedMessages } = setupMergeRegistry();
+    const result = await registry.call('merge_queued_messages', {
+      worker_id: 'worker-1',
+      queued_message_ids: { item: ['q1', 'q2'] },
+      message: 'merged',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(mergeWorkerQueuedMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ queuedMessageIds: ['q1', 'q2'] }),
+    );
+  });
+
+  it('still rejects folded single-id and non-array junk forms for queued_message_ids', async () => {
+    // 单元素折叠({item:'q1'}/裸标量)只凑出 1 个 id,合并不了;无 item 键的对象不是数组。
+    // 两类都必须报参数错,不能静默放行。
+    const { registry, mergeWorkerQueuedMessages } = setupMergeRegistry();
+    for (const queued_message_ids of [{ item: 'q1' }, 'q1', { foo: ['q1', 'q2'] }]) {
+      const result = await registry.call('merge_queued_messages', {
+        worker_id: 'worker-1',
+        queued_message_ids,
+        message: 'merged',
+      });
+      expect(result.isError).toBe(true);
+    }
+    expect(mergeWorkerQueuedMessages).not.toHaveBeenCalled();
+  });
+
+  it('coerces {item:[...]} through the real MCP SDK entry where DirectToolSink registers', async () => {
+    // 生产校验层是 DirectToolSink 注册后的 MCP SDK validateToolInput(zod-compat),
+    // registry.call 不覆盖它;SDK 升级若丢 preprocess,这条用例会先红。
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const mergeWorkerQueuedMessages = vi.fn(async () => ({
+      ok: true as const,
+      workerId: 'worker-1',
+      queuedMessageId: 'merged-1',
+      messages: [],
+    }));
+    const server = createOrcaMcpServer(
+      createOrcaDeps({ mergeWorkerQueuedMessages }),
+      {
+        agentKind: 'codex',
+        workingDir: '/repo',
+        sessionId: 'lead-1',
+        vendorOptions: { orcaRole: 'lead' },
+      },
+    );
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'session-context-orca-entry', version: '0.0.0' });
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const result = await client.callTool({
+        name: 'merge_queued_messages',
+        arguments: {
+          worker_id: 'worker-1',
+          queued_message_ids: { item: ['q1', 'q2'] },
+          message: 'merged',
+        },
+      });
+      expect((result as { isError?: boolean }).isError).toBeFalsy();
+      expect(mergeWorkerQueuedMessages).toHaveBeenCalledWith(
+        expect.objectContaining({ queuedMessageIds: ['q1', 'q2'] }),
+      );
+
+      // 坏形态在 SDK 协议层被拒(-32602 Invalid params),不会透传到 handler。
+      const bad = await client.callTool({
+        name: 'merge_queued_messages',
+        arguments: {
+          worker_id: 'worker-1',
+          queued_message_ids: { foo: ['q1', 'q2'] },
+          message: 'merged',
+        },
+      });
+      expect((bad as { isError?: boolean }).isError).toBe(true);
+      expect(mergeWorkerQueuedMessages).toHaveBeenCalledTimes(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   // github_lizi / gitlab_lizi 的同款用例已分别随 lizi_github / lizi_gitlab 退役
   // 删除(2026-07-14,能力迁入内置意识 cindy-github / cindy-gitlab)。原覆盖的
   // 两条路径由 cindy_memory 版承接:Claude 绑定语境路径见下面第一个用例,Codex
   // call-time 动态语境路径见既有的 dynamic 用例。
+
+  it('keeps Bot Home Memory available when global Maker Memory is disabled', () => {
+    const getManager = () => ({ isEnabled: () => false }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((item) => item.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+    expect(provider.isEnabled?.({
+      agentKind: 'pi',
+      workingDir: '/bot/workspace',
+      memoryScopeKey: 'bot:bot-a',
+      vendorOptions: {},
+    })).toBe(true);
+    expect(provider.isEnabled?.({
+      agentKind: 'pi',
+      workingDir: '/ordinary/project',
+      vendorOptions: {},
+    })).toBe(false);
+  });
 
   it('lets cindy_memory resolve the workingDir from the bound Claude session', async () => {
     // Claude 绑定语境:toClaudeSdkConfig 传入的 workingDir 即会话绑定值,tool
@@ -494,6 +947,69 @@ describe('dynamic lizi MCP session context', () => {
     expect(getStore).toHaveBeenLastCalledWith('/home/me/proj');
   });
 
+  it('uses the host-owned Bot memory scope instead of the route workdir', async () => {
+    const getStore = vi.fn(async (_scope: string) => ({
+      list: vi.fn(async () => []),
+    }));
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore,
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    const result = await tools(cfg.instance).call_tool.handler({
+      name: 'memory_list',
+      args: {},
+    });
+
+    expect(parse(result as never)).toMatchObject({ ok: true, data: [] });
+    expect(getStore).toHaveBeenLastCalledWith('bot:release-helper');
+  });
+
+  it('passes host-owned Bot identity to session_search without exposing it as tool input', async () => {
+    const hits = [{
+      sessionId: 'history-session',
+      sessionUrl: 'cindy://session/history-session?device=host-device',
+      messageId: 'm1', role: 'user', snippet: 'release', ts: 1, score: -1,
+    }];
+    const searchSessions = vi.fn(async () => hits);
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore: vi.fn(),
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager, searchSessions } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'claude-code',
+      workingDir: '/project-a',
+      memoryScopeKey: 'bot:release-helper',
+      sessionId: 'bot-session-a',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+
+    const result = await tools(cfg.instance).call_tool.handler({
+      name: 'session_search',
+      args: { query: 'release' },
+    });
+
+    expect(parse(result as never)).toMatchObject({ ok: true, data: { hits, count: 1 } });
+    expect(searchSessions).toHaveBeenCalledWith('release', {
+      callerMemoryScopeKey: 'bot:release-helper',
+      callerSessionId: 'bot-session-a',
+    });
+  });
+
   it('advertises Cindy as the helper self-inspection category', async () => {
     const server = createXdtHelperMcpServer(
       {},
@@ -545,6 +1061,18 @@ describe('dynamic lizi MCP session context', () => {
       agent_kind: 'codex',
       working_dir: '/repo',
     });
+  });
+
+  // Runtime identity discovery must expose cross-device origin even when no local
+  // orcaRole exists (the 2026-10-21 live probe otherwise misidentified the Worker).
+  it('returns the execution-device Worker origin from the authoritative context', async () => {
+    const lead = { leadDeviceId: 'pc', leadSessionId: 'lead-1', workerLabel: 'tester' };
+    const server = createXdtHelperMcpServer({}, {
+      agentKind: 'codex', workingDir: '/worker', sessionId: 'remote-worker',
+      vendorOptions: { orcaRemoteWorker: true, orcaRemoteLead: lead },
+    });
+    const result = await tools(server).call_tool.handler({ name: 'get_current_session_id', args: {} });
+    expect(parse(result as never)).toMatchObject({ ok: true, session_id: 'remote-worker', orca_remote_lead: lead });
   });
 
   it('fails closed when the authoritative accessor cannot resolve a session', async () => {
@@ -1199,6 +1727,13 @@ describe('dynamic lizi MCP session context', () => {
     const withoutArchiveCtx = await tools(server).archive_worker.handler({
       worker_id: 'worker-1',
     });
+    const withoutSteerQueuedCtx = await tools(server).steer_queued_message.handler({
+      queued_message_id: 'queued-1',
+    });
+    const withoutMoveQueuedCtx = await tools(server).move_queued_message.handler({
+      queued_message_id: 'queued-1',
+      position: 0,
+    });
 
     expect(parse(withoutSendCtx as never)).toMatchObject({
       ok: false,
@@ -1216,6 +1751,16 @@ describe('dynamic lizi MCP session context', () => {
       ok: false,
       errorCode: 'LEAD_NOT_SUPPORTED',
     });
+    expect(parse(withoutSteerQueuedCtx as never)).toMatchObject({
+      ok: false,
+      errorCode: 'LEAD_NOT_SUPPORTED',
+    });
+    expect(parse(withoutMoveQueuedCtx as never)).toMatchObject({
+      ok: false,
+      errorCode: 'LEAD_NOT_SUPPORTED',
+    });
+    expect(deps.steerWorkerQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.moveWorkerQueuedMessage).not.toHaveBeenCalled();
     expect(deps.sendToWorker).not.toHaveBeenCalled();
     expect(deps.interruptWorker).not.toHaveBeenCalled();
     expect(deps.idleWorker).not.toHaveBeenCalled();
@@ -1315,6 +1860,7 @@ describe('dynamic lizi MCP session context', () => {
         idle_ms: 0,
         restored_from_storage: true,
         result: 'done output',
+        turnError: null,
       })),
     });
     const server = createOrcaMcpServer(deps, {
@@ -1394,4 +1940,21 @@ describe('dynamic lizi MCP session context', () => {
       workerId: 'worker-1',
     });
   });
+});
+
+// Unit / #7253: all harnesses use the same current-task delivery tool; ambient
+// context must win over the server's captured context, and descendants cannot
+// announce their parent's delivery. Existing title tests do not cover this report.
+it.each([['claude-code', false], ['codex', false], ['pi', false], ['claude-code', true], ['codex', true], ['pi', true]] as const)('routes %s delivery only from the current task executor (SSH: %s)', async (agentKind, ssh) => {
+  const report = vi.fn(() => ({ ok: true as const }));
+  const server = createXdtHelperMcpServer({ taskDelivery: { report } }, { agentKind, workingDir: '' });
+  const call = () => tools(server).call_tool.handler({ name: 'report_task_delivery', args: { final_delivery: true } });
+  expect(parse(await call() as never)).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  const context = { agentKind, workingDir: '/repo', sessionId: 'current', sessionInstanceId: 'runtime-1', ...(ssh ? { remoteHostId: 'ssh-host' } : {}) };
+  expect(parse(await runWithLiziMcpSessionContext(context, call) as never)).toMatchObject({ ok: true, recorded: true });
+  expect(report).toHaveBeenCalledWith('current', true, 'runtime-1');
+  report.mockClear();
+  expect(parse(await runWithLiziMcpSessionContext({ ...context, mcpCallerKind: 'descendant' }, call) as never))
+    .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+  expect(report).not.toHaveBeenCalled();
 });

@@ -1,8 +1,10 @@
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
+import { ensureMacPackageManagerPath } from './agentToolPath.js';
 import { app } from 'electron';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
+import os from 'node:os';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -12,6 +14,22 @@ import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
+import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
+import { recognizeLinuxUserInstallation, linuxUserDesktopName } from './linuxInstallation.js';
+import { prepareCindyVersionStartup, dispatchCindyVersionStartup } from './cindy-make/versionStartup.js';
+
+if (process.platform === 'linux' && app.isPackaged) {
+  const installation = recognizeLinuxUserInstallation(app.getPath('exe'), os.homedir(), process.getuid?.() ?? -1);
+  if (installation) app.setDesktopName(linuxUserDesktopName(installation.prefix));
+}
+
+// Backend selection must precede ready and the dynamic bootstrap/auth imports.
+// This default never overrides --password-store; no plaintext fallback is added.
+configureLinuxPasswordStore({
+  platform: process.platform,
+  env: process.env,
+  commandLine: app.commandLine,
+});
 
 // 正式目录保持历史兼容：global 构建继续使用 CindyGlobal，cn 版继续使用
 // productName 默认的 Cindy；dev 也按构建区域选择对应 profile。必须在
@@ -26,6 +44,8 @@ const regionUserDataDirName = resolveRegionUserDataDirName({
 if (regionUserDataDirName) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
 }
+// A verified version handoff retains the launching original's profile and keychain identity.
+prepareCindyVersionStartup();
 
 // Node happy-eyeballs(autoSelectFamily)默认每个地址只给 250ms 完成 TCP 握手,
 // VPN/高 RTT 链路上直连海外端点(platform.claude.com 换 token、订阅模式模型流量等)
@@ -38,6 +58,7 @@ initLogger();
 const log = createLogger('fix-path');
 log.debug(`[fix-path] before PATH=${process.env.PATH ?? ''}`);
 fixPath();
+ensureMacPackageManagerPath();
 log.debug(`[fix-path] after PATH=${process.env.PATH ?? ''}`);
 
 // Guarantee /usr/sbin:/sbin are on PATH before anything resolves the device id.
@@ -218,6 +239,20 @@ if (devFlags.needsIsolatedDeviceId) {
   stderr.write(`[cindy] dev isolated deviceId → ${isolatedDeviceId}\n`);
 }
 
+// UI 模拟数据(restart --mock,见 docs/dev-rules/ui-mock-data.md):只在源码运行的
+// 隔离沙箱里生效。其它任何 profile 一律清掉开关,模拟任务绝不写进正式或共享数据。
+const uiMockData = !app.isPackaged
+  && process.env.XDT_UI_MOCK === '1'
+  && devFlags.profileKind === 'isolated-sandbox';
+if (process.env.XDT_UI_MOCK === '1' && !uiMockData) {
+  stderr.write('[cindy] WARN: XDT_UI_MOCK ignored outside an unpackaged isolated sandbox\n');
+}
+if (uiMockData) {
+  stderr.write('[cindy] dev UI mock data enabled (account-free, demo tasks)\n');
+} else {
+  delete process.env.XDT_UI_MOCK;
+}
+
 // 实例注册表对 dev 与 packaged 一律登记:dev/release 按 flavor 分锁域、共享同一
 // userData 双开是受支持的工作流(bootstrap-electron 单例锁注释),owner-namespace
 // 迁移的独占检查靠本注册表发现「还有谁共享这份 userData」——packaged 不登记的话,
@@ -266,10 +301,15 @@ if (!process.env.XDT_BROWSER_RUNTIME_DIR) {
 refreshBrowserRuntimeConfigDir();
 
 async function dispatch(): Promise<void> {
+  if (await dispatchCindyVersionStartup()) return;
   const cleanupDevInstance = await beginDesktopDevInstance(desktopDevInstanceOptions);
   // Windows updater forceQuit() ends in process.exit(0), which bypasses Electron will-quit.
   process.once('exit', cleanupDevInstance);
   app.once('will-quit', cleanupDevInstance);
+  if (uiMockData) {
+    const { startFreshProfileInLocalMode } = await import('./appSessionState.js');
+    startFreshProfileInLocalMode();
+  }
   const mod = await import('./bootstrap-electron.js');
   await mod.bootstrapElectron();
 }

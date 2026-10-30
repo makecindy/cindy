@@ -7,6 +7,28 @@ const read = (relativePath: string): string =>
   readFileSync(resolve(__dirname, '..', relativePath), 'utf8').replace(/\r\n/g, '\n');
 
 describe('remote Orca Worker creation context', () => {
+  it('uses SSH-filtered candidates for remote-project models and provider selection', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const selection = await loadSshSessionModelSelection(');
+    const end = draft.indexOf('const newSession = await createSession(', start);
+    expect(start).toBeGreaterThan(-1);
+    const selection = draft.slice(start, end);
+    expect(selection).toContain('providers: localProviders');
+    expect(selection).toContain('agentKind: capabilityAgentKind');
+    expect(selection).toContain('if (!selection.ok)');
+    // Behavioral filtering and source pinning are covered in sshSessionModelSelection.test.ts.
+    expect(selection).toContain('target.hostId');
+    expect(read('components/settings/RemoteHostDetail.tsx')).toContain('loadSshSessionModelSelection(hostId)');
+  });
+
+  it('writes the SSH no-effort sentinel instead of omitting the session field', () => {
+    const draft = read('features/cc-agent/NewMakerDraftRoute.tsx');
+    const start = draft.indexOf('const newSession = await createSession(');
+    const end = draft.indexOf('if (!newSession)', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(draft.slice(start, end)).toContain("effort: sshEffort ?? '',");
+  });
   it('scopes capabilities, providers, and the nested model selector to the controlled device', () => {
     const popover = read('features/cc-agent/CreateWorkerPopover.tsx');
 
@@ -59,13 +81,13 @@ describe('remote Orca Worker creation context', () => {
     // 任一远程路径都不得回退到 controller key 判定。
     expect(selector).toContain('if (!deviceId) {');
     expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
-    expect(selector).toContain("if (provider?.source === 'user') return false;");
-    expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
+    expect(selector).toContain("if (isCustomRoutedProvider(provider)) return false;");
+    expect(selector).toContain('return isCodexGatewayWireModel(id) && !hasSavedKey;');
     expect(selector).toContain("if (remoteModelListStatus !== 'ready') return true;");
     expect(selector).toContain(
       'if (remoteProviders.error) return remoteProviders.unsupported ? false : true;',
     );
-    expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
+    expect(selector).toContain('const rowAgentKind = rowAgent ?? resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');
   });
 });

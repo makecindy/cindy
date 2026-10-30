@@ -5,6 +5,7 @@
  * product-owned whitelist against SkillHub, reusing the existing installer so
  * zip verification, registry writes, and global skill links stay centralized.
  */
+import { fetchOrganizationAutoInstallSkills } from './organizationAutoInstall';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -16,7 +17,9 @@ import * as installService from './installService';
 import { SkillhubMarketService } from './marketService';
 import { listIgnoredAutoSyncSkills, recordAutoSyncCandidateSkills } from './autoSyncPreferences';
 import { registryService } from './registry';
+import { withSkillMutation } from './sharedMutationLease';
 import type { StoredInstall } from './registry/types';
+import { skillhubCatalogKey, type SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 
 const log = createLogger('skillhub:autoSync');
 
@@ -44,11 +47,14 @@ interface SyncResultItem {
   name: string;
   exists: boolean;
   latestVersion?: string;
+  catalogScope?: SkillhubCatalogScope;
 }
 
 interface AutoSyncSkill {
   name: string;
   version?: string;
+  /** Product config must identify the catalog that owns this slug. */
+  catalogScope?: SkillhubCatalogScope;
 }
 
 interface AutoSyncConfigResult {
@@ -60,7 +66,9 @@ interface AutoSyncDeps {
   getCurrentUserId: () => string | null;
   fetchConfig: () => Promise<AutoSyncSkill[] | AutoSyncConfigResult>;
   listAllInstalls: () => Promise<ListedInstall[]>;
-  syncMarket: (params: { slugs?: string[] }) => Promise<{ success: boolean; results?: SyncResultItem[]; error?: string }>;
+  syncMarket: (params: {
+    skills?: Array<{ slug: string; catalogScope: SkillhubCatalogScope }>;
+  }) => Promise<{ success: boolean; results?: SyncResultItem[]; error?: string }>;
   detectClaudeSkillConflict: (slug: string, expectedSharedPath: string) => Promise<ClaudeSkillConflict | null>;
   install: InstallFn;
   cancelInstall: (name: string) => boolean;
@@ -123,7 +131,7 @@ export class SkillhubAutoSyncService {
     if (!userId) return Promise.resolve();
     if (this.completedUserId === userId) return Promise.resolve();
     if (this.inFlight) {
-      if (this.inFlightUserId === userId) return this.inFlight;
+      if (this.inFlightUserId === userId && !this.externalCancelRequested) return this.inFlight;
       return this.inFlight.finally(() => this.runOnceAfterLogin());
     }
 
@@ -131,6 +139,7 @@ export class SkillhubAutoSyncService {
     this.inFlightUserId = userId;
     this.inFlight = this.run()
       .then(() => {
+        this.assertAuthUnchanged();
         this.completedUserId = userId;
       })
       .catch((err) => {
@@ -146,6 +155,7 @@ export class SkillhubAutoSyncService {
   }
 
   cancelInFlight(): void {
+    this.completedUserId = null;
     this.externalCancelRequested = true;
     if (this.activeInstallSlug) {
       this.deps.cancelInstall(this.activeInstallSlug);
@@ -165,6 +175,7 @@ export class SkillhubAutoSyncService {
       });
       return { skills: defaultAutoSyncSkills(), usingFallbackConfig: true };
     });
+    this.assertAuthUnchanged();
     const { skills, usingFallbackConfig } = config;
     if (skills.length === 0) {
       await this.recordCandidateSkills(userId, [], { replace: !usingFallbackConfig });
@@ -183,7 +194,11 @@ export class SkillhubAutoSyncService {
       return false;
     });
     if (enabledSkills.length === 0) return;
-    const slugs = enabledSkills.map((skill) => skill.name);
+    const refs = enabledSkills.map((skill) => ({
+      slug: skill.name,
+      catalogScope: skill.catalogScope ?? ('market' as const),
+    }));
+    const slugs = refs.map(({ slug }) => slug);
 
     const localInstalls = await this.deps.listAllInstalls().catch((err) => {
       log.warn('list local installs failed', {
@@ -192,10 +207,10 @@ export class SkillhubAutoSyncService {
       throw err;
     });
     const autoSyncSlugs = new Set(slugs);
-    const relevantInstalls = buildRelevantInstallMap(localInstalls, autoSyncSlugs);
+    const relevantInstalls = buildRelevantInstallMap(localInstalls, refs, autoSyncSlugs);
     const blockedGlobalInstalls = buildBlockedGlobalInstallMap(localInstalls, autoSyncSlugs);
 
-    const sync = await this.deps.syncMarket({ slugs }).catch((err) => {
+    const sync = await this.deps.syncMarket({ skills: refs }).catch((err) => {
       log.warn('market sync failed', {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -208,11 +223,15 @@ export class SkillhubAutoSyncService {
 
     this.assertAuthUnchanged();
 
-    const marketByName = new Map((sync.results ?? []).map((item) => [item.name, item]));
+    const marketByName = new Map((sync.results ?? []).map((item) => [
+      skillhubCatalogKey(item.name, item.catalogScope ?? 'market'),
+      item,
+    ]));
     const failedSlugs: string[] = [];
     for (const skill of enabledSkills) {
       const slug = skill.name;
-      const local = relevantInstalls.get(slug);
+      const catalogScope = skill.catalogScope ?? 'market';
+      const local = relevantInstalls.get(skillhubCatalogKey(slug, catalogScope));
       let localInstallPathExists = false;
       if (!local) {
         const blocked = blockedGlobalInstalls.get(slug);
@@ -235,7 +254,7 @@ export class SkillhubAutoSyncService {
         localInstallPathExists = await this.deps.pathExists(local.installPath);
       }
 
-      const market = marketByName.get(slug);
+      const market = marketByName.get(skillhubCatalogKey(slug, catalogScope));
       const targetVersion = skill.version ?? market?.latestVersion;
       if (!market?.exists || !targetVersion) {
         log.warn('whitelisted skill is unavailable in SkillHub', { slug });
@@ -267,13 +286,14 @@ export class SkillhubAutoSyncService {
       const params: installService.InstallParams = local
         ? {
           name: slug,
+          catalogScope,
           autoSync: true,
           installPath: local.installPath,
           version: targetVersion,
           force: true,
           skipBackup: !localInstallPathExists,
         }
-        : { name: slug, autoSync: true, ...(skill.version ? { version: targetVersion } : {}) };
+        : { name: slug, catalogScope, autoSync: true, ...(skill.version ? { version: targetVersion } : {}) };
       const previousInstall = local && localInstallPathExists ? local : undefined;
 
       this.assertAuthUnchanged();
@@ -466,7 +486,7 @@ export class SkillhubAutoSyncService {
 
   private assertAuthUnchanged(): void {
     const currentUserId = this.deps.getCurrentUserId();
-    if (!currentUserId || currentUserId !== this.inFlightUserId) {
+    if (this.externalCancelRequested || !currentUserId || currentUserId !== this.inFlightUserId) {
       throw new Error('auth user changed during auto sync');
     }
   }
@@ -475,7 +495,7 @@ export class SkillhubAutoSyncService {
 export const skillhubAutoSyncService = new SkillhubAutoSyncService();
 
 function defaultAutoSyncSkills(): AutoSyncSkill[] {
-  return DEFAULT_SKILLHUB_AUTO_SYNC_SLUGS.map((name) => ({ name }));
+  return DEFAULT_SKILLHUB_AUTO_SYNC_SLUGS.map((name) => ({ name, catalogScope: 'market' }));
 }
 
 async function pathExists(p: string): Promise<boolean> {
@@ -488,6 +508,23 @@ async function pathExists(p: string): Promise<boolean> {
 }
 
 async function fetchRemoteAutoSyncConfig(): Promise<AutoSyncConfigResult> {
+  const [product, organization] = await Promise.allSettled([
+    fetchProductAutoSyncConfig(), fetchOrganizationAutoInstallSkills(),
+  ]);
+  const productConfig = product.status === 'fulfilled' ? product.value
+    : { skills: defaultAutoSyncSkills(), usingFallbackConfig: true };
+  const skills = new Map(productConfig.skills.map((skill) => [skill.name, skill]));
+  if (organization.status === 'fulfilled') {
+    for (const skill of organization.value) skills.set(skill.name, skill);
+  } else {
+    // Old servers and transient errors must not erase persisted ignore preferences.
+    log.warn('organization skill distribution unavailable');
+  }
+  return { skills: [...skills.values()], usingFallbackConfig:
+    productConfig.usingFallbackConfig || organization.status === 'rejected' };
+}
+
+async function fetchProductAutoSyncConfig(): Promise<AutoSyncConfigResult> {
   const url = process.env.XDT_SKILLHUB_AUTO_SYNC_CONFIG_URL
     ?? `${(await ensureBaseUrl()).replace(/\/+$/, '')}/${SKILLHUB_AUTO_SYNC_CONFIG_PATH}`;
   const response = await fetchJsonWithTimeout(url, CONFIG_FETCH_TIMEOUT_MS);
@@ -626,7 +663,7 @@ function parseListedInstall(value: unknown): ListedInstall | undefined {
   };
 }
 
-function parseAutoSyncConfig(value: unknown): AutoSyncSkill[] | null {
+export function parseAutoSyncConfig(value: unknown): AutoSyncSkill[] | null {
   if (!value || typeof value !== 'object') return null;
   const rawSkills = (value as { skills?: unknown }).skills;
   if (!Array.isArray(rawSkills)) return null;
@@ -635,7 +672,12 @@ function parseAutoSyncConfig(value: unknown): AutoSyncSkill[] | null {
   const skills: AutoSyncSkill[] = [];
   for (const raw of rawSkills) {
     const skill = parseAutoSyncSkill(raw);
-    if (!skill || seen.has(skill.name)) continue;
+    if (!skill) continue;
+    // Global discovery has exactly one ~/.agents/skills/<slug> slot. Preserve
+    // the historical first-entry-wins behavior when a remote config repeats a
+    // slug with different catalog scopes instead of scheduling two installs
+    // that would target the same directory.
+    if (seen.has(skill.name)) continue;
     seen.add(skill.name);
     skills.push(skill);
   }
@@ -645,15 +687,25 @@ function parseAutoSyncConfig(value: unknown): AutoSyncSkill[] | null {
 function parseAutoSyncSkill(value: unknown): AutoSyncSkill | null {
   if (typeof value === 'string') {
     const name = normalizeSkillName(value);
-    return name ? { name } : null;
+    return name ? { name, catalogScope: 'market' } : null;
   }
   if (!value || typeof value !== 'object') return null;
-  const obj = value as { name?: unknown; slug?: unknown; enabled?: unknown; version?: unknown };
+  const obj = value as {
+    name?: unknown;
+    slug?: unknown;
+    enabled?: unknown;
+    version?: unknown;
+    catalogScope?: unknown;
+    scope?: unknown;
+  };
   if (obj.enabled === false) return null;
   const name = normalizeSkillName(obj.name ?? obj.slug);
   if (!name) return null;
   const version = typeof obj.version === 'string' && obj.version.trim() ? obj.version.trim() : undefined;
-  return { name, ...(version ? { version } : {}) };
+  const rawScope = obj.catalogScope ?? obj.scope;
+  if (rawScope !== undefined && rawScope !== 'team' && rawScope !== 'market') return null;
+  const catalogScope = rawScope === 'team' || rawScope === 'market' ? rawScope : 'market';
+  return { name, catalogScope, ...(version ? { version } : {}) };
 }
 
 function normalizeSkillName(value: unknown): string | null {
@@ -662,14 +714,21 @@ function normalizeSkillName(value: unknown): string | null {
   return name ? name : null;
 }
 
-function buildRelevantInstallMap(installs: ListedInstall[], autoSyncSlugs: Set<string>): Map<string, ListedInstall> {
+function buildRelevantInstallMap(
+  installs: ListedInstall[],
+  refs: Array<{ slug: string; catalogScope: SkillhubCatalogScope }>,
+  autoSyncSlugs: Set<string>,
+): Map<string, ListedInstall> {
   const result = new Map<string, ListedInstall>();
   const globalRoot = path.join(os.homedir(), '.agents', 'skills');
+  const configuredKeys = new Set(refs.map(({ slug, catalogScope }) => skillhubCatalogKey(slug, catalogScope)));
 
   for (const install of installs) {
     if (!isAutoSyncedGlobalInstall(install, autoSyncSlugs)) continue;
     if (!isGlobalSkillInstall(globalRoot, install)) continue;
-    if (!result.has(install.skillName)) result.set(install.skillName, install);
+    const key = skillhubCatalogKey(install.skillName, install.entry.catalogScope);
+    if (!configuredKeys.has(key)) continue;
+    if (!result.has(key)) result.set(key, install);
   }
   return result;
 }
@@ -748,7 +807,19 @@ function normalizeForCompare(value: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-async function cleanupAutoSyncedGlobalInstall({
+async function cleanupAutoSyncedGlobalInstall(params: CancelledInstallCleanup): Promise<void> {
+  const names = [params.slug, path.basename(params.absolutePath)];
+  if (params.previousInstall) names.push(params.previousInstall.skillName, path.basename(params.previousInstall.installPath));
+  const completed = await withSkillMutation(names, async () => {
+    await cleanupAutoSyncedGlobalInstallUnderLease(params);
+    return true;
+  });
+  // The existing cancellation journal retries this cleanup; a busy lease must
+  // not be reported as success and silently discard that pending work.
+  if (!completed) throw new Error('another client is changing this skill');
+}
+
+async function cleanupAutoSyncedGlobalInstallUnderLease({
   slug,
   absolutePath,
   previousInstall,

@@ -23,6 +23,9 @@ class ResizeObserverStub {
 }
 (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
 
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -51,6 +54,7 @@ vi.mock('@/hooks/useProviders', () => ({
         id: 'anthropic',
         name: 'Anthropic',
         source: 'builtin',
+        auth: { method: 'oauth' },
         agents: ['claude-code', 'codex', 'pi'],
         connected: true,
         suspended: false,
@@ -65,6 +69,7 @@ vi.mock('@/hooks/useProviders', () => ({
         id: 'deepseek',
         name: 'DeepSeek',
         source: 'user',
+        auth: { method: 'apiKey' },
         agents: ['claude-code', 'codex', 'pi'],
         connected: true,
         suspended: false,

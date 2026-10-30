@@ -4,7 +4,7 @@
  * evict 只清该设备、evict 在途结果丢弃不复活 —— 与 useAgentCapabilities 同范式。
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   connectedProvidersForAgent,
   visibleModelUnion,
@@ -13,6 +13,43 @@ import {
 
 beforeEach(() => {
   vi.resetModules();
+});
+
+it('expires only subscription share snapshots and preserves ordinary API discovery cache semantics', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const api = provider('openai');
+  const invoke = vi.fn(async (device: string) => ({ providers: [device === 'share:subscription' ? login : api] }));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  await mod.prefetchDeviceProviders('share:api');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription')).toBe(false);
+  const later = Date.now() + 61_000;
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  expect(mod.isSubscriptionShareCatalogStale('share:api', later)).toBe(false);
+  expect(mod.isSubscriptionShareCatalogStale('same-account-computer', later)).toBe(false);
+  mod.evictDeviceProviders('share:subscription');
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
+  await mod.prefetchDeviceProviders('share:api');
+  expect(invoke.mock.calls.filter(([device]) => device === 'share:api')).toHaveLength(1);
+});
+
+// A failed policy refresh evicts the authoritative cache. Its subscription
+// identity must survive that soft eviction so the next membership poll retries;
+// account/disconnect eviction must still discard the hint and any late result.
+it('retains subscription freshness after a failed soft refresh and clears it at the owner boundary', async () => {
+  const login = { ...provider('subscription'), subscriptionFastPolicy: { allowFast: true, groupAllowsFast: true } };
+  const invoke = vi.fn().mockResolvedValueOnce({ providers: [login] }).mockRejectedValueOnce(Error('temporary disconnect'));
+  vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+  const mod = await import('@/hooks/useDeviceProviders');
+  await mod.prefetchDeviceProviders('share:subscription');
+  const later = Date.now() + 61_000;
+  mod.evictDeviceProviders('share:subscription', { retainDisplaySnapshot: true });
+  await mod.prefetchDeviceProviders('share:subscription');
+  expect(mod.getCachedDeviceProviders('share:subscription')).toBeNull();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(true);
+  mod.evictAllDeviceProviders();
+  expect(mod.isSubscriptionShareCatalogStale('share:subscription', later)).toBe(false);
 });
 
 type Providers = {
@@ -188,7 +225,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     ]);
   });
 
-  it('模型有 efforts 却没有自洽 defaultEffort 时丢掉该行，不整表失败', async () => {
+  it('缺默认思考深度的远程模型保留，并按实际支持档位补默认', async () => {
     const invoke = vi.fn(async () => ({
       providers: [
         {
@@ -220,7 +257,40 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
     expect(
       mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.map((m) => m.id),
-    ).toEqual(['claude-opus-5']);
+    ).toEqual(['gpt-5.6-luna', 'claude-opus-5']);
+    expect(mod.getCachedDeviceProviders('dev-luna')?.providers[0]?.models['claude-code']?.[0]?.defaultEffort).toBe('medium');
+  });
+
+  it.each([undefined, true, false])('preserves provider effort capability marker %s without inferring legacy emptiness', async (effortsUnknown) => {
+    const mod = await import('@/hooks/useDeviceProviders');
+    const base = providerWithModel('remote');
+    const model = {
+      ...base.models['claude-code'][0],
+      efforts: [],
+      defaultEffort: null,
+      ...(effortsUnknown === undefined ? {} : { effortsUnknown }),
+    };
+    const result = mod.parseDeviceProvidersPayload({ providers: [{
+      ...base, models: { 'claude-code': [model] },
+    }] });
+
+    expect(result.providers[0]?.models['claude-code']?.[0]?.effortsUnknown).toBe(effortsUnknown);
+  });
+
+  it('preserves explicit no-thinking and rejects malformed remote defaults', async () => {
+    const mod = await import('@/hooks/useDeviceProviders');
+    const base = providerWithModel('remote');
+    const model = base.models['claude-code'][0];
+    const result = mod.parseDeviceProvidersPayload({ providers: [{ ...base, models: {
+      'claude-code': [
+        { ...model, id: 'empty', efforts: [], defaultEffort: undefined },
+        { ...model, id: 'explicit-null', defaultEffort: null },
+        { ...model, id: 'invalid', defaultEffort: { value: 'medium' } },
+      ],
+    } }] });
+    expect(result.providers[0]?.models['claude-code']?.map(m => [m.id, m.defaultEffort])).toEqual([
+      ['empty', null], ['explicit-null', null],
+    ]);
   });
 
   it.each([
@@ -503,5 +573,64 @@ describe('useDeviceProviders deviceId-aware cache', () => {
       status: 'ready',
       providers: [provider('fresh-xd')],
     });
+  });
+});
+
+
+describe('provider visibility readiness retry', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it('retries a serialized typed readiness error, deduplicates callers, then retains hidden switches', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink();
+    invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    invoke.mockResolvedValue({ ...result('host'), modelVisibilityOverrides: { 'codex:xd:hidden': false } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('host', listener);
+    const requests = [mod.prefetchDeviceProviders('host'), mod.prefetchDeviceProviders('host')];
+    await vi.runAllTimersAsync();
+    await Promise.all(requests);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 'ready', modelVisibilityOverrides: { 'codex:xd:hidden': false } }));
+  });
+
+  it('stops after three not-ready attempts and reports a real error without legacy fallback', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink().mockRejectedValue(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('host', listener);
+    const pending = mod.prefetchDeviceProviders('host');
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', unsupported: false }));
+    expect(mod.getCachedDeviceProviders('host')).toBeNull();
+  });
+
+  it.each(['[INTERNAL] failed', 'MODEL_VISIBILITY_NOT_READY: untyped'])('does not retry other errors: %s', async (message) => {
+    const invoke = stubDeviceLink().mockRejectedValue(new Error(message));
+    const mod = await import('@/hooks/useDeviceProviders');
+    await mod.prefetchDeviceProviders('host');
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(mod.isDeviceProvidersUnsupportedError(new Error(message))).toBe(false);
+  });
+
+  it('eviction cancels delayed retries without disturbing another device', async () => {
+    vi.useFakeTimers();
+    const invoke = stubDeviceLink();
+    invoke.mockRejectedValueOnce(new Error('[MODEL_VISIBILITY_NOT_READY] waiting'));
+    const mod = await import('@/hooks/useDeviceProviders');
+    const pending = mod.prefetchDeviceProviders('retired');
+    await vi.advanceTimersByTimeAsync(0);
+    mod.evictDeviceProviders('retired');
+    await mod.prefetchDeviceProviders('healthy');
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(mod.getCachedDeviceProviders('retired')).toBeNull();
+    expect(mod.getCachedDeviceProviders('healthy')).toEqual(result('healthy'));
   });
 });

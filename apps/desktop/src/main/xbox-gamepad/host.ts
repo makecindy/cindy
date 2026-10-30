@@ -5,10 +5,8 @@ import { promisify } from 'node:util';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
-import {
-  isXboxGamepadHostMessage,
-  type XboxGamepadHostMessage,
-} from './protocol.js';
+import { resolveWindowsInputHelper } from '../input-devices/windowsHelperBinary.js';
+import { isXboxGamepadHostMessage, type XboxGamepadHostMessage } from './protocol.js';
 
 const execFilePromise = promisify(execFile);
 const log = createLogger('xbox-gamepad-host');
@@ -23,6 +21,7 @@ export interface XboxGamepadHost {
   start(): void;
   probe(): void;
   stop(): void;
+  setSwitch2UsbWanted(wanted: boolean): void;
 }
 
 export interface XboxGamepadHostDeps {
@@ -41,7 +40,7 @@ export function createXboxGamepadHost(
   let child: ChildProcessWithoutNullStreams | null = null;
   let starting = false;
   let wanted = false;
-  let buffer = '';
+  let switch2UsbWanted = false;
   let consecutiveFailures = 0;
   let crashAccounted = false;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
@@ -102,7 +101,11 @@ export function createXboxGamepadHost(
     }
   };
 
+  const writeSwitch2UsbWanted = (): boolean =>
+    writeHelper(switch2UsbWanted ? 'switch2-usb on\n' : 'switch2-usb off\n');
+
   const attach = (next: ChildProcessWithoutNullStreams): void => {
+    let buffer = '';
     child = next;
     starting = false;
     crashAccounted = false;
@@ -113,6 +116,7 @@ export function createXboxGamepadHost(
     stableTimer.unref?.();
     next.stdout.setEncoding('utf8');
     next.stdout.on('data', (chunk: string) => {
+      if (child !== next) return;
       buffer += chunk;
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
@@ -127,18 +131,21 @@ export function createXboxGamepadHost(
       log.debug('xbox gamepad helper stdin error', { error: error.message });
     });
     next.on('error', (error: Error) => {
-      if (child === next) child = null;
+      if (child !== next) return;
+      child = null;
       starting = false;
       if (!wanted) return;
       reportHostFailure(error.message);
       noteChildGone();
     });
     next.on('exit', (code, signal) => {
-      if (child === next) child = null;
+      if (child !== next) return;
+      child = null;
       if (!wanted) return;
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
       noteChildGone();
     });
+    writeSwitch2UsbWanted();
   };
 
   const reportHostFailure = (message: string): void => {
@@ -159,6 +166,7 @@ export function createXboxGamepadHost(
       attach(next);
     } catch (error) {
       starting = false;
+      if (!wanted) return;
       const message = error instanceof Error ? error.message : String(error);
       // Not `presence: false` — a helper that won't build is an error state, not
       // "no controller plugged in", and the settings page must say so.
@@ -178,6 +186,11 @@ export function createXboxGamepadHost(
       if (writeHelper('probe\n')) return;
       void startChild();
     },
+    setSwitch2UsbWanted(next: boolean) {
+      if (switch2UsbWanted === next) return;
+      switch2UsbWanted = next;
+      writeSwitch2UsbWanted();
+    },
     stop() {
       wanted = false;
       clearRestart();
@@ -188,7 +201,8 @@ export function createXboxGamepadHost(
       try {
         if (!current.stdin.destroyed) {
           current.stdin.write('stop\n', (error) => {
-            if (error) log.debug('xbox gamepad helper stdin write failed', { error: error.message });
+            if (error)
+              log.debug('xbox gamepad helper stdin write failed', { error: error.message });
           });
           current.stdin.end();
         }
@@ -201,12 +215,13 @@ export function createXboxGamepadHost(
 }
 
 function defaultSpawnHelper(command: string): ChildProcessWithoutNullStreams {
-  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 }
 
-async function resolveXboxGamepadHelperPath(): Promise<string> {
-  if (process.platform === 'darwin') return resolveMacHelperPath();
-  throw new Error(`Xbox gamepad helper is not available on ${process.platform}`);
+export async function resolveXboxGamepadHelperPath(platform = process.platform): Promise<string> {
+  if (platform === 'darwin') return resolveMacHelperPath();
+  if (platform === 'win32') return resolveWindowsInputHelper('gamepad');
+  throw new Error(`Xbox gamepad helper is not available on ${platform}`);
 }
 
 async function resolveMacHelperPath(): Promise<string> {
@@ -214,11 +229,22 @@ async function resolveMacHelperPath(): Promise<string> {
   if (app.isPackaged && fs.existsSync(packaged)) return packaged;
 
   const source = resolveMacHelperSource();
-  const binary = path.join(app.getPath('userData'), 'xbox-gamepad', 'cindy-macos-xbox-gamepad-helper');
+  const helperDir = path.dirname(source);
+  const switch2UsbC = path.join(helperDir, 'switch2_usb.c');
+  const switch2UsbH = path.join(helperDir, 'switch2_usb.h');
+  const binary = path.join(
+    app.getPath('userData'),
+    'xbox-gamepad',
+    'cindy-macos-xbox-gamepad-helper',
+  );
   if (!fs.existsSync(source)) {
     throw new Error(`Xbox gamepad helper source missing at ${source}`);
   }
-  const sourceMtime = fs.statSync(source).mtimeMs;
+  const sourceMtime = Math.max(
+    fs.statSync(source).mtimeMs,
+    fs.existsSync(switch2UsbC) ? fs.statSync(switch2UsbC).mtimeMs : 0,
+    fs.existsSync(switch2UsbH) ? fs.statSync(switch2UsbH).mtimeMs : 0,
+  );
   if (fs.existsSync(binary) && fs.statSync(binary).mtimeMs >= sourceMtime) {
     failedHelperSourceMtime = 0;
     return binary;
@@ -227,11 +253,16 @@ async function resolveMacHelperPath(): Promise<string> {
     throw new Error('Xbox gamepad helper compile failed; waiting for source change');
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
+  const object = `${binary}.switch2_usb.o`;
   try {
+    await execFilePromise('clang', ['-c', switch2UsbC, '-o', object], { timeout: 30_000 });
     await execFilePromise(
       'swiftc',
       [
         source,
+        object,
+        '-import-objc-header',
+        switch2UsbH,
         '-O',
         '-framework',
         'Foundation',
@@ -242,7 +273,7 @@ async function resolveMacHelperPath(): Promise<string> {
         '-o',
         binary,
       ],
-      { timeout: 20_000 },
+      { timeout: 30_000 },
     );
   } catch (error) {
     failedHelperSourceMtime = sourceMtime;

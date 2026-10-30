@@ -6,6 +6,7 @@ import { fetch as undiciFetch, type Agent, type Response as UndiciResponse } fro
 import type { TextModelClient } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { describeErrorWithCause, markRefinerModelOutputError } from './refinerErrorKind.js';
 import { createRefinerHttpDispatcher, resolveRefinerDispatcher } from './refinerHttpDispatcher.js';
 import { extractJsonStringFieldSnapshot } from './streamingJson.js';
@@ -14,7 +15,13 @@ const log = createLogger('voice-input:refine-model:litellm');
 
 const DISABLE_REFINER_PREWARM = process.env.XDT_VOICE_INPUT_DISABLE_REFINER_PREWARM === '1';
 const REFINER_TIMING_ENABLED = process.env.XDT_VOICE_INPUT_REFINER_TIMING === '1';
+// Caps the model's output text and any single SSE event. The whole stream gets
+// a far larger cap: each event wraps one or two characters in ~180 chars of
+// JSON, so a 64K stream cap rejected every refinement over ~550 characters.
+// 2M still bounds endless framing-only events (each chunk rearms the idle
+// timeout) while staying ~10x above the managed server's 1,024-token output.
 const MAX_RESPONSE_CHARS = 64_000;
+const MAX_STREAM_CHARS = 2_000_000;
 
 // Own pool for the LiteLLM proxy host (tuning lives in refinerHttpDispatcher.ts).
 const refinerDispatcher = createRefinerHttpDispatcher();
@@ -77,6 +84,8 @@ type LiteLlmTextModelClientOptions = {
   }) => Promise<{ url: string; authorization: string }>;
   timeoutMs?: number;
   onUsage?: (usage: LiteLlmTokenUsage) => void;
+  /** Called after request target/dispatcher awaits and immediately before fetch. */
+  beforeDispatch?: () => void;
 };
 
 type ParsedSseBlock = { data: unknown };
@@ -89,6 +98,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
   }) => Promise<{ url: string; authorization: string }>;
   private readonly timeoutMs: number;
   private readonly onUsage?: (usage: LiteLlmTokenUsage) => void;
+  private readonly beforeDispatch?: () => void;
 
   constructor(options: LiteLlmTextModelClientOptions) {
     this.proxyApiKey = options.proxyApiKey;
@@ -96,6 +106,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
     this.requestTargetProvider = options.requestTargetProvider;
     this.timeoutMs = options.timeoutMs ?? 8_000;
     this.onUsage = options.onUsage;
+    this.beforeDispatch = options.beforeDispatch;
   }
 
   async requestJson<T>(input: {
@@ -168,6 +179,7 @@ export class LiteLlmTextModelClient implements TextModelClient {
         // 代理解析放在看门狗起表之前:它是本机一次解析(带 30s 缓存),不该占用
         // response-headers 的等待预算。
         const dispatcher = await resolveRefinerDispatcher(target.url, refinerDispatcher);
+        this.beforeDispatch?.();
         armIdleTimeout('response headers');
         return undiciFetch(target.url, {
           method: 'POST',
@@ -185,6 +197,10 @@ export class LiteLlmTextModelClient implements TextModelClient {
       if (response.status === 401 && this.requestTargetProvider) {
         await response.arrayBuffer().catch(() => undefined);
         response = await sendRequest(true);
+      } else if (response.status === 401 && this.proxyApiKey) {
+        // The proxy-key branch sends the Cindy AI key to the Cindy gateway; the
+        // managed requestTargetProvider branch above uses Cindy voice tokens instead.
+        reportCindyGatewayKeyRejected(this.proxyApiKey);
       }
       const headersAt = performance.now();
       armIdleTimeout('response body');
@@ -290,17 +306,13 @@ async function readStreamingChatCompletion(input: {
       input.onChunk();
       const chunk = decoder.decode(value, { stream: true });
       rawChars += chunk.length;
-      if (rawChars > MAX_RESPONSE_CHARS) {
-        // Runaway generation: the channel works, the model is flooding.
-        throw markRefinerModelOutputError(
-          new Error(`LiteLLM refinement response exceeded ${MAX_RESPONSE_CHARS} characters`),
-        );
-      }
+      assertResponseWithinLimit(rawChars, MAX_STREAM_CHARS);
       buf += normalizeSseLineEndings(chunk);
       let idx = buf.indexOf('\n\n');
       while (idx >= 0) {
         const block = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
+        assertResponseWithinLimit(block.length);
         const event = parseSseBlock(block);
         if (event) {
           if (!servedModel && isRecord(event.data) && typeof event.data.model === 'string' && event.data.model) {
@@ -314,6 +326,7 @@ async function readStreamingChatCompletion(input: {
           const delta = extractDeltaContent(event.data);
           if (delta) {
             content += delta;
+            assertResponseWithinLimit(content.length);
             input.onTextContent(content);
           }
           const chunkUsage = extractUsageSummary(event.data);
@@ -321,6 +334,7 @@ async function readStreamingChatCompletion(input: {
         }
         idx = buf.indexOf('\n\n');
       }
+      assertResponseWithinLimit(buf.length);
     }
     if (buf.trim()) {
       const event = parseSseBlock(buf);
@@ -331,6 +345,7 @@ async function readStreamingChatCompletion(input: {
         const delta = extractDeltaContent(event.data);
         if (delta) {
           content += delta;
+          assertResponseWithinLimit(content.length);
           input.onTextContent(content);
         }
         const chunkUsage = extractUsageSummary(event.data);
@@ -349,6 +364,14 @@ async function readStreamingChatCompletion(input: {
     rawChars,
     bodyAt: performance.now(),
   };
+}
+
+function assertResponseWithinLimit(chars: number, max = MAX_RESPONSE_CHARS): void {
+  if (chars <= max) return;
+  // Runaway generation: the channel works, the model is flooding.
+  throw markRefinerModelOutputError(
+    new Error(`LiteLLM refinement response exceeded ${max} characters`),
+  );
 }
 
 function parseSseBlock(block: string): ParsedSseBlock | null {

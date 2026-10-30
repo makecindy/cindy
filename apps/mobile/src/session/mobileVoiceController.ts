@@ -1,9 +1,11 @@
 import {
   BufferedAsrProvider,
   DictationRefiner,
+  hasPcmSound,
   VoiceInputController,
   VoiceTimelineLogger,
   type AsrProvider,
+  type AudioGate,
   type AudioTrace,
   type DictationRefinementContext,
   type EditableRange,
@@ -20,21 +22,33 @@ import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { CINDY_MANAGED_REFINER_PROVIDER } from '@/session/mobileCindyVoiceSession';
 import {
   appendVoiceTranscriptDraftWithRange,
+  insertVoiceTranscriptDraftWithRange,
+  type MobileVoiceSelection,
   buildMobileVoiceRefinementContext,
   makeMobileRefinerPromptCacheKey,
   MobileLiteLlmTextModelClient,
   mobileVoiceErrorCodeMessage,
+  isMobileVoiceRateLimited,
+  mobileVoiceRateLimitMessage,
   mobileVoiceTranscriptKeptError,
   type MobileVoiceDraftInsertion,
 } from '@/session/mobileVoiceInput';
-import { startMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
+import { startMobileRealtimeAudio, type MobileRealtimeAudioChunk } from '@/session/mobileRealtimeAudio';
+import { MobileVoiceAudioLevels } from '@/session/mobileVoiceAudioLevels';
+import { MobilePendingAudioGate } from '@/session/mobilePendingAudioGate';
 import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
+import {
+  classifyMobileVoiceFailure,
+  createMobileVoiceTimelineRecorder,
+  logMobileVoice,
+  shortRunId,
+} from '@/session/mobileVoiceDiagnostics';
 
 type StartRealtimeAudio = (options: {
   sampleRate: number;
-  onChunk: (chunk: { pcm16: ArrayBuffer; trace: AudioTrace }) => void;
+  onChunk: (chunk: MobileRealtimeAudioChunk) => boolean | void;
   onError?: (error: Error) => void;
-}) => Promise<() => Promise<void>>;
+}) => Promise<(stoppedAt?: number) => Promise<void>>;
 
 type MobileDictationRefiner = {
   refine(input: {
@@ -55,8 +69,14 @@ export type MobileVoiceControllerSession = {
 type MobileVoiceControllerOptions = {
   credential: StoredMobileVoiceCredential;
   initialDraft: string;
+  initialSelection?: MobileVoiceSelection;
   refinementContext?: DictationRefinementContext;
-  localVoiceInputHistory?: readonly string[];
+  /**
+   * Persisted per-host history for refinement context. A getter lets the host
+   * read storage in the background: it is only consulted when a refinement
+   * request is built, so it never has to delay opening the microphone.
+   */
+  localVoiceInputHistory?: MobileVoiceInputHistorySource;
   asr?: AsrProvider;
   refiner?: MobileDictationRefiner | null;
   connectionProvider?: (provider: string) => Promise<{
@@ -75,7 +95,7 @@ type MobileVoiceControllerOptions = {
   }) => Promise<void>;
   startAudio?: StartRealtimeAudio;
   readCurrentDraft?: () => string;
-  onDraftChanged: (draft: string) => void;
+  onDraftChanged: (draft: string, selection?: MobileVoiceSelection, replacement?: MobileVoiceDraftInsertion) => void;
   onStateChanged?: (state: VoiceInputState) => void;
   onError?: (message: string) => void;
   onReadyForStartCue?: () => void;
@@ -90,7 +110,16 @@ type MobileVoiceControllerOptions = {
     end: number;
   }) => void;
   onTimelineEvent?: (event: VoiceTimelineEvent) => void;
+  /**
+   * Optional filter between the microphone and the ASR ("recognize my voice").
+   * Undefined keeps the unfiltered behavior.
+   */
+  audioGate?: AudioGate | Promise<AudioGate | undefined>;
+  /** Gesture time, before permission / storage work, for end-to-end diagnostics. */
+  requestedAt?: number;
 };
+
+type MobileVoiceInputHistorySource = readonly string[] | (() => readonly string[] | undefined);
 
 const PARTIAL_DRAFT_PUBLISH_INTERVAL_MS = 80;
 
@@ -140,17 +169,13 @@ export function createMobileVoiceControllerSession(
         system: request.system,
         user: { schemaName: 'dictation_refinement', input: request.user },
         promptCacheKey,
-      }).catch((error) => {
-        console.warn(
-          '[mobile-voice] refiner warmup failed (non-fatal):',
-          error instanceof Error ? error.message : String(error),
-        );
+      }).then(() => {
+        logMobileVoice('debug', 'refiner prompt cache warmed');
+      }, (error) => {
+        logMobileVoice('warn', 'refiner warmup failed (non-fatal)', { reason: classifyMobileVoiceFailure(error) });
       });
     } catch (error) {
-      console.warn(
-        '[mobile-voice] refiner warmup skipped:',
-        error instanceof Error ? error.message : String(error),
-      );
+      logMobileVoice('warn', 'refiner warmup skipped', { reason: classifyMobileVoiceFailure(error) });
     }
   };
   const baseDraft = options.initialDraft;
@@ -158,7 +183,10 @@ export function createMobileVoiceControllerSession(
   let lastPublishedDraft = baseDraft;
   let pendingDraftToPublish: string | null = null;
   let draftPublishThrottleTimer: ReturnType<typeof setTimeout> | null = null;
-  let stopAudio: (() => Promise<void>) | null = null;
+  let stopAudio: ((stoppedAt?: number) => Promise<void>) | null = null;
+  let audioOpening: Promise<void> | null = null;
+  let audioStopping: Promise<void> | null = null;
+  let captureStopRequestedAt: number | undefined;
   let state: VoiceInputState = 'idle';
   let controllerError: Error | null = null;
   // Run lifecycle as an explicit phase machine instead of a set of overlapping
@@ -171,9 +199,9 @@ export function createMobileVoiceControllerSession(
   //   any → running                      (a fresh start() begins a new run)
   // Every teardown-ish question is answered from the phase, so the answers can
   // never disagree with each other the way independent flags could:
-  //   - captureTornDown(): should onChunk drop mic audio? (post-stop straggler
-  //     chunks must never be buffered/flushed — a stop() that waits for a slow
-  //     handshake would otherwise transcribe speech after the user stopped)
+  //   - captureTornDown(): drop ordinary post-stop events. Only an explicit
+  //     native drain receipt, clipped to the user's stop time, may still enter
+  //     the buffer while stopping; a slow ASR handshake cannot extend capture.
   //   - phase === 'failed': did the run die (mic or connect failure)?
   //   - phase === 'cancelled': was the run abandoned on purpose (not an error)?
   let runPhase: 'idle' | 'running' | 'stopping' | 'cancelled' | 'failed' = 'idle';
@@ -189,6 +217,15 @@ export function createMobileVoiceControllerSession(
   // Orthogonal to runPhase: it describes the mic, not the run lifecycle.
   let captureLive = false;
   let listeningPendingCaptureLive = false;
+  // Whether captured PCM ever contained sound this run. A silent recording with
+  // no transcript ends at stop without waiting for the cloud handshake, final
+  // recognition or refinement. Deliberately conservative: any plausible sound
+  // (including background noise) keeps the normal path.
+  let soundDetected = false;
+  let audioLevels = new MobileVoiceAudioLevels();
+  let runStartedAt = Date.now();
+  const runTag = (): string => shortRunId(controller.id);
+  const recordTimeline = createMobileVoiceTimelineRecorder({ provider: options.credential.asr.provider });
   // The ASR connect runs concurrently with capture (see start()), so its failure
   // can surface while a stop()/mic-failure races it. Track the settled outcome at
   // session scope so both start() and an early stop() observe the same errors.
@@ -197,6 +234,8 @@ export function createMobileVoiceControllerSession(
   let asrStartError: unknown = null;
   let audioFailureError: Error | null = null;
   let voiceInsertion: MobileVoiceDraftInsertion | null = null;
+  let voiceInsertionReplacementRange: { start: number; end: number } | null = null;
+  let publishedVoiceInsertion: MobileVoiceDraftInsertion | null = null;
   let voiceInsertionSegmentIds: string[] = [];
   let voiceInsertionTouched = false;
   let historyEntryId: string | null = null;
@@ -208,6 +247,14 @@ export function createMobileVoiceControllerSession(
   const readCurrentDraft = (): string => {
     const visibleDraft = options.readCurrentDraft?.() ?? latestDraft;
     if (
+      options.readCurrentDraft && pendingDraftToPublish !== null
+      && visibleDraft !== lastPublishedDraft
+      && voiceInsertion && publishedVoiceInsertion
+      && isInsertionIntact(visibleDraft, publishedVoiceInsertion)
+    ) {
+      return replaceInsertionText(visibleDraft, publishedVoiceInsertion, voiceInsertion.text);
+    }
+    if (
       visibleDraft === lastPublishedDraft
       && (pendingDraftToPublish !== null || draftPublishThrottleTimer !== null)
     ) {
@@ -218,20 +265,33 @@ export function createMobileVoiceControllerSession(
 
   const publishDraftNow = (draft: string): void => {
     pendingDraftToPublish = null;
-    if (lastPublishedDraft === draft) return;
+    // The first insertion can change selected atoms even when its text is identical.
+    if (lastPublishedDraft === draft && (!voiceInsertion || publishedVoiceInsertion)) return;
+    const replacement = voiceInsertion
+      ? publishedVoiceInsertion
+        ? { ...publishedVoiceInsertion, text: voiceInsertion.text }
+        : voiceInsertionReplacementRange
+          ? { ...voiceInsertionReplacementRange, text: voiceInsertion.text }
+          : undefined
+      : undefined;
     lastPublishedDraft = draft;
-    options.onDraftChanged(draft);
+    publishedVoiceInsertion = voiceInsertion ? { ...voiceInsertion } : null;
+    options.onDraftChanged(draft, voiceInsertion
+      ? { start: voiceInsertion.end, end: voiceInsertion.end }
+      : undefined, replacement);
   };
 
   const publishPendingDraftNow = (): void => {
     const pending = pendingDraftToPublish;
     if (pending === null) return;
-    if (voiceInsertion && !isInsertionIntact(readCurrentDraft(), voiceInsertion)) {
+    const currentDraft = readCurrentDraft();
+    if (voiceInsertion && !isInsertionIntact(currentDraft, voiceInsertion)) {
       voiceInsertionTouched = true;
       pendingDraftToPublish = null;
       return;
     }
-    publishDraftNow(pending);
+    latestDraft = currentDraft;
+    publishDraftNow(currentDraft);
   };
 
   const cancelPendingDraftPublish = (): void => {
@@ -262,9 +322,17 @@ export function createMobileVoiceControllerSession(
   // was deferred at start until the mic is actually capturing, so the UI's
   // "listening" cue matches real audio flow rather than the ~150-200ms-earlier
   // moment the audio session began warming up.
-  const markCaptureLive = (): void => {
+  const markCaptureLive = (trace: AudioTrace, timestampSource?: 'hardware' | 'delivery'): void => {
     if (captureLive) return;
     captureLive = true;
+    logMobileVoice('debug', 'capture live', {
+      runId: runTag(), elapsedMs: Date.now() - runStartedAt,
+      timestampSource: timestampSource ?? 'delivery',
+      ...(timestampSource === 'hardware' ? {
+        firstSampleAfterRequestMs: trace.capturedAt - runStartedAt,
+        deliveryDelayMs: Date.now() - trace.capturedAt,
+      } : {}),
+    });
     if (listeningPendingCaptureLive && state === 'listening') {
       listeningPendingCaptureLive = false;
       options.onStateChanged?.('listening');
@@ -316,9 +384,18 @@ export function createMobileVoiceControllerSession(
       return buildEditableRange(voiceInsertion, segmentIds, voiceInsertionTouched);
     }
 
-    const result = appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
+    // A selection belongs to its captured draft. If typing changed that draft
+    // before the first ASR result, preserve the edit instead of replacing stale offsets.
+    const result = options.initialSelection && currentDraft === baseDraft
+      ? insertVoiceTranscriptDraftWithRange(currentDraft, normalized, options.initialSelection)
+      : appendVoiceTranscriptDraftWithRange(currentDraft, normalized);
     if (!result.insertion) return undefined;
     voiceInsertion = result.insertion;
+    voiceInsertionReplacementRange = options.initialSelection && currentDraft === baseDraft
+      ? 'atomRange' in options.initialSelection
+        ? null
+        : { start: options.initialSelection.start, end: options.initialSelection.end }
+      : { start: result.insertion.start, end: result.insertion.start };
     voiceInsertionSegmentIds = segmentIds;
     latestDraft = result.draft;
     publishDraftChange(latestDraft, mode);
@@ -328,7 +405,22 @@ export function createMobileVoiceControllerSession(
   const controller = new VoiceInputController({
     asr,
     refiner,
-    logger: new VoiceTimelineLogger(options.onTimelineEvent),
+    // Refine during a speech pause and show the result right away. The shared
+    // controller only acts on it when a refiner exists (refinement enabled).
+    pauseRefinementEnabled: true,
+    retryEmptyTranscript: true,
+    // A reconnect allocates another managed session and can hit the account
+    // limit; report that instead of the generic "stopped receiving" failure.
+    recoveryErrorMessage: mobileVoiceRateLimitMessage,
+    audioGate: options.audioGate instanceof Promise
+      ? new MobilePendingAudioGate(options.audioGate, (error) => {
+        void handleAudioFailure(error instanceof Error ? error : new Error(String(error)));
+      })
+      : options.audioGate,
+    logger: new VoiceTimelineLogger((event) => {
+      recordTimeline(event);
+      options.onTimelineEvent?.(event);
+    }),
     callbacks: {
       onStateChanged(nextState) {
         if (runPhase === 'failed' && nextState === 'done') {
@@ -356,14 +448,17 @@ export function createMobileVoiceControllerSession(
       onSubmitted(text, segment) {
         const range = publishText(text, [segment.id], 'immediate');
         if (range) {
-          submittedTextForLearning = text;
+          // A pause-time refinement may already be the submitted text; learning
+          // still compares against the raw transcript it was based on.
+          submittedTextForLearning = segment.basedOnText ?? text;
           recordSubmittedHistory(text);
         }
         return range;
       },
-      onRefinementPreview(text, _segment, range) {
-        publishText(text, range.segmentIds, 'immediate');
-      },
+      // No onRefinementPreview: a streamed refinement is only a prefix of the
+      // final text (removed fillers shift everything after them). Like desktop,
+      // keep the current text until the validated result arrives via
+      // applyRefinement instead of showing a half-finished hybrid.
       applyRefinement(range, refinedText) {
         const applied = publishText(refinedText, range.segmentIds, 'immediate') !== undefined;
         if (applied) {
@@ -407,6 +502,11 @@ export function createMobileVoiceControllerSession(
       submittedTextForLearning = null;
       captureLive = false;
       listeningPendingCaptureLive = false;
+      soundDetected = false;
+      audioLevels = new MobileVoiceAudioLevels();
+      audioStopping = null;
+      captureStopRequestedAt = undefined;
+      runStartedAt = options.requestedAt ?? Date.now();
       // A fresh start() begins a new run from ANY previous phase — in particular
       // 'failed': a mic interruption must not poison the next recording on the
       // same session, so the failure record is cleared here too.
@@ -420,24 +520,38 @@ export function createMobileVoiceControllerSession(
       // handshake (the previous serial ordering awaited connect BEFORE opening the
       // mic). Audio captured during the handshake is buffered and replayed by
       // BufferedAsrProvider once the connect settles, so nothing is lost.
-      asrStartPromise = controller.start().then(() => undefined, (error: unknown) => {
+      asrStartPromise = controller.start().then(() => {
+        // With a connection prewarmed at press-in, the controller subscribes
+        // after the provider already connected; this is the moment it is usable.
+        logMobileVoice('debug', 'asr ready', { runId: runTag(), elapsedMs: Date.now() - runStartedAt });
+      }, (error: unknown) => {
         asrStartError = error;
       });
+      // controller.start() assigns the run id synchronously.
+      logMobileVoice('info', 'start', {
+        runId: runTag(),
+        provider: options.credential.asr.provider,
+        sampleRate: options.credential.asr.pcmSampleRate ?? 16_000,
+        refinement: Boolean(refiner),
+      });
       try {
-        stopAudio = await startAudio({
+        audioOpening = startAudio({
           sampleRate: options.credential.asr.pcmSampleRate ?? 16_000,
           onChunk: (chunk) => {
             // Drop audio emitted after the run began tearing down capture, so an
             // early stop that waits for the in-flight handshake can't buffer and
             // later flush post-stop speech/noise.
-            if (captureTornDown()) return;
-            markCaptureLive();
+            if (captureTornDown() && !(runPhase === 'stopping' && chunk.drained)) return false;
+            audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
+            if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
+            if (runPhase === 'running') markCaptureLive(chunk.trace, chunk.timestampSource);
             controller.appendAudio(chunk.pcm16, chunk.trace);
           },
           onError: (error) => {
             void handleAudioFailure(error);
           },
-        });
+        }).then((stop) => { stopAudio = stop; });
+        await audioOpening;
       } catch (error) {
         runPhase = 'failed';
         // Surface the mic failure immediately — do NOT wait for the in-flight
@@ -447,6 +561,7 @@ export function createMobileVoiceControllerSession(
         // for an in-flight connect), and asrStartPromise carries its own
         // .catch so the late settle can never become an unhandled rejection.
         await controller.cancel().catch(() => undefined);
+        logMobileVoiceFailure('start failed', 'microphone', error);
         throw redactMobileVoiceError(error, options.credential);
       }
       if (captureTornDown() && stopAudio) {
@@ -454,14 +569,19 @@ export function createMobileVoiceControllerSession(
         // opening: its teardown saw stopAudio === null and could not close the
         // capture, so close the just-opened handle here — otherwise the mic and
         // its event subscriptions stay live even though the run is abandoned.
-        const stop = stopAudio;
-        stopAudio = null;
-        await stop().catch(() => undefined);
+        await stopNativeCapture();
       }
       // Wait for the ASR connection to settle before declaring the start
       // successful, so a failed handshake still surfaces as a startup error (and
       // the optional start cue is only played once both capture and ASR are up).
       await asrStartPromise;
+      if (currentRunPhase() === 'cancelled') {
+        // The run was cancelled (or ended silently) while the handshake was
+        // still settling; the ASR wrapper already tears the just-opened provider
+        // down. A handshake outcome for an abandoned run is not an error, so
+        // return quietly without announcing a successful start.
+        return;
+      }
       if (asrStartError) {
         runPhase = 'failed';
         if (stopAudio) {
@@ -470,6 +590,7 @@ export function createMobileVoiceControllerSession(
           await stop().catch(() => undefined);
         }
         await controller.cancel().catch(() => undefined);
+        logMobileVoiceFailure('start failed', 'asr', asrStartError);
         throw redactMobileVoiceError(asrStartError, options.credential);
       }
       if (currentRunPhase() === 'failed') {
@@ -481,12 +602,6 @@ export function createMobileVoiceControllerSession(
           audioFailureError ?? new Error('Realtime voice capture was interrupted during startup.'),
           options.credential,
         );
-      }
-      if (currentRunPhase() === 'cancelled') {
-        // The user cancelled while the handshake was still settling; the ASR
-        // wrapper already tears the just-opened provider down. This is not an
-        // error, so return quietly without announcing a successful start.
-        return;
       }
       // ASR 会话已建立(refine session 同步就绪),此刻预热润色 prompt cache,
       // 让缓存赶在用户停止说话前热起来。
@@ -503,15 +618,43 @@ export function createMobileVoiceControllerSession(
       // Pre-stop audio buffered inside BufferedAsrProvider is still replayed once
       // the connect settles, so short utterances are not lost.
       if (runPhase === 'running') runPhase = 'stopping';
-      if (stopAudio) {
-        const stop = stopAudio;
-        stopAudio = null;
-        await stop().catch(() => undefined);
+      const stopRequestedAt = Date.now();
+      captureStopRequestedAt = stopRequestedAt;
+      logMobileVoice('debug', 'stop requested', {
+        runId: runTag(),
+        elapsedMs: stopRequestedAt - runStartedAt,
+        captureLive,
+        soundDetected,
+        ...audioLevels.summary(),
+        hasTranscript: Boolean(voiceInsertion),
+      });
+      // An immediate release can beat the native start receipt. Wait only for
+      // capture (never ASR), then drain before deciding this was a silent run.
+      if (!stopAudio && !audioStopping) await audioOpening?.catch(() => undefined);
+      await stopNativeCapture();
+      if (currentRunPhase() === 'stopping' && !soundDetected && !voiceInsertion) {
+        logMobileVoice('info', 'silent recording ended without ASR finalization', {
+          runId: runTag(),
+          elapsedMs: Date.now() - runStartedAt,
+          captureLive,
+        });
+        // Nothing audible was captured and nothing was recognized: end now
+        // instead of waiting for a pending cloud start, final ASR or refinement.
+        // Audio already sent is not recalled. 'cancelled' also lets a start()
+        // still awaiting the handshake return quietly.
+        runPhase = 'cancelled';
+        cancelPendingDraftPublish();
+        await controller.cancel().catch(() => undefined);
+        notifyReadyForEndCue();
+        return latestDraft;
       }
       // Then wait for the ASR handshake to settle (it runs concurrently with
       // capture) so the failure checks below observe its final outcome. The
       // pre-stop audio replay + flush ordering is handled by BufferedAsrProvider.
+      const handshakeWaitStartedAt = Date.now();
       if (asrStartPromise) await asrStartPromise.catch(() => undefined);
+      const handshakeWaitMs = Date.now() - handshakeWaitStartedAt;
+      if (handshakeWaitMs > 50) logMobileVoice('debug', 'stop waited for ASR connection', { waitMs: handshakeWaitMs });
       if (asrStartError || audioFailureError) {
         // The run is dead — either the ASR handshake failed during an early stop,
         // or the mic failed while the handshake was still settling. Surface it
@@ -532,6 +675,7 @@ export function createMobileVoiceControllerSession(
       }
       if (state === 'submitting' || state === 'refining') await waitForDone(doneWaiters);
       if (runPhase === 'stopping') runPhase = 'idle';
+      logMobileVoice('debug', 'stop finished', { runId: runTag(), stopToDoneMs: Date.now() - stopRequestedAt, state });
       return latestDraft;
     },
     async cancel() {
@@ -542,12 +686,17 @@ export function createMobileVoiceControllerSession(
       // opening later) is handled by BufferedAsrProvider when controller.cancel()
       // reaches its stop().
       runPhase = 'cancelled';
-      if (stopAudio) {
-        const stop = stopAudio;
-        stopAudio = null;
-        await stop();
+      try {
+        if (stopAudio) {
+          const stop = stopAudio;
+          stopAudio = null;
+          await stop();
+        }
+      } finally {
+        // Native drain can reject (overflow / missing history). Cancellation
+        // still owns filter disposal and closing the ASR connection.
+        await controller.cancel();
       }
-      await controller.cancel();
     },
     currentDraft() {
       return readCurrentDraft();
@@ -560,6 +709,7 @@ export function createMobileVoiceControllerSession(
     if (runPhase !== 'running' && runPhase !== 'stopping') return;
     runPhase = 'failed';
     audioFailureError = error;
+    logMobileVoiceFailure('capture failed', 'microphone', error);
     cancelPendingDraftPublish();
     state = 'error';
     options.onStateChanged?.('error');
@@ -571,6 +721,17 @@ export function createMobileVoiceControllerSession(
     } finally {
       await controller.cancel().catch(() => undefined);
     }
+  }
+
+  async function stopNativeCapture(): Promise<void> {
+    if (audioStopping) return audioStopping;
+    const stop = stopAudio;
+    if (!stop) return;
+    stopAudio = null;
+    audioStopping = stop(captureStopRequestedAt).catch(async (error: unknown) => {
+      await handleAudioFailure(error instanceof Error ? error : new Error(String(error)));
+    });
+    return audioStopping;
   }
 
   function recordSubmittedHistory(text: string): void {
@@ -648,7 +809,20 @@ function replaceInsertionText(
   return `${draft.slice(0, insertion.start)}${text}${draft.slice(insertion.end)}`;
 }
 
+
+function logMobileVoiceFailure(message: string, stage: 'microphone' | 'asr', error: unknown): void {
+  logMobileVoice('warn', message, {
+    stage,
+    rateLimited: isMobileVoiceRateLimited(error),
+    reason: classifyMobileVoiceFailure(error),
+  });
+}
+
 function redactMobileVoiceError(error: unknown, credential: StoredMobileVoiceCredential): Error {
+  // A recognized account limit gets the localized "wait and retry" text instead
+  // of whatever the server or the last fallback candidate reported.
+  const rateLimitMessage = mobileVoiceRateLimitMessage(error);
+  if (rateLimitMessage) return new Error(rateLimitMessage);
   const message = redactMobileVoiceCredentialText(
     error instanceof Error ? error.message : String(error),
     credential,
@@ -666,7 +840,7 @@ function createMobileRefiner(
   credential: StoredMobileVoiceCredential,
   options: {
     refinementContext?: DictationRefinementContext;
-    localVoiceInputHistory?: readonly string[];
+    localVoiceInputHistory?: MobileVoiceInputHistorySource;
     refinerTargetProvider?: (provider: string, options?: { refreshAccessToken?: boolean }) => Promise<{
       url: string;
       authorization: string;
@@ -689,7 +863,9 @@ function createMobileRefiner(
     promptCacheScope: mobileRefinerPromptCacheScope(credential),
     contextProvider: () => buildMobileVoiceRefinementContext(credential, {
       refinementContext: options.refinementContext,
-      localVoiceInputHistory: options.localVoiceInputHistory,
+      localVoiceInputHistory: typeof options.localVoiceInputHistory === 'function'
+        ? options.localVoiceInputHistory()
+        : options.localVoiceInputHistory,
       // 词典来自被控桌面的只读快照缓存(拉取在开麦时异步触发)。桌面离线或还没
       // 拉到时是空数组 —— 润色照常进行,只是少了术语提示。
       dictionaryEntries: readCachedMobileVoiceDictionary(credential.hostDeviceId),

@@ -89,7 +89,7 @@ describe('cindy_feishu_bot channel routing note', () => {
       '正文可以使用标题、列表、表格、普通段落或代码块组织内容,发布时会转换为纯文本;附件引用不受此限制',
     );
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('xdt-file:///绝对路径');
-    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('cindy-media://… 或 xdt-image://…');
+    expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('本机图片绝对路径或 cindy-media://…');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).toContain('不要解释或复述这些格式要求');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('X (Twitter)');
     expect(X_HOOK_SESSION_CHANNEL_NOTE).not.toContain('公开回帖');
@@ -135,6 +135,28 @@ describe('cindy_feishu_bot channel routing note', () => {
     } finally {
       await feishu.cleanup();
       await base.cleanup();
+    }
+  });
+});
+
+
+describe('Feishu notification delivery result', () => {
+  it('reports delivered-but-unlinked as success with a no-resend warning and receipt', async () => {
+    const deps = makeDeps();
+    deps.sendMessage = vi.fn(async () => ({ ok: true, messageId: 'om_sent', sessionLinked: false }));
+    const harness = await makeHarness(deps);
+    try {
+      const result = await harness.client.callTool({
+        name: 'call_tool', arguments: { name: 'send_message_to_user', args: { text: 'done' } },
+      });
+      const content = result.content as Array<{ text?: string }>;
+      const payload = JSON.parse(content[0].text!);
+      expect(result.isError).not.toBe(true);
+      expect(payload).toMatchObject({ ok: true, messageId: 'om_sent', sessionLinked: false });
+      expect(payload.warning).toContain('不要重新发送');
+      expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.cleanup();
     }
   });
 });

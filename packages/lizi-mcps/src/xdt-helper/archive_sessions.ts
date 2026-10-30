@@ -4,7 +4,7 @@
  * 归档 = 把 sessions.status 置为 'archived'(从 sidebar 的 active 桶移出,可随时取消);
  * 取消归档 = 置回 'active'。两者都不删数据,可逆。
  *
- * host 侧走 patchSessionMetaInDb(已校验 status 白名单 + 广播 sessions:patched),
+ * 本机走 setSessionsStatusInDb；远程复用 patchSessionMetaInDb(状态校验 + 广播),
  * 因此改动会即时反映到 sidebar / agent-island,无需用户刷新或重启。
  *
  * 工具层护栏:
@@ -20,6 +20,8 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import type { LiziMcpSessionContext } from '../types.js';
 import { errorPayload, okPayload } from './_payload.js';
+import { stringArrayParam } from './_array-param.js';
+import { parseQualifiedSessionId } from './send_to_session.js';
 
 const MAX_BATCH_SIZE = 50;
 
@@ -42,25 +44,52 @@ export type SetSessionsStatusResult = ControlResult<
   'NOT_FOUND' | 'PRECONDITION_FAILED'
 >;
 
+export type RemoteSessionsStatusResult =
+  | { ok: true; changed: SessionStatusChangeItem[] }
+  | {
+      ok: false;
+      errorCode: string;
+      message: string;
+      changed: SessionStatusChangeItem[];
+      failedSessionId: string;
+      remainingSessionIds: string[];
+    };
+
 export interface ArchiveSessionsDeps {
   getSessionContext(): LiziMcpSessionContext;
   setSessionsStatus(params: {
     sessionIds: string[];
     status: SessionStatus;
   }): Promise<SetSessionsStatusResult>;
+  /** One remote device per batch; sequential, stop on failure, no rollback/replay. */
+  setRemoteSessionsStatus?(params: {
+    deviceId: string;
+    sessionIds: string[];
+    status: SessionStatus;
+  }): Promise<RemoteSessionsStatusResult>;
 }
+
+const BATCH_DESCRIPTION =
+  '默认本机（也支持 local::sessionId）；跨电脑传 deviceId::sessionId（来自 list_sessions），沿用同账号远程控制授权与任务权限档。' +
+  '一次只接受一台电脑的任务，混合本机/远程或多台远程电脑在写入前报 INVALID_ARGS。' +
+  '本机批次原子写入；远程按顺序逐项写入，首次失败即停止，不回滚已完成项，错误 data 返回 changed、failed_session_id、remaining_session_ids。' +
+  'REMOTE_RESULT_UNKNOWN 表示失败项可能已生效，先查询状态再决定是否重试，不自动重发。' +
+  '远程失败码还包括 REMOTE_UNSUPPORTED / REMOTE_DEVICE_OFFLINE / REMOTE_DISABLED / REMOTE_ACCESS_REVOKED / REMOTE_UNAVAILABLE。';
 
 const ARCHIVE_DESCRIPTION =
   `批量归档 ${BRAND_NAME} 历史对话/session(把 status 置为 archived,从侧栏 active 列表移出)。` +
   '归档可逆、不删数据,要恢复用 unarchive_sessions；已删除的 session 不能归档或恢复。' +
   '适合"清理已完成/过期会话"。' +
   '建议先用 history/list_sessions 找到目标 session_id。' +
-  '失败码: NOT_FOUND(某些 id 不存在,整批不写) / PRECONDITION_FAILED(目标已删除) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
+  BATCH_DESCRIPTION +
+  '失败码: NOT_FOUND / PRECONDITION_FAILED(目标已删除或生命周期受限) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
 
 const UNARCHIVE_DESCRIPTION =
   `批量取消归档 ${BRAND_NAME} 历史对话/session(把 status 置回 active,恢复到侧栏 active 列表)。` +
   '是 archive_sessions 的逆操作；已删除的 session 不能通过此工具复活。' +
-  '失败码: NOT_FOUND / PRECONDITION_FAILED(目标已删除) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
+  '恢复只改归档状态，不发送旧消息、不恢复暂停自动化、不启动执行；恢复成功后可另用 send_to_session 发送新消息。' +
+  BATCH_DESCRIPTION +
+  '失败码: NOT_FOUND / PRECONDITION_FAILED(目标已删除或生命周期受限) / NO_SESSION_CONTEXT / HOST_NOT_READY / INVALID_ARGS。';
 
 function dedupe(ids: string[]): { ids: string[]; duplicate: string | null } {
   const seen = new Set<string>();
@@ -97,14 +126,20 @@ function registerSessionStatusTool(
     category: 'control',
     description: config.description,
     inputShape: {
-      session_ids: z
-        .array(z.string().min(1))
-        .min(1)
-        .max(MAX_BATCH_SIZE)
+      session_ids: stringArrayParam(z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE))
         .describe(config.idsDescription),
     },
     handler: async ({ session_ids }) => {
-      const { ids, duplicate } = dedupe(session_ids);
+      if (session_ids.some((id) => {
+        const target = parseQualifiedSessionId(id);
+        return target?.deviceId === 'local' && target.sessionId.includes('::');
+      })) {
+        return errorPayload('INVALID_ARGS', 'local:: 后必须是本机任务 ID，不能嵌套设备前缀。');
+      }
+      const { ids, duplicate } = dedupe(session_ids.map((id) => {
+        const target = parseQualifiedSessionId(id);
+        return target?.deviceId === 'local' ? target.sessionId : id;
+      }));
       if (duplicate) {
         return errorPayload('INVALID_ARGS', `同一次调用里 session_id 重复: ${duplicate}。`);
       }
@@ -123,6 +158,36 @@ function registerSessionStatusTool(
           'INVALID_ARGS',
           '不能归档当前正在运行的 session。请把它从 session_ids 里去掉(或先切换到别的会话再归档它)。',
         );
+      }
+
+      const targets = ids.map(parseQualifiedSessionId);
+      if (ids.some((id, i) => id.includes('::') && !targets[i])) {
+        return errorPayload('INVALID_ARGS', '设备任务 ID 必须为 deviceId::sessionId。');
+      }
+      const remote = targets.find((target) => target !== null);
+      if (remote) {
+        if (targets.some((target) => !target || target.deviceId !== remote.deviceId)) {
+          return errorPayload('INVALID_ARGS', '一次只能操作同一台电脑的任务，请按电脑分批调用；本次没有写入。');
+        }
+        if (!deps.setRemoteSessionsStatus) {
+          return errorPayload('REMOTE_UNSUPPORTED', '当前宿主不支持跨电脑归档/取消归档；本次没有写入。');
+        }
+        const result = await deps.setRemoteSessionsStatus({
+          deviceId: remote.deviceId,
+          sessionIds: targets.map((target) => target!.sessionId),
+          status: config.targetStatus,
+        });
+        const qualify = (id: string) => `${remote.deviceId}::${id}`;
+        const changed = result.changed.map((item) => toPayloadItem({ ...item, sessionId: qualify(item.sessionId) }));
+        if (!result.ok) {
+          return errorPayload(result.errorCode, result.message, {
+            partial: changed.length > 0 || result.errorCode === 'REMOTE_RESULT_UNKNOWN',
+            changed,
+            failed_session_id: qualify(result.failedSessionId),
+            remaining_session_ids: result.remainingSessionIds.map(qualify),
+          });
+        }
+        return okPayload({ status: config.targetStatus, count: changed.length, changed });
       }
 
       const result = await deps.setSessionsStatus({ sessionIds: ids, status: config.targetStatus });
@@ -153,7 +218,7 @@ export function registerArchiveSessionsTool(
     name: 'archive_sessions',
     description: ARCHIVE_DESCRIPTION,
     targetStatus: 'archived',
-    idsDescription: `要归档的 session id 列表。一次最多 ${MAX_BATCH_SIZE} 个,建议来自 list_sessions 返回的 id。`,
+    idsDescription: `同一台电脑的 session id 列表；远程用 deviceId::sessionId。一次最多 ${MAX_BATCH_SIZE} 个,建议来自 list_sessions 返回的 id。`,
   });
 }
 
@@ -165,6 +230,6 @@ export function registerUnarchiveSessionsTool(
     name: 'unarchive_sessions',
     description: UNARCHIVE_DESCRIPTION,
     targetStatus: 'active',
-    idsDescription: `要取消归档的 session id 列表。一次最多 ${MAX_BATCH_SIZE} 个。`,
+    idsDescription: `同一台电脑的 session id 列表；远程用 deviceId::sessionId。一次最多 ${MAX_BATCH_SIZE} 个。`,
   });
 }

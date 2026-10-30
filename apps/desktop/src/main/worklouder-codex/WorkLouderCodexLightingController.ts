@@ -2,10 +2,20 @@ import {
   WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
   WORKLOUDER_CODEX_KEYCAP_ACTIONS,
+  WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS,
+  WORKLOUDER_HID_AG_CODES,
+  normalizeWorkLouderCreatorTaskKeys,
+  buildCreatorMicro2AgentKeymap,
   cloneWorkLouderCodexSettings,
   createWorkLouderCodexDefaultSettings,
-  isWorkLouderCodexMicrophoneKeycap,
+  creatorCommandAssignment,
+  isWorkLouderCodexVoiceAssignment,
+  isWorkLouderCreatorProgrammableKey,
+  resolveWorkLouderHidRole,
   workLouderCodexAutoDimMs,
+  workLouderLayoutMerges,
+  workLouderMergeForKey,
+  workLouderShouldMuteKeyZone,
   type WorkLouderCodexAction,
   type WorkLouderCodexAgentSlotState,
   type WorkLouderCodexAnalogDirection,
@@ -25,7 +35,7 @@ import {
   createWorkLouderCodexOffFrame,
   createWorkLouderCodexLightingFrame,
   createWorkLouderCodexWindowRevealFrame,
-  foldOrcaWorkerActivityOntoLeads,
+  muteWorkLouderCodexKeyZone,
   isWorkLouderCodexLightingFrameOff,
   type WorkLouderCodexHidEvent,
   type WorkLouderCodexJoystickEvent,
@@ -70,6 +80,7 @@ export interface WorkLouderCodexLightingSink {
     handler: ((reason: WorkLouderCodexConnectionReason) => void) | null,
   ): void;
   setDeviceEnabled?(enabled: boolean): void;
+  rebindCreatorKeymap?(keymap: string[][]): void;
   setPresenceHandler?(
     handler: ((
       present: boolean,
@@ -83,16 +94,16 @@ export interface WorkLouderCodexLightingSink {
 }
 
 type TaskCatalogLoader = () => Promise<WorkLouderCodexTaskCatalog | readonly string[]>;
-type WorkerSessionLoader = (
-  leadSessionIds: readonly string[],
-) => Promise<Readonly<Record<string, readonly string[]>>>;
 
 /** Keeps task LEDs, physical controls, and the settings projection on one state machine. */
 export class WorkLouderCodexLightingController {
   private lastFrameKey = '';
   private slotSessionIds: string[] = [];
+  /**
+   * Agent Island activity. Orca Workers never appear here; a Lead whose team is
+   * still working stays `running` because Agent Island defers its completion.
+   */
   private latestActivity: readonly WorkLouderCodexSessionActivity[] = [];
-  private workersByLead: Readonly<Record<string, readonly string[]>> = {};
   private taskCatalog: WorkLouderCodexTaskCatalog = { sidebar: [], lastSent: [], options: [] };
   private agentSlots: WorkLouderCodexAgentSlotState[] = emptyAgentSlots();
   private slotRefreshVersion = 0;
@@ -126,6 +137,8 @@ export class WorkLouderCodexLightingController {
   private inputActionsEnabled = false;
   private joystickNeedsCenter = false;
   private voicePressed = false;
+  /** First switch down under a 2U cap; its release ends the press. The other switch is ignored. */
+  private mergeWinner = new Map<string, string>();
 
   constructor(
     private readonly sink: WorkLouderCodexLightingSink,
@@ -135,7 +148,6 @@ export class WorkLouderCodexLightingController {
       undefined,
     private readonly dispatchPreviewInput: (input: WorkLouderCodexPreviewInput) => void = () =>
       undefined,
-    private readonly loadWorkerSessions: WorkerSessionLoader = async () => ({}),
   ) {}
 
   start(): void {
@@ -177,7 +189,7 @@ export class WorkLouderCodexLightingController {
         action: cloneAction(slot.action),
       })),
       taskOptions: this.taskCatalog.options.map((task) => ({ ...task })),
-      agentSlotCount: WORKLOUDER_CODEX_AGENT_SLOT_COUNT,
+      agentSlotCount: this.agentSlots.length,
     };
   }
 
@@ -203,6 +215,9 @@ export class WorkLouderCodexLightingController {
     this.sink.setDeviceEnabled?.(settings.deviceEnabled);
     if (!settings.deviceEnabled) this.connectionStatus = 'disabled';
     this.publishAgentSlots();
+    if (settings.layout.taskKeys) {
+      this.sink.rebindCreatorKeymap?.(buildCreatorMicro2AgentKeymap(settings.layout.taskKeys));
+    }
     const frame = this.updateLightingFrame();
     this.resetAutoDimTimer(frame);
     this.emitState();
@@ -242,8 +257,6 @@ export class WorkLouderCodexLightingController {
         const catalog = normalizeTaskCatalog(await this.loadTaskCatalog());
         if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.taskCatalog = catalog;
-        await this.refreshWorkerSessions(refreshVersion);
-        if (!this.taskSlotsEnabled || refreshVersion !== this.slotRefreshVersion) return;
         this.publishAgentSlots();
         this.updateLightingFrame(true);
         this.emitState();
@@ -282,8 +295,6 @@ export class WorkLouderCodexLightingController {
     }
     this.taskSlotsEnabled = true;
     this.inputActionsEnabled = true;
-    await this.refreshWorkerSessions(refreshVersion);
-    if (refreshVersion !== this.slotRefreshVersion) return;
     this.publishAgentSlots();
     this.updateLightingFrame(true);
     this.emitState();
@@ -302,7 +313,6 @@ export class WorkLouderCodexLightingController {
     this.taskCatalog = { sidebar: [], lastSent: [], options: [] };
     this.agentSlots = emptyAgentSlots();
     this.slotSessionIds = [];
-    this.workersByLead = {};
     this.pendingAgentKeyTap = null;
     this.joystickNeedsCenter = this.joystickDirection !== null;
     this.joystickDirection = null;
@@ -341,17 +351,29 @@ export class WorkLouderCodexLightingController {
     if (event.key.startsWith('ENC')) {
       this.emitEncoderPreview(event);
     } else {
-      this.emitKeyPreview(
-        previewPartForHidKey(event.key, this.settings.layout.separateMicrophoneKeys),
-        event.act,
-      );
+      this.emitKeyPreview(this.previewPartForEvent(event.key), event.act);
     }
     if (this.layoutPreviewActive) return;
     if (!this.inputActionsEnabled) {
       this.releaseHeldVoiceFromEvent(event);
       return;
     }
-    const agentMatch = /^AG0([0-5])$/.exec(event.key);
+    const creatorRole = this.settings.layout.taskKeys
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      : null;
+    if (creatorRole?.role === 'task') {
+      if (event.act === 1) this.handleAgentKeyPress(creatorRole.slot);
+      return;
+    }
+    if (creatorRole?.role === 'command') {
+      const merge = workLouderMergeForKey(
+        workLouderLayoutMerges(this.settings.layout),
+        creatorRole.physical,
+      );
+      this.handleCommandKeyInput(event, merge?.origin ?? creatorRole.physical);
+      return;
+    }
+    const agentMatch = /^AG(0[0-9]|1[0-2])$/.exec(event.key);
     if (agentMatch) {
       if (event.act === 1) this.handleAgentKeyPress(Number(agentMatch[1]));
       return;
@@ -363,9 +385,23 @@ export class WorkLouderCodexLightingController {
     if (/^ACT(?:0[6-9]|1[0-2])$/.test(event.key)) this.handleCommandKeyInput(event);
   }
 
+  private previewPartForEvent(key: string): WorkLouderCodexPreviewPart | null {
+    const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), key);
+    if (merge) return merge.origin as WorkLouderCodexPreviewPart;
+    if (this.settings.layout.taskKeys) {
+      const role = resolveWorkLouderHidRole(
+        key,
+        this.settings.layout.taskKeys,
+        this.device.deviceType,
+      );
+      if (role) return role.physical as WorkLouderCodexPreviewPart;
+    }
+    return previewPartForHidKey(key);
+  }
+
   private handleAgentKeyPress(slot: number): void {
     this.handleDeviceActivity();
-    if (!this.taskSlotsEnabled || slot < 0 || slot >= WORKLOUDER_CODEX_AGENT_SLOT_COUNT) return;
+    if (!this.taskSlotsEnabled || slot < 0 || slot >= this.agentSlots.length) return;
     const action = this.agentSlots[slot]?.action;
     if (!action) {
       this.dispatchRendererAction({ type: 'command', commandId: 'newTask' });
@@ -387,17 +423,29 @@ export class WorkLouderCodexLightingController {
     });
   }
 
-  private handleCommandKeyInput(event: WorkLouderCodexHidEvent): void {
-    const slot = this.commandSlotForKey(event.key);
+  private handleCommandKeyInput(
+    event: WorkLouderCodexHidEvent,
+    physical?: string,
+  ): void {
+    const slot = physical ?? this.commandSlotForKey(event.key);
     if (!slot) return;
-    const assignment = this.settings.layout.slots[slot];
-    if (isWorkLouderCodexMicrophoneKeycap(assignment.keycapId)) {
-      if (event.act === 1 || event.act === 0) {
-        this.voicePressed = event.act === 1;
-        this.dispatchRendererAction({
-          type: 'voice',
-          phase: event.act === 1 ? 'press' : 'release',
-        });
+    const assignment = isWorkLouderCreatorProgrammableKey(slot)
+      ? creatorCommandAssignment(this.settings.layout, slot)
+      : this.settings.layout.slots[slot as WorkLouderCodexCommandSlot];
+    const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), slot);
+    if (merge && (event.act === 0 || event.act === 1)) {
+      if (!this.claimMergeSwitch(merge.origin, event.key, event.act === 1)) return;
+    }
+    // Voice speaks through a printed MIC keycap (Codex) or a bound voice
+    // action (Creator's blank caps). A short click starts and stays recording.
+    if (isWorkLouderCodexVoiceAssignment(assignment)) {
+      if (event.act === 1) {
+        if (this.voicePressed) return;
+        this.voicePressed = true;
+        this.dispatchRendererAction({ type: 'voice', phase: 'press' });
+      } else if (event.act === 0 && this.voicePressed) {
+        this.voicePressed = false;
+        this.dispatchRendererAction({ type: 'voice', phase: 'release' });
       }
       return;
     }
@@ -407,11 +455,11 @@ export class WorkLouderCodexLightingController {
     if (action) this.executeAction(action, true);
   }
 
-  private commandSlotForKey(key: string): WorkLouderCodexCommandSlot | null {
-    if (!this.settings.layout.separateMicrophoneKeys && (key === 'ACT10' || key === 'ACT11')) {
-      return key === 'ACT10' ? 'ACT10_ACT11' : null;
-    }
-    return /^ACT(?:0[6-9]|1[0-2])$/.test(key) ? (key as WorkLouderCodexCommandSlot) : null;
+  private commandSlotForKey(key: string): string | null {
+    const merge = workLouderMergeForKey(workLouderLayoutMerges(this.settings.layout), key);
+    if (merge) return merge.origin;
+    if (isWorkLouderCreatorProgrammableKey(key)) return key;
+    return /^ACT(?:0[6-9]|1[0-2])$/.test(key) ? key : null;
   }
 
   private handleEncoderInput(event: WorkLouderCodexHidEvent): void {
@@ -564,22 +612,46 @@ export class WorkLouderCodexLightingController {
   }
 
   private releaseHeldVoiceFromEvent(event: WorkLouderCodexHidEvent): void {
-    if (event.act !== 0 || !/^ACT(?:0[6-9]|1[0-2])$/.test(event.key)) return;
-    const slot = this.commandSlotForKey(event.key);
+    if (event.act !== 0) return;
+    const creatorRole = this.settings.layout.taskKeys
+      ? resolveWorkLouderHidRole(event.key, this.settings.layout.taskKeys, this.device.deviceType)
+      : null;
+    const slot =
+      creatorRole?.role === 'command'
+        ? creatorRole.physical
+        : this.commandSlotForKey(event.key);
     if (!slot) return;
-    if (!isWorkLouderCodexMicrophoneKeycap(this.settings.layout.slots[slot].keycapId)) return;
+    const assignment = isWorkLouderCreatorProgrammableKey(slot)
+      ? creatorCommandAssignment(this.settings.layout, slot)
+      : this.settings.layout.slots[slot as WorkLouderCodexCommandSlot];
+    if (!isWorkLouderCodexVoiceAssignment(assignment)) return;
     this.releaseHeldVoice();
   }
 
   private releaseHeldHardwareGestures(): void {
     this.stopJoystickScroll();
     this.releaseHeldVoice();
+    this.mergeWinner.clear();
   }
 
   private releaseHeldVoice(): void {
     if (!this.voicePressed) return;
     this.voicePressed = false;
+    this.mergeWinner.clear();
     this.dispatchRendererAction({ type: 'voice', phase: 'release' });
+  }
+
+  /** First switch under a 2U cap wins; its release counts. The other switch is dropped. */
+  private claimMergeSwitch(origin: string, hidKey: string, down: boolean): boolean {
+    const winner = this.mergeWinner.get(origin);
+    if (down) {
+      if (winner) return false;
+      this.mergeWinner.set(origin, hidKey);
+      return true;
+    }
+    if (winner !== hidKey) return false;
+    this.mergeWinner.delete(origin);
+    return true;
   }
 
   private stopJoystickScroll(): void {
@@ -602,6 +674,9 @@ export class WorkLouderCodexLightingController {
     } else if (action.type === 'keycap') {
       const resolved = WORKLOUDER_CODEX_KEYCAP_ACTIONS[action.keycapId];
       if (resolved) this.executeAction(resolved, focusTask);
+    } else if (action.type === 'voice') {
+      // Voice is hold-to-talk: it is driven by key press/release events in
+      // handleCommandKeyInput, never by a one-shot action execution.
     } else {
       this.dispatchRendererAction(action);
     }
@@ -612,7 +687,8 @@ export class WorkLouderCodexLightingController {
     const titleById = new Map(
       this.taskCatalog.options.map((task) => [task.id, task.title] as const),
     );
-    this.agentSlots = Array.from({ length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT }, (_, slot) => {
+    const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
+    this.agentSlots = Array.from({ length: slotCount }, (_, slot) => {
       const action = actions[slot] ?? null;
       const sessionId = action?.type === 'task' ? action.sessionId : null;
       return {
@@ -622,22 +698,48 @@ export class WorkLouderCodexLightingController {
         action: cloneAction(action),
       };
     });
-    this.slotSessionIds = this.agentSlots.map((slot) => slot.sessionId ?? '');
+    const sessionIdsByTaskSlot = this.agentSlots.map((slot) => slot.sessionId ?? '');
+    const taskKeys = normalizeWorkLouderCreatorTaskKeys(this.settings.layout.taskKeys);
+    if (this.device.deviceType === 'codex-micro') {
+      this.slotSessionIds = WORKLOUDER_HID_AG_CODES.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT).map(
+        (physical) => {
+          if (!isWorkLouderCreatorProgrammableKey(physical)) return '';
+          const slot = taskKeys.indexOf(physical);
+          return slot >= 0 ? (sessionIdsByTaskSlot[slot] ?? '') : '';
+        },
+      );
+      return;
+    }
+    this.slotSessionIds = Array.from(
+      { length: WORKLOUDER_CODEX_AGENT_SLOT_COUNT },
+      (_, slot) => sessionIdsByTaskSlot[slot] ?? '',
+    );
   }
 
   private agentActionsForCurrentSource(): Array<WorkLouderCodexAction | null> {
+    const slotCount = this.settings.layout.taskKeys?.length ?? WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
     if (this.settings.agentSource === 'custom') {
-      return this.settings.customAgentKeys.map(cloneAction);
+      return Array.from({ length: slotCount }, (_, slot) => {
+        if (slot < this.settings.customAgentKeys.length) {
+          return cloneAction(this.settings.customAgentKeys[slot] ?? null);
+        }
+        const task = this.taskCatalog.options[slot];
+        return task ? { type: 'task', sessionId: task.id } : null;
+      });
     }
-    const tasks =
+    const primary =
       this.settings.agentSource === 'last-sent'
         ? this.taskCatalog.lastSent
         : this.settings.agentSource === 'priority'
           ? this.priorityTasks()
           : this.taskCatalog.sidebar;
-    return tasks
-      .slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT)
-      .map((task) => ({ type: 'task', sessionId: task.id }));
+    const used = new Set(primary.map((task) => task.id));
+    const filler = this.taskCatalog.options.filter((task) => !used.has(task.id));
+    const tasks = [...primary, ...filler];
+    return Array.from({ length: slotCount }, (_, slot) => {
+      const task = tasks[slot];
+      return task ? { type: 'task', sessionId: task.id } : null;
+    });
   }
 
   private priorityTasks(): WorkLouderCodexTaskOption[] {
@@ -645,7 +747,7 @@ export class WorkLouderCodexLightingController {
     const recentRank = new Map(
       this.taskCatalog.options.map((task, index) => [task.id, index] as const),
     );
-    const prioritized = this.lightingActivity()
+    const prioritized = this.latestActivity
       .filter((activity) => optionById.has(activity.sessionId))
       .toSorted((left, right) => {
         const scoreDiff = activityPriority(right) - activityPriority(left);
@@ -660,19 +762,20 @@ export class WorkLouderCodexLightingController {
     return [...prioritized, ...this.taskCatalog.sidebar.filter((task) => !included.has(task.id))];
   }
 
-  private lightingActivity(): WorkLouderCodexSessionActivity[] {
-    return foldOrcaWorkerActivityOntoLeads(this.latestActivity, this.workersByLead);
-  }
-
-  private async refreshWorkerSessions(refreshVersion: number): Promise<void> {
-    const leadIds = catalogLeadSessionIds(this.taskCatalog);
-    const workersByLead = await this.loadWorkerSessions(leadIds);
-    if (refreshVersion !== this.slotRefreshVersion) return;
-    this.workersByLead = workersByLead;
+  private lightingThreadCount(): number {
+    return WORKLOUDER_CODEX_AGENT_SLOT_COUNT;
   }
 
   private updateLightingFrame(wakeOnBaseFrameChange = false): WorkLouderCodexLightingFrame {
-    const baseFrame = createWorkLouderCodexLightingFrame(this.lightingActivity(), this.slotSessionIds);
+    const threadCount = this.lightingThreadCount();
+    const projected = createWorkLouderCodexLightingFrame(
+      this.latestActivity,
+      this.slotSessionIds,
+      threadCount,
+    );
+    const baseFrame = workLouderShouldMuteKeyZone(this.settings.layout.taskKeys)
+      ? muteWorkLouderCodexKeyZone(projected)
+      : projected;
     const baseFrameKey = JSON.stringify(baseFrame);
     const baseFrameChanged = baseFrameKey !== this.lastBaseFrameKey;
     this.lastBaseFrameKey = baseFrameKey;
@@ -683,12 +786,12 @@ export class WorkLouderCodexLightingController {
     );
     const overlay = this.windowRevealTimer
       ? applyWorkLouderCodexLightingBrightness(
-          createWorkLouderCodexWindowRevealFrame(),
+          createWorkLouderCodexWindowRevealFrame(threadCount),
           this.settings.lightingBrightness,
         )
       : null;
     const frame = this.lightingDimmed
-      ? createWorkLouderCodexOffFrame()
+      ? createWorkLouderCodexOffFrame(threadCount)
       : (overlay ?? brightnessAdjusted);
     const frameKey = JSON.stringify(frame);
     if (frameKey !== this.lastFrameKey) {
@@ -729,6 +832,7 @@ export class WorkLouderCodexLightingController {
     if (!this.settings.deviceEnabled && status !== 'disabled') return;
     if (status === this.connectionStatus) return;
     this.connectionStatus = status;
+    if (status !== 'connected') this.releaseHeldHardwareGestures();
     if (status === 'connected') {
       this.connectionReason = null;
       this.devicePresent = true;
@@ -737,15 +841,23 @@ export class WorkLouderCodexLightingController {
       }
     } else if (status === 'not-detected') {
       this.devicePresent = false;
+      // Drop live telemetry so the settings card does not keep a stale battery
+      // next to "Not detected". Keep firmware identity: occupancy keys off it,
+      // and wiping it here would disable HID on the next accessories sync.
       this.device = {
         ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        deviceType: this.device.deviceType,
+        isUsbConnection: this.device.isUsbConnection,
         inputMonitoringPermission: this.device.inputMonitoringPermission,
       };
     } else if (status !== 'disabled') {
-      // Keep the last permission answer; everything else is stale once the
-      // board is gone and would sit next to "Not detected" as if it were live.
+      // HID contention reports as `error` / `device-in-use`. Occupancy keys
+      // off firmware identity, so wiping it here would disable the host and
+      // restart the bind loop. Drop live telemetry only.
       this.device = {
         ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
+        deviceType: this.device.deviceType,
+        isUsbConnection: this.device.isUsbConnection,
         inputMonitoringPermission: this.device.inputMonitoringPermission,
       };
     }
@@ -762,8 +874,13 @@ export class WorkLouderCodexLightingController {
   }
 
   private handleDeviceState(device: WorkLouderCodexDeviceState): void {
+    const previousType = this.device.deviceType;
     this.device = { ...device };
     if (device.deviceType) this.devicePresent = true;
+    if (previousType !== this.device.deviceType) {
+      this.publishAgentSlots();
+      this.updateLightingFrame();
+    }
     this.emitState();
   }
 
@@ -774,6 +891,7 @@ export class WorkLouderCodexLightingController {
       isUsbConnection: boolean;
     },
   ): void {
+    const previousType = this.device.deviceType;
     this.devicePresent = present;
     if (!present) {
       this.device = {
@@ -786,6 +904,10 @@ export class WorkLouderCodexLightingController {
         deviceType: identity.deviceType,
         isUsbConnection: identity.isUsbConnection,
       };
+    }
+    if (previousType !== this.device.deviceType) {
+      this.publishAgentSlots();
+      this.updateLightingFrame();
     }
     this.emitState();
   }
@@ -855,13 +977,9 @@ export class WorkLouderCodexLightingController {
   }
 }
 
-function previewPartForHidKey(
-  key: string,
-  separateMicrophoneKeys: boolean,
-): WorkLouderCodexPreviewPart | null {
+function previewPartForHidKey(key: string): WorkLouderCodexPreviewPart | null {
   if (/^AG0[0-5]$/.test(key)) return key as WorkLouderCodexPreviewPart;
   if (key.startsWith('ENC')) return 'encoder';
-  if (!separateMicrophoneKeys && (key === 'ACT10' || key === 'ACT11')) return 'ACT10_ACT11';
   if (/^ACT(?:0[6-9]|1[0-2])$/.test(key)) return key as WorkLouderCodexPreviewPart;
   return null;
 }
@@ -873,16 +991,6 @@ function emptyAgentSlots(): WorkLouderCodexAgentSlotState[] {
     title: null,
     action: null,
   }));
-}
-
-function catalogLeadSessionIds(catalog: WorkLouderCodexTaskCatalog): string[] {
-  return [
-    ...new Set(
-      [...catalog.options, ...catalog.sidebar, ...catalog.lastSent]
-        .map((task) => task.id)
-        .filter(Boolean),
-    ),
-  ];
 }
 
 function normalizeTaskCatalog(
@@ -897,8 +1005,8 @@ function normalizeTaskCatalog(
   }
   const options = value.map((id) => ({ id, title: id, pinned: false }));
   return {
-    sidebar: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT),
-    lastSent: options.slice(0, WORKLOUDER_CODEX_AGENT_SLOT_COUNT),
+    sidebar: options.slice(0, WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.length),
+    lastSent: options.slice(0, WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.length),
     options,
   };
 }
@@ -926,6 +1034,8 @@ function actionTitle(action: WorkLouderCodexAction | null): string | null {
       return action.text;
     case 'external-url':
       return action.url;
+    case 'voice':
+      return null;
     case 'task':
       return action.sessionId;
   }

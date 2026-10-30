@@ -59,6 +59,10 @@ export const DEVICE_LINK_INVOKE = {
 
 /** main → renderer push */
 export const DEVICE_LINK_PUSH = {
+  /** Local peer recovery invalidates content readiness; payload: { deviceId }. Not a wire push. */
+  PEER_LINK_RESET: 'device-link:peer-link-reset',
+  /** Local recovery succeeded; payload: { deviceId }. Not a wire push. */
+  PEER_LINK_REOPENED: 'device-link:peer-link-reopened',
   /** 同账号某设备 presence 变化(上线/下线/开关/busy),payload: PresenceSnapshot */
   PRESENCE_CHANGED: 'device-link:presence-changed',
   /** 本机 relay 连接状态变化,payload: { status: 'stopped'|'connecting'|'online' } */
@@ -116,6 +120,7 @@ export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
 /** 连接问题分类(同 @cindy/device-link 的 DeviceLinkConnectionIssueKind) */
 export type DeviceLinkConnectionIssueKind =
   | 'auth-failed'
+  | 'device-removed'
   | 'replaced'
   | 'too-many-connections'
   | 'version-mismatch'

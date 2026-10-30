@@ -80,10 +80,9 @@ import {
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
-import {
-  decodeCatalogPin,
-  type OneshotRoute,
-} from '../utility-model/textOneshotPinOptions.js';
+import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
+import { assertLibraryEditImageSource } from './imageChannelRegistry.js';
+import type { OneshotRoute } from '../utility-model/textOneshotPinOptions.js';
 import type { AgentKind } from '@cindy/model-providers';
 
 /**
@@ -134,12 +133,6 @@ export interface CindyVideoCapabilities {
 /** 某个图像型号的 provider 实际编辑能力，用于通用 1–4 图契约的二次校验。 */
 export interface CindyImageCapabilities {
   maxEditImages?: number;
-}
-
-export interface CindyMediaOverrideSelection {
-  modelId: string;
-  providerId: string;
-  label?: string;
 }
 
 export interface CindySlotDeps {
@@ -201,26 +194,21 @@ export interface CindySlotDeps {
    */
   videoCapabilities?(model: string, providerId?: string): CindyVideoCapabilities | null;
   /**
-   * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
+   * 指纹或 library 相对键 → 磁盘路径,且仅当该媒体在此意识名下;
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
    * ownerScopeKey 是任务受理时捕获的稳定作用域；宿主须锁定同一 DB，并在
    * 每个查询 await 边界复核，禁止通过动态 defaultDb 跨到新账号。
+   * editImage 消费口:正本只认 assets/<2>/<hash>/blob.<ext>;sidecar 禁止当像素。
    */
   resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
   /**
-   * 意识专属后端覆盖(解析表第②层,用户在意识详情页钉的);无覆盖返回
-   * null。capability 为能力键(image.generate / video.edit …);返回值仍过
-   * 白名单校验(型号可能已随主机演进下架)。
+   * 用户在插件详情「模型与任务」里显式选的模型(与插件新建任务共用同一份
+   * 配置,见 pluginTaskPrefsStore);null = 未选 = 跟随默认。只作用于快问快答;
+   * 图像/视频/向量没有逐插件覆盖,始终走目录默认与插件请求里的档位/型号。
    */
-  getOverride(ghostId: string, capability: string): string | null;
-  /**
-   * Provider-aware 媒体覆盖。新版 Host 偏好按 providerId + modelId 保存；存在时
-   * 必须贯穿能力校验与最终派发，不能降回裸 modelId 后走 first-wins。
-   */
-  getMediaOverride?(
+  getOneshotModelSelection?(
     ghostId: string,
-    capability: string,
-  ): CindyMediaOverrideSelection | null;
+  ): { providerId?: string; agentKind: AgentKind; model: string } | null;
   /**
    * 当前图像能力配置——真身是 providers.json 运行时目录(与会话模型列表
    * 同一获取来源),每单现读跟随热更。models = 白名单与显示名;defaults =
@@ -315,8 +303,8 @@ export interface CindySlotDeps {
     maxTokens?: number;
     timeoutMs: number;
     /**
-     * 本次快问快答的路由(用户钉档或身份卡声明偏好解析出的终态,见
-     * utility-model/textOneshotPinOptions);缺省 = 跟随系统默认轻量链。
+     * 本次快问快答的路由(用户在详情页选的模型或身份卡声明偏好解析出的终态,
+     * 见 utility-model/textOneshotPinOptions);缺省 = 跟随系统辅助模型链。
      */
     route?: OneshotRoute;
   }): Promise<
@@ -849,7 +837,6 @@ export class GhostCindySlot {
       };
     }
     const defaults = cfg.defaults;
-    const whitelist = new Set(cfg.models.map((m) => m.id));
     let model = defaults.standard;
     let providerId: string | undefined;
     let providerModelLabel: string | undefined;
@@ -858,23 +845,6 @@ export class GhostCindySlot {
         return { ok: false, message: `未知档位(可用:${GHOST_MODEL_TIERS.join(' / ')})` };
       }
       model = defaults[p.tier as GhostModelTier];
-    }
-    const capability = `${info.category}.${info.action}`;
-    const mediaOverride = this.deps.getMediaOverride?.(ghostId, capability) ?? null;
-    if (mediaOverride) {
-      model = mediaOverride.modelId;
-      providerId = mediaOverride.providerId;
-      providerModelLabel = mediaOverride.label;
-    } else {
-      const override = this.deps.getOverride(ghostId, capability);
-      if (override !== null) {
-        if (whitelist.has(override)) {
-          model = override;
-        } else {
-          // 钉的型号已随白名单演进下架:落回上面的档位/默认,不让老配置卡死能力。
-          this.deps.log?.warn('ghost cindy override no longer whitelisted, ignored', { ghostId, override });
-        }
-      }
     }
     if (p.model !== undefined) {
       if (typeof p.model !== 'string') {
@@ -918,7 +888,7 @@ export class GhostCindySlot {
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的
     // 交集,单个型号支持的时长/帧率差异很大(seedance 2.0 是 4/6/8/10 秒,
-    // seedance 2.5 是 4–30 秒且没有 1080p,happyhorse 只有 5 秒)。不支持即
+    // seedance 2.5 是 4–30 秒,happyhorse 只有 5 秒)。不支持即
     // 明拒并列出该型号的可用值,不做最近似降级——静默改成别的档位会让意识
     // 以为自己的参数生效了。
     if (info.category === 'video' && presentVideoKeys.length > 0) {
@@ -947,7 +917,15 @@ export class GhostCindySlot {
         return { ok: false, message: `源图过多(上限 ${maxSources} 张)` };
       }
       for (const h of p.hashes) {
-        if (typeof h !== 'string' || !HASH_RE.test(h)) {
+        if (typeof h !== 'string') {
+          return { ok: false, message: '源图指纹格式不合法' };
+        }
+        const blobKey = h.startsWith('library:') ? h.slice('library:'.length) : h;
+        if (isLibrarySidecarRelPath(blobKey) || (blobKey.includes('/') && !isLibraryBlobRelPath(blobKey))) {
+          return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
+        }
+        if (isLibraryBlobRelPath(blobKey)) continue;
+        if (!HASH_RE.test(h)) {
           return { ok: false, message: '源图指纹格式不合法' };
         }
       }
@@ -1028,10 +1006,24 @@ export class GhostCindySlot {
       // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
       for (const hash of hashes) {
-        const abs = await this.deps.resolveOwnedMedia(ghostId, hash, ownerScopeKey);
+        const lookup = hash.startsWith('library:') ? hash.slice('library:'.length) : hash;
+        if (isLibrarySidecarRelPath(lookup)) {
+          return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
+        }
+        const abs = await this.deps.resolveOwnedMedia(ghostId, lookup, ownerScopeKey);
         assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
+        }
+        if (isLibraryBlobRelPath(lookup)) {
+          try {
+            assertLibraryEditImageSource(abs);
+          } catch (err) {
+            return {
+              ok: false,
+              message: err instanceof Error ? err.message : '源图必须是 library 正本 blob,sidecar 禁止当像素',
+            };
+          }
         }
         imagePaths.push(abs);
       }
@@ -1506,8 +1498,8 @@ export class GhostCindySlot {
   /**
    * oneshot_text:快问快答(2026-07-31 开闸)。轻量任务模型链直答一次,
    * 文字随本次 invoke 递回;不产媒体、不进任何会话。选型不自由:只接受
-   * 用户钉档或身份卡声明的偏好(2026-08-05 起,解析权在主机),都没有才走
-   * 系统默认链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
+   * 用户在详情页选的模型或身份卡声明的偏好(解析权在主机),都没有才走
+   * 系统辅助模型链。失败面全部结构化(errorCode 稳定契约,见 shared 类型注释)。
    * 在途并发闸与媒体代办共用同一计数与用户上限——它们花的都是用户的额度。
    */
   private async handleOneshotText(
@@ -1592,27 +1584,14 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
-      // 选型优先级:用户在详情页的钉档 > 身份卡声明的偏好模型 > 系统默认链。
-      // 钉档两形态:轻量档位键(随系统链演进的逻辑档位)与目录钉(cat: 编码的
-      // 供应商×agent×模型);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
-      const override = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
+      // 选型优先级:用户在详情页选的模型 > 身份卡声明的偏好模型 > 系统辅助模型链。
+      // 用户选的是一组完整的 供应商×agent×模型,钉死不回落(失败如实返回,不悄悄
+      // 换链路烧钱);声明解析不到(目录没有/已停用/不可路由)按未声明处理。
+      // 每单现读,不缓存:系统辅助模型改动后,跟随默认的插件下一单即跟随。
+      const selected = this.deps.getOneshotModelSelection?.(ghostId) ?? null;
       let route: OneshotRoute | undefined;
-      if (override !== undefined) {
-        const catalogPin = decodeCatalogPin(override);
-        if (catalogPin) {
-          route = { kind: 'catalog', ...catalogPin };
-        } else if (override.startsWith('cat:')) {
-          // 带目录钉前缀但解码失败(存储损坏/未来格式):目录钉的语义是「钉死
-          // 不回落」,静默落到系统默认链会悄悄烧错链路的钱——按无可选通道
-          // 收单,引导用户到详情页重新钉档。
-          return {
-            ok: false,
-            message: '快问快答的钉档值无法解析(可能已损坏或来自新版本),请到插件详情页重新钉档',
-            errorCode: 'NO_CANDIDATE',
-          };
-        } else {
-          route = { kind: 'utility-profile', profileId: override };
-        }
+      if (selected) {
+        route = { kind: 'catalog', ...selected };
       } else {
         const declaredModel = ghost.manifest.cindy?.oneshotModel;
         const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
@@ -1856,8 +1835,6 @@ export class GhostCindySlot {
       }
       model = cfg.defaults[p.tier as GhostModelTier];
     }
-    const override = this.deps.getOverride(ghostId, 'embed.text');
-    if (override && whitelist.has(override)) model = override;
     if (p.model !== undefined) {
       if (typeof p.model !== 'string' || !whitelist.has(p.model)) {
         return {

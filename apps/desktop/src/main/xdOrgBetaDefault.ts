@@ -12,15 +12,11 @@
  * 真正的发布通道切换仍留给下次 fetchManifest / 用户自行重启,这里不 relaunch。
  */
 
-export const XD_ORG_SLUG = 'xd';
+import { XD_ORG_SLUG, isXdOrgUser, type XdOrgIdentity } from '../shared/xdOrg.js';
 
-const XD_ORG_NAME_FALLBACKS = new Set(['xd', '心动网络']);
+export { XD_ORG_SLUG, isXdOrgUser };
 
-export interface XdOrgBetaUser {
-  membershipKind: 'personal' | 'org';
-  orgSlug: string | null;
-  orgName: string | null;
-}
+export type XdOrgBetaUser = XdOrgIdentity;
 
 export interface XdOrgBetaChannelState {
   enableBeta: boolean;
@@ -50,14 +46,6 @@ export type XdOrgBetaDefaultOutcome =
       reason:
         'not-xd-org' | 'already-enabled' | 'user-customized' | 'beta-unavailable' | 'stale-auth';
     };
-
-/** 当前登录用户是否是 xd 组织。orgSlug 优先,旧 token 才回退显示名。 */
-export function isXdOrgUser(user: XdOrgBetaUser | null | undefined): boolean {
-  if (!user || user.membershipKind !== 'org') return false;
-  if (user.orgSlug !== null) return user.orgSlug === XD_ORG_SLUG;
-  const name = user.orgName?.trim().toLocaleLowerCase();
-  return name !== undefined && XD_ORG_NAME_FALLBACKS.has(name);
-}
 
 /** 先按 xd 身份判定，只有非 xd 才允许 feature flag 打开设备默认值。 */
 export function shouldAttemptOrgBetaDefault(input: {

@@ -192,19 +192,13 @@ function basenameFromPathLike(value: string): string {
   return slash >= 0 ? value.slice(slash + 1) : value;
 }
 
-function normalizeKnownFileHref(href: string): string {
-  const strippedScheme = href.startsWith('file://') ? href.slice(7) : href;
-  const decoded = safeDecodeURIComponent(stripQueryAndHash(strippedScheme.trim()));
-  return basenameFromPathLike(decoded);
-}
-
 /**
  * Resolve a model-authored markdown link against files the user attached in
  * this chat session. LLMs often cite an uploaded document as
  * `[name.docx](name.docx)` because the prompt exposes the original filename,
  * while the real file lives outside the session working directory. In that
  * case, resolve by unique attachment basename before falling back to cwd-based
- * path resolution.
+ * path resolution. Explicit absolute/home paths keep their own identity.
  *
  * Matching is case-insensitive. Windows / macOS-default filesystems are
  * case-insensitive, and LLMs frequently lowercase the basename when authoring
@@ -221,12 +215,15 @@ export function resolveKnownLocalFileHref(
   files: readonly KnownLocalFileRef[] | undefined,
 ): string | null {
   if (!href || !files || files.length === 0) return null;
-  const wanted = normalizeKnownFileHref(href).toLowerCase();
+  const decoded = safeDecodeURIComponent(stripQueryAndHash(href.trim()));
+  if (/^(?:file:\/\/|[\\/]|[a-z]:[\\/]|~[\\/])/i.test(decoded)) return null;
+  const wanted = basenameFromPathLike(decoded).toLowerCase();
   if (!wanted) return null;
 
   const matches = files.filter((file) => {
-    const name = normalizeKnownFileHref(file.name).toLowerCase();
-    const pathName = normalizeKnownFileHref(file.path).toLowerCase();
+    // Attachment metadata is literal filesystem text, not URL syntax.
+    const name = basenameFromPathLike(file.name).toLowerCase();
+    const pathName = basenameFromPathLike(file.path).toLowerCase();
     return wanted === name || wanted === pathName;
   });
 
@@ -326,16 +323,19 @@ export type SmartResolveResult =
   | { status: 'multiple'; candidates: string[] }
   | { status: 'none'; fallbackAbsPath: string };
 
+function toMainLookupHref(href: string, workingDir: string): string {
+  if (!href.startsWith('file://')) return href;
+  // File URL conversion yields literal text; main still decodes its href input.
+  return resolveLocalPath(href, workingDir).replace(/%/g, '%25');
+}
+
 export async function resolveLocalPathSmart(
   href: string,
   workingDir: string,
+  options: { refresh?: boolean } = {},
 ): Promise<SmartResolveResult> {
   const fallback = resolveLocalPath(href, workingDir);
-  // Main-process resolver expects a native absolute/relative path, not a
-  // file:// URL. Keep the public API accepting file:// because markdown links
-  // frequently use that form; resolveLocalPath already handles the cross-
-  // platform decoding rules.
-  const lookupHref = href.startsWith('file://') ? fallback : href;
+  const lookupHref = toMainLookupHref(href, workingDir);
   const api = (typeof window !== 'undefined' ? window.electronAPI : undefined) as
     | { resolvePath?: typeof window.electronAPI.resolvePath }
     | undefined;
@@ -343,7 +343,7 @@ export async function resolveLocalPathSmart(
     return { status: 'none', fallbackAbsPath: fallback };
   }
   try {
-    const r = await api.resolvePath({ href: lookupHref, workingDir });
+    const r = await api.resolvePath({ href: lookupHref, workingDir, ...(options.refresh ? { refresh: true } : {}) });
     if (r.status === 'unique' && r.candidates[0]) {
       return { status: 'unique', absPath: r.candidates[0], ...(r.kind ? { kind: r.kind } : {}) };
     }
@@ -464,11 +464,10 @@ async function runBatchForDir(
     return;
   }
 
-  // Main resolver wants a native path, not a file:// URL — same rule as
-  // `resolveLocalPathSmart`. Map each href to the lookup form it sends.
+  // Use the same URL decoding boundary for direct and batched lookups.
   const lookupOf = new Map<string, string>();
   for (const href of hrefs) {
-    lookupOf.set(href, href.startsWith('file://') ? resolveLocalPath(href, workingDir) : href);
+    lookupOf.set(href, toMainLookupHref(href, workingDir));
   }
   const lookups = [...new Set(lookupOf.values())];
 
@@ -587,6 +586,35 @@ export function toLocalFileUrl(absPath: string, revision?: string): string {
 }
 
 /**
+ * Normalize the legacy path-shaped `xdt-file:///...` URL used by older
+ * messages into the query-shaped URL understood by the main-process handler.
+ *
+ * The custom protocol deliberately keeps the absolute path in `?path=` so
+ * Chromium cannot reinterpret a Windows drive letter as the URL host. Keep
+ * canonical `xdt-file://local/?path=...` URLs byte-for-byte unchanged; this
+ * helper is only a compatibility bridge for persisted/history messages.
+ */
+export function normalizeXdtFileUrlForRenderer(url: string): string {
+  if (!url.startsWith('xdt-file:///')) return url;
+
+  const queryOrHash = url.search(/[?#]/);
+  const rawPath = url.slice('xdt-file://'.length, queryOrHash >= 0 ? queryOrHash : undefined);
+  let absPath = safeDecodeURIComponent(rawPath);
+  // URL syntax adds a leading slash before a Windows drive letter.
+  if (/^\/[A-Za-z]:[\\/]/.test(absPath)) absPath = absPath.slice(1);
+  if (!(absPath.startsWith('/') || WIN_ABS_RE.test(absPath))) return url;
+
+  // Preserve the optional cache-busting revision used by renderer-created
+  // URLs, while ignoring unrelated legacy query parameters.
+  let revision: string | undefined;
+  if (queryOrHash >= 0 && url[queryOrHash] === '?') {
+    const match = /(?:^|&)v=([^&#]*)/.exec(url.slice(queryOrHash + 1));
+    if (match) revision = safeDecodeURIComponent(match[1]);
+  }
+  return toLocalFileUrl(absPath, revision);
+}
+
+/**
  * Normalize an original Markdown image destination for renderer loading.
  *
  * The caller preserves the original mdast destination before react-markdown
@@ -614,12 +642,13 @@ export function normalizeMarkdownImageSrc(
     src.startsWith('http://') ||
     src.startsWith('https://') ||
     src.startsWith('xdt-image://') ||
+    src.startsWith('xdt-video://') ||
     src.startsWith('cindy-media://') ||
-    src.startsWith('xdt-file://') ||
     src.startsWith('cindy-remote-media://')
   ) {
     return src;
   }
+  if (src.startsWith('xdt-file://')) return normalizeXdtFileUrlForRenderer(src);
 
   let localPath = src;
   if (localPath.startsWith('file://')) {

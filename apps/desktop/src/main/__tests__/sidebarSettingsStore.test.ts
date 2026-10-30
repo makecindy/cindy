@@ -4,6 +4,8 @@ import path from 'node:path';
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { buildManualPinnedReorder } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
+
 type TestMode = 'signed-out' | 'local' | 'cloud';
 
 const harness = vi.hoisted(() => ({
@@ -14,6 +16,7 @@ const harness = vi.hoisted(() => ({
     generation: 1,
   },
   boundaryPending: false,
+  navigated: false,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
   send: vi.fn(),
@@ -87,6 +90,8 @@ vi.mock('../logger.js', () => ({
 
 vi.mock('../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: (...args: unknown[]) => harness.assertTrusted(...args),
+  isTrustedAppRendererWindow: (w: { appContent?: boolean; isDestroyed: () => boolean }) =>
+    w.appContent === true && !w.isDestroyed() && !harness.navigated,
 }));
 
 vi.mock('../windowFocusClassifier.js', () => ({
@@ -172,6 +177,7 @@ describe('sidebarSettingsStore', () => {
     harness.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-sidebar-owner-state-'));
     harness.session = { mode: 'cloud', dataOwnerId: 'owner-a', generation: 1 };
     harness.boundaryPending = false;
+    harness.navigated = false;
     harness.handlers.clear();
     harness.listeners.clear();
     harness.send.mockReset();
@@ -196,7 +202,41 @@ describe('sidebarSettingsStore', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(harness.root, { recursive: true, force: true });
+  });
+
+  it('restores a local project through the host entry with platform identity and owner fencing', async () => {
+    const { restoreLocalProjectVisibility } = await import('../sidebarSettingsStore');
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    const owner = request({});
+    expect(await restoreLocalProjectVisibility('c:/WORKSPACE/alpha', owner)).toBe(true);
+    expect(loadSnapshot().hiddenProjectKeys).toEqual([]);
+    expect(harness.send).toHaveBeenLastCalledWith(
+      'sidebar-settings:hidden-project-keys-changed',
+      [],
+      owner,
+    );
+    expect(await restoreLocalProjectVisibility('C:/workspace/Alpha', owner)).toBe(false);
+    setSession('cloud', 'owner-b');
+    await expect(restoreLocalProjectVisibility('C:/workspace/Alpha', owner)).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+  });
+
+  it('does not send project paths after an app window navigates away', async () => {
+    const { restoreLocalProjectVisibility } = await import('../sidebarSettingsStore');
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    expect(harness.send).toHaveBeenCalled();
+    harness.send.mockClear();
+    harness.sendSecond.mockClear();
+    harness.navigated = true;
+    await restoreLocalProjectVisibility('C:/workspace/Alpha', request({}));
+    await hiddenHandler(request({ projectKey: 'C:/workspace/Alpha', hidden: true }));
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
+    expect(harness.untrustedSend).not.toHaveBeenCalled();
+    expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
   it('isolates pinned and hidden state by owner', async () => {
@@ -656,9 +696,7 @@ describe('sidebarSettingsStore', () => {
       'utf-8',
     );
 
-    const writing = mainViewHiddenHandler(
-      request({ ghostId: 'xd-sites', hidden: true }),
-    );
+    const writing = mainViewHiddenHandler(request({ ghostId: 'xd-sites', hidden: true }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     setSession('cloud', 'owner-a');
     fs.unlinkSync(`${file}.lock`);
@@ -678,6 +716,30 @@ describe('sidebarSettingsStore', () => {
     ).resolves.toEqual(['project:b', 'project:a']);
 
     expect(loadSnapshot().pinnedOrder).toEqual(['project:b', 'project:a']);
+  });
+
+  it('removes every legacy Windows project-pin casing variant in one mutation', async () => {
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: [
+            'project:local:D:/École/Project-A',
+            'session-a',
+            'project:local:d:/école/project-a',
+          ],
+        },
+      }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: { kind: 'remove', entryId: 'project:local:D:/ÉCOLE/PROJECT-A' },
+        }),
+      ),
+    ).resolves.toEqual(['session-a']);
+    expect(loadSnapshot().pinnedOrder).toEqual(['session-a']);
   });
 
   it('does not let a delayed legacy migration overwrite newer pinned state', async () => {
@@ -801,6 +863,71 @@ describe('sidebarSettingsStore', () => {
     });
   });
 
+  // #6345, unit: production drag builder -> registered IPC -> durable owner file.
+  // Existing rebase tests rank every visible pin first; remotely observed pins
+  // can have pinnedAt without a rank on the displaying computer.
+  it.each([
+    {
+      name: 'moves a ranked pin below the first unranked pin',
+      ranked: ['ranked-a', 'ranked-b'],
+      desired: ['ranked-a', 'unranked-a', 'ranked-b', 'unranked-b'],
+    },
+    {
+      name: 'moves a later unranked pin above the first unranked pin',
+      ranked: ['ranked-a', 'ranked-b'],
+      desired: ['ranked-a', 'ranked-b', 'unranked-b', 'unranked-a'],
+    },
+    {
+      name: 'persists a first drag with no previously ranked pins',
+      ranked: [],
+      desired: ['unranked-b', 'ranked-a', 'ranked-b', 'unranked-a'],
+    },
+  ])('$name', async ({ ranked, desired }) => {
+    const active = ['ranked-a', 'ranked-b', 'unranked-a', 'unranked-b'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(ranked, active, desired);
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(desired);
+    expect(loadSnapshot().pinnedOrder).toEqual(desired);
+    expect(JSON.parse(fs.readFileSync(ownerFile(), 'utf-8')).pinnedOrder).toEqual(desired);
+  });
+
+  it('ranks observed pins while preserving hidden slots and concurrent pin changes', async () => {
+    const ranked = ['ranked-pin', 'hidden-pin'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(
+      ranked,
+      ['ranked-pin', 'hidden-pin', 'observed-a', 'observed-b'],
+      ['observed-b', 'observed-a', 'ranked-pin'],
+    );
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'concurrent-pin' } }));
+    await pinnedHandler(request({ mutation: { kind: 'remove', entryId: 'ranked-pin' } }));
+
+    const expected = ['concurrent-pin', 'observed-b', 'hidden-pin', 'observed-a'];
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(expected);
+    expect(loadSnapshot().pinnedOrder).toEqual(expected);
+  });
+
+  it('preserves ranked pins outside the currently loaded status catalogue', async () => {
+    const ranked = ['ranked-a', 'not-loaded', 'ranked-b'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: ranked } }));
+    const drag = buildManualPinnedReorder(
+      ranked,
+      ['ranked-a', 'ranked-b', 'observed-pin'],
+      ['ranked-b', 'observed-pin', 'ranked-a'],
+    );
+    const expected = ['ranked-b', 'not-loaded', 'observed-pin', 'ranked-a'];
+
+    await expect(
+      pinnedHandler(request({ mutation: { kind: 'reorder', ...drag } })),
+    ).resolves.toEqual(expected);
+    expect(loadSnapshot().pinnedOrder).toEqual(expected);
+  });
+
   it('rebases a stale drag without losing a pin from another window', async () => {
     await pinnedHandler(
       request({ mutation: { kind: 'migrate-legacy', order: ['session-a', 'session-b'] } }),
@@ -818,6 +945,73 @@ describe('sidebarSettingsStore', () => {
         }),
       ),
     ).resolves.toEqual(['session-c', 'session-b', 'session-a']);
+  });
+
+  it('rebases legacy Windows project variants by identity after a concurrent promote', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    const baseOrder = [storedProject, duplicateVariant, 'session-a'];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: baseOrder } }));
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-c' } }));
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder,
+            order: ['session-a', duplicateVariant, storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-c', 'session-a', storedProject]);
+  });
+
+  it('keeps a concurrent pin in its deduplicated durable slot during a legacy Windows rebase', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: [storedProject, duplicateVariant, 'session-c', 'session-a'],
+        },
+      }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder: [storedProject, duplicateVariant, 'session-a'],
+            order: ['session-a', duplicateVariant, storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-a', 'session-c', storedProject]);
+  });
+
+  it('does not let a stale reorder resurrect a concurrently removed Windows project identity', async () => {
+    const storedProject = 'project:local:D:/École/Project-A';
+    const duplicateVariant = 'project:local:d:/école/project-a';
+    const baseOrder = [storedProject, 'session-a', duplicateVariant];
+    await pinnedHandler(request({ mutation: { kind: 'migrate-legacy', order: baseOrder } }));
+    await pinnedHandler(
+      request({ mutation: { kind: 'remove', entryId: 'project:local:D:/ÉCOLE/PROJECT-A' } }),
+    );
+
+    await expect(
+      pinnedHandler(
+        request({
+          mutation: {
+            kind: 'reorder',
+            baseOrder,
+            order: [duplicateVariant, 'session-a', storedProject],
+          },
+        }),
+      ),
+    ).resolves.toEqual(['session-a']);
   });
 
   it('treats repeated hidden intents as no-ops without broadcasting', async () => {

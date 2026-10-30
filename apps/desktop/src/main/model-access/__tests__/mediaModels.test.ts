@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const serverApiFetchMock = vi.hoisted(() => vi.fn());
 const readModelDisableOverridesMock = vi.hoisted(() => vi.fn());
 const listProviderMediaModelsMock = vi.hoisted(() => vi.fn());
+const isCatalogMediaModelVisibleMock = vi.hoisted(() =>
+  vi.fn((_providerId: string, _modelId: string, _defaultEnabled?: boolean) => true),
+);
 
 vi.mock('../../serverApiClient.js', () => ({
   serverApiFetch: serverApiFetchMock,
@@ -24,6 +27,9 @@ vi.mock('../../maker-host/model-disable-store.js', () => ({
 }));
 vi.mock('../../cindy-media/providerMediaRuntime.js', () => ({
   listProviderMediaModels: listProviderMediaModelsMock,
+}));
+vi.mock('../../cindy-brain/mediaDisplayVisibility.js', () => ({
+  isCatalogMediaModelVisible: isCatalogMediaModelVisibleMock,
 }));
 
 import {
@@ -88,6 +94,16 @@ describe('listAvailableMediaModels', () => {
     serverApiFetchMock.mockReset().mockResolvedValue(payload);
     readModelDisableOverridesMock.mockReset().mockReturnValue({});
     listProviderMediaModelsMock.mockReset().mockReturnValue([]);
+    isCatalogMediaModelVisibleMock.mockReset().mockReturnValue(true);
+  });
+
+  // Unit contract: listAvailableMediaModels preserves the parsed summary and provider discount.
+  // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
+  it('preserves the optional summary through media parsing and provider projection', async () => {
+    const displayPricing = { items: [{ label: 'Output', price: 0.3, unit: 'image', quantity: 1 }],
+      summary: { input: [{ price: 0.02, unit: 'image', quantity: 1, component: 'image' }], output: [{ price: 0.3, unit: 'image', quantity: 1, component: 'image' }] } };
+    serverApiFetchMock.mockResolvedValue({ ...payload, models: [{ ...payload.models[0], displayPricing, costDiscount: 0.2 }] });
+    await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
   });
 
   it('不带操作筛选时按 Gateway mode 返回图片/视频模型', async () => {
@@ -149,6 +165,16 @@ describe('listAvailableMediaModels', () => {
     );
   });
 
+  it('Gateway 图像型号尊重设置页显示开关', async () => {
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, modelId: string, _defaultEnabled?: boolean) =>
+        modelId !== 'image-without-guide',
+    );
+    await expect(listAvailableMediaModels('image.generate')).resolves.toMatchObject([
+      { id: 'image-with-guide' },
+    ]);
+  });
+
   it('叠加客户端现有 XD provider/model 停用准入', async () => {
     readModelDisableOverridesMock.mockReturnValueOnce({
       disabledModels: { 'xd:image-without-guide': true },
@@ -179,7 +205,7 @@ describe('listAvailableMediaModels', () => {
     ]);
     expect(serverApiFetchMock).toHaveBeenCalledWith(
       '/api/model-access/models?schemaVersion=5',
-      expect.any(Object),
+      expect.objectContaining({ headers: { 'X-Cindy-Model-Capabilities': 'display_pricing' } }),
     );
   });
 
@@ -380,6 +406,13 @@ describe('listAvailableMediaModels', () => {
     await expect(
       listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
     ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    resetExecutableMediaModelCache();
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, id: string, _defaultEnabled?: boolean) => id !== modelId,
+    );
+    await expect(
+      listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
+    ).resolves.toMatchObject({ models: [] });
     expect(
       isMediaModelExecutableForGuide(modelId, 'openai-images-v1', 'image.generate'),
     ).toBe(true);

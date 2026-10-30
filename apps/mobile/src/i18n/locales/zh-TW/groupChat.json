@@ -1,0 +1,395 @@
+{
+  "title": "群聊",
+  "memberSeparator": "、",
+  "memberCount_one": "{{count}} 位成員",
+  "memberCount_other": "{{count}} 位成員",
+  "organizer": "負責人",
+  "waitingConfirm": "{{name}}在等你確認",
+  "loadFailedTitle": "無法載入這個群聊",
+  "loadFailedDescription": "暫時讀不到電腦上的這個群聊，可以重試，或返回夥伴頁。",
+  "unavailableTitle": "這個群聊已無法使用",
+  "unavailableDescription": "它可能已被刪除。返回夥伴頁可以開啟其他群聊和夥伴。",
+  "list": {
+    "noMessages": "還沒有訊息",
+    "empty": "還沒有群聊。點 + 選幾位夥伴建一個。",
+    "running": "有夥伴正在忙"
+  },
+  "create": {
+    "title": "新增群聊",
+    "nameLabel": "群聊名稱",
+    "namePlaceholder": "例如：週末出遊",
+    "nameRequired": "為群聊取個名字",
+    "membersLabel": "選擇夥伴",
+    "selectedCount_one": "已選 {{count}} 位，最多 {{max}} 位",
+    "selectedCount_other": "已選 {{count}} 位，最多 {{max}} 位",
+    "close": "關閉",
+    "submitShort": "建立",
+    "submit": "建立群聊",
+    "failed": "群聊沒能建立，請稍後重試"
+  },
+  "memberStatus": {
+    "paused": "已暫停",
+    "unavailable": "無法使用"
+  },
+  "mention": {
+    "all": "所有人",
+    "allHint": "大家都回答",
+    "label": "點名夥伴"
+  },
+  "composer": {
+    "label": "群聊訊息",
+    "placeholder": "在群聊裡說點什麼，@ 某位夥伴就只讓它回答…",
+    "noMembers": "群聊裡暫時沒有能接話的夥伴，去群聊設定裡新增一位吧",
+    "tooLong": "訊息太長了，最多 {{max}} 個字",
+    "sendFailed": "訊息沒有送出，請稍後重試",
+    "stopFailed": "沒能停下這一輪，請再試一次",
+    "stop": "停止這一輪",
+    "more": "更多操作",
+    "division": "安排分工",
+    "divisionDescription": "讓負責人先分好工，夥伴們一步步做",
+    "divisionBusy": "正在分工，做完或停止後才能安排新的",
+    "divisionTag": "分工",
+    "removeDivision": "移除分工",
+    "placeholderDivision": "說說要做成什麼，負責人會先分好工…",
+    "placeholderPlanProposed": "想換人或改步驟，直接說…",
+    "placeholderPlanWaiting": "想讓{{name}}改改，直接說…",
+    "placeholderPlanRunning": "說的話會帶給正在做的{{name}}…",
+    "send": "傳送"
+  },
+  "timeline": {
+    "newMessages_one": "{{count}} 則新訊息",
+    "newMessages_other": "{{count}} 則新訊息",
+    "emptyTitle": "群聊裡還沒有訊息",
+    "emptyDescription": "說一句話開始，夥伴們會接著聊。@ 某位夥伴就只讓它回答。",
+    "roundEnded": "夥伴們說完了",
+    "continue": "繼續討論",
+    "continueFailed": "沒能繼續討論，請再試一次",
+    "nextStep": "下一步：",
+    "continuePlan": "繼續",
+    "continuePlanFailed": "沒能繼續下一步，請再試一次",
+    "stepFailed": "{{name}}沒做完",
+    "retryStep": "重試",
+    "retryFailed": "沒能重試這一步，請再試一次",
+    "endPlan": "結束分工",
+    "planDone_one": "{{count}} 步都做完了",
+    "planDone_other": "{{count}} 步都做完了",
+    "planDoneGeneric": "分工做完了",
+    "olderOnComputer": "更早的訊息請在電腦上查看"
+  },
+  "quote": {
+    "label": "引用 {{name}}：{{summary}}",
+    "deleted": "原訊息已刪除",
+    "attachments": "{{name}} 等 {{total}} 個附件",
+    "unavailable": "無法找到這則訊息。"
+  },
+  "notice": {
+    "memberJoined": "{{name}}加入了群聊",
+    "memberFailed": "{{name}}這次沒能回覆",
+    "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
+    "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
+    "planFailed": "{{name}}沒排出分工，可以再試一次",
+    "planStopped": "分工已停止",
+    "workdirUnavailable": "{{name}}找不到工作目錄",
+    "stepFailed": "{{name}}這一步出錯了，沒做完",
+    "stepTimeout": "{{name}}太久沒做完，這一步先停下",
+    "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+    "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。",
+        "advice": "請夥伴的主人封存不用的任務。",
+        "details": "請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。"
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。",
+        "advice": "請遠端電腦的主人釋放不用的任務或提高上限。",
+        "details": "請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。"
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}無法回覆：目前模型不支援圖片。",
+        "advice": "請切換至支援圖片的模型。",
+        "details": "請切換至支援圖片的模型，或在「設定 → 個性化 → 視覺橋」啟用並設定視覺模型後重新傳送。"
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}無法回覆：目前沒有可用模型。",
+        "advice": "請在夥伴設定中選擇可用模型。",
+        "details": "請在夥伴設定中選擇已連線的可用模型後重新傳送。"
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}無法回覆：模型連線需要重新驗證。",
+        "advice": "請重新連接對應的模型來源。",
+        "details": "請在設定中重新連線對應的模型來源後重新傳送。"
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}無法回覆：模型請求過於頻繁。",
+        "advice": "請稍後重新傳送。",
+        "details": "請稍後重新傳送，或選擇其他可用模型。"
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}無法回覆：模型服務暫時繁忙。",
+        "advice": "請稍後重新傳送。",
+        "details": "請稍後重新傳送，或選擇其他可用模型。"
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}無法回覆：模型用量已達上限。",
+        "advice": "請檢查配額或選擇其他模型。",
+        "details": "請檢查對應來源的配額，或選擇其他可用模型。"
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}無法回覆：網路連線失敗。",
+        "advice": "請檢查網路或Proxy。",
+        "details": "請檢查網路或 Proxy 後重新傳送。"
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}本次回覆逾時。",
+        "advice": "請重新傳送訊息。",
+        "details": "請重新傳送訊息，或選擇其他可用模型。"
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}這次未能回覆。",
+        "advice": "請重新傳送訊息。",
+        "details": "請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
+      }
+    },
+    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。"
+  },
+  "plan": {
+    "intro_one": "這件事分 {{count}} 步，我這樣分工：",
+    "intro_other": "這件事分 {{count}} 步，我這樣分工：",
+    "missing": "這個安排已經讀不到了",
+    "start": "開始",
+    "dismiss": "不用了",
+    "editHint": "想換人或改步驟，直接說",
+    "autoNote": "做完一步會自動交給下一位。",
+    "pauseNote": "每做完一步會停下來，等你點「繼續」。",
+    "superseded": "已更新",
+    "dismissed": "不用了",
+    "stopped": "已停止",
+    "stepDone": "做完了",
+    "stepRunning": "正在做",
+    "stepFailed": "沒做完",
+    "stepPending": "還沒開始",
+    "stepMenuTitle": "誰來做這一步",
+    "removeStep": "刪掉這一步",
+    "keepOneStep": "至少留一步",
+    "startFailed": "沒能開始分工，請再試一次",
+    "dismissFailed": "沒能結束這個安排，請再試一次",
+    "editFailed": "這一步沒改成，請再試一次",
+    "editStepHint": "換人或刪掉這一步",
+    "reassignStepHint": "換人做這一步",
+    "eyebrow_one": "分工 · {{count}} 步",
+    "eyebrow_other": "分工 · {{count}} 步",
+    "awaitingStart": "等你開始",
+    "progressRunning": "正在做 {{current}} / {{total}}",
+    "progressDone": "做完 {{done}} / {{total}}",
+    "allDone": "都做完了"
+  },
+  "speaking": {
+    "stopping": "正在停止…",
+    "planning": "正在安排…",
+    "step": "正在做…"
+  },
+  "task": {
+    "state": {
+      "started": "進行中",
+      "waiting": "等你確認",
+      "completed": "已完成",
+      "failed": "失敗了",
+      "cancelled": "已取消",
+      "timed-out": "已逾時"
+    }
+  },
+  "files": {
+    "onComputer": "檔案在電腦上，回電腦開啟",
+    "loading": "載入中…",
+    "unavailable": "暫時無法載入",
+    "untitled": "附件"
+  },
+  "settings": {
+    "open": "群聊設定",
+    "title": "群聊設定",
+    "members": "成員",
+    "remove": "移出",
+    "removeNamed": "把 {{name}} 移出群聊",
+    "minMembers": "群聊裡至少要有 {{min}} 位夥伴",
+    "maxMembers": "最多 {{max}} 位",
+    "noMoreBots": "沒有其他可以加入的夥伴了",
+    "nameSaveFailed": "群名稱未能儲存，輸入已保留，請重試。",
+    "membersSaveFailed": "成員沒能更新，請再試一次",
+    "replyMode": "沒有 @ 人的時候",
+    "replyModeAll": "大家都可以接話",
+    "replyModeMentioned": "只有被 @ 的回答",
+    "replyModeNote": "沒什麼可補充的夥伴不會說話。每輪最多聊 3 圈、10 則，之後等你點「繼續討論」。",
+    "replyModeNoteQueue": "夥伴們排隊依序回答，前 5 位自動接著說。引用夥伴的訊息或回覆它的話題，也會叫到它。",
+    "replyModeSaveFailed": "回覆方式沒能儲存，請再試一次",
+    "delete": "刪除群聊",
+    "deleteNote": "只刪除這個群聊和其中的訊息，夥伴本身、它們的記憶和私聊都不受影響。",
+    "deleteConfirmTitle": "刪除「{{name}}」？",
+    "deleteFailed": "群聊沒能刪除，請稍後重試",
+    "speakingMode": "發言方式",
+    "speakingModeAuto": "自動",
+    "speakingModeSequential": "一律輪流",
+    "speakingModeAutoNote": "未 @ 人或 @所有人時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
+    "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
+    "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次",
+    "setOrganizer": "設為負責人",
+    "setOrganizerNamed": "把 {{name}} 設為負責人",
+    "organizerNote": "負責人幫你安排誰做哪一步，預設是第一位夥伴。",
+    "organizerSaveFailed": "負責人沒能更換，請再試一次",
+    "projectDir": "專案資料夾",
+    "projectDirNone": "沒選",
+    "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
+    "add": "新增夥伴",
+    "projectDirOnComputer": "在電腦上選擇或更換",
+    "memberActions": "{{name}} 的操作",
+    "retry": "重試",
+    "conflict": "群設定已更新，請核對後再儲存。輸入已保留。",
+    "archive": "封存群聊",
+    "archiveConfirmTitle": "封存「{{name}}」？",
+    "archiveNote": "僅群主可封存。封存後無法繼續傳送訊息，歷史訊息會保留。",
+    "description": "群組簡介",
+    "descriptionSaveFailed": "群組簡介未儲存",
+    "makeAdmin": "設為管理員",
+    "removeAdmin": "取消管理員",
+    "roles": {
+      "owner": "群主",
+      "admin": "管理員",
+      "member": "成員",
+      "guest": "訪客"
+    },
+    "cloudStatus": {
+      "loading": "正在讀取群組設定…",
+      "permission": "只有群主和管理員可以修改這些設定",
+      "unavailable": "群組設定讀取失敗，請重試"
+    }
+  },
+  "errors": {
+    "memberLimit": "一個群聊需要 2–6 位夥伴",
+    "memberUnavailable": "有夥伴現在無法使用，換一位再試",
+    "mentionUnavailable": "點名的成員已無法使用，請重新選擇後傳送",
+    "notFound": "這個群聊已不存在",
+    "hostNotReady": "Cindy 還在準備中，請稍後重試",
+    "planOpen": "正在分工，做完或停止後才能安排新的",
+    "planClosed": "這個安排已經結束或更新了",
+    "invalidAttachment": "附件無法讀取，請重新選擇後傳送。",
+    "attachmentUnavailable": "未能從手機取回附件，請檢查裝置連線後重試。",
+    "attachmentTooLarge": "附件超過 100 MB，請選擇較小的檔案。",
+    "mediaUploadFailed": "附件未能上傳到群聊服務，請稍後重試。",
+    "authRequired": "登入已失效，請在電腦上重新登入。",
+    "chatUnavailable": "群聊服務暫時無法連線，請檢查網路後重試。",
+    "importPending": "群歷史記錄仍在同步，請稍後重試。",
+    "requestTimeout": "還未確認操作結果，請重新整理查看後再重試。",
+    "permissionDenied": "你沒有執行此操作的群管理權限。",
+    "serviceError": "群聊服務處理失敗，請稍後重試。",
+    "groupArchived": "本群已封存，無法執行此操作。",
+    "quoteUnavailable": "引用的訊息已刪除或無法查看，已取消引用，請再傳送一次",
+    "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
+    "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
+    "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+  },
+  "followUp": {
+    "next": "分工 · 下一步",
+    "failedStep": "第 {{step}} 步沒做完"
+  },
+  "server": {
+    "attachmentTooLarge": "群聊附件不能超過 {{size}} MB，請選擇較小的檔案。",
+    "offline": "暫時無法連線群聊，請重試。",
+    "loadFailed": "暫時無法讀取群聊，請重試。",
+    "loadOlder": "載入更早的訊息",
+    "attachmentFailed": "附件開啟失敗，請重試。",
+    "attachmentPreviewLoading": "正在讀取附件…",
+    "attachmentPreviewFailed": "無法預覽此附件，請重試。",
+    "attachmentPreviewTooLarge": "附件超過 10 MB，手機上無法預覽。",
+    "attachmentPreviewBinary": "此附件不是可閱讀的文字，無法預覽。",
+    "attachmentPreviewTruncated": "預覽最多顯示 10,000 行、100,000 個字元。",
+    "attachmentPreviewEmpty": "此檔案為空。",
+    "attachmentPreviewRetry": "重試",
+    "attachmentPreviewOpenOutside": "在瀏覽器中開啟",
+    "attachmentPreviewClose": "關閉附件預覽",
+    "previewUnavailable": "暫時無法讀取訊息預覽",
+    "endpointUnavailable": "群聊服務設定暫時無法使用，請重試。"
+  },
+  "lifecycle": {
+    "dissolve": "解散群聊",
+    "dissolveNote": "解散後無法恢復。所有成員將無法傳送訊息，進行中的工作會停止，邀請會失效。成員仍可查看原本有權存取的歷史訊息。",
+    "hide": "從我的列表移除",
+    "hideNote": "從你所有裝置的列表中移除此群聊。不改變成員關係，不刪除歷史訊息、不停止進行中的工作，也不影響其他成員。",
+    "leave": "退出群聊",
+    "leaveNote": "你和你的伙伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
+    "unavailable": "目前伺服器或電腦尚不支援此操作。",
+    "dissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
+    "failed": "操作未完成，請重試。",
+    "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+  },
+  "mask": {
+    "toolAccess": "工具權限",
+    "catchup": {
+      "title": "@ 我的訊息",
+      "me": "我",
+      "markAll": "全部標為已讀",
+      "empty": "沒有未讀的 @ 訊息",
+      "thread": "話題",
+      "main": "群聊",
+      "answered": "已代答"
+    },
+    "title": "AI 代答模式",
+    "settings": "AI 代答設定",
+    "companion": "我的夥伴",
+    "choose": "選擇一位夥伴",
+    "enabled": "自動代答",
+    "triggerLabel": "觸發方式",
+    "resumeAfter": "離開多久後恢復",
+    "start": "開始時間",
+    "end": "結束時間",
+    "startManual": "現在開啟",
+    "stop": "停止代答",
+    "todos": "整理與我有關的待辦",
+    "digestLabel": "彙總給我",
+    "saving": "正在儲存…",
+    "saveError": "未能儲存，仍按原設定代答。請重試。",
+    "retry": "重試",
+    "loading": "正在載入你的設定…",
+    "takeover": "我來回覆",
+    "resume": "恢復代答",
+    "status": {
+      "enabled": "已啟用",
+      "paused": "已讓位",
+      "off": "未開啟",
+      "offline": "已離線",
+      "waiting": "待觸發",
+      "unbound": "未連結"
+    },
+    "detail": {
+      "paused": "你已接回這段交流",
+      "off": "自動代答已關閉",
+      "offline": "代答已暫停 · 電腦離線",
+      "waiting": "等待手動開啟",
+      "unbound": "尚未選擇夥伴",
+      "enabled": "夥伴正在為你待答"
+    },
+    "trigger": {
+      "always": "永久觸發",
+      "manual": "手動指定觸發",
+      "scheduled": "定時觸發"
+    },
+    "digest": {
+      "daily": "每日彙總",
+      "manual": "手動彙整"
+    },
+    "minutes": "{{count}} 分鐘",
+    "presence": "你正在參與 · 離開 {{minutes}} 分鐘後恢復",
+    "scheduledWait": "等待 {{time}} 開始",
+    "attribution": "{{name}} 為 {{owner}} 回覆",
+    "digestNow": "立即整理",
+    "digestWorking": "整理中…",
+    "digestSent": "已傳送至夥伴私聊",
+    "digestFailed": "整理失敗，請重試",
+    "digestEmpty": "暫無新的待整理內容",
+    "access": {
+      "chat": "僅群內交流",
+      "tools": "主人已授權工具與資料",
+      "authorizeTitle": "授權本群使用 {{name}} 的工具與資料？",
+      "toolsHint": "本群成員可使用夥伴現有的工具與私人資料，結果對全群可見。原有操作核准仍有效；撤回會停止進行中的請求，已執行的操作無法撤銷。",
+      "confirm": "確認"
+    }
+  }
+}

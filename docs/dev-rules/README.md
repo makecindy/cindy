@@ -13,9 +13,14 @@
 
 ## 当前文档
 
-- [`repo-map.md`](repo-map.md)：仓库地图——apps、packages 与顶层目录的定位导航。
+- 模块工作入口：[Desktop](../../apps/desktop/AGENTS.md)、[Mobile](../../apps/mobile/AGENTS.md)、
+  [maker-core](../../packages/maker-core/AGENTS.md)；这里只索引模块触发条件，专题正文不重复维护。
+- [`repo-map.md`](repo-map.md)：仓库地图——目录职责，以及发送、权限、恢复、默认模型和手机新建任务的生产入口、共享判据与测试。
+- [`session-regressions.md`](session-regressions.md)：已发生过的任务体验回归、现有测试入口与运行命令。
 - [`environment-setup.md`](environment-setup.md)：公共开发环境、依赖安装与 submodule
   准备。
+- [`model-catalog-maintenance.md`](model-catalog-maintenance.md)：模型配置与下发统一入口——架构图、字段职责、覆盖顺序、修改位置、代码导航与发布验收。
+- [`model-catalog-runtime.md`](model-catalog-runtime.md)：模型窗口、压缩预算、原生缓存、参考价与显示细则；从架构入口按需进入。
 - [`desktop-development.md`](desktop-development.md)：Desktop 的 Agent 安全启动入口与
   分层验证命令。
 - [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)：
@@ -27,6 +32,8 @@
   `cindy-media://` 协议、引用生命周期与历史兼容边界。
 - [`database-and-migrations.md`](database-and-migrations.md)：Desktop SQLite schema、
   append-only migration、companion script、隔离运行与异步数据库访问规则。
+- [`ui-mock-data.md`](ui-mock-data.md)：Desktop 与 Mobile 共用的免登录 UI 模拟数据，`--mock`
+  启动方式、数据正本与写入边界。
 - [`mobile-development.md`](mobile-development.md)：Mobile 的模拟器开发、分层验证与
   专项文档入口。
 - [`orca-team-architecture.md`](orca-team-architecture.md)：Orca 多 Agent 协同架构与运行时约束。

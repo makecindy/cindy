@@ -35,14 +35,36 @@ describe('Forge OIDC install entry wiring', () => {
     expect(body).toContain('const installOrigin = forgeInstallOriginForMembership(membershipKind);');
     expect(body).toContain('...(installOrigin ? { installOrigin } : {})');
     expect(body).toContain(
-      'ghostInstallApprovalToken(installed.approval),\n        installOrigin,',
+      'ghostInstallApprovalToken(installed.approval),\n          installedGhostStoragePart(installed),\n          consent,\n          installOrigin,',
     );
     expect(body).not.toContain("installOrigin: 'agent-forge'");
   });
 
-  it('tokenBroker 只在企业身份下拿 Forge facts，且不触发 OIDC 确认窗', () => {
+  it('Agent 安装先在锁外求得插件确认，再在锁内交给装入事务复核', () => {
     const body = forgeInstallBody();
-    expect(body).toContain('installOrigin ? { installOrigin } : undefined');
+    const consent = body.indexOf('await obtainGhostInstallConsent(');
+    const mutation = body.indexOf('return withGhostInstallLock');
+    expect(consent).toBeGreaterThanOrEqual(0);
+    expect(mutation).toBeGreaterThan(consent);
+    expect(body).toContain("initiator: 'agent', origin: 'forge'");
+    expect(body).toContain('consent: { decision: consent, manifest: inspected.manifest }');
+    expect(body).toContain('inspected.packageSha256');
+  });
+
+  it('packing 时捕获的 owner 由调用方传入，取新租约前若已切换则拒绝', () => {
+    const body = forgeInstallBody();
+    expect(body).toContain('mutationOwner: ActiveAppSession');
+    expect(body).not.toContain('const mutationOwner = captureGhostMutationOwner();');
+    const lock = body.indexOf('return withGhostInstallLock');
+    const lease = body.lastIndexOf('beginGhostMutation(expected.mutationOwner)');
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(lease).toBeGreaterThan(lock);
+  });
+
+  it('tokenBroker 拿 Forge facts 时带上当前组织 namespace，且不触发 OIDC 确认窗', () => {
+    const body = forgeInstallBody();
+    expect(body).toContain('...(installOrigin ? { installOrigin } : {})');
+    expect(body).toContain('namespace: forgeNamespace ?? null');
     expect(body).toContain('forgeOidcInstallConfirmFacts(');
   });
 
@@ -59,4 +81,16 @@ describe('Forge OIDC install entry wiring', () => {
     expect(wiring).not.toContain('BrowserWindow.getAllWindows');
     expect(source).not.toContain('function pickTrustedAppWindow');
   });
+
+  it('resolves an explicit target before consent and pins its receiver', () => {
+    const body = forgeInstallBody();
+    const check = body.indexOf('if (!existingForForge && !isValidNewGhostId(inspected.manifest.id))');
+    const existing = body.indexOf('const target = resolveForgeInstallTarget(');
+    expect(existing).toBeGreaterThanOrEqual(0);
+    expect(check).toBeGreaterThan(existing);
+    expect(body).not.toContain('ghost.manifest.id === inspected.manifest.id');
+    expect(body).toContain('const existingForForge = target.installed');
+    expect(body).toContain('!== receiverApproval');
+  });
+
 });

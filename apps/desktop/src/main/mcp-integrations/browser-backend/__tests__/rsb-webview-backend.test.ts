@@ -7,7 +7,7 @@
 //  - advanced unsupported actions yield a structured error (no throw)
 
 import fs from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -116,6 +116,39 @@ beforeEach(() => {
 
 afterEach(() => {
   dispatchTabOpSpy.mockReset();
+});
+
+describe('RsbWebviewBackend — bundled recipe sessions', () => {
+  it('routes commands to the owning guest, rejects another session and releases listeners', async () => {
+    const wc = fakeWc();
+    const send = vi.fn(async (_method: string) => ({ root: { nodeId: 42 } }));
+    const listeners = new Set<unknown>();
+    Object.assign(wc, { removeListener: vi.fn(), debugger: {
+      isAttached: () => true, sendCommand: send,
+      on: (_event: string, listener: unknown) => { listeners.add(listener); },
+      removeListener: (_event: string, listener: unknown) => { listeners.delete(listener); },
+    } });
+    let activeSession = 'owner';
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([{ sessionId: 'owner', tabId: 't', webContentsId: 1 }], new Map([['t', wc]])),
+      getActiveSessionId: () => activeSession,
+      bridge: { getHostWebContents: () => null, logger: logger() }, logger: logger(),
+    });
+    try {
+      const begin = await backend.call({ action: 'recipeCommand', targetId: 't', recipeCommand: { method: 'Cindy.begin' } });
+      expect(begin.ok).toBe(true);
+      const sessionId = (begin.data as { sessionId: string }).sessionId;
+      const request = { action: 'recipeCommand' as const, targetId: 't', recipeCommand: { method: 'DOM.getDocument', sessionId } };
+      expect((await backend.call(request)).data).toMatchObject({ root: { nodeId: 42 } });
+      activeSession = 'other';
+      expect((await backend.call(request)).ok).toBe(false);
+      expect(send.mock.calls.filter(([method]) => method === 'DOM.getDocument')).toHaveLength(1);
+      activeSession = 'owner';
+      const before = listeners.size;
+      expect((await backend.call({ ...request, recipeCommand: { method: 'Cindy.end', sessionId } })).ok).toBe(true);
+      expect(listeners.size).toBeLessThan(before);
+    } finally { await backend.dispose(); }
+  });
 });
 
 describe('RsbWebviewBackend — diagnostic actions', () => {
@@ -1418,7 +1451,7 @@ describe('RsbWebviewBackend — uploads and page dialogs', () => {
       expect(res.ok).toBe(true);
       expect(res.data).toMatchObject({ tabId: 't1', uploadedFiles: 1 });
       expect(env.sendCommand).toHaveBeenCalledWith('DOM.setFileInputFiles', {
-        files: [await fs.realpath(file)],
+        files: [realpathSync(file)],
         objectId: 'file-input',
       });
       await env.backend.dispose();

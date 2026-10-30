@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
  *
@@ -15,8 +16,8 @@
  * 录制期间设置 body.dataset.appShortcutRecording 旗标, useAppShortcut 全体
  * 让路, 避免录制 ⌘B 时误触发侧边栏切换。
  *
- * 已检测或已启用的硬件设备出现在快捷键这一级。其余不展开,
- * 收到「配件」入口里。
+ * 已检测或已启用的硬件设备出现在快捷键这一级，方便直接打开。
+ * 「配件」始终列出全部可见设备，不因为某台已经出现在外面就从列表里拿掉。
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -34,6 +35,7 @@ import {
   getAppShortcutDefinition,
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
+  isGlobalAppShortcutComboUsable,
   type AppShortcutCombo,
   type AppShortcutDefinition,
   type AppShortcutId,
@@ -41,6 +43,7 @@ import {
 import { isSystemReservedShortcut } from '../../../shared/keyboardReserved';
 import {
   getAppShortcutCombos,
+  getAppShortcutGlobalFailures,
   getAppShortcutOverrides,
   getAppShortcutPlatform,
   subscribeAppShortcuts,
@@ -51,6 +54,11 @@ import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { WorkLouderCodexEntry, WorkLouderCodexSettings } from './WorkLouderCodexSettings';
+import {
+  isWorkLouderModel,
+  VISIBLE_WORKLOUDER_MODELS,
+  type WorkLouderModel,
+} from '../../../shared/workLouderCodex';
 import {
   GAMEPAD_FAMILIES,
   VISIBLE_GAMEPAD_FAMILIES,
@@ -67,7 +75,7 @@ function shouldShowHardwareOutside(device: {
   return device.present === true || device.enabled === true;
 }
 
-type HardwarePane = 'list' | 'accessories' | 'worklouder' | GamepadFamily;
+type HardwarePane = 'list' | 'accessories' | WorkLouderModel | GamepadFamily;
 
 function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
   const { t } = useTranslation();
@@ -87,7 +95,7 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
           {t('settings.shortcuts.accessories.title')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
@@ -108,17 +116,30 @@ export function KeyboardShortcutsSection() {
   const { t } = useTranslation();
   const platform = getAppShortcutPlatform();
   // overrides 快照订阅: 改绑 / reset 后 main 广播 → appShortcutStore 通知 →
-  // 这里重渲染。快照序列化做 useSyncExternalStore 的相等性判定。
-  const overridesJson = useSyncExternalStore(subscribeAppShortcuts, () =>
-    JSON.stringify(getAppShortcutOverrides()),
+  // 这里重渲染。快照序列化做 useSyncExternalStore 的相等性判定; 全局快捷键
+  // 注册失败列表同属一次广播, 一并纳入快照。
+  const snapshotJson = useSyncExternalStore(subscribeAppShortcuts, () =>
+    JSON.stringify({
+      overrides: getAppShortcutOverrides(),
+      globalFailures: getAppShortcutGlobalFailures(),
+    }),
   );
-  const overrides = JSON.parse(overridesJson) as Partial<
-    Record<AppShortcutId, AppShortcutCombo | null>
-  >;
+  const { overrides, globalFailures } = JSON.parse(snapshotJson) as {
+    overrides: Partial<Record<AppShortcutId, AppShortcutCombo | null>>;
+    globalFailures: AppShortcutId[];
+  };
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
-  const workLouder = useWorkLouderCodex({ watchConnection: true });
+  const workLouderCodex = useWorkLouderCodex({ model: 'codex-micro', watchConnection: true });
+  const workLouderCreator = useWorkLouderCodex({
+    model: 'creator-micro-2',
+    watchConnection: true,
+  });
+  const workLouderBoards = {
+    'codex-micro': workLouderCodex,
+    'creator-micro-2': workLouderCreator,
+  };
   const xboxGamepad = useXboxGamepad({ family: 'xbox', watchConnection: true });
   const playstationGamepad = useXboxGamepad({ family: 'playstation', watchConnection: true });
   const nintendoGamepad = useXboxGamepad({ family: 'nintendo', watchConnection: true });
@@ -129,10 +150,15 @@ export function KeyboardShortcutsSection() {
     nintendo: nintendoGamepad,
     generic: genericGamepad,
   };
-  const workLouderConnected = shouldShowHardwareOutside({
-    present: workLouder.state?.devicePresent,
-    enabled: workLouder.state?.settings.deviceEnabled,
-  });
+  const workLouderConnected = Object.fromEntries(
+    VISIBLE_WORKLOUDER_MODELS.map((model) => [
+      model,
+      shouldShowHardwareOutside({
+        present: workLouderBoards[model].state?.devicePresent,
+        enabled: workLouderBoards[model].state?.settings.deviceEnabled,
+      }),
+    ]),
+  ) as Record<WorkLouderModel, boolean>;
   const gamepadConnected = Object.fromEntries(
     GAMEPAD_FAMILIES.map((family) => [
       family,
@@ -142,9 +168,6 @@ export function KeyboardShortcutsSection() {
       }),
     ]),
   ) as Record<GamepadFamily, boolean>;
-  const hasAccessories =
-    !workLouderConnected || VISIBLE_GAMEPAD_FAMILIES.some((family) => !gamepadConnected[family]);
-  const showAccessoriesEntry = hasAccessories;
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const mutationRequestIdRef = useRef(0);
@@ -154,17 +177,13 @@ export function KeyboardShortcutsSection() {
   useEffect(() => {
     if (workLouderOpenRequested) {
       setHardwareReturnTo('list');
-      setHardwarePane('worklouder');
+      setHardwarePane('codex-micro');
     }
   }, [workLouderOpenRequested]);
 
-  useEffect(() => {
-    if (hardwarePane === 'accessories' && !hasAccessories) setHardwarePane('list');
-  }, [hardwarePane, hasAccessories]);
-
-  const openWorkLouder = (from: 'list' | 'accessories') => {
+  const openWorkLouder = (model: WorkLouderModel, from: 'list' | 'accessories') => {
     setHardwareReturnTo(from);
-    setHardwarePane('worklouder');
+    setHardwarePane(model);
   };
   const openGamepad = (family: GamepadFamily, from: 'list' | 'accessories') => {
     setHardwareReturnTo(from);
@@ -234,6 +253,11 @@ export function KeyboardShortcutsSection() {
         comboToElectronAccelerator(combo, 'darwin') === null
       ) {
         return t('settings.shortcuts.errors.menuAccelerator');
+      }
+      // 全局快捷键在所有应用里截走按键: 须能注册到系统且不占编辑惯例键
+      // (与 main store 校验一致)。
+      if (selfDef.scope === 'global' && !isGlobalAppShortcutComboUsable(combo, platform)) {
+        return t('settings.shortcuts.errors.globalUnusable');
       }
       // 跨 id 冲突: 与 main store 写入兜底共用 shared 的 findAppShortcutConflict。
       const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform);
@@ -342,8 +366,13 @@ export function KeyboardShortcutsSection() {
   const iconButtonClass =
     'inline-flex h-[26px] w-[26px] items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors';
 
-  if (hardwarePane === 'worklouder') {
-    return <WorkLouderCodexSettings onBack={() => setHardwarePane(hardwareReturnTo)} />;
+  if (isWorkLouderModel(hardwarePane)) {
+    return (
+      <WorkLouderCodexSettings
+        model={hardwarePane}
+        onBack={() => setHardwarePane(hardwareReturnTo)}
+      />
+    );
   }
   if ((GAMEPAD_FAMILIES as readonly string[]).includes(hardwarePane)) {
     return (
@@ -353,7 +382,7 @@ export function KeyboardShortcutsSection() {
       />
     );
   }
-  if (hardwarePane === 'accessories' && hasAccessories) {
+  if (hardwarePane === 'accessories') {
     return (
       <div className="flex flex-col gap-[14px]">
         <div className="flex items-center gap-2">
@@ -377,15 +406,17 @@ export function KeyboardShortcutsSection() {
             '[&>*+*]:border-t [&>*+*]:border-[var(--settings-theme-card-border)]',
           )}
         >
-          {!workLouderConnected && (
+          {VISIBLE_WORKLOUDER_MODELS.map((model) => (
             <WorkLouderCodexEntry
-              state={workLouder.state}
-              loading={workLouder.loading}
+              key={model}
+              model={model}
+              state={workLouderBoards[model].state}
+              loading={workLouderBoards[model].loading}
               grouped
-              onOpen={() => openWorkLouder('accessories')}
+              onOpen={() => openWorkLouder(model, 'accessories')}
             />
-          )}
-          {VISIBLE_GAMEPAD_FAMILIES.filter((family) => !gamepadConnected[family]).map((family) => (
+          ))}
+          {VISIBLE_GAMEPAD_FAMILIES.map((family) => (
             <XboxGamepadEntry
               key={family}
               family={family}
@@ -418,13 +449,15 @@ export function KeyboardShortcutsSection() {
       </div>
       {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
 
-      {workLouderConnected && (
+      {VISIBLE_WORKLOUDER_MODELS.filter((model) => workLouderConnected[model]).map((model) => (
         <WorkLouderCodexEntry
-          state={workLouder.state}
-          loading={workLouder.loading}
-          onOpen={() => openWorkLouder('list')}
+          key={model}
+          model={model}
+          state={workLouderBoards[model].state}
+          loading={workLouderBoards[model].loading}
+          onOpen={() => openWorkLouder(model, 'list')}
         />
-      )}
+      ))}
       {VISIBLE_GAMEPAD_FAMILIES.filter((family) => gamepadConnected[family]).map((family) => (
         <XboxGamepadEntry
           key={family}
@@ -434,7 +467,7 @@ export function KeyboardShortcutsSection() {
           onOpen={() => openGamepad(family, 'list')}
         />
       ))}
-      {showAccessoriesEntry && <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />}
+      <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />
 
       <div
         className={cn(
@@ -447,7 +480,13 @@ export function KeyboardShortcutsSection() {
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
           const combos = getAppShortcutCombos(def.id);
-          const rowError = error?.id === def.id ? error.message : null;
+          // 写入错误优先; 否则提示全局快捷键当前未能注册 (被其它应用占用)。
+          const rowError =
+            error?.id === def.id
+              ? error.message
+              : combos.length > 0 && globalFailures.includes(def.id)
+                ? t('settings.shortcuts.errors.globalOccupied')
+                : null;
           return (
             <div key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
@@ -467,7 +506,7 @@ export function KeyboardShortcutsSection() {
               {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
               <span
                 className={cn(
-                  'inline-flex min-w-[72px] items-center justify-center rounded-md px-2 py-1',
+                  'inline-flex min-w-[72px] items-center justify-center rounded-[4px] px-2 py-1',
                   // 不用 font-mono: 项目的 mono 映射到 --app-font-code (代码字体),
                   // 普遍缺 ⌘⇧⌥⌃ 字形, 会 fallback 渲染得又小又不协调。系统 UI
                   // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。
@@ -488,13 +527,16 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
+                  tone="quiet"
                   type="button"
                   onClick={() => setRecordingId(null)}
-                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors"
                 >
                   {t('settings.shortcuts.cancel')}
-                </button>
+                </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
                   <button

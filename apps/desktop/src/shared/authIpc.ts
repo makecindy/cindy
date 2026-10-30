@@ -8,6 +8,7 @@ import type {
 
 export type DesktopLoginAction =
   | { type: 'reset' }
+  | { type: 'back' }
   | { type: 'cancel-browser' }
   | { type: 'discover'; email: string }
   | { type: 'discover-sso-org'; org: string }
@@ -27,9 +28,79 @@ export type DesktopLoginAction =
   | { type: 'request-binding-code'; contact: string }
   | { type: 'verify-binding'; contact: string; code: string };
 
+/** In-memory presentation metadata; never a persisted cooldown or retry budget. */
+export type DesktopLoginState = (AuthFlowState | { step: 'entry' }) & { retryAt?: number };
+
 export type DesktopLoginActionResult =
-  | { success: true; state: AuthFlowState }
-  | { success: false; code: string; state: AuthFlowState | null };
+  | { success: true; state: DesktopLoginState }
+  | { success: false; code: string; state: DesktopLoginState | null; retryAt?: number };
+
+/**
+ * 登录准备态(「正在连接登录服务」)最多转圈的时长。
+ * main 的 getProviders 闸与 renderer `loadLoginState` 共用,超时后落到既有 error 步。
+ */
+export const LOGIN_PREPARING_UNLOCK_TIMEOUT_MS = 30_000;
+
+export type SettledDesktopLoginActionResult =
+  | { success: true; state: DesktopLoginState }
+  | { success: false; code: string; state: DesktopLoginState; retryAt?: number };
+
+export function loginPreparingErrorState(
+  code = 'AUTH_SERVICE_UNAVAILABLE',
+  retryAt?: number,
+): Extract<DesktopLoginState, { step: 'error' }> {
+  return {
+    step: 'error',
+    code,
+    recoverTo: 'identifier',
+    ...(code === 'RATE_LIMITED' && retryAt !== undefined ? { retryAt } : {}),
+  };
+}
+
+/** IPC 失败且 `state == null` 时不得让 renderer 停在 preparing。 */
+export function settleDesktopLoginResult(
+  result: DesktopLoginActionResult,
+): SettledDesktopLoginActionResult {
+  if (result.state) {
+    return result.success
+      ? { success: true, state: result.state }
+      : { ...result, state: result.state };
+  }
+  const code = result.success === false ? result.code : 'AUTH_SERVICE_UNAVAILABLE';
+  return { ...result, success: false, code, state: loginPreparingErrorState(code) };
+}
+
+/**
+ * 限时等待 getLoginState。超时或 throw 都落到可重试 error 步,不 abort 在途请求。
+ * 迟到 settle 忽略(与 main 准备态闸一致:只解锁 UI)。
+ */
+export async function awaitDesktopLoginStateLoad(
+  getLoginState: () => Promise<DesktopLoginActionResult>,
+  timeoutMs: number = LOGIN_PREPARING_UNLOCK_TIMEOUT_MS,
+): Promise<SettledDesktopLoginActionResult> {
+  const load = getLoginState().then(settleDesktopLoginResult, () => ({
+    success: false as const,
+    code: 'AUTH_SERVICE_UNAVAILABLE',
+    state: loginPreparingErrorState(),
+  }));
+  if (timeoutMs <= 0) return load;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<SettledDesktopLoginActionResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        success: false,
+        code: 'AUTH_SERVICE_UNAVAILABLE',
+        state: loginPreparingErrorState(),
+      });
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([load, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export interface DesktopSavedAccount {
   /** Opaque main-owned identifier. Renderer must not derive realm or membership ids from it. */
@@ -105,6 +176,8 @@ export function parseDesktopLoginAction(value: unknown): DesktopLoginAction | nu
   switch (value.type) {
     case 'reset':
       return { type: 'reset' };
+    case 'back':
+      return { type: 'back' };
     case 'cancel-browser':
       return { type: 'cancel-browser' };
     case 'discover':

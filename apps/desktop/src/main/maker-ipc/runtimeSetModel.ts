@@ -1,3 +1,4 @@
+import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
 import type { AgentKind, Effort } from '@cindy/maker-core';
 
 import {
@@ -23,7 +24,23 @@ interface RuntimeSetModelSession {
   codexThreadModelProviderId?: string | null;
   codexCindyRemoteCompactionCompatible?: boolean | null;
   model: string;
-  setModel: (model: string, opts?: { providerId?: string | null; effort?: Effort }) => Promise<void>;
+  setModel: (
+    model: string,
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
+  ) => Promise<void>;
+  requiresModelSwitchRebuild?: (
+    model: string,
+    opts?: { providerId?: string | null },
+  ) => boolean | Promise<boolean>;
+  previewModelSwitch?: (
+    model: string,
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
+  ) => Promise<{
+    action: 'hot' | 'refresh' | 'rebuild' | 'unavailable';
+    targetContextWindow: number | null;
+    windowVerified: boolean;
+    reason?: string;
+  } | undefined>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -36,7 +53,7 @@ interface RuntimeSetModelActiveSession {
 export interface RuntimeSetModelMaker {
   getSession: (sessionId: string) => RuntimeSetModelSession | undefined;
   listActiveSessions: () => RuntimeSetModelActiveSession[];
-  closeSession: (sessionId: string) => Promise<void>;
+  closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
 }
 
 interface RuntimeSetModelLogger {
@@ -51,10 +68,29 @@ export interface ApplyRuntimeSetModelChangeInput {
   providerId?: string | null;
   effort?: Effort;
   /**
+   * Pi-only:目标模型的思考开关意图(renderer 的 providerModelMemory 记忆，缺省开)。
+   * Pi 的 set_model 不会重置 thinking level，不收敛就会让上一个模型的 off/旧档位
+   * 漂移给新模型(实报：切模后模型把推理写进正文)。非 Pi 引擎忽略。
+   */
+  thinkingEnabled?: boolean;
+  /**
    * Orca Worker 的 live model/provider 属于执行单元身份，不能热切。即使凭证
    * 形态相同，也必须沿用 credential-switch 的 idle close / busy defer 边界。
    */
   forceSessionRebuild?: boolean;
+  /**
+   * 任务级工作上下文预算：host 已按**目标路由**重新收敛（含目录上限与模型级上限）。
+   * 只在会话已有显式预算且目标路由变化时下发；缺席 = 引擎保持当前预算。
+   */
+  contextWindowBudget?: number | null;
+  /** Re-evaluate the current Pi descriptor, including immutable spawn inputs. */
+  refreshPiConfiguration?: boolean;
+  /** Fail closed before an otherwise-required runtime replacement mutates route state. */
+  assertSessionCloseSupported?: () => void;
+  /** Called after async preflight, immediately before the first setting side effect. */
+  admit?: () => void;
+  /** Host authorization refreshed after async route preparation, before admission. */
+  beforeMutation?: () => Promise<void>;
   isSessionInTurn?: (sessionId: string) => boolean;
   /**
    * 会话自己正在跑 turn 时的延迟生效登记(PendingCredentialSwitchService.register)。
@@ -62,7 +98,7 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   registerPendingCredentialSwitch?: (
     sessionId: string,
-    target: { model: string; providerId: string | null },
+    target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' },
   ) => void | Promise<void>;
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
@@ -85,7 +121,7 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   getPendingCredentialSwitch?: (
     sessionId: string,
-  ) => { model: string; providerId: string | null } | undefined;
+  ) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
   /**
    * 当前本地 Codex spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * shouldCloseSessionForCredentialSwitch 用它解析隐式来源的凭证家族,精确判定
@@ -93,10 +129,10 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   codexAuthInjection?: CodexProxyAuthInjection | null;
   /**
-   * The host has proved that this local Codex selection crosses the explicit XD/OpenAI
-   * credential boundary and has a persisted native thread to rebuild.
+   * The host found a native writer in another local process. Closing the business
+   * handle may retain that writer, so verify release or relink before publishing.
    */
-  requiresCodexThreadRelink?: boolean;
+  requiresCodexThreadRelink?: boolean | (() => Promise<boolean>);
   /** Closes over the captured Profile DB and atomically commits thread + full target route. */
   relinkCodexThread?: () => Promise<void>;
   logger?: RuntimeSetModelLogger;
@@ -104,9 +140,27 @@ export interface ApplyRuntimeSetModelChangeInput {
 
 export type ApplyRuntimeSetModelChangeResult =
   /** 直接生效(热切 route / 或已关会话待下次发送重建)。 */
-  | { status: 'applied'; persistedRoute?: true }
+  | { status: 'applied'; persistedRoute?: true; retiredRuntime?: true }
   /** 凭证形态要换但会话自己在跑:已登记 pending,turn 结束后自动生效。 */
   | { status: 'deferred'; persistedRoute?: never };
+
+export async function closeRejectedRuntimeAndRestoreControlStores(input: {
+  closeRuntime: () => Promise<void>;
+  restoreControlStores: () => void;
+  reportCloseError: (error: unknown) => void;
+  assertRuntimeClosed: () => void;
+}): Promise<void> {
+  try {
+    await input.closeRuntime();
+  } catch (error) {
+    input.reportCloseError(error);
+  } finally {
+    // The old control route must match the unchanged persistent route even when
+    // teardown rejects. The caller then verifies that no rejected handle remains.
+    input.restoreControlStores();
+  }
+  input.assertRuntimeClosed();
+}
 
 export function isRemoteModelSwitchRouteChangeError(error: unknown): boolean {
   return (
@@ -142,17 +196,15 @@ export async function applyRuntimeSetModelChange(
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
   // (否则会把 pending 的来源覆盖丢)。
   const pendingTarget =
-    normalizedProviderId === undefined
-      ? input.getPendingCredentialSwitch?.(sessionId)
-      : undefined;
+    normalizedProviderId === undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined;
   const nextProviderId =
     normalizedProviderId !== undefined
       ? normalizedProviderId
       : pendingTarget !== undefined
         ? pendingTarget.providerId
         : currentProviderId;
-  const shouldCloseSession = sess
-    ? input.forceSessionRebuild === true || shouldCloseSessionForCredentialSwitch({
+  const credentialModeRequiresRebuild = sess
+    ? shouldCloseSessionForCredentialSwitch({
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
@@ -161,21 +213,58 @@ export async function applyRuntimeSetModelChange(
         nextModel: model,
         currentCodexProxyActive: sess.codexProxyActive,
         currentCodexThreadModelProviderId: sess.codexThreadModelProviderId,
-        currentCodexCindyRemoteCompactionCompatible:
-          sess.codexCindyRemoteCompactionCompatible,
+        currentCodexCindyRemoteCompactionCompatible: sess.codexCindyRemoteCompactionCompatible,
         codexAuthInjection: input.codexAuthInjection,
       })
     : false;
-  const requiresCodexThreadRelink = input.requiresCodexThreadRelink === true;
+  // Pi owns the decision about its live model directory, proxy bridge and
+  // spawn-time inputs. A provider id or credential family alone cannot prove
+  // that its native session needs replacement.
+  const piRouteChanged = sess?.agentKind === 'pi' &&
+    (sess.model !== model || currentProviderId !== nextProviderId);
+  // 预算必须与下面 setModel 拿到的**同一份**目标值：外层预演决定要不要重建，而
+  // switchModel 会先把预算写成新值再预演。用旧预算就会判「可热切」，内层按新预算
+  // 发现保留量不匹配便抛错，宿主此时已错过重建分支 —— 首次发送必失败（Greptile P1）。
+  const piPreview = piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)
+    ? await sess.previewModelSwitch?.(model, {
+        providerId: nextProviderId,
+        ...(typeof input.contextWindowBudget === 'number'
+          ? { contextWindowBudget: input.contextWindowBudget }
+          : {}),
+      })
+    : undefined;
+  if ((piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)) && !piPreview) {
+    throw new Error('Pi model switch preview is unavailable; runtime selection was not changed');
+  }
+  if (piPreview?.action === 'unavailable') {
+    throw new Error(piPreview.reason ?? 'Pi target model is unavailable; runtime selection was not changed');
+  }
+  let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'
+    ? await input.requiresCodexThreadRelink() : input.requiresCodexThreadRelink === true;
+  const modelSwitchRequiresRebuild =
+    sess &&
+    sess.agentKind !== 'pi' &&
+    input.forceSessionRebuild !== true &&
+    !credentialModeRequiresRebuild &&
+    !requiresCodexThreadRelink
+      ? await sess.requiresModelSwitchRebuild?.(model, { providerId: nextProviderId }) ?? false
+      : false;
+  const shouldCloseSession = Boolean(sess) && (
+    input.forceSessionRebuild === true ||
+    modelSwitchRequiresRebuild ||
+    credentialModeRequiresRebuild ||
+    piPreview?.action === 'rebuild'
+  );
+  if (shouldCloseSession && typeof input.requiresCodexThreadRelink === 'function') {
+    requiresCodexThreadRelink = await input.requiresCodexThreadRelink();
+  }
   if (requiresCodexThreadRelink && !input.relinkCodexThread) {
     throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
   }
   let selfBusyMemo: boolean | undefined;
   const isSelfBusy = (): boolean => {
     if (selfBusyMemo !== undefined) return selfBusyMemo;
-    const active = maker
-      .listActiveSessions()
-      .find((candidate) => candidate.id === sessionId);
+    const active = maker.listActiveSessions().find((candidate) => candidate.id === sessionId);
     selfBusyMemo = active
       ? isLocalSessionBusy(active, isSessionInTurn)
       : isSessionInTurn?.(sessionId) === true;
@@ -190,6 +279,8 @@ export async function applyRuntimeSetModelChange(
   }
 
   if (!sess && requiresCodexThreadRelink) {
+    if (input.beforeMutation) await input.beforeMutation();
+    input.admit?.();
     await input.relinkCodexThread?.();
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     input.wakeSessionInputQueue?.(sessionId);
@@ -197,23 +288,25 @@ export async function applyRuntimeSetModelChange(
   }
 
   if (
-    sess?.agentKind === 'codex' &&
+    (sess?.agentKind === 'codex' || sess?.agentKind === 'pi') &&
     !sess.remoteHostId &&
     !shouldCloseSession &&
     currentProviderId !== nextProviderId &&
     isSelfBusy()
   ) {
-    // 超集 host 可以跨来源复用，不代表 route 可以在 turn 中途热切。Codex 的一个
+    // Codex/Pi 可以复用已装配的账号路由，不代表 route 可以在 turn 中途热切。一个
     // turn 可能包含多次上游请求；立即改 provider store 会让后续工具回合带着旧
     // wire model 命中新来源，造成同 turn 跨计费，甚至因模型不受支持而 4xx。
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
-    // shared host 保留，不重新 spawn app-server。
+    // 当前账号保持到回合边界，不能让工具续轮命中新账号。
     if (input.registerPendingCredentialSwitch) {
+      if (input.beforeMutation) await input.beforeMutation();
+      input.admit?.();
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });
-      logger?.info('set-model: Codex provider route switch deferred until turn end', {
+      logger?.info('set-model: provider route switch deferred until turn end', {
         sessionId,
         currentProviderId,
         nextProviderId,
@@ -224,19 +317,30 @@ export async function applyRuntimeSetModelChange(
     }
     throw new CredentialModeSwitchBusyError(
       [sessionId],
-      `Cannot switch Codex provider route while the session is busy: ${sessionId}`,
+      `Cannot switch provider route while the session is busy: ${sessionId}`,
     );
   }
 
   if (sess && (shouldCloseSession || requiresCodexThreadRelink)) {
+    input.assertSessionCloseSupported?.();
+    if (input.beforeMutation) await input.beforeMutation();
+    input.admit?.();
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
+      // A required credential rebuild must also survive close failure: keeping
+      // the old process alive cannot be treated as applying the new account.
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
       });
-      logger?.info('set-model: credential switch deferred until turn end', {
+      logger?.info('set-model: session rebuild deferred until turn end', {
         sessionId,
         agentKind: sess.agentKind,
+        reason: input.forceSessionRebuild === true
+          ? 'forced'
+          : modelSwitchRequiresRebuild
+            ? 'model-context-host'
+            : 'credential-mode',
         currentProviderId,
         nextProviderId,
         fromModel: sess.model,
@@ -254,11 +358,18 @@ export async function applyRuntimeSetModelChange(
     const clearedPending = input.getPendingCredentialSwitch?.(sessionId);
     input.clearPendingCredentialSwitch?.(sessionId, { wake: false });
     try {
-      await prepareLocalSessionCredentialModeSwitch({
-        maker,
-        sessionId,
-        isSessionInTurn,
-      });
+      if (sess.remoteHostId && shouldCloseSession) {
+        // A configuration reload targets this task's remote handle only. The
+        // local-only credential helper deliberately does not close SSH handles.
+        if (isSelfBusy()) throw new CredentialModeSwitchBusyError([sessionId]);
+        await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'runtime-refresh'));
+      } else {
+        await prepareLocalSessionCredentialModeSwitch({
+          maker,
+          sessionId,
+          isSessionInTurn,
+        });
+      }
     } catch (err) {
       // 空闲判定与 close 之间的竞态(恰好起了新 turn):有 pending 通道就转延迟,
       // 没有(老调用方)保持抛 busy 的旧语义。
@@ -270,6 +381,7 @@ export async function applyRuntimeSetModelChange(
         input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,
@@ -283,25 +395,46 @@ export async function applyRuntimeSetModelChange(
       }
       throw err;
     }
-    if (requiresCodexThreadRelink) {
-      await input.relinkCodexThread?.();
+    let relinkAfterClose = false;
+    try {
+      relinkAfterClose = requiresCodexThreadRelink ||
+        (typeof input.requiresCodexThreadRelink === 'function' && await input.requiresCodexThreadRelink());
+      if (relinkAfterClose) {
+        if (!input.relinkCodexThread) throw new Error(`Codex provider thread relink is required for session ${sessionId}`);
+        await input.relinkCodexThread();
+      }
+    } catch (error) {
+      // A failed history transfer must not discard an earlier accepted pending route.
+      if (clearedPending && input.registerPendingCredentialSwitch) {
+        await input.registerPendingCredentialSwitch(sessionId, clearedPending);
+      }
+      throw error;
     }
     if (providerId !== undefined) setSessionProvider(sessionId, nextProviderId);
     // close + route 都落定后再唤醒队列:排队消息按新凭证形态 lazy-create 派发。
     input.wakeSessionInputQueue?.(sessionId);
-    logger?.info('set-model: closed live session after credential mode switch', {
+    logger?.info('set-model: closed live session for route rebuild', {
       sessionId,
       agentKind: sess.agentKind,
+      reason: input.forceSessionRebuild === true
+        ? 'forced'
+        : requiresCodexThreadRelink
+          ? 'provider-thread-relink'
+          : modelSwitchRequiresRebuild
+            ? 'model-context-host'
+            : 'credential-mode',
       currentProviderId,
       nextProviderId,
       fromModel: sess.model,
       toModel: model,
     });
-    return requiresCodexThreadRelink
-      ? { status: 'applied', persistedRoute: true }
-      : { status: 'applied' };
+    return relinkAfterClose && input.relinkCodexThread
+      ? { status: 'applied', persistedRoute: true, retiredRuntime: true }
+      : { status: 'applied', retiredRuntime: true };
   }
 
+  if (input.beforeMutation) await input.beforeMutation();
+  input.admit?.();
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);
     // 显式选源且无需切换 → 取消尚未兑现的 pending(后选覆盖先选)。
@@ -325,12 +458,16 @@ export async function applyRuntimeSetModelChange(
     await sess.setModel(model, {
       // model-only 且内存尚未确认来源时不要把 providerId:null 传进 runtime,
       // 否则未 hydrate 的 custom 会话会被清成默认网关。
-      ...(normalizedProviderId !== undefined
-        || hasSessionProvider(sessionId)
-        || pendingTarget !== undefined
+      ...(normalizedProviderId !== undefined ||
+      hasSessionProvider(sessionId) ||
+      pendingTarget !== undefined
         ? { providerId: nextProviderId }
         : {}),
       ...(effort !== undefined ? { effort } : {}),
+      ...(input.contextWindowBudget !== undefined
+        ? { contextWindowBudget: input.contextWindowBudget }
+        : {}),
+      ...(input.thinkingEnabled !== undefined ? { thinkingEnabled: input.thinkingEnabled } : {}),
     });
   } catch (err) {
     if (providerId !== undefined) {
@@ -345,4 +482,92 @@ export async function applyRuntimeSetModelChange(
     throw err;
   }
   return { status: 'applied' };
+}
+
+/** Apply budget edits or changed catalog defaults only to their live routes. */
+export async function refreshActiveModelContextSettings(input: {
+  runtime: Omit<ApplyRuntimeSetModelChangeInput, 'sessionId' | 'model' | 'providerId'>;
+  targets?: readonly { agent: AgentKind; providerId: string; modelId: string }[];
+  inferProviderId: (model: string, agent: AgentKind) => string | null;
+  assertCurrent: () => void;
+  hasPendingSelection: (sessionId: string) => boolean;
+  withSessionLock: (sessionId: string, run: () => Promise<void>) => Promise<void>;
+  /** Called under the caller's session lock; Pi shares the full model-window transaction. */
+  applyPiRefresh?: (sessionId: string, model: string, providerId: string | null) => Promise<void>;
+}): Promise<void> {
+  const { runtime, targets, inferProviderId, assertCurrent } = input;
+  for (const active of runtime.maker.listActiveSessions()) {
+    await input.withSessionLock(active.id, async () => {
+      assertCurrent();
+      const session = runtime.maker.getSession(active.id);
+      if (!session) return;
+      const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
+      if (targets && !targets.some((t) => t.agent === session.agentKind &&
+        (source === null || t.providerId === source) && t.modelId === session.model)) return;
+      // The pending route is a later user choice; its rebuild reads current settings.
+      const hasPending = () => input.hasPendingSelection(active.id) || !!runtime.getPendingCredentialSwitch?.(active.id);
+      if (hasPending()) return;
+      if (session.agentKind === 'pi') {
+        if (!input.applyPiRefresh) {
+          throw new Error('Pi model settings refresh requires the model-window host transaction');
+        }
+        const budgetChanged = await session.requiresModelSwitchRebuild?.(
+          session.model, { providerId: source },
+        ) ?? false;
+        const preview = await session.previewModelSwitch?.(session.model, { providerId: source });
+        assertCurrent();
+        if (hasPending() || runtime.maker.getSession(active.id) !== session) return;
+        if (!preview || preview.action === 'unavailable') {
+          runtime.logger?.info('Pi catalog refresh requires explicit runtime action', {
+            sessionId: active.id,
+            reason: preview?.reason ?? 'model switch preview unavailable',
+          });
+          return;
+        }
+        if (!targets && !budgetChanged && preview.action === 'hot') return;
+        if (isLocalSessionBusy(active, runtime.isSessionInTurn)) {
+          // Catalog updates must wait for the turn boundary. A later user
+          // selection takes priority through the existing pending registry.
+          await runtime.registerPendingCredentialSwitch?.(active.id, {
+            model: session.model,
+            providerId: getSessionProvider(active.id),
+            selectionSource: 'agent',
+          });
+          return;
+        }
+        try {
+          await input.applyPiRefresh(active.id, session.model, getSessionProvider(active.id));
+        } catch (error) {
+          assertCurrent();
+          runtime.logger?.info('Pi catalog refresh failed', {
+            sessionId: active.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (targets) throw error;
+        }
+        return;
+      }
+      if ((!targets || source === null) && !await session.requiresModelSwitchRebuild?.(session.model, { providerId: source })) return;
+      assertCurrent();
+      if (hasPending() || runtime.maker.getSession(active.id) !== session) return;
+      try {
+        await applyRuntimeSetModelChange({ ...runtime, sessionId: active.id, model: session.model,
+          providerId: getSessionProvider(active.id), forceSessionRebuild: true });
+      } catch (error) {
+        // Catalog notifications have no caller to retry a failed idle close. Keep
+        // this task pending and continue the batch, without replacing newer choices.
+        if (targets || !runtime.registerPendingCredentialSwitch) throw error;
+        assertCurrent();
+        if (!hasPending() && runtime.maker.getSession(active.id) === session) {
+          await runtime.registerPendingCredentialSwitch(active.id, {
+            model: session.model, providerId: getSessionProvider(active.id), forceSessionRebuild: true,
+          });
+        }
+        runtime.logger?.info('catalog context reload failed; continuing remaining tasks', {
+          sessionId: active.id, error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
+  assertCurrent();
 }

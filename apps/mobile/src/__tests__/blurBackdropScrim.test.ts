@@ -23,11 +23,15 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     expect(src).toContain("isScrim ? 'dark' : mode === 'dark' ? 'dark' : 'light'");
   });
 
-  it('scrim 消费点用裸 BlurBackdrop(走恒深默认):SheetModal / SessionActionSheet 背板', () => {
+  it('兼容弹层保留恒深 BlurBackdrop，Android 原生弹层消费同一遮罩 token', () => {
     const sheetModal = readTextLf(resolve(process.cwd(), 'src/session/SheetModal.tsx'), 'utf8');
-    const actionSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheet.tsx'), 'utf8');
+    const actionSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheetFrame.tsx'), 'utf8');
+    const nativeSheet = readTextLf(resolve(process.cwd(), 'src/session/SessionActionSheetFrame.android.tsx'), 'utf8');
     expect(sheetModal).toContain('<BlurBackdrop />');
     expect(actionSheet).toContain('<BlurBackdrop />');
+    expect(nativeSheet).toContain('scrimColor={colors.overlay}');
+    expect(nativeSheet).toContain('containerColor={colors.surfaceElevated}');
+    expect(nativeSheet).toContain('colorScheme={mode}');
   });
 
   it('surface 消费点保留显式浅色 overlayColor(面板表面不染深)', () => {
@@ -40,10 +44,10 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     // SessionActionSheet 操作卡 / 取消卡底色(sheetActionSurface)。
     expect(actionSheet).toContain('intensity={32}');
     expect(actionSheet).toContain('overlayColor={colors.sheetActionSurface}');
-    // 会话顶栏 chrome 底色(chatHeaderSurface)——非 scrim,走 surface 语义。
+    // iOS 顶栏使用原生渐进模糊，不再叠自定义 surface 背板。
     const sessionHeader = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     expect(sessionHeader).toContain(
-      'return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;',
+      '<SessionHeaderNativeBlur height=',
     );
   });
 

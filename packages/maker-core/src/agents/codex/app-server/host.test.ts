@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { AppServerHost } from './host.js';
+import { AppServerHost, CodexNativeInitializationStoppedError } from './host.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { Transport, LineHandler, StderrHandler, CloseHandler } from './transport.js';
 
@@ -69,6 +69,43 @@ class DelayedTransport implements Transport {
   }
 }
 
+class RejectedInitializeTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+  closed = false;
+
+  async writeLine(line: string): Promise<void> {
+    const message = JSON.parse(line) as { id?: unknown; method?: string };
+    if (message.id == null || message.method !== 'initialize') return;
+    for (const handler of this.lineHandlers) {
+      handler(JSON.stringify({
+        id: message.id,
+        error: { code: -32_000, message: 'initialize boom' },
+      }));
+    }
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(_handler: StderrHandler): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+}
+
 class NotificationTransport implements Transport {
   private readonly lineHandlers = new Set<LineHandler>();
   private readonly closeHandlers = new Set<CloseHandler>();
@@ -116,6 +153,75 @@ class NotificationTransport implements Transport {
   }
 }
 
+describe('concrete writer candidate proof', () => {
+  it.each(['request', 'notification', 'subscription'])('retains %s evidence until confirmed process exit', async (source) => {
+    const transports: NotificationTransport[] = [];
+    const host = new AppServerHost({ createTransport: () => {
+      const transport = new NotificationTransport(); transports.push(transport); return transport;
+    }, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.ensureStarted();
+      expect(host.writerCandidate).toBeNull();
+      await host.request('thread/loaded/list');
+      expect(host.writerCandidate).toBeNull();
+      if (source === 'request') await host.request('thread/resume', { threadId: 'source' });
+      if (source === 'notification') transports[0].emit({ method: 'thread/started', params: { thread: { id: 'source' } } });
+      if (source === 'subscription') host.subscribeThread('source', {});
+      const proof = host.writerCandidate;
+      expect(proof).not.toBeNull();
+      const close = vi.spyOn(transports[0], 'close').mockRejectedValueOnce(new Error('exit not proven'));
+      await expect(host.shutdown('test', { throwOnTransportError: true })).rejects.toThrow('exit not proven');
+      expect(host.writerCandidate).toBe(proof);
+      close.mockRestore();
+      await host.shutdown('confirmed', { throwOnTransportError: true });
+      expect(host.writerCandidate).toBeNull();
+      await host.ensureStarted();
+      expect(host.writerCandidate).toBeNull();
+      // A late old notification cannot turn the replacement into an old writer.
+      transports[0].emit({ method: 'thread/started', params: { thread: { id: 'source' } } });
+      expect(host.writerCandidate).toBeNull();
+      await host.request('thread/start');
+      expect(host.writerCandidate).not.toBe(proof);
+      expect(host.writerCandidate).not.toBeNull();
+    } finally { await host.retire(); }
+  });
+});
+
+describe('AppServerHost isolated account lifecycle', () => {
+  it.each([false, true])('rejects persistent native policy before task dispatch (OAuth: %s)', async oauth => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'file' } }));
+    const readTokens = vi.fn(async () => ({ accessToken: 'fixture-token', chatgptAccountId: 'account-b' }));
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, requireEphemeralAuth: true,
+      ...(oauth ? { externalAuth: { readTokens } } : {}),
+    });
+    try {
+      await expect(host.request('thread/resume', { threadId: 'fixture' })).rejects.toThrow('isolated account authentication');
+      const methods = transport.lines.map(line => JSON.parse(line).method);
+      expect(methods).not.toContain('account/login/start');
+      expect(methods).not.toContain('thread/resume');
+      expect(readTokens).not.toHaveBeenCalled();
+    } finally { await host.retire(); }
+  });
+
+  it('never installs a credential read that finishes after retirement', async () => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'ephemeral' } }));
+    let resolve!: (value: { accessToken: string; chatgptAccountId: string }) => void;
+    const readTokens = vi.fn(() => new Promise<{ accessToken: string; chatgptAccountId: string }>(done => { resolve = done; }));
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, externalAuth: { readTokens },
+    });
+    const pending = host.ensureStarted();
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(readTokens).toHaveBeenCalledOnce());
+    const retiring = host.retire();
+    resolve({ accessToken: 'late-fixture-secret', chatgptAccountId: 'account-b' });
+    await retiring;
+    await rejected;
+    expect(transport.lines.join('\n')).not.toContain('late-fixture-secret');
+  });
+});
+
 describe('AppServerHost assistant text delta routing', () => {
   it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
     const transport = new NotificationTransport();
@@ -151,7 +257,256 @@ describe('AppServerHost assistant text delta routing', () => {
   });
 });
 
+// 保护: account/rateLimits/updated 按 limitId 去重后, 不变的快照不再重复广播 (原先每
+// ~3.5s 一条 account_usage), 但内容变化仍立即下发, 且晚到的 subscriber 仍能经 replay
+// 立即拿到当前配额 (Codex chip 冷启动依赖它)。
+describe('AppServerHost account rate limit fan-out', () => {
+  it('drops only consecutive duplicate snapshots (keeping bucket order) and still replays the latest to late subscribers', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+    const early = vi.fn();
+    const earlySubscription = host.subscribeThread('thread-1', { accountRateLimitsUpdated: early });
+    const snapshot = (limitId: string, usedPercent: number) => ({
+      method: 'account/rateLimits/updated',
+      params: { rateLimits: { limitId, primary: { usedPercent, windowDurationMins: 300, resetsAt: 1 } } },
+    });
+
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex_spark', 10));
+    transport.emit(snapshot('codex', 10));
+    transport.emit(snapshot('codex', 20));
+
+    expect(early.mock.calls.map(([p]) => [p.rateLimits.limitId, p.rateLimits.primary.usedPercent])).toEqual([
+      ['codex', 10],
+      ['codex_spark', 10],
+      ['codex', 10],
+      ['codex', 20],
+    ]);
+
+    transport.emit(snapshot('codex', 20));
+    const late = vi.fn();
+    const lateSubscription = host.subscribeThread('thread-2', { accountRateLimitsUpdated: late });
+    expect(late.mock.calls.map(([p]) => [p.rateLimits.limitId, p.rateLimits.primary.usedPercent])).toEqual([
+      ['codex_spark', 10],
+      ['codex', 20],
+    ]);
+    expect(early).toHaveBeenCalledTimes(4);
+
+    // 无 limitId 的稀疏更新不去重, 且仅在它是最新一条时才排在回放最后。
+    const sparse = { method: 'account/rateLimits/updated', params: { rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300, resetsAt: 1 } } } };
+    transport.emit(sparse);
+    transport.emit(sparse);
+    expect(early).toHaveBeenCalledTimes(5);
+    const afterSparse = vi.fn();
+    const sparseSubscription = host.subscribeThread('thread-3', { accountRateLimitsUpdated: afterSparse });
+    expect(afterSparse.mock.calls.map(([p]) => p.rateLimits.limitId ?? null)).toEqual(['codex_spark', 'codex', null]);
+    await sparseSubscription.release();
+
+    await earlySubscription.release();
+    await lateSubscription.release();
+    await host.shutdown();
+  });
+});
+
+describe('AppServerHost custom Provider subagent policy', () => {
+  const routes = [
+    {
+      providerId: 'images-a',
+      modelProviderId: 'cindy_custom_aaaaaaaaaaaaaaaaaaaa',
+      capabilities: { imageGeneration: true },
+      responseModels: ['image-a', 'image-a-alt'],
+    },
+    {
+      providerId: 'images-b',
+      modelProviderId: 'cindy_custom_bbbbbbbbbbbbbbbbbbbb',
+      capabilities: { imageGeneration: true },
+      responseModels: ['image-b'],
+    },
+  ];
+
+  function policy(
+    root: { providerId: string; model: string },
+    child?: { providerId: string; catalogModel: string },
+  ) {
+    const host = new AppServerHost({
+      createTransport: () => new HangingTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      codexCustomProviderRoutes: routes,
+      ...(child
+        ? { subagentRoute: { ...child, reasoningEffort: null } }
+        : {}),
+    });
+    return host.getCustomProviderThreadPolicy(root.providerId, root.model);
+  }
+
+  it('does not affect a non-image parent', () => {
+    expect(policy({ providerId: 'images-a', model: 'text-a' }, {
+      providerId: 'images-b',
+      catalogModel: 'image-b',
+    })).toEqual({
+      dynamicIdentity: false,
+      disableSubagents: false,
+      disableModelOverrides: false,
+    });
+  });
+
+  it.each([
+    ['same Provider eligible child', 'images-a', 'image-a-alt', false],
+    ['same Provider non-Responses child', 'images-a', 'text-a', true],
+    ['different Provider child', 'images-b', 'image-b', true],
+  ] as const)('%s', (_label, providerId, catalogModel, disableSubagents) => {
+    expect(policy(
+      { providerId: 'images-a', model: 'image-a' },
+      { providerId, catalogModel },
+    )).toEqual({
+      dynamicIdentity: true,
+      disableSubagents,
+      disableModelOverrides: true,
+    });
+  });
+
+  it('allows the second dynamic Provider with its own matching child', () => {
+    expect(policy(
+      { providerId: 'images-b', model: 'image-b' },
+      { providerId: 'images-b', catalogModel: 'image-b' },
+    )).toEqual({
+      dynamicIdentity: true,
+      disableSubagents: false,
+      disableModelOverrides: true,
+    });
+  });
+});
+
+describe('AppServerHost shutdown completion', () => {
+  it.each([false, true])('shutdown and retire wait for the same process (failure=%s)', async (fails) => {
+    const transport = new NotificationTransport();
+    let finish!: () => void;
+    let fail!: (error: Error) => void;
+    const completion = new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; });
+    const close = vi.spyOn(transport, 'close').mockImplementation(() => completion);
+    const onRetired = vi.fn();
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, onRetired });
+    await host.ensureStarted();
+    const settled = vi.fn();
+    const shutdown = host.shutdown().then(settled);
+    const retire = host.retire('retire', { throwOnTransportError: true });
+    const retirement = fails
+      ? expect(retire).rejects.toThrow('exit not confirmed')
+      : expect(retire).resolves.toBeUndefined();
+    await Promise.resolve();
+    await expect(host.ensureStarted()).rejects.toThrow('after retirement');
+    expect(onRetired).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    if (fails) fail(new Error('exit not confirmed'));
+    else finish();
+    await Promise.all([shutdown, retirement]);
+    expect(close).toHaveBeenCalledOnce();
+    expect(onRetired).toHaveBeenCalledTimes(fails ? 0 : 1);
+    if (fails) {
+      await expect(host.shutdown('retry', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+      expect(onRetired).not.toHaveBeenCalled();
+      close.mockResolvedValue(undefined);
+      await Promise.all([host.retire(), host.retire('late exit', { throwOnTransportError: true })]);
+      expect(onRetired).toHaveBeenCalledOnce();
+      await expect(retire).rejects.toThrow('exit not confirmed');
+    }
+    await host.retire();
+    expect(close).toHaveBeenCalledTimes(fails ? 3 : 1);
+    expect(onRetired).toHaveBeenCalledOnce();
+    await expect(host.ensureStarted()).rejects.toThrow('after retirement');
+  });
+
+  it('rechecks failed shutdown before restarting and respects retirement during that recheck', async () => {
+    const transport = new NotificationTransport();
+    const close = vi.spyOn(transport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    const createTransport = vi.fn().mockReturnValueOnce(transport).mockReturnValue(new NotificationTransport());
+    const onRetired = vi.fn();
+    const host = new AppServerHost({ createTransport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, onRetired });
+    await host.ensureStarted();
+    await expect(host.shutdown('failed', { throwOnTransportError: true })).rejects.toThrow('exit not confirmed');
+    await expect(host.ensureStarted()).rejects.toThrow('exit not confirmed');
+    expect(createTransport).toHaveBeenCalledOnce();
+    close.mockResolvedValue(undefined);
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+
+    const nextTransport = createTransport.mock.results[1]!.value as NotificationTransport;
+    const nextClose = vi.spyOn(nextTransport, 'close').mockRejectedValue(new Error('exit not confirmed'));
+    await host.shutdown();
+    let finish!: () => void;
+    nextClose.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const restart = expect(host.ensureStarted()).rejects.toThrow('after retirement');
+    const retiring = host.retire('retire during recheck', { throwOnTransportError: true });
+    await vi.waitFor(() => expect(nextClose).toHaveBeenCalledTimes(2));
+    finish();
+    await Promise.all([restart, retiring]);
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    expect(onRetired).toHaveBeenCalledOnce();
+  });
+
+  it('blocks bootstrap retry until the failed process has exited', async () => {
+    const failed = new RejectedInitializeTransport();
+    let finish!: () => void;
+    vi.spyOn(failed, 'close').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(new NotificationTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const failure = expect(host.ensureStarted()).rejects.toThrow('initialize boom');
+    await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
+    await expect(host.ensureStarted()).rejects.toThrow('during shutdown');
+    expect(createTransport).toHaveBeenCalledOnce();
+    finish();
+    await failure;
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+
+  it('recovers when subscribing synchronously reports a closed startup transport', async () => {
+    const failed = new NotificationTransport();
+    let finish!: () => void;
+    vi.spyOn(failed, 'onClose').mockImplementation((handler) => { handler({ reason: 'closed on subscribe' }); return () => {}; });
+    vi.spyOn(failed, 'close').mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(new NotificationTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'cindy-test', version: '0.0.0' } });
+    const failure = expect(host.ensureStarted()).rejects.toThrow();
+    await vi.waitFor(() => expect(failed.close).toHaveBeenCalledOnce());
+    await expect(host.ensureStarted()).rejects.toThrow('during shutdown');
+    finish();
+    await failure;
+    await host.ensureStarted();
+    expect(createTransport).toHaveBeenCalledTimes(2);
+    await host.shutdown();
+  });
+});
+
 describe('AppServerHost MCP readiness', () => {
+  it('releases Host-owned resources only on terminal retire and only once', async () => {
+    const onRetired = vi.fn(async () => undefined);
+    const host = new AppServerHost({
+      createTransport: () => new NotificationTransport(),
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+      onRetired,
+    });
+
+    await host.shutdown('transport recovery');
+    expect(onRetired).not.toHaveBeenCalled();
+    await Promise.all([
+      host.retire('task finished'),
+      host.retire('duplicate cleanup'),
+    ]);
+    expect(onRetired).toHaveBeenCalledOnce();
+  });
+
   it('retries a negative tool probe instead of permanently caching it', async () => {
     let available = false;
     const transport = new NotificationTransport((method) => (
@@ -225,7 +580,124 @@ const logger: Logger = {
   child: () => logger,
 };
 
+describe('native SQLite initialization recovery', () => {
+  class FailedNativeTransport extends NotificationTransport {
+    failed = false;
+    closeGate: Promise<void> = Promise.resolve();
+    override async writeLine(line: string) {
+      this.lines.push(line);
+      this.failed = true;
+      await super.close('native SQLite exited');
+    }
+    nativeSqliteInitializationFailed() { return this.failed; }
+    override async close(reason?: string) { await this.closeGate; await super.close(reason); }
+  }
+
+  it('shares recovery, waits for close, and sends the task only to the replacement', async () => {
+    const failed = new FailedNativeTransport();
+    let release!: () => void;
+    failed.closeGate = new Promise(resolve => { release = resolve; });
+    const healthy = new NotificationTransport();
+    const createTransport = vi.fn().mockReturnValueOnce(failed).mockReturnValue(healthy);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      const first = host.ensureStarted();
+      expect(host.ensureStarted()).toBe(first);
+      await vi.waitFor(() => expect(failed.failed).toBe(true));
+      expect(createTransport).toHaveBeenCalledTimes(1);
+      release();
+      await first;
+      await host.request('thread/start', {});
+      expect(createTransport).toHaveBeenCalledTimes(2);
+      expect(failed.lines.map(line => JSON.parse(line).method)).toEqual(['initialize']);
+      expect(healthy.lines.map(line => JSON.parse(line).method)).toEqual(['initialize', 'thread/start']);
+    } finally { release(); await host.retire(); }
+  });
+
+  it.each(['exhaust', 'shutdown', 'retire', 'timeout', 'close-failure'] as const)('stops recovery on %s', async mode => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const failed = new FailedNativeTransport();
+    if (mode !== 'exhaust') failed.closeGate = gate;
+    if (mode === 'close-failure') failed.close = vi.fn(async () => { await gate; throw new Error('exit unconfirmed'); });
+    const createTransport = vi.fn(() => mode === 'exhaust' ? new FailedNativeTransport() : failed);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    const started = mode === 'timeout' ? host.ensureStartedWithTimeout(10, 'fixture') : host.ensureStarted();
+    const rejection = expect(started).rejects.toThrow(mode === 'timeout' ? /timed out/ : mode === 'close-failure' ? /exit unconfirmed/ : /initialization stopped/);
+    if (mode === 'exhaust') {
+      await rejection;
+      expect(createTransport).toHaveBeenCalledTimes(3);
+    } else {
+      await vi.waitFor(() => expect(failed.failed).toBe(true));
+      const stopped = mode === 'shutdown' ? host.shutdown() : mode === 'retire' ? host.retire() : undefined;
+      if (mode === 'timeout') await rejection;
+      release();
+      await rejection;
+      await stopped;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(createTransport).toHaveBeenCalledTimes(1);
+    }
+    await host.retire();
+  });
+
+  it('does not retry an initialize RPC rejection', async () => {
+    const createTransport = vi.fn(() => new RejectedInitializeTransport());
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    await expect(host.ensureStarted()).rejects.not.toBeInstanceOf(CodexNativeInitializationStoppedError);
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    await host.retire();
+  });
+
+  it('does not retry credential installation after native initialization', async () => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'ephemeral' } }));
+    const createTransport = vi.fn(() => transport);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' },
+      externalAuth: { readTokens: async () => { throw new Error('synthetic official account rejected'); } },
+    });
+    await expect(host.request('thread/start', {})).rejects.toThrow('Codex account authentication is unavailable or has changed');
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    expect(transport.lines.map(line => JSON.parse(line).method)).not.toContain('thread/start');
+    await host.retire();
+  });
+
+  it('never replays a task RPC failure after initialize', async () => {
+    const transport = new NotificationTransport(method => {
+      if (method === 'thread/start') throw new Error('synthetic task write failed');
+      return {};
+    });
+    const createTransport = vi.fn(() => transport);
+    const host = new AppServerHost({ createTransport, logger, clientInfo: { name: 'test', version: '0' } });
+    await expect(host.request('thread/start', {})).rejects.toThrow();
+    expect(createTransport).toHaveBeenCalledTimes(1);
+    expect(transport.lines.filter(line => JSON.parse(line).method === 'thread/start')).toHaveLength(1);
+    await host.retire();
+  });
+});
+
 describe('AppServerHost.request startup timeout', () => {
+  it.each([undefined, 1000])('checks dispatch after the final startup await (timeout=%s)', async (timeoutMs) => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({ createTransport: () => transport, logger, clientInfo: { name: 'test', version: '0' } });
+    try {
+      await host.ensureStarted();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const ensure = host.ensureStarted.bind(host);
+      vi.spyOn(host, 'ensureStarted').mockImplementationOnce(async () => { await gate; return ensure(); });
+      let valid = true;
+      const beforeDispatch = vi.fn(() => { if (!valid) throw new Error('route expired'); });
+      const pending = host.request('thread/start', {}, { timeoutMs, beforeDispatch });
+      expect(beforeDispatch).not.toHaveBeenCalled();
+      valid = false;
+      release();
+      await expect(pending).rejects.toThrow('route expired');
+      expect(transport.lines.some((line) => JSON.parse(line).method === 'thread/start')).toBe(false);
+      valid = true;
+      await host.request('thread/start', {}, { timeoutMs, beforeDispatch });
+      expect(transport.lines.filter((line) => JSON.parse(line).method === 'thread/start')).toHaveLength(1);
+    } finally { await host.shutdown(); }
+  });
+
   it('bounds a hung ensureStarted by the caller-provided timeoutMs (greptile R6 P1)', async () => {
     // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 — 调用方显式
     // 给的 timeoutMs 必须同样覆盖启动路径, 否则「关键 RPC 加超时」形同虚设。
@@ -300,6 +772,20 @@ describe('AppServerHost.request startup timeout', () => {
 });
 
 describe('AppServerHost.ensureStartedWithTimeout', () => {
+  it('closes the failed transport when initialize rejects', async () => {
+    const transport = new RejectedInitializeTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+
+    await expect(host.ensureStarted()).rejects.toThrow('initialize boom');
+
+    expect(transport.closed).toBe(true);
+    await host.shutdown();
+  });
+
   it('rejects when startup hangs past the budget and keeps the shared bootstrap reusable (codex R13 P1)', async () => {
     // startSession 的 initialize 直调与 request() 的 startup deadline 同款语义:
     // 超时只截断本次等待, startPromise 后台继续, 后续调用直接复用不重新 spawn。

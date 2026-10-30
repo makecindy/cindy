@@ -9,6 +9,7 @@ import {
   resetWechatWorkingDir,
   resolveWechatWorkingDir,
   writeWechatWorkingDir,
+  writeWechatCompanionBinding,
 } from '../channelSettings';
 
 let root = '';
@@ -22,6 +23,25 @@ afterEach(() => {
 });
 
 describe('personal WeChat channel settings', () => {
+  // Teammate routing must survive changing/resetting the independent channel's directory.
+  // Existing directory-only cases did not cover this new persisted override (unit tier).
+  it('preserves teammate binding across directory changes and removes only the requested override', () => {
+    const selected = path.join(root, 'project');
+    fs.mkdirSync(selected);
+    writeWechatCompanionBinding('bot-cindy', root);
+    expect(writeWechatWorkingDir(selected, root).companionBotId).toBe('bot-cindy');
+    expect(resetWechatWorkingDir(root).companionBotId).toBe('bot-cindy');
+    writeWechatWorkingDir(selected, root);
+    const detached = writeWechatCompanionBinding(null, root);
+    expect(detached.companionBotId).toBeUndefined();
+    expect(detached.workingDir).toBe(fs.realpathSync.native(selected).replace(/\\/g, '/'));
+  });
+
+  it('rejects malformed teammate identities without replacing the existing binding', () => {
+    writeWechatCompanionBinding('bot-cindy', root);
+    expect(() => writeWechatCompanionBinding('../another', root)).toThrow('WECHAT_COMPANION_INVALID');
+    expect(readWechatChannelSettings(root).companionBotId).toBe('bot-cindy');
+  });
   it('persists only a directory selected from an absolute existing path', () => {
     const selected = path.join(root, 'project');
     const replacement = path.join(root, 'replacement');

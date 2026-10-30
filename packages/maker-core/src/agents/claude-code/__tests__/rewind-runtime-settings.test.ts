@@ -19,11 +19,13 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps } from '../../base-agent.js';
+import type { AgentDeps, StartSessionOptions } from '../../base-agent.js';
+import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { ModelDescriptor } from '../../../types/capabilities.js';
+import type { Effort } from '../../../types/common.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -178,7 +180,7 @@ function createFakeQuery(stream = createControlledStream()) {
     [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
     setPermissionMode: vi.fn(async () => assertWritable()),
     setModel: vi.fn(async () => assertWritable()),
-    applyFlagSettings: vi.fn(async () => assertWritable()),
+    applyFlagSettings: vi.fn(async (_settings: Record<string, unknown>) => assertWritable()),
     interrupt: vi.fn(async () => {}),
     send: vi.fn(async () => {}),
     close: vi.fn(() => {
@@ -204,7 +206,14 @@ async function startRewindableSession(
     autoCompactThresholdPct?: number;
     idleTimeoutMs?: number;
     remoteHostId?: string;
+    fastMode?: boolean;
+    fastModePolicy?: StartSessionOptions['fastModePolicy'];
     model?: string;
+    effort?: Effort;
+    availableModels?: ModelDescriptor[];
+    resolveModelContextLimit?: AgentDeps['resolveModelContextLimit'];
+    resolveModelCompactionPct?: AgentDeps['resolveModelCompactionPct'];
+    resolveModelEfforts?: AgentDeps['resolveModelEfforts'];
     shouldHandoffAfterContextAssessment?: (tokens: number, window: number) => boolean;
   } = {},
 ) {
@@ -235,14 +244,20 @@ async function startRewindableSession(
         infoCalls.push(message);
       },
     ),
-    capabilityAdditions: { availableModels: TEST_MODELS },
+    capabilityAdditions: { availableModels: options.availableModels ?? TEST_MODELS },
+    resolveModelContextLimit: options.resolveModelContextLimit,
+    resolveModelCompactionPct: options.resolveModelCompactionPct,
+    ...(options.resolveModelEfforts ? { resolveModelEfforts: options.resolveModelEfforts } : {}),
     ...(remoteCcQueryFactory ? { remoteCcQueryFactory } : {}),
   });
   const handle = await agent.startSession({
     sessionId: 'session-rewind',
     model: options.model ?? 'claude-opus-4-6',
+    ...(options.effort ? { effort: options.effort } : {}),
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(options.fastMode !== undefined ? { fastMode: options.fastMode } : {}),
+    ...(options.fastModePolicy ? { fastModePolicy: options.fastModePolicy } : {}),
     ...(options.remoteHostId ? { remoteHostId: options.remoteHostId } : {}),
   });
 
@@ -268,6 +283,133 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('keeps the explicit standard override when a suppressed task restarts after relaxation', async () => {
+    const policy = { isAllowed: () => true, isRequestAllowed: () => false, subscribe: () => () => {} };
+    const { handle } = await startRewindableSession({ fastMode: false, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+
+  it('starts with explicit standard settings, clamps stale Fast enables and never re-enables on relaxation', async () => {
+    let allowed = false;
+    const policy = { isAllowed: () => allowed, subscribe: () => () => {} };
+    const { handle, firstQuery } = await startRewindableSession({ fastMode: true, fastModePolicy: policy });
+    try {
+      expect(sdkMock.query.mock.calls[0][0].options.settings).toHaveProperty('fastMode', false);
+      await handle.setFastMode?.(true);
+      expect(firstQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: false });
+      expect(handle.getFastMode?.()).toBe(false);
+      allowed = true;
+      expect(handle.getFastMode?.()).toBe(false);
+    } finally { await handle.close(); }
+  });
+  it('does not relabel an in-flight result with a newly saved budget', async () => {
+    let budget = 1_000;
+    const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });
+    try {
+      budget = 32_000;
+      firstQuery.stream.emit({
+        type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 6_000, output_tokens: 10 },
+        modelUsage: { 'claude-opus-4-6': { contextWindow: 1_000_000 } },
+      });
+      await vi.waitFor(() => expect(handle.getUsageSnapshot().contextTokens).toBeGreaterThan(0));
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('requires a history-preserving rebuild when the active route budget changes', async () => {
+    let budget: number | null = 80_000;
+    const { handle } = await startRewindableSession({ autoCompactThresholdPct: 90, resolveModelContextLimit: () => budget });
+    try {
+      expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('80000');
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      budget = 140_000;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('uses the model compaction policy in the native environment and preserves the legacy fallback', async () => {
+    for (const pct of [75, null]) {
+      sdkMock.query.mockClear();
+      const { handle } = await startRewindableSession({
+        autoCompactThresholdPct: 85,
+        resolveModelCompactionPct: () => pct,
+      });
+      try {
+        expect(sdkMock.query.mock.calls[0]?.[0]?.options?.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe(String(pct ?? 85));
+      } finally { await handle.close(); }
+    }
+  });
+
+  // PR #7460 P1: equal windows do not imply equal native percentage overrides.
+  // Unit: the production rebuild predicate must cover local/SSH and sub-100K scaling;
+  // existing budget tests changed only the window, so missed this same-window switch.
+  it.each([
+    [undefined, 80_000], ['ssh-test', 80_000],
+    [undefined, 200_000], ['ssh-test', 200_000],
+  ] as const)('rebuilds same-window model switches when native compaction differs (%s, %s)', async (remoteHostId, window) => {
+    let pct = 50;
+    const { handle } = await startRewindableSession({
+      remoteHostId,
+      autoCompactThresholdPct: 90,
+      resolveModelContextLimit: () => window,
+      resolveModelCompactionPct: (_provider, model) => model === 'claude-sonnet-5' ? 90 : pct,
+    });
+    try {
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(false);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-sonnet-5')).toBe(true);
+      // An in-place preference edit needs the same refresh, even without a model change.
+      pct = 90;
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
+  it('passes the selected custom-provider window and compact threshold to spawned Claude Code', async () => {
+    const originalMaxContextTokens = process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+    const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+    process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = '1000';
+    process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '30';
+
+    try {
+      const { handle } = await startRewindableSession({
+        model: 'xai/grok-4.6',
+        autoCompactThresholdPct: 80.4,
+        availableModels: [{
+          id: 'xai/grok-4.6',
+          displayName: 'Grok 4.6',
+          contextWindow: 372_000.4,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        }],
+      });
+      await handle.close();
+
+      const env = sdkMock.query.mock.calls[0]?.[0]?.options?.env as
+        | Record<string, string>
+        | undefined;
+      expect(env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('372000');
+      expect(env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80');
+    } finally {
+      if (originalMaxContextTokens === undefined) {
+        delete process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
+      } else {
+        process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = originalMaxContextTokens;
+      }
+      if (originalCompactPctOverride === undefined) {
+        delete process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+      } else {
+        process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = originalCompactPctOverride;
+      }
+    }
+  });
+
   it('keeps the selected and catalog Claude wire models available for a live model switch', async () => {
     const { handle, firstQuery } = await startRewindableSession();
 
@@ -314,6 +456,218 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       firstQuery.setModel.mock.invocationCallOrder[0],
     );
     expect(handle.getUsageSnapshot().contextWindow).toBe(256_000);
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch crosses the Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'gpt-5.6-sol',
+      availableModels: [
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.setModel?.('claude-fable-5');
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-fable-5[1m]');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to fable' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    expect(firstQuery.close).toHaveBeenCalled();
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.forkSession).toBe(true);
+    expect(sdkMock.query.mock.calls[1]?.[0]?.options?.resumeSessionAt).toBeUndefined();
+
+    await handle.close();
+  });
+
+  it('rebuilds the local Query env when a live switch from Fable to GPT re-enables the cap disable flag', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-gpt' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-gpt');
+    });
+
+    const startEnv = sdkMock.query.mock.calls[0]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(startEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBeUndefined();
+
+    await handle.setModel?.('gpt-5.6-sol');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(secondQuery);
+    await handle.send({ type: 'user', content: 'after crossing to gpt' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(2);
+    const rebuildEnv = sdkMock.query.mock.calls[1]?.[0]?.options?.env as Record<string, string> | undefined;
+    expect(rebuildEnv?.CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP).toBe('1');
+
+    await handle.close();
+  });
+
+  it('does not rebuild the Query when a live switch stays on the same Explore inherit-cap policy', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-explore-cap-same' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-explore-cap-same');
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.send({ type: 'user', content: 'same-policy switch' });
+
+    expect(sdkMock.query).toHaveBeenCalledTimes(1);
+    expect(firstQuery.setModel).toHaveBeenCalledWith('claude-sonnet-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote live switch that would desync the Explore inherit-cap env', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap');
+    });
+
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(firstQuery.setModel).not.toHaveBeenCalled();
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  it('rejects a remote Explore inherit-cap switch even while rewind rebuild is pending', async () => {
+    const { handle, firstQuery } = await startRewindableSession({
+      remoteHostId: 'remote-1',
+      model: 'claude-fable-5',
+      availableModels: [
+        {
+          id: 'claude-fable-5',
+          displayName: 'Claude Fable 5',
+          contextWindow: 1_000_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+        {
+          id: 'gpt-5.6-sol',
+          displayName: 'GPT 5.6 Sol',
+          contextWindow: 256_000,
+          efforts: ['high'],
+          defaultEffort: 'high',
+        },
+      ],
+    });
+    void (async () => {
+      try { for await (const _event of handle.events()) { /* drain */ } } catch { /* ignore */ }
+    })();
+    firstQuery.stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-remote-explore-cap-rewind' });
+    await vi.waitFor(() => {
+      expect(handle.id).toBe('sdk-remote-explore-cap-rewind');
+    });
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    await expect(handle.setModel?.('gpt-5.6-sol')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(handle.model).toBe('claude-fable-5');
+
+    await handle.close();
+  });
+
+  // 宿主在没有可续接回复时只借原生检查点回滚文件,随后自己关闭会话;这里不能 close
+  // Query 或设续接点,否则同一 handle 上的下一次发送会去 resume 一个不存在的时点。
+  it('rolls back files only when the host restarts the native session', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+
+    await handle.commitRewindFiles?.('user-uuid-1', '', { rewindsToNativeThreadStart: true });
+
+    expect(firstQuery.rewindFiles).toHaveBeenCalledWith('user-uuid-1', { dryRun: false });
+    expect(firstQuery.close).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('surfaces a file restore failure instead of reporting a files-only rewind as done', async () => {
+    const { handle, firstQuery } = await startRewindableSession();
+    firstQuery.rewindFiles.mockRejectedValueOnce(new Error('EACCES: cannot restore'));
+
+    await expect(
+      handle.commitRewindFiles?.('user-uuid-1', '', { rewindsToNativeThreadStart: true }),
+    ).rejects.toThrow('EACCES');
+    expect(firstQuery.close).not.toHaveBeenCalled();
 
     await handle.close();
   });
@@ -413,6 +767,194 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.setEffort?.('max');
 
     expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'max' });
+
+    await handle.close();
+  });
+
+  it('clamps a carried-over xhigh to the target model efforts on start and live change (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'z-ai/glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const { handle, firstQuery } = await startRewindableSession({
+      model: glm.id,
+      effort: 'xhigh',
+      availableModels: [...TEST_MODELS, glm],
+    });
+
+    expect(sdkMock.query.mock.calls[0]?.[0]?.options?.effort).toBe('high');
+
+    await handle.setEffort?.('xhigh');
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'high' });
+
+    await handle.setModel?.('claude-sonnet-5');
+    await handle.setEffort?.('xhigh');
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'xhigh' });
+
+    await handle.close();
+  });
+
+  it('re-applies the clamped effort on a hot model switch without a separate setEffort (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'z-ai/glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      effort: 'xhigh',
+      availableModels: [...TEST_MODELS, glm],
+    });
+
+    // The live Query keeps the sticky xhigh; the switch itself must narrow it.
+    await handle.setModel?.(glm.id);
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'high' });
+
+    // Switching back restores the selected xhigh for the model that supports it.
+    await handle.setModel?.('claude-sonnet-5');
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'xhigh' });
+
+    // An effort passed with the switch wins over the previous one.
+    await handle.setModel?.(glm.id, { effort: 'max' });
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'max' });
+    expect(handle.getEffort?.()).toBe('max');
+
+    await handle.close();
+  });
+
+  it('re-applies on a hot switch even when the selected effort is unchanged, since the runtime may have fallen back (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'z-ai/glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      availableModels: [...TEST_MODELS, glm],
+    });
+    // An older runtime rejects max; the live Query actually keeps xhigh while the session keeps max.
+    firstQuery.applyFlagSettings
+      .mockRejectedValueOnce(new Error('invalid effortLevel: max'))
+      .mockResolvedValueOnce(undefined);
+    await handle.setEffort?.('max');
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'xhigh' });
+
+    // Same selected max on GLM-5.3: the sticky xhigh must still be replaced.
+    await handle.setModel?.(glm.id);
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'max' });
+
+    await handle.close();
+  });
+
+  it('re-applies the narrowed effort when the model drifts during query rebuild (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'z-ai/glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const { handle } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      effort: 'xhigh',
+      availableModels: [...TEST_MODELS, glm],
+    });
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockImplementationOnce(() => {
+      // Only the model drifts; the selected effort stays xhigh.
+      void handle.setModel?.(glm.id);
+      return secondQuery;
+    });
+    await handle.send({ type: 'user', content: 'switch to glm during rebuild' });
+
+    expect(secondQuery.setModel).toHaveBeenCalled();
+    expect(secondQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'high' });
+
+    await handle.close();
+  });
+
+  it('narrows with the efforts of the session route, not the first same-ID descriptor (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const resolveModelEfforts = vi.fn((providerId: string | null | undefined) =>
+      providerId === 'custom-glm' ? (['low', 'max'] as const) : null);
+    const { handle, firstQuery } = await startRewindableSession({
+      model: 'claude-sonnet-5',
+      effort: 'xhigh',
+      availableModels: [...TEST_MODELS, glm],
+      resolveModelEfforts,
+    });
+
+    await handle.setModel?.(glm.id, { providerId: 'custom-glm' });
+    expect(resolveModelEfforts).toHaveBeenCalledWith('custom-glm', glm.id);
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'low' });
+
+    // An unknown or ambiguous route keeps the selected effort instead of borrowing a descriptor.
+    await handle.setModel?.(glm.id, { providerId: 'other' });
+    expect(firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'xhigh' });
+
+    await handle.close();
+  });
+
+  it('uses the target route for the max fallback and replays a provider-only drift (#5402)', async () => {
+    const glm: ModelDescriptor = {
+      id: 'glm-5.3',
+      displayName: 'GLM-5.3',
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high', 'max'],
+      defaultEffort: 'high',
+    };
+    const routes: Record<string, readonly Effort[]> = {
+      preset: ['low', 'medium', 'high', 'max'],
+      custom: ['low', 'max'],
+    };
+    const resolveModelEfforts = (providerId: string | null | undefined) =>
+      (providerId ? routes[providerId] : undefined) ?? null;
+
+    // An older runtime rejects max: the retry must come from the custom route, not the first descriptor.
+    const live = await startRewindableSession({
+      model: glm.id,
+      effort: 'high',
+      availableModels: [...TEST_MODELS, glm],
+      resolveModelEfforts,
+    });
+    live.firstQuery.applyFlagSettings.mockImplementation(async (settings: Record<string, unknown>) => {
+      if (settings.effortLevel === 'max') throw new Error('invalid effortLevel: max');
+    });
+    await live.handle.setModel?.(glm.id, { providerId: 'custom', effort: 'max' });
+    expect(live.firstQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'low' });
+    await live.handle.close();
+
+    // Same model ID switched to another provider while the Query is rebuilding.
+    sdkMock.query.mockReset();
+    const { handle } = await startRewindableSession({
+      model: glm.id,
+      effort: 'high',
+      availableModels: [...TEST_MODELS, glm],
+      resolveModelEfforts,
+    });
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    const secondQuery = createFakeQuery();
+    sdkMock.query.mockImplementationOnce(() => {
+      void handle.setModel?.(glm.id, { providerId: 'custom' });
+      return secondQuery;
+    });
+    await handle.send({ type: 'user', content: 'switch provider during rebuild' });
+    expect(secondQuery.applyFlagSettings).toHaveBeenLastCalledWith({ effortLevel: 'low' });
 
     await handle.close();
   });
@@ -1571,6 +2113,44 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.close();
   });
 
+  it.each(['compact-running', 'between-turns', 'user-running'] as const)(
+    'shared stall distinguishes the bridge from user execution: %s', async (phase) => {
+      const { agent, handle, firstQuery } = await startRewindableSession({ autoCompactThresholdPct: 50 });
+      firstQuery.stream.emit({ type: 'stream_event', event: {
+        type: 'message_delta', usage: { input_tokens: 400_000, output_tokens: 0 },
+      } });
+      await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+      await handle.setModel?.('claude-sonnet-5');
+      const query = createFakeQuery();
+      sdkMock.query.mockReturnValue(query);
+      const session = new Session({ id: 'bridge-stall', agentKind: 'claude-code',
+        workDir: '/repo', handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 200 });
+      const events: AgentEvent[] = [];
+      session.onEvent((event) => events.push(event));
+      try {
+        await session.send('execute the original instruction');
+        if (phase !== 'compact-running') {
+          query.stream.emit({ type: 'result', stop_reason: 'end_turn',
+            total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+        }
+        if (phase === 'user-running') {
+          query.stream.emit({ type: 'stream_event', event: { type: 'message_start',
+            message: { id: 'real-user-turn', role: 'assistant', content: [],
+              usage: { input_tokens: 0, output_tokens: 0 } } } });
+        }
+        await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+          type: 'error', data: expect.objectContaining({ reason: phase === 'user-running'
+            ? 'turn_no_event_timeout' : 'bridge_turn_no_event_timeout' }),
+        })), { timeout: 2000 });
+        if (phase !== 'user-running') {
+          expect(query.close).toHaveBeenCalled();
+          expect(query.interrupt).not.toHaveBeenCalled();
+        }
+      } finally { await session.close(); }
+    },
+  );
+
   it('upstream-idle watchdog during bridge closes query and rebuilds from rewind point', async () => {
     // 反馈原型 (Codex review 3535664420 / 3536509277): watchdog 是**直接 push eventQueue**
     // 绕过 filter;若打在 bridge /compact 上,只清 counter + interrupt 仍无法追回 SDK 已
@@ -1604,7 +2184,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
           'watchdog terminal error must reach eventQueue (not swallowed by bridge filter)',
         ).toBe(true);
@@ -1613,7 +2193,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     );
     await vi.waitFor(() => {
       expect(
-        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout'),
+        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout'),
       ).toBe(true);
     });
 
@@ -1688,7 +2268,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
         ).toBe(true);
       },
@@ -1807,7 +2387,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       type: 'user',
       content: [{ type: 'image', path: path.join(os.tmpdir(), 'slow-missing.png') }],
     });
-
+    await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as {
       prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
     };
@@ -1885,7 +2465,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       type: 'user',
       content: [{ type: 'image', path: path.join(os.tmpdir(), 'compact-boundary-then-fail.png') }],
     });
-
+    await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as {
       prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
     };
@@ -1965,7 +2545,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
       { type: 'user', content: [{ type: 'image', path: path.join(os.tmpdir(), 'slow-stop.png') }] },
       { signal: controller.signal },
     );
-
+    await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as {
       prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
     };
@@ -2310,12 +2890,12 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     await handle.send({ type: 'user', content: 'long bridge compact' });
 
     await expect(handle.setModel?.('claude-opus-4-6')).resolves.toBeUndefined();
-    await expect(handle.setEffort?.('xhigh')).resolves.toBeUndefined();
+    await expect(handle.setEffort?.('max')).resolves.toBeUndefined();
     await expect(handle.setFastMode?.(true)).resolves.toBeUndefined();
     await expect(handle.setPermissionMode?.('auto')).resolves.toBeUndefined();
 
     expect(secondQuery.setModel).toHaveBeenCalledWith('claude-opus-4-6[1m]');
-    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({ effortLevel: 'xhigh' });
+    expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({ effortLevel: 'max' });
     expect(secondQuery.applyFlagSettings).toHaveBeenCalledWith({ fastMode: true });
     // Cindy 档 'auto' 映射到 SDK 'default'(见 toSdkPermissionMode)。
     expect(secondQuery.setPermissionMode).toHaveBeenCalledWith('default');
@@ -2414,15 +2994,19 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
         events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'send_cancelled_before_acceptance'),
       ).toBe(true);
     });
-    expect(secondQuery.close).not.toHaveBeenCalled();
+    expect(secondQuery.close).toHaveBeenCalled();
 
     const rebuildArgs = sdkMock.query.mock.calls[1]?.[0] as {
       prompt: AsyncIterable<{ message?: { content?: unknown } }> & { pending: number };
     };
     expect(rebuildArgs.prompt.pending).toBe(0);
+    const retryQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(retryQuery);
     await handle.send({ type: 'user', content: 'next after accept replay cancellation' });
-    expect(sdkMock.query).toHaveBeenCalledTimes(2);
-    const promptIter = rebuildArgs.prompt[Symbol.asyncIterator]();
+    expect(sdkMock.query).toHaveBeenCalledTimes(3);
+    const retryArgs = sdkMock.query.mock.calls[2]?.[0] as typeof rebuildArgs;
+    expect(sdkMock.query.mock.calls[2]?.[0]?.options?.resume).toBe(sdkMock.query.mock.calls[1]?.[0]?.options?.resume);
+    const promptIter = retryArgs.prompt[Symbol.asyncIterator]();
     expect((await promptIter.next()).value?.message?.content).toBe('next after accept replay cancellation');
 
     await handle.close();

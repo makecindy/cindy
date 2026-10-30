@@ -16,7 +16,8 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+
 import { toast } from '@/lib/toast';
 import {
   LINK_OPEN_DEFAULTS,
@@ -25,6 +26,12 @@ import {
   type LinkOpenPreference,
 } from '@/hooks/useLinkOpenPreference';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import {
+  SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_DIVIDER_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+} from './settingsRowClasses';
 
 const OPTIONS: Array<{ value: LinkOpenPreference; labelKey: string }> = [
   { value: 'sidebar', labelKey: 'settings.linkOpen.options.sidebar' },
@@ -32,15 +39,11 @@ const OPTIONS: Array<{ value: LinkOpenPreference; labelKey: string }> = [
 ];
 
 /** 带分割线的多行卡片:卡片自身不留内边距,由每行 `px-4 py-4` 承担。 */
-const CARD_CLASS = cn(
-  'flex flex-col rounded-xl',
-  'bg-[var(--settings-theme-card-bg)]',
-  'border border-[var(--settings-theme-card-border)]',
-);
-const ROW_CLASS = 'flex items-center justify-between gap-3 px-4 py-4';
-const ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
-const ROW_HINT_CLASS = 'text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70';
-const DIVIDER_CLASS = 'mx-4 h-px bg-[var(--settings-theme-card-border)]';
+const CARD_CLASS = SETTINGS_CARD_CLASS;
+const ROW_CLASS = 'cindy-segmented-row px-4 py-4';
+const ROW_LABEL_CLASS = SETTINGS_ROW_LABEL_CLASS;
+const ROW_HINT_CLASS = SETTINGS_ROW_HINT_CLASS;
+const DIVIDER_CLASS = SETTINGS_ROW_DIVIDER_CLASS;
 
 function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
   const { t } = useTranslation();
@@ -60,36 +63,14 @@ function LinkOpenPreferenceRow({ kind }: { kind: LinkOpenKind }) {
         <p className={ROW_HINT_CLASS}>{t(`settings.linkOpen.${kind}.description`)}</p>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="cindy-segmented-row-actions">
         <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
-        {/* 分段控件的 token 与外观分区「侧边栏卡片模式」完全同款(docs/design-rules/cindy-design-system.md 复用原则):
-            选中态 chip 底 + 正文字色,未选中态次级字色 + hover 项底。 */}
-        <div
-          role="radiogroup"
+        <SegmentedControl
           aria-label={t(`settings.linkOpen.${kind}.ariaLabel`)}
-          className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
-        >
-          {OPTIONS.map((opt) => {
-            const active = preference === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setPreference(opt.value)}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-xs transition-colors',
-                  active
-                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
-                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
-                )}
-              >
-                {t(opt.labelKey)}
-              </button>
-            );
-          })}
-        </div>
+          value={preference}
+          onValueChange={setPreference}
+          options={OPTIONS.map((opt) => ({ value: opt.value, label: t(opt.labelKey) }))}
+        />
       </div>
     </div>
   );

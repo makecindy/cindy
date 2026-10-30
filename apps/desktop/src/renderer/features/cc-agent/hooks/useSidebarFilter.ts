@@ -7,7 +7,7 @@
  *   - vendor   : 'all' | 'cc' | 'codex'           → 客户端 render 阶段过滤
  *   - lastActivity : 'all' | '1d' | ...           → 客户端 render 阶段过滤
  *   - groupBy  : 'project' | 'flat'               → 客户端 render 阶段切换主列表分组
- *   - sortBy   : 'recency' | 'priority'           → 客户端 render 阶段切换任务排序
+ *   - sortBy   : 'recency' | 'created' | 'priority'           → 客户端 render 阶段切换任务排序
  *   - projectOrder : 'activity' | 'custom'        → 按项目分组时的项目行顺序
  *   - manualProjectOrder : string[]               → Project 分组的自定义顺序
  *
@@ -45,15 +45,22 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import type { TaskBotIdentity } from '@/features/bots/botFollowScopes';
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
-import type {
-  SidebarPinnedOrderMutation,
-  SidebarSettingsSnapshot,
+import {
+  sidebarPinnedEntryComparisonKey,
+  type SidebarPinnedOrderMutation,
+  type SidebarSettingsSnapshot,
 } from '../../../../shared/sidebarSettings';
 
 import {
+  loadCreators,
+  persistCreators,
+  nextCreatorsAfterToggle,
+  normalizeTaskCreators,
+  type FilterCreators,
   loadStatus,
   loadProjects,
   loadVendor,
@@ -119,6 +126,11 @@ export {
 export interface UseSidebarFilterReturn {
   /** Status 维度（默认 'active'）。 */
   status: FilterStatus;
+  creators: FilterCreators;
+  creatorOptions: readonly TaskBotIdentity[];
+  toggleCreator: (key: string) => void;
+  setCreatorsAll: () => void;
+  setCreatorsNone: () => void;
   /** Project 维度。'all' = 全部；string[] = 仅显示其中的 normalized workingDir。 */
   projects: FilterProjects;
   /** projects === 'all' 时返回 null，方便 render 阶段做"是否在集合内"判定。 */
@@ -135,7 +147,7 @@ export interface UseSidebarFilterReturn {
   groupBy: FilterGroupBy;
   /** 「对话归为一组」开关(D 期):true = 无项目任务收进「对话」组;默认 false 散排。 */
   groupDialogue: boolean;
-  /** 「按设备分组」开关(E 期):默认 true;仅有远程设备连接时可见/生效。 */
+  /** 「按设备分组」开关(E 期):默认 true;有可选远程设备（含断线缓存）时可见/生效。 */
   groupDevice: boolean;
   /** Sidebar 主列表任务排序。默认 'recency'。 */
   sortBy: FilterSortBy;
@@ -159,7 +171,7 @@ export interface UseSidebarFilterReturn {
    * 调用幂等。
    */
   gc: (activeWorkingDirs: readonly string[]) => void;
-  /** M41: 设置 vendor 筛选（'all' | 'cc' | 'codex'），持久化到 localStorage。 */
+  /** 设置 Harness 筛选，持久化到已有 vendor localStorage 键。 */
   setVendor: (v: FilterVendor) => void;
   /** 设置最近活跃范围，持久化到 localStorage。 */
   setLastActivity: (lastActivity: FilterLastActivity) => void;
@@ -173,13 +185,14 @@ export interface UseSidebarFilterReturn {
   setSortBy: (sortBy: FilterSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
-  /** 一键重置内容筛选（status/projects/vendor/lastActivity）回默认。 */
+  /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
   resetContentFilters: () => void;
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
   /** 直接替换 Pinned 手动排序顺序并持久化。
    *  activeEntryIds 是拖拽开始时所有仍有效的 pinned session / project entry id；
-   *  baseOrder 是该次拖拽实际看到的完整顺序，供 Main 在最新快照上安全 rebase。 */
+   *  baseOrder 只含当前已加载目录内、此前已有持久 rank 的条目，不含仅展示的未排序置顶（#6345）；
+   *  供 Main 区分「并发移除」与「新条目」，并保留当前目录外的已有 rank。 */
   setManualPinnedOrder: (
     order: readonly string[],
     activeEntryIds: readonly string[],
@@ -213,6 +226,7 @@ function isExactOwnerStampCurrent(
 export function useSidebarFilter(
   hiddenProjectKeys: ReadonlySet<string>,
   initialSnapshot: SidebarSettingsSnapshot,
+  creatorOptions: readonly TaskBotIdentity[] = [],
 ): UseSidebarFilterReturn {
   const ownerId = initialSnapshot.dataOwnerId;
   const ownerStamp = useMemo<DataOwnerPushStamp>(
@@ -225,6 +239,30 @@ export function useSidebarFilter(
   const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
   const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects(ownerId));
+  const [storedCreators, setCreators] = useState<FilterCreators>(() => loadCreators(ownerId));
+  const normalizeCreators = useCallback((selected: FilterCreators): FilterCreators =>
+    normalizeTaskCreators(selected, creatorOptions), [creatorOptions]);
+  const creators = useMemo(() => normalizeCreators(storedCreators), [normalizeCreators, storedCreators]);
+  useEffect(() => {
+    if (creators === storedCreators) return;
+    setCreators(creators);
+    persistCreators(creators, ownerId);
+  }, [creators, storedCreators, ownerId]);
+  const toggleCreator = useCallback((key: string) => {
+    setCreators(previous => {
+      const next = nextCreatorsAfterToggle(normalizeCreators(previous), key);
+      persistCreators(next, ownerId);
+      return next;
+    });
+  }, [ownerId, normalizeCreators]);
+  const setCreatorsNone = useCallback(() => {
+    setCreators('none');
+    persistCreators('none', ownerId);
+  }, [ownerId]);
+  const setCreatorsAll = useCallback(() => {
+    setCreators('all');
+    persistCreators('all', ownerId);
+  }, [ownerId]);
   const [vendor, setVendorState] = useState<FilterVendor>(() => loadVendor());
   const [lastActivity, setLastActivityState] = useState<FilterLastActivity>(() =>
     loadLastActivity(),
@@ -255,6 +293,7 @@ export function useSidebarFilter(
   );
   const pinnedWriteQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingPinnedWritesRef = useRef(0);
+  const deferredPinnedSnapshotStampRef = useRef<DataOwnerPushStamp | null>(null);
   const legacyMigrationStartedRef = useRef(false);
   const legacyMigrationPendingRef = useRef(loadedPinned.needsLegacyMigration);
 
@@ -275,7 +314,11 @@ export function useSidebarFilter(
       } else {
         durablePinnedOrderRef.current = snapshot;
       }
-      if (pendingPinnedWritesRef.current > 0) return;
+      if (pendingPinnedWritesRef.current > 0) {
+        deferredPinnedSnapshotStampRef.current = nextOwnerStamp;
+        return;
+      }
+      deferredPinnedSnapshotStampRef.current = null;
       latestPinnedOrderRef.current = snapshot;
       setManualPinnedOrderState((prev) => (sameStringArray(prev, snapshot) ? prev : snapshot));
     },
@@ -326,10 +369,19 @@ export function useSidebarFilter(
           throw err;
         } finally {
           pendingPinnedWritesRef.current = Math.max(0, pendingPinnedWritesRef.current - 1);
+          const deferredStamp = deferredPinnedSnapshotStampRef.current;
+          if (pendingPinnedWritesRef.current === 0) {
+            deferredPinnedSnapshotStampRef.current = null;
+          }
+          // A refresh may have updated the durable baseline while the old
+          // generation's write was pending. Once the queue drains, show that
+          // baseline even if the old write failed; never overwrite newer
+          // optimistic writes or publish a snapshot from a different account.
           if (
-            succeeded &&
             pendingPinnedWritesRef.current === 0 &&
-            isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)
+            ((succeeded && isExactOwnerStampCurrent(mutationOwnerStamp, ownerStamp)) ||
+              (deferredStamp?.dataOwnerId === ownerId &&
+                isDataOwnerPushStampCurrent(deferredStamp)))
           ) {
             const persisted = Array.from(durablePinnedOrderRef.current);
             latestPinnedOrderRef.current = persisted;
@@ -442,18 +494,18 @@ export function useSidebarFilter(
   const gc = useCallback(
     (activeWorkingDirs: readonly string[]) => {
       setProjectsState((prev) => {
-        const next = gcProjectsAgainstActive(
-          prev,
-          activeWorkingDirs,
-          window.electronAPI.platform,
-        );
+        const next = gcProjectsAgainstActive(prev, activeWorkingDirs, window.electronAPI.platform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
       });
       setManualProjectOrderState((prev) => {
         if (prev.length === 0) return prev;
-        const next = normalizeManualProjectOrder(prev, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(
+          prev,
+          activeWorkingDirs,
+          window.electronAPI.platform,
+        );
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
@@ -504,13 +556,13 @@ export function useSidebarFilter(
   }, []);
 
   const resetContentFilters = useCallback(() => {
-    setStatusState('active');
-    persistStatus('active');
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
       persistProjects('all', ownerId);
       return 'all';
     });
+    setCreators('all');
+    persistCreators('all', ownerId);
     setVendorState('all');
     persistVendor('all');
     setLastActivityState('all');
@@ -520,7 +572,11 @@ export function useSidebarFilter(
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
       setManualProjectOrderState((prev) => {
-        const next = normalizeManualProjectOrder(order, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(
+          order,
+          activeWorkingDirs,
+          window.electronAPI.platform,
+        );
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
@@ -533,7 +589,10 @@ export function useSidebarFilter(
   const setManualPinnedOrder = useCallback(
     (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
       updatePinnedOrder(
-        () => normalizeManualPinnedOrder(order, activeEntryIds),
+        () =>
+          normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
+            sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
+          ),
         (_latestOrder, nextOrder) => ({
           kind: 'reorder',
           baseOrder: Array.from(baseOrder),
@@ -546,10 +605,19 @@ export function useSidebarFilter(
   const promotePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) =>
-          prev[0] === entryId
-            ? Array.from(prev)
-            : [entryId, ...prev.filter((id) => id !== entryId)],
+        (prev) => {
+          const identity = sidebarPinnedEntryComparisonKey(
+            entryId,
+            window.electronAPI.platform,
+          );
+          return [
+            entryId,
+            ...prev.filter(
+              (id) =>
+                sidebarPinnedEntryComparisonKey(id, window.electronAPI.platform) !== identity,
+            ),
+          ];
+        },
         () => ({ kind: 'promote', entryId }),
       ),
     [updatePinnedOrder],
@@ -558,18 +626,31 @@ export function useSidebarFilter(
   const removePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev)),
+        (prev) => {
+          const identity = sidebarPinnedEntryComparisonKey(
+            entryId,
+            window.electronAPI.platform,
+          );
+          return prev.filter(
+            (id) => sidebarPinnedEntryComparisonKey(id, window.electronAPI.platform) !== identity,
+          );
+        },
         () => ({ kind: 'remove', entryId }),
       ),
     [updatePinnedOrder],
   );
 
   const isSessionContentFiltered =
-    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all';
+    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all';
 
   const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
   return {
+    creators,
+    creatorOptions,
+    toggleCreator,
+    setCreatorsAll,
+    setCreatorsNone,
     status,
     projects,
     projectsAsSet,

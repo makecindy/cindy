@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { compareAppUpdateVersions } from '../updateVersionPolicy';
+import { compareAppUpdateVersions, parseAppUpdateVersion } from '../updateVersionPolicy';
+
+describe('parseAppUpdateVersion', () => {
+  it('normalizes valid SemVer and rejects malformed input', () => {
+    expect(parseAppUpdateVersion('1.2.3')).toBe('1.2.3');
+    expect(parseAppUpdateVersion('not-semver')).toBeNull();
+    expect(parseAppUpdateVersion(null)).toBeNull();
+  });
+});
 
 describe('compareAppUpdateVersions', () => {
   it.each([

@@ -5,12 +5,12 @@
  * to the query source: Orca worker sessions must not be attachable from Feishu.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 const dbMock = vi.hoisted(() => ({
+  drizzle: null as ReturnType<typeof drizzle> | null,
   rows: [] as Array<{
     id?: string;
     title?: string;
@@ -22,7 +22,7 @@ const dbMock = vi.hoisted(() => ({
 
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({
-    drizzle: {
+    drizzle: dbMock.drizzle ?? {
       select: () => ({
         from: () => ({
           where: () => {
@@ -40,25 +40,47 @@ vi.mock('../localDb/client/current', () => ({
 
 import {
   listProjectsForControl,
+  listRecentSessionsForPicker,
   listSessionsForWorkspace,
 } from '../im/shared/controlProjects';
-
-const source = readFileSync(
-  resolve(__dirname, '..', 'im', 'shared', 'controlProjects.ts'),
-  'utf8',
-);
+import { listWorkLouderCodexTaskCatalog } from '../worklouder-codex/taskSlots';
 
 describe('/ctr control project/session picker', () => {
   beforeEach(() => {
     dbMock.rows = [];
+    dbMock.drizzle = null;
   });
 
-  it('filters Orca worker sessions from attachable /ctr session lists', () => {
-    expect(source).toContain("ne(sessions.orcaRole, 'worker')");
-    expect(source).toContain('isNull(sessions.orcaRole)');
-    // 4 = 定义 + 3 个 attachable 查询(listProjectsForControl /
-    // listRecentSessionsForPicker / listSessionsForWorkspace)都必须带该谓词。
-    expect(source.match(/attachableSessionPredicate\(\)/g)).toHaveLength(4);
+  // Unit, #6529: hidden follow-ups leaked into IM and keyboard task pickers.
+  // The old query mock ignored WHERE; execute the production catalog queries
+  // against in-memory SQLite instead. Minimal rows: ordinary + side-chat +
+  // review + worker, with a follow-up-only directory to exercise project lists.
+  it('keeps attached tasks and workers out of ordinary IM and keyboard catalogs', async () => {
+    const sqlite = new Database(':memory:');
+    try {
+      sqlite.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, source TEXT,
+        status TEXT, working_dir TEXT, orca_role TEXT, user_send_at INTEGER,
+        updated_at INTEGER, pinned_at INTEGER)`);
+      const insert = sqlite.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const [id, source, role, dir] of [
+        ['main', 'desktop', null, '/workspace/main'],
+        ['child', 'side-chat', null, '/workspace/main'],
+        ['review', 'review', null, '/workspace/main'],
+        ['worker', 'desktop', 'worker', '/workspace/main'],
+        ['child-only-project', 'side-chat', null, '/workspace/follow-up'],
+      ]) insert.run(id, id, source, 'active', dir, role, 1000, 1000, null);
+      dbMock.drizzle = drizzle(sqlite);
+      expect((await listProjectsForControl()).map(row => row.workingDir)).toEqual(['/workspace/main']);
+      expect((await listRecentSessionsForPicker()).map(row => row.id)).toEqual(['main']);
+      expect((await listSessionsForWorkspace('/workspace/main')).map(row => row.id)).toEqual(['main']);
+      const keyboard = await listWorkLouderCodexTaskCatalog();
+      for (const rows of [keyboard.sidebar, keyboard.lastSent, keyboard.options]) {
+        expect(rows.map(row => row.id)).toEqual(['main']);
+      }
+    } finally {
+      dbMock.drizzle = null;
+      sqlite.close();
+    }
   });
 
   it('groups worktree sessions with the base project for Feishu control', async () => {

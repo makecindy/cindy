@@ -47,9 +47,12 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import * as sessionService from '@/lib/sessionService';
 import {
   markSessionAutomaticHistoryLoadCompleted,
   restoreSessionAutomaticHistoryLoadAttempts,
+  saveSessionScroll,
+  clearSessionScroll,
 } from '@/lib/sessionScrollStore';
 
 const BASE_TIME = new Date('2026-05-20T00:00:00.000Z');
@@ -169,10 +172,84 @@ describe('makerChatStore active view tracking', () => {
 
   afterEach(() => {
     for (const dispose of [...disposers].reverse()) dispose();
-    for (const sessionId of sessionIds) makerChatStore.purgeSession(sessionId);
+    for (const sessionId of sessionIds) {
+      makerChatStore.purgeSession(sessionId);
+      clearSessionScroll(sessionId);
+    }
     makerChatStore.__teardownGlobalListeners();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  async function readingWindow(label: string, count = 350, contentSize = 1) {
+    const id = sid(label);
+    const leave = enter(id);
+    vi.mocked(messageService.list).mockResolvedValueOnce(Array.from({ length: count }, (_, i) =>
+      dbMessage(id, `${i}`, 'x'.repeat(contentSize), new Date(BASE_TIME.getTime() + i * 1000).toISOString()),
+    ));
+    makerChatStore.ensureInitialMessages(id);
+    await flushPromises();
+    saveSessionScroll(id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0',
+      messageClientId: 'client-0', offset: 0, isNearBottom: false });
+    return { id, leave, messages: makerChatStore.getSnapshot(id).messages };
+  }
+
+  it('keeps a bounded old reading window on a hot return without another history read', async () => {
+    const view = await readingWindow('reading');
+    view.leave();
+    expect(makerChatStore.getSnapshot(view.id).messages).toBe(view.messages);
+    enter(view.id);
+    makerChatStore.ensureInitialMessages(view.id);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(view.id).messages).toBe(view.messages);
+    expect(messageService.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('cannot resurrect a retained reading window after purge and same-id reopen', async () => {
+    const view = await readingWindow('purged-reading');
+    view.leave();
+    makerChatStore.purgeSession(view.id);
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      dbMessage(view.id, 'fresh', 'new history', BASE_TIME.toISOString()),
+    ]);
+    enter(view.id);
+    makerChatStore.ensureInitialMessages(view.id);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(view.id).messages.map((message) => message.clientId))
+      .toEqual(['client-fresh']);
+  });
+
+  it('trims the displaced third reading window immediately and respects final-view ownership', async () => {
+    const a = await readingWindow('reading-a');
+    const extra = enter(a.id);
+    a.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toBe(a.messages);
+    extra();
+    const b = await readingWindow('reading-b'); b.leave();
+    const c = await readingWindow('reading-c'); c.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toHaveLength(200);
+    expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
+    expect(makerChatStore.getSnapshot(c.id).messages).toBe(c.messages);
+  });
+
+  it('does not reserve tail views, oversized row counts or oversized text windows', async () => {
+    const tail = await readingWindow('tail');
+    saveSessionScroll(tail.id, { windowAnchorKey: null, viewportTopKey: 'msg-client-0', offset: 0, isNearBottom: true });
+    tail.leave();
+    expect(makerChatStore.getSnapshot(tail.id).messages).toHaveLength(200);
+    const many = await readingWindow('many', 1001); many.leave();
+    expect(makerChatStore.getSnapshot(many.id).messages).toHaveLength(200);
+    const large = await readingWindow('large', 350, 100_000); large.leave();
+    expect(makerChatStore.getSnapshot(large.id).messages).toHaveLength(200);
+  });
+
+  it('bounds the combined text budget and keeps retained histories past five minutes', async () => {
+    const a = await readingWindow('budget-a', 350, 50_000); a.leave();
+    const b = await readingWindow('budget-b', 350, 50_000); b.leave();
+    expect(makerChatStore.getSnapshot(a.id).messages).toHaveLength(200);
+    expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(makerChatStore.getSnapshot(b.id).messages).toBe(b.messages);
   });
 
   it('enterView marks a session active and clears lastViewedAt', () => {
@@ -238,6 +315,20 @@ describe('makerChatStore active view tracking', () => {
     // 非空泛验证:回收确实发生了 —— 最早创建的 idle 会话(非 active)已被 purge,
     // 重新 getSnapshot 只会拿到重建的空 slice。
     expect(makerChatStore.getSnapshot(otherIds[0]).messages).toHaveLength(0);
+  });
+
+  it.each([0, 9_000])('keeps read-projected windows replaceable unless history has %s used tokens', async (contextTokens) => {
+    const sessionId = sid('projected-context');
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
+      contextTokens, contextWindow: 272_000, totalCostUsd: 0,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(272_000);
+    makerChatStore.setContextWindow(sessionId, 1_000_000);
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow)
+      .toBe(contextTokens > 0 ? 272_000 : 1_000_000);
   });
 
   it('initial history load backfills to the latest plan boundary', async () => {
@@ -974,7 +1065,7 @@ describe('makerChatStore active view tracking', () => {
     await makerChatStore.loadAroundMessage(sessionId, 'hit', { radius: 60 });
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
-    expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(sessionId).historyWindowIslands).toHaveLength(1);
     expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
@@ -994,8 +1085,8 @@ describe('makerChatStore active view tracking', () => {
     ]);
     // 阶段二:最新页落地 → 游标交还给它的下沿,往上翻才会穿过孤岛与尾段之间的缺失区间。
     expect(snapshot.oldestMessageId).toBe('latest-page-oldest');
-    // 洞还在,孤岛标记不清 —— 下一次跳转仍会尝试补齐。
-    expect(snapshot.historyWindowHasIsland).toBe(true);
+    // 洞还在,孤岛区间不清 —— 下一次跳转仍会尝试补齐。
+    expect(snapshot.historyWindowIslands).toHaveLength(1);
   });
 
   it('keeps loadOlder history chronological after thinking timestamps are backdated', async () => {
@@ -1276,49 +1367,126 @@ describe('makerChatStore active view tracking', () => {
     });
   });
 
-  // 反向验证：Set 版没破坏原 522b2b31 的 demote 触发条件——session leave 后超过
-  // DEMOTE_IDLE_MS 应被清空 messages（释放内存）。
-  it('demotes a session after it has been left for longer than DEMOTE_IDLE_MS', () => {
-    const sessionId = sid('demote');
+  // 离开时长本身不再清空窗口:用户常在几分钟后切回,任务往往已跑完。只有缓存总量
+  // 超出预算时才按离开先后整窗淘汰。
+  it('keeps a left session warm past five minutes until the total budget is exceeded', () => {
+    const sessionId = sid('soft-evict');
     const dispose = enter(sessionId);
     addMessage(sessionId);
     markSessionAutomaticHistoryLoadCompleted(sessionId);
+    dispose();
+
+    vi.advanceTimersByTime(30 * 60_000);
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
     expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(5);
 
-    dispose(); // 写 lastViewedAt = BASE_TIME
-    // 4:59 仍保留，5:00 的 demote timer 才清空（检查间隔 30s）。
-    vi.advanceTimersByTime(4 * 60_000 + 59_000);
-    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
-
-    vi.advanceTimersByTime(1_000);
-
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
     expect(restoreSessionAutomaticHistoryLoadAttempts(sessionId, 5)).toBe(0);
   });
 
-  it('demotes a prefetched session that never enters a mounted view', async () => {
-    const sessionId = sid('prefetch-demote');
+  it('evicts the least recently left windows first and never a mounted one', () => {
+    const oldest = sid('soft-evict-oldest');
+    const newer = sid('soft-evict-newer');
+    const mounted = sid('soft-evict-mounted');
+    for (const sessionId of [oldest, newer]) {
+      const dispose = enter(sessionId);
+      addMessage(sessionId);
+      vi.advanceTimersByTime(1_000);
+      dispose();
+    }
+    enter(mounted);
+    addMessage(mounted);
+
+    try {
+      // Three cached rows against a two-row budget: only the oldest leave goes.
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 2, characters: 1 << 30 });
+      vi.advanceTimersByTime(30_000);
+      expect(makerChatStore.getSnapshot(oldest).messages).toHaveLength(0);
+      expect(makerChatStore.getSnapshot(newer).messages).toHaveLength(1);
+      expect(makerChatStore.getSnapshot(mounted).messages).toHaveLength(1);
+
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      vi.advanceTimersByTime(30_000);
+      expect(makerChatStore.getSnapshot(newer).messages).toHaveLength(0);
+      expect(makerChatStore.getSnapshot(mounted).messages).toHaveLength(1);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
+  });
+
+  it('counts deeply nested, cyclic tool input toward the text budget', () => {
+    const sessionId = sid('soft-evict-tool-input');
+    // Deeply nested (and cyclic) arbitrary MCP input must still be counted.
+    let deepInput: Record<string, unknown> = { content: 'x'.repeat(5_000) };
+    for (let level = 0; level < 20; level++) deepInput = { level, nested: deepInput };
+    deepInput.self = deepInput;
+    const dispose = enter(sessionId);
+    makerChatStore.__applyStreamEventForTest(sessionId, {
+      sessionId,
+      type: 'tool_use',
+      data: { toolUseId: 'tu-write', toolName: 'Write', input: deepInput },
+    } as never);
+    dispose();
+    const [row] = makerChatStore.getSnapshot(sessionId).messages;
+    expect(row.content.length).toBeLessThan(5_000);
+
+    try {
+      // The summary alone fits, the full Write input does not.
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 100, characters: 4_000 });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
+  });
+
+  it('counts every payload field, e.g. a completed plan kept outside content', async () => {
+    const sessionId = sid('soft-evict-plan');
+    const dispose = enter(sessionId);
+    vi.mocked(messageService.list).mockResolvedValueOnce([{
+      ...dbMessage(sessionId, 'plan-row', '', BASE_TIME.toISOString()),
+      role: 'plan_review',
+      content: { requestId: 'plan-1', status: 'approved', plan: '# Plan\n' + 'step\n'.repeat(1_000) },
+    } as unknown as Message]);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    dispose();
+    const [row] = makerChatStore.getSnapshot(sessionId).messages;
+    expect(row).toMatchObject({ role: 'plan_review', content: '' });
+
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 100, characters: 4_000 });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
+    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
+  });
+
+  it('evicts a prefetched session that never enters a mounted view by budget', async () => {
+    const sessionId = sid('prefetch-evict');
     addMessage(sessionId);
 
     makerChatStore.ensureInitialMessages(sessionId);
     await flushPromises();
 
     expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(BASE_TIME.getTime());
+    vi.advanceTimersByTime(30 * 60_000);
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
 
-    vi.advanceTimersByTime(4 * 60_000);
-    makerChatStore.ensureInitialMessages(sessionId);
-    expect(makerChatStore.__activeViewTest.getLastViewedAt(sessionId)).toBe(
-      BASE_TIME.getTime() + 4 * 60_000,
-    );
-
-    vi.advanceTimersByTime(4 * 60_000 + 59_000);
-    expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(1);
-
-    vi.advanceTimersByTime(1_000);
-
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
   });

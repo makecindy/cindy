@@ -1,236 +1,450 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from "vitest";
 import {
   canPreviewResolvedRemoteMedia,
   formatRemoteMediaSize,
+  mediaLoadFailureKey,
   isDesktopLocalMediaUrl,
+  isDirectPreviewableMediaUrl,
   isResolvedRemoteMediaFresh,
   localCopyResolvedMedia,
   REMOTE_MEDIA_NEVER_EXPIRES,
   resolveMobileRemoteMedia,
-} from '@/session/remoteMedia';
+} from "@/session/remoteMedia";
 
-describe('mobile remote media', () => {
-  it('recognizes desktop-local media schemes only', () => {
-    expect(isDesktopLocalMediaUrl('xdt-image://cache/a.png')).toBe(true);
-    expect(isDesktopLocalMediaUrl('xdt-video://cache/a.mp4')).toBe(true);
-    expect(isDesktopLocalMediaUrl('xdt-audio://cache/a.mp3')).toBe(true);
-    expect(isDesktopLocalMediaUrl('xdt-file://m?path=/tmp/a.pdf')).toBe(true);
-    expect(isDesktopLocalMediaUrl('https://example.com/a.png')).toBe(false);
-    expect(isDesktopLocalMediaUrl('xdt-model://asset.glb')).toBe(false);
+describe("mobile remote media", () => {
+  // Regression: video streaming forced OSS even when authenticated peer bytes
+  // were available. Retention must finish before the staging lease is released.
+  it.each([false, true])('owns peer video playback beyond its staging lifetime (copy fails=%s)', async (fails) => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const staged = { ossKey: '', mimeType: 'video/mp4', size: 3 };
+    const dispose = vi.fn();
+    recordPeerMedia(staged, 'file:///staging/clip.mp4', dispose);
+    const fetchRemoteMedia = vi.fn(async () => staged);
+    const retainLocalVideo = vi.fn(async (media: import('@/session/remoteMedia').MobileResolvedRemoteMedia) => {
+      expect(dispose).not.toHaveBeenCalled();
+      if (fails) throw new Error('disk full');
+      return { ...media, url: 'file:///retained/clip.mp4', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES };
+    });
+    const result = resolveMobileRemoteMedia({ kind: 'video', url: 'xdt-file://open?path=/clip.mp4' }, {
+      fetchRemoteMedia, presignGet: vi.fn(), retainLocalVideo,
+    });
+    if (fails) await expect(result).rejects.toThrow('disk full');
+    else await expect(result).resolves.toMatchObject({ url: 'file:///retained/clip.mp4', previewable: true });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith('xdt-file://open?path=/clip.mp4', expect.objectContaining({ stream: false, revalidate: true }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+  it('retains a background fallback and releases its staging copy and cloud object', async () => {
+    const { recordPeerMedia } = await import('@/device-link/peerFileRegistry');
+    const local = { ossKey: '', mimeType: 'application/pdf', size: 3 };
+    const dispose = vi.fn();
+    recordPeerMedia(local, 'file:///background/pdf', dispose);
+    let retain!: NonNullable<import('@/session/remoteMedia').MobileRemoteMediaFetchOptions['retainBackground']>;
+    const discardBackgroundOssKey = vi.fn();
+    await resolveMobileRemoteMedia({ kind: 'file', url: 'xdt-file://open?path=/a.pdf' }, {
+      fetchRemoteMedia: async (_url, options) => {
+        retain = options!.retainBackground!;
+        return { ...local, inlineBase64: 'YWJj' };
+      },
+      presignGet: async () => ({ getUrl: 'https://oss/new', expiresAt: '2099-01-01T00:00:00Z' }),
+    }, { stream: false, discardBackgroundOssKey });
+    const cacheDownload = vi.fn(async () => local);
+    await retain({ ...local, ossKey: 'oss/new', cacheDownload });
+    expect(cacheDownload).toHaveBeenCalledWith('https://oss/new');
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(discardBackgroundOssKey).toHaveBeenCalledWith('oss/new');
+  });
+  it('returns a completed fallback copy while preserving ownership of the OSS object', async () => {
+    const { recordPeerMedia, releasePeerMedia } = await import('@/device-link/peerFileRegistry');
+    const local = { ossKey: '', mimeType: 'application/pdf', size: 3 };
+    recordPeerMedia(local, 'file:///cached/pdf', () => {});
+    const cacheDownload = vi.fn(async () => local);
+    const onOssKey = vi.fn();
+    try {
+      const result = await resolveMobileRemoteMedia({ kind: 'file', url: 'xdt-file://open?path=/a.pdf' }, {
+        fetchRemoteMedia: async () => ({ ossKey: 'oss/file', size: 3, mimeType: local.mimeType, cacheDownload }),
+        presignGet: async () => ({ getUrl: 'https://oss/file', expiresAt: '2099-01-01T00:00:00Z' }),
+      }, { stream: false, onOssKey });
+      expect(result).toMatchObject({ url: 'file:///cached/pdf', ossKey: 'oss/file' });
+      expect(cacheDownload).toHaveBeenCalledWith('https://oss/file');
+      expect(onOssKey).toHaveBeenCalledExactlyOnceWith('oss/file');
+    } finally { releasePeerMedia('file:///cached/pdf'); }
+  });
+  // Unit regression: retained sent images must serve original and thumbnail requests
+  // offline. Existing tests covered only remote downloads and already-resolved copies.
+  it.each([false, true])('reads a retained sent image offline (thumbnail=%s), with forced repair bypass', async (thumbnail) => {
+    const findLocalImage = vi.fn(async () => ({ uri: 'file:///doc/sent.png', size: 100, mimeType: 'image/png' }));
+    const fetchRemoteMedia = vi.fn(async () => { throw new Error('NOT_CONNECTED'); });
+    const presignGet = vi.fn();
+    const media = { kind: 'image' as const, url: `cindy-media://blobs/${'a'.repeat(64)}.png` };
+    const deps = { findLocalImage, fetchRemoteMedia, presignGet };
+    await expect(resolveMobileRemoteMedia(media, deps, { thumbnail })).resolves.toMatchObject({
+      url: 'file:///doc/sent.png', size: 100, ossKey: '', expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+    });
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(presignGet).not.toHaveBeenCalled();
+    await expect(resolveMobileRemoteMedia(media, deps, { skipCache: true })).rejects.toThrow('NOT_CONNECTED');
+    expect(findLocalImage).toHaveBeenCalledOnce();
+    findLocalImage.mockRejectedValueOnce(new Error('unreadable local file'));
+    await expect(resolveMobileRemoteMedia(media, deps)).rejects.toThrow('NOT_CONNECTED');
   });
 
-  it('resolves desktop media through device-link fetch plus server presign-get', async () => {
+  it.each(['DEVICE_OFFLINE', 'NOT_CONNECTED', 'DEVICE_LINK_NOT_CONNECTED', 'PEER_OFFLINE'])(
+    'recognizes the structured %s code even when its message has no code', (code) => {
+      expect(mediaLoadFailureKey(Object.assign(new Error('remote device is unavailable'), { code }))).toBe('message.lightbox.deviceOffline');
+      expect(mediaLoadFailureKey({ code, message: 'unavailable' })).toBe('message.lightbox.deviceOffline');
+    },
+  );
+  it('does not misclassify permission, timeout or configuration errors as offline', () => {
+    for (const code of ['REMOTE_DISABLED', 'PERMISSION_DENIED', 'TIMEOUT', 'VERSION_MISMATCH']) {
+      expect(mediaLoadFailureKey(Object.assign(new Error('request failed'), { code }))).toBe('message.lightbox.loadFailed');
+    }
+    expect(mediaLoadFailureKey({ code: 'MEDIA_SOURCE_MISSING' })).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[NOT_CONNECTED] relay closed'))).toBe('message.lightbox.deviceOffline');
+  });
+  it('classifies stable failure codes without exposing paths or assuming every failure is a missing file', () => {
+    expect(mediaLoadFailureKey(new Error('[MEDIA_SOURCE_MISSING] missing'))).toBe('message.lightbox.sourceMissing');
+    expect(mediaLoadFailureKey(new Error('[DEVICE_LINK_NOT_CONNECTED]'))).toBe('message.lightbox.deviceOffline');
+    expect(mediaLoadFailureKey(new Error('ENOENT /private/user.png'))).toBe('message.lightbox.loadFailed');
+    expect(mediaLoadFailureKey(new Error('timeout'))).toBe('message.lightbox.loadFailed');
+  });
+  it("accepts inline audio and video data URLs for the media player", () => {
+    expect(isDirectPreviewableMediaUrl("https://example.com/a.mp4")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:image/png;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:audio/mpeg;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:video/mp4;base64,aaa")).toBe(true);
+    expect(isDirectPreviewableMediaUrl("data:text/plain;base64,aaa")).toBe(false);
+  });
+
+  it("recognizes desktop-local media schemes only", () => {
+    expect(isDesktopLocalMediaUrl("xdt-image://cache/a.png")).toBe(true);
+    expect(isDesktopLocalMediaUrl("xdt-video://cache/a.mp4")).toBe(true);
+    expect(isDesktopLocalMediaUrl("xdt-audio://cache/a.mp3")).toBe(true);
+    expect(isDesktopLocalMediaUrl("xdt-file://m?path=/tmp/a.pdf")).toBe(true);
+    expect(isDesktopLocalMediaUrl("https://example.com/a.png")).toBe(false);
+    expect(isDesktopLocalMediaUrl("xdt-model://asset.glb")).toBe(false);
+  });
+
+  it("resolves desktop media through device-link fetch plus server presign-get", async () => {
     const fetchRemoteMedia = vi.fn(async () => ({
-      ossKey: 'cindy/device-link/user-1/a.png',
-      mimeType: 'image/png',
+      ossKey: "cindy/device-link/user-1/a.png",
+      mimeType: "image/png",
       size: 2048,
     }));
     const presignGet = vi.fn(async () => ({
-      getUrl: 'https://oss.example/a.png?signature=1',
-      expiresAt: '2026-06-16T10:05:00.000Z',
+      getUrl: "https://oss.example/a.png?signature=1",
+      expiresAt: "2026-06-16T10:05:00.000Z",
     }));
 
-    await expect(resolveMobileRemoteMedia({
-      kind: 'image',
-      url: 'xdt-image://cache/a.png',
-    }, { fetchRemoteMedia, presignGet })).resolves.toEqual({
-      url: 'https://oss.example/a.png?signature=1',
-      ossKey: 'cindy/device-link/user-1/a.png',
-      mimeType: 'image/png',
+    await expect(
+      resolveMobileRemoteMedia(
+        {
+          kind: "image",
+          url: "xdt-image://cache/a.png",
+        },
+        { fetchRemoteMedia, presignGet },
+      ),
+    ).resolves.toEqual({
+      url: "https://oss.example/a.png?signature=1",
+      ossKey: "cindy/device-link/user-1/a.png",
+      mimeType: "image/png",
       size: 2048,
-      expiresAt: '2026-06-16T10:05:00.000Z',
+      expiresAt: "2026-06-16T10:05:00.000Z",
       previewable: true,
     });
-    expect(fetchRemoteMedia).toHaveBeenCalledWith('xdt-image://cache/a.png', undefined);
-    expect(presignGet).toHaveBeenCalledWith('cindy/device-link/user-1/a.png');
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      "xdt-image://cache/a.png",
+      undefined,
+    );
+    expect(presignGet).toHaveBeenCalledWith("cindy/device-link/user-1/a.png");
   });
 
-  it('hands the ossKey to onOssKey before presign, so a presign failure is still recoverable', async () => {
+  it("resolves a plugin file for export without treating it as a picture", async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: "files/report.pdf", mimeType: "application/pdf", size: 100 }));
+    const presignGet = vi.fn(async () => ({ getUrl: "https://oss.example/report.pdf", expiresAt: "2026-10-01T00:00:00Z" }));
+    const result = await resolveMobileRemoteMedia({ kind: "file", url: "xdt-file://open?path=%2Ftmp%2Freport.pdf" }, { fetchRemoteMedia, presignGet });
+    expect(result).toMatchObject({ previewable: false, mimeType: "application/pdf", url: "https://oss.example/report.pdf" });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith("xdt-file://open?path=%2Ftmp%2Freport.pdf", undefined);
+  });
+
+  it("hands the ossKey to onOssKey before presign, so a presign failure is still recoverable", async () => {
     // presign 失败会让本函数在返回之前抛错 —— 调用方拿不到 resolved 结果,围绕它写的
     // finally 不会执行,已上传的对象永久遗留(review P1)。onOssKey 让 key 在上传成功那一刻
     // 就交出去,失败路径也能 best-effort DELETE。
     const order: string[] = [];
     const fetchRemoteMedia = vi.fn(async () => {
-      order.push('upload');
-      return { ossKey: 'cindy/device-link/user-1/a.png', mimeType: 'image/png', size: 2048 };
+      order.push("upload");
+      return {
+        ossKey: "cindy/device-link/user-1/a.png",
+        mimeType: "image/png",
+        size: 2048,
+      };
     });
     const presignGet = vi.fn(async () => {
-      order.push('presign');
-      throw new Error('relay down');
+      order.push("presign");
+      throw new Error("relay down");
     });
     const seen: string[] = [];
 
-    await expect(resolveMobileRemoteMedia(
-      { kind: 'image', url: 'xdt-image://cache/a.png' },
-      { fetchRemoteMedia, presignGet },
-      { onOssKey: (key) => { order.push('onOssKey'); seen.push(key); } },
-    )).rejects.toThrow('relay down');
+    await expect(
+      resolveMobileRemoteMedia(
+        { kind: "image", url: "xdt-image://cache/a.png" },
+        { fetchRemoteMedia, presignGet },
+        {
+          onOssKey: (key) => {
+            order.push("onOssKey");
+            seen.push(key);
+          },
+        },
+      ),
+    ).rejects.toThrow("relay down");
 
-    expect(seen).toEqual(['cindy/device-link/user-1/a.png']);
+    expect(seen).toEqual(["cindy/device-link/user-1/a.png"]);
     // 顺序必须是 上传 → 交出 key → presign,否则失败窗口依旧漏。
-    expect(order).toEqual(['upload', 'onOssKey', 'presign']);
+    expect(order).toEqual(["upload", "onOssKey", "presign"]);
   });
 
-  it('hands out the ossKey even when the fetch result fails validation (0-byte file)', async () => {
+  it("accepts a zero-byte file and hands out its OSS key before presign", async () => {
     // 合法的零字节文件(空 .css / .js)会因 `size > 0` 这条校验先抛错,而被控端的 PUT
     // 已经完成 —— key 必须在校验**之前**交出去,否则那个对象永久遗留(review P1)。
     const fetchRemoteMedia = vi.fn(async () => ({
-      ossKey: 'cindy/device-link/user-1/empty.css',
-      mimeType: 'text/css',
+      ossKey: "cindy/device-link/user-1/empty.css",
+      mimeType: "text/css",
       size: 0,
     }));
     const seen: string[] = [];
 
-    await expect(resolveMobileRemoteMedia(
-      { kind: 'image', url: 'xdt-image://cache/empty.css' },
-      { fetchRemoteMedia, presignGet: vi.fn() },
-      { onOssKey: (key) => seen.push(key) },
-    )).rejects.toThrow();
+    await expect(
+      resolveMobileRemoteMedia(
+        { kind: "image", url: "xdt-image://cache/empty.css" },
+        {
+          fetchRemoteMedia,
+          presignGet: vi.fn(async () => ({
+            getUrl: "https://example.com/empty",
+            expiresAt: "2099-01-01T00:00:00Z",
+          })),
+        },
+        { onOssKey: (key) => seen.push(key) },
+      ),
+    ).resolves.toMatchObject({ size: 0, url: "https://example.com/empty" });
 
-    expect(seen).toEqual(['cindy/device-link/user-1/empty.css']);
+    expect(seen).toEqual(["cindy/device-link/user-1/empty.css"]);
   });
 
-  it('does not call onOssKey when there is no object at all (empty key)', async () => {
-    const fetchRemoteMedia = vi.fn(async () => ({ ossKey: '', mimeType: 'text/css', size: 0 }));
+  it("does not call onOssKey when there is no object at all (empty key)", async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({
+      ossKey: "",
+      mimeType: "text/css",
+      size: 0,
+    }));
     const onOssKey = vi.fn();
-    await expect(resolveMobileRemoteMedia(
-      { kind: 'image', url: 'xdt-image://cache/x.css' },
-      { fetchRemoteMedia, presignGet: vi.fn() },
-      { onOssKey },
-    )).rejects.toThrow();
+    await expect(
+      resolveMobileRemoteMedia(
+        { kind: "image", url: "xdt-image://cache/x.css" },
+        { fetchRemoteMedia, presignGet: vi.fn() },
+        { onOssKey },
+      ),
+    ).rejects.toThrow();
     expect(onOssKey).not.toHaveBeenCalled();
   });
 
-  it('does not call onOssKey for inline results (no OSS object to reclaim)', async () => {
+  it("does not call onOssKey for inline results (no OSS object to reclaim)", async () => {
     const fetchRemoteMedia = vi.fn(async () => ({
-      ossKey: '',
-      mimeType: 'image/webp',
-      size: 4096,
-      inlineBase64: 'aGVsbG8=',
+      ossKey: "",
+      mimeType: "image/webp",
+      size: 5,
+      inlineBase64: "aGVsbG8=",
     }));
     const onOssKey = vi.fn();
 
     await resolveMobileRemoteMedia(
-      { kind: 'image', url: 'xdt-image://cache/a.png' },
+      { kind: "image", url: "xdt-image://cache/a.png" },
       { fetchRemoteMedia, presignGet: vi.fn() },
       { thumbnail: true, onOssKey },
     );
     expect(onOssKey).not.toHaveBeenCalled();
   });
 
-  it('returns inline thumbnail bytes as a data uri without touching presign', async () => {
+  it("returns inline thumbnail bytes as a data uri without touching presign", async () => {
     const fetchRemoteMedia = vi.fn(async () => ({
-      ossKey: '',
-      mimeType: 'image/webp',
-      size: 4096,
-      inlineBase64: 'aGVsbG8=',
+      ossKey: "",
+      mimeType: "image/webp",
+      size: 5,
+      inlineBase64: "aGVsbG8=",
     }));
     const presignGet = vi.fn();
 
-    await expect(resolveMobileRemoteMedia({
-      kind: 'image',
-      url: 'xdt-image://cache/a.png',
-    }, { fetchRemoteMedia, presignGet }, { thumbnail: true })).resolves.toMatchObject({
-      url: 'data:image/webp;base64,aGVsbG8=',
-      ossKey: '',
-      mimeType: 'image/webp',
-      size: 4096,
+    await expect(
+      resolveMobileRemoteMedia(
+        {
+          kind: "image",
+          url: "xdt-image://cache/a.png",
+        },
+        { fetchRemoteMedia, presignGet },
+        { thumbnail: true },
+      ),
+    ).resolves.toMatchObject({
+      url: "data:image/webp;base64,aGVsbG8=",
+      ossKey: "",
+      mimeType: "image/webp",
+      size: 5,
       previewable: true,
-      inlineBase64: 'aGVsbG8=',
+      inlineBase64: "aGVsbG8=",
     });
-    expect(fetchRemoteMedia).toHaveBeenCalledWith('xdt-image://cache/a.png', { thumbnail: true });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith("xdt-image://cache/a.png", {
+      thumbnail: true,
+    });
     expect(presignGet).not.toHaveBeenCalled();
   });
 
-  it('falls back to the presign path when an old desktop ignores the thumbnail flag', async () => {
+  it.each([
+    ["audio", "audio/mpeg"],
+    ["video", "video/mp4"],
+  ] as const)("turns inline %s bytes into a player-accepted data URL", async (kind, mimeType) => {
+    const inlineBase64 = "aGVsbG8=";
     const fetchRemoteMedia = vi.fn(async () => ({
-      ossKey: 'cindy/device-link/user-1/a.png',
-      mimeType: 'image/png',
+      ossKey: "",
+      mimeType,
+      size: 5,
+      inlineBase64,
+    }));
+    const presignGet = vi.fn();
+    const resolved = await resolveMobileRemoteMedia(
+      { kind, url: `cindy-media://blobs/${"a".repeat(64)}.bin` },
+      { fetchRemoteMedia, presignGet },
+    );
+    expect(resolved.url).toBe(`data:${mimeType};base64,${inlineBase64}`);
+    expect(isDirectPreviewableMediaUrl(resolved.url)).toBe(true);
+    expect(resolved.previewable).toBe(true);
+    expect(presignGet).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the presign path when an old desktop ignores the thumbnail flag", async () => {
+    const fetchRemoteMedia = vi.fn(async () => ({
+      ossKey: "cindy/device-link/user-1/a.png",
+      mimeType: "image/png",
       size: 2048,
     }));
     const presignGet = vi.fn(async () => ({
-      getUrl: 'https://oss.example/a.png?signature=1',
-      expiresAt: '2026-06-16T10:05:00.000Z',
+      getUrl: "https://oss.example/a.png?signature=1",
+      expiresAt: "2026-06-16T10:05:00.000Z",
     }));
 
-    await expect(resolveMobileRemoteMedia({
-      kind: 'image',
-      url: 'xdt-image://cache/a.png',
-    }, { fetchRemoteMedia, presignGet }, { thumbnail: true })).resolves.toMatchObject({
-      url: 'https://oss.example/a.png?signature=1',
-      ossKey: 'cindy/device-link/user-1/a.png',
+    await expect(
+      resolveMobileRemoteMedia(
+        {
+          kind: "image",
+          url: "xdt-image://cache/a.png",
+        },
+        { fetchRemoteMedia, presignGet },
+        { thumbnail: true },
+      ),
+    ).resolves.toMatchObject({
+      url: "https://oss.example/a.png?signature=1",
+      ossKey: "cindy/device-link/user-1/a.png",
     });
-    expect(presignGet).toHaveBeenCalledWith('cindy/device-link/user-1/a.png');
+    expect(presignGet).toHaveBeenCalledWith("cindy/device-link/user-1/a.png");
   });
 
-  it('marks resolved image, video, and audio media as mobile-previewable by MIME type', () => {
-    expect(canPreviewResolvedRemoteMedia('video', 'video/mp4')).toBe(true);
-    expect(canPreviewResolvedRemoteMedia('audio', 'audio/mpeg')).toBe(true);
-    expect(canPreviewResolvedRemoteMedia('image', 'application/octet-stream')).toBe(false);
-    expect(canPreviewResolvedRemoteMedia('video', 'application/octet-stream')).toBe(false);
+  it("marks resolved image, video, and audio media as mobile-previewable by MIME type", () => {
+    expect(canPreviewResolvedRemoteMedia("video", "video/mp4")).toBe(true);
+    expect(canPreviewResolvedRemoteMedia("audio", "audio/mpeg")).toBe(true);
+    expect(
+      canPreviewResolvedRemoteMedia("image", "application/octet-stream"),
+    ).toBe(false);
+    expect(
+      canPreviewResolvedRemoteMedia("video", "application/octet-stream"),
+    ).toBe(false);
   });
 
-  it('guards cached presigned urls with a safety window', () => {
-    const now = Date.parse('2026-06-16T10:00:00.000Z');
-    expect(isResolvedRemoteMediaFresh({ expiresAt: '2026-06-16T10:02:00.000Z' }, now)).toBe(true);
-    expect(isResolvedRemoteMediaFresh({ expiresAt: '2026-06-16T10:00:30.000Z' }, now)).toBe(false);
-    expect(isResolvedRemoteMediaFresh({ expiresAt: 'bad-date' }, now)).toBe(false);
+  it("guards cached presigned urls with a safety window", () => {
+    const now = Date.parse("2026-06-16T10:00:00.000Z");
+    expect(
+      isResolvedRemoteMediaFresh(
+        { expiresAt: "2026-06-16T10:02:00.000Z" },
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      isResolvedRemoteMediaFresh(
+        { expiresAt: "2026-06-16T10:00:30.000Z" },
+        now,
+      ),
+    ).toBe(false);
+    expect(isResolvedRemoteMediaFresh({ expiresAt: "bad-date" }, now)).toBe(
+      false,
+    );
   });
 
-  describe('localCopyResolvedMedia', () => {
+  describe("localCopyResolvedMedia", () => {
     const resolved = {
-      url: 'https://oss.example/obj?sig=abc',
-      ossKey: 'user/obj-1',
-      mimeType: 'image/png',
+      url: "https://oss.example/obj?sig=abc",
+      ossKey: "user/obj-1",
+      mimeType: "image/png",
       size: 3_000_000,
-      expiresAt: '2026-06-16T11:00:00.000Z',
+      expiresAt: "2026-06-16T11:00:00.000Z",
       previewable: true,
     };
 
-    it('swaps the presigned url for the local file and keeps the oss key', () => {
+    it("swaps the presigned url for the local file and keeps the oss key", () => {
       // 保留 ossKey 是硬要求:对象仍在世,退屏清理靠它 DELETE。
-      expect(localCopyResolvedMedia(resolved, {
-        uri: 'file:///cache/obj-1.png',
-        mimeType: 'image/png',
-        size: 2_999_888,
-      })).toEqual({
-        url: 'file:///cache/obj-1.png',
-        ossKey: 'user/obj-1',
-        mimeType: 'image/png',
+      expect(
+        localCopyResolvedMedia(resolved, {
+          uri: "file:///cache/obj-1.png",
+          mimeType: "image/png",
+          size: 2_999_888,
+        }),
+      ).toEqual({
+        url: "file:///cache/obj-1.png",
+        ossKey: "user/obj-1",
+        mimeType: "image/png",
         size: 2_999_888,
         expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
         previewable: true,
       });
     });
 
-    it('falls back to the presigned entry when the disk copy is unusable', () => {
+    it("falls back to the presigned entry when the disk copy is unusable", () => {
       // 落盘被跳过(单对象超预算)/ 失败 / 落成了非图片:回落原条目,不能返回坏地址。
       expect(localCopyResolvedMedia(resolved, null)).toBeNull();
       expect(localCopyResolvedMedia(resolved, undefined)).toBeNull();
-      expect(localCopyResolvedMedia(resolved, { uri: '', mimeType: 'image/png', size: 1 })).toBeNull();
-      expect(localCopyResolvedMedia(resolved, {
-        uri: 'file:///cache/obj-1.bin',
-        mimeType: 'application/octet-stream',
-        size: 1,
-      })).toBeNull();
+      expect(
+        localCopyResolvedMedia(resolved, {
+          uri: "",
+          mimeType: "image/png",
+          size: 1,
+        }),
+      ).toBeNull();
+      expect(
+        localCopyResolvedMedia(resolved, {
+          uri: "file:///cache/obj-1.bin",
+          mimeType: "application/octet-stream",
+          size: 1,
+        }),
+      ).toBeNull();
     });
 
-    it('marks the local copy as non-expiring so reopening skips the network', () => {
+    it("marks the local copy as non-expiring so reopening skips the network", () => {
       const local = localCopyResolvedMedia(resolved, {
-        uri: 'file:///cache/obj-1.png',
-        mimeType: 'image/png',
+        uri: "file:///cache/obj-1.png",
+        mimeType: "image/png",
         size: 10,
       });
       // 队列按 isResolvedRemoteMediaFresh 判缓存可用性:本地文件必须恒 fresh,
       // 否则再次点开又会回到「重新取件 + 重新下载」。
-      expect(local && isResolvedRemoteMediaFresh(local, Date.parse('2030-01-01T00:00:00.000Z'))).toBe(true);
+      expect(
+        local &&
+          isResolvedRemoteMediaFresh(
+            local,
+            Date.parse("2030-01-01T00:00:00.000Z"),
+          ),
+      ).toBe(true);
     });
   });
 
-  it('formats byte sizes compactly', () => {
-    expect(formatRemoteMediaSize(0)).toBe('');
-    expect(formatRemoteMediaSize(512)).toBe('512 B');
-    expect(formatRemoteMediaSize(2048)).toBe('2.0 KB');
-    expect(formatRemoteMediaSize(2 * 1024 * 1024)).toBe('2.0 MB');
+  it("formats byte sizes compactly", () => {
+    expect(formatRemoteMediaSize(0)).toBe("");
+    expect(formatRemoteMediaSize(512)).toBe("512 B");
+    expect(formatRemoteMediaSize(2048)).toBe("2.0 KB");
+    expect(formatRemoteMediaSize(2 * 1024 * 1024)).toBe("2.0 MB");
   });
 });

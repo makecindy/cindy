@@ -11,14 +11,19 @@
  */
 
 import type { AskUserQuestionItem, InteractionDecision } from '@cindy/maker-core';
+import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 
 import {
   buildAskNoAnswerDecision,
   buildPermissionDenyDecision,
   buildPlanDenyDecision,
+  type SessionPermissionRequest,
 } from './interactionCardModel';
 
 interface PendingEntry {
+  sharedPermission?: SharedPermission;
+  /** Runtime runner identity; never shared across channels or reconnect instances. */
+  owner?: symbol;
   resolve: (decision: InteractionDecision) => void;
   reject: (err: Error) => void;
   /** Card messageId we sent — orchestrator can patch it after resolve. */
@@ -26,12 +31,10 @@ interface PendingEntry {
   /** For sanity / log: which kind we're awaiting. */
   kind: InteractionDecision['kind'];
   /**
-   * Original toolName from the InteractionRequest (only set when kind ===
-   * 'permission'). Needed to construct `permissionUpdates` for "always
-   * allow this tool" semantics — cardActionHandler doesn't have access to
-   * the request, so we stash it here at register time.
+   * Original permission context, including host-owned session consent.
+   * Only the stored request determines "always allow"; button payloads do not.
    */
-  toolName?: string;
+  permissionRequest?: SessionPermissionRequest;
   /**
    * 授权卡原始正文(title + body, 仅 kind === 'permission')。点击后收口时
    * 保留它再追加决策结果 — 用户需要看到自己批准的是什么, 不能整卡换成
@@ -41,7 +44,7 @@ interface PendingEntry {
   /**
    * 多题/多选打勾卡的原始问题(仅 kind === 'ask_user_question' 且
    * needsAskMultiCard 时登记)。ask:multi 按键要按问题下标改写勾选态并
-   * 重建卡片, cardActionHandler 拿不到原始请求, 与 toolName 同理登记在此。
+   * 重建卡片, cardActionHandler 拿不到原始请求, 与 permissionRequest 同理登记在此。
    */
   askQuestions?: AskUserQuestionItem[];
   /**
@@ -59,7 +62,9 @@ export function registerPending(
   kind: InteractionDecision['kind'],
   messageId: string,
   extras?: {
-    toolName?: string;
+    sharedPermission?: SharedPermission;
+    owner?: symbol;
+    permissionRequest?: SessionPermissionRequest;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
     askSelections?: Map<number, Set<number>>;
@@ -89,7 +94,9 @@ export function registerPendingExternal(
   resolve: (decision: InteractionDecision) => void,
   reject: (err: Error) => void,
   extras?: {
-    toolName?: string;
+    sharedPermission?: SharedPermission;
+    owner?: symbol;
+    permissionRequest?: SessionPermissionRequest;
     permissionCard?: { title: string; body: string };
     askQuestions?: AskUserQuestionItem[];
     askSelections?: Map<number, Set<number>>;
@@ -99,11 +106,13 @@ export function registerPendingExternal(
     throw new Error(`pending interaction already exists for requestId=${requestId}`);
   }
   pending.set(requestId, {
+    sharedPermission: extras?.sharedPermission,
     resolve,
     reject,
     messageId,
     kind,
-    toolName: extras?.toolName,
+    owner: extras?.owner,
+    permissionRequest: extras?.permissionRequest,
     permissionCard: extras?.permissionCard,
     askQuestions: extras?.askQuestions,
     askSelections: extras?.askSelections,
@@ -117,9 +126,13 @@ export function lookupPending(requestId: string): PendingEntry | null {
 export function resolvePending(
   requestId: string,
   decision: InteractionDecision,
-): { messageId: string; permissionCard?: { title: string; body: string } } | null {
+): { messageId: string; permissionCard?: { title: string; body: string }; shared?: boolean } | null {
   const entry = pending.get(requestId);
   if (!entry) return null;
+  if (entry.sharedPermission) {
+    if (!entry.sharedPermission.decide(decision)) return null;
+    return { messageId: entry.messageId, shared: true };
+  }
   pending.delete(requestId);
   entry.resolve(decision);
   return { messageId: entry.messageId, permissionCard: entry.permissionCard };
@@ -137,6 +150,10 @@ export function resolvePending(
 export function cancelPending(requestId: string, reason: string): { messageId: string } | null {
   const entry = pending.get(requestId);
   if (!entry) return null;
+  if (entry.sharedPermission) {
+    entry.sharedPermission.settle(buildPermissionDenyDecision(reason));
+    return null; // The shared presenter owns the final card, including its source.
+  }
   pending.delete(requestId);
   if (entry.kind === 'ask_user_question') {
     entry.resolve(buildAskNoAnswerDecision());
@@ -148,12 +165,23 @@ export function cancelPending(requestId: string, reason: string): { messageId: s
   return { messageId: entry.messageId };
 }
 
+/** Remove a shared presentation after the authoritative decision has settled. */
+export function forgetSharedPending(requestId: string, permission: SharedPermission): void {
+  if (pending.get(requestId)?.sharedPermission === permission) pending.delete(requestId);
+}
+
 /** Reject all pending interactions (used on session close / error). */
-export function rejectAllPending(reason: string): void {
-  for (const [, entry] of pending) {
-    entry.reject(new Error(reason));
-  }
-  pending.clear();
+export function rejectAllPending(
+  reason: string,
+  owner?: symbol,
+): Array<{ requestId: string; messageId: string }> {
+  const entries = [...pending].filter(([, entry]) => owner === undefined || entry.owner === owner);
+  // Remove the selected entries before callbacks can register another request.
+  for (const [requestId] of entries) pending.delete(requestId);
+  for (const [, entry] of entries) entry.reject(new Error(reason));
+  // Shared presenters update their own final card, including cards still being sent.
+  return entries.filter(([, entry]) => !entry.sharedPermission)
+    .map(([requestId, entry]) => ({ requestId, messageId: entry.messageId }));
 }
 
 export function getPendingCount(): number {

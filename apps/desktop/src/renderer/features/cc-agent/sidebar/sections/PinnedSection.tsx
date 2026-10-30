@@ -21,7 +21,7 @@
  * 受控组件——entries 为空时返回 null（不渲染段）。
  */
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlignJustify,
   ChevronDown,
@@ -29,6 +29,7 @@ import {
   LayoutGrid,
   LayoutList,
   Check,
+  Pin,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -44,7 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarCardMode, type SidebarViewMode } from '@/hooks/useSidebarCardMode';
-import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from '../menuStyles';
+import { MENU_ITEM_CLASS } from '../menuStyles';
 import { SectionCollapse } from '../SectionCollapse';
 import { CardMasonry } from '../CardMasonry';
 import { SessionItem } from '../SessionItem';
@@ -55,6 +56,23 @@ import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import type { Session } from '@/lib/ccAgent.types';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
+import { aggregateSessionLamps } from '../../lib/sessionLampAggregation';
+import {
+  loadPinnedSectionCollapsed,
+  persistPinnedSectionCollapsed,
+} from '../../hooks/helpers/sidebarFilterCore';
+import {
+  getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
+  subscribeRemoteSessionActivity,
+  useRemoteSessionActivityRevision,
+} from '@/features/device-link/remoteSessionActivityStore';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
+
+// This header consumes only running state; unread tones remain on task rows.
+const EMPTY_ATTENTION_KINDS = new Map<string, never>();
+const EMPTY_SESSION_IDS = new Set<string>();
 
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
@@ -106,12 +124,7 @@ function ViewStyleMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="bottom"
-        align="end"
-        sideOffset={4}
-        className={cn(MENU_CONTENT_CLASS, 'min-w-[128px]')}
-      >
+      <DropdownMenuContent side="bottom" align="end" sideOffset={4} className="min-w-[128px]">
         {OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}
@@ -194,11 +207,52 @@ export function PinnedSection({
   const { mode, setMode } = useSidebarCardMode();
   // 段头 trigger 的图标 = 当前选中的显示模式(用户一眼看出现在是哪种)。
   const ViewStyleTriggerIcon = viewStyleIcon(mode);
-  // 卡片视觉(card 瀑布流 / list 单列满宽)统称"卡片态";text 为紧凑行。
-  const isCardLike = mode !== 'text';
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadPinnedSectionCollapsed);
+  const toggleCollapsed = useCallback(() => {
+    const next = !collapsed;
+    setCollapsed(next);
+    persistPinnedSectionCollapsed(next);
+  }, [collapsed]);
 
   const visibleEntries = entries;
+  // 聚合不受段级折叠影响；远程状态与 rail 入口复用同一设备隔离的灯语。
+  const remoteActivityRevision = useRemoteSessionActivityRevision();
+  const pinnedSessions = useMemo(
+    () =>
+      visibleEntries.flatMap((entry) =>
+        entry.kind === 'session' ? [entry.session] : entry.displaySessions,
+      ),
+    [visibleEntries],
+  );
+  // Pinned rows are absent from ProjectsSection's starting settlement.
+  // Settle only the activity being pushed, never an old waiting phase on rerender.
+  useEffect(
+    () =>
+      subscribeRemoteSessionActivity((deviceId, sessionId) => {
+        if (!deviceId || !sessionId || getSessionDeviceId(sessionId) !== deviceId) return;
+        if (
+          !pinnedSessions.some(
+            (session) => session.id === sessionId && session.deviceLinkDeviceId === deviceId,
+          )
+        )
+          return;
+        if (isRemoteSessionActivityActive(getRemoteSessionActivity(sessionId, deviceId))) {
+          absorbSessionStarting([sessionId]);
+        }
+      }),
+    [pinnedSessions],
+  );
+  const hasRunningSession = useMemo(
+    () =>
+      aggregateSessionLamps(pinnedSessions, {
+        runningSessionIds,
+        notifications: EMPTY_SESSION_IDS,
+        attentionKinds: EMPTY_ATTENTION_KINDS,
+        urgentSessionIds: EMPTY_SESSION_IDS,
+      }).running,
+    // revision tracks the shared aggregate's remote store reads.
+    [pinnedSessions, runningSessionIds, remoteActivityRevision],
+  );
   const visibleSessions = useMemo(
     () => visibleEntries.flatMap((entry) => (entry.kind === 'session' ? [entry.session] : [])),
     [visibleEntries],
@@ -211,7 +265,12 @@ export function PinnedSection({
   // 置顶视图传 visibleSessions;文字 / 列表都画,card 变体不画这个标签。
   const sourceLabelMap = useMemo(
     () =>
-      buildSessionSourceLabelMap(visibleSessions, allKnownProjects, t('ccAgent.sidebar.dialogues')),
+      buildSessionSourceLabelMap(
+        visibleSessions,
+        allKnownProjects,
+        t('ccAgent.sidebar.dialogues'),
+        t('settings.cindyMake.title'),
+      ),
     [visibleSessions, allKnownProjects, t],
   );
 
@@ -298,7 +357,7 @@ export function PinnedSection({
   if (visibleEntries.length === 0) return null;
 
   return (
-    <div className="flex flex-col gap-0.5 w-full">
+    <div className="flex flex-col w-full">
       {/* Section Title — height 24, padding [0,12,0,24]
           颜色规格（2026-04-20 二次确认对标设计稿 ZVIpx/WazkW）：
             Light #262626 / Dark #f5f0e8（深色文本，非 Stone 灰）
@@ -308,14 +367,25 @@ export function PinnedSection({
           右侧固定的"显示样式"切换钮(justify-between 推到最右,与 DialogueSection
           等对话列表段头的右侧动作同款 hover 行为)。cardMode 只影响菜单里的勾选项,
           不改变段头文字样式或按钮位置。 */}
-      <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
+      <div className="group/sidebar-header relative flex h-6 items-center justify-between pr-3 pl-6">
+        <span
+          aria-hidden
+          className={cn(
+            'absolute left-1.5 inline-flex shrink-0',
+            collapsed && hasRunningSession
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <Pin size={13} strokeWidth={2} />
+        </span>
         <div className="flex min-w-0 items-center gap-1">
           {/* 段标题:与 项目/对话 段头同款,2026-07 用户定稿。 */}
           <button
             type="button"
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={toggleCollapsed}
             aria-expanded={!collapsed}
-            className="text-sm font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
+            className="text-sm leading-5 font-medium text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]"
           >
             {t('ccAgent.sidebar.pinned')}
           </button>
@@ -323,7 +393,7 @@ export function PinnedSection({
             <Tip text={toggleLabel} side="bottom">
               <button
                 type="button"
-                onClick={() => setCollapsed((value) => !value)}
+                onClick={toggleCollapsed}
                 aria-label={toggleLabel}
                 aria-expanded={!collapsed}
                 className={cn(
@@ -366,7 +436,13 @@ export function PinnedSection({
           导致右留白(~23px)明显宽于左(11px)——改为 pr-0 后两侧都≈12px 且更窄。 */}
       {/* 段级收起走 SectionCollapse 高度动画,播完卸载子树。 */}
       <SectionCollapse collapsed={collapsed}>
-        <div className={cn('flex flex-col gap-0.5', isCardLike ? 'pr-0 pl-3' : 'pt-1 pr-0 pl-3')}>
+        {/* 留白放进折叠内容，收起后不残留；列表和卡片按自身内边距补偿。 */}
+        <div
+          className={cn(
+            'flex flex-col gap-0.5 pr-0 pl-3',
+            mode === 'text' ? 'pt-1.5' : mode === 'list' ? 'pt-1' : 'pt-0.5',
+          )}
+        >
           {/* 三种显示模式:
               - card:CardMasonry 响应式分栏(侧栏 ~258px 起 2 列、~424px 起 3 列,错落瀑布);
               - list:卡片视觉但**单列满宽**(不分栏、铺满左侧,类灵动岛),走单列 SortableList;

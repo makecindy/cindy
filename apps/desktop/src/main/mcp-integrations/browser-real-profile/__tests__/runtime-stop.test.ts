@@ -1,7 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import type { BrowserControlResult } from '@cindy/browser-control-runtime';
+import { describe, expect, it, vi } from 'vitest';
+import type {
+  BrowserControlRequest,
+  BrowserControlResult,
+} from '@cindy/browser-control-runtime';
 
-import { assertManagedBrowserStopped, managedConfigPatchBeforeStop } from '../runtime-stop.js';
+import {
+  assertManagedBrowserStopped,
+  createBrowserProfileLifecycleQueue,
+  managedConfigPatchBeforeStop,
+  stopManagedBrowserForProfile,
+  wrapRuntimeWithProfileLifecycleQueue,
+} from '../runtime-stop.js';
 import { RealProfileError } from '../types.js';
 
 function result(action: 'status' | 'stop', ok: boolean, data?: unknown): BrowserControlResult {
@@ -85,5 +94,141 @@ describe('assertManagedBrowserStopped', () => {
         stop: result('stop', true, {}),
       }),
     ).toThrow(RealProfileError);
+  });
+});
+
+describe('stopManagedBrowserForProfile', () => {
+  it('pins status and stop to the same profile', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest) => {
+      if (request.action === 'status') return result('status', true, { running: true });
+      return result('stop', true, { stopped: true });
+    });
+
+    await stopManagedBrowserForProfile({ call }, 'Cindy-real');
+
+    expect(call).toHaveBeenNthCalledWith(1, { action: 'status', profile: 'Cindy-real' });
+    expect(call).toHaveBeenNthCalledWith(2, { action: 'stop', profile: 'Cindy-real' });
+  });
+
+  it('fails closed when a successful status omits a boolean running flag', () => {
+    expect(() =>
+      assertManagedBrowserStopped({
+        status: result('status', true, {}),
+        stop: null,
+      }),
+    ).toThrow(RealProfileError);
+
+    expect(() =>
+      assertManagedBrowserStopped({
+        status: result('status', true, { running: 'false' }),
+        stop: null,
+      }),
+    ).toThrow(RealProfileError);
+  });
+
+  it('requires a stop when CDP is down but the managed process still has a pid', () => {
+    expect(() =>
+      assertManagedBrowserStopped({
+        status: result('status', true, { running: false, pid: 1234 }),
+        stop: null,
+      }),
+    ).toThrow(RealProfileError);
+
+    expect(() =>
+      assertManagedBrowserStopped({
+        status: result('status', true, { running: false, pid: 1234 }),
+        stop: result('stop', true, { stopped: true }),
+      }),
+    ).not.toThrow();
+  });
+
+  it('does not stop a different profile when the pinned profile is idle', async () => {
+    const call = vi.fn(async () => result('status', true, { running: false }));
+
+    await stopManagedBrowserForProfile({ call }, 'Cindy');
+
+    expect(call).toHaveBeenCalledOnce();
+    expect(call).toHaveBeenCalledWith({ action: 'status', profile: 'Cindy' });
+  });
+
+  it('stops the pinned process when CDP is temporarily unavailable', async () => {
+    const call = vi.fn(async (request: BrowserControlRequest) =>
+      request.action === 'status'
+        ? result('status', true, { running: false, pid: 1234 })
+        : result('stop', true, { stopped: true }),
+    );
+
+    await stopManagedBrowserForProfile({ call }, 'Cindy-real');
+
+    expect(call).toHaveBeenNthCalledWith(1, { action: 'status', profile: 'Cindy-real' });
+    expect(call).toHaveBeenNthCalledWith(2, { action: 'stop', profile: 'Cindy-real' });
+  });
+});
+
+describe('browser profile lifecycle queue', () => {
+  it('waits for an in-flight browser start before changing consent', async () => {
+    const queue = createBrowserProfileLifecycleQueue();
+    const events: string[] = [];
+    let finishStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      finishStart = resolve;
+    });
+    const runtime = wrapRuntimeWithProfileLifecycleQueue(
+      {
+        call: vi.fn(async (request: BrowserControlRequest) => {
+          events.push('start');
+          await startGate;
+          events.push('start-finished');
+          return { ok: true, action: request.action };
+        }),
+      },
+      queue,
+    );
+
+    const start = runtime.call({ action: 'start' });
+    await vi.waitFor(() => expect(events).toEqual(['start']));
+    const revokeConsent = queue.run(async () => {
+      events.push('consent-revoked');
+    });
+    await Promise.resolve();
+    expect(events).toEqual(['start']);
+
+    finishStart();
+    await Promise.all([start, revokeConsent]);
+    expect(events).toEqual(['start', 'start-finished', 'consent-revoked']);
+  });
+
+  it('keeps later reset work behind an already queued enable operation', async () => {
+    const queue = createBrowserProfileLifecycleQueue();
+    const events: string[] = [];
+    let finishEnable!: () => void;
+    const enableGate = new Promise<void>((resolve) => {
+      finishEnable = resolve;
+    });
+
+    const enable = queue.run(async () => {
+      events.push('enable');
+      await enableGate;
+      events.push('enable-finished');
+    });
+    const reset = queue.run(async () => {
+      events.push('reset');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['enable']));
+
+    finishEnable();
+    await Promise.all([enable, reset]);
+    expect(events).toEqual(['enable', 'enable-finished', 'reset']);
+  });
+
+  it('continues with later work after a queued operation rejects', async () => {
+    const queue = createBrowserProfileLifecycleQueue();
+    const failed = queue.run(async () => {
+      throw new Error('start failed');
+    });
+    const next = queue.run(async () => 'completed');
+
+    await expect(failed).rejects.toThrow('start failed');
+    await expect(next).resolves.toBe('completed');
   });
 });

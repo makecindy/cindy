@@ -27,9 +27,11 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { SshToolRegistry } from './ssh/registry.js';
 import { errorPayload } from './ssh/_shared.js';
 import {
+  registerSshAddHostTool,
   registerSshExecTool,
   registerSshHostStatusTool,
   registerSshListHostsTool,
+  registerSshReloadConfigTool,
 } from './ssh/index.js';
 import type { SshMcpDeps } from './types.js';
 
@@ -37,14 +39,20 @@ const D_LIST_TOOLS =
   '探索 cindy_ssh 可用工具（渐进式发现入口）。不传 category → 返回所有类目+每个类目工具数量。' +
   '传 category=ssh → 返回该类目下所有工具的名称和简介。' +
   '用户要求 ssh 到某台机器执行命令 / 查看远端状态时，用本工具集（复用应用内已配置的 SSH 主机与认证），' +
-  '不要用 Bash 手拼 ssh 命令行。获取工具名后用 call_tool({name, args}) 执行。';
+  '不要用 Bash 手拼 ssh 命令行。主机还没配置时也能在这里替用户添加到这台电脑的「设置 → 远程连接」。' +
+  '获取工具名后用 call_tool({name, args}) 执行。';
 
 const D_CALL_TOOL =
   '调用 cindy_ssh 中的某个具体工具。先用 list_tools 拿工具名 + 简介，再用本工具执行。' +
   '错误码：' +
-  '`HOST_NOT_FOUND` = 目标主机未配置（返回已配置清单，引导用户到「设置 → 远程连接」添加）；' +
+  '`HOST_NOT_FOUND` = 目标主机未配置（返回已配置清单；需要时用 ssh_add_host 添加）；' +
+  '`HOST_ALREADY_EXISTS` = 添加时别名已存在；' +
+  '`SSH_CONFIG_RELOAD_REQUIRED` = 配置已写入但未刷新，调用 ssh_reload_config；' +
+  '`SSH_CONFIG_WRITE_FAILED` = 写入 SSH 配置失败，把 hint 转告用户；' +
   '`AMBIGUOUS_HOST` = hostname 命中多台，改用 alias；' +
   '`SSH_AUTH_FAILED` = 认证失败（确定性错误，不要重试，把 hint 转告用户）；' +
+  '`SSH_AGENT_UNAVAILABLE` = 本机 SSH Agent 不可用（启动 Agent / ssh-add 后再试）；' +
+  '`SSH_CONFIG_AUTH_UNSUPPORTED` = Cindy 暂不能安全复现该主机的部分 SSH 配置规则（确定性错误，不要重试）；' +
   '`SSH_CONNECT_FAILED` = 连接/执行失败；' +
   '`EXEC_TIMEOUT` = 命令超时（长任务改 nohup 后台跑再轮询）；' +
   '`INVALID_ARGS` = zod schema 校验失败（返回 schema 自纠）；' +
@@ -135,6 +143,8 @@ export function createSshMcpServer(deps: SshMcpDeps): McpServer {
   registerSshListHostsTool(registry, deps);
   registerSshHostStatusTool(registry, deps);
   registerSshExecTool(registry, deps);
+  registerSshAddHostTool(registry, deps);
+  registerSshReloadConfigTool(registry, deps);
 
   registerListToolsEntry(server, registry);
   registerCallToolEntry(server, registry);

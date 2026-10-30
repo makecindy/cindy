@@ -85,4 +85,23 @@ describe('Work Louder device status', () => {
       ),
     ).rejects.toThrow('device disconnected');
   });
+
+  it('rejects a resolved { ok: false } status envelope as a failed round trip', async () => {
+    const getDeviceStatus = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { message: 'timeout' },
+    });
+
+    await expect(
+      postDeviceStatus(
+        {
+          sendLightingConfig: vi.fn(),
+          sendThreadsLighting: vi.fn(),
+          getDeviceStatus,
+        },
+        'codex-micro',
+        true,
+      ),
+    ).rejects.toThrow('timeout');
+  });
 });

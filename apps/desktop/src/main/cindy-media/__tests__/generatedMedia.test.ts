@@ -147,6 +147,7 @@ describe('createBlobVideoStorage.saveVideo(生成视频入仓)', () => {
 
 describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑本体)', () => {
   const deps = {
+    verifyManagedUrl: vi.fn(async (_url: string) => {}),
     ingestFromPath: vi.fn(async ({ originalName }: { sourcePath: string; originalName?: string }) => ({
       url: `cindy-media://blobs/${'b'.repeat(64)}.png`,
       filename: originalName ?? 'x.png',
@@ -158,11 +159,44 @@ describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑
   };
 
   beforeEach(() => {
+    deps.verifyManagedUrl.mockReset();
     deps.ingestFromPath.mockClear();
     deps.ingestBuffer.mockClear();
   });
 
-  it('托管地址(老 xdt-image / 新 cindy-media)原样透传,不重复入仓', async () => {
+  // #6412: the prior path-only/data-URL-only cases missed their combined shape.
+  // unit: production materializer must return a managed result without touching a foreign path.
+  it.each(['base64', 'data-url'])('uses valid %s bytes before an unreadable remote path', async (encoding) => {
+    deps.ingestFromPath.mockRejectedValueOnce(new Error('MEDIA_SOURCE_MISSING'));
+    const source = encoding === 'base64'
+      ? { data: PNG_BYTES.toString('base64') }
+      : { url: `data:image/jpeg;base64,${PNG_BYTES.toString('base64')}` };
+    const saved = await generatedMedia.materializeGeneratedImage({
+      ...source, path: '/other-computer/image.png', pathOrigin: 'remote-agent',
+    }, deps);
+    expect(saved?.url).toBe(`cindy-media://blobs/${'c'.repeat(64)}.png`);
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+    expect(deps.ingestBuffer).toHaveBeenCalledWith({ buffer: PNG_BYTES, mimeType: 'image/png' });
+    deps.ingestFromPath.mockReset();
+    deps.ingestFromPath.mockImplementation(async ({ originalName }) => ({
+      url: `cindy-media://blobs/${'b'.repeat(64)}.png`, filename: originalName ?? 'x.png',
+    }));
+  });
+
+  it('never reads a remote path on this Host, even if a local namesake exists', async () => {
+    await expect(generatedMedia.materializeGeneratedImage({
+      path: '/tmp/actual.png', pathOrigin: 'remote-agent',
+    }, deps)).rejects.toThrow('REMOTE_SOURCE_REQUIRED');
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+  });
+
+  it.each(['not an image', '%%%'])('rejects invalid image bytes without falling back to a path', async (data) => {
+    await expect(generatedMedia.materializeGeneratedImage({ data, path: '/tmp/actual.png' }, deps))
+      .rejects.toThrow('INVALID_IMAGE');
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+  });
+
+  it('托管地址核验后复用，不重复入仓', async () => {
     const legacy = await generatedMedia.materializeGeneratedImage(
       { url: 'xdt-image://sess-1/pic.png' },
       deps,
@@ -176,6 +210,17 @@ describe('materializeGeneratedImage(codex 生成图物化,thin adapter 的逻辑
     expect(blob?.filename).toBe(`${'d'.repeat(64)}.png`);
     expect(deps.ingestFromPath).not.toHaveBeenCalled();
     expect(deps.ingestBuffer).not.toHaveBeenCalled();
+    expect(deps.verifyManagedUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('拒绝不存在的受管地址；有实际文件时重新导入当前 Host', async () => {
+    const url = `cindy-media://blobs/${'e'.repeat(64)}.png`;
+    deps.verifyManagedUrl.mockRejectedValueOnce(new Error('missing'));
+    await expect(generatedMedia.materializeGeneratedImage({ url }, deps)).rejects.toThrow('missing');
+    expect(deps.ingestFromPath).not.toHaveBeenCalled();
+    deps.verifyManagedUrl.mockRejectedValueOnce(new Error('missing'));
+    await expect(generatedMedia.materializeGeneratedImage({ url, path: '/tmp/actual.png' }, deps)).resolves.toMatchObject({ filename: 'actual.png' });
+    expect(deps.ingestFromPath).toHaveBeenCalledWith({ sourcePath: '/tmp/actual.png', originalName: 'actual.png' });
   });
 
   it('本地路径 → ingestFromPath;data: base64 → ingestBuffer(mime 从 data url 头取)', async () => {

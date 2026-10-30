@@ -4,8 +4,9 @@
  * dispatch 把控制端 args 原样喂本机 handler;create-session 的 workingDir 决定 agent 在哪起
  * 进程(可读写/执行)。allowlist 只挡 channel 不挡 args,故必须对 workingDir 收敛。
  * 所有本地路径都必须通过当前文件系统探测,历史 recent/session 记录不能替代可访问性。
- * SSH workdir 的端点识别由 file-browser 独立处理,不能放宽 create-session、worktree:create
- * 或远程 /cmd 共用的本地目录安全闸。这里锁住:目录放行、文件/不存在路径拒、空路径拒、
+ * checkRemoteWorkingDir 始终只探测本地;新建任务的 SSH 端点解析与远端实时探测由
+ * createRemoteWorkingDirGuard 包装,不能放宽 worktree:create 或远程 /cmd 的本地目录安全闸。
+ * 这里锁住:目录放行、文件/不存在路径拒、空路径拒、
  * 断线探测不阻塞事件循环且在业务超时内收敛。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';

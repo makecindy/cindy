@@ -4,7 +4,9 @@ import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelp
 import {
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
+  registerMoveSessionQueuedMessageTool,
   registerSetSessionRuntimeTool,
+  registerSteerSessionQueuedMessageTool,
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerUpdateSessionQueuedMessageTool,
@@ -32,6 +34,16 @@ function setup(opts?: { sessionId?: string | undefined }) {
     cancelQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
       ok: true as const,
       queuedMessageId,
+    })),
+    steerQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+      ok: true as const,
+      queuedMessageId,
+      delivery: 'steered' as const,
+    })),
+    moveQueuedMessage: vi.fn(async ({ queuedMessageId }) => ({
+      ok: true as const,
+      queuedMessageId,
+      position: 0,
     })),
     steerSession: vi.fn(async () => ({ ok: true as const, queuedMessageId: 'steer-1' })),
     stopSessionTurn: vi.fn(async () => ({
@@ -72,6 +84,8 @@ function setup(opts?: { sessionId?: string | undefined }) {
   const registry = new XdtHelperToolRegistry();
   registerUpdateSessionQueuedMessageTool(registry, deps);
   registerCancelSessionQueuedMessageTool(registry, deps);
+  registerSteerSessionQueuedMessageTool(registry, deps);
+  registerMoveSessionQueuedMessageTool(registry, deps);
   registerSteerSessionTool(registry, deps);
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
@@ -80,6 +94,30 @@ function setup(opts?: { sessionId?: string | undefined }) {
 }
 
 describe('cindy_helper session control tools', () => {
+  it('forwards a complete harness selection and reports the next-send boundary', async () => {
+    const { deps, registry } = setup();
+    const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true, status: 'deferred', effectiveBoundary: 'next_send', generation: 2,
+      effectiveProfile: old,
+      pendingMutation: { generation: 2, source: 'agent', profile: { ...old, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' } },
+    });
+    expect(parse(await registry.call('set_session_runtime', {
+      session_id: 'target', harness: 'codex', model: 'gpt-6-astra', provider_id: 'openai', expected_generation: 1,
+    }))).toMatchObject({
+      ok: true, effective_boundary: 'next_send', effective: { harness: 'claude-code' },
+      pending: { profile: { harness: 'codex', model: 'gpt-6-astra' } },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({ targetSessionId: 'target', expectedGeneration: 1,
+      patch: { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai' } });
+  });
+
+  it.each([{ harness: 'codex' }, { harness: 'unknown', model: 'gpt-6-astra' }])('rejects invalid complete selection %j', async (patch) => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('set_session_runtime', { ...patch, expected_generation: 1 }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+  });
+
   it('atomically changes the current session runtime with generation CAS', async () => {
     const { deps, registry } = setup();
     const result = parse(
@@ -127,9 +165,10 @@ describe('cindy_helper session control tools', () => {
     // 校验明细,调用方一轮自纠。
     const { registry } = setup();
     const result = parse(await registry.call('set_session_runtime', { effort: 'high' }));
+    const data = result.data as Record<string, unknown> | undefined;
     expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
-    expect(JSON.stringify(result.data?.validation_errors ?? result)).toContain('expected_generation');
-    expect(result.data?.schema).toBeTruthy();
+    expect(JSON.stringify(data?.validation_errors ?? result)).toContain('expected_generation');
+    expect(data?.schema).toBeTruthy();
   });
 
   it('updates and cancels only through the caller-bound ownership context', async () => {
@@ -170,6 +209,8 @@ describe('cindy_helper session control tools', () => {
         session_id: 'target', queued_message_id: 'q', message: 'next',
       }],
       ['cancel_session_queued_message', { session_id: 'target', queued_message_id: 'q' }],
+      ['steer_session_queued_message', { session_id: 'target', queued_message_id: 'q' }],
+      ['move_session_queued_message', { session_id: 'target', queued_message_id: 'q', position: 0 }],
       ['steer_session', { session_id: 'target', message: 'urgent context' }],
     ] as const) {
       expect(parse(await registry.call(name, args))).toMatchObject({
@@ -179,7 +220,88 @@ describe('cindy_helper session control tools', () => {
     }
     expect(deps.updateQueuedMessage).not.toHaveBeenCalled();
     expect(deps.cancelQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.steerQueuedMessage).not.toHaveBeenCalled();
+    expect(deps.moveQueuedMessage).not.toHaveBeenCalled();
     expect(deps.steerSession).not.toHaveBeenCalled();
+  });
+
+  it('converts a queued message to a steer and reports a retained fallback reason', async () => {
+    const { deps, registry } = setup();
+
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+    }))).toEqual({
+      ok: true,
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      delivery: 'steered',
+    });
+    expect(deps.steerQueuedMessage).toHaveBeenCalledWith({
+      callerSessionId: 'caller-session',
+      targetSessionId: 'target-session',
+      queuedMessageId: 'queued-1',
+    });
+
+    vi.mocked(deps.steerQueuedMessage).mockResolvedValueOnce({
+      ok: true,
+      queuedMessageId: 'queued-2',
+      delivery: 'queued',
+      reason: 'STEER_UNCERTAIN',
+    });
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'caller-session',
+      queued_message_id: 'queued-2',
+    }))).toEqual({
+      ok: true,
+      session_id: 'caller-session',
+      queued_message_id: 'queued-2',
+      delivery: 'queued',
+      reason: 'STEER_UNCERTAIN',
+    });
+
+    vi.mocked(deps.steerQueuedMessage).mockResolvedValueOnce({
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      message: 'user message',
+    });
+    expect(parse(await registry.call('steer_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'user-1',
+    }))).toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
+  });
+
+  it('moves a queued message and returns the final position', async () => {
+    const { deps, registry } = setup();
+    vi.mocked(deps.moveQueuedMessage).mockResolvedValueOnce({
+      ok: true,
+      queuedMessageId: 'queued-1',
+      position: 3,
+    });
+
+    expect(parse(await registry.call('move_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: 10,
+    }))).toEqual({
+      ok: true,
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: 3,
+    });
+    expect(deps.moveQueuedMessage).toHaveBeenCalledWith({
+      callerSessionId: 'caller-session',
+      targetSessionId: 'target-session',
+      queuedMessageId: 'queued-1',
+      position: 10,
+    });
+
+    expect(parse(await registry.call('move_session_queued_message', {
+      session_id: 'target-session',
+      queued_message_id: 'queued-1',
+      position: -1,
+    }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.moveQueuedMessage).toHaveBeenCalledTimes(1);
   });
 
   it('steers, requests graceful stop and projects bounded runtime metadata', async () => {

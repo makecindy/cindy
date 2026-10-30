@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
@@ -6,10 +6,13 @@ import {
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
+  mobileMarkdownManagedImagePreviewUrl,
   mobileMarkdownImageAltChipText,
   MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH,
   mobileMarkdownInlineImageSize,
   parseMobileMarkdown,
+  parseMobileMarkdownDocument,
+  parseMobileMarkdownIncremental,
   parseMobileMarkdownInlines,
   groupMobileMarkdownSelectableBlocks,
 } from '@/session/messageMarkdown';
@@ -19,12 +22,108 @@ beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
 });
 
+describe('incremental mobile Markdown parsing', () => {
+  it('reuses completed blocks after a safe blank-line checkpoint', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# title\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(true);
+    expect(next.reusedBlockCount).toBe(1);
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks[0]).toBe(first.blocks[0]);
+    expect(next.parsedSourceUtf16Length).toBe('first paragraph\n\nsecond paragraph'.length);
+  });
+
+  it('falls back to a full parse for an edit in the existing prefix', () => {
+    const first = parseMobileMarkdownDocument('# title\n\nfirst paragraph');
+    const next = parseMobileMarkdownIncremental(
+      '# changed\n\nfirst paragraph\n\nsecond paragraph',
+      first,
+    );
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('keeps fenced code and display math semantics when appending', () => {
+    const codeFirst = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const codeNext = parseMobileMarkdownIncremental(
+      `${codeFirst.source}\n\nend`,
+      codeFirst,
+    );
+    expect(codeNext.blocks).toEqual(parseMobileMarkdownDocument(codeNext.source).blocks);
+
+    const mathFirst = parseMobileMarkdownDocument('intro\n\n$$\nx = 1\n$$');
+    const mathNext = parseMobileMarkdownIncremental(
+      `${mathFirst.source}\n\nend`,
+      mathFirst,
+    );
+    expect(mathNext.blocks).toEqual(parseMobileMarkdownDocument(mathNext.source).blocks);
+  });
+
+  it('falls back when an escaped inline math opener is closed by a later flush', () => {
+    const first = parseMobileMarkdownDocument('intro\n\nvalue \\(');
+    const next = parseMobileMarkdownIncremental(`${first.source}x\\)`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.incremental).toBe(false);
+    expect(next.reusedBlockCount).toBe(0);
+    expect(next.blocks).toEqual(full.blocks);
+  });
+
+  it('keeps line offsets when appending after a closed fence without a trailing newline', () => {
+    const first = parseMobileMarkdownDocument('intro\n\n```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}\n\nend`, first);
+    const full = parseMobileMarkdownDocument(next.source);
+
+    expect(next.blocks).toEqual(full.blocks);
+    expect(next.blocks.at(-1)?.key).toBe(full.blocks.at(-1)?.key);
+  });
+
+  it('does not reuse an EOF checkpoint when an append mutates its last line', () => {
+    const first = parseMobileMarkdownDocument('```ts\nconst x = 1;\n```');
+    const next = parseMobileMarkdownIncremental(`${first.source}continued`, first);
+
+    expect(next.incremental).toBe(false);
+    expect(next.blocks).toEqual(parseMobileMarkdownDocument(next.source).blocks);
+  });
+
+  it('preserves full-parser semantics across character-by-character streaming flushes', () => {
+    const fixtures = [
+      '# heading\n\nplain text\n\n- item\n\nend',
+      'intro\n\n```ts\nconst x = 1;\n```\n\nresult',
+      'intro\n\n$$\nx = 1\n$$\n\nresult',
+      'prefix \\(x + 1\\) suffix\n\nnext',
+      '<!-- hidden\n\ntext -->\n\nvisible',
+    ];
+    for (const fixture of fixtures) {
+      let previous: ReturnType<typeof parseMobileMarkdownDocument> | null = null;
+      for (let end = 1; end <= fixture.length; end += 1) {
+        const source = fixture.slice(0, end);
+        const result = parseMobileMarkdownIncremental(source, previous);
+        expect(result.blocks, `prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).blocks,
+        );
+        expect(result.ranges, `ranges at prefix length ${end}`).toEqual(
+          parseMobileMarkdownDocument(source).ranges,
+        );
+        previous = result;
+      }
+    }
+  });
+});
+
 describe('messageMarkdown', () => {
   it('parses the reported PR-watch long message without creating an oversized inline image', () => {
     const blocks = parseMobileMarkdown(PR_WATCH_EXPANDED_BLANK_FIXTURE);
 
     expect(blocks.length).toBeGreaterThan(1);
-    // badge Markdown 位于 strong 标记内,当前解析为文本而非图片;空白不是图片尺寸撑高导致。
+    // badge Markdown 位于 strong 标记内,强调里的图片按原文显示(不成图片);空白不是图片尺寸撑高导致。
     expect(collectMobileMarkdownImages(PR_WATCH_EXPANDED_BLANK_FIXTURE)).toEqual([]);
     expect(blocks.some((block) => block.type === 'code')).toBe(true);
   });
@@ -251,6 +350,44 @@ describe('messageMarkdown', () => {
     ]);
   });
 
+  it('classifies managed video Markdown links for the mobile media viewer', () => {
+    const hash = 'a'.repeat(64);
+    expect(parseMobileMarkdownInlines(
+      `播放 [海洋视频](cindy-media://blobs/${hash}.mp4) 继续`,
+    )).toEqual([
+      { type: 'text', text: '播放 ' },
+      {
+        type: 'link',
+        text: '海洋视频',
+        url: `cindy-media://blobs/${hash}.mp4`,
+        managedMediaKind: 'video',
+      },
+      { type: 'text', text: ' 继续' },
+    ]);
+
+    for (const extension of ['webm', 'mov']) {
+      expect(parseMobileMarkdownInlines(
+        `[video](cindy-media://blobs/${hash}.${extension})`,
+      )).toEqual([{
+        type: 'link',
+        text: 'video',
+        url: `cindy-media://blobs/${hash}.${extension}`,
+        managedMediaKind: 'video',
+      }]);
+    }
+  });
+
+  it('keeps unsupported or malformed cindy-media links as literal text', () => {
+    const hash = 'a'.repeat(64);
+    for (const input of [
+      `[image](cindy-media://blobs/${hash}.png)`,
+      '[video](cindy-media://blobs/not-a-sha.mp4)',
+      `[video](cindy-media://other/${hash}.mp4)`,
+    ]) {
+      expect(parseMobileMarkdownInlines(input)).toEqual([{ type: 'text', text: input }]);
+    }
+  });
+
   it('does not swallow fullwidth parentheses or CJK punctuation after a bare URL', () => {
     expect(parseMobileMarkdownInlines(
       '诊断已写在 https://github.com/example/app/issues/3561#issuecomment-5391602790（无 @）。',
@@ -400,6 +537,45 @@ describe('messageMarkdown', () => {
       { type: 'text', text: ', ' },
       { type: 'link', text: 'docs', url: 'https://example.com/docs' },
       { type: 'text', text: '.' },
+    ]);
+  });
+
+  it('keeps links and other inline tokens inside emphasis, flattened with marks', () => {
+    expect(parseMobileMarkdownInlines('打开 **https://example.com/abc/** 安装')).toEqual([
+      { type: 'text', text: '打开 ' },
+      { type: 'link', text: 'https://example.com/abc/', url: 'https://example.com/abc/', marks: ['strong'] },
+      { type: 'text', text: ' 安装' },
+    ]);
+    expect(parseMobileMarkdownInlines('**看 [文档](https://example.com/docs) 和 `a.ts`**')).toEqual([
+      { type: 'strong', text: '看 ' },
+      { type: 'link', text: '文档', url: 'https://example.com/docs', marks: ['strong'] },
+      { type: 'strong', text: ' 和 ' },
+      { type: 'code', text: 'a.ts', marks: ['strong'] },
+    ]);
+    expect(parseMobileMarkdownInlines('*见 https://example.com/x*')).toEqual([
+      { type: 'emphasis', text: '见 ' },
+      { type: 'link', text: 'https://example.com/x', url: 'https://example.com/x', marks: ['emphasis'] },
+    ]);
+    expect(parseMobileMarkdownInlines('**~~https://example.com/old~~**')).toEqual([
+      { type: 'link', text: 'https://example.com/old', url: 'https://example.com/old', marks: ['strong', 'strikethrough'] },
+    ]);
+  });
+
+  it('keeps images inside emphasis as literal text and does not linkify their [alt](url)', () => {
+    expect(parseMobileMarkdownInlines(
+      '**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 https://example.com/y**',
+    )).toEqual([
+      { type: 'strong', text: '<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub> 标题 ' },
+      { type: 'link', text: 'https://example.com/y', url: 'https://example.com/y', marks: ['strong'] },
+    ]);
+  });
+
+  it('keeps bare paths inside emphasis within an HTML comment as plain text', () => {
+    expect(parseMobileMarkdownInlines('<!-- **src/a.ts** --> **src/b.ts**')).toEqual([
+      { type: 'text', text: '<!-- ' },
+      { type: 'strong', text: 'src/a.ts' },
+      { type: 'text', text: ' --> ' },
+      { type: 'link', text: 'src/b.ts', url: 'src/b.ts', bare: true, marks: ['strong'] },
     ]);
   });
 
@@ -869,6 +1045,17 @@ describe('messageMarkdown', () => {
       { type: 'image', alt: '', url: 'cindy-media://blobs/a.png' },
     ]);
     expect(isMobileMarkdownImageDirectUrl('cindy-media://blobs/a.png')).toBe(false);
+  });
+
+  it('parses remote images with standard optional titles without exposing Markdown source', () => {
+    for (const url of ['cindy-media://blobs/a.png', 'xdt-image://cache/a.png', 'https://example.com/shot(1).png']) {
+      for (const destination of [`${url} "真实截图"`, `${url} '截图'`, `${url} (截图)`, `<${url}> "截图"`]) {
+        expect(parseMobileMarkdownInlines(`![验收](${destination})`)).toEqual([
+          { type: 'image', alt: '验收', url },
+        ]);
+      }
+    }
+    expect(parseMobileMarkdownInlines('![x](javascript:alert(1) "title")').some((inline) => inline.type === 'image')).toBe(false);
   });
 
   it('rejects img-prefixed non-img tags exactly (img must be followed by whitespace, / or >)', () => {
@@ -1405,11 +1592,9 @@ describe('bare file paths(正文纯文本形态)', () => {
     ]);
   });
 
-  it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
-    // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
-    // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。
+  it('被强调包裹的路径同样识别,带外层强调标记(与桌面 remark 在 strong 子节点里 linkify 同口径)', () => {
     expect(parseMobileMarkdownInlines('**src/App.tsx**')).toEqual([
-      { type: 'strong', text: 'src/App.tsx' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true, marks: ['strong'] },
     ]);
   });
 
@@ -1444,7 +1629,72 @@ describe('bare file paths(正文纯文本形态)', () => {
   });
 });
 
+describe('automatic Markdown image fetch scope', () => {
+  const pathUrl = (file: string, extra = '') => `xdt-file://open?path=${encodeURIComponent(file)}${extra}`;
+
+  it.each(['/private/photo.png', '/repo-other/photo.png', '/repo/../private/photo.png'])(
+    'does not automatically fetch outside or escaping path %s', (file) => {
+      expect(mobileMarkdownManagedImagePreviewUrl(file, '/repo')).toBeNull();
+      expect(mobileMarkdownManagedImagePreviewUrl(pathUrl(file), '/repo')).toBeNull();
+      // Explicitly opening the chip still uses the established viewer path.
+      expect(mobileMarkdownImageUrlForWorkdir(file, '/repo')).not.toBeNull();
+    },
+  );
+
+  it('requires workdir for file previews but not for already managed media', () => {
+    expect(mobileMarkdownManagedImagePreviewUrl(pathUrl('/repo/a.png'))).toBeNull();
+    expect(mobileMarkdownManagedImagePreviewUrl('shot.png')).toBeNull();
+    expect(mobileMarkdownManagedImagePreviewUrl('cindy-media://blobs/a.png')).toBe('cindy-media://blobs/a.png');
+    expect(mobileMarkdownManagedImagePreviewUrl('xdt-image://session/a.png')).toBe('xdt-image://session/a.png');
+  });
+
+  it('overwrites supplied baseDir with the task root for Host realpath checks', () => {
+    const result = mobileMarkdownManagedImagePreviewUrl(pathUrl('/repo/link/a.png', '&baseDir=%2F&baseDir=%2Fprivate'), '/repo', 'message:2');
+    const parsed = new URL(result!);
+    expect(parsed.searchParams.getAll('baseDir')).toEqual(['/repo']);
+    expect(parsed.searchParams.get('path')).toBe('/repo/link/a.png');
+    expect(parsed.searchParams.get('v')).toBe('message:2');
+    expect(new URL(mobileMarkdownManagedImagePreviewUrl('out/a.png', '/repo')!).searchParams.get('baseDir')).toBe('/repo');
+  });
+
+  it('handles Windows separators and roots without treating neighboring directories as children', () => {
+    const root = 'C:\\Repo';
+    const preview = mobileMarkdownManagedImagePreviewUrl(pathUrl('c:\\repo\\out\\a.png'), root);
+    expect(new URL(preview!).searchParams.get('baseDir')).toBe(root);
+    expect(mobileMarkdownManagedImagePreviewUrl(pathUrl('C:\\Repo-other\\a.png'), root)).toBeNull();
+    expect(mobileMarkdownManagedImagePreviewUrl(pathUrl('D:\\Repo\\a.png'), root)).toBeNull();
+    expect(mobileMarkdownManagedImagePreviewUrl(pathUrl('C:\\Repo\\..\\private\\a.png'), root)).toBeNull();
+  });
+
+  it('keeps SSH task provenance and supplies the same remote root constraint', () => {
+    const result = mobileMarkdownManagedImagePreviewUrl(pathUrl('/srv/work/out/a.png', '&remoteHostId=other&baseDir=%2F'), '/srv/work', 'm', 'host', 'task');
+    const parsed = new URL(result!);
+    expect(parsed.searchParams.get('remoteHostId')).toBe('host');
+    expect(parsed.searchParams.get('sessionId')).toBe('task');
+    expect(parsed.searchParams.get('baseDir')).toBe('/srv/work');
+    expect(mobileMarkdownManagedImagePreviewUrl('a.png', '/srv/work', 'm', 'host')).toBeNull();
+  });
+});
+
 describe('groupMobileMarkdownSelectableBlocks', () => {
+  it('keeps fallback image chips and surrounding paragraphs in the selectable text run', () => {
+    const blocks = parseMobileMarkdown('前段\n\n正文 ![图](shot.png) 结尾\n\n后段');
+    // No resolver or no workdir: the renderer can only show the existing text chip.
+    for (const imageRendersPreview of [() => false, (image: { url: string }) => mobileMarkdownManagedImagePreviewUrl(image.url) !== null]) {
+      const groups = groupMobileMarkdownSelectableBlocks(blocks, { imageRendersPreview });
+      expect(groups).toHaveLength(1);
+      expect(groups[0].type).toBe('text_run');
+    }
+  });
+
+  it('separates actual managed previews while keeping outside-workdir chips selectable', () => {
+    const imageRendersPreview = (image: { url: string }) => mobileMarkdownManagedImagePreviewUrl(image.url, '/repo') !== null;
+    const groups = groupMobileMarkdownSelectableBlocks(
+      parseMobileMarkdown('前段\n\n![图](shot.png)\n\n说明 ![外部图](/private/photo.png) 结尾'),
+      { imageRendersPreview },
+    );
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'single', 'text_run']);
+  });
   it('merges consecutive text blocks into one run so native selection can cross paragraphs', () => {
     const blocks = parseMobileMarkdown([
       '# 标题',
@@ -1513,6 +1763,43 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(groups.map((group) => (group.type === 'text_run' ? group.blocks.length : 0))).toEqual([1, 1, 2]);
   });
 
+  it('can bound one native text run by inline fragment count', () => {
+    const blocks = [{
+      type: 'paragraph' as const,
+      key: 'paragraph:0',
+      inlines: Array.from({ length: 7 }, (_, index) => ({
+        type: 'strong' as const,
+        text: String(index),
+      })),
+    }];
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 3,
+    });
+    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
+
+    expect(groups.map((group) => group.type)).toEqual(['text_run', 'text_run', 'text_run']);
+    expect(chunks.map((block) => block.inlines.length)).toEqual([3, 3, 1]);
+    expect(chunks.map((block) => block.textRunContinuation === true)).toEqual([false, true, true]);
+    expect(chunks.flatMap((block) => block.inlines).map((inline) => (
+      inline.type === 'image' ? inline.alt : inline.text
+    )).join('')).toBe('0123456');
+  });
+
+  it('counts inline fragments across adjacent text blocks', () => {
+    const blocks = Array.from({ length: 5 }, (_, index) => ({
+      type: 'paragraph' as const,
+      key: `paragraph:${index}`,
+      inlines: [{ type: 'text' as const, text: String(index) }],
+    }));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunInlineFragments: 2,
+    });
+
+    expect(groups.map((group) => (
+      group.type === 'text_run' ? group.blocks.length : 0
+    ))).toEqual([2, 2, 1]);
+  });
+
   it('counts rendered block separators when bounding text runs by text length', () => {
     const blocks = parseMobileMarkdown(['aaaa', '', 'bbbb'].join('\n'));
     const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 8 });
@@ -1553,14 +1840,16 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     expect(chunkText.join('')).toBe(text);
   });
 
-  it('keeps oversized non-direct image alt text in one image inline while bounding rendered chip text', () => {
+  it('keeps managed image previews out of selectable text runs without splitting oversized alt text', () => {
     const alt = 'a'.repeat(MOBILE_MARKDOWN_IMAGE_ALT_CHIP_MAX_UTF16_LENGTH + 21);
     const blocks = parseMobileMarkdown(`![${alt}](docs/local-image.png)`);
-    const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 1800 });
-    const chunks = groups.flatMap((group) => (group.type === 'text_run' ? group.blocks : []));
-    const imageInlines = chunks.flatMap((block) => block.inlines.filter((inline) => inline.type === 'image'));
+    const groups = groupMobileMarkdownSelectableBlocks(blocks, {
+      maxTextRunUtf16Length: 1800,
+      imageRendersPreview: (image) => mobileMarkdownManagedImagePreviewUrl(image.url, '/repo') !== null,
+    });
+    const imageInlines = blocks.flatMap((block) => 'inlines' in block ? block.inlines.filter((inline) => inline.type === 'image') : []);
 
-    expect(groups.map((group) => group.type)).toEqual(['text_run']);
+    expect(groups.map((group) => group.type)).toEqual(['single']);
     expect(imageInlines).toHaveLength(1);
     expect(imageInlines[0]).toMatchObject({ alt, url: 'docs/local-image.png' });
     expect(mobileMarkdownImageAltChipText(imageInlines[0].alt)).toHaveLength(
@@ -1595,6 +1884,7 @@ describe('groupMobileMarkdownSelectableBlocks', () => {
     const groups = groupMobileMarkdownSelectableBlocks(blocks, {
       maxTextRunBlocks: 0.5,
       maxTextRunUtf16Length: 0.5,
+      maxTextRunInlineFragments: 0.5,
     });
     expect(groups).toHaveLength(1);
     expect(groups[0].type).toBe('text_run');
@@ -1729,4 +2019,89 @@ describe('title 剥离不得灾难性回溯(ReDoS)', () => {
       { type: 'text', text: ' 补充' },
     ]);
   });
+});
+
+// Performance regression: inline image/comment guards used to rebuild full-source
+// masks for every token. Existing semantic fixtures do not bound that repeated work.
+// Real parser, counted full-source replacements (no wall-clock threshold), unit tier.
+it('prepares paragraph image guards once while preserving formatted text and images', () => {
+  const source = '**one** `two` **three** `four` ![photo](https://example.invalid/a.png)';
+  const replace = String.prototype.replace;
+  let fullSourcePasses = 0;
+  const spy = vi.spyOn(String.prototype, 'replace').mockImplementation(function (this: string, ...args: Parameters<typeof replace>) {
+    if (String(this) === source) fullSourcePasses += 1;
+    return Reflect.apply(replace, this, args);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type !== 'text')).toEqual([
+      { type: 'strong', text: 'one' }, { type: 'code', text: 'two' },
+      { type: 'strong', text: 'three' }, { type: 'code', text: 'four' },
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+    ]);
+    expect(fullSourcePasses).toBeLessThanOrEqual(4);
+  } finally { spy.mockRestore(); }
+});
+
+// A distant URL used to be normalized for every preceding formatted token,
+// repeatedly scanning its full prefix. Count that work through the real parser.
+it('normalizes a pending bare URL once and still discovers the following URL', () => {
+  const source = '**one** `two` **three** `four` https://example.invalid/a。 https://example.invalid/b!';
+  const urlIndex = source.indexOf('https:');
+  const slice = String.prototype.slice;
+  let prefixScans = 0;
+  const spy = vi.spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start?: number, end?: number) {
+    if (String(this) === source && start === 0 && end === urlIndex) prefixScans += 1;
+    return Reflect.apply(slice, this, [start, end]);
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.slice(-4)).toEqual([
+      { type: 'link', text: 'https://example.invalid/a', url: 'https://example.invalid/a' },
+      { type: 'text', text: '。 ' },
+      { type: 'link', text: 'https://example.invalid/b', url: 'https://example.invalid/b' },
+      { type: 'text', text: '!' },
+    ]);
+    expect(prefixScans).toBeLessThanOrEqual(2);
+  } finally { spy.mockRestore(); }
+});
+
+// #7088 follow-up: each formatted token rescanned all remaining syntax, blocking
+// Hermes on a long paragraph. Count examined suffix characters through the real
+// parser (unit, not wall-clock timing); existing semantic tests miss this cost.
+it('bounds repeated suffix searches while keeping text, links and images', () => {
+  const source = '**one** `two` '.repeat(30) + '![photo](https://example.invalid/a.png) after src/end.ts';
+  const exec = RegExp.prototype.exec;
+  let searchedCharacters = 0;
+  const spy = vi.spyOn(RegExp.prototype, 'exec').mockImplementation(function (this: RegExp, input: string) {
+    const from = this.lastIndex;
+    const match = Reflect.apply(exec, this, [input]);
+    if (input === source && this.global) searchedCharacters += (match ? match.index + match[0].length : source.length) - from;
+    return match;
+  });
+  try {
+    const parsed = parseMobileMarkdownInlines(source);
+    expect(parsed.filter(token => token.type === 'strong')).toHaveLength(30);
+    expect(parsed.filter(token => token.type === 'code')).toHaveLength(30);
+    expect(parsed.slice(-3)).toEqual([
+      { type: 'image', alt: 'photo', url: 'https://example.invalid/a.png' },
+      { type: 'text', text: ' after ' },
+      { type: 'link', text: 'src/end.ts', url: 'src/end.ts', bare: true },
+    ]);
+    expect(searchedCharacters).toBeLessThan(source.length * 20);
+  } finally { spy.mockRestore(); }
+});
+
+// The pending-search optimization must retain raw prefix boundaries and rejected
+// spans. Through the public parser, protect rendering when another grammar wins
+// before/inside a candidate; these cases distinguish unsafe token-level caching.
+it.each([
+  ['**a**_b_', [{ type: 'strong', text: 'a' }, { type: 'text', text: '_b_' }]],
+  ['`a`$b$', [{ type: 'code', text: 'a' }, { type: 'text', text: '$b$' }]],
+  ['![a `b`](bad) then ![ok](src/a.png)', [
+    { type: 'text', text: '![a ' }, { type: 'code', text: 'b' },
+    { type: 'text', text: '](bad) then ' }, { type: 'image', alt: 'ok', url: 'src/a.png' },
+  ]],
+])('keeps overlapping and consumed-prefix rendering for %s', (source, expected) => {
+  expect(parseMobileMarkdownInlines(source as string)).toEqual(expected);
 });

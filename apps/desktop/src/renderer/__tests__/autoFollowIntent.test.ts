@@ -8,7 +8,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectKnownUserMessageIds,
@@ -802,6 +803,43 @@ describe('resolveLastUserMessageObservation', () => {
 });
 
 describe('MessageStream send-window handoff wiring', () => {
+  it.each([true, false])('upward intent ends restoration and cancels follow only when pinned (%s)', (nearBottom) => {
+    const source = ts.createSourceFile('MessageStream.tsx',
+      readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8'),
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const component = source.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'MessageStream');
+    const declaration = component?.body?.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((node) => Array.from(node.declarationList.declarations))
+      .find((node) => node.name.getText(source) === 'unpinAutoFollowForUserUpIntent');
+    if (!declaration?.initializer || !ts.isCallExpression(declaration.initializer)) {
+      throw new Error('Upward-intent callback not found');
+    }
+    const callback = declaration.initializer.arguments[0];
+    const code = ts.transpileModule(`(${callback.getText(source)})();`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const bindings = {
+      restoringRef: { current: true },
+      isNearBottomRef: { current: nearBottom },
+      sessionId: `up-intent-${nearBottom}`,
+      bumpSendFollowCancelGeneration,
+      setIsNearBottom: vi.fn(),
+    };
+    const startGeneration = readSendFollowCancelGeneration(bindings.sessionId);
+    const unpin = new Function(...Object.keys(bindings), code);
+    unpin(...Object.values(bindings));
+    expect(bindings.restoringRef.current).toBe(false);
+    expect(bindings.isNearBottomRef.current).toBe(false);
+    expect(readSendFollowCancelGeneration(bindings.sessionId)).toBe(startGeneration + Number(nearBottom));
+    if (nearBottom) expect(bindings.setIsNearBottom).toHaveBeenCalledExactlyOnceWith(false);
+    else expect(bindings.setIsNearBottom).not.toHaveBeenCalled();
+    // Leftover upward input away from the tail must not cancel another send.
+    unpin(...Object.values(bindings));
+    expect(readSendFollowCancelGeneration(bindings.sessionId)).toBe(startGeneration + Number(nearBottom));
+  });
+
   it('clears any anchored window on a local send and only defers pin for stale slices', () => {
     const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
     expect(source).toContain('resolveSendWindowHandoff({');
@@ -815,9 +853,6 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('subscribeFollowLatestRequests');
     expect(source).toContain('readFollowLatestRequestKey(sessionId)');
     expect(source).toContain('pinToBottom();');
-    expect(source).toMatch(
-      /const unpinAutoFollowForUserUpIntent = useCallback\(\(\) => \{\s*if \(!isNearBottomRef\.current\) return;\s*bumpSendFollowCancelGeneration\(sessionId\);/,
-    );
     expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
     expect(source).toContain('knownUserMessageIds: knownUserMessageIdsRef.current');
     expect(source).toContain('collectKnownUserMessageIds(messages,');

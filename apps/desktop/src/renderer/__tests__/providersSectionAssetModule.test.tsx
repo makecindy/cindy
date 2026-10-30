@@ -16,11 +16,13 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { ProviderAccountUsageModule } from '../components/settings/ProviderAccountUsageModule';
 
 const {
   providersState,
   authState,
   creditUsageState,
+  quotaState,
   modelAccessState,
   apiKeyState,
   primaryActionState,
@@ -30,6 +32,10 @@ const {
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
     user: { membershipKind: 'personal' } as { membershipKind: 'personal' | 'org' } | null,
     dataOwnerId: 'account-1' as string | null,
+  },
+  quotaState: {
+    unlimited: false,
+    usage: null as import('../hooks/useClaudeAccountUsage').ClaudeAccountUsageSnapshot | null,
   },
   creditUsageState: { available: null as string | null },
   modelAccessState: {
@@ -66,10 +72,23 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/hooks/useModelAccessCreditUsage', () => ({
-  useModelAccessCreditUsage: (enabled: boolean) =>
-    enabled && creditUsageState.available !== null
-      ? { available: creditUsageState.available }
-      : null,
+  useModelAccessCreditUsageResult: (enabled: boolean) => ({
+    usage:
+      enabled && creditUsageState.available !== null
+        ? { available: creditUsageState.available }
+        : null,
+    loading: false,
+    refresh: vi.fn(),
+  }),
+}));
+
+vi.mock('@/hooks/useClaudeAccountUsage', () => ({
+  useClaudeAccountUsageResult: (enabled: boolean) => ({
+    usage: enabled ? quotaState.usage : null,
+    unlimited: enabled && quotaState.unlimited,
+    loading: false,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock('@/hooks/useXdAssetPrimaryAction', () => ({
@@ -132,8 +151,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: () => null,
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -201,6 +220,8 @@ beforeEach(() => {
   authState.user = { membershipKind: 'personal' };
   authState.dataOwnerId = 'account-1';
   creditUsageState.available = '18.42';
+  quotaState.usage = null;
+  quotaState.unlimited = false;
   modelAccessState.state = 'ok';
   modelAccessState.source = 'server';
   modelAccessState.accountTier = null;
@@ -225,8 +246,39 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// PR #7031: settings and chip must both open the queried account's dashboard.
+// Unit/jsdom, a CN-first configuration whose usable key belongs to Global/Pi.
+it.each(['ready', 'unavailable'])('uses the queried dashboard in the settings card (%s)', async (status) => {
+  const dashboardUrl = 'https://z.ai/manage-apikey/coding-plan/personal/my-plan';
+  Object.assign(window.electronAPI, { openExternal: vi.fn(async () => undefined) });
+  Object.assign(window.electronAPI.maker, { fetchProviderAccountUsage: vi.fn(async () => ({
+    status, dashboardUrl,
+    ...(status === 'ready'
+      ? { agent: 'pi', stale: false, snapshot: { kind: 'zhipu-coding-plan-quota', noPlan: true, level: null, fiveHour: null, weekly: null, fetchedAt: 1 } }
+      : { error: 'auth' }),
+  })) });
+  render(<ProviderAccountUsageModule provider={{
+    id: 'mixed-glm', auth: { method: 'apiKey' },
+    routing: {
+      'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' },
+      pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+    },
+  } as ProviderView} />);
+  await screen.findByText(status === 'ready' ? 'Pi' : 'providerAccountUsage.error.auth');
+  fireEvent.click(screen.getByRole('button', { name: 'providerAccountUsage.zhipuCodingPlan.usage' }));
+  expect(window.electronAPI.openExternal).toHaveBeenCalledExactlyOnceWith(dashboardUrl);
+});
+
 describe('ProvidersSection — Cindy AI 账户资产模块', () => {
-  it('仅免费个人账号在 Cindy AI 模型数量后显示身份标签', async () => {
+  it.each(['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio'])(
+    'shows the source name %s in the provider list and detail header', async (name) => {
+      providersState.providers = [{ ...makeXd(), name }];
+      renderSection();
+      expect((await screen.findAllByText(name)).length).toBeGreaterThanOrEqual(2);
+      expect(screen.queryByText('settings.providers.xd.title')).toBeNull();
+    },
+  );
+  it('仅免费个人账号在 Cindy AI 名称后显示身份标签', async () => {
     modelAccessState.accountTier = 'free';
     renderSection();
 
@@ -234,7 +286,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(badge.textContent).toBe('settings.providers.xd.accountTier.free');
     const assetModule = screen.getByTestId('cindy-ai-asset-module');
     expect(assetModule.contains(badge)).toBe(false);
-    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.models.modelCount');
+    expect(badge.previousElementSibling?.textContent).toBe('settings.providers.xd.title');
+    expect(screen.getByTestId('provider-detail-metadata').textContent).not.toContain('settings.providers.models.modelCount');
     expect(screen.getByTestId('provider-detail-metadata').contains(badge)).toBe(true);
 
     cleanup();
@@ -270,11 +323,11 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     );
 
     const buyPlan = screen.getByText('settings.providers.xd.asset.buyPlan').closest('button');
-    expect(buyPlan?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(buyPlan?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(buyPlan?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(buyPlan?.className).toContain('text-[var(--accent-pure-cta-fg)]');
     const usageButton = screen.getByText('settings.providers.xd.asset.viewUsage').closest('button');
-    expect(usageButton?.style.backgroundColor).toBe('var(--settings-btn-secondary-bg)');
-    expect(usageButton?.style.color).toBe('var(--settings-btn-secondary-text)');
+    expect(usageButton?.className).toContain('[--button-face-bg:var(--surface-elevated)]');
+    expect(usageButton?.className).toContain('text-[var(--text-primary)]');
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
     expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
 
@@ -292,8 +345,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
 
     const upgrade = screen.getByText('settings.providers.xd.asset.upgradePlan').closest('button');
-    expect(upgrade?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(upgrade?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(upgrade?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(upgrade?.className).toContain('text-[var(--accent-pure-cta-fg)]');
 
     fireEvent.click(screen.getByText('settings.providers.xd.asset.upgradePlan'));
     await waitFor(() =>
@@ -313,8 +366,8 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('settings.providers.xd.asset.upgradePlan')).toBeNull();
 
     const topup = screen.getByText('billing.settings.topupCard.action').closest('button');
-    expect(topup?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
-    expect(topup?.style.color).toBe('var(--accent-pure-cta-fg)');
+    expect(topup?.className).toContain('[--button-face-bg:var(--accent-cta-bg-pure)]');
+    expect(topup?.className).toContain('text-[var(--accent-pure-cta-fg)]');
 
     fireEvent.click(screen.getByText('billing.settings.topupCard.action'));
     await waitFor(() =>
@@ -334,14 +387,28 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.getByText('settings.providers.pill.connected')).toBeTruthy();
   });
 
-  it('企业账号:整块资产模块不渲染,也不显示占位', async () => {
+  it('企业账号:显示周期额度,不读取个人余额或提供充值', async () => {
     authState.user = { membershipKind: 'org' };
+    quotaState.usage = { spend: 25, maxBudget: 100, currency: 'USD', todaySpend: 5, fetchedAt: 1 };
     renderSection();
 
     await screen.findAllByText('settings.providers.xd.title');
     expect(screen.queryByText('billing.balance.title')).toBeNull();
     expect(screen.queryByText('cny:18.42')).toBeNull();
+    expect(screen.getByText('USD:75')).toBeTruthy();
+    expect(primaryActionState.lastEnabled).toBe(false);
     expect(screen.queryByText('billing.settings.topupCard.action')).toBeNull();
+  });
+
+  it('shows no personal limit rather than an unavailable quota for an enterprise', async () => {
+    authState.user = { membershipKind: 'org' };
+    quotaState.unlimited = true;
+    renderSection();
+    expect(await screen.findByText('settings.providers.xd.asset.noPersonalLimit')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.xd.asset.unavailable')).toBeNull();
+    expect(screen.getByText('settings.providers.xd.asset.refresh')).toBeTruthy();
+    expect(screen.queryByText('billing.balance.title')).toBeNull();
+    expect(primaryActionState.lastEnabled).toBe(false);
   });
 
   it('local 会话(未登录云账号):同样不渲染', async () => {
@@ -353,12 +420,14 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     expect(screen.queryByText('billing.balance.title')).toBeNull();
   });
 
-  it('拿不到余额:不渲染余额区,不显示「—」占位', async () => {
+  it('拿不到余额:显示说明和就地重试,不伪造零余额', async () => {
     creditUsageState.available = null;
     renderSection();
 
     await screen.findAllByText('settings.providers.xd.title');
-    expect(screen.queryByText('billing.balance.title')).toBeNull();
+    expect(screen.getByText('billing.balance.title')).toBeTruthy();
+    expect(screen.getByText('settings.providers.xd.asset.unavailable')).toBeTruthy();
+    expect(screen.getByText('settings.providers.xd.asset.refresh')).toBeTruthy();
     expect(screen.queryByText('settings.providers.xd.asset.syncFailed')).toBeNull();
   });
 

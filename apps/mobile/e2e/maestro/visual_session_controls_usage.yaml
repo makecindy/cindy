@@ -20,7 +20,7 @@ appId: ${APP_ID}
       id: "session.menuSheet"
     timeout: 10000
 - tapOn:
-    id: "session.infoButton"
+    id: "session.menuUsageRow"
 - extendedWaitUntil:
     visible:
       id: "session.infoSheet"

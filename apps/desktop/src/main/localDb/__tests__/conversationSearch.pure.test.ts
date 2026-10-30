@@ -6,6 +6,7 @@ import {
   mergeConversationSearchResults,
   normalizeConversationContentPreview,
   textPreview,
+  visibleMessageText,
   visibleMessageTextForConversationSearch,
 } from '../conversationSearch.pure';
 import type { ConversationSearchSessionSummary } from '../../../shared/conversationSearch';
@@ -33,6 +34,19 @@ function session(
 }
 
 describe('conversationSearch.pure', () => {
+  it('preserves findings and code indentation for result cards while search stays one line', () => {
+    const findings = '## Findings\n\n- P1: Discount\n- P2: Shipping\n\n```ts\nif (ready) {\n  ship();\n}\n```';
+    for (const content of [findings, JSON.stringify([
+      { type: 'thinking', thinking: 'private reasoning' },
+      { type: 'text', text: findings },
+    ])]) {
+      expect(visibleMessageText('assistant', content)).toBe(findings);
+      expect(visibleMessageTextForConversationSearch('assistant', content)).toBe(
+        findings.replace(/\s+/g, ' '),
+      );
+    }
+  });
+
   it('scores and highlights fuzzy title matches', () => {
     const match = fuzzyTitleMatch('Chat History', 'ch');
     expect(match).not.toBeNull();
@@ -270,6 +284,16 @@ describe('conversationSearch.pure', () => {
       snippet: null,
       keywordMatchedVisibleText: false,
     });
+  });
+
+  it('preview / snippet 窗口按码点截，不把 emoji 切成半个代理对', () => {
+    const emoji = `${'😀'.repeat(90)}登录`;
+    const preview = normalizeConversationContentPreview('user', emoji, '登录', 180);
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(lone.test(preview.preview)).toBe(false);
+    expect(preview.snippet && lone.test(preview.snippet)).toBe(false);
+    expect(preview.snippet).toContain('登录');
+    expect(preview.keywordMatchedVisibleText).toBe(true);
   });
 
   it('extracts visible AskUser and plan review text for conversation search', () => {

@@ -1,6 +1,28 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
-import { Image as NativeImage, StyleSheet, View } from "react-native";
+import {
+  forwardRef,
+  createElement,
+  type ComponentType,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Image as NativeImage,
+  PixelRatio,
+  Platform,
+  StyleSheet,
+  View,
+} from "react-native";
 import Svg, {
+  G,
+  Path,
+  Circle,
+  Ellipse,
+  Line,
+  Polygon,
+  Polyline,
   ClipPath,
   Defs,
   Image as SvgImage,
@@ -9,17 +31,19 @@ import Svg, {
   TSpan,
 } from "react-native-svg";
 
-import type {
-  ConversationShareMessage,
-  ConversationShareWebViewColors,
+import type { ShareVector } from "./conversationShareRichAnswer";
+import {
+  CONVERSATION_SHARE_HAIRLINE,
+  type ConversationShareMessage,
+  type ConversationShareWebViewColors,
 } from "@/session/conversationShareWebViewHtml";
-import { createConversationShareFooterAssetGate } from "@/session/conversationShareAssetGate";
+import { createConversationShareAssetGate } from "@/session/conversationShareAssetGate";
 import {
   buildConversationShareSvgLayout,
   conversationShareSvgRenderSize,
   type ConversationShareSvgBubble,
 } from "@/session/conversationShareSvgLayout";
-import { typeScale } from "@/theme";
+import { monoFont, typeScale } from "@/theme";
 
 export interface ConversationShareSvgHandle {
   exportPng(): Promise<string>;
@@ -35,8 +59,11 @@ const SHARE_CHARACTER_SIZE = 22;
 const SHARE_LOGO_HEIGHT = 18;
 const SHARE_LOCKUP_GAP = 6;
 const SHARE_EXPORT_TIMEOUT_MS = 20_000;
-// Export-card geometry: this is a 1px bubble border in the SVG coordinate
-// system, not a Lucide icon stroke (whose thinnest token is intentionally 1.75).
+// Leave time within the existing export deadline for fallback layout + capture.
+const SHARE_DECODE_TIMEOUT_MS = 15_000;
+// Export-card geometry: a 1px code/table border in the SVG coordinate system,
+// not a Lucide icon stroke (whose thinnest token is intentionally 1.75). Message
+// bubbles use the chat's hairline instead.
 const SHARE_BUBBLE_STROKE_WIDTH = 1;
 
 export const ConversationShareSvg = forwardRef<
@@ -52,25 +79,82 @@ export const ConversationShareSvg = forwardRef<
   ref,
 ) {
   const svgRef = useRef<Svg | null>(null);
+  const [imageKeysByUri] = useState(() => {
+    const original = buildConversationShareSvgLayout({
+      allShareableIds,
+      colors,
+      messages,
+      width,
+    });
+    const keys = new Map<string, string[]>();
+    original.images.forEach((image, index) => {
+      const occurrences = keys.get(image.uri) ?? [];
+      occurrences.push(`image-${index}`);
+      keys.set(image.uri, occurrences);
+    });
+    return keys;
+  });
+  const [assetGate] = useState(() =>
+    createConversationShareAssetGate([
+      "character",
+      "logo",
+      ...Array.from(imageKeysByUri.values()).flat(),
+    ]),
+  );
+  const [readyAssets, setReadyAssets] = useState<ReadonlySet<string> | null>(
+    null,
+  );
+  const captureMessages = useMemo(
+    () =>
+      readyAssets
+        ? messages.map((message) => ({
+            ...message,
+            images: new Map(
+              Array.from(message.images ?? []).filter(([, image]) =>
+                imageKeysByUri
+                  .get(image.uri)
+                  ?.every((key) => readyAssets.has(key)),
+              ),
+            ),
+          }))
+        : messages,
+    [imageKeysByUri, messages, readyAssets],
+  );
   const layout = useMemo(
     () =>
       buildConversationShareSvgLayout({
         allShareableIds,
         colors,
-        messages,
+        messages: captureMessages,
         width,
       }),
-    [allShareableIds, colors, messages, width],
+    [allShareableIds, colors, captureMessages, width],
   );
+  // Removing a failed URI must not remount already decoded SVG occurrences.
+  const keyedImages = useMemo(() => {
+    const occurrences = new Map<string, number>();
+    return layout.images.map((image) => {
+      const occurrence = occurrences.get(image.uri) ?? 0;
+      occurrences.set(image.uri, occurrence + 1);
+      return { ...image, key: imageKeysByUri.get(image.uri)![occurrence]! };
+    });
+  }, [imageKeysByUri, layout.images]);
   const renderSize = useMemo(
-    () => conversationShareSvgRenderSize(layout),
+    () =>
+      conversationShareSvgRenderSize(
+        layout,
+        Platform.OS === "android" ? PixelRatio.get() : 1,
+      ),
     [layout],
   );
   const logoAsset = colors.dark ? shareLogoDarkAsset : shareLogoLightAsset;
-  const footerAssetGate = useMemo(
-    () => createConversationShareFooterAssetGate(),
-    [logoAsset],
-  );
+  // The screen keys this component by prepared snapshot + theme.
+  const exportJob = useRef<{
+    promise: Promise<string>;
+    cancel(): void;
+    capture(sourceTooLarge: boolean): void;
+  } | null>(null);
+  useEffect(() => () => exportJob.current?.cancel(), []);
   const logoSource = NativeImage.resolveAssetSource(logoAsset);
   const logoWidth = (SHARE_LOGO_HEIGHT * logoSource.width) / logoSource.height;
   const lockupWidth = SHARE_CHARACTER_SIZE + SHARE_LOCKUP_GAP + logoWidth;
@@ -80,48 +164,80 @@ export const ConversationShareSvg = forwardRef<
     ref,
     () => ({
       exportPng() {
+        if (exportJob.current) return exportJob.current.promise;
         if (renderSize.sourceTooLarge) {
           return Promise.reject(
             new Error("conversation share content is too large"),
           );
         }
-        return new Promise<string>((resolve, reject) => {
-          let settled = false;
-          const fail = (error: Error) => {
-            if (settled) return;
-            settled = true;
+        let capture = (_sourceTooLarge: boolean) => {};
+        let cancel = () => {};
+        const promise = new Promise<string>((resolve, reject) => {
+          let phase: "decoding" | "layout" | "capturing" | "settled" =
+            "decoding";
+          const finish = (error?: Error, base64?: string) => {
+            if (phase === "settled") return;
+            phase = "settled";
             clearTimeout(timer);
-            reject(error);
+            clearTimeout(decodeTimer);
+            assetGate.finish();
+            if (error) reject(error);
+            else resolve(base64!);
           };
           const timer = setTimeout(() => {
-            fail(new Error("conversation share svg export timed out"));
+            finish(new Error("conversation share svg export timed out"));
           }, SHARE_EXPORT_TIMEOUT_MS);
-          void footerAssetGate.waitUntilReady().then(() => {
-            if (settled) return;
+          const prepareCapture = () => {
+            if (phase !== "decoding") return;
+            phase = "layout";
+            clearTimeout(decodeTimer);
+            const ready = assetGate.finish();
+            if (!ready.has("character") || !ready.has("logo")) {
+              finish(new Error("conversation share footer is unavailable"));
+              return;
+            }
+            setReadyAssets(ready);
+          };
+          const decodeTimer = setTimeout(
+            prepareCapture,
+            SHARE_DECODE_TIMEOUT_MS,
+          );
+          void assetGate.waitUntilSettled().then(prepareCapture);
+          cancel = () =>
+            finish(new Error("conversation share svg export cancelled"));
+          capture = (sourceTooLarge) => {
+            if (phase !== "layout") return;
+            phase = "capturing";
+            if (sourceTooLarge) {
+              finish(new Error("conversation share content is too large"));
+              return;
+            }
             const svg = svgRef.current;
             if (!svg) {
-              fail(new Error("conversation share svg renderer is unavailable"));
+              finish(
+                new Error("conversation share svg renderer is unavailable"),
+              );
               return;
             }
             try {
               svg.toDataURL((base64) => {
-                if (settled) return;
+                if (phase === "settled") return;
                 if (!base64) {
-                  fail(new Error("conversation share svg export was empty"));
+                  finish(new Error("conversation share svg export was empty"));
                   return;
                 }
-                settled = true;
-                clearTimeout(timer);
-                resolve(base64);
+                finish(undefined, base64);
               });
             } catch (error) {
-              fail(error instanceof Error ? error : new Error(String(error)));
+              finish(error instanceof Error ? error : new Error(String(error)));
             }
-          });
+          };
         });
+        exportJob.current = { promise, cancel, capture };
+        return promise;
       },
     }),
-    [footerAssetGate, renderSize.sourceTooLarge],
+    [assetGate, renderSize.sourceTooLarge],
   );
 
   return (
@@ -134,6 +250,52 @@ export const ConversationShareSvg = forwardRef<
         { height: renderSize.height, width: renderSize.width },
       ]}
     >
+      {Platform.OS === "android" && !renderSize.sourceTooLarge
+        ? [
+            { source: shareCharacterAsset, keys: ["character"] },
+            { source: logoAsset, keys: ["logo"] },
+            ...Array.from(imageKeysByUri, ([uri, keys]) => ({
+              source: { uri },
+              keys,
+            })),
+          ].map(({ source, keys }) => (
+            <NativeImage
+              key={keys[0]}
+              source={source}
+              resizeMethod="none"
+              fadeDuration={0}
+              style={styles.decodeProbe}
+              onLoad={() => {
+                // Bundled footer bitmaps are held by this mounted view.
+                // Release Android may resolve them to resource names, which the
+                // URI-only queryCache API cannot look up as native res:/ IDs.
+                if (keys[0] === "character" || keys[0] === "logo") {
+                  keys.forEach(assetGate.markReady);
+                  return;
+                }
+                // Android SVG cache hits do not emit onLoad. This mounted Image
+                // holds the same unresized Fresco bitmap; encoded/disk cache alone
+                // is insufficient, including when Fresco refuses a large bitmap.
+                const uri = NativeImage.resolveAssetSource(source).uri;
+                const cached = NativeImage.queryCache?.([uri]);
+                if (!cached) {
+                  keys.forEach(assetGate.markFailed);
+                  return;
+                }
+                void cached.then(
+                  (cache) => {
+                    const mark = cache[uri]?.includes("memory")
+                      ? assetGate.markReady
+                      : assetGate.markFailed;
+                    keys.forEach(mark);
+                  },
+                  () => keys.forEach(assetGate.markFailed),
+                );
+              }}
+              onError={() => keys.forEach(assetGate.markFailed)}
+            />
+          ))
+        : null}
       <Svg
         height={renderSize.height}
         ref={svgRef}
@@ -148,7 +310,25 @@ export const ConversationShareSvg = forwardRef<
         {!renderSize.sourceTooLarge ? (
           <>
             {layout.bubbles.map((bubble, bubbleIndex) => (
-              <SvgBubbleView bubble={bubble} key={`bubble-${bubbleIndex}`} />
+              <SvgBubbleView
+                bubble={bubble}
+                key={`bubble-${bubbleIndex}`}
+                clipIdPrefix={`share-bubble-${bubbleIndex}`}
+              />
+            ))}
+            {keyedImages.map((image) => (
+              <SvgImage
+                key={image.key}
+                href={{ uri: image.uri }}
+                x={image.x}
+                y={image.y}
+                width={image.width}
+                height={image.height}
+                preserveAspectRatio="xMidYMid meet"
+                onLoad={() => {
+                  if (Platform.OS !== "android") assetGate.markReady(image.key);
+                }}
+              />
             ))}
             {layout.gaps.map((gap, gapIndex) => (
               <SvgText
@@ -180,7 +360,9 @@ export const ConversationShareSvg = forwardRef<
               height={SHARE_CHARACTER_SIZE}
               href={shareCharacterAsset}
               key={`conversation-share-character-${colors.dark ? "dark" : "light"}`}
-              onLoad={() => footerAssetGate.markReady("character")}
+              onLoad={() => {
+                if (Platform.OS !== "android") assetGate.markReady("character");
+              }}
               preserveAspectRatio="xMidYMid slice"
               width={SHARE_CHARACTER_SIZE}
               x={lockupX}
@@ -190,7 +372,9 @@ export const ConversationShareSvg = forwardRef<
               height={SHARE_LOGO_HEIGHT}
               href={logoAsset}
               key={`conversation-share-logo-${colors.dark ? "dark" : "light"}`}
-              onLoad={() => footerAssetGate.markReady("logo")}
+              onLoad={() => {
+                if (Platform.OS !== "android") assetGate.markReady("logo");
+              }}
               preserveAspectRatio="xMinYMid meet"
               width={logoWidth}
               x={lockupX + SHARE_CHARACTER_SIZE + SHARE_LOCKUP_GAP}
@@ -201,11 +385,26 @@ export const ConversationShareSvg = forwardRef<
           </>
         ) : null}
       </Svg>
+      {readyAssets ? (
+        // A newly mounted native layout event is the commit barrier: capture
+        // must see the fallback SVG, even when its outer size did not change.
+        <View
+          collapsable={false}
+          onLayout={() => exportJob.current?.capture(renderSize.sourceTooLarge)}
+          style={styles.decodeProbe}
+        />
+      ) : null}
     </View>
   );
 });
 
-function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
+function SvgBubbleView({
+  bubble,
+  clipIdPrefix,
+}: {
+  bubble: ConversationShareSvgBubble;
+  clipIdPrefix: string;
+}) {
   return (
     <>
       {bubble.fill || bubble.stroke ? (
@@ -214,17 +413,34 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
           height={bubble.height}
           rx={12}
           stroke={bubble.stroke}
-          strokeWidth={bubble.stroke ? SHARE_BUBBLE_STROKE_WIDTH : undefined}
+          strokeWidth={bubble.stroke ? CONVERSATION_SHARE_HAIRLINE : undefined}
           width={bubble.width}
           x={bubble.x}
           y={bubble.y}
         />
       ) : null}
+      {bubble.rectangles?.map((rect, index) => (
+        <Rect
+          key={`rect-${index}`}
+          {...rect}
+          strokeWidth={SHARE_BUBBLE_STROKE_WIDTH}
+        />
+      ))}
+      {bubble.vectors?.map((vector, index) => (
+        <ShareVectorView
+          key={`vector-${index}`}
+          item={vector}
+          clipId={`${clipIdPrefix}-vector-${index}`}
+        />
+      ))}
       {bubble.textBlocks.map((block, blockIndex) => (
         <SvgText
           fill={block.color}
-          fontFamily="Arial"
+          fontFamily={block.monospace ? monoFont : "Arial"}
           fontSize={block.fontSize}
+          fontWeight={block.bold ? "bold" : "normal"}
+          fontStyle={block.italic ? "italic" : "normal"}
+          textDecoration={block.decoration}
           key={`text-${blockIndex}`}
           x={block.x}
           y={block.y}
@@ -235,7 +451,9 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
               key={`line-${lineIndex}`}
               x={block.x}
             >
-              {line || " "}
+              {/* Lines are already laid out: preserve code indentation and the
+                  spaces at styled-run boundaries in native SVG text. */}
+              {line ? line.replace(/ /g, "\u00a0") : " "}
             </TSpan>
           ))}
         </SvgText>
@@ -245,6 +463,7 @@ function SvgBubbleView({ bubble }: { bubble: ConversationShareSvgBubble }) {
 }
 
 const styles = StyleSheet.create({
+  decodeProbe: { position: "absolute", width: 1, height: 1 },
   hidden: {
     left: 0,
     opacity: 0,
@@ -252,3 +471,51 @@ const styles = StyleSheet.create({
     top: 0,
   },
 });
+
+// A nested Svg creates a native root/viewport and can clip the rest of a long export.
+// Keep every shape in the single capture root; map the component viewBox with groups.
+function ShareVectorView({
+  item,
+  clipId,
+}: {
+  item: ShareVector;
+  clipId: string;
+}) {
+  const [vx, vy, vw, vh] = item.vector.viewBox.split(" ").map(Number);
+  const scale = Math.min(item.width / vw!, item.height / vh!);
+  const dx = item.x + (item.width - vw! * scale) / 2 - vx! * scale;
+  const dy = item.y + (item.height - vh! * scale) / 2 - vy! * scale;
+  const types = {
+    path: Path,
+    rect: Rect,
+    circle: Circle,
+    ellipse: Ellipse,
+    line: Line,
+    polyline: Polyline,
+    polygon: Polygon,
+    text: SvgText,
+  };
+  return (
+    <>
+      <Defs>
+        <ClipPath id={clipId}>
+          <Rect x={item.x} y={item.y} width={item.width} height={item.height} />
+        </ClipPath>
+      </Defs>
+      <G clipPath={`url(#${clipId})`}>
+        <G
+          transform={`translate(${dx},${dy}) scale(${scale})`}
+          fill={item.color}
+        >
+          {item.vector.shapes.map((shape, index) =>
+            createElement(
+              types[shape.type] as ComponentType<any>,
+              { ...shape.props, key: index },
+              shape.text,
+            ),
+          )}
+        </G>
+      </G>
+    </>
+  );
+}

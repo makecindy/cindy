@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
 import {
@@ -16,12 +16,13 @@ import {
   shouldReleaseConversationSearchLock,
   stampRemoteSearchResponse,
 } from '@/lib/conversationSearchFanout';
-import { searchConversationsAcrossOrigins } from '@/lib/conversationSearchService';
+import { searchConversations, searchConversationsAcrossOrigins } from '@/lib/conversationSearchService';
 import type {
   ConversationSearchRequest,
   ConversationSearchResponse,
   ConversationSearchResultItem,
 } from '../../../shared/conversationSearch';
+import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { MACHINE_ALL, MACHINE_LOCAL } from '@/features/device-link/selectedMachineStore';
 
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Session {
@@ -282,6 +283,16 @@ describe('shouldReleaseConversationSearchLock', () => {
 });
 
 describe('merge and stamp', () => {
+  it('excludes hidden Make tasks from indexed and reused remote results before limiting', () => {
+    const page = response([
+      result('make', 100, { source: 'cindy-make', deviceLinkDeviceId: 'dev-a' }),
+      result('merge', 99, { source: 'cindy-make-merge', deviceLinkDeviceId: 'dev-a' }),
+      result('ordinary', 1, { source: 'desktop', deviceLinkDeviceId: 'dev-a' }),
+    ]);
+    expect(mergeConversationSearchFanout([page], 1).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(remoteResultsFromFanoutPages([page]).map(item => item.session.id)).toEqual(['ordinary']);
+    expect(filterResultsByRequestFilters(page, {}).results.map(item => item.session.id)).toEqual(['ordinary']);
+  });
   it('keeps same-id hits from different devices and stamps origin', () => {
     const remote = stampRemoteSearchResponse(response([result('same', 10)]), {
       deviceId: 'dev-a',
@@ -300,6 +311,32 @@ describe('merge and stamp', () => {
 });
 
 describe('searchCachedSessionsByTitle', () => {
+  it('excludes both Make sources from cached titles even if explicitly requested', () => {
+    const rows = [
+      session({ id: 'make', title: 'needle', source: 'cindy-make' }),
+      session({ id: 'merge', title: 'needle', source: 'cindy-make-merge' }),
+      session({ id: 'ordinary', title: 'Needle notes', source: 'desktop' }),
+    ];
+    expect(searchCachedSessionsByTitle(rows, { query: 'needle', limit: 1 }).results.map(item => item.session.id)).toEqual(['ordinary']);
+    expect(searchCachedSessionsByTitle(rows, { query: 'needle', filters: { sessionIds: ['make', 'merge'] } }).results).toEqual([]);
+  });
+  it('excludes active and archived companions before ranking and limiting title matches', () => {
+    const rows = [
+      session({ id: 'bot-active', title: 'needle', source: 'bot' }),
+      session({ id: 'bot-archived', title: 'needle', source: 'bot', status: 'archived' }),
+      session({ id: 'ordinary', title: 'Needle planning', source: 'desktop' }),
+      session({ id: 'legacy', title: 'Needle notes' }),
+    ];
+    const page = searchCachedSessionsByTitle(rows, { query: 'needle', limit: 2 });
+    expect(page.results.map((item) => item.session.id).sort()).toEqual(['legacy', 'ordinary']);
+    expect(
+      searchCachedSessionsByTitle(rows, {
+        query: 'needle',
+        filters: { sessionIds: ['bot-active', 'bot-archived'] },
+      }).results,
+    ).toEqual([]);
+  });
+
   it('matches visible titles and skips workers', () => {
     const request: ConversationSearchRequest = { query: 'remote', limit: 10 };
     const page = searchCachedSessionsByTitle(
@@ -320,6 +357,79 @@ describe('searchCachedSessionsByTitle', () => {
   });
 });
 
+describe('ordinary search against a retained remote companion mirror', () => {
+  afterEach(() => {
+    remoteProjectsStore.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['offline', 'disconnect', 'timeout', 'legacy-list', 'legacy-cache'] as const)(
+    'hides companion titles on %s fallback while preserving their model metadata',
+    async (mode) => {
+      const deviceId = 'companion-search-host';
+      const bot = session({
+        id: 'bot-active',
+        title: 'needle',
+        source: 'bot',
+        model: 'gpt-6-astra',
+        agentKind: 'codex',
+      });
+      const archivedBot = { ...bot, id: 'bot-archived', status: 'archived' as const };
+      const ordinary = session({ id: 'ordinary', title: 'Needle planning', source: 'desktop' });
+      remoteProjectsStore.pinSessionOrigin(deviceId, bot.id);
+      remoteProjectsStore.mergeDeviceSessions(deviceId, 'MacBook', [bot, ordinary]);
+      remoteProjectsStore.mergeDeviceSessions(deviceId, 'MacBook', [archivedBot], 'archived');
+      // An ordinary list excludes companions; their chat metadata survives its refresh.
+      remoteProjectsStore.setDeviceSessions(deviceId, 'MacBook', [ordinary]);
+      remoteProjectsStore.markDeviceDisconnected(deviceId);
+      const snapshot = remoteProjectsStore.getDeviceSessions(deviceId);
+      const invoke = vi.fn(async (_device, channel) => {
+        if (mode === 'disconnect') throw new Error('[DEVICE_LINK_NOT_CONNECTED] closed');
+        if (mode === 'timeout') throw new Error('[DEVICE_LINK_TIMEOUT] unavailable');
+        if (channel === 'local-db:conversations:search')
+          throw new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] unsupported');
+        if (mode === 'legacy-list') return [bot, archivedBot, ordinary];
+        throw new Error('[DEVICE_LINK_TIMEOUT] list unavailable');
+      });
+      vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+      const page = await searchConversations(
+        { query: 'needle', limit: 1 },
+        {
+          origins: [
+            {
+              kind: 'remote',
+              deviceId,
+              deviceName: 'MacBook',
+              connected: mode !== 'offline',
+              sessionIds: null,
+            },
+          ],
+        },
+      );
+      expect(page.results.map((item) => item.session.id)).toEqual(['ordinary']);
+      expect(page.remoteResults?.map((item) => item.session.id)).toEqual(['ordinary']);
+      expect(page.results[0]?.session.deviceLinkDeviceId).toBe(deviceId);
+      expect(invoke).toHaveBeenCalledTimes(
+        mode === 'offline' ? 0 : mode.startsWith('legacy') ? 2 : 1,
+      );
+      expect(remoteProjectsStore.getDeviceSessions(deviceId)).toBe(snapshot);
+      expect(snapshot.filter((row) => row.source === 'bot')).toEqual(
+        expect.arrayContaining(
+          [bot, archivedBot].map((row) =>
+            expect.objectContaining({
+              id: row.id,
+              status: row.status,
+              model: 'gpt-6-astra',
+              agentKind: 'codex',
+              deviceLinkDeviceId: deviceId,
+            }),
+          ),
+        ),
+      );
+    },
+  );
+});
+
 describe('searchConversationsAcrossOrigins', () => {
   const request: ConversationSearchRequest = {
     query: 'needle',
@@ -327,6 +437,38 @@ describe('searchConversationsAcrossOrigins', () => {
     sortBy: 'relevance',
     semanticMode: 'hybrid',
   };
+
+  it.each([1, 3, 24, 40])('finds ordinary hits behind %i Make hits on a bounded legacy host', async (hiddenCount) => {
+    const candidates = [
+      ...Array.from({ length: hiddenCount }, (_entry, index) => result('make-' + index, 100 - index, {
+        source: index % 2 === 0 ? 'cindy-make' : 'cindy-make-merge',
+      })),
+      ...Array.from({ length: 4 }, (_entry, index) => result('ordinary-' + index, 4 - index, { source: 'desktop' })),
+    ];
+    const invokeRemote = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => {
+      const remoteRequest = args[0] as ConversationSearchRequest;
+      return response(candidates.slice(0, Math.min(remoteRequest.limit ?? 20, 50)));
+    });
+    const searchLocal = vi.fn(async () => response([]));
+    const page = await searchConversationsAcrossOrigins({ ...request, limit: 3 }, {
+      origins: [
+        { kind: 'local', sessionIds: null },
+        { kind: 'remote', deviceId: 'dev-a', deviceName: 'Studio', connected: true, sessionIds: null },
+      ],
+      searchLocal,
+      invokeRemote,
+      listCachedRemoteSessions: () => [],
+    });
+
+    expect(page.results.map((item) => item.session.id)).toEqual(['ordinary-0', 'ordinary-1', 'ordinary-2']);
+    expect(page.remoteResults?.map((item) => item.session.id)).toEqual([
+      'ordinary-0', 'ordinary-1', 'ordinary-2', 'ordinary-3',
+    ]);
+    expect(invokeRemote).toHaveBeenCalledExactlyOnceWith('dev-a', 'local-db:conversations:search', [
+      expect.objectContaining({ limit: 50, semanticMode: 'keyword' }),
+    ]);
+    expect(searchLocal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ limit: 3, semanticMode: 'hybrid' }));
+  });
 
   it('fans out, forces keyword on remotes, and survives a failed device', async () => {
     const invokeRemote = vi.fn(async (deviceId: string) => {
@@ -597,6 +739,40 @@ describe('filterResultsByRequestFilters', () => {
       },
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('matches Windows drive and UNC case variants without folding POSIX paths', () => {
+    const windowsPage = response([
+      result('drive', 1, { workingDir: 'C:/work/repo' }),
+      result('unc', 1, { workingDir: '//SERVER/Share/Work/Repo' }),
+      result('other', 1, { workingDir: 'C:/work/other' }),
+    ]);
+    const windowsRequest = {
+      filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
+    };
+    expect(
+      filterResultsByRequestFilters(windowsPage, windowsRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['drive', 'unc']);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response(windowsPage.results.slice(0, 2)),
+        windowsRequest.filters.workingDirs,
+      ),
+    ).toBe(false);
+
+    const posixPage = response([
+      result('posix-lower', 1, { workingDir: '/work/repo' }),
+      result('posix-upper', 1, { workingDir: '/Work/Repo' }),
+    ]);
+    const posixRequest = { filters: { workingDirs: ['/work/repo'] } };
+    expect(
+      filterResultsByRequestFilters(posixPage, posixRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['posix-lower']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(posixPage, ['/work/repo'])).toBe(true);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {

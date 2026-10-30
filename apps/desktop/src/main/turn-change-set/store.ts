@@ -765,6 +765,7 @@ function broadcastUpdated(
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
 ): void {
   if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+  broadcastTap.tapWindowBroadcast(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
@@ -1334,6 +1335,7 @@ export function applyTurnChangeSetAction(
   id: string,
   action: TurnChangeAction,
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
+  assertCanApply?: () => Promise<void>,
 ): Promise<TurnChangeActionResult> {
   const releaseSessionDir = retainSessionDir(sessionId);
   const operation = (async () => {
@@ -1387,12 +1389,16 @@ export function applyTurnChangeSetAction(
                 'The workspace no longer matches the recorded patch.',
               );
             }
+            await assertCanApply?.();
+            assertOwnerScopeCurrent(ownerScope);
             await persistWorkspaceState(sessionId, id, nextState);
             const summary = toSummary(value, nextState);
             broadcastUpdated({ sessionId, summary }, ownerScope);
             return { action, changed: false, summary };
           }
 
+          await assertCanApply?.();
+          assertOwnerScopeCurrent(ownerScope);
           await applyRecordedPatch(value, revert);
           await persistWorkspaceState(sessionId, id, nextState);
           const summary = toSummary(value, nextState);

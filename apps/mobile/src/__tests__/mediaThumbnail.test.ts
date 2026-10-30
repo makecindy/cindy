@@ -42,6 +42,10 @@ describe('shouldAutoResolveMediaThumbnail', () => {
 });
 
 describe('mediaThumbnailPhase', () => {
+  it('shows a failed direct image as unavailable instead of an empty ready preview', () => {
+    expect(mediaThumbnailPhase(image('https://x/expired.png', true), { status: 'error' }, true))
+      .toEqual({ kind: 'fallback', reason: 'error' });
+  });
   it('maps direct, resolving, resolved, and fallback states', () => {
     expect(mediaThumbnailPhase(image('https://x/a.png', true), idle, true)).toEqual({ kind: 'direct' });
     expect(mediaThumbnailPhase(image('xdt-image://cache/a.png'), idle, true)).toEqual({ kind: 'resolving' });

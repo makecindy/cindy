@@ -15,7 +15,10 @@ test("desktop shared userData follows the region identity", () => {
   assert.equal(desktopUserDataDirNameForRegion("global"), "CindyGlobal");
   assert.equal(desktopUserDataDirNameForRegion("cn"), "Cindy");
   assert.equal(desktopUserDataDirNameForRegion("dev"), "CindyDev");
-  assert.throws(() => desktopUserDataDirNameForRegion("us"), /expected cn, global or dev/);
+  assert.throws(
+    () => desktopUserDataDirNameForRegion("us"),
+    /expected cn, global or dev/,
+  );
 });
 
 test("desktop userData path follows platform appData rules and selected region", () => {
@@ -24,7 +27,12 @@ test("desktop userData path follows platform appData rules and selected region",
     "/Users/tester/Library/Application Support/CindyGlobal",
   );
   assert.equal(
-    desktopUserDataDirForRegion("cn", "linux", { XDG_CONFIG_HOME: "/tmp/config" }, "/home/tester"),
+    desktopUserDataDirForRegion(
+      "cn",
+      "linux",
+      { XDG_CONFIG_HOME: "/tmp/config" },
+      "/home/tester",
+    ),
     "/tmp/config/Cindy",
   );
   assert.equal(
@@ -40,10 +48,7 @@ test("desktop userData path follows platform appData rules and selected region",
 
 test("desktop dev region defaults to global and keeps the legacy env fallback", () => {
   assert.equal(resolveDesktopDevRegion([], {}), "global");
-  assert.equal(
-    resolveDesktopDevRegion([], { CINDY_AUTH_REGION: "cn" }),
-    "cn",
-  );
+  assert.equal(resolveDesktopDevRegion([], { CINDY_AUTH_REGION: "cn" }), "cn");
 });
 
 test("desktop dev region accepts both CLI forms and overrides the legacy env", () => {
@@ -175,12 +180,12 @@ test("direct dev consumes the region flag before launching Electron Forge", () =
   ]);
 });
 
-test("an explicit endpoint manifest override remains higher priority than the region default", () => {
+test("local server debugging retains its endpoint manifest", () => {
   assert.deepEqual(
     resolveDesktopDevStartupConfig({
       argv: ["--region=global"],
       env: { XDT_ENDPOINT_MANIFEST_FILE: "config/custom-endpoint.json" },
-      mode: "remote",
+      mode: "local",
     }),
     {
       region: "global",
@@ -188,4 +193,65 @@ test("an explicit endpoint manifest override remains higher priority than the re
       endpointManifestFile: "config/custom-endpoint.json",
     },
   );
+});
+
+test("remote dev replaces inherited manifests for every selected region", () => {
+  const manifests = {
+    cn: "config/endpoint.json",
+    global: "config/endpoint.global.json",
+    dev: "config/endpoint.dev.json",
+  };
+  for (const inherited of [
+    ...Object.values(manifests),
+    "config/custom-endpoint.json",
+  ]) {
+    for (const [region, manifest] of Object.entries(manifests)) {
+      const env = {
+        CINDY_AUTH_REGION: "cn",
+        VITE_CINDY_AUTH_REGION: "cn",
+        XDT_ENDPOINT_MANIFEST_FILE: inherited,
+      };
+      applyDesktopDevStartupConfig({ argv: [`--region=${region}`], env });
+      assert.equal(env.CINDY_AUTH_REGION, region);
+      assert.equal(env.VITE_CINDY_AUTH_REGION, region);
+      assert.equal(env.XDT_ENDPOINT_MANIFEST_FILE, manifest);
+      // The downstream dev wrapper parses the environment again without CLI flags.
+      applyDesktopDevStartupConfig({ argv: [], env });
+      assert.equal(env.XDT_ENDPOINT_MANIFEST_FILE, manifest);
+    }
+  }
+});
+
+test("switching regions in the same environment also switches the endpoint file", () => {
+  const env = {};
+  for (const region of ["cn", "global", "dev", "cn"]) {
+    const config = applyDesktopDevStartupConfig({
+      argv: [`--region=${region}`],
+      env,
+    });
+    assert.equal(config.region, region);
+    assert.equal(
+      env.XDT_ENDPOINT_MANIFEST_FILE,
+      `config/endpoint${region === "cn" ? "" : `.${region}`}.json`,
+    );
+  }
+});
+
+test("remote CDN startup removes inherited files and remains CDN through the child wrapper", () => {
+  for (const argv of [
+    ["--region=global", "--endpoints-cdn"],
+    ["--region=global"],
+  ]) {
+    const env = {
+      XDT_ENDPOINT_MANIFEST_FILE: "config/endpoint.json",
+      XDT_ENDPOINTS_CDN: "1",
+    };
+    applyDesktopDevStartupConfig({ argv, env });
+    assert.equal(env.XDT_ENDPOINT_MANIFEST_FILE, undefined);
+    assert.deepEqual(applyDesktopDevStartupConfig({ argv: [], env }), {
+      region: "global",
+      endpointsCdn: true,
+      endpointManifestFile: undefined,
+    });
+  }
 });

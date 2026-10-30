@@ -2,7 +2,18 @@ const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
+config.transformer.babelTransformerPath = require.resolve('./babel-transformer');
 const workspaceRoot = path.resolve(__dirname, '../..');
+// Shared endpoint discovery bundles the public manifests from the repository config directory.
+config.watchFolders = [...config.watchFolders, path.join(workspaceRoot, 'config')];
+// Keep upload routing build-time-only, with the desktop validator as the single configuration source.
+// Missing config is allowed for local/open-source builds; malformed or cross-region config is not.
+const { mobileLogUploadBuildEnv, mobileLogUploadConfigRequired } = require('../../scripts/shared/log-upload-build-env.mjs');
+Object.assign(process.env, mobileLogUploadBuildEnv({
+  repoRoot: workspaceRoot,
+  authRegion: process.env.EXPO_PUBLIC_CINDY_AUTH_REGION || 'global',
+  allowMissing: !mobileLogUploadConfigRequired(),
+}));
 const workspaceNodeModules = path.join(workspaceRoot, 'node_modules');
 const appNodeModules = path.join(__dirname, 'node_modules');
 const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArrayBuffer.js');
@@ -11,8 +22,10 @@ const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArra
 const workspaceTsSourcePackages = [
   'auth-client',
   'device-link',
+  'device-link-protocol',
   'maker-shared',
   'model-providers',
+  'voice-input-core',
 ];
 
 config.resolver.disableHierarchicalLookup = true;
@@ -68,7 +81,20 @@ const loginFixturesStub = path.join(
   'packages/auth-client/fixtures/loginScenarios.production-stub.ts',
 );
 
+const devEndpointManifest = path.join(workspaceRoot, 'config/endpoint.dev.json');
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Metro collects static requires even in inactive env.ts branches. This private,
+  // gitignored manifest is only an input to explicitly selected CindyDev builds;
+  // Global/CN must work without it and must not bundle it when it happens to exist.
+  // Dev uses normal resolution, so a missing manifest still fails explicitly.
+  if (
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION?.trim() !== 'dev' &&
+    path.resolve(path.dirname(context.originModulePath), moduleName) === devEndpointManifest
+  ) {
+    return { type: 'empty' };
+  }
+
   if (moduleName === loginFixturesModule && process.env.NODE_ENV === 'production') {
     return { type: 'sourceFile', filePath: loginFixturesStub };
   }

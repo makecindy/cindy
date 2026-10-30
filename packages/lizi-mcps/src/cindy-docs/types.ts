@@ -74,6 +74,10 @@ export type WriteDocsOutputFn = (input: {
   path: string;
   data: Uint8Array;
   overwrite: boolean;
+  /** Host already authorized a path outside the session workingDir. */
+  authorizedOutsideWorkdir?: boolean;
+  /** Recheck immediately before the final write; stale grants must not commit. */
+  isCurrent?: () => boolean;
 }) => Promise<void>;
 
 /** 单页结构快照。宽高单位是 PDF point(1/72 英寸)。 */
@@ -90,6 +94,8 @@ export interface DocsPdfPageInspection {
   blank: boolean;
   /** 结构存在但未做位图级可见性验证。 */
   visibilityUnverified: boolean;
+  /** 该页文字提取失败时的解析器错误(此时 textChars=0 不代表没有文字)。 */
+  textError?: string;
 }
 
 export interface DocsPdfInspection {

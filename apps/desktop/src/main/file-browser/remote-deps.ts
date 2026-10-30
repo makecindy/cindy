@@ -15,7 +15,11 @@ import {
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
-import { ensureRemoteHostReady, getRemoteSshPool } from '../remote-ssh/index.js';
+import {
+  ensureRemoteHostReady,
+  getRemoteSshPool,
+  setRemoteFileBrowserEndpointInvalidator,
+} from '../remote-ssh/index.js';
 import { RemoteFileBrowserManager } from './remote.js';
 
 const log = createLogger('file-browser/remote-deps');
@@ -46,6 +50,10 @@ export function resolveFileServiceBundlePath(): string {
 }
 
 let manager: RemoteFileBrowserManager | null = null;
+
+setRemoteFileBrowserEndpointInvalidator(async (hostId) => {
+  if (manager) await manager.disposeHost(hostId);
+});
 
 /** 生产单例。首次调用装配真实依赖。 */
 export function getRemoteFileBrowser(): RemoteFileBrowserManager {

@@ -55,11 +55,46 @@ export type ModelRouteVerdict =
       reason:
         | 'model-disabled'
         | 'explicit-source-disabled'
+        | 'explicit-source-unavailable'
         | 'capability-model'
         | 'model-retired'
         | 'payment-required'
         | 'exclusive-source-unavailable';
     };
+
+export type ModelRouteRejectReason = Extract<ModelRouteVerdict, { kind: 'reject' }>['reason'];
+
+/**
+ * 路由拒绝原因 → 一句可行动的说明。会话切模(register)与定时任务触发(runner)共用,
+ * 两个入口不得各自维护一份措辞:定时任务此前把所有 reason 都写成「disabled in settings」,
+ * exclusive grok 未登录 SuperGrok 时用户被引导去设置里找一个并不存在的停用开关(#3884)。
+ */
+export function describeModelRouteRejection(
+  reason: ModelRouteRejectReason,
+  model: string,
+  providerId: string | null | undefined,
+): string {
+  // 穷尽 switch,不设 default:新增 reason 时编译器逼着补文案,不会静默落回
+  // 「disabled in settings」这条本次要消除的误分类。
+  switch (reason) {
+    case 'model-disabled':
+      return `model "${model}" is disabled in settings`;
+    case 'explicit-source-disabled':
+      return `provider "${providerId ?? ''}" is disabled for model "${model}" in settings`;
+    case 'explicit-source-unavailable':
+      return `provider "${providerId ?? ''}" is unavailable; select an available provider before sending`;
+    case 'capability-model':
+      return `model "${model}" is not an agent chat model`;
+    case 'model-retired':
+      return `model "${model}" has been retired from the catalog`;
+    case 'payment-required':
+      return `model "${model}" requires paid access`;
+    case 'exclusive-source-unavailable':
+      return `model "${model}" requires SuperGrok (xAI) or an explicitly selected custom source; the default gateway cannot serve it`;
+  }
+  const unreachable: never = reason;
+  return `model "${model}" is unavailable (${String(unreachable)})`;
+}
 
 export type ExclusiveProviderRoute =
   | { kind: 'keep' }
@@ -154,7 +189,7 @@ export function shouldApplyExclusiveProviderReroute(
   if (providerId === 'xai') return false;
   if (!views) return true;
   const source = views.find((provider) => provider.id === providerId)?.source;
-  if (source === 'user') return false;
+  if (source === 'user' || source === 'organization') return false;
   if (source) return true;
   return false;
 }
@@ -239,6 +274,10 @@ function checkDisableAxisRoute(
   ) {
     return { kind: 'reject', reason: 'payment-required' };
   }
+  // An explicit connection owns credential routing. Its removal must never become an implicit default.
+  if (providerId && !views.some((provider) => provider.id === providerId)) {
+    return { kind: 'reject', reason: 'explicit-source-unavailable' };
+  }
   if (offering.length === 0) {
     if (options.isPaymentRequiredTombstone?.(null, modelId, agent)) {
       return { kind: 'reject', reason: 'payment-required' };
@@ -272,7 +311,7 @@ function checkDisableAxisRoute(
       // 显式来源存在且未停用:放行。
       return { kind: 'pass' };
     }
-    // 未知/陈旧的显式来源(不在目录、或不提供该模型):实际路由层(provider-route)
+    // 已知来源但不提供该模型:实际路由层(provider-route)
     // 查不到该 provider 的 routing 描述会回退**原生默认**落点 —— 效果等同隐式路由。
     // 不能 pass-through:原生默认拷贝被停用时,带着陈旧 id 放行 = 照旧经停用拷贝
     // 付费(PR #744 review 第二十三轮)。落到下方隐式口径继续裁决(reroute 会把
@@ -427,6 +466,9 @@ export function resolveLenientRoute(
   let verdict = checkModelRoute(views, agent, model, providerId, opts);
   if (verdict.kind === 'pass') return { model, providerId, degraded: false };
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
+  if (verdict.reason === 'explicit-source-unavailable') {
+    return { model: undefined, providerId, degraded: true };
+  }
   if (providerId) {
     verdict = checkModelRoute(views, agent, model, null, opts);
     if (verdict.kind === 'pass') return withEffort(model, null, true);

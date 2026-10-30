@@ -13,7 +13,7 @@ describe('provider branding', () => {
   it.each([
     ['anthropic', 'anthropic'],
     ['openai', 'openai'],
-    ['xd', 'xd'],
+    ['xd', 'cindy'],
   ] as const)('maps built-in provider %s to its official mark', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
   });
@@ -23,6 +23,21 @@ describe('provider branding', () => {
     for (const entry of entries) {
       expect(hasProviderLogo(entry.id), entry.id).toBe(true);
     }
+  });
+
+  it.each(['https://chatgpt.com/backend-api/codex', 'https://api.openai.com/v1'])(
+    'uses the same OpenAI mark for independent account/API connections: %s', upstream => {
+      expect(resolveProviderLogoKind('openai-independent', {
+        codex: { upstream }, 'claude-code': { upstream }, pi: { upstream },
+      })).toBe(resolveProviderLogoKind('openai'));
+      expect(resolveProviderLogoKind('renamed-work-account', { codex: { upstream } })).toBe('openai');
+    },
+  );
+
+  it('does not brand lookalike ChatGPT endpoints as OpenAI', () => {
+    expect(resolveProviderLogoKind('custom', {
+      codex: { upstream: 'https://chatgpt.com.example.org/v1' },
+    })).toBeNull();
   });
 
   it('uses a dedicated xAI mark', () => {
@@ -55,6 +70,7 @@ describe('provider branding', () => {
   });
 
   it('guards runtime logo values before indexing shared paths', () => {
+    expect(isProviderLogoKind('cindy')).toBe(true);
     expect(isProviderLogoKind('vercel')).toBe(true);
     expect(isProviderLogoKind('future-brand')).toBe(false);
     expect(isProviderLogoKind(null)).toBe(false);
@@ -71,6 +87,30 @@ describe('provider branding', () => {
       }
       expect(hasProviderLogo('renamed-provider', routing), preset.id).toBe(true);
     }
+  });
+
+  it.each([
+    'https://aiplatform.googleapis.com',
+    'https://us-central1-aiplatform.googleapis.com',
+    'https://aiplatform.us.rep.googleapis.com',
+    'https://aiplatform.eu.rep.googleapis.com',
+  ])('brands official Vertex hosts as Google: %s', upstream => {
+    expect(resolveProviderLogoKind('renamed-vertex', { pi: { upstream } })).toBe('google');
+  });
+
+  it('does not brand a lookalike Vertex host as Google', () => {
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://aiplatform.googleapis.com.evil.test' },
+    })).toBeNull();
+  });
+
+  it('brands the official Azure Cognitive Services host as Azure', () => {
+    expect(resolveProviderLogoKind('renamed-azure', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com/openai/v1' },
+    })).toBe('azure');
+    expect(resolveProviderLogoKind('lookalike', {
+      pi: { upstream: 'https://my-resource.cognitiveservices.azure.com.evil.test/openai/v1' },
+    })).toBeNull();
   });
 
   it('rejects spoofed hosts, malformed URLs, and mixed-brand routing deterministically', () => {

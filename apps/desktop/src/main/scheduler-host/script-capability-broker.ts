@@ -2,14 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
 import type { Schedule, ScriptCapability } from '@cindy/maker-scheduler';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 
 import type { GhostToolCallResult } from '../../shared/ghost.js';
-import { getGhostCardService, getGhostPipeDispatcher } from '../cindy-brain/index.js';
+import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import {
+  findTrustedXdGhostForScript,
+  getGhostCardService,
+  getGhostPipeDispatcher,
+} from '../cindy-brain/index.js';
 import { validateFsRelPath } from '../cindy-brain/fsSlot.js';
 import { tryGetOrcaCollabService } from '../maker-ipc/register.js';
+import { getSessionRowSnapshotStrict, restoreArchivedSessionForSend } from '../localDb/ipc/sessions';
+import { assertReviewSessionExternalInputAllowed } from '../reviewer/reviewSessionInputPolicy';
+import { isManagedScheduledTarget } from './restore-target';
 import type { ScriptCapabilityBroker, ScriptCapabilityCall } from './script-runner';
 // model 兜底与 runner 同源(2026-06 曾因多份拷贝不同步导致 UI 显示与实跑模型不一致)
-import { defaultModelFor } from './model-defaults.js';
 
 type DispatchEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
@@ -73,6 +81,15 @@ async function callGhostForScript(
   active: Map<string, Set<string>>,
   writePath: string | null,
 ): Promise<GhostToolCallResult> {
+  const ghost = findTrustedXdGhostForScript(request.ghostId);
+  const pendingLegacy = ghost?.namespaceState === 'pending'
+    && !hasDeliveryNamespace(ghost) && ghost.approval.state === 'approved';
+  // Unconfirmed still projects the last namespace. That is not a grant.
+  if (!ghost || ghost.manifest.id !== request.ghostId || ghost.namespaceState === 'unconfirmed' ||
+      (ghost.namespace !== 'xd' && !pendingLegacy)) {
+    fail('GHOST_NOT_FOUND', 'XD plugin ' + request.ghostId + ' is not available in the current session');
+  }
+  const ghostId = installedGhostStoragePart(ghost);
   const callId = randomUUID();
   // 登记值与 script-runner 的 spawn cwd 严格同源(同一字符串,不 trim 改写):
   // POSIX 允许首尾空白的目录名,trim 后登记会让授权根与脚本实际 cwd 分叉
@@ -87,7 +104,7 @@ async function callGhostForScript(
   const scriptWorkdir = writePath !== null && rawWorkdir.trim() && isAbsolute(rawWorkdir) ? rawWorkdir : null;
   const cardService = getGhostCardService();
   cardService.registerCall(callId, {
-    ghostId: request.ghostId,
+    ghostId,
     toolUseId: null,
     sessionId: null,
     scriptWorkdir,
@@ -101,7 +118,7 @@ async function callGhostForScript(
   }
   bucket.add(callId);
   try {
-    return await getGhostPipeDispatcher().callGhostTool({ ...request, callId });
+    return await getGhostPipeDispatcher().callGhostTool({ ...request, ghostId, callId });
   } finally {
     bucket.delete(callId);
     if (bucket.size === 0) active.delete(runId);
@@ -201,6 +218,30 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
       preferredProviderId?: string | null,
     ) => Promise<{ model: string; providerId: string | null; catalogKnown?: boolean } | null>;
   } = {}) {}
+
+  /** 新建任务的配置:模型留空时按新建任务口径实时解析,不写死型号。 */
+  private async createDefaultsFor(schedule: Schedule) {
+    if (schedule.modelAgentDeviceId ?? schedule.agentDeviceId) {
+      fail('PRECONDITION_FAILED', 'script execution does not support remote model sources; select a local model before switching modes');
+    }
+    const agentKind = schedule.modelAgentKind ?? schedule.agentKind;
+    const explicitProviderId = schedule.providerId?.trim() || null;
+    const dynamicDefaultRoute = !schedule.model?.trim()
+      ? await this.deps.resolveDefaultModelRoute?.(agentKind, explicitProviderId) ?? null
+      : null;
+    const model = schedule.model?.trim() || dynamicDefaultRoute?.model;
+    if (!model) fail('PRECONDITION_FAILED', `${agentKind} has no connected model source`);
+    return {
+      agentKind,
+      model,
+      providerId: explicitProviderId ?? dynamicDefaultRoute?.providerId ?? null,
+      effort: schedule.effort as DispatchEffort | undefined,
+      fastMode: (schedule.fastMode ?? false),
+      workingDir: schedule.workingDir ?? '',
+      workspaceKind: 'project' as const,
+      permissionMode: 'bypassPermissions' as const,
+    };
+  }
 
   /**
    * runner 判定本轮 fire 终结(drain 截止/abort/超时放弃等待在途调用)时调用:
@@ -356,35 +397,32 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         const service = tryGetOrcaCollabService();
         if (!service) fail('HOST_NOT_READY', 'session dispatch service is not ready');
         const schedule = context.schedule;
-        const explicitProviderId = schedule.providerId?.trim() || null;
-        const dynamicDefaultRoute = !schedule.model?.trim() && schedule.agentKind === 'pi'
-          ? await this.deps.resolveDefaultModelRoute?.(
-              schedule.agentKind,
-              explicitProviderId,
-            ) ?? null
-          : null;
-        const model = schedule.model?.trim()
-          || dynamicDefaultRoute?.model
-          || defaultModelFor(schedule.agentKind);
-        if (!model) fail('PRECONDITION_FAILED', 'Pi has no connected model source');
+        const requestedTarget = typeof params.target_session_id === 'string'
+          && params.target_session_id.trim() ? params.target_session_id : undefined;
+        if (schedule.targetSessionId && requestedTarget && requestedTarget !== schedule.targetSessionId) {
+          fail('INVALID_ARGS', 'bound scripts can only dispatch to their target session');
+        }
+        const targetSessionId = schedule.targetSessionId ?? requestedTarget;
+        const message = requireString(params, 'message');
+        // Bound owners are restored once at fire admission. A later archive must
+        // not be undone by the same run. Unbound scripts first choose their target here.
+        if (targetSessionId && !schedule.targetSessionId) {
+          const target = await getSessionRowSnapshotStrict(targetSessionId);
+          // Use the dispatcher's Review policy before any lifecycle mutation.
+          await assertReviewSessionExternalInputAllowed(targetSessionId, () => target?.source ?? null);
+          if (target && !isManagedScheduledTarget(target)) {
+            await restoreArchivedSessionForSend(targetSessionId);
+          }
+        }
         const result = await service.sendToSession({
-          targetSessionId:
-            typeof params.target_session_id === 'string' && params.target_session_id.trim()
-              ? params.target_session_id
-              : undefined,
-          message: requireString(params, 'message'),
+          targetSessionId,
+          message,
           title: typeof params.title === 'string' ? params.title : undefined,
           useWorktree: false,
-          createDefaults: {
-            agentKind: schedule.agentKind,
-            model,
-            providerId: explicitProviderId ?? dynamicDefaultRoute?.providerId ?? null,
-            effort: schedule.effort as DispatchEffort | undefined,
-            fastMode: !!schedule.fastMode,
-            workingDir: schedule.workingDir ?? '',
-            workspaceKind: 'project',
-            permissionMode: 'bypassPermissions',
-          },
+          // 投递到已有任务时沿用该任务自己的配置,只有新建任务才需要默认路由。
+          ...(targetSessionId
+            ? { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true as const }
+            : { createDefaults: await this.createDefaultsFor(schedule) }),
         });
         if (!result.ok) fail(result.errorCode, result.message);
         return {

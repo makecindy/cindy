@@ -1,0 +1,13 @@
+{
+  "id": "ds2b-legacy-placeholder",
+  "name": "DS2b Legacy Placeholder",
+  "type": "light",
+  "colors": {
+    "surface": "#fafafa",
+    "text-primary": "#111111",
+    "settings-input-placeholder": "#c4c4c4",
+    "chat-input-placeholder": "var(--text-tertiary)",
+    "ask-input-placeholder": "var(--text-tertiary)",
+    "plan-action-fb-placeholder": "var(--text-tertiary)"
+  }
+}

@@ -90,7 +90,7 @@ describe('device-link auto-title wiring', () => {
       );
       const stages = [
         /(?:await\s+)?inputCoordinator\.ensureQueueRestored\(sid\)/,
-        /await materializeQueuedOssAttachments/,
+        /await materializeQueuedOssAttachmentsDeferred/,
         /await hydrateQueuedAgentReferences/,
         /await prepareDeviceLinkAutoTitle\(sid, queued\)/,
       ];
@@ -160,7 +160,7 @@ describe('device-link auto-title wiring', () => {
       'if (!isCurrentInputGeneration())',
       earlySessionGuardAt,
     );
-    const materializeAt = body.indexOf('await materializeQueuedOssAttachments');
+    const materializeAt = body.indexOf('await materializeQueuedOssAttachmentsDeferred');
     const materializeGuardAt = body.indexOf('assertCurrentInputGeneration();', materializeAt);
     const hydrateAt = body.indexOf('await hydrateQueuedAgentReferences', materializeAt);
     const hydrateGuardAt = body.indexOf('assertCurrentInputGeneration();', hydrateAt);
@@ -208,7 +208,7 @@ describe('user rename notification ordering', () => {
       // patchSessionMetaInDb(device-link 远程改名)
       [
         'if (patch.title !== undefined) noteUserTitleWritten(sessionId);',
-        'withStatusWriteLock(sessionId, patch.status, async () => {',
+        'withStatusWriteLock(db, sessionId, patch.status, async () => {',
       ],
       // renameSessionTitlesInDb(MCP 批量改名)
       [

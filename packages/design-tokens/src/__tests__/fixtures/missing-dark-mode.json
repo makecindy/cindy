@@ -1,0 +1,11 @@
+{
+  "$description": "error fixture: semantic role missing dark",
+  "surface": {
+    "surface": {
+      "light": {
+        "$type": "color",
+        "$value": "{hex-f8f8f6}"
+      }
+    }
+  }
+}

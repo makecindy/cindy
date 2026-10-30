@@ -21,4 +21,22 @@ describe('wide session drawer navigation', () => {
       sessionId: 'session-b',
     });
   });
+
+  it('keeps companion history identity and the matched message when opening a search result', () => {
+    const replaceParams = vi.fn();
+    const target = {
+      deviceId: 'device-b',
+      deviceName: 'Desktop B',
+      sessionId: 'old-chat',
+      focusClientId: 'matched-message',
+      resourceCollectionId: 'teammates',
+      resourceKind: 'bot',
+      resourceId: 'companion-b',
+      resourceHistorySessionId: 'old-chat',
+    };
+
+    switchDrawerSessionInPlace({ replaceParams }, target);
+
+    expect(replaceParams).toHaveBeenCalledWith(target);
+  });
 });

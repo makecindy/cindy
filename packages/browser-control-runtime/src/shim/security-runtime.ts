@@ -30,6 +30,7 @@ export { FsSafeError } from '../_generated/vendor/fs-safe/dist/errors.js';
 // ── SSRF / hostname policy (real upstream ssrf.ts) ───────────────────────────
 export {
   SsrFBlockedError,
+  isBlockedHostnameOrIp,
   isPrivateNetworkAllowedByPolicy,
   matchesHostnameAllowlist,
   resolvePinnedHostnameWithPolicy,

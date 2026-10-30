@@ -1,3 +1,4 @@
+import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager.js';
 /**
  * apps/desktop/src/main/agent-binaries/index.ts
  *
@@ -5,7 +6,8 @@
  * 2026-08 起 pi 也走本模块(整目录 tar.gz 分发,可选资产,失败由 pi-host 降级)。
  *
  * 公开 API (全部走 (kind, ...) 形态, 调用方不再分 claude/codex 各导一份):
- *   prepare(kind, opts?)             — splash 下载入口, 真做 dev fallback / OSS 下载 / SHA256 校验 / IPC 进度广播
+ *   prepare(kind, opts?)             — 启动安装入口，优先复用后台下载；首装/修复保留网络兜底
+ *   prefetch(kind, opts?)            — 后台/About 共用的下载缓存，不切换当前运行路径
  *   getCachedBinaryStatus(kind)      — 同步快查 (DropdownMenu 元 IPC 用), 不触发下载
  *   getReadyBinaryPath(kind)         — 读 prepare() 成功后写入的 cache 路径 (maker-host 构造期同步注入)
  *   peekNeedsDownload(kind)          — splash 顺序检查用
@@ -18,7 +20,7 @@
  *     行为逻辑全部共享。新增 agent (e.g. gemini) 时, 一行加 CONFIG 即可。
  *   - 基础 BinaryProvisioner 实例懒加载 + 缓存 (createBinaryProvisioner 是工厂, 复用同一份 cached manifest)。
  *   - prepare(kind) 内部:
- *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 git lfs pull / pnpm update:codex)
+ *       dev: findDevBinary 短路, 缺失硬错 (开发者必须 pnpm update:codex-package)
  *       Linux packaged: CDN manifest 段优先 (与 mac/win 同链, 国内可达); 资产缺失 /
  *         拉取 / 下载失败时静默回落 runtime fallback (PC 已装 CLI / 旧缓存 / userData
  *         私有安装 / 带上游 SHA-256 的官方 pin 资产, 不依赖系统 npm/curl/tar)
@@ -31,10 +33,11 @@ import fs from 'node:fs';
 import { app, BrowserWindow } from 'electron';
 
 import { createBinaryProvisioner } from './factory.js';
-import { probeBinaryVersion } from './binary-version-probe.js';
+import { isBinaryVersionNotOlder, normalizeBinaryVersion, probeBinaryVersion } from './binary-version-probe.js';
 import { findDevBinary } from './dev-fallback.js';
 import {
   findCachedLinuxRuntimeFallbackBinary,
+  findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
 } from './linux-runtime-fallback.js';
 import { getVendorAsset } from './manifest.js';
@@ -46,6 +49,20 @@ import {
 } from '../manifestService.js';
 import { ProgressNormalizer } from '../updateProgressNormalizer.js';
 import { createLogger } from '../logger.js';
+import { consumeStartupBinaryUpdateMarker, type StartupBinaryUpdateScope } from './startup-update.js';
+import { clearPreparedBinaryDownloads, hasPreparedBinaryDownload } from './download-cache.js';
+
+let startupUpdateScope: StartupBinaryUpdateScope | undefined;
+
+function resolveUpdateCheck(kind: AgentBinaryKind, checkForUpdates?: boolean): boolean {
+  startupUpdateScope ??= app.isPackaged
+    && consumeStartupBinaryUpdateMarker(app.getPath('userData'), app.getVersion());
+  if (checkForUpdates !== undefined) return checkForUpdates;
+  // Legacy application-update markers must not force a network upgrade anymore.
+  // prepare() adopts a completed background download, otherwise keeps the usable
+  // local runtime. Scoped markers from older About flows retain their repair path.
+  return Array.isArray(startupUpdateScope) && startupUpdateScope.includes(kind);
+}
 
 /**
  * CDN 腿预算上限(毫秒)。有进展的慢速下载给 3 分钟窗口(百 MB 级资产在慢网
@@ -156,12 +173,11 @@ import type {
 // createBinaryProvisioner 用的内部 enum, 历史叫 'claude' / 'codex' (factory 内部
 // 硬约定, 不改)。
 //
-// pi 与 cc/codex 的差异:
-//   - artifactKind 'tar-gz-dir': pi 是整目录分发(主二进制 + theme/ 等运行时资产,
-//     只装主二进制会在 RPC 启动期崩溃), CDN 资产是整包 tar.gz, 归档根即完整目录
-//     (与 apps/pi-bin/<platform>/ 同布局)。
-//   - optionalAsset: pi 是可选实验 agent。manifest 缺 pi 字段 / 下载失败都不阻塞
-//     启动 —— check-environment 的 pi 段静默降级，本次不注册 pi。
+// 目录分发运行时:
+//   - codex-package:完整目录包含 bin/codex、code-mode host、rg 与 resources；生产入口
+//     与 dev 一致指向 bin/codex，CDN 资产读取 manifest.codexPackage。
+//   - pi:完整目录包含主二进制与 theme/ 等运行时资产；同时它是可选实验 agent，
+//     manifest 缺 pi 字段 / 下载失败都不阻塞启动。
 
 export type AgentBinaryKind = 'claude-code' | 'codex' | 'pi';
 
@@ -170,7 +186,8 @@ interface AgentBinaryConfig {
   manifestField: string;           // CDN manifest 顶层字段
   installSubdir: string;           // userData/<installSubdir>/<version>/<binary>
   binaryName: string;              // 平台相关二进制名
-  devBinDir: string;               // apps/<devBinDir>/<platform>/ (LFS bundle)
+  devBinDir: string;               // apps/<devBinDir>/<platform>/
+  devBinaryName?: string;          // dev 可覆盖入口相对路径；prod 仍使用 binaryName
   vendorTag: VendorKey;            // 'binary-download-progress' IPC payload 的 vendor 字段
   artifactKind: 'gz' | 'tar-gz-dir'; // CDN 资产形态(单文件 gz / 整目录 tar.gz)
   optionalAsset?: boolean;         // true = manifest 缺字段不算"需要下载"(可选 vendor)
@@ -186,15 +203,18 @@ const CONFIG: Record<AgentBinaryKind, AgentBinaryConfig> = {
     devBinDir: 'claude-code-bin',
     vendorTag: 'claude',
     artifactKind: 'gz',
+    preserveLocalVersion: true,
   },
   codex: {
     vendorKey: 'codex',
-    manifestField: 'codex',
-    installSubdir: 'codex',
-    binaryName: process.platform === 'win32' ? 'codex.exe' : 'codex',
-    devBinDir: 'codex-bin',
+    manifestField: 'codexPackage',
+    installSubdir: 'codex-package',
+    binaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
+    devBinDir: 'codex-package-bin',
+    devBinaryName: path.join('bin', process.platform === 'win32' ? 'codex.exe' : 'codex'),
     vendorTag: 'codex',
-    artifactKind: 'gz',
+    artifactKind: 'tar-gz-dir',
+    preserveLocalVersion: true,
   },
   pi: {
     vendorKey: 'pi',
@@ -235,8 +255,33 @@ function getBase(kind: AgentBinaryKind): BinaryProvisioner {
 
 const lastReadyPath = new Map<AgentBinaryKind, string>();
 
+let piKernelManager: PiKernelManager | undefined;
+export function getPiKernelManager(): PiKernelManager {
+  return piKernelManager ??= createPiKernelManager(path.join(app.getPath('userData'), 'pi'),
+    () => lastReadyPath.get('pi'), binary => { lastReadyPath.set('pi', binary); });
+}
+
+/** Managed commands and About use the same installer and durable selection. */
+export async function updateReadyPiBinary(force: boolean): Promise<string> {
+  return getPiKernelManager().install({ source: 'upstream', force });
+}
+
 export function getReadyBinaryPath(kind: AgentBinaryKind): string | undefined {
   return lastReadyPath.get(kind);
+}
+
+/** Background/About share the cache, while the running process keeps its path. */
+export async function prefetch(
+  kind: AgentBinaryKind,
+  opts: { manifest?: Manifest; signal?: AbortSignal } = {},
+): Promise<boolean> {
+  if (!app.isPackaged) return false;
+  // An explicit Pi selection (including an intentional downgrade) is authoritative.
+  if (kind === 'pi' && getPiKernelManager().hasSelection()) {
+    await clearPreparedBinaryDownloads('pi').catch(() => undefined);
+    return true;
+  }
+  return getBase(kind).prefetch(opts);
 }
 
 /**
@@ -279,9 +324,12 @@ export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus
     }
   }
 
-  // dev: 优先查 LFS bundle (apps/<devBinDir>/<platform>/<binary>)
+  // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) return { binaryReady: true, binaryPath: devPath };
   }
 
@@ -324,9 +372,35 @@ export async function prepare(
   const cfg = CONFIG[kind];
   const { step, totalSteps, broadcastProgress = true, broadcastFailure = true } = opts;
 
+  if (kind === 'pi') {
+    try {
+      const manager = getPiKernelManager();
+      if (manager.hasSelection()) {
+        // Preserve the existing packaged offline policy; an explicit selection only
+        // changes version arbitration, not whether startup requires a manifest.
+        if (app.isPackaged && !await fetchManifest(undefined, opts.signal).catch(() => null)) {
+          lastReadyPath.delete('pi');
+          return { ready: false, error: 'manifest_failed', downloaded: false };
+        }
+        const selected = await manager.selectedBinary(opts.signal);
+        if (selected) {
+          lastReadyPath.set('pi', selected);
+          return { ready: true, path: selected, downloaded: false };
+        }
+      }
+    } catch {
+      // Do not resurrect a higher leftover version after an explicit downgrade.
+      lastReadyPath.delete('pi');
+      return { ready: false, error: 'pi_selection_invalid', downloaded: false };
+    }
+  }
+
   // ── dev mode 短路 (与老 vendor/{claude,codex}/binaryProvisioner.ts 等价) ──
   if (!app.isPackaged) {
-    const devPath = findDevBinary({ vendorBinDir: cfg.devBinDir, binaryName: cfg.binaryName });
+    const devPath = findDevBinary({
+      vendorBinDir: cfg.devBinDir,
+      binaryName: cfg.devBinaryName ?? cfg.binaryName,
+    });
     if (devPath) {
       console.log(`[agent-binaries/${kind}] dev fallback hit: ${devPath}`);
       console.warn(`[agent-binaries/${kind}] dev fallback: SHA256 check SKIPPED — for development only`);
@@ -335,6 +409,8 @@ export async function prepare(
     }
     return { ready: false, error: `${kind} dev binary not found for ${getPlatformKey()}`, downloaded: false };
   }
+
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
 
   // ── packaged Linux: CDN manifest 段优先,失败静默回落 runtime fallback ─────
   // 2026-08 起 Linux 与 mac/win 同链:scripts 侧发版把 claude/codex 资产上传
@@ -345,6 +421,7 @@ export async function prepare(
   // pi 例外:没有官方 CLI fallback 链,Linux 也走下方通用 manifest 路径
   // (manifest 缺 pi 字段 → asset_missing 快速失败,由调用方降级)。
   if (process.platform === 'linux' && app.isPackaged && kind !== 'pi') {
+    if (opts.checkForUpdates === false && !getCachedManifest()) await probeManifestForPeek();
     // 本轮轮次起点:优先消费本轮 peek 探测的发起点(含 Phase 0 探测耗时,
     // 比 prepare 起点更接近 signal 创建时刻);本轮 peek 命中缓存未探测时
     // lastPeekProbeStartMs 为 0,退回 now。消费后清零,防跨轮残留
@@ -363,6 +440,34 @@ export async function prepare(
     // 可能已拉取并缓存)→ 清标记走 CDN,CDN 资产可用时不该被旧标记跳过。
     if (getCachedManifest()) skipCdnUntilNextProbeSuccess = false;
     const cdnSkipped = skipCdnUntilNextProbeSuccess;
+    let usableLocalFallbackPath: string | undefined;
+    if (opts.checkForUpdates === false) {
+      const hasLocalCdnRuntime = getCachedManifest() && !await getBase(kind).peekNeedsDownload(opts);
+      if (!hasLocalCdnRuntime) {
+        const localPath = await findUsableLinuxRuntimeFallbackBinary(kind, opts.signal);
+        if (localPath) {
+          const manifest = getCachedManifest();
+          const asset = manifest && getVendorAsset(manifest, cfg.manifestField);
+          let usePreparedDownload = false;
+          if (asset && hasPreparedBinaryDownload(cfg.vendorKey, asset)) {
+            const localVersion = await probeBinaryVersion(localPath, opts.signal);
+            const targetVersion = normalizeBinaryVersion(asset.version);
+            // As with managed installs, adopt only a provably newer target.
+            // Failed/unknown probes keep the already usable system/private CLI.
+            usePreparedDownload = Boolean(localVersion && targetVersion
+              && !isBinaryVersionNotOlder(localVersion, targetVersion));
+          }
+          if (!usePreparedDownload) {
+            lastReadyPath.set(kind, localPath);
+            return { ready: true, path: localPath, downloaded: false };
+          }
+          // Try the completed cache first. A corrupt or locked cache falls back
+          // to the working system/private runtime without starting network IO.
+          usableLocalFallbackPath = localPath;
+          opts = { ...opts, allowDownload: false };
+        }
+      }
+    }
     // CDN 腿的信号与预算在 prepareViaCdn 内构造(预算从传输真正开始计起,
     // 排队等待不计入,见该函数注释)。CDN 链任何异常(含磁盘错误级)都是降级
     // 第一环的信号:吞掉走 fallback,绝不让 CDN 尝试本身变成 splash 失败原因。
@@ -380,6 +485,10 @@ export async function prepare(
       }
     }
     if (cdnResult.ready) return cdnResult;
+    if (usableLocalFallbackPath) {
+      lastReadyPath.set(kind, usableLocalFallbackPath);
+      return { ready: true, path: usableLocalFallbackPath, downloaded: false };
+    }
 
     if (broadcastProgress) {
       broadcastBinaryDownloadProgress({
@@ -468,7 +577,7 @@ async function prepareViaCdn(
 
   // ── 不广播 IPC 路径 (lazy 调用, 当前 desktop 不走) ────────────────────────
   if (!broadcastProgress) {
-    const result = await base.prepare({ signal: opts.signal });
+    const result = await base.prepare({ signal: opts.signal, checkForUpdates: opts.checkForUpdates, allowDownload: opts.allowDownload });
     if (result.ready) {
       lastReadyPath.set(kind, result.binaryPath);
       return { ready: true, path: result.binaryPath };
@@ -533,6 +642,8 @@ async function prepareViaCdn(
   try {
     const result = await base.prepare({
       signal: effectiveSignal,
+      checkForUpdates: opts.checkForUpdates,
+      allowDownload: opts.allowDownload,
       onProgress: (p: VendorRuntimeState) => {
         if (p.status === 'downloading') {
           didDownload = true;
@@ -598,9 +709,13 @@ async function prepareViaCdn(
 
 // ── splash 顺序检查 helpers ──────────────────────────────────────────────────
 
-export async function peekNeedsDownload(kind: AgentBinaryKind): Promise<boolean> {
+export async function peekNeedsDownload(
+  kind: AgentBinaryKind,
+  opts: Pick<PrepareOpts, 'checkForUpdates'> = {},
+): Promise<boolean> {
   // dev 模式永不下载 (findDevBinary 命中 / 缺失都不走 OSS)
   if (!app.isPackaged) return false;
+  opts = { ...opts, checkForUpdates: resolveUpdateCheck(kind, opts.checkForUpdates) };
   // Linux(cc/codex):manifest 有段 → 走通用 CDN peek(与 mac/win 同口径);
   // 无段(旧 canary / 首发渠道)→ 只看私有 fallback 是否已就位(fs 快查)。
   // peek 时 manifest 未缓存则做一次跨 vendor 的短超时探测(3s,single-flight +
@@ -618,11 +733,13 @@ export async function peekNeedsDownload(kind: AgentBinaryKind): Promise<boolean>
       manifest = await probeManifestForPeek();
     }
     if (manifest && getVendorAsset(manifest, CONFIG[kind].manifestField)) {
-      return getBase(kind).peekNeedsDownload();
+      const needsDownload = await getBase(kind).peekNeedsDownload(opts);
+      if (!needsDownload || opts.checkForUpdates) return needsDownload;
     }
+    if (opts.checkForUpdates === false) return await findUsableLinuxRuntimeFallbackBinary(kind) === null;
     return findCachedLinuxRuntimeFallbackBinary(kind) === null;
   }
-  return getBase(kind).peekNeedsDownload();
+  return getBase(kind).peekNeedsDownload(opts);
 }
 
 export async function getInstallState(kind: AgentBinaryKind): Promise<VendorRuntimeState> {

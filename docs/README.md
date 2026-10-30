@@ -13,6 +13,13 @@
 | [design-rules/DESIGN.md](design-rules/DESIGN.md) | 设计规范 | authoritative | Desktop 与 Mobile 的视觉语言、Token、组件和交互约定 | — |
 | [dev-rules/README.md](./dev-rules/README.md) | 开发规则索引 | authoritative | Cindy 客户端工程规则 | — |
 | [environment-setup.md](./dev-rules/environment-setup.md) | 开发环境 | authoritative | 公共依赖、submodule 与首次安装 | — |
+| [model-catalog-maintenance.md](./dev-rules/model-catalog-maintenance.md) | 模型配置与下发入口 | authoritative | 架构、配置层级、修改位置、代码导航与发布验收 | — |
+| [model-metadata-precedence.md](./product-rules/model-metadata-precedence.md) | 模型资料合同 | authoritative | 继承、用户覆盖、多账号与成员语义 | — |
+| [local-model-selection.md](./product-rules/local-model-selection.md) | 本地模型规则 | authoritative | 包装、硬件、候选和推荐 | — |
+| [model-registry-v4-media.md](./model-registry-v4-media.md) | 媒体模型合同 | authoritative | 全类型资料与发布兼容条件 | — |
+| [model-catalog-runtime.md](./dev-rules/model-catalog-runtime.md) | 模型运行细则 | authoritative | 窗口、压缩、原生缓存与显示 | — |
+| [model-catalog.md](./examples/model-catalog.md) | 模型配置示例 | 参考 | 可校验的最小配置和维护场景 | — |
+| [model-catalog-history.md](./model-catalog-history.md) | 模型历史记录 | 参考 | 旧型号取舍与迁移记录，不代表当前发布状态 | — |
 | [desktop-development.md](./dev-rules/desktop-development.md) | Desktop 开发规则 | authoritative | Desktop 启动、重启与验证 | — |
 | [electron-security-and-process-boundaries.md](./dev-rules/electron-security-and-process-boundaries.md) | Electron 安全规则 | authoritative | Renderer、preload、BrowserWindow、WebView、IPC、CSP 与进程边界 | — |
 | [credentials-and-local-storage.md](./dev-rules/credentials-and-local-storage.md) | 本地数据安全规则 | authoritative | 凭证、用户持久数据、临时文件与测试目录 | — |
@@ -31,6 +38,7 @@
 | [remote-and-mobile-adaptation.md](./dev-rules/remote-and-mobile-adaptation.md) | 远程/手机版门禁 | authoritative | SSH 远程工作区、device-link allowlist、`apps/mobile` 入口与功能类 PR 三选一门禁 | — |
 | [development-workflow.md](./dev-rules/development-workflow.md) | 开发工作流 | authoritative | worktree dogfooding 契约、提 PR/直推 main 门禁、Review P0/P1/P2 口径 | — |
 | [plugin-setup-runtime.md](./plugin-setup-runtime.md) | 技术设计 | 参考 | `ghost_list` / `ghost_info` / `ghost_call` 插件配置前置检查、Ask-shell Setup 卡片、配置变更回调与原调用恢复 | — |
+| [remote-plugin-oauth.md](./remote-plugin-oauth.md) | 客户端契约 | 参考 | 远程设备插件 OAuth 事务、Desktop 回调桥、任务授权指引及兼容边界 | — |
 | [desktop-login-hosted-callback.md](./desktop-login-hosted-callback.md) | 跨仓契约 | 参考 | Desktop 系统浏览器登录的托管回调链路：auth-server 路由契约、结果页模板交付、灰度开关与回滚 | — |
 | [auth-realm-routing.md](./auth-realm-routing.md) | 跨仓契约 | 参考 | 组织 SSO 双区域发现、会话区域持久化与 token 消费端点路由 | — |
 | [client-log-upload-requirements.md](./client-log-upload-requirements.md) | 需求文档 | 参考 | Desktop 客户端日志上报（手动 + 崩溃自动）的目标、数据边界、同意闸与可靠性要求 | — |

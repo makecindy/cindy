@@ -1,5 +1,6 @@
 /**
- * ssh-host-prefs-store —— 每台 SSH 远端机器的本地偏好(autoConnect + agentProxy)。
+ * ssh-host-prefs-store —— 每台 SSH 远端机器的本地偏好(displayName +
+ * autoConnect + agentProxy)。
  *
  * 设计上跟 ~/.ssh/config 解耦: 不污染用户的 ssh config (那是 ssh 客户端通用配置),
  * 用一个独立 JSON 落 <userData>/ssh-host-prefs.json. 数据极小, 同步 R/W + 内存
@@ -55,6 +56,7 @@ export function isAllowedAgentProxyRemotePort(v: unknown): v is number {
 }
 
 export interface SshHostPref {
+  displayName?: string;
   autoConnect: boolean;
   agentProxy?: SshHostAgentProxyPref;
 }
@@ -114,11 +116,22 @@ function normalize(raw: unknown): SshHostPrefs {
     const v = value as Record<string, unknown>;
     const agentProxy = normalizeAgentProxy(v.agentProxy);
     out[hostId] = {
+      ...(typeof v.displayName === 'string' && v.displayName.trim()
+        ? { displayName: v.displayName.trim() }
+        : {}),
       autoConnect: v.autoConnect === true,
       ...(agentProxy ? { agentProxy } : {}),
     };
   }
   return out;
+}
+
+export function getSshHostDisplayName(hostId: string): string {
+  return readSshHostPrefs()[hostId]?.displayName?.trim() || hostId;
+}
+
+export function setSshHostDisplayName(hostId: string, displayName: string): void {
+  patchSshHostPref(hostId, { displayName });
 }
 
 let cached: SshHostPrefs | null = null;
@@ -159,21 +172,45 @@ export function getSshHostAgentProxy(hostId: string): SshHostAgentProxyPref | nu
 
 /** 写入单 host 的 agentProxy 配置 (null = 关闭并清除), atomic write + 更新 cache. */
 export function setSshHostAgentProxy(hostId: string, agentProxy: SshHostAgentProxyPref | null): void {
+  patchSshHostPref(hostId, { agentProxy });
+}
+
+/** Persist related alias-local fields in one atomic prefs-file replacement. */
+export function patchSshHostPref(
+  hostId: string,
+  patch: { displayName?: string; agentProxy?: SshHostAgentProxyPref | null },
+): void {
   const current = { ...readSshHostPrefs() };
-  // 不 spread 旧 entry — 旧 agentProxy 会借 spread 复活, null 语义就是清除。
-  const next: SshHostPref = { autoConnect: current[hostId]?.autoConnect === true };
-  if (agentProxy) {
-    const normalized = normalizeAgentProxy(agentProxy);
-    if (!normalized) {
-      throw new Error(`invalid agentProxy pref: localHost/localPort malformed`);
-    }
-    next.agentProxy = { ...normalized, enabled: agentProxy.enabled === true };
+  const next: SshHostPref = {
+    autoConnect: current[hostId]?.autoConnect === true,
+    ...(current[hostId]?.displayName ? { displayName: current[hostId].displayName } : {}),
+    ...(current[hostId]?.agentProxy ? { agentProxy: current[hostId].agentProxy } : {}),
+  };
+
+  if (patch.displayName !== undefined) {
+    const normalized = patch.displayName.trim();
+    if (normalized && normalized !== hostId) next.displayName = normalized;
+    else delete next.displayName;
   }
+
+  if (patch.agentProxy !== undefined) {
+    // null explicitly clears; undefined means the caller did not edit this field.
+    delete next.agentProxy;
+    if (patch.agentProxy) {
+      const normalized = normalizeAgentProxy(patch.agentProxy);
+      if (!normalized) {
+        throw new Error('invalid agentProxy pref: localHost/localPort malformed');
+      }
+      next.agentProxy = { ...normalized, enabled: patch.agentProxy.enabled === true };
+    }
+  }
+
   current[hostId] = next;
   writePrefs(current);
   const ap = next.agentProxy;
-  log.info('ssh host agentProxy written', {
+  log.info('ssh host local prefs written', {
     hostId,
+    displayNameCustomized: !!next.displayName,
     enabled: ap?.enabled === true,
     mode: ap?.mode ?? null,
     // 脱敏: proxyUrl 即使将来校验放宽也不原样进日志 (review: PR #992

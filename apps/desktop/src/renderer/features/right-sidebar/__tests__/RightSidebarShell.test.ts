@@ -2,9 +2,13 @@
 
 import { createElement, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AppShortcutOverrides } from '../../../../shared/appShortcuts';
-import type { LucideIcon } from 'lucide-react';
+import {
+  BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
+  BROWSER_COMMENT_EXIT_MODE_CHANNEL,
+} from '../../../../shared/browserComment';
+import { Globe, type LucideIcon } from 'lucide-react';
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -15,9 +19,43 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   getSessionDeviceId: () => undefined,
+  useRemoteProjectSessions: () => [],
+}));
+
+vi.mock('../lib/openSideChatTab', () => ({
+  canOpenSideChat: () => false,
+  openSideChatTab: vi.fn(async () => true),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
 }));
 
 vi.mock('../plugins', () => ({}));
+
+const installedGhostsMock = vi.hoisted(() => ({ list: [] as unknown[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({
+  useInstalledGhosts: () => installedGhostsMock.list,
+  readInstalledGhostsSnapshot: () => installedGhostsMock.list,
+}));
+
+// Real guest preload and host, joined only at the Electron IPC boundary.
+const commentIpc = vi.hoisted(() => ({
+  listeners: new Map<string, (event: unknown, payload: unknown) => void>(),
+  sendToHost: vi.fn(),
+}));
+vi.mock('electron', () => ({
+  ipcRenderer: {
+    on: (channel: string, listener: (event: unknown, payload: unknown) => void) =>
+      commentIpc.listeners.set(channel, listener),
+    sendToHost: (channel: string, payload: unknown) => commentIpc.sendToHost(channel, payload),
+  },
+}));
 
 // eagerSpawnAndReport 会真的 acquire 一个 <webview> 并等 dom-ready(jsdom 里永远
 // 不来 → 8s 兜底),跨 session popup 用例只关心它前后的编排,所以桩掉这一个导出。
@@ -32,6 +70,11 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 });
 
 import { RightSidebarShell } from '../RightSidebarShell';
+import '../plugins/plugin-task';
+import { BrowserTabBody } from '../plugins/web-browser/BrowserTabBody';
+import type { WebBrowserState } from '../plugins/web-browser';
+import type { TabKindBodyProps } from '../types';
+import { browserWebviewPool } from '../lib/browserWebviewPool';
 import { registerTabKind, unregisterTabKind } from '../registry';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
 import { _resetPopupRouterForTests } from '../lib/popupRouter';
@@ -43,6 +86,18 @@ import {
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
 import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
+import {
+  __resetSidebarTabWindowsStateForTest,
+  __setSidebarTabWindowsStateForTest,
+} from '@/lib/sidebarTabWindowState';
+import {
+  __resetGlobalTabsForTest,
+  addGlobalPluginTab,
+  getActiveGlobalTabId,
+  requestRevealSessionTab,
+} from '../globalTabs';
+import { __resetTabGroupsForTest, getTabGroup } from '../tabGroups';
+import { toast } from '@/lib/toast';
 import { writePanelCollapsed } from '@/layout/collapsePrefs';
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
 
@@ -263,8 +318,505 @@ describe('RightSidebarShell empty state', () => {
     _resetRsbBrowserBridgeForTests();
     _resetPopupRouterForTests();
     _resetNativePopupTabsForTests();
+    __resetSidebarTabWindowsStateForTest();
+    __resetGlobalTabsForTest();
+    __resetTabGroupsForTest();
+    window.localStorage.clear();
+    installedGhostsMock.list = [];
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RightSidebarShell 同时投影全局页签(globalTabs,不跟对话)与任务
+  //   页签;可观察的是全局页签钉在条首并带图钉、切任务后仍在、点它只改本窗口的全局激活位
+  //   而不写任务桶的 setActive、有全局页签在场时任务页签关空不触发自动收起、关闭全局页签
+  //   是全局动作、插件停用后它从投影里消失但数据保留。
+  // - Bug / 规则依据:右侧栏「跟对话 / 不跟对话」两类页签模型(本 PR)。
+  // - 现有覆盖缺口:其余用例只覆盖任务桶。
+  // - 最小失败输入:一个 plugin-view 全局页签 + 一个任务页签,切换任务。
+  // - tier:unit(jsdom,localStorage 全局页签 + 进程内 store)。
+  it('pins global plugin-view tabs across tasks without touching the task bucket active marker', async () => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html', title: 'Alpha Panel' } }, enabled: true },
+    ];
+    const globalTab = addGlobalPluginTab('alpha')!;
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-files', kind: 'file-browser', state: null }],
+      activeTabId: 'tab-files',
+    });
+    const { rerender } = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.kinds.fileBrowser')).toBeTruthy());
+    const pinned = screen.getByTestId('right-sidebar-pinned-tabs');
+    expect(pinned.textContent).toContain('rightSidebar.tabs.kinds.pluginView');
+    expect(pinned.querySelector('[data-pinned]')).toBeTruthy();
+
+    // 选中全局页签:只改本窗口的全局激活位,任务桶的 setActive 不落库。
+    tabsIpc.setActive.mockClear();
+    fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.pluginView'));
+    expect(getActiveGlobalTabId()).toBe(globalTab.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+
+    // 切到空任务:全局页签还在、仍是激活页签;任务没有页签但不渲染空态、不触发收起。
+    tabsIpc.list.mockResolvedValueOnce({ tabs: [], activeTabId: null });
+    rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's2',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+    await waitFor(() => expect(getBucket('s2').hydrated).toBe(true));
+    expect(screen.getByTestId('right-sidebar-pinned-tabs').textContent).toContain(
+      'rightSidebar.tabs.kinds.pluginView',
+    );
+    expect(screen.queryByText('rightSidebar.tabs.empty.title')).toBeNull();
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+
+    // 插件停用:页签从投影消失(数据保留),没有别的页签了才算关空。
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html', title: 'Alpha Panel' } }, enabled: false },
+    ];
+    rerender(
+      createElement(RightSidebarShell, {
+        sessionId: 's2',
+        workdir: '/tmp/other',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+        subagentsAvailable: false,
+        onAllTabsClosed,
+      }),
+    );
+    await waitFor(() => expect(screen.queryByTestId('right-sidebar-pinned-tabs')).toBeNull());
+    expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy();
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledOnce());
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:同一任务的右侧组与左侧组两个 Shell;可观察的是页签右键
+  //   「移到左侧」后从右侧条消失、出现在左侧条并被选中(组归属落 localStorage),在左侧
+  //   组点它仍写任务级激活位;「关闭其他」只作用于本组。
+  // - Bug / 规则依据:页签组模型——页签可移到聊天区任一边,两边投影同一任务桶不串。
+  // - 现有覆盖缺口:Shell 此前只有单组。
+  // - 最小失败输入:两个任务页签 + 一次「移到左侧」。
+  // - tier:unit(jsdom,进程内 store + localStorage 组归属)。
+  it('moves a task tab between groups; each group projects only its own tabs', async () => {
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-web', kind: 'web-browser', state: null },
+      ],
+      activeTabId: 'tab-files',
+    });
+    const shellProps = {
+      sessionId: 's1',
+      workdir: '/tmp/repo',
+      remoteHostId: null,
+      isMac: false,
+      subagentsAvailable: false,
+    };
+    const right = render(createElement(RightSidebarShell, { ...shellProps, groupId: 'right' }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    const left = render(createElement(RightSidebarShell, { ...shellProps, groupId: 'left' }));
+    const stripOf = (view: ReturnType<typeof render>) =>
+      view.container.querySelector('[data-testid="right-sidebar-tab-strip"]')!;
+    expect(stripOf(right).textContent).toContain('rightSidebar.tabs.kinds.browser');
+    expect(stripOf(left).textContent).not.toContain('rightSidebar.tabs.kinds.browser');
+
+    // 右键浏览器页签 →「移到左侧」。
+    const webPill = right.getByText('rightSidebar.tabs.kinds.browser').closest('.group')!;
+    fireEvent.contextMenu(webPill);
+    fireEvent.click(screen.getByTestId('right-sidebar-tab-move-left'));
+    expect(getTabGroup('tab-web')).toBe('left');
+    await waitFor(() =>
+      expect(stripOf(left).textContent).toContain('rightSidebar.tabs.kinds.browser'),
+    );
+    expect(stripOf(right).textContent).not.toContain('rightSidebar.tabs.kinds.browser');
+    // 搬过去的页签在左侧组被选中并成为任务级激活页签;右侧组回落到自己剩下的页签。
+    await waitFor(() => expect(getBucket('s1').activeTabId).toBe('tab-web'));
+    expect(stripOf(left).querySelector('.group')?.className).toContain('font-medium');
+    expect(
+      right.getByText('rightSidebar.tabs.kinds.fileBrowser').closest('.group')?.className,
+    ).toContain('font-medium');
+
+    // 在右侧组点文件页签:任务级激活位照常落库。
+    tabsIpc.setActive.mockClear();
+    fireEvent.click(right.getByText('rightSidebar.tabs.kinds.fileBrowser'));
+    await waitFor(() => expect(tabsIpc.setActive).toHaveBeenCalled());
+    expect(getBucket('s1').activeTabId).toBe('tab-files');
+
+    // 右侧组「关闭其他」只关本组的页签(本组只剩文件页签,无其它可关)。
+    fireEvent.contextMenu(right.getByText('rightSidebar.tabs.kinds.fileBrowser').closest('.group')!);
+    const closeOthers = screen
+      .getByText('rightSidebar.tabs.contextMenu.closeOthers')
+      .closest('[role="menuitem"]')!;
+    expect(closeOthers.getAttribute('data-disabled')).not.toBeNull();
+    left.unmount();
+    right.unmount();
+  });
+
+  it.each([
+    { otherBrowser: false, release: 'close', away: 'task-b' },
+    { otherBrowser: true, release: 'close', away: 'task-b' },
+    { otherBrowser: false, release: 'evict', away: 'task-b' },
+    { otherBrowser: true, release: 'evict', away: 'task-b' },
+    // New-task page without a project: the shell stays mounted with no foreground session (#6485).
+    { otherBrowser: false, release: 'close', away: null },
+  ])('keeps a live browser connected across task switches ($otherBrowser, away: $away) until $release', async ({ otherBrowser, release, away }) => {
+    Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+    registerTabKind({
+      kind: 'web-browser',
+      menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'browser'),
+      TabBody: (props: TabKindBodyProps) => createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+      defaultState: () => ({ url: 'https://example.test/', title: '', favicon: null, isAudible: false }),
+    });
+    const entry = browserWebviewPool.acquire('browser-a');
+    // jsdom has no Electron guest APIs. Keep the real pool, hook and bodies;
+    // only supply the native boundary used to observe a loaded guest.
+    Object.assign(entry.webview, {
+      getURL: () => 'https://example.test/',
+      getTitle: () => '',
+      canGoBack: () => false,
+      canGoForward: () => false,
+      getWebContentsId: () => 101,
+      setAudioMuted: () => undefined,
+      executeJavaScript: async () => undefined,
+    });
+    if (otherBrowser) {
+      const b = browserWebviewPool.acquire('browser-b');
+      Object.assign(b.webview, {
+        getURL: () => 'https://other.test/', getTitle: () => '',
+        canGoBack: () => false, canGoForward: () => false,
+        getWebContentsId: () => 102, setAudioMuted: () => undefined,
+        executeJavaScript: async () => undefined,
+      });
+    }
+    tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) => sessionId === 'task-a' ? {
+      tabs: [{ id: 'browser-a', kind: 'web-browser', state: { url: 'https://example.test/' } }],
+      activeTabId: 'browser-a',
+    } : otherBrowser ? {
+      tabs: [{ id: 'browser-b', kind: 'web-browser', state: { url: 'https://other.test/' } }],
+      activeTabId: 'browser-b',
+    } : { tabs: [], activeTabId: null });
+    const props = { workdir: '/tmp/task-a', remoteHostId: null, isMac: true };
+    const view = render(createElement(RightSidebarShell, { ...props, sessionId: 'task-a' }));
+    try {
+      await waitFor(() => expect(entry.wrapper.parentElement?.id).not.toBe('browser-webview-pool'));
+      const slot = entry.wrapper.parentElement!;
+      expect(slot.isConnected).toBe(true);
+      const removedAncestors: Node[] = [];
+      const observer = new MutationObserver((records) => {
+        for (const record of records) for (const node of record.removedNodes) {
+          if (node.contains(entry.wrapper)) removedAncestors.push(node);
+        }
+      });
+      observer.observe(view.container, { childList: true, subtree: true });
+      for (let i = 0; i < 3; i++) {
+        view.rerender(createElement(RightSidebarShell, { ...props, workdir: '/tmp/task-b', sessionId: away }));
+        if (away) await waitFor(() => expect(getBucket(away).hydrated).toBe(true));
+        expect(entry.wrapper.parentElement).toBe(slot);
+        expect(slot.isConnected).toBe(true);
+        expect(slot.closest('[aria-hidden="true"]')).not.toBeNull();
+        view.rerender(createElement(RightSidebarShell, { ...props, sessionId: 'task-a' }));
+        expect(entry.wrapper.parentElement).toBe(slot);
+        expect(slot.closest('[aria-hidden="true"]')).toBeNull();
+      }
+      await act(async () => { await Promise.resolve(); });
+      observer.disconnect();
+      expect(removedAncestors).toHaveLength(0);
+      // A's event writes to A's bucket even while B is the foreground task.
+      view.rerender(createElement(RightSidebarShell, { ...props, workdir: '/tmp/task-b', sessionId: away }));
+      await act(async () => {
+        entry.webview.dispatchEvent(Object.assign(new Event('page-title-updated'), { title: 'A in background' }));
+      });
+      expect(getBucket('task-a').tabs[0].state).toMatchObject({ title: 'A in background' });
+      if (otherBrowser) expect(getBucket('task-b').tabs[0].state).not.toMatchObject({ title: 'A in background' });
+      if (release === 'close') {
+        await act(async () => { await closeTab('task-a', 'browser-a'); });
+      } else {
+        act(() => { for (let i = 0; i < 5; i++) browserWebviewPool.acquire('pressure-' + i); });
+      }
+      expect(browserWebviewPool.peek('browser-a')).toBeNull();
+      expect(entry.wrapper.isConnected).toBe(false);
+      expect(slot.isConnected).toBe(false);
+      if (release === 'evict') {
+        view.rerender(createElement(RightSidebarShell, { ...props, sessionId: 'task-a' }));
+        await waitFor(() => expect(browserWebviewPool.peek('browser-a')).not.toBeNull());
+        const restored = browserWebviewPool.peek('browser-a')!;
+        expect(restored.wrapper).not.toBe(entry.wrapper);
+        expect(restored.webview.getAttribute('src')).toBe('https://example.test/');
+        expect(browserWebviewPool.inspectTabIds().length).toBeLessThanOrEqual(5);
+      }
+    } finally {
+      view.unmount();
+      browserWebviewPool.releaseAll();
+      unregisterTabKind('web-browser');
+    }
+  });
+
+  it.each(['task switch', 'sidebar hide'] as const)(
+    'closes the retained browser More portal on %s without restoring hidden focus',
+    async (transition) => {
+      Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+      registerTabKind({
+        kind: 'web-browser',
+        menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+        TabPillTitle: () => createElement('span', null, 'browser'),
+        TabBody: (props: TabKindBodyProps) =>
+          createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+        defaultState: () => ({
+          url: 'https://example.test/',
+          title: '',
+          favicon: null,
+          isAudible: false,
+        }),
+      });
+      const entry = browserWebviewPool.acquire('browser-a');
+      // Supply only the Electron boundary; the host, menu portal and focus
+      // handling are real, as in the retained-browser regression above.
+      Object.assign(entry.webview, {
+        getURL: () => 'https://example.test/',
+        getTitle: () => '',
+        canGoBack: () => false,
+        canGoForward: () => false,
+        getWebContentsId: () => 101,
+        setAudioMuted: () => undefined,
+        executeJavaScript: async () => undefined,
+      });
+      tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+        sessionId === 'task-a'
+          ? {
+              tabs: [{ id: 'browser-a', kind: 'web-browser', state: { url: 'https://example.test/' } }],
+              activeTabId: 'browser-a',
+            }
+          : { tabs: [], activeTabId: null },
+      );
+      const props = {
+        sessionId: 'task-a',
+        workdir: '/tmp/task-a',
+        remoteHostId: null,
+        isMac: true,
+        shellVisible: true,
+      };
+      const view = render(createElement(RightSidebarShell, props));
+      const nextTaskInput = document.createElement('input');
+      document.body.append(nextTaskInput);
+      try {
+        await waitFor(() => expect(entry.wrapper.parentElement?.id).not.toBe('browser-webview-pool'));
+        const slot = entry.wrapper.parentElement;
+        let trigger = screen.getByRole('button', { name: 'rightSidebar.browser.moreTools' });
+        act(() => trigger.focus());
+        fireEvent.keyDown(trigger, { key: 'Enter' });
+        const firstMenu = await screen.findByRole('menu');
+        expect(view.container.contains(firstMenu)).toBe(false);
+        fireEvent.keyDown(firstMenu, { key: 'Escape' });
+        await waitFor(() => expect(firstMenu.isConnected).toBe(false));
+        await waitFor(() => expect(document.activeElement).toBe(trigger));
+
+        fireEvent.keyDown(trigger, { key: 'Enter' });
+        const menu = await screen.findByRole('menu');
+        // Change the task without a pointer event that could independently
+        // dismiss the menu, matching keyboard task switching.
+        view.rerender(createElement(
+          RightSidebarShell,
+          transition === 'task switch'
+            ? { ...props, sessionId: 'task-b', workdir: '/tmp/task-b' }
+            : { ...props, shellVisible: false },
+        ));
+        act(() => nextTaskInput.focus());
+        await waitFor(() => expect(menu.isConnected).toBe(false));
+        // Radix defers close autofocus with a zero-delay timer. Drain that
+        // callback before checking that the hidden opener cannot steal focus.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(document.activeElement).toBe(nextTaskInput);
+        expect(entry.wrapper.parentElement).toBe(slot);
+        expect(entry.wrapper.isConnected).toBe(true);
+
+        view.rerender(createElement(RightSidebarShell, props));
+        trigger = screen.getByRole('button', { name: 'rightSidebar.browser.moreTools' });
+        expect(screen.queryByRole('menu')).toBeNull();
+        expect(trigger.getAttribute('data-state')).toBe('closed');
+        expect(entry.wrapper.parentElement).toBe(slot);
+        fireEvent.keyDown(trigger, { key: 'Enter' });
+        expect(await screen.findByRole('menu')).toBeTruthy();
+      } finally {
+        view.unmount();
+        nextTaskInput.remove();
+        browserWebviewPool.releaseAll();
+        unregisterTabKind('web-browser');
+      }
+    },
+  );
+
+  function renderInteractionBrowser() {
+    Object.assign(window.electronAPI, { onRsbBrowserFocusUrlBar: () => () => undefined });
+    registerTabKind({
+      kind: 'web-browser',
+      menu: { kind: 'web-browser', labelKey: 'browser', icon: Globe, order: 1, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'browser'),
+      TabBody: (props: TabKindBodyProps) =>
+        createElement(BrowserTabBody, { ...props, state: props.state as WebBrowserState }),
+      defaultState: () => ({ url: 'https://example.test/', title: '', favicon: null, isAudible: false }),
+    });
+    const entry = browserWebviewPool.acquire('browser-a');
+    Object.assign(entry.webview, {
+      getURL: () => 'https://example.test/', getTitle: () => '',
+      canGoBack: () => false, canGoForward: () => false,
+      getWebContentsId: () => 101, setAudioMuted: () => undefined,
+      executeJavaScript: async () => undefined,
+    });
+    tabsIpc.list.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+      sessionId === 'task-a'
+        ? { tabs: [{ id: 'browser-a', kind: 'web-browser', state: { url: 'https://example.test/' } }], activeTabId: 'browser-a' }
+        : { tabs: [], activeTabId: null },
+    );
+    const props = { sessionId: 'task-a', workdir: '/tmp/task-a', remoteHostId: null, isMac: true, shellVisible: true };
+    const view = render(createElement(RightSidebarShell, props));
+    const hide = (transition: 'task switch' | 'sidebar hide') => view.rerender(createElement(
+      RightSidebarShell, transition === 'task switch'
+        ? { ...props, sessionId: 'task-b', workdir: '/tmp/task-b' }
+        : { ...props, shellVisible: false },
+    ));
+    const show = () => view.rerender(createElement(RightSidebarShell, props));
+    return { entry, view, hide, show };
+  }
+
+  it.each(['task switch', 'sidebar hide'] as const)(
+    'cancels retained address editing on %s without background navigation', async (transition) => {
+      const { entry, view, hide, show } = renderInteractionBrowser();
+      const external = document.createElement('input');
+      document.body.append(external);
+      try {
+        await screen.findByRole('button', { name: 'https://example.test/' });
+        const slot = entry.wrapper.parentElement;
+        const originalSrc = entry.webview.getAttribute('src');
+        fireEvent.click(screen.getByRole('button', { name: 'https://example.test/' }));
+        const address = view.container.querySelector('input')!;
+        await waitFor(() => expect(document.activeElement).toBe(address));
+        fireEvent.change(address, { target: { value: 'https://unfinished.test/' } });
+        hide(transition);
+        // The real Shell transition must cancel editing by itself. jsdom does
+        // not implement CSS-induced blur; native blur timing needs Chromium.
+        expect(view.container.querySelector('input')).toBeNull();
+        expect(getBucket('task-a').tabs[0].state).toMatchObject({ url: 'https://example.test/' });
+        expect(entry.webview.getAttribute('src')).toBe(originalSrc);
+        show();
+        expect(view.container.querySelector('input')).toBeNull();
+        expect(entry.wrapper.parentElement).toBe(slot);
+        expect(entry.wrapper.isConnected).toBe(true);
+
+        // Ordinary visible blur and explicit Enter/Ctrl+Enter remain commits.
+        for (const [value, key, want] of [
+          ['https://clicked.test/', 'blur', 'https://clicked.test/'],
+          ['https://entered.test/', 'Enter', 'https://entered.test/'],
+          ['google', 'Ctrl+Enter', 'https://www.google.com'],
+        ]) {
+          fireEvent.click(screen.getByRole('button', { name: (getBucket('task-a').tabs[0].state as WebBrowserState).url }));
+          const input = view.container.querySelector('input')!;
+          await waitFor(() => expect(document.activeElement).toBe(input));
+          fireEvent.change(input, { target: { value } });
+          if (key === 'blur') act(() => external.focus());
+          else fireEvent.keyDown(input, { key: 'Enter', ctrlKey: key === 'Ctrl+Enter' });
+          expect(getBucket('task-a').tabs[0].state).toMatchObject({ url: want });
+          expect(entry.webview.getAttribute('src')).toBe(want);
+        }
+      } finally {
+        view.unmount(); external.remove();
+        browserWebviewPool.releaseAll(); unregisterTabKind('web-browser');
+      }
+    },
+  );
+
+  it.each(['task switch', 'sidebar hide'] as const)(
+    'removes the real guest comment blocker on %s while retaining its host', async (transition) => {
+      await import('../../../../preload/browserCommentPreload');
+      let overlay: ShadowRoot | undefined;
+      const attachShadow = Element.prototype.attachShadow;
+      const shadowSpy = vi.spyOn(Element.prototype, 'attachShadow').mockImplementation(function (this: Element, init) {
+        const shadow = attachShadow.call(this, init);
+        if (init.mode === 'closed') overlay = shadow;
+        return shadow;
+      });
+      const target = document.createElement('button');
+      target.textContent = 'Guest target';
+      document.body.append(target);
+      const oldHitTest = Object.getOwnPropertyDescriptor(document, 'elementsFromPoint');
+      Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [target] });
+      const { entry, view, hide, show } = renderInteractionBrowser();
+      Object.assign(entry.webview, { send: (channel: string, envelope: unknown) => {
+        const handler = commentIpc.listeners.get(channel);
+        if (!handler) throw new Error('Missing guest command: ' + channel);
+        handler({}, envelope);
+      } });
+      commentIpc.sendToHost.mockImplementation((channel: string, payload: unknown) => {
+        entry.webview.dispatchEvent(Object.assign(new Event('ipc-message'), { channel, args: [payload] }));
+      });
+      try {
+        await screen.findByRole('button', { name: 'https://example.test/' });
+        const slot = entry.wrapper.parentElement;
+        const src = entry.webview.getAttribute('src');
+        fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.comment' }));
+        await screen.findByText('rightSidebar.browser.commentModeHint');
+        const blocker = overlay!.querySelector<HTMLElement>('.blocker')!;
+        const click = new MouseEvent('click', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 });
+        fireEvent(blocker, click);
+        expect(click.defaultPrevented).toBe(true);
+        const editor = await screen.findByPlaceholderText('rightSidebar.browser.commentPlaceholder');
+        fireEvent.change(editor, { target: { value: 'Keep my unfinished comment' } });
+        const selectionMessage = commentIpc.sendToHost.mock.calls.find(
+          ([channel]) => channel === BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
+        )!;
+        hide(transition);
+        await waitFor(() => expect(blocker.isConnected).toBe(false));
+        // A queued selection from the old interaction must not reopen an
+        // editor in the retained background host.
+        act(() => commentIpc.sendToHost(...selectionMessage));
+        expect(screen.queryByPlaceholderText('rightSidebar.browser.commentPlaceholder')).toBeNull();
+        // Detached old blocker must have lost its capture handler as well.
+        const staleClick = new MouseEvent('click', { bubbles: true, cancelable: true });
+        fireEvent(blocker, staleClick);
+        expect(staleClick.defaultPrevented).toBe(false);
+        expect(entry.wrapper.parentElement).toBe(slot);
+        expect(entry.wrapper.isConnected).toBe(true);
+        expect(entry.webview.getAttribute('src')).toBe(src);
+        show();
+        expect(screen.queryByRole('button', { name: 'rightSidebar.browser.exitCommentMode' })).toBeNull();
+        expect(screen.queryByPlaceholderText('rightSidebar.browser.commentPlaceholder')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.comment' }));
+        await screen.findByText('rightSidebar.browser.commentModeHint');
+        fireEvent.click(overlay!.querySelector('.blocker')!, { clientX: 20, clientY: 30 });
+        expect((await screen.findByPlaceholderText('rightSidebar.browser.commentPlaceholder') as HTMLTextAreaElement).value).toBe('Keep my unfinished comment');
+      } finally {
+        view.unmount();
+        // Real preload teardown also runs after a failed red assertion.
+        commentIpc.listeners.get(BROWSER_COMMENT_EXIT_MODE_CHANNEL)?.({}, { requestId: 'test-cleanup' });
+        commentIpc.sendToHost.mockReset();
+        shadowSpy.mockRestore(); target.remove();
+        if (oldHitTest) Object.defineProperty(document, 'elementsFromPoint', oldHitTest);
+        else Reflect.deleteProperty(document, 'elementsFromPoint');
+        browserWebviewPool.releaseAll(); unregisterTabKind('web-browser');
+      }
+    },
+  );
 
   it('clears the active browser session only when a visible detached shell is hidden', async () => {
     const setActiveSession = window.electronAPI.rsbBrowserBridge.setActiveSession;
@@ -329,6 +881,63 @@ describe('RightSidebarShell empty state', () => {
     expect(screen.queryByText('rightSidebar.tabs.kinds.subagents')).toBeNull();
     expect(tabsIpc.close).not.toHaveBeenCalled();
     expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: null });
+  });
+
+  it('collapses an unavailable retired-only sidebar without deleting its history', async () => {
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'old-simulator', kind: 'ios-simulator', state: null }],
+      activeTabId: 'old-simulator',
+    });
+    const view = render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null,
+      shellVisible: true, isMac: true, subagentsAvailable: false, onAllTabsClosed,
+    }));
+    await waitFor(() => expect(onAllTabsClosed).toHaveBeenCalledTimes(1));
+    expect(tabsIpc.close).not.toHaveBeenCalled();
+    expect(getBucket('s1').tabs.map(tab => tab.id)).toEqual(['old-simulator']);
+    view.unmount();
+  });
+
+  // #6861:冷启动归属未知不能收起插件任务页或改写恢复的选择;正文只在确认本机后加载。
+  // 真实 Shell → 可用性投影 → plugin-task → GhostWebviewBody;旧覆盖只测已解析的清单。
+  // 最小输入:持久化任务页 + undefined→null/远端;另带普通页检测选中位丢失。tier:unit。
+  it.each([
+    { device: null, mixed: false }, { device: 'other-device', mixed: false },
+    { device: null, mixed: true }, { device: 'other-device', mixed: true },
+  ])('preserves plugin task selection until ownership resolves ($device, mixed=$mixed)', async ({ device, mixed }) => {
+    installedGhostsMock.list = [{
+      manifest: { id: 'alpha', name: 'Alpha', taskView: { html: 'task.html', title: 'Task Page' } },
+      enabled: true, dir: '/tmp/alpha',
+    }];
+    const onAllTabsClosed = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        ...(mixed ? [{ id: 'files', kind: 'file-browser', state: null }] : []),
+        { id: 'plugin-task', kind: 'plugin-task', state: { instanceId: 'alpha' } },
+      ], activeTabId: 'plugin-task',
+    });
+    const props = {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true, onAllTabsClosed,
+    };
+    const view = render(createElement(RightSidebarShell, props));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    expect(screen.getByText('Task Page')).toBeTruthy();
+    expect(onAllTabsClosed).not.toHaveBeenCalled();
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    expect(document.querySelector('webview')).toBeNull();
+    view.rerender(createElement(RightSidebarShell, { ...props, deviceLinkDeviceId: device }));
+    if (device === null) {
+      await waitFor(() => expect(document.querySelector('webview')?.getAttribute('src')).toBe('cindy-ghost://alpha/task.html?session=s1'));
+      expect(getBucket('s1').activeTabId).toBe('plugin-task');
+      expect(onAllTabsClosed).not.toHaveBeenCalled();
+      expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(screen.queryByText('Task Page')).toBeNull());
+      expect(document.querySelector('webview')).toBeNull();
+      expect(onAllTabsClosed).toHaveBeenCalledTimes(mixed ? 0 : 1);
+    }
+    expect(tabsIpc.close).not.toHaveBeenCalled();
   });
 
   it('keeps a persisted Subagents-only sidebar intact while Pi eligibility is loading', async () => {
@@ -837,9 +1446,14 @@ describe('RightSidebarShell empty state', () => {
 
   it('keeps mac panel actions in the panel topbar without reserving a hidden show trigger', async () => {
     // 展开态没有固定唤起入口；detach / maximize / 收起始终属于面板自身。
-    const onDetach = vi.fn();
+    // 「在独立窗口中打开」作用于当前页签:有激活页签时才渲染,回调带该页签 id。
+    const onDetachTab = vi.fn();
     const onMaximize = vi.fn();
     const onCloseSidebar = vi.fn();
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [{ id: 'tab-pop', kind: 'file-browser', state: null }],
+      activeTabId: 'tab-pop',
+    });
     const { unmount } = render(
       createElement(RightSidebarShell, {
         sessionId: 's1',
@@ -848,23 +1462,29 @@ describe('RightSidebarShell empty state', () => {
         isMac: true,
         unifiedTopbar: true,
         panelSide: 'left',
-        onDetach,
+        onDetachTab,
         onMaximize,
         onCloseSidebar,
       }),
     );
 
-    await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' }),
+      ).toBeTruthy(),
+    );
     const actions = screen.getByTestId('right-sidebar-topbar-actions');
     expect(actions).toBeTruthy();
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' }).click();
-    expect(onDetach).toHaveBeenCalledOnce();
+    expect(onDetachTab).toHaveBeenCalledWith('tab-pop');
     screen.getByRole('button', { name: 'rightSidebar.tabs.controls.maximizeAria' }).click();
     expect(onMaximize).toHaveBeenCalledOnce();
     screen.getByRole('button', { name: 'contentHeader.collapsePanel' }).click();
     expect(onCloseSidebar).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
     unmount();
+    // 后两次渲染回到空会话(store 是模块级单例,先清掉上面水合进来的页签)。
+    _resetStore();
 
     // maximize 后面板占据最右边缘，仍保留自属控件，但不为隐藏的唤起入口留空。
     const { unmount: unmountMax } = render(
@@ -876,7 +1496,7 @@ describe('RightSidebarShell empty state', () => {
         unifiedTopbar: true,
         panelSide: 'left',
         isMaximized: true,
-        onDetach,
+        onDetachTab,
         onMaximize,
         onCloseSidebar,
       }),
@@ -884,6 +1504,10 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
+    // 没有页签就没有可弹出的目标:按钮不渲染。
+    expect(
+      screen.queryByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' }),
+    ).toBeNull();
     unmountMax();
 
     // 贴右时同样保留面板自属控件，不显示无效唤起入口，也不留空。
@@ -894,7 +1518,7 @@ describe('RightSidebarShell empty state', () => {
         remoteHostId: null,
         isMac: true,
         unifiedTopbar: true,
-        onDetach,
+        onDetachTab,
         onMaximize,
         onCloseSidebar,
       }),
@@ -902,7 +1526,6 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     expect(screen.getByTestId('right-sidebar-topbar-actions')).toBeTruthy();
     expect(screen.queryByTestId('right-sidebar-fixed-trigger-spacer')).toBeNull();
-    expect(screen.getByRole('button', { name: 'rightSidebar.tabs.controls.detachAria' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'contentHeader.collapsePanel' })).toBeTruthy();
   });
 
@@ -918,7 +1541,7 @@ describe('RightSidebarShell empty state', () => {
         onCloseSidebar,
         onShowSidebar,
         onMaximize: vi.fn(),
-        onDetach: vi.fn(),
+        onDetachTab: vi.fn(),
       }),
     );
 
@@ -952,7 +1575,7 @@ describe('RightSidebarShell empty state', () => {
         isMac: false,
         onCloseSidebar: vi.fn(),
         onMaximize: vi.fn(),
-        onDetach: vi.fn(),
+        onDetachTab: vi.fn(),
       }),
     );
 
@@ -1077,6 +1700,146 @@ describe('RightSidebarShell empty state', () => {
     await waitFor(() => expect(screen.getByText('rightSidebar.tabs.empty.title')).toBeTruthy());
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onAllTabsClosed).not.toHaveBeenCalled();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:RightSidebarShell 渲染同一会话桶;页签弹出到独立窗口
+  //   (sidebarTabWindowState 镜像)后主窗侧栏不再显示它的 pill 与 body,激活位落到
+  //   仍在侧栏的页签并落库;窗口关闭(镜像清空)后 pill 回来。弹出窗口自身
+  //   (hostedTabIds)只挂被指派的页签、不画空态、不写任务级激活位。
+  // - Bug / 规则依据:侧栏「弹出」从整栏改为单页签(本 PR);webview / 终端不能双实例,
+  //   两个 renderer 投影同一页签就是双实例。
+  // - 现有覆盖缺口:相邻用例只覆盖可用性过滤(subagents / retired),没有跨窗口归属。
+  // - 最小失败输入:两页签会话 + 镜像标记 active 页签已弹出。
+  // - tier:unit(jsdom,进程内 store 与镜像,无 IPC)。
+  // #6861 同族回归:弹出请求不得清空主窗全局选择;归还后同一请求才露出任务页。
+  // 真实 Shell + 页签镜像交错弹出/归还,补齐独立窗口选中用例缺少的主窗半边;unit。
+  it('reveals a task tab only while the attached shell hosts it', async () => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html', title: 'Alpha Panel' } }, enabled: true },
+    ];
+    const globalTab = addGlobalPluginTab('alpha')!;
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-web', kind: 'web-browser', state: null },
+      ],
+      activeTabId: 'tab-files',
+    });
+    __setSidebarTabWindowsStateForTest({
+      'tab-web': { windowId: 'w1', sessionId: 's1', open: true },
+    });
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      unifiedTopbar: true,
+    }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.pluginView'));
+    expect(getActiveGlobalTabId()).toBe(globalTab.id);
+    act(() => requestRevealSessionTab('s1', 'tab-web'));
+    expect(getActiveGlobalTabId()).toBe(globalTab.id);
+    act(() => __setSidebarTabWindowsStateForTest({}));
+    await waitFor(() => expect(document.querySelector('[data-sortable-id="tab-web"]')).toBeTruthy());
+    act(() => requestRevealSessionTab('s1', 'tab-web'));
+    expect(getActiveGlobalTabId()).toBeNull();
+  });
+
+  // 独立窗口多页签时，main 转来的 reveal 必须改变窗口内部激活位，不写主窗的任务桶。
+  it('selects only hosted tabs when a popped-out window receives a reveal request', async () => {
+    tabsIpc.list.mockResolvedValueOnce({
+      tabs: [
+        { id: 'tab-files', kind: 'file-browser', state: null },
+        { id: 'tab-web', kind: 'web-browser', state: null },
+      ],
+      activeTabId: 'tab-files',
+    });
+    const selected = vi.fn();
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: '/tmp/repo', remoteHostId: null, isMac: true,
+      hostedTabIds: new Set(['tab-files', 'tab-web']), onActiveTabChange: selected,
+    }));
+    await waitFor(() => expect(selected).toHaveBeenLastCalledWith('tab-web'));
+    tabsIpc.setActive.mockClear();
+    act(() => requestRevealSessionTab('s1', 'tab-files'));
+    await waitFor(() => expect(selected).toHaveBeenLastCalledWith('tab-files'));
+    act(() => requestRevealSessionTab('s1', 'foreign-tab'));
+    expect(selected).toHaveBeenLastCalledWith('tab-files');
+    expect(tabsIpc.setActive).not.toHaveBeenCalled();
+  });
+
+  it('hides popped-out tabs from the sidebar and keeps the solo window on its own tab', async () => {
+    registerTabKind({
+      kind: 'terminal',
+      menu: { kind: 'terminal', labelKey: 'terminal', icon: Globe, order: 2, enabled: true },
+      TabPillTitle: () => createElement('span', null, 'terminal-pill'),
+      TabBody: () => createElement('div', null, 'terminal-body'),
+      defaultState: () => ({}),
+    });
+    try {
+      tabsIpc.list.mockResolvedValue({
+        tabs: [
+          { id: 'tab-files', kind: 'file-browser', state: null },
+          { id: 'tab-term', kind: 'terminal', state: {} },
+        ],
+        activeTabId: 'tab-term',
+      });
+      const { unmount } = render(
+        createElement(RightSidebarShell, {
+          sessionId: 's1',
+          workdir: '/tmp/repo',
+          remoteHostId: null,
+          isMac: true,
+          unifiedTopbar: true,
+          subagentsAvailable: false,
+        }),
+      );
+      await waitFor(() => expect(screen.getByText('terminal-pill')).toBeTruthy());
+      expect(screen.getByText('rightSidebar.tabs.kinds.fileBrowser')).toBeTruthy();
+
+      // 终端页签弹出:侧栏不再显示它,激活位移到文件页签并落库。
+      act(() => {
+        __setSidebarTabWindowsStateForTest({
+          'tab-term': { windowId: 'w1', sessionId: 's1', open: true },
+        });
+      });
+      await waitFor(() => expect(screen.queryByText('terminal-pill')).toBeNull());
+      expect(screen.queryByText('terminal-body')).toBeNull();
+      expect(screen.getByText('rightSidebar.tabs.kinds.fileBrowser')).toBeTruthy();
+      await waitFor(() =>
+        expect(tabsIpc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: 'tab-files' }),
+      );
+      expect(getBucket('s1').tabs).toHaveLength(2);
+
+      // 窗口关闭(镜像清空):页签回到侧栏。
+      act(() => {
+        __setSidebarTabWindowsStateForTest({});
+      });
+      await waitFor(() => expect(screen.getByText('terminal-pill')).toBeTruthy());
+      unmount();
+
+      // 弹出窗口自身:只挂被指派的页签(页签条照常,供多页签切换),没有空态,不改任务级激活位。
+      tabsIpc.setActive.mockClear();
+      _resetStore();
+      render(
+        createElement(RightSidebarShell, {
+          sessionId: 's1',
+          workdir: '/tmp/repo',
+          remoteHostId: null,
+          isMac: true,
+          subagentsAvailable: false,
+          hostedTabIds: new Set(['tab-term']),
+        }),
+      );
+      await waitFor(() => expect(screen.getByText('terminal-body')).toBeTruthy());
+      expect(screen.getByTestId('right-sidebar-tab-bar')).toBeTruthy();
+      expect(screen.getByText('terminal-pill')).toBeTruthy();
+      expect(screen.queryByText('rightSidebar.tabs.empty.title')).toBeNull();
+      expect(screen.queryByText('rightSidebar.tabs.kinds.fileBrowser')).toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(tabsIpc.setActive).not.toHaveBeenCalled();
+    } finally {
+      unregisterTabKind('terminal');
+    }
   });
 });
 
@@ -1304,5 +2067,120 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     });
     expect(getBucket('s2').tabs).toHaveLength(0);
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe('RightSidebarShell add-tab failure toast', () => {
+  const toastError = vi.mocked(toast.error);
+  let tabsIpc: RightSidebarTabsIpcStub;
+
+  beforeEach(() => {
+    toastError.mockClear();
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    _resetSidebarCommandsForTests();
+    rsbBrowserCommandListeners = [];
+    rsbBrowserPopupListeners = [];
+    rsbNativePopupEventListeners = [];
+    rsbNativePopupClaim.mockClear();
+    rsbNativePopupClose.mockClear();
+    eagerSpawnAndReport.mockClear();
+    eagerSpawnAndReport.mockImplementation(async () => undefined);
+    tabsIpc = makeRightSidebarTabsIpc();
+    installElectronApi(tabsIpc);
+  });
+
+  afterEach(() => {
+    _resetSidebarCommandsForTests();
+    _resetStore();
+    _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
+    _resetNativePopupTabsForTests();
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  function renderShellWithTerminalKind(): void {
+    registerTabKind({
+      kind: 'terminal',
+      menu: {
+        kind: 'terminal',
+        labelKey: 'rightSidebar.tabs.kinds.terminal',
+        icon: (() => null) as unknown as LucideIcon,
+        order: 1,
+        enabled: true,
+      },
+      TabPillTitle: () => createElement('span'),
+      TabBody: () => createElement('div'),
+      defaultState: () => null,
+    });
+    render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        shellVisible: true,
+        isMac: true,
+      }),
+    );
+  }
+
+  it.each([
+    ['RIGHT_SIDEBAR_TOO_MANY_TABS', 'ipcError.RIGHT_SIDEBAR_TOO_MANY_TABS'],
+    ['RIGHT_SIDEBAR_STATE_TOO_LARGE', 'ipcError.RIGHT_SIDEBAR_STATE_TOO_LARGE'],
+    ['RIGHT_SIDEBAR_UNKNOWN_KIND', 'ipcError.RIGHT_SIDEBAR_UNKNOWN_KIND'],
+  ])('toasts the %s message when addTab fails', async (code, expectedKey) => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error(`[${code}] tab rejected`));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith(expectedKey));
+    } finally {
+      unregisterTabKind('terminal');
+    }
+  });
+
+  it('falls back to the generic addFailed toast for uncoded errors', async () => {
+    tabsIpc.upsert.mockRejectedValueOnce(new Error('boom'));
+    try {
+      renderShellWithTerminalKind();
+      await waitFor(() => expect(tabsIpc.list).toHaveBeenCalledWith({ sessionId: 's1' }));
+      const addButton = screen.getByRole('button', { name: 'rightSidebar.tabs.addAria' });
+      vi.spyOn(addButton.parentElement as HTMLElement, 'getBoundingClientRect').mockReturnValue({
+        x: 20,
+        y: 20,
+        top: 20,
+        right: 44,
+        bottom: 44,
+        left: 20,
+        width: 24,
+        height: 24,
+        toJSON: () => ({}),
+      });
+      fireEvent.pointerDown(addButton, { button: 0, ctrlKey: false });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'rightSidebar.tabs.kinds.terminal' }));
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith('rightSidebar.tabs.addFailed'));
+    } finally {
+      unregisterTabKind('terminal');
+    }
   });
 });

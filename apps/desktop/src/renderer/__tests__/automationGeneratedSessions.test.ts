@@ -37,10 +37,7 @@ import {
   isScheduledSession,
 } from '@/features/cc-agent/lib/scheduledSessionGrouping';
 import { getFocusedScheduleStatusFilter } from '@/features/scheduler/SchedulerPage';
-import {
-  isUnreadFailedScheduleRun,
-  isUnreadScheduleRun,
-} from '@/features/scheduler/lib/runUnread';
+import { isUnreadFailedScheduleRun, isUnreadScheduleRun } from '@/features/scheduler/lib/runUnread';
 // Windows checkout(core.autocrlf)下源码是 CRLF;统一归一成 LF,含 \n 的多行片段断言才跨平台成立。
 const readTextLf = (...args: Parameters<typeof readFileSync>): string =>
   String(readFileSync(...args)).replace(/\r\n/g, '\n');
@@ -106,7 +103,10 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
+    // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
+      'side-chat',
       'desktop',
       'feishu',
       'slack',
@@ -128,6 +128,9 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('review');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('bot');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).not.toContain('cindy-make-merge');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
     expect(normalizeSessionSource('scheduler')).toBe('scheduler');
@@ -408,6 +411,75 @@ describe('automation-generated sessions', () => {
     expect(entries[2]).toEqual({ kind: 'session', session: sessions[3] });
   });
 
+  it('keeps remote schedule state and the owning device on remote automation groups', () => {
+    // 侧栏把远程设备镜像的索引并入分组索引:远程组拿到暂停态 / 下次运行,
+    // 并记住所属设备,让分组操作发到那台电脑而不是本机。
+    const remoteIndex = new Map([
+      ['remote-1', makeScheduleSessionInfo({ scheduleId: 'sched-remote', scheduleName: 'Remote', scheduleStatus: 'paused', nextFireAt: 1_767_225_600_000 })],
+      ['remote-2', makeScheduleSessionInfo({ scheduleId: 'sched-remote', scheduleName: 'Remote', scheduleStatus: 'paused', nextFireAt: 1_767_225_600_000 })],
+    ]);
+    const sessions = ['remote-2', 'remote-1'].map((id) =>
+      makeSession({ id, source: 'scheduler', deviceLinkDeviceId: 'device-b' }),
+    );
+
+    const [entry] = groupAutomationSidebarEntries(sessions, {
+      notifications: new Set(),
+      scheduleSessionIndex: remoteIndex,
+    });
+
+    expect(entry).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'schedule:sched-remote:device:device-b',
+        scheduleId: 'sched-remote',
+        scheduleStatus: 'paused',
+        nextFireAt: 1_767_225_600_000,
+        deviceLinkDeviceId: 'device-b',
+        title: 'Remote',
+      },
+    });
+  });
+
+  it('folds runs of one teammate routine together and leaves older-host routine rows flat', () => {
+    // 伙伴例行任务不是 schedule：按「伙伴 + 规则」成组，不同规则 / 伙伴各自成组；
+    // 旧主机不投影 routineId 时保持平铺，不误并。
+    const routineRun = (id: string, botId: string, routineId?: string) =>
+      makeSession({
+        id,
+        title: 'Morning brief',
+        source: 'bot',
+        workspaceKind: 'dialogue',
+        companion: { id: botId, role: 'routine', ...(routineId ? { routineId } : {}) },
+      });
+    const sessions = [
+      routineRun('brief-2', 'bot-a', 'brief'),
+      routineRun('brief-1', 'bot-a', 'brief'),
+      routineRun('other-bot', 'bot-b', 'brief'),
+      routineRun('legacy-1', 'bot-a'),
+      routineRun('legacy-2', 'bot-a'),
+    ];
+
+    const entries = groupAutomationSidebarEntries(sessions, { notifications: new Set() });
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      'automation-group',
+      'session',
+      'session',
+      'session',
+    ]);
+    expect(entries[0]).toMatchObject({
+      kind: 'automation-group',
+      group: {
+        id: 'routine:bot-a:brief',
+        title: 'Morning brief',
+        teammateRoutine: { botId: 'bot-a', routineId: 'brief' },
+      },
+    });
+    if (entries[0].kind !== 'automation-group') throw new Error('expected automation group');
+    expect(entries[0].group.scheduleId).toBeUndefined();
+    expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
+  });
+
   it('shows every recent run as its own row when expanded (primary not hidden into header)', () => {
     const group = {
       id: 'schedule:sched-jira',
@@ -512,13 +584,13 @@ describe('automation-generated sessions', () => {
     ).toEqual(['ok']);
   });
 
-  it('surfaces unread failed schedule runs as an in-session mark-as-read banner', () => {
+  it('routes historical failures to the seen receipt while keeping retry scoped to one run', () => {
     const sessionViewSource = readTextLf(
       new URL('../features/cc-agent/CCAgentSessionView.tsx', import.meta.url),
       'utf8',
     );
     const bannerSource = readTextLf(
-      new URL('../components/chat/InterruptedTurnBanner.tsx', import.meta.url),
+      new URL('../components/chat/UnreadFailedScheduleBanner.tsx', import.meta.url),
       'utf8',
     );
     const zh = JSON.parse(
@@ -526,17 +598,18 @@ describe('automation-generated sessions', () => {
     );
 
     expect(sessionViewSource).toContain('<UnreadFailedScheduleBanner');
-    expect(sessionViewSource).toContain('unreadFailedScheduleRunIds.length > 0');
+    expect(sessionViewSource).toContain('scheduleSessionInfo.hasFailedRun');
+    expect(sessionViewSource).toContain('shouldShowFailedScheduleNotice({');
     expect(sessionViewSource).toContain('useAutomationScheduleSessionInfo(sessionId)');
     expect(sessionViewSource).not.toContain('useAutomationScheduleSessionIndex()');
     expect(sessionViewSource).toContain('latestUnreadFailedRunId');
-    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId])');
-    expect(sessionViewSource).not.toContain(
-      'void markScheduleRunsReadAndSync(unreadFailedScheduleRunIds)',
+    expect(sessionViewSource).toContain('markScheduleRunsReadAndSync([currentUnreadFailedRunId], remoteDeviceId ?? undefined)');
+    expect(sessionViewSource).toContain(
+      'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
     );
-    expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
-    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('这次定时任务没有完成。');
-    expect(zh.chat.unreadFailedScheduleBanner.markAsRead).toBe('标为已读');
+    expect(bannerSource).toContain('scheduleFailureMessageKey(latestFailedRun)');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有自动运行失败。');
+    expect(sessionViewSource).toContain('latestFailedRun={scheduleSessionInfo.latestFailedRun}');
   });
 
   it('maps a focused schedule to the status bucket that can reveal it', () => {
@@ -590,6 +663,77 @@ describe('automation-generated sessions', () => {
         showAll: true,
       }).map((session) => session.id),
     ).toEqual(['jira-3', 'jira-2', 'jira-1']);
+  });
+
+  // review P2(#2938):上层聚合灯为远程活动点亮的子运行,不能藏在「显示全部」后。
+  // 远程 running / 未读不在本地 notifications / runningSessionIds 里,父层通过
+  // foldExemptSessionIds 并入,自动化组的展开态折叠也要认这份豁免。
+  it('keeps remote-lamp exempt automation children visible in the expanded fold', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:sched-remote', title: 'Remote', sessions, attentionSessionIds: [] };
+
+    const withoutExempt = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      showAll: false,
+    });
+    expect(withoutExempt.visibleSessions.map((session) => session.id)).not.toContain('run-6');
+
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      foldExemptSessionIds: new Set(['run-6']),
+      showAll: false,
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toContain('run-6');
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
+  });
+
+  it('merges newly exempt remote runs into a frozen layout without moving its clicked rows', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:remote-frozen', title: 'Remote', sessions, attentionSessionIds: [] };
+    const options = { notifications: new Set<string>(), showAll: false,
+      frozenVisibleSessionIds: ['run-2', 'run-0'], activeSessionId: 'run-2' };
+    const before = getAutomationGroupChildView(group, options);
+    expect(before.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0']);
+    const view = getAutomationGroupChildView(group, {
+      ...options, foldExemptSessionIds: new Set(['run-0', 'run-6', 'other-group']),
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-2', 'run-0', 'run-6']);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(4);
+    expect(view.totalCount).toBe(7);
+    expect(getAutomationGroupChildView(group, { ...options, showAll: true }).visibleSessions)
+      .toEqual(sessions);
+  });
+
+  it.each(['unread', 'running'])('keeps newly %s local runs visible in frozen layouts without remote exemptions', (activity) => {
+    const sessions = ['clicked', 'idle', 'active'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:local-frozen', title: 'Local', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(activity === 'unread' ? ['clicked', 'active', 'other-group'] : []),
+      runningSessionIds: new Set(activity === 'running' ? ['clicked', 'active', 'other-group'] : []),
+      showAll: false, frozenVisibleSessionIds: ['clicked'],
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toEqual(['clicked', 'active']);
+    expect(view.hiddenCount).toBe(1);
+    expect(view.isOverflowing).toBe(true);
+  });
+
+  it('keeps overflow available when a frozen layout still hides idle runs', () => {
+    const sessions = ['visible', 'hidden'].map((id) => makeSession({ id, source: 'scheduler' }));
+    const group = { id: 'schedule:frozen-overflow', title: 'Frozen', sessions, attentionSessionIds: [] };
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(), showAll: false, frozenVisibleSessionIds: ['visible', 'removed'],
+    });
+    expect(view.visibleSessions).toEqual([sessions[0]]);
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
   });
 
   it('caps collapsed automation children at five and overflows the rest like the dialogue list', () => {
@@ -791,7 +935,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'manual',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
     expect(
       getAutomationGroupPrimarySession(group, new Set(['jira-2']), {
         preferredSessionId: 'jira-2',
@@ -805,7 +949,7 @@ describe('automation-generated sessions', () => {
         activeSessionId: 'jira-1',
         frozenVisibleSessionIds: ['jira-1'],
       }).map((session) => session.id),
-    ).toEqual(['jira-1']);
+    ).toEqual(['jira-1', 'jira-2']);
   });
 
   it('freezes the group primary while the clicked automation session is active', () => {
@@ -855,7 +999,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('toggleCollapsed()');
     // 切折叠必须复位轴 2:showAll 被收起告警列表和展开历史列表共用。复位挂在
     // collapsed 变化上,覆盖 chevron 与父层「收起所有分组」,不只一条点击路径。
-    expect(source).toContain('useLayoutEffect(() => {\n    setShowAll(false);\n  }, [collapsed]);');
+    expect(source).toMatch(/useLayoutEffect\(\(\) => \{\s+setShowAll\(false\);\s+\}, \[collapsed\]\);/);
     expect(source).toContain('const ToggleIcon = collapsed ? ChevronRight : ChevronDown');
     expect(source).toContain('aria-expanded={!collapsed}');
     // 轴 1 收起时只留组头 + 被提上来的未处理告警行,取舍统一由 childView 决定
@@ -927,7 +1071,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain("group.scheduleStatus === 'active'");
     // 用正则容忍 prettier 折行(条件在一行还是拆三行都算通过)。
     expect(source).toMatch(
-      /scheduleId &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
+      /hasHoverActions &&\s*!menuOpen &&\s*'group-hover:opacity-0 group-focus-within\/slot:opacity-0'/,
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
@@ -1075,7 +1219,8 @@ describe('automation-generated sessions', () => {
     expect(storageSource).toContain("eq(sessions.source, 'scheduler')");
     expect(storageSource).toContain('listDirectScheduleIdsByLegacyKey');
     expect(storageSource).toContain('directScheduleId && directScheduleId !== row.id');
-    expect(scheduleIndexHookSource).toContain('nextFireAt: run.nextFireAt');
+    expect(scheduleIndexHookSource).toContain('projectScheduleSidebarIndex(runs)');
+    expect(readFileSync(new URL('../features/scheduler/lib/projectScheduleSidebarIndex.ts', import.meta.url), 'utf8')).toContain('nextFireAt: run.nextFireAt');
     expect(preloadSource).toContain('listSidebarIndexRuns');
   });
 
@@ -1148,7 +1293,9 @@ describe('automation-generated sessions', () => {
     expect(sidebarSource).toContain('knownSessionIds: group.sessions.map((session) => session.id)');
     expect(sidebarSource).toContain("if (action === 'mark-read')");
     expect(sidebarSource).toContain('unreadSuccessScheduleRunIds(info)');
-    expect(sidebarSource).toContain("t('ccAgent.layout.markedAsRead', { count: processed.length })");
+    expect(sidebarSource).toContain(
+      "t('ccAgent.layout.markedAsRead', { count: processed.length })",
+    );
     expect(sidebarSource).not.toContain(
       "t('ccAgent.layout.markedAsRead', { count: unreadRunIds.length })",
     );

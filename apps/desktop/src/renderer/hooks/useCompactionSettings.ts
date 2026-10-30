@@ -7,7 +7,7 @@ const log = createLogger('UseCompactionSettings');
 
 // main (compaction-settings-store) 是 clamp 的唯一 source of truth: IPC 返回值已是
 // [50,95] 内的合法整数, Slider 也用 min/max/step 约束输入。
-const DEFAULT_PCT = 75;
+const DEFAULT_PCT = 90;
 const WRITE_DEBOUNCE_MS = 300;
 
 export type CompactionAgent = 'claude' | 'pi';

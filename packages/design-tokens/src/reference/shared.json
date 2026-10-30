@@ -1,0 +1,44 @@
+{
+  "reference": {
+    "windowBacking": {
+      "light": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [
+            0.933333,
+            0.933333,
+            0.913725
+          ],
+          "alpha": 0.85
+        },
+        "$extensions": {
+          "com.cindy.desktop": {
+            "format": "rgb",
+            "alpha": true,
+            "precision": 2
+          }
+        }
+      },
+      "dark": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [
+            0.019608,
+            0.019608,
+            0.019608
+          ],
+          "alpha": 0.85
+        },
+        "$extensions": {
+          "com.cindy.desktop": {
+            "format": "rgb",
+            "alpha": true,
+            "precision": 2
+          }
+        }
+      }
+    }
+  }
+}

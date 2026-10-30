@@ -135,6 +135,7 @@ export class RsbWindowController {
   private visible = false;
   private pendingOpen = false;
   private pendingOpenShouldFocus = true;
+  private openFallbackExtended = false;
   private disposed = false;
   private readyWaiters: Array<{
     resolve: () => void;
@@ -457,7 +458,12 @@ export class RsbWindowController {
   async routeCommand(
     request: RsbWindowCommandRouteRequest,
   ): Promise<RsbWindowCommandRouteResult> {
-    const { command, allowOpen } = request;
+    const { allowOpen } = request;
+    // 子窗口执行开页时也需要原点击来源。只从既有路由信封派生一次，
+    // 与 command 一起经过现有排队/交接路径；不信任 command 内自报的来源。
+    const command: RsbWindowCommand = request.command.type === 'open-plugin-task'
+      ? { ...request.command, userInitiated: request.userInitiated === true }
+      : request.command;
     const userInitiated = request.userInitiated !== false;
     if (!this.deps.settings.read().detached) return 'attached';
     const hostSessionId = commandHostSessionId(command);
@@ -730,6 +736,7 @@ export class RsbWindowController {
     this.visible = false;
     this.pendingOpen = false;
     this.pendingOpenShouldFocus = true;
+    this.openFallbackExtended = false;
     this.destroyingWindow = false;
     this.clearPinnedSession();
 
@@ -748,16 +755,32 @@ export class RsbWindowController {
 
   // ── 超时与恢复 ────────────────────────────────────────────────────
 
-  private scheduleOpenFallback(win: BrowserWindow): void {
+  private scheduleOpenFallback(win: BrowserWindow, resetExtension = true): void {
     this.clearOpenTimeout();
+    // 顺延是自我 re-arm,不得重置标志;外部重新打开(reload、新 open 周期)则给新一轮
+    // 一次顺延机会,晚到的自动化等待器仍能等满自身期限。
+    if (resetExtension) this.openFallbackExtended = false;
     this.openTimeout = setTimeout(() => {
       this.openTimeout = null;
       if (win !== this.winRef || win.isDestroyed() || !this.pendingOpen) return;
-      // renderer shell 未就绪时仍展示(loadURL 在 BrowserWindow 创建时就开始了,
-      // 5s 足够 Electron 完成 HTML 加载和 React 根挂载);即使只有 Loading 壳也是
-      // 可辨识的反馈,比永久不给用户任何反应好。
-      if (!this.rendererReady && !this.visible) {
-        this.deps.log.warn('right-sidebar open timed out before renderer-ready');
+      // 窗口规则 §3.1:超时只能展示已挂载的 Loading 壳。shell(rendererReady)未就绪
+      // 时展示可能是空白窗口;按资源用量窗口基线作废缓存并走有界恢复(重建重开),
+      // 恢复额度耗尽才放弃。仅 shell 就绪、内容未到时仍展示 Loading 壳。
+      if (!this.rendererReady) {
+        // 自动化/宿主 waiter(ready 握手、宿主会话)各自有界等待并假定窗口存活:
+        // 超时若有 waiter 在场则顺延一个周期再失效,避免提前拆窗把有界等待拒成
+        // 'closed before ready';每次外部重新打开可重置一次,持续有 waiter 时窗口
+        // 存活期仍以最长 waiter 期限为界,不会无限顺延。
+        if (
+          !this.openFallbackExtended
+          && (this.readyWaiters.length > 0 || this.hostWaiters.length > 0)
+        ) {
+          this.openFallbackExtended = true;
+          this.scheduleOpenFallback(win, false);
+          return;
+        }
+        this.invalidateWindow(win, 'renderer readiness timed out');
+        return;
       }
       if (!this.visible) this.showWindow(win, this.pendingOpenShouldFocus);
     }, DEFAULT_OPEN_TIMEOUT_MS);
@@ -921,9 +944,9 @@ export class RsbWindowController {
 
   // ── 命令路由辅助 ─────────────────────────────────────────────────
 
-  private adoptHostSession(sessionId: string): void | Promise<void> {
+  private adoptHostSession(sessionId: string, retrying = false): void | Promise<void> {
     if (!sessionId) return;
-    if (this.lastContext?.available && this.lastContext.sessionId === sessionId) {
+    if (!retrying && this.lastContext?.available && this.lastContext.sessionId === sessionId) {
       // 已经在目标宿主上。再钉一次会挡住之后的 setContext。
       // 若 pin 还钉着别人，当前宿主的新请求要先把它拆掉。
       if (this.pinnedSessionId && this.pinnedSessionId !== sessionId) {
@@ -935,24 +958,53 @@ export class RsbWindowController {
     }
     if (this.pinnedSessionId !== sessionId) this.replacePinnedSession(sessionId);
     const cached = this.knownContexts.get(sessionId);
-    if (cached) {
+    // Bot ownership can change while this session is not focused. In particular,
+    // a cached canonical session may have become history, and a null owner may
+    // have been sent before the renderer's Bot profiles finished loading.
+    const needsFreshBotOwner = cached?.botOwner !== undefined && !!this.deps.resolveHostContext;
+    if (cached && !needsFreshBotOwner) {
       this.applyAdoptedContext(cached);
       return;
     }
-    const pending = this.deps.resolveHostContext?.(sessionId);
-    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
-      return Promise.resolve(pending).then((resolved) => {
-        if (this.disposed) return;
-        if (resolved) this.rememberContext(resolved);
-        if (this.pinnedSessionId !== sessionId) return;
-        this.finishAdoptHostSession(sessionId, resolved);
-      });
+    let pending: ReturnType<NonNullable<RsbWindowControllerDeps['resolveHostContext']>> | undefined;
+    try {
+      pending = this.deps.resolveHostContext?.(sessionId);
+    } catch {
+      this.finishAdoptHostSession(sessionId, null, cached, true);
+      return;
     }
-    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null);
+    if (pending && typeof (pending as Promise<RsbWindowContext | null>).then === 'function') {
+      return Promise.resolve(pending).then(
+        (resolved) => {
+          if (this.disposed) return;
+          if (resolved) this.rememberContext(resolved);
+          if (this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, resolved, cached);
+        },
+        () => {
+          if (this.disposed || this.pinnedSessionId !== sessionId) return;
+          this.finishAdoptHostSession(sessionId, null, cached, true);
+        },
+      );
+    }
+    this.finishAdoptHostSession(sessionId, (pending as RsbWindowContext | null | undefined) ?? null, cached);
   }
 
-  private finishAdoptHostSession(sessionId: string, resolved: RsbWindowContext | null): void {
+  private finishAdoptHostSession(
+    sessionId: string,
+    resolved: RsbWindowContext | null,
+    cached?: RsbWindowContext,
+    retryOnFailure = false,
+  ): void {
     if (!resolved) {
+      if (cached) {
+        // Draft sessions may not be in the DB yet. Keep their usable host
+        // context, but never publish an unverified cached Bot owner.
+        this.applyAdoptedContext({ ...cached, botOwner: undefined });
+        if (retryOnFailure) this.scheduleAdoptRetry(sessionId);
+        else this.resetAdoptRetry();
+        return;
+      }
       this.scheduleAdoptRetry(sessionId);
       return;
     }
@@ -981,7 +1033,7 @@ export class RsbWindowController {
     this.adoptRetryTimer = setTimeout(() => {
       this.adoptRetryTimer = null;
       if (this.disposed || this.pinnedSessionId !== sessionId) return;
-      void this.adoptHostSession(sessionId);
+      void this.adoptHostSession(sessionId, true);
     }, delay);
   }
 

@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
-  resolveAgentIslandVisibleSessionFromRouteTarget,
+  isAgentIslandVisibleSessionOwnedByBotRoute,
+  resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail,
   resolveAgentIslandVisibleSessionIdFromPath,
 } from '@/lib/agentIslandVisibleSessionRoute';
@@ -35,6 +36,46 @@ const ccAgentSessionViewSource = readTextLf(
   'utf8',
 );
 
+describe('bot and split route visibility', () => {
+  it.each([
+    ['/bots/bot-a/session/chat-a', true],
+    ['/bots/bot-a/history/history-a', true],
+    ['/bots/remote/device-a/bot-a/session/chat-a', true],
+    ['/bots/remote/device-a/bot-a', true],
+    ['/bots/bot-a', false],
+    ['/bots', false],
+    ['/bots/roster', false],
+    ['/bots/bot-a/session', false],
+  ])('delegates %s to the validating view', (pathname, expected) => {
+    expect(isAgentIslandVisibleSessionOwnedByBotRoute(pathname)).toBe(expected);
+  });
+
+  it('keeps stale splits out of bot pages across navigation and settings', () => {
+    const splits = ['task-a', 'task-b'];
+    const targets = [
+      '/cc-agent/task-a',
+      '/bots/bot-a',
+      '/bots/bot-a?settings=1',
+      '/bots/bot-a/session/chat-a',
+      // The session settings drawer keeps the chat mounted underneath it.
+      '/bots/bot-a/session/chat-a?settings=1',
+      '/bots/bot-a/history/history-a',
+      '/settings',
+      '/cc-agent/files/task-a',
+      '/cc-agent/task-a',
+    ];
+    expect(targets.map((target) => resolveAgentIslandVisibleSessionsFromPath(
+      new URL(target, 'https://cindy.invalid').pathname,
+      splits,
+    ))).toEqual([
+      ['task-a', 'task-b'], null, null, null, null, null, null, null,
+      ['task-a', 'task-b'],
+    ]);
+    expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', [])).toBe('task-a');
+    expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', ['task-b'])).toBe('task-a');
+  });
+});
+
 describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
   it('returns the session id only for routes that visibly show a session', () => {
     expect(resolveAgentIslandVisibleSessionIdFromPath('/cc-agent/session-a')).toBe('session-a');
@@ -51,19 +92,6 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(resolveAgentIslandVisibleSessionIdFromPath('/cc-agent/scheduled')).toBeNull();
     expect(resolveAgentIslandVisibleSessionIdFromPath('/cc-agent/files/session-a')).toBeNull();
     expect(resolveAgentIslandVisibleSessionIdFromPath('/cc-agent/orca/new')).toBeNull();
-  });
-
-  it('preserves Orca worker targets when acknowledging a complete route target', () => {
-    expect(
-      resolveAgentIslandVisibleSessionFromRouteTarget(
-        '/cc-agent/lead-a?worker=worker-b&source=notification',
-      ),
-    ).toEqual(['lead-a', 'worker-b']);
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/cc-agent/lead-a')).toBe('lead-a');
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/cc-agent/lead-a?worker=new')).toBe(
-      'lead-a',
-    );
-    expect(resolveAgentIslandVisibleSessionFromRouteTarget('/settings?worker=worker-b')).toBeNull();
   });
 
   it('lets the workdir browse route own visible-session reports for doc-mode rails', () => {
@@ -110,16 +138,9 @@ describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
     expect(workdirBrowseRouteSource).toContain('if (!isAgentIslandSupported()) return;');
     expect(workdirBrowseRouteSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(agentIslandVisibleSessionId)');
     expect(orcaWorkerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
-    expect(orcaWorkerPanelSource).toContain('viewVisible && workerSessionId && workerSessionId !== leadSessionId');
-  });
-
-  it('acknowledges notification focus navigation to collapse Agent Island after jumping', () => {
-    expect(mainLayoutSource).toContain(
-      'const visibleSession = resolveAgentIslandVisibleSessionFromRouteTarget(target);',
+    expect(orcaWorkerPanelSource).toContain(
+      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
     );
-    expect(mainLayoutSource).toContain(`if (isAgentIslandSupported()) {
-          void window.electronAPI.agentIsland?.setVisibleSession?.(visibleSession);
-        }`);
   });
 
   it('routes plugin setup navigation through the owning session view', () => {

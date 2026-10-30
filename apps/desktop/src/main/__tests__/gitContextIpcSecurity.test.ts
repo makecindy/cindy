@@ -34,7 +34,9 @@ describe('git-context remote IPC security contract', () => {
   it('fails closed when device-link PR refs lookup is unavailable', () => {
     const lookup = ipcSource.indexOf('const refs = await listPrRefs(remoteSessionId);');
     const clear = ipcSource.indexOf('return [];', lookup);
-    const statusQuery = ipcSource.indexOf('return prStatusService!.getStatuses(parsed);');
+    const statusQuery = ipcSource.indexOf(
+      'return prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });',
+    );
 
     expect(ipcSource).toContain("log.warn('remote PR refs lookup failed (fail closed)'");
     expect(lookup).toBeGreaterThanOrEqual(0);

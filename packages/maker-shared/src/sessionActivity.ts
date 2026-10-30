@@ -1,3 +1,13 @@
+import type { WorkingPhase } from './workingStatus.js';
+
+export function getSessionListActivityAt<Value>(session: {
+  lastActivityAt?: Value | null;
+  userSendAt?: Value | null;
+  updatedAt: Value;
+}): Value {
+  return session.lastActivityAt ?? session.userSendAt ?? session.updatedAt;
+}
+
 /**
  * Canonical session control-plane status projection.
  *
@@ -7,6 +17,19 @@
  */
 
 type OpenValue<Known extends string> = Known | (string & Record<never, never>);
+
+export type SessionRightStatus = 'error' | 'awaiting' | 'running' | 'done' | 'time';
+
+/** Shared by local desktop and every remote controller. */
+export function resolveSessionRightStatus(
+  activity: Pick<SessionActivitySnapshot, 'phase' | 'attention'>,
+): SessionRightStatus {
+  if (activity.phase === 'error' && activity.attention) return 'error';
+  if (activity.phase === 'needs-interaction') return 'awaiting';
+  if (activity.phase === 'running') return 'running';
+  if (activity.phase === 'completed' && activity.attention) return 'done';
+  return 'time';
+}
 
 export type SessionActivityPhase = OpenValue<
   'idle' | 'running' | 'needs-interaction' | 'completed' | 'error'
@@ -42,6 +65,8 @@ export interface SessionActivitySnapshot {
    * Optional on the wire so older device-link snapshots remain readable.
    */
   currentTurnActive?: boolean;
+  /** Public generation category; never assistant prose, tool arguments or reasoning. */
+  workingPhase?: WorkingPhase;
   recordStatus?: SessionRecordStatus;
   startedAtMs: number | null;
   lastActivityAtMs: number | null;
@@ -66,6 +91,7 @@ export interface SessionActivityTransition {
 }
 
 export interface SessionActivityProjectionInput {
+  interruption?: SessionInterruptionState;
   sessionId: string;
   recordStatus?: SessionRecordStatus;
   title?: string | null;
@@ -81,6 +107,29 @@ export interface SessionActivityProjectionInput {
   attention?: boolean;
   turnGeneration?: number | null;
   gracefulStopState?: SessionGracefulStopState;
+}
+
+/** Optional host evidence; old hosts omit it. Read receipts do not dismiss alerts. */
+export interface SessionInterruptionState {
+  interruptedTurnStartedAt?: number | null;
+  activeTurnStartedAt?: number | null;
+  lastTurnEndedAt?: number | null;
+  clearedAt?: string | null;
+  status?: string;
+}
+
+export function hasPendingSessionInterruption(
+  session: SessionInterruptionState | undefined,
+): boolean {
+  const started = session?.interruptedTurnStartedAt;
+  if (!session || typeof started !== 'number' || !Number.isFinite(started) || started <= 0)
+    return false;
+  return (
+    session.status === 'active' &&
+    session.activeTurnStartedAt === started &&
+    started > (session.lastTurnEndedAt ?? 0) &&
+    started > (session.clearedAt ? Date.parse(session.clearedAt) : 0)
+  );
 }
 
 const WORKFLOW_RULES: readonly {
@@ -142,16 +191,17 @@ function resolvePhase(input: SessionActivityProjectionInput): SessionActivityPha
 export function projectSessionActivity(
   input: SessionActivityProjectionInput,
 ): SessionActivitySnapshot {
+  const interrupted = hasPendingSessionInterruption(input.interruption);
   return {
     sessionId: input.sessionId,
-    phase: resolvePhase(input),
+    phase: interrupted ? 'error' : resolvePhase(input),
     currentTurnActive: input.running === true || input.livePhase === 'running',
     ...(input.recordStatus ? { recordStatus: input.recordStatus } : {}),
     startedAtMs: input.startedAtMs ?? null,
     lastActivityAtMs: input.lastActivityAtMs ?? null,
     currentActionSummary: input.currentActionSummary?.trim() || null,
     ...(input.interactionKind ? { interactionKind: input.interactionKind } : {}),
-    attention: input.attention === true,
+    attention: interrupted || input.attention === true,
     workflow: sessionWorkflowFromTitle(input.title),
     turnGeneration: input.turnGeneration ?? null,
     gracefulStopState: input.gracefulStopState ?? 'none',
@@ -167,4 +217,19 @@ export function isSessionActivityWaitingForUser(
   activity: Pick<SessionActivitySnapshot, 'phase'>,
 ): boolean {
   return activity.phase === 'needs-interaction';
+}
+
+export function resolveCollapsedGroupRightStatus({
+  collapsed,
+  latestKind,
+  tone,
+}: {
+  collapsed: boolean;
+  latestKind: SessionRightStatus;
+  tone: 'error' | 'done' | null;
+}): SessionRightStatus {
+  if (!collapsed) return latestKind;
+  if (tone === 'error') return 'error';
+  if (tone === 'done' && latestKind === 'time') return 'done';
+  return latestKind;
 }

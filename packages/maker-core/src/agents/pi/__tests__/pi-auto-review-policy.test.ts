@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { classifyPiToolForAutoReview } from '../auto-review-policy.js';
+import { classifyPiToolForAutoReview, normalizePiToolForAutoReview } from '../auto-review-policy.js';
 
 const WS = '/Users/t/ws';
 const roots = [WS];
@@ -24,6 +24,25 @@ function verdict(
 }
 
 describe('classifyPiToolForAutoReview', () => {
+  it.each(['read', 'grep', 'find', 'ls', 'bash', 'powershell'])(
+    'preserves the complete %s operation and all canonical credential evidence', (toolName) => {
+      const input = toolName === 'bash' || toolName === 'powershell'
+        ? { command: 'cat innocent.txt; rm -rf /outside/report', timeout: 30 }
+        : { path: `${WS}/innocent.txt`, pattern: 'token', nested: { paths: ['second.txt'] } };
+      for (const [resolvedCredentialPaths, credentialEvidenceStatus] of [
+        [null, 'unverifiable'],
+        [['/etc/hosts'], 'host-policy-mismatch'],
+        [['/Users/t/.ssh/id_rsa', '/Users/t/.aws/credentials'], 'credential-paths'],
+      ] as const) {
+        const action = normalizePiToolForAutoReview({ toolName, input, workspaceRoots: roots, resolvedCredentialPaths });
+        expect(action).toMatchObject({ kind: 'other', requireConsent: true });
+        expect(JSON.parse((action as { description: string }).description)).toEqual({
+          toolName, input, resolvedCredentialPaths, credentialEvidenceStatus,
+        });
+      }
+    },
+  );
+
   it('approves file writes inside the workspace, escalates outside or pathless', () => {
     expect(verdict('edit', { path: `${WS}/src/a.ts` })).toBe('auto-approve');
     expect(verdict('write', { path: `${WS}/README.md` })).toBe('auto-approve');

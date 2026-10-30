@@ -6,12 +6,14 @@
  *
  * 缓存 / 去重 / 代际驱逐核心在 `./deviceProvidersCache`(纯逻辑、node 可测);本文件只做
  * React 接线。优雅回退:被控端为旧版(allowlist 无 `maker:provider:list`)→ listProviders
- * reject → 暴露 error,调用方回退到基于 capabilities 的扁平模型列表。
+ * reject → 暴露 unsupported,调用方才回退到基于 capabilities 的扁平模型列表。
  */
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
+import { connectionRecoverySyncRetryDelayMs, formatRemoteError, isAutoRecoveringRemoteError } from './remoteStatus';
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
@@ -20,8 +22,11 @@ import {
   getDeviceFetchEpoch,
   getDeviceProvidersGen,
   markDeviceFetchEpoch,
+  isDeviceProvidersUnsupportedError,
+  isDeviceProvidersVisibilityNotReadyError,
   subscribeDeviceProviders,
   subscribeDeviceProvidersGen,
+  subscribeDeviceProvidersError,
   type DeviceProvidersPayload,
 } from './deviceProvidersCache';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
@@ -33,8 +38,10 @@ export interface UseDeviceProvidersResult {
   /** 被控端「模型显示/隐藏」override 快照;undefined = 旧被控端(列表不过滤)。 */
   modelVisibilityOverrides?: Record<string, boolean>;
   loading: boolean;
-  /** 非 null = 拉取失败(典型:旧版被控端不识别通道);调用方据此回退扁平列表。 */
+  /** 非 null = 拉取失败(典型:旧版被控端不识别通道);仅 unsupported 允许回退扁平列表。 */
   error: string | null;
+  /** Only true for a host that explicitly lacks provider:list. */
+  unsupported: boolean;
   /**
    * 「当前目录确为所选设备的就绪目录」——仅当 payload 来自该设备的缓存命中或拉取完成
    * (经订阅回调确认)才为 true。`loading === false` 不能替代本信号:loading 初始值就是
@@ -46,20 +53,28 @@ export interface UseDeviceProvidersResult {
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 
+function canRecoverProviderRead(error: unknown): boolean {
+  return isAutoRecoveringRemoteError(error)
+    || isDeviceProvidersVisibilityNotReadyError(error);
+}
+
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
-export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult {
+export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
   // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
   // 的 effect 不会因连接恢复重跑(maker.invoke 跨重连稳定,codex review P2)——把
   // connectionEpoch 纳入 effect 依赖,连接恢复即重跑 effect、经 cache-miss 重新
   // 拉取,不再永久停在 ready=false 的空目录。
-  const { connectionEpoch } = useDeviceLink();
+  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink();
+  const recovering = !!deviceId && recoveringDeviceIds.has(deviceId);
   const [payload, setPayload] = useState<DeviceProvidersPayload>(
     deviceId ? getCachedDeviceProviders(deviceId) ?? EMPTY_PAYLOAD : EMPTY_PAYLOAD,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDeviceId, setErrorDeviceId] = useState<string | null>(null);
+  const [catalogGeneration, setCatalogGeneration] = useState(() => deviceId ? getDeviceProvidersGen(deviceId) : 0);
   // ready 的判定载体:payload 已确认属于哪个设备 + 置位时的缓存代际。仅在缓存命中 /
   // 拉取完成(订阅回调)时置位;切设备 cache-miss 立即清 null。首渲染即按
   // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口;
@@ -88,6 +103,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
   // 该设备首次标记(正常缓存命中快路径,与原 null 语义一致)。
 
   useEffect(() => {
+    setCatalogGeneration(deviceId ? getDeviceProvidersGen(deviceId) : 0);
     if (!deviceId) {
       setPayload(EMPTY_PAYLOAD);
       setError(null);
@@ -96,6 +112,14 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       return;
     }
     let cancelled = false;
+    const unsubscribeError = subscribeDeviceProvidersError(deviceId, (error) => {
+      if (cancelled) return;
+      if (isDeviceProvidersUnsupportedError(error)) setPayload(EMPTY_PAYLOAD);
+      setReadyFor(null);
+      setLoading(false);
+      setError(formatRemoteError(error));
+      setErrorDeviceId(deviceId);
+    });
     const unsubscribe = subscribeDeviceProviders(deviceId, (next) => {
       if (cancelled) return;
       setPayload(next);
@@ -121,17 +145,19 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     //   响应较晚返回仍通过 isCurrent() 把 fresh 的新目录覆盖回旧目录。
     const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, (reason) => {
       if (cancelled) return;
+      // Restart recovery even when React batches invalidation and an identical error.
+      setCatalogGeneration(getDeviceProvidersGen(deviceId));
       setReadyFor(null);
       if (reason === 'fresh-invalidate') return;
       setPayload(EMPTY_PAYLOAD);
+      setLoading(true);
+      setError(null);
+      const refreshGen = getDeviceProvidersGen(deviceId);
+      const isCurrentRefresh = () => !cancelled && getDeviceProvidersGen(deviceId) === refreshGen;
       void fetchDeviceProviders(deviceId, () => maker.listProviders())
-        .catch((e: unknown) => {
-          if (cancelled) return;
-          // 暴露错误(codex review P2:在在线目录刷新失败后安排重试/暴露错误):
-          // 静默吞掉失败会让模型选择器停在空目录且连接保持在线时 effect 不重跑
-          // ——设置 error,调用方据此回退扁平模型列表;后续 provider 事件/重连/
-          // 重挂载会再次触发刷新。失败保持未就绪(readyFor 已清)。
-          setError(e instanceof Error ? e.message : String(e));
+        .catch(() => undefined) // current-generation errors arrive through the cache subscription
+        .finally(() => {
+          if (isCurrentRefresh()) setLoading(false);
         });
     });
     const cached = getCachedDeviceProviders(deviceId);
@@ -159,6 +185,7 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
         cancelled = true;
         unsubscribe();
         unsubscribeGen();
+        unsubscribeError();
       };
     }
     if (cached && reconnected) {
@@ -167,18 +194,17 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       setPayload(cached);
       setLoading(true);
       setReadyFor(null);
+      const requestGen = getDeviceProvidersGen(deviceId);
       fetchDeviceProvidersFresh(deviceId, () => maker.listProviders())
-        .catch((e: unknown) => {
-          if (cancelled) return;
-          setError(e instanceof Error ? e.message : String(e));
-        })
+        .catch(() => undefined)
         .finally(() => {
-          if (!cancelled) setLoading(false);
+          if (!cancelled && getDeviceProvidersGen(deviceId) === requestGen) setLoading(false);
         });
       return () => {
         cancelled = true;
         unsubscribe();
         unsubscribeGen();
+        unsubscribeError();
       };
     }
     // cache miss:先清空,避免 fetch 解析前(失败则永远)残留上一设备的供应商。
@@ -186,20 +212,63 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
     setLoading(true);
     setError(null);
     setReadyFor(null);
+    const requestGen = getDeviceProvidersGen(deviceId);
     fetchDeviceProviders(deviceId, () => maker.listProviders())
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-      })
+      .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && getDeviceProvidersGen(deviceId) === requestGen) setLoading(false);
       });
     return () => {
       cancelled = true;
       unsubscribe();
       unsubscribeGen();
+      unsubscribeError();
     };
   }, [connectionEpoch, deviceId, maker]);
+
+  // A peer link can recover without a new relay epoch. Retry only this failed
+  // catalog read; never reset the transport or turn cached rows into ready data.
+  const needsRecovery = errorDeviceId === deviceId && error !== null && canRecoverProviderRead(error);
+  useEffect(() => {
+    if (!deviceId || !needsRecovery || status !== 'online' || recovering) return;
+    let cancelled = false;
+    let inFlight = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let generation = getDeviceProvidersGen(deviceId);
+    const current = () => !cancelled && generation === getDeviceProvidersGen(deviceId);
+    const schedule = (delay: number) => {
+      clearTimeout(timer);
+      if (!current() || inFlight || AppState.currentState !== 'active') return;
+      timer = setTimeout(() => { void retry(); }, delay);
+    };
+    const retry = async () => {
+      if (!current() || inFlight || AppState.currentState !== 'active') return;
+      inFlight = true;
+      // Fresh bypasses a retained pre-failure cache and shares its in-flight read
+      // with other consumers. Existing generation guards reject late responses.
+      const request = fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
+      generation = getDeviceProvidersGen(deviceId);
+      try {
+        await request;
+      } catch (failure) {
+        inFlight = false;
+        if (canRecoverProviderRead(failure)) schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+      } finally {
+        inFlight = false;
+      }
+    };
+    const subscription = AppState.addEventListener('change', (next) => {
+      clearTimeout(timer);
+      if (next === 'active') schedule(0);
+    });
+    schedule(pickerOpen ? 0 : connectionRecoverySyncRetryDelayMs(attempt++));
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [catalogGeneration, connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
   return {
     providers: payload.providers,
@@ -207,7 +276,8 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       ? { modelVisibilityOverrides: payload.modelVisibilityOverrides }
       : {}),
     loading,
-    error,
+    error: errorDeviceId === deviceId ? error : null,
+    unsupported: errorDeviceId === deviceId && isDeviceProvidersUnsupportedError(error),
     ready: deviceId !== undefined
       && readyFor === deviceId
       && readyGen === getDeviceProvidersGen(deviceId),

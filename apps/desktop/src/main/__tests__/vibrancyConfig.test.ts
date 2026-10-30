@@ -12,7 +12,12 @@ vi.mock('../logger.js', () => ({
   }),
 }));
 
-import { resolveVibrancyConfig } from '../vibrancyConfig';
+import type { BrowserWindow } from 'electron';
+import {
+  resolveVibrancyConfig,
+  resolveWindowVibrancyConfig,
+  setWindowWallpaperCovered,
+} from '../vibrancyConfig';
 
 const MATERIAL_VALUES = [
   'sidebar',
@@ -25,10 +30,48 @@ const MATERIAL_VALUES = [
 ] as const;
 
 describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)', () => {
+  // Regression: an opaque in-app wallpaper used to leave the hidden native backdrop running.
+  it.each(['darwin', 'win32', 'linux'])(
+    'wallpaper coverage disables native material on %s',
+    (platform) => {
+      for (const isDark of [false, true]) {
+        const config = resolveVibrancyConfig('cindy', isDark, platform, {
+          getSystemVersion: () => '10.0.22631',
+          wallpaperCovered: true,
+        });
+        expect(config.vibrancy).toBeNull();
+        expect(config.backgroundColor).toBe(isDark ? '#1f1f1e' : '#f8f8f6');
+        if (platform === 'win32') expect(config.backgroundMaterial).toBe('none');
+      }
+    },
+  );
+
   beforeEach(() => {
     delete process.env.XDT_VIBRANCY_MATERIAL;
     delete process.env.XDT_BACKDROP_MATERIAL;
   });
+
+  it.each(['darwin', 'win32'])(
+    'restores %s material per window without cross-window coverage leaks',
+    (platform) => {
+      const coveredWindow = {} as BrowserWindow;
+      const loadingWindow = {} as BrowserWindow;
+      const options = { getSystemVersion: () => '10.0.22631' };
+      setWindowWallpaperCovered(coveredWindow, true);
+      for (const isDark of [false, true]) {
+        expect(
+          resolveWindowVibrancyConfig(coveredWindow, 'cindy', isDark, platform, options),
+        ).toEqual(resolveVibrancyConfig('default', isDark, platform, options));
+        expect(
+          resolveWindowVibrancyConfig(loadingWindow, 'cindy', isDark, platform, options),
+        ).toEqual(resolveVibrancyConfig('cindy', isDark, platform, options));
+      }
+      setWindowWallpaperCovered(coveredWindow, false);
+      expect(resolveWindowVibrancyConfig(coveredWindow, 'cindy', true, platform, options)).toEqual(
+        resolveVibrancyConfig('cindy', true, platform, options),
+      );
+    },
+  );
 
   afterEach(() => {
     vi.restoreAllMocks();

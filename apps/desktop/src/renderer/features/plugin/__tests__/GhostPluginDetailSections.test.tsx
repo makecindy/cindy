@@ -1,18 +1,49 @@
 /**
- * Regression coverage for Plugin detail section content and interaction behavior.
+ * Regression coverage for Plugin detail sections, optional Host task settings and interaction behavior.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import path from 'node:path';
+import type { InstalledGhost } from '../../../../shared/ghost';
+import type { PreparedPluginContribution } from '../../../../shared/pluginContributions';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
+vi.mock('@/hooks/useModelPricing', () => ({
+  useGatewayModelPricing: () => null,
+  useReferenceModelPricing: () => null,
+}));
+vi.mock('@/hooks/useProviders', () => ({
+  useProviders: () => ({ providers: [], providerOrder: [], loading: false }),
+}));
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: () => ({ providers: [], loading: false, unsupported: false }),
+}));
+vi.mock('@/hooks/useAgentCapabilities', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAgentCapabilities')>()),
+  useAgentCapabilities: () => ({ capabilities: null, loading: false }),
+}));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+vi.mock('@/hooks/useConnectedSource', () => ({
+  useConnectedSource: () => ({ hasConnectedSource: true, loading: false }),
+}));
+
 vi.mock('@/lib/toast', () => ({ toast: toastMocks }));
 vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
-  GhostSettingsWebview: () => <div data-testid="ghost-settings-webview" />,
+  GhostSettingsWebview: ({ account, reloadKey }: { account?: ReactNode; reloadKey?: number }) => (
+    <>
+      {account}
+      <div key={reloadKey} data-testid="ghost-settings-webview" />
+    </>
+  ),
 }));
+
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -49,19 +80,20 @@ vi.mock('react-i18next', () => ({
         'settings.ghosts.detail.openLocation': 'Open Install Location',
         'settings.ghosts.detail.expandInfoValue': `Show full ${String(options?.label ?? '')}`,
         'settings.ghosts.detail.collapseInfoValue': `Collapse ${String(options?.label ?? '')}`,
-        'settings.ghosts.detail.panelNotDocked': 'Not docked',
-        'settings.ghosts.detail.cindyPrefs.noModels': 'No models available',
+        'settings.ghosts.detail.panelDismissed': 'Not docked',
+        'settings.providers.openai.title': 'OpenAI',
+        'settings.providers.xd.title': 'Cindy AI',
         'settings.defaults.restore': 'Restore default',
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return labels[key] ?? key;
+      return labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
+    i18n: { language: 'en' },
   }),
 }));
 
 import type { GhostPermissionItem } from '../../../../shared/ghost';
-import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
 import {
   DetailsSection,
   GhostPluginDetailView,
@@ -70,7 +102,8 @@ import {
   ToolDescriptionChip,
   ToolsSection,
 } from '../GhostPluginDetailView';
-import type { GhostPluginDetail } from '../lib/ghostPluginViewModel';
+import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
+import { RemotePluginReadOnlyDetail } from '../RemotePluginReadOnlyDetail';
 
 const permissions: GhostPermissionItem[] = [
   {
@@ -109,6 +142,7 @@ const permissions: GhostPermissionItem[] = [
 
 const detail: GhostPluginDetail = {
   id: 'builtin.example',
+  ghostId: 'builtin.example',
   name: 'Example',
   description: 'Example plugin',
   version: '1.2.3',
@@ -119,14 +153,13 @@ const detail: GhostPluginDetail = {
   tabPanel: false,
   hasMainView: false,
   mainViewTitle: null,
-  hostCapability: null,
   author: 'XD',
   contents: ['code'],
   permissions: [],
   tools: [],
   hasSettingsUi: false,
-  cindyCapabilities: [],
-  hasErrand: false,
+  hasTaskPreferences: false,
+  hasPluginTasks: false,
   panelMinWidth: 320,
   installDir: '/tmp/cindy-brain/builtin.example',
   trust: {
@@ -138,6 +171,15 @@ const detail: GhostPluginDetail = {
   },
 };
 
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+
+    },
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -147,6 +189,323 @@ afterEach(() => {
 });
 
 describe('Ghost plugin detail sections', () => {
+  it('shows target shared counts without reading local personal usage for a remote installation', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const usageSummary = vi.fn();
+    Object.assign(window.electronAPI, { ghosts: { usageSummary } });
+    render(
+      <GhostPluginDetailView
+        remote
+        ghost={{ manifest: { id: detail.ghostId }, enabled: true } as InstalledGhost}
+        detail={detail}
+        marketItem={
+          {
+            sourceType: 'server',
+            scope: 'organization',
+            downloadStatistics: { requestCount: '1284' },
+          } as import('../../../../shared/pluginMarket').PluginMarketItem
+        }
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    expect(screen.getByText('1,284 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.usage.title')).toBeNull();
+    expect(usageSummary).not.toHaveBeenCalled();
+  });
+
+  it('keeps unknown older-Host details honest and renders no local configuration or file actions', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const { container } = render(<RemotePluginReadOnlyDetail
+      detail={{ id: '_ns__team__notes', name: 'Team notes', description: 'Installed on A' }}
+      notice={<p>Read only on A</p>} loading={false} failed={false} online
+      onBack={vi.fn()} onRetry={vi.fn()}
+    />);
+    expect(screen.getByRole('heading', { name: 'Team notes' })).toBeTruthy();
+    expect(screen.getByText('_ns__team__notes')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.remote.detailUnavailable')).toBeTruthy();
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.queryByText('settings.ghosts.detail.configurationTitle')).toBeNull();
+    expect(screen.queryByLabelText('Open Install Location')).toBeNull();
+    expect(container.textContent).not.toMatch(/undefined|unverified|已停用|Disabled/);
+  });
+  it('renders Host permission descriptions through the existing permission dialog and disables retry offline', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<RemotePluginReadOnlyDetail
+      detail={{ id: 'notes', name: 'Notes', description: '', permissions: [{ title: 'Read service', description: 'Only the declared service' }] }}
+      notice={<p>Offline</p>} loading={false} failed online={false}
+      onBack={vi.fn()} onRetry={vi.fn()}
+    />);
+    expect((screen.getByRole('button', { name: 'settings.ghosts.remote.refreshDetail' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions: Read service' }));
+    expect(within(await screen.findByRole('dialog')).getByText('Only the declared service')).toBeTruthy();
+  });
+  it('keeps installed use details focused on the plugin without a version and publishing section', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Only version changes', tools: [{ name: 'example', description: 'Example tool' }] }} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
+      onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.getByText(detail.description)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Tools' })).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.queryByText('Only version changes')).toBeNull();
+  });
+
+
+  it.each(['pending', 'approved', 'rejected', 'cancelled'] as const)(
+    'hides a submission that cannot be repeated for the %s version without showing publishing details', (status) => {
+      vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+      const publish = vi.fn();
+      const preview: PreparedPluginContribution = {
+        preparedId: 'preview', instanceId: 'instance', pluginId: 'plugin', ghostId: 'example',
+        name: detail.name, description: detail.description, version: '1.0.0', sha256: 'a'.repeat(64),
+        sizeBytes: 100, releaseNotes: 'Complete package release notes', expiresAt: '2026-10-16T00:00:00.000Z',
+        preflight: {
+          subject: { authority: 'https://auth.example', membershipId: 'member' },
+          queriedAt: '2026-10-16T00:00:00.000Z', policyVersion: 2,
+          target: { pluginId: 'plugin', ghostId: 'example', version: '1.0.0', expectedRelease: null },
+          pendingRelease: status === 'pending' ? { releaseId: 'release', version: '1.0.0' } : null,
+          blockers: [{ code: 'VERSION_ALREADY_SUBMITTED', message: 'Change the version before publishing again' }],
+          actions: { canSubmit: false },
+        },
+      };
+      const view = (prepared: PreparedPluginContribution) => <GhostPluginDetailView
+        ghost={null} detail={detail} panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()}
+        onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
+        onContribute={publish} publishingPreview={prepared}
+        contributionUnavailableReason={prepared.preflight?.actions.canSubmit ? undefined : 'Change the version before publishing again'} />;
+      const { rerender } = render(view(preview));
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
+      expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+      expect(screen.queryByText('Change the version before publishing again')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.contribution.versionConsumedHint')).toBeNull();
+      expect(screen.queryByText('Complete package release notes')).toBeNull();
+      expect(publish).not.toHaveBeenCalled();
+      // A previous cancelled/rejected/approved result does not hide a new eligible version.
+      rerender(view({ ...preview, version: '1.1.0', preflight: { ...preview.preflight!, target: { ...preview.preflight!.target, version: '1.1.0' }, pendingRelease: null, blockers: [], actions: { canSubmit: true } } }));
+      const submit = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
+      expect(submit).toHaveProperty('disabled', false);
+      fireEvent.click(submit);
+      expect(publish).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('keeps the local publishing entry in the use header without a publishing section', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const publish = vi.fn();
+    render(<GhostPluginDetailView ghost={null} detail={detail} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
+      onContribute={publish} />);
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }).closest('header')).toBeTruthy();
+    const chat = screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' });
+    expect(within(chat.closest('.plugin-detail-actions') as HTMLElement).getByRole('switch')).toBeTruthy();
+    expect(screen.getByText('Example plugin')).toBeTruthy();
+    const action = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
+    fireEvent.click(action);
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
+  it('does not advertise host login for a locally imported unverified GitHub plugin', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const verify = vi.fn();
+    Object.assign(window.electronAPI, { gitContext: { githubConnection: verify } });
+    render(
+      <GhostPluginDetailView
+        ghost={
+          { manifest: { id: 'cindy-github' }, enabled: true, trust: { level: 'unverified' } } as InstalledGhost
+        }
+        detail={{ ...detail, id: 'cindy-github', ghostId: 'cindy-github', hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+    expect(verify).not.toHaveBeenCalled();
+  });
+  it.each([
+    { layout: 'legacy', connection: { status: 'missing' } },
+    { layout: 'root', connection: { status: 'auth', source: 'token' } },
+  ])(
+    'connects GitHub in $layout layout and reloads settings after authorization',
+    async ({ layout, connection }) => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      Object.assign(window.electronAPI, {
+        gitContext: {
+          githubConnection: async () => connection,
+          onGithubConnected: () => () => {},
+          githubSetupStatus: async () => ({ phase: 'connected' }),
+          startGithubSetup: async () => ({ phase: 'connected' }),
+        },
+      });
+      const ghost: InstalledGhost = {
+        manifest: { schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip',
+          id: 'cindy-github', name: 'GitHub', version: '1.0.0', entry: 'main.js', settingsHtml: 'settings.html' },
+        dir: path.join('plugins', ...(layout === 'root' ? ['_ns', '_root'] : []), 'cindy-github'),
+        namespace: null,
+        enabled: true,
+        approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+        trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+      };
+      const { unmount } = render(
+        <GhostPluginDetailView
+          ghost={ghost}
+          detail={toGhostPluginDetail(ghost)}
+          panelStatus={null}
+          onBack={vi.fn()}
+          onToggle={vi.fn()}
+          onUse={vi.fn()}
+          onUpdate={vi.fn()}
+          onUpdateFromFile={vi.fn()}
+          onUninstall={vi.fn()}
+          toggleDisabled={false}
+        />,
+      );
+      const previousSettings = screen.getByTestId('ghost-settings-webview');
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.stages.login.title'));
+      fireEvent.click(await screen.findByText('ccAgent.gitContext.pr.setup.connect'));
+      await waitFor(() =>
+        expect(screen.getByTestId('ghost-settings-webview')).not.toBe(previousSettings),
+      );
+      expect(screen.getByText('ccAgent.gitContext.pr.setup.done')).toBeTruthy();
+      unmount();
+    },
+  );
+  it('places Background Tasks after settings and before Tools for plugins declaring hiddenTasks', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const listBackgroundTasks = vi.fn(async () => ({ items: [
+      { taskId: 'bg-1', title: 'Hidden grading', status: 'active' as const, updatedAt: Date.now(), running: false },
+    ] }));
+    Object.assign(window.electronAPI, { ghosts: { listBackgroundTasks, revealBackgroundTask: vi.fn() } });
+    const ghost = { manifest: { agent: { tasks: true, hiddenTasks: true } }, enabled: true, taskCapabilityApproved: true } as InstalledGhost;
+    render(<GhostPluginDetailView ghost={ghost} detail={{ ...detail, tools: [{ name: 'render', description: 'Render.' }] }} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(await screen.findByText('Hidden grading')).toBeTruthy();
+    expect(listBackgroundTasks).toHaveBeenCalledWith(detail.id);
+    const heading = screen.getByRole('heading', { name: 'settings.ghosts.backgroundTasks.title' });
+    const tools = screen.getByRole('heading', { name: 'Tools' });
+    expect(heading.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Outside a router the open action is omitted; showing in the task list stays available.
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.backgroundTasks.open' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.backgroundTasks.reveal' })).toBeTruthy();
+  });
+  it('lets the user retry task permission, disables duplicate clicks, and hides after approval', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    let finish!: (value: { granted: boolean }) => void;
+    const requestTaskApproval = vi.fn(() => new Promise<{ granted: boolean }>(resolve => { finish = resolve; }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { tasks: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { taskCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    const button = screen.getByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' }) as HTMLButtonElement;
+    fireEvent.click(button); fireEvent.click(button);
+    expect(requestTaskApproval).toHaveBeenCalledOnce();
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id);
+    expect(button.disabled).toBe(true);
+    finish({ granted: false });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+  });
+  it('uses the shared Cindy Switch for the plugin enabled control', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const onToggle = vi.fn();
+    const view = (disabled = false) => (
+      <GhostPluginDetailView
+        ghost={null}
+        detail={detail}
+        panelStatus="Docked"
+        onBack={vi.fn()}
+        onToggle={onToggle}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={disabled}
+      />
+    );
+    const { rerender } = render(view());
+
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.ghosts.enableAria',
+    });
+    expect(toggle.className).toContain('cindy-switch');
+    expect(toggle.className).toContain('data-[state=checked]:bg-[var(--switch-track-on)]');
+    expect(toggle.firstElementChild?.className).toContain(
+      'data-[state=checked]:bg-[var(--switch-thumb-on)]',
+    );
+    fireEvent.click(toggle);
+    expect(onToggle.mock.calls).toEqual([[false]]);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle.mock.calls).toEqual([[false], [false]]);
+    rerender(view(true));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders a remote disabled notice without a configuration heading or local settings', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    render(
+      <GhostPluginDetailView
+        remote
+        remoteConfiguration={<p>Enable this plugin before configuring.</p>}
+        ghost={null}
+        detail={{ ...detail, enabled: false, hasSettingsUi: true }}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
+      />,
+    );
+
+    expect(screen.getByText('Enable this plugin before configuring.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'settings.ghosts.detail.configurationTitle' })).toBeNull();
+    expect(screen.queryByTestId('ghost-settings-webview')).toBeNull();
+  });
+
   it('shows the main-view preference alongside the plugin settings UI', () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -325,36 +684,7 @@ describe('Ghost plugin detail sections', () => {
     expect(topBarFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
-    expect(detailActions?.className).toContain('flex-nowrap');
-  });
-
-  it('renders an enabled Host capability as a conversation action', () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const onUse = vi.fn();
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, canUse: false, hostCapability: 'ios-simulator' }}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={onUse}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' }));
-    expect(onUse).toHaveBeenCalledTimes(1);
+    expect(detailActions?.className).toContain('flex-wrap');
   });
 
   it('routes a projected detail icon failure to market recovery', () => {
@@ -476,7 +806,7 @@ describe('Ghost plugin detail sections', () => {
         ).disabled,
       ).toBe(true);
 
-      // 启用区域是单个 switch 按钮；点文字或轨道都由同一交互处理。
+      // 共享 Switch 和关联文字标签遵循同一禁用门控。
       const toggle = screen.getByRole('switch', {
         name: 'settings.ghosts.enableAria',
       }) as HTMLButtonElement;
@@ -549,13 +879,11 @@ describe('Ghost plugin detail sections', () => {
         disconnect() {}
       },
     );
-    // packaged 构建上 Main 会对 cindy- / filo- / xd- 前缀直接 GHOST_ID_RESERVED,
-    // 把这个必失败动作留在菜单里等于让用户选完文件才吃错误。
     // vitest 默认 DEV=true,这里显式模拟打包产物(DEV=false)。
     vi.stubEnv('DEV', false);
     // 显式标注类型:JSX prop 位置的内联展开会让 tsc 现推一个巨大的匿名类型,
     // desktop 的 typecheck 本就贴着 CI 的 4GB 堆上限跑,能省则省。
-    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art' };
+    const officialDetail: GhostPluginDetail = { ...detail, id: 'cindy-art', ghostId: 'cindy-art' };
     render(
       <GhostPluginDetailView
         ghost={null}
@@ -584,42 +912,48 @@ describe('Ghost plugin detail sections', () => {
     vi.unstubAllEnvs();
   });
 
-  it('keeps the local .cindy update entry for ordinary third-party plugins', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    // 同样是打包产物,但非保留前缀:Main 不会拒,入口必须留着。
-    vi.stubEnv('DEV', false);
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={detail}
-        panelStatus={null}
-        onBack={vi.fn()}
-        onToggle={vi.fn()}
-        onUse={vi.fn()}
-        onUpdate={vi.fn()}
-        onUpdateFromFile={vi.fn()}
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
+  it.each(['builtin.example', 'xd-ordinary', 'filo-ordinary'])(
+    'keeps the local .cindy update entry actionable for ordinary root %s',
+    async (ghostId) => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+      vi.stubEnv('DEV', false);
+      const onUpdateFromFile = vi.fn();
+      const ordinaryDetail: GhostPluginDetail = { ...detail, id: ghostId, ghostId };
+      render(
+        <GhostPluginDetailView
+          ghost={null}
+          detail={ordinaryDetail}
+          panelStatus={null}
+          onBack={vi.fn()}
+          onToggle={vi.fn()}
+          onUse={vi.fn()}
+          onUpdate={vi.fn()}
+          onUpdateFromFile={onUpdateFromFile}
+          onUninstall={vi.fn()}
+          toggleDisabled={false}
+        />,
+      );
 
-    fireEvent.pointerDown(
-      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
-      { button: 0, ctrlKey: false },
-    );
-    expect(
-      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
-    ).toBeTruthy();
-    expect(screen.getByRole('separator')).toBeTruthy();
-    vi.unstubAllEnvs();
-  });
+      fireEvent.pointerDown(
+        screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+        { button: 0, ctrlKey: false },
+      );
+      const updateItem = screen.getByRole('menuitem', {
+        name: 'settings.ghosts.detail.updateFromFile',
+      });
+      expect(screen.getByRole('separator')).toBeTruthy();
+      fireEvent.click(updateItem);
+      expect(onUpdateFromFile).toHaveBeenCalledOnce();
+      vi.unstubAllEnvs();
+    },
+  );
 
   it('renders an export menu item only when onExport is provided', async () => {
     vi.stubGlobal(
@@ -677,426 +1011,83 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.getByText('By Cindy').className).toContain('truncate');
   });
 
-  it('uses each Cindy capability catalog in the responsive control group', () => {
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: {},
-            image: {
-              options: [
-                {
-                  id: 'image-default',
-                  label: 'Image Default',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-                {
-                  id: 'image-option',
-                  label: 'Image Option',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-default',
-                label: 'Image Default',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            imageEdit: {
-              options: [
-                {
-                  id: 'image-edit',
-                  label: 'Image Edit',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-                {
-                  id: 'image-edit-option',
-                  label: 'Image Edit Option',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-edit',
-                label: 'Image Edit',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            video: {
-              options: [{ id: 'video-default', label: 'Video Default' }],
-              defaultModel: { id: 'video-default', label: 'Video Default' },
-            },
-            videoEdit: {
-              options: [{ id: 'video-edit', label: 'Video Edit' }],
-              defaultModel: { id: 'video-edit', label: 'Video Edit' },
-            },
-          }),
-          setCindyPref: vi.fn(),
-        },
+  it.each([
+    { name: 'quick answers only', manifest: { cindy: { text: ['oneshot'] } }, taskRows: false, showCard: true },
+    { name: 'plugin tasks', manifest: { agent: { tasks: true } }, taskRows: true, showCard: true },
+    { name: 'legacy errands', manifest: { agent: { errand: true } }, taskRows: true, showCard: true },
+    { name: 'workspaces', manifest: { workspace: true }, taskRows: true, showCard: true },
+    { name: 'explicitly enabled tasks', manifest: { agent: { tasks: true }, showTaskPreferences: true }, taskRows: true, showCard: true },
+    { name: 'opted-out tasks', manifest: { agent: { tasks: true }, showTaskPreferences: false }, taskRows: true, showCard: false },
+    { name: 'opted-out quick answers', manifest: { cindy: { text: ['oneshot'] }, showTaskPreferences: false }, taskRows: false, showCard: false },
+    { name: 'opted-out legacy errands', manifest: { agent: { errand: true }, showTaskPreferences: false }, taskRows: true, showCard: false },
+    { name: 'opted-out workspaces', manifest: { workspace: true, showTaskPreferences: false }, taskRows: true, showCard: false },
+  ])('respects Host task card visibility for $name', ({ manifest, taskRows, showCard }) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    Object.assign(window.electronAPI, {
+      ghosts: {
+        errandPrefsSync: () => ({ config: {}, auxiliaryModelLabel: 'Grok 4.6' }),
+        setErrandConfig: vi.fn(async () => ({ config: {} })),
       },
+      showOpenDirectoryDialog: vi.fn(),
     });
-
-    const { container } = render(
-      <CindyCapabilityPrefs
-        ghostId="builtin.example"
-        capabilities={['image.generate', 'image.edit']}
-        appearance="plugin"
-      />,
-    );
-
-    expect(container.querySelector('.cindy-capability-prefs')).toBeTruthy();
-    expect(container.querySelector('.cindy-capability-row')).toBeTruthy();
-    const pickers = screen.getAllByRole('combobox');
-    expect(pickers).toHaveLength(2);
-    fireEvent.click(pickers[0]!);
-    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
-    expect(screen.getByText('Image Option')).toBeTruthy();
-    fireEvent.click(pickers[0]!);
-    fireEvent.click(pickers[1]!);
-    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
-    expect(screen.getByText('Image Edit Option')).toBeTruthy();
-    expect(pickers[0]!.className).toContain('max-w-[60%]');
-  });
-
-  // 2026-08-05:快问快答钉档扩展为目录全量文本模型——富列表选择器(供应商
-  // 分组 / 折扣与订阅徽标 / 搜索),身份卡声明偏好时"跟随默认"行如实展示。
-  it('text capability renders the rich pin picker with provider groups and budget badge', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip', id: 'model-plugin',
+        name: 'Model plugin', version: '1.0.0', entry: 'main.js',
+        ...(manifest as Partial<InstalledGhost['manifest']>),
       },
-    );
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: {},
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  agentSuffix: 'Codex',
-                  budget: true,
-                  subscription: false,
-                },
-                {
-                  id: 'cat:openai:codex:gpt-5.5',
-                  label: 'Codex · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'codex',
-                  modelId: 'gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Codex',
-                  budget: false,
-                  subscription: true,
-                },
-                {
-                  id: 'cat:openai:codex:chatgpt/gpt-5.5',
-                  label: 'Codex · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'codex',
-                  modelId: 'chatgpt/gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Codex',
-                  budget: false,
-                  subscription: true,
-                },
-                {
-                  id: 'cat:openai:claude-code:chatgpt/gpt-5.5',
-                  label: 'Claude Code · GPT 5.5 · OpenAI',
-                  group: 'OpenAI',
-                  providerId: 'openai',
-                  agentKind: 'claude-code',
-                  modelId: 'chatgpt/gpt-5.5',
-                  modelName: 'GPT 5.5',
-                  agentSuffix: 'Claude Code',
-                  budget: false,
-                  subscription: true,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              declaredModel: { id: 'cat:xd:codex:codex/gpt-5.5', label: 'codex/gpt-5.5' },
-            },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
+      dir: '/plugins/model-plugin',
+      namespace: null,
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000002' },
+      ...(taskRows ? { taskCapabilityApproved: true as const } : {}),
+      trust: detail.trust,
+    };
+    const projected = toGhostPluginDetail(ghost);
+    expect(projected).toMatchObject({ hasTaskPreferences: showCard, hasPluginTasks: taskRows });
     render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
+      <GhostPluginDetailView
+        ghost={ghost}
+        detail={projected}
+        panelStatus={null}
+        onBack={vi.fn()}
+        onToggle={vi.fn()}
+        onUse={vi.fn()}
+        onUpdate={vi.fn()}
+        onUpdateFromFile={vi.fn()}
+        onUninstall={vi.fn()}
+        toggleDisabled={false}
       />,
     );
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
-    );
-
-    const agentList = await screen.findByRole('listbox');
-    // 第一层只显示自动选择和 Agent，不混入模型排列组合。
-    expect(within(agentList).queryByText('GW')).toBeNull();
-    expect(within(agentList).queryByText('OpenAI')).toBeNull();
-    const defaultRow = within(agentList).getAllByRole('option')[0]!;
-    expect(defaultRow.textContent).toContain(
-      'settings.ghosts.detail.cindyPrefs.defaultOptionDeclared',
-    );
-    fireEvent.click(agentList.querySelector('[data-agent-kind="codex"]')!);
-
-    let codexModels = await screen.findByRole('listbox');
-    expect(within(codexModels).getByText('GW')).toBeTruthy();
-    expect(within(codexModels).getByText('OpenAI')).toBeTruthy();
-    expect(codexModels.querySelector('[data-pin-id*="claude-code"]')).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.auxiliaryModels.backToAgents' }),
-    );
-    const agentListAgain = await screen.findByRole('listbox');
-    fireEvent.click(agentListAgain.querySelector('[data-agent-kind="claude-code"]')!);
-    const claudeModels = await screen.findByRole('listbox');
-    expect(claudeModels.querySelector('[data-pin-id*="claude-code"]')).toBeTruthy();
-    expect(claudeModels.querySelector('[data-pin-id*="openai:codex:"]')).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.auxiliaryModels.backToAgents' }),
-    );
-    fireEvent.click(
-      (await screen.findByRole('listbox')).querySelector('[data-agent-kind="codex"]')!,
-    );
-    codexModels = await screen.findByRole('listbox');
-    // 同 Agent 的同名别名折叠；另一个 Agent 的同名模型不混在本层。
-    const budgetRow = within(codexModels).getByText('GPT 5.5 折扣').closest('button')!;
-    expect(within(budgetRow).getByText('settings.ghosts.detail.cindyPrefs.budgetBadge')).toBeTruthy();
-    const plainRow = within(codexModels).getByText('GPT 5.5', { exact: true }).closest('button')!;
-    expect(
-      within(plainRow).queryByText('settings.ghosts.detail.cindyPrefs.budgetBadge'),
-    ).toBeNull();
-    expect(within(plainRow).getByText('settings.providers.models.subscription')).toBeTruthy();
-    // 点行钉档:写回 cat: 编码钉值。
-    fireEvent.click(plainRow);
-    expect(setCindyPref).toHaveBeenCalledWith(
-      'xdt-knowledge',
-      'text.oneshot',
-      'cat:openai:codex:gpt-5.5',
-    );
-    vi.unstubAllEnvs();
+    expect(screen.queryByText('settings.ghosts.detail.cindyPrefs.title')).toBeNull();
+    if (!showCard) {
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.title')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.model')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.permission')).toBeNull();
+      expect(screen.queryByText('settings.ghosts.detail.errandPrefs.workdir')).toBeNull();
+      return;
+    }
+    expect(screen.getByText('settings.ghosts.detail.errandPrefs.title')).toBeTruthy();
+    expect(screen.getAllByText('settings.ghosts.detail.errandPrefs.model')).toHaveLength(1);
+    expect(screen.getByText(`settings.ghosts.detail.errandPrefs.${taskRows ? 'desc' : 'descModelOnly'}`)).toBeTruthy();
+    expect(Boolean(screen.queryByText('settings.ghosts.detail.errandPrefs.permission'))).toBe(taskRows);
+    expect(Boolean(screen.queryByText('settings.ghosts.detail.errandPrefs.workdir'))).toBe(taskRows);
   });
 
-  // 2026-08-05 review:存量轻量档位钉(目录扩展前的合法钉值)回显友好名,
-  // 不当 stale 露原始 id。
-  it('text capability shows a friendly label for a legacy utility-profile pin', () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+  it('does not show the model card for media-only plugins (media always follows the system default)', () => {
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip', id: 'art', name: 'Art',
+        version: '1.0.0', entry: 'main.js', cindy: { image: ['generate', 'edit'], embed: ['text'] },
+        showTaskPreferences: true,
       },
-    );
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'text.oneshot': 'litellm-kimi-k2.6' },
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  budget: true,
-                  subscription: false,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              utilityProfiles: [{ id: 'litellm-kimi-k2.6', label: 'kimi-k2.6 · Gateway' }],
-            },
-          }),
-          setCindyPref: vi.fn(async () => ({ overrides: {} })),
-        },
-      },
-    });
-
-    render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
-      />,
-    );
-    const trigger = screen.getByRole('button', {
-      name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot',
-    });
-    expect(trigger.textContent).toContain('kimi-k2.6 · Gateway');
-    expect(trigger.textContent).not.toContain('litellm-kimi-k2.6');
-    vi.unstubAllEnvs();
-  });
-
-  // 2026-08-05 review:stale 目录钉(模型已下架)点中 = 当前值,只收起不回写
-  // (回写必被白名单拒成「操作失败」);清钉走「跟随默认」行。
-  it('stale catalog pin row closes without rewriting; clearing goes through the default row', async () => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'text.oneshot': 'cat:gone:codex:retired-model' },
-            image: { options: [], defaultModel: null },
-            imageEdit: { options: [], defaultModel: null },
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-            text: {
-              options: [
-                {
-                  id: 'cat:xd:codex:codex/gpt-5.5',
-                  label: 'Codex · GPT 5.5 折扣 · GW',
-                  group: 'GW',
-                  providerId: 'xd',
-                  agentKind: 'codex',
-                  modelId: 'codex/gpt-5.5',
-                  modelName: 'GPT 5.5 折扣',
-                  budget: true,
-                  subscription: false,
-                },
-              ],
-              defaultModel: { id: 'codex-gpt-5.4-mini', label: 'gpt-5.4-mini · Codex' },
-              utilityProfiles: [],
-            },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
-    render(
-      <CindyCapabilityPrefs
-        ghostId="xdt-knowledge"
-        capabilities={['text.oneshot']}
-        appearance="plugin"
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
-    );
-    const agentList = await screen.findByRole('listbox');
-    fireEvent.click(agentList.querySelector('[data-agent-kind="codex"]')!);
-    const listbox = await screen.findByRole('listbox');
-    // stale 行如实显示原值且为当前选中;点它不回写。
-    const staleRow = within(listbox).getByText('cat:gone:codex:retired-model').closest('button')!;
-    expect(staleRow.getAttribute('aria-selected')).toBe('true');
-    fireEvent.click(staleRow);
-    expect(setCindyPref).not.toHaveBeenCalled();
-
-    // 重新展开,点「跟随默认」清钉(model=null)。
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.ghosts.detail.cindyPrefs.cap.text.oneshot' }),
-    );
-    const reopened = await screen.findByRole('listbox');
-    fireEvent.click(within(reopened).getAllByRole('option')[0]!);
-    expect(setCindyPref).toHaveBeenCalledWith('xdt-knowledge', 'text.oneshot', null);
-    vi.unstubAllEnvs();
-  });
-
-  it('keeps a reset entry for a stale media override when the catalog has no models', async () => {
-    const setCindyPref = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        ghosts: {
-          cindyPrefsSync: () => ({
-            overrides: { 'video.generate': 'retired-video-model' },
-            image: {
-              options: [
-                {
-                  id: 'image-default',
-                  label: 'Image Default',
-                  providerId: 'xd',
-                  providerName: 'Cindy AI',
-                },
-              ],
-              defaultModel: {
-                id: 'image-default',
-                label: 'Image Default',
-                providerId: 'xd',
-                providerName: 'Cindy AI',
-              },
-            },
-            imageEdit: {
-              options: [{ id: 'image-edit', label: 'Image Edit' }],
-              defaultModel: { id: 'image-edit', label: 'Image Edit' },
-            },
-            // 目录没给视频清单 = 能力暂不可用。
-            video: { options: [], defaultModel: null },
-            videoEdit: { options: [], defaultModel: null },
-          }),
-          setCindyPref,
-        },
-      },
-    });
-
-    const { container } = render(
-      <CindyCapabilityPrefs
-        ghostId="builtin.example"
-        capabilities={['image.generate', 'video.generate', 'video.edit']}
-        appearance="plugin"
-      />,
-    );
-
-    // 三行都在(插件确实申请了这三项能力),但只有图像那行给下拉。
-    expect(container.querySelectorAll('.cindy-capability-row')).toHaveLength(3);
-    expect(screen.getAllByRole('combobox')).toHaveLength(1);
-
-    const empties = container.querySelectorAll('.cindy-capability-empty');
-    expect(empties).toHaveLength(1);
-    expect(empties[0]!.textContent).toBe('No models available');
-    expect(empties[0]!.className).toContain('text-[var(--text-tertiary)]');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Restore default' }));
-    await waitFor(() => {
-      expect(setCindyPref).toHaveBeenCalledWith('builtin.example', 'video.generate', null);
-    });
+      dir: '/plugins/art',
+      namespace: null,
+      enabled: true,
+      approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000003' },
+      trust: detail.trust,
+    };
+    expect(toGhostPluginDetail(ghost)).toMatchObject({ hasTaskPreferences: false, hasPluginTasks: false });
   });
 
   it('shows only the Tool description after an explicit click', async () => {
@@ -1286,4 +1277,15 @@ describe('Ghost plugin detail sections', () => {
       within(dialog).getByText((_, element) => element?.textContent === 'scope.read\nscope.write'),
     ).toBeTruthy();
   });
+});
+
+it('adds shared counts to installed detail metadata while preserving author and version', () => {
+  const { container } = render(<GhostPluginMetadata author="Cindy" version="1.7.5" marketItem={{
+    sourceType: 'server', scope: 'organization',
+    downloadStatistics: { requestCount: '1284' },
+    usageStatistics: { usageCount: '8932', usageCountLast7Days: '12', asOf: '2026-10-13T00:00:00Z' },
+  } as import('../../../../shared/pluginMarket').PluginMarketItem} />);
+  expect(container.textContent).toContain('By Cindy·v1.7.5');
+  expect(container.textContent).toContain('1,284 settings.ghosts.usage.downloadsValue');
+  expect(container.textContent).toContain('8,932 settings.ghosts.usage.usesValue');
 });

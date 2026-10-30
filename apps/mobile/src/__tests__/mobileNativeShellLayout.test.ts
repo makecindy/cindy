@@ -54,6 +54,23 @@ describe('mobileNativeShellLayout', () => {
     expect(layout.contentMaxWidth).toBe(390);
   });
 
+  it.each([100, 80, 79, 35, 34, 4, 0, 700])(
+    'keeps the absolute composer above the keyboard at %s pt of actual overlap',
+    (keyboardHeight) => {
+      const layout = buildSessionNativeShellLayout({
+        attachmentPickerOpen: false,
+        keyboardHeight,
+        keyboardVisible: keyboardHeight > 0,
+        paletteOpen: false,
+        platform: 'ios',
+        safeAreaBottomInset: 34,
+        screenHeight: 844,
+      });
+      // 真实页面的绝对 bottom + 内层 safe area 是输入区距窗口底的总留白。
+      expect(layout.keyboardBottomInset + 34).toBe(Math.max(keyboardHeight, 34));
+    },
+  );
+
   it('caps palettes independently from the composer so message history remains mounted', () => {
     const layout = buildSessionNativeShellLayout({
       attachmentPickerOpen: false,

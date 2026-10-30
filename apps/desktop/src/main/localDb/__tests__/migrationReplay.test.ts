@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
 import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import { initializeTaskTagPresets } from '../taskTagPresets';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -102,6 +103,253 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it.each(['missing', 'legacy', 'partial'])(
+    'replays remote report persistence with %s Worker schema',
+    (shape) => {
+      const { db, cleanup } = createTempDb();
+      try {
+        // Later migrations need the sessions and task tables these Worker fixtures omit.
+        db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+        if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
+        db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+        db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
+        // These reduced historical fixtures still need the group table present since schema 83.
+        db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+        db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+        const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
+        expect(result.applied.map((migration) => migration.seq)).toEqual([
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136,
+        ]);
+        expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
+        expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
+        expect(columnNames(db, 'sessions')).toContain('notifications_muted');
+        expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+        expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
+        expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
+        expect(tableExists(db, 'plugin_usage_events')).toBe(true);
+        expect(columnNames(db, 'plugin_usage_events')).toContain('entry_kind');
+        expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
+        expect(tableExists(db, 'orca_remote_opens')).toBe(true);
+        if (shape !== 'missing') {
+        expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
+        expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
+      }
+      } finally {
+        cleanup();
+      }
+    },
+  );
+  it('keeps existing tool usage when upgrading the invocation ledger', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec(readFileSync(path.join(drizzleDir(), '0128_demonic_odin.sql'), 'utf-8'));
+      db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY)');
+      db.prepare('INSERT INTO plugin_usage_subjects (id,source_kind,ghost_id,display_name,recording_started_at) VALUES (?,?,?,?,?)')
+        .run('subject', 'manual', 'plugin', 'Plugin', 100);
+      db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')
+        .run('legacy-tool', 'subject', 0, 100, 'run');
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 131 });
+      expect(db.prepare('SELECT call_id,subject_id,occurred_at,entry_kind FROM plugin_usage_events').all()).toEqual([
+        { call_id: 'legacy-tool', subject_id: 'subject', occurred_at: 100, entry_kind: 'tool' },
+      ]);
+    } finally { cleanup(); }
+  });
+  it('rolls back migration 131 on failure and safely retries from schema 130', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      const tempDrizzle = createTempDrizzleDir();
+      try {
+        copyFileSync(
+          path.join(drizzleDir(), '0131_amused_puff_adder.sql'),
+          path.join(tempDrizzle.dir, '0131_amused_puff_adder.sql'),
+        );
+        db.exec(`
+          CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+          INSERT INTO migration_meta (key, value) VALUES ('schema_version', '130');
+          CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+          INSERT INTO migration_history VALUES (130, '0130_parallel_devos.sql', 'fixture-hash', 1);
+          CREATE TABLE sessions (id TEXT PRIMARY KEY);
+          INSERT INTO sessions (id) VALUES ('existing-session');
+          CREATE TRIGGER fail_schema_version_131
+          BEFORE UPDATE ON migration_meta
+          WHEN NEW.key = 'schema_version' AND NEW.value = '131'
+          BEGIN
+            SELECT RAISE(ABORT, 'injected schema version failure');
+          END;
+        `);
+
+        expect(() => runMigrationReplay(db, { drizzleDir: tempDrizzle.dir })).toThrow(
+          'injected schema version failure',
+        );
+        expect(columnNames(db, 'sessions')).not.toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('130');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(0);
+
+        db.exec('DROP TRIGGER fail_schema_version_131');
+        const retry = runMigrationReplay(db, { drizzleDir: tempDrizzle.dir });
+
+        expect(retry.applied.map((migration) => migration.seq)).toEqual([131]);
+        expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+        expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('131');
+        expect(db.prepare('SELECT count(*) FROM migration_history WHERE seq = 131').pluck().get()).toBe(1);
+        expect(db.prepare('SELECT id FROM sessions').all()).toEqual([{ id: 'existing-session' }]);
+      } finally {
+        tempDrizzle.cleanup();
+      }
+    } finally { cleanup(); }
+  });
+  it('adds nullable sessions.hidden_at to a populated database without touching existing tasks', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, pinned_at INTEGER, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Visible', 'active', NULL, 1), ('b', 'Pinned', 'archived', 5, 2);");
+      db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 125 });
+      expect(result.applied.map((migration) => migration.seq)[0]).toBe(126);
+      expect(columnNames(db, 'sessions')).toContain('hidden_at');
+      expect(db.prepare('SELECT id, title, status, pinned_at, updated_at, hidden_at FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'a', title: 'Visible', status: 'active', pinned_at: null, updated_at: 1, hidden_at: null },
+        { id: 'b', title: 'Pinned', status: 'archived', pinned_at: 5, updated_at: 2, hidden_at: null },
+      ]);
+      db.prepare("UPDATE sessions SET hidden_at = 9 WHERE id = 'a'").run();
+      expect(db.prepare("SELECT count(*) AS n FROM sessions WHERE hidden_at IS NULL").get()).toEqual({ n: 1 });
+    } finally { cleanup(); }
+  });
+  it('defaults sessions.notifications_muted to unmuted on a populated database', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Loud', 'active', 1), ('b', 'Archived', 'archived', 2);");
+      db.exec("CREATE TABLE plugin_usage_events (call_id TEXT PRIMARY KEY)");
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
+      expect(result.applied.map((migration) => migration.seq)).toEqual([
+        130, 131, 132, 133, 134, 135, 136,
+      ]);
+      expect(columnNames(db, 'sessions')).toContain('notifications_muted');
+      // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
+      expect(db.prepare('SELECT id, notifications_muted FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'a', notifications_muted: 0 },
+        { id: 'b', notifications_muted: 0 },
+      ]);
+      db.prepare("UPDATE sessions SET notifications_muted = 1 WHERE id = 'a'").run();
+      expect(db.prepare('SELECT id FROM sessions WHERE notifications_muted = 0').all()).toEqual([{ id: 'b' }]);
+    } finally { cleanup(); }
+  });
+  it('commits the complete fresh schema and task presets in one outer transaction', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.transaction(() => {
+        runMigrationReplay(db, { drizzleDir: drizzleDir() });
+        initializeTaskTagPresets(db);
+      })();
+      expect(
+        db.prepare("SELECT value FROM migration_meta WHERE key='schema_version'").pluck().get(),
+      ).toBe(String(maxMigrationSeq()));
+      expect(
+        db.prepare("SELECT count(*) FROM task_tags WHERE id LIKE 'preset:%'").pluck().get(),
+      ).toBe(6);
+      expect(db.prepare('SELECT count(*) FROM task_tags').pluck().get()).toBe(12);
+    } finally {
+      cleanup();
+    }
+  });
+  it('adds runtime provenance without certifying or changing legacy context values', () => {
+    const { db, cleanup } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-context-provenance-'));
+    try {
+      db.exec(`CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER, context_window INTEGER);
+        INSERT INTO sessions VALUES ('legacy', 140500, 1050000);`);
+      const migration = listMigrations(drizzleDir()).find((item) => item.fileName.endsWith('_context_window_runtime.sql'))!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+      runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+      expect(db.prepare('SELECT * FROM sessions').get()).toEqual({
+        id: 'legacy', context_tokens: 140500, context_window: 1050000, context_window_runtime: null,
+      });
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
+  it.each(['missing table', 'legacy table', 'existing column'] as const)(
+    'replays the scheduled Harness migration safely with %s',
+    (state) => {
+      const { db, cleanup } = createTempDb();
+      const stagedDir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-scheduled-harness-'));
+      try {
+        db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+        const migration = listMigrations(drizzleDir()).find((item) => item.seq === 104)!;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        mkdirSync(path.join(stagedDir, 'scripts'));
+        copyFileSync(migration.tsScriptPath!, path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)));
+        if (state !== 'missing table') {
+          db.exec(`CREATE TABLE schedules (id TEXT PRIMARY KEY, agent_kind TEXT, model TEXT);
+            INSERT INTO schedules VALUES ('legacy-schedule', 'codex', 'legacy-model');`);
+          if (state === 'existing column') {
+            db.exec(`ALTER TABLE schedules ADD model_agent_kind TEXT;
+              UPDATE schedules SET model_agent_kind = 'pi';`);
+          }
+        }
+        for (let replay = 0; replay < 2; replay += 1) {
+          const result = runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: 103 });
+          expect(result.applied.map((item) => item.seq)).toEqual([104]);
+          if (state === 'missing table') {
+            expect(tableExists(db, 'schedules')).toBe(false);
+          } else {
+            expect(db.prepare('SELECT * FROM schedules').all()).toEqual([{
+              id: 'legacy-schedule', agent_kind: 'codex', model: 'legacy-model',
+              model_agent_kind: state === 'existing column' ? 'pi' : null,
+            }]);
+          }
+          expect(db.prepare("SELECT value FROM migration_meta WHERE key = 'schema_version'").pluck().get()).toBe('104');
+        }
+      } finally {
+        rmSync(stagedDir, { recursive: true, force: true });
+        cleanup();
+      }
+    },
+  );
+
+  // Migration tier: upgrading an existing automation must preserve its content
+  // and legacy inheritance; partial fixtures and an already-added column are safe.
+  it.each(['missing table', 'legacy table', 'existing column'])(
+    'replays the scheduled Agent location migration with %s', (state) => {
+      const { db, cleanup } = createTempDb();
+      const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-scheduled-agent-location-'));
+      try {
+        db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+        const migration = listMigrations(drizzleDir()).find((item) => item.fileName.endsWith('_schedule_model_location.sql'))!;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        mkdirSync(path.join(stagedDir, 'scripts'));
+        copyFileSync(migration.tsScriptPath!, path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)));
+        if (state !== 'missing table') {
+          db.exec("CREATE TABLE schedules (id TEXT PRIMARY KEY, prompt TEXT); INSERT INTO schedules VALUES ('old', 'keep this prompt');");
+          if (state === 'existing column') db.exec("ALTER TABLE schedules ADD model_agent_device_id TEXT; UPDATE schedules SET model_agent_device_id = 'shared:owner';");
+        }
+        for (let replay = 0; replay < 2; replay += 1) {
+          runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+          if (state === 'missing table') expect(tableExists(db, 'schedules')).toBe(false);
+          else expect(db.prepare('SELECT * FROM schedules').all()).toEqual([{ id: 'old', prompt: 'keep this prompt',
+            model_agent_device_id: state === 'existing column' ? 'shared:owner' : null }]);
+        }
+      } finally {
+        rmSync(stagedDir, { recursive: true, force: true });
+        cleanup();
+      }
+    },
+  );
+
   it('replays every drizzle migration into a fresh database', () => {
     const { db, cleanup } = createTempDb();
     try {
@@ -150,17 +398,45 @@ describeMigrationReplay('migration replay', () => {
       expect(tableExists(db, 'wechat_outbox')).toBe(true);
       expect(tableExists(db, 'wechat_file_attachments')).toBe(true);
       expect(tableExists(db, 'schedule_session_latest_runs')).toBe(true);
+      expect(tableExists(db, 'bot_groups')).toBe(true);
+      expect(tableExists(db, 'bot_group_members')).toBe(true);
+      expect(tableExists(db, 'bot_group_messages')).toBe(true);
+      expect(indexExists(db, 'uniq_bot_group_messages_group_sequence')).toBe(true);
+      expect(indexExists(db, 'uniq_bot_group_messages_group_client')).toBe(true);
+      expect(indexExists(db, 'idx_bot_group_members_bot')).toBe(true);
+      expect(tableExists(db, 'bot_group_plans')).toBe(true);
+      expect(tableExists(db, 'bot_group_plan_steps')).toBe(true);
+      expect(indexExists(db, 'idx_bot_group_plans_group_created')).toBe(true);
       expect(indexExists(db, 'idx_messages_active_error_tail')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_schedule')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_heartbeat')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_running_legacy')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_unread_terminal')).toBe(true);
       expect(indexExists(db, 'idx_schedule_runs_session_latest')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_skill_recent')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_skill_recent_any_version')).toBe(true);
+      expect(indexExists(db, 'idx_skill_usage_exposures_analyzer_recent_source')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_insert')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_delete')).toBe(true);
       expect(triggerExists(db, 'schedule_session_latest_run_update')).toBe(true);
       expect(unreadRunPlan.some((row) => row.detail.includes('idx_schedule_runs_unread_terminal')))
         .toBe(true);
+
+      db.prepare("INSERT INTO sessions (id, created_at, updated_at) VALUES ('s-cjk', 1, 1)").run();
+      db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+         VALUES ('m-cjk', 'c-cjk', 's-cjk', 'user', '登录报错了', 1)`,
+      ).run();
+      const indexed = db
+        .prepare('SELECT content FROM messages_fts WHERE message_id = ?')
+        .get('m-cjk') as { content: string };
+      expect(indexed.content).toBe('登 录 报 错 了');
+      expect(
+        db
+          .prepare("SELECT message_id FROM messages_fts WHERE messages_fts MATCH '\"登 录\"'")
+          .pluck()
+          .all(),
+      ).toEqual(['m-cjk']);
     } finally {
       cleanup();
     }
@@ -207,6 +483,7 @@ describeMigrationReplay('migration replay', () => {
     const { db, cleanup } = createTempDb();
     // 复刻 0060 之前的库:拷贝 drizzle 目录并剔除 0060,重放到 0059 后再 seed。
     const stagedDir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-pre0060-'));
+    const replay0060Dir = mkdtempSync(path.join(tmpdir(), 'xdmaker-drizzle-only0060-'));
     try {
       for (const migration of listMigrations(drizzleDir())) {
         if (migration.seq >= 60) continue;
@@ -244,15 +521,20 @@ describeMigrationReplay('migration replay', () => {
         { id: 'plain-session', permission_mode: 'acceptEdits', plan_mode_enabled: 0 },
       ]);
 
-      const replayResult = runMigrationReplay(db, {
-        drizzleDir: drizzleDir(),
-        currentVersion: 59,
-      });
-      // 59 之后的迁移全部重放(0060 及以后陆续新增的都在内),不写死具体序号
-      const expectedReplaySeqs = listMigrations(drizzleDir())
-        .filter((migration) => migration.seq > 59)
-        .map((migration) => migration.seq);
-      expect(replayResult.applied.map((migration) => migration.seq)).toEqual(expectedReplaySeqs);
+      // 只重放本测试要证明幂等的 0060。把 schema_version 人为倒退后重放所有
+      // 后续 DDL 并不是受支持的恢复路径；新表 migration 也不应被迫做成可重复 CREATE。
+      const migration0060 = listMigrations(drizzleDir()).find((migration) => migration.seq === 60);
+      expect(migration0060).toBeDefined();
+      copyFileSync(migration0060!.sqlPath, path.join(replay0060Dir, migration0060!.fileName));
+      if (migration0060!.tsScriptPath) {
+        mkdirSync(path.join(replay0060Dir, 'scripts'), { recursive: true });
+        copyFileSync(
+          migration0060!.tsScriptPath,
+          path.join(replay0060Dir, 'scripts', path.basename(migration0060!.tsScriptPath)),
+        );
+      }
+      const replayResult = runMigrationReplay(db, { drizzleDir: replay0060Dir, currentVersion: 59 });
+      expect(replayResult.applied.map((migration) => migration.seq)).toEqual([60]);
       const replayRows = db
         .prepare(
           `SELECT id, permission_mode, plan_mode_enabled FROM sessions ORDER BY id`,
@@ -261,6 +543,7 @@ describeMigrationReplay('migration replay', () => {
       expect(replayRows).toEqual(rows);
     } finally {
       rmSync(stagedDir, { recursive: true, force: true });
+      rmSync(replay0060Dir, { recursive: true, force: true });
       cleanup();
     }
   });
@@ -285,6 +568,11 @@ describeMigrationReplay('migration replay', () => {
         );
         CREATE TABLE schedule_runs (
           id TEXT PRIMARY KEY NOT NULL
+        );
+        CREATE TABLE right_sidebar_tabs (
+          id TEXT PRIMARY KEY NOT NULL,
+          session_id TEXT NOT NULL,
+          kind TEXT NOT NULL
         );
         INSERT INTO sessions (id, permission_mode) VALUES ('legacy-plan', 'plan');
         INSERT INTO migration_history (seq, file_name, content_hash, applied_at) VALUES

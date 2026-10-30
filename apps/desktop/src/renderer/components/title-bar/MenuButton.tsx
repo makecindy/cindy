@@ -1,4 +1,5 @@
 import { Menu } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -14,15 +15,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tip } from '@/components/ui/tooltip';
+import { useSharedTaskTasks } from '@/features/device-link/useSharedTaskTasks';
+import { SharedTaskEndedNotice } from '@/features/device-link/SharedTaskEndedNotice';
 
 export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+  useSharedTaskTasks();
+
   return (
-    <DropdownMenu>
+    <><DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
-        <Tip text={t('titleBar.menu')} side="bottom">
+        <Tip text={t('titleBar.menu')} side="bottom" controlledOpen={menuOpen ? false : undefined}>
           {/* 尺寸与 ChromeActions 的折叠按钮同规格(h-7 / 图标 15 / rounded-md),
               与折叠态标题行图标(「…」h-7 / 15)视觉重量一致。 */}
           <button
@@ -40,9 +46,9 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
           </button>
         </Tip>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="bg-titlebar border-titlebar-border">
+      <DropdownMenuContent align="start">
         {onExitFullscreen && (
-          <DropdownMenuItem className="focus:bg-titlebar-button-hover" onSelect={onExitFullscreen}>
+          <DropdownMenuItem onSelect={onExitFullscreen}>
             {t('contentHeader.exitFullscreen')}
           </DropdownMenuItem>
         )}
@@ -54,7 +60,6 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
             不重复导航;在 /settings?tab=xxx 子页时回到设置默认页,与 macOS 原生
             菜单「设置…」行为一致。 */}
         <DropdownMenuItem
-          className="focus:bg-titlebar-button-hover"
           onSelect={() => {
             log.info('Settings clicked');
             if (`${location.pathname}${location.search}` !== '/settings') {
@@ -65,7 +70,6 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
           {t('titleBar.menuItems.settings')}
         </DropdownMenuItem>
         <DropdownMenuItem
-          className="focus:bg-titlebar-button-hover"
           onSelect={() => {
             void window.electronAPI.resourceUsageWindow
               .open()
@@ -77,7 +81,6 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
           {t('titleBar.menuItems.resourceUsage')}
         </DropdownMenuItem>
         <DropdownMenuItem
-          className="focus:bg-titlebar-button-hover"
           onSelect={() => {
             log.info('Help clicked');
             navigate('/settings?tab=help');
@@ -94,7 +97,6 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
             的用户不知道该不该点。术语裁决(i18n/GLOSSARY.md)管的是指代那类对象的位置
             —— 页面标题与正文仍写 Issue,因为点进去就跳 GitHub,名字必须对得上。 */}
         <DropdownMenuItem
-          className="focus:bg-titlebar-button-hover"
           onSelect={() => {
             log.info('Issues clicked');
             navigate('/issues');
@@ -103,12 +105,13 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
           {t('titleBar.menuItems.issues')}
         </DropdownMenuItem>
         <DropdownMenuItem
-          className="focus:bg-titlebar-button-hover"
           onSelect={() => { void checkForUpdateWithToast(t); }}
         >
           {t('titleBar.menuItems.checkForUpdates')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <SharedTaskEndedNotice onReturnToTasks={() => navigate('/')} />
+    </>
   );
 }

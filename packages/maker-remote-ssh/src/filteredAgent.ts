@@ -23,8 +23,7 @@
  */
 
 import crypto from 'node:crypto';
-import { promises as fs } from 'node:fs';
-import { BaseAgent, createAgent, utils, type ParsedKey, type PublicKeyEntry, type SignCallback, type SigningRequestOptions } from 'ssh2';
+import { BaseAgent, createAgent, type ParsedKey, type PublicKeyEntry, type SignCallback, type SigningRequestOptions } from 'ssh2';
 
 /** SHA256 base64 (without trailing `=` and without the `SHA256:` prefix). */
 export function rawFingerprintOfPublicKey(blob: Buffer): string {
@@ -78,25 +77,34 @@ function asParsedKey(item: ParsedKey | PublicKeyEntry): ParsedKey | null {
  */
 export class FilteredAgent extends BaseAgent<ParsedKey> {
   private readonly upstream: BaseAgent<ParsedKey>;
-  /** Full `SHA256:...` form. Compared verbatim against `sshFingerprint`. */
-  private readonly allowedFingerprint: string;
+  /** Full `SHA256:...` forms, de-duplicated in OpenSSH configuration order. */
+  private readonly allowedFingerprints: string[];
 
-  constructor(upstream: BaseAgent<ParsedKey>, allowedFingerprint: string) {
+  constructor(upstream: BaseAgent<ParsedKey>, allowedFingerprints: string | readonly string[]) {
     super();
     this.upstream = upstream;
-    this.allowedFingerprint = allowedFingerprint;
+    const values = typeof allowedFingerprints === 'string'
+      ? [allowedFingerprints]
+      : [...allowedFingerprints];
+    this.allowedFingerprints = values.filter((value, index) => values.indexOf(value) === index);
+    if (this.allowedFingerprints.length === 0) {
+      throw new Error('FilteredAgent requires at least one allowed fingerprint');
+    }
   }
 
   getIdentities(cb: (err: Error | undefined, publicKeys?: ParsedKey[]) => void): void {
     this.upstream.getIdentities((err, keys) => {
       if (err) return cb(err);
-      const matches: ParsedKey[] = [];
+      const byFingerprint = new Map<string, ParsedKey>();
       for (const item of keys ?? []) {
         const key = asParsedKey(item);
-        if (key && sshFingerprint(key) === this.allowedFingerprint) {
-          matches.push(key);
-        }
+        if (key) byFingerprint.set(sshFingerprint(key), key);
       }
+      // OpenSSH offers configured identities in configuration order. Agent
+      // enumeration order is unrelated and can hit MaxAuthTries first.
+      const matches = this.allowedFingerprints
+        .map((fingerprint) => byFingerprint.get(fingerprint))
+        .filter((key): key is ParsedKey => key !== undefined);
       cb(undefined, matches);
     });
   }
@@ -118,29 +126,10 @@ export class FilteredAgent extends BaseAgent<ParsedKey> {
   }
 }
 
-/**
- * Build a `FilteredAgent` from a public-key file path. Reads the .pub,
- * extracts the SHA256 fingerprint, and wraps the platform-default agent
- * endpoint (UNIX socket on POSIX, OpenSSH named pipe on Windows).
- *
- * Throws on:
- *   - pubkey file missing / unreadable
- *   - malformed .pub content (parseKey failure)
- */
-export async function createFilteredAgentFromPubkey(
-  pubkeyPath: string,
+export function createFilteredAgentFromFingerprints(
+  fingerprints: readonly string[],
   agentEndpoint: string,
-): Promise<FilteredAgent> {
-  const buf = await fs.readFile(pubkeyPath);
-  const parsed = utils.parseKey(buf.toString('utf-8').trim());
-  if (parsed instanceof Error) {
-    throw new Error(`parse pubkey ${pubkeyPath} failed: ${parsed.message}`);
-  }
-  const key = Array.isArray(parsed) ? parsed[0] : parsed;
-  if (!key) {
-    throw new Error(`parse pubkey ${pubkeyPath} returned no key`);
-  }
-  const fingerprint = sshFingerprint(key);
+): FilteredAgent {
   const upstream = createAgent(agentEndpoint) as BaseAgent<ParsedKey>;
-  return new FilteredAgent(upstream, fingerprint);
+  return new FilteredAgent(upstream, fingerprints);
 }

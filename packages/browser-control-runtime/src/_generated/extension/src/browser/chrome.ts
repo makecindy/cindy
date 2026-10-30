@@ -45,6 +45,7 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
+  withCdpSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -449,6 +450,80 @@ function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname
   return lock.pid;
 }
 
+/**
+ * PID of the live Chrome owning this managed profile, or null if none.
+ *
+ * Reads the profile's SingletonLock and confirms the process actually exists,
+ * so callers can distinguish "the process is gone" from "the CDP endpoint went
+ * quiet" — a busy or stalled Chrome produces the latter while still running.
+ */
+export function readManagedProfileOwnerPid(userDataDir: string): number | null {
+  return readCurrentHostSingletonPid(userDataDir);
+}
+
+/**
+ * Whether this exact PID holds the CDP port.
+ *
+ * Positive identity, unlike the lock alone: the lock records a PID that the OS
+ * may since have recycled, so anything destructive must confirm the process it
+ * is about to signal is really the browser. Returns false on platforms with no
+ * probe (Windows), which keeps callers fail-safe rather than fail-destructive.
+ */
+export function managedProfilePidOwnsCdpPort(pid: number, cdpPort: number): boolean {
+  return pidListensOnPort(pid, cdpPort);
+}
+
+/**
+ * Whether this PID is a Chrome launched for exactly this profile and port.
+ *
+ * Identity from the process itself, not inferred from what it happens to hold:
+ * holding a port proves only that something is listening, and a port freed by
+ * an exited Chrome can be taken over by anything. Required before anything
+ * destructive — the command line must carry both our --user-data-dir and our
+ * --remote-debugging-port. Returns false wherever the command line cannot be
+ * read, so callers fail safe rather than fail destructive.
+ */
+export function pidIsManagedChromeForProfile(params: {
+  pid: number;
+  cdpPort: number;
+  userDataDir: string;
+}): boolean {
+  if (!processExists(params.pid)) return false;
+  const command = readManagedProcessCommandLine(params.pid);
+  if (!command) return false;
+  return (
+    managedCommandHasExactArg(command, `--remote-debugging-port=${params.cdpPort}`) &&
+    managedCommandHasExactArg(command, `--user-data-dir=${params.userDataDir}`)
+  );
+}
+
+/**
+ * Exact-argument match for a process command line.
+ *
+ * NOT processCommandHasArg: that falls back to `text.includes` when argv is
+ * unavailable, which it always is on Darwin (ps yields a flat string). A
+ * substring test accepts `--user-data-dir=<dir>-backup` for `<dir>`, and this
+ * result gates SIGTERM/SIGKILL — so an unrelated Chrome could be killed. Where
+ * argv exists the element comparison is already exact; otherwise require a
+ * whitespace or quote delimiter on both sides.
+ */
+function managedCommandHasExactArg(
+  command: { argv: string[] | null; text: string },
+  expected: string,
+): boolean {
+  if (command.argv) {
+    return command.argv.includes(expected);
+  }
+  let offset = command.text.indexOf(expected);
+  while (offset >= 0) {
+    const before = offset === 0 ? "" : command.text[offset - 1];
+    const after = command.text[offset + expected.length] ?? "";
+    if ((!before || /[\s"']/.test(before)) && (!after || /[\s"']/.test(after))) return true;
+    offset = command.text.indexOf(expected, offset + 1);
+  }
+  return false;
+}
+
 function clearChromeSingletonArtifacts(userDataDir: string) {
   for (const basename of CHROME_SINGLETON_LOCK_PATHS) {
     try {
@@ -755,6 +830,8 @@ export function buildOpenClawChromeLaunchArgs(params: {
   if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
+  } else {
+    args.push("--no-startup-window");
   }
   if (resolved.noSandbox) {
     args.push("--no-sandbox");
@@ -1144,26 +1221,44 @@ export async function stopOpenClawChrome(
 ) {
   const proc = running.proc;
   try {
-    if (proc.killed) {
+    if (proc.exitCode != null || proc.signalCode != null) {
       return;
     }
-    try {
-      proc.kill("SIGTERM");
-    } catch {
-      // ignore
+    // LOCAL PATCH (Cindy, via sync.mjs): Windows SIGTERM force-kills too.
+    // Ask Chrome to flush and close via CDP, within the existing grace period.
+    const start = Date.now();
+    if (!proc.killed && process.platform === "win32" && timeoutMs > 0) {
+      try {
+        // Discovery, WebSocket handshake and command each share the budget.
+        const cdpTimeoutMs = Math.max(1, Math.floor(timeoutMs / 3));
+        const wsUrl = await getChromeWebSocketUrl(
+          cdpUrlForPort(running.cdpPort), cdpTimeoutMs,
+        );
+        if (wsUrl && proc.exitCode == null && proc.signalCode == null && Date.now() - start < timeoutMs) {
+          await withCdpSocket(wsUrl, (send) => send("Browser.close"), {
+            handshakeTimeoutMs: cdpTimeoutMs,
+            commandTimeoutMs: cdpTimeoutMs,
+            handshakeRetries: 0,
+          });
+        }
+      } catch {
+        // Closing Chrome can drop CDP before replying. Still wait for exit.
+      }
+    } else if (!proc.killed && process.platform !== "win32") {
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
     }
 
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (!proc.exitCode && proc.killed) {
-        break;
-      }
-      if (
-        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
-      ) {
+    while (true) {
+      // CDP can disappear while Chrome is still flushing its profile.
+      if (proc.exitCode != null || proc.signalCode != null) {
         return;
       }
       const remainingMs = timeoutMs - (Date.now() - start);
+      if (remainingMs <= 0) break;
       await new Promise((r) => {
         setTimeout(r, Math.max(1, Math.min(100, remainingMs)));
       });

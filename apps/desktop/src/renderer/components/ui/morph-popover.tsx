@@ -61,6 +61,12 @@ import { cn } from '@/lib/utils';
  */
 export const MORPH_CONTENT_RESIZE_EVENT = 'cindy:morph-content-resize';
 
+/**
+ * 面板终态默认 = 共享下拉菜单同一材质(DESIGN §4 / §15.12):Cindy 主题 macOS 毛玻璃、
+ * Windows 实色,其它主题 --cmd-palette-bg;变量与模糊规则在 globals.css。
+ */
+export const MORPH_MENU_SURFACE = 'var(--menu-panel-surface)';
+
 const MORPH_MS = 220;
 const MORPH_EASE = 'cubic-bezier(0.3, 0.9, 0.25, 1)';
 /** 面板停靠位与 chip 之间的间隙(对齐 Radix sideOffset 习惯) */
@@ -123,7 +129,7 @@ interface MorphPopoverProps {
   /** 面板形变起点底色/边色(= chip 的),默认 composer pill 规格。 */
   startBg?: string;
   startBorderColor?: string;
-  /** 面板终态底色/边色,默认 model dropdown 规格。 */
+  /** 面板终态底色/边色,默认共享菜单面板(MORPH_MENU_SURFACE + --cmd-palette-border)。 */
   endBg?: string;
   endBorderColor?: string;
   /**
@@ -191,8 +197,8 @@ export function MorphPopover({
   stickyWidthKey,
   startBg = 'var(--composer-pill-bg)',
   startBorderColor = 'var(--border-default)',
-  endBg = 'var(--model-dropdown-bg)',
-  endBorderColor = 'var(--model-dropdown-border)',
+  endBg = MORPH_MENU_SURFACE,
+  endBorderColor = 'var(--cmd-palette-border)',
   startRadius,
   panelClassName,
   wrapperClassName,
@@ -603,6 +609,8 @@ export function MorphPopover({
             // 停靠侧外显:本组件按请求侧钳高、不做碰撞翻转,选错侧会开成截断/零高,
             // 而 jsdom 无布局引擎测不出几何 —— 暴露出来让调用方的选侧决策可被断言。
             data-morph-side={side}
+            // 共享菜单材质:Cindy 主题下 macOS 叠 blur(globals.css),Windows 实色。
+            data-menu-surface={endBg === MORPH_MENU_SURFACE ? '' : undefined}
             role="group"
             aria-label={panelAriaLabel}
             tabIndex={-1}

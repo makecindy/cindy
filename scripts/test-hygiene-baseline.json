@@ -1,0 +1,1086 @@
+{
+  "description": "Ratchet baseline for scripts/check-test-hygiene.mjs. Counts may only go down; see engineering-conventions.md §3.2.",
+  "files": {
+    "apps/desktop/scripts/nsis-include-paths.test.mjs": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/accessibilitySupportIpc.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/agentBinaryLinuxPrepare.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/analyticsSettingsService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/analyticsSettingsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/appBadgeService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/appearanceZoomMenu.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/authAccountsIpcSecurity.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/authCredentialRecoveryWiring.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/cdnResponseLifecycle.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/chatAttachmentIpcOwnerBoundary.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/claudeAccountUsageSource.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/claudeOrphanReaper.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/codexToolTreeReaper.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/computerUsePluginIpc.test.ts": {
+      "sourceReads": 11
+    },
+    "apps/desktop/src/main/__tests__/deviceLinkSettingsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/dialogueWorkspace.test.ts": {
+      "resetModules": 3
+    },
+    "apps/desktop/src/main/__tests__/disableOrcaStrandedLead.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/ghostAccountBoundaryOrdering.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/__tests__/ghostSetupInteractionLifecycle.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/heartbeatService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/imageCacheStartupSweepDisabled.test.ts": {
+      "sourceReads": 7
+    },
+    "apps/desktop/src/main/__tests__/imageCacheStoreLifecycle.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/imDefaultSettingsIpcSecurity.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/interruptedContinuationContract.test.ts": {
+      "sourceReads": 4
+    },
+    "apps/desktop/src/main/__tests__/lifecycle.test.ts": {
+      "resetModules": 2,
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/__tests__/mainWindowBackgroundThrottling.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/main/__tests__/makerEventHotPathOrdering.test.ts": {
+      "sourceReads": 6
+    },
+    "apps/desktop/src/main/__tests__/makerOrcaRoleMarking.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/__tests__/modelPricingPrewarmOrdering.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/notificationService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/projectOrderStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/providerImportWiring.test.ts": {
+      "sourceReads": 5
+    },
+    "apps/desktop/src/main/__tests__/releaseNotesService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/resolved-app-theme.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/safeStorageCodexRestart.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/sessionDragReleaseNativeHost.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/sessionRuntimeFallbackIntent.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/sessionTaskSummary.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/__tests__/setSessionsStatusInDb.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/__tests__/sidebarSettingsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/updateChannelStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/updaterUi.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/updateService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/usageBroadcasterClaudeSubscription.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/main/__tests__/usageBroadcasterCodexAccount.test.ts": {
+      "resetModules": 9
+    },
+    "apps/desktop/src/main/__tests__/usageBroadcasterXaiSubscription.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/windowsDiagnosticsTrayWiring.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/__tests__/windowsTaskbarNative.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/main/__tests__/workdirDiagnostics.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/worktreeManagerCreate.test.ts": {
+      "resetModules": 1,
+      "realWaits": 2
+    },
+    "apps/desktop/src/main/__tests__/worktreeSessionTransfer.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/__tests__/worktreeStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/agent-binaries/__tests__/startup-policy.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/agent-island/__tests__/layoutPreferenceStore.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/main/agent-island/__tests__/service.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/bot-import/__tests__/host.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/bot-import/__tests__/openclawCronWorker.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/builtinGhostProvisioner.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/byokImageChannel.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/downloadLifecycle.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/GhostManager.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/ghostUserDataRelocation.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/nodeRuntimePackaging.test.ts": {
+      "sourceReads": 14
+    },
+    "apps/desktop/src/main/cindy-brain/__tests__/pluginModelPrefsIpc.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/cindy-make/__tests__/stateBroadcast.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/cindy-make/__tests__/versionStartup.test.ts": {
+      "resetModules": 1,
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/companion-cloud/__tests__/twoDevices.harness.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/computer-permission-guide/__tests__/electron-window.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/computer-permission-guide/__tests__/MacComputerPermissionGuideNativeHost.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/computer-permission-guide/__tests__/switch-target.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/device-link/__tests__/crossProcessLock.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/device-link/__tests__/deviceName.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/device-link/__tests__/providerShareGuestPrefs.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/device-link/__tests__/sharedTaskAccountBoundary.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/doc-tools/__tests__/docsOutputWriterPackaging.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/doc-tools/__tests__/readSheetProcessPackaging.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/embedding-host/__tests__/hostLifecycle.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/file-browser/__tests__/deviceOp.test.ts": {
+      "realWaits": 3
+    },
+    "apps/desktop/src/main/localDb/__tests__/cjkSeg.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/localDb/__tests__/conversationSearch.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/localDb/__tests__/dbSlimmingUpgradeOrder.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/localDb/__tests__/schemaLeaseTakeoverWiring.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/localDb/__tests__/sessionListMessageCount.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/localDb/ipc/__tests__/ownerEnsureCoordinator.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/accountProviderReadinessWiring.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/main/maker-host/__tests__/authAdaptersImportPurity.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/chat-embedding-settings-store.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/codex-browser-companion.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/codexCustomContextCatalog.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/memorySettingsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/nativeProviderAuthBinding.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/pi-package-store-security.test.ts": {
+      "resetModules": 17
+    },
+    "apps/desktop/src/main/maker-host/__tests__/piBinaryDistribution.test.ts": {
+      "sourceReads": 8
+    },
+    "apps/desktop/src/main/maker-host/__tests__/piNativeAdapterRuntime.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/piSystemPrompt.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/maker-host/__tests__/remoteCcQueryFactory.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/maker-host/__tests__/runtimeConfigs.test.ts": {
+      "resetModules": 3
+    },
+    "apps/desktop/src/main/maker-host/__tests__/runtimeConfigsRipgrep.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/session-effort-store.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-host/__tests__/sessionProviderStore.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/agent-input-coordinator.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/bootstrapDirectoryGrants.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/botDirectMessageService.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/botInvitation.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/botTaskCoordination.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/deferredRestartQueueDrain.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/makerSendTransaction.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/orcaInterAgentDispatcher.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/orcaLifecycleService.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/orcaModelSelectionIntent.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/orcaProviderRoutingSnapshotWiring.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/orcaTeamService.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/pluginTaskAuthorshipWiring.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/promptPredictionStopLedger.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/schedulerQueuedPreparation.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/maker-ipc/__tests__/silentStopContinuationBinding.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/mcp-integrations/__tests__/forgeIconConversionPackaging.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/main/mcp-integrations/__tests__/schedulerDevices.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/mcp-integrations/browser-real-profile/__tests__/snapshot.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/plugin-market/__tests__/install-manifest-read.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/plugin-market/__tests__/service-custom-sources.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/plugin-market/__tests__/sources-cache-lease.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/plugin-publisher/__tests__/host.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/provider-group/__tests__/failoverSessionClose.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/remote-agent/executor/__tests__/executor.test.ts": {
+      "realWaits": 5
+    },
+    "apps/desktop/src/main/remote-desktop/__tests__/backgroundActivity.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/main/remote-desktop/__tests__/viewerDisplaySupport.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/remote-ssh/__tests__/agentProxy.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/main/remote-ssh/__tests__/agentProxyPrefsLog.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/remote-ssh/__tests__/codex-remote-mcp.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/remote-ssh/__tests__/remoteHostMutationContract.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/resource-usage-window/__tests__/windowSecurity.test.ts": {
+      "sourceReads": 4
+    },
+    "apps/desktop/src/main/reviewer/__tests__/reviewExternalInputWiring.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/reviewer/__tests__/reviewPdfProcessPackaging.test.ts": {
+      "sourceReads": 6
+    },
+    "apps/desktop/src/main/scheduler-host/__tests__/preRunHook.test.ts": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/main/skillhub/__tests__/activationPreferences.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/main/skillhub/__tests__/customizationScanHost.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/__tests__/identityPolicy.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/__tests__/installService.test.ts": {
+      "resetModules": 4
+    },
+    "apps/desktop/src/main/skillhub/__tests__/publishService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/__tests__/registryReconciliation.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/__tests__/sharedMutationLease.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/registry/__tests__/manifestIO.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/skillhub/registry/__tests__/registryService.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/vision-bridge/__tests__/vision-bridge-settings-store.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/voice-input/__tests__/dictionarySyncStore.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/voice-input/__tests__/ElevenLabsScribeProvider.test.ts": {
+      "realWaits": 2
+    },
+    "apps/desktop/src/main/voice-input/__tests__/globalShortcut.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/voice-input/__tests__/RealtimeAsrWebSocketProvider.test.ts": {
+      "realWaits": 3
+    },
+    "apps/desktop/src/main/voice-input/__tests__/SystemAudioMuteGuard.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/voice-input/__tests__/VolcengineSaucAsrProvider.test.ts": {
+      "realWaits": 4
+    },
+    "apps/desktop/src/main/voice-input/__tests__/WindowsFunctionKeyShortcutListener.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/worklouder-codex/__tests__/codexMicroGuardHook.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/worklouder-codex/__tests__/settingsIpc.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/main/worklouder-codex/__tests__/WorkLouderCodexHostClient.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/main/worktree/__tests__/precreatedCancellation.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/main/xbox-gamepad/__tests__/index.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/preload/__tests__/appearanceSnapshot.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/preload/__tests__/browserCommentPreload.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/preload/__tests__/ghostPanelMedia.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/preload/__tests__/skillhubFanOut.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/accountUsageSnapshot.test.ts": {
+      "sourceReads": 6
+    },
+    "apps/desktop/src/renderer/__tests__/agentCapabilitiesDeviceCache.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/agentDeviceModelMemory.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/__tests__/attachmentFileCard.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/attachmentTypeThumb.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/autoFollowIntent.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/automationGeneratedSessions.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/automationGroupCollapse.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/__tests__/brandLoadingMarkContract.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/ccAgentSessionViewThemeContract.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/chatAttachmentSave.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/chatInputGhostSnapshot.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/chatInputSteerShortcut.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/cindyMakeInlineEntry.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/composerChipPresentation.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/composerDraftSameOwnerGenerationBump.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/composerListIndentDecoration.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/composerStructuredLists.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/conversationSearchBox.test.ts": {
+      "sourceReads": 4
+    },
+    "apps/desktop/src/renderer/__tests__/deviceLinkDeviceListLoading.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/deviceLinkDraftFlow.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/deviceLinkProjectsConcurrency.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/deviceProvidersCache.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/deviceProvidersRecovery.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/devicesProvidersRefresh.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/diffHorizontalScroll.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/diffPanelShellA11y.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/extraDirsButtonPathOverlap.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/favoriteAnchorMemory.test.ts": {
+      "resetModules": 7
+    },
+    "apps/desktop/src/renderer/__tests__/focusScrollLifecycle.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/foregroundRecoveryDiagnostics.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/foundationDefaultsFreeze.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/ghostCardFrameCanvas.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/ghostCommandDecoration.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/ghostCommandSourceLabel.dom.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/ghostUnreadStore.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/gitReviewTransport.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/globalTextSelectionColor.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/goalLearnTransportRouting.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/hiddenAnimationGate.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/issueCommandAttachments.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/localCatalogSnapshot.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/__tests__/makerExperimentalAccepted.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/makerTransportOrcaRouting.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/makerTransportRouting.test.ts": {
+      "resetModules": 1,
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/markdownCjkStrongDelimiter.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/markdownFencedCodeInline.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/markdownHeadingTokens.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/markdownMathRendering.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/markdownStrikethrough.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/memorySettingsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/menuButtonSettingsEntry.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/mobileDownloadDialog.test.tsx": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/modelDefinitionsDefaults.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/modelDefinitionsDeviceId.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/modelEnginePrefs.test.ts": {
+      "resetModules": 14
+    },
+    "apps/desktop/src/renderer/__tests__/modelFavorites.test.ts": {
+      "resetModules": 17
+    },
+    "apps/desktop/src/renderer/__tests__/modelVisibilityPrefs.test.ts": {
+      "resetModules": 18
+    },
+    "apps/desktop/src/renderer/__tests__/morphPopover.test.tsx": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerDraft.test.ts": {
+      "resetModules": 54,
+      "realWaits": 1
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerDraftRemoteHost.test.ts": {
+      "resetModules": 6
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerGenericCreatePreservesDraft.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerLocalFirstMessageSend.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerOrcaCreateOrder.test.ts": {
+      "sourceReads": 4
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerRemoteFirstMessageSend.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/newMakerWorktreeSend.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/permissionSessionApproval.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/pinnedProjectSidebarIntegration.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/pluginRecommendationRecovery.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/projectCollapsedAttention.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/providerModelMemory.test.ts": {
+      "resetModules": 13
+    },
+    "apps/desktop/src/renderer/__tests__/recentWorkdirsStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/reducedMotionEscape.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/releaseNotesNormalize.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/__tests__/remoteHistoryHandoff.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/remoteModelHooksDeviceOwnership.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/remoteSessionSyncInvariants.test.ts": {
+      "sourceReads": 12
+    },
+    "apps/desktop/src/renderer/__tests__/reviewCommandDispatch.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/rewindDraftAttachments.test.ts": {
+      "sourceReads": 3
+    },
+    "apps/desktop/src/renderer/__tests__/rolePillWorkerCountSummary.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/rolePillWorkerErrorIndicator.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/scheduleDefaultModel.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/selectedMachineOwnerState.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/sentInlineAtomBody.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/sentPastedTextPreview.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/sessionAgentSwitchRemoteRouting.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/sessionStartingStore.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/sidebarSessionTime.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/sidebarUpgradeDefaults.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/sidebarUpperSingleButton.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/tapdbConsentGate.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/__tests__/textLightbox.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/__tests__/todaySpendChip.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/__tests__/unifiedModelPanelRendering.test.tsx": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/renderer/__tests__/userMessageCollapse.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/chat/__tests__/embeddedSessionNavigation.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/chat/__tests__/rehypeStreamWordFade.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/layout/__tests__/WallpaperVideo.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/new-chat/__tests__/composerBlankPointerFocus.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/new-chat/__tests__/composerPromptRecommendation.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/settings/__tests__/CustomProviderDialogAccessibility.test.tsx": {
+      "realWaits": 2
+    },
+    "apps/desktop/src/renderer/components/settings/__tests__/RemoteSection.addFormOrder.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/settings/__tests__/settingsSearchCatalog.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/settings/usage/__tests__/usageHistoryDevices.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/status/__tests__/QuotaBar.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/components/ui/__tests__/dropdownMenuHighlight.test.tsx": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/components/ui/__tests__/input.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/BotGroupChatView.test.tsx": {
+      "realWaits": 1
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/botGroupListRemoval.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/botNavigation.test.ts": {
+      "sourceReads": 5
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/botStore.lifecycle.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/botStore.modelSettings.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/bots/__tests__/chatInviteBrowserHandoff.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/cc-agent/__tests__/agentDeviceDraftMemory.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/cc-agent/__tests__/modelWindowConfirmation.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/cc-agent/__tests__/newMakerDraftModelPrefs.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/cc-agent/__tests__/splitGroupStore.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/features/cc-agent/__tests__/subagentTabDiscovery.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/cc-agent/sidebar/__tests__/sessionRowRenderIsolation.test.ts": {
+      "sourceReads": 13
+    },
+    "apps/desktop/src/renderer/features/cc-agent/workdir-browse/__tests__/FileTreeView.horizontalScroll.test.tsx": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/remote-desktop/__tests__/viewerInput.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/features/right-sidebar/plugins/resource-usage/__tests__/plugin.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/right-sidebar/plugins/resource-usage/__tests__/subscription.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/skillhub/hooks/__tests__/useCategoryList.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/skillhub/hooks/__tests__/useSkillPublishComparison.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/features/skillhub/lib/__tests__/marketRoutes.test.ts": {
+      "sourceReads": 5
+    },
+    "apps/desktop/src/renderer/features/skillhub/lib/__tests__/publishProgressFilter.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/features/skillhub/lib/__tests__/skillhubManagementE2EScript.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/hooks/__tests__/codexAuthLogin.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/hooks/__tests__/useAvailableAgents.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/hooks/__tests__/useDingTalkBot.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/hooks/__tests__/useModelPricing.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/lib/__tests__/composerDraftSessionSwitchGuard.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/lib/__tests__/providerModelEfforts.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/desktop/src/renderer/lib/__tests__/sessionService.test.ts": {
+      "resetModules": 2
+    },
+    "apps/desktop/src/renderer/state/__tests__/agentIslandActivity.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/themes/__tests__/generatedEffortInitialization.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/voice-input/__tests__/dictionaryLearningSettings.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/voice-input/__tests__/overlayRetryGate.test.ts": {
+      "sourceReads": 2
+    },
+    "apps/desktop/src/renderer/voice-input/__tests__/startCue.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/voice-input/__tests__/voiceInputHistory.test.ts": {
+      "resetModules": 1
+    },
+    "apps/desktop/src/renderer/voice-input/__tests__/VoiceInputSection.recordingGate.test.ts": {
+      "sourceReads": 9
+    },
+    "apps/mobile/src/__tests__/agentCapabilitiesCache.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/cacheWriteNotice.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/chatServerEndpointDiscovery.test.tsx": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/clientEndpointStartup.test.ts": {
+      "resetModules": 12
+    },
+    "apps/mobile/src/__tests__/CompanionMemoryPage.test.tsx": {
+      "realWaits": 2
+    },
+    "apps/mobile/src/__tests__/composerPlugins.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/mobile/src/__tests__/devCacheMenu.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/deviceCatalogRefresh.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/devServerEnvironment.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/durableOutboxFiles.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/endpointManifestLoader.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/incomingShareFeedbackScript.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/incomingShareNative.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/iosAppDistribution.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/messageCacheStorage.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/mobileSpeakerFilterStorage.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/mobileTapdb.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/mobileVoiceCue.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/mobile/src/__tests__/mobileVoiceHistoryStore.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/remoteHistoryReentry.test.ts": {
+      "sourceReads": 1
+    },
+    "apps/mobile/src/__tests__/remoteResourceCache.test.ts": {
+      "resetModules": 2
+    },
+    "apps/mobile/src/__tests__/useBotGroupChat.test.tsx": {
+      "realWaits": 2
+    },
+    "apps/mobile/src/__tests__/useDeviceProviders.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/__tests__/visualMock.test.ts": {
+      "resetModules": 1
+    },
+    "apps/mobile/src/debug/localDiagnostics.test.ts": {
+      "resetModules": 1
+    },
+    "packages/lizi-im/src/feishu/__tests__/outboundFile.test.ts": {
+      "sourceReads": 1
+    },
+    "packages/lizi-mcps/src/computer/computerMcpServer.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-cc-manager/__tests__/kill-pending-send.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-cc-manager/__tests__/sdk-handlers.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/claude-code/__tests__/auto-continued-turn-in-flight.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/claude-code/__tests__/extraDirs-rebuild.test.ts": {
+      "sourceReads": 1
+    },
+    "packages/maker-core/src/agents/claude-code/__tests__/forward-loop-crash-teardown.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/claude-code/__tests__/plan-mode.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/codex/__tests__/device-hosted-guest.native.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/codex/goal-ownership.native.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/codex/native-auto-review-policy.native.test.ts": {
+      "sourceReads": 2
+    },
+    "packages/maker-core/src/agents/codex/native-auto-review-policy.test.ts": {
+      "sourceReads": 2
+    },
+    "packages/maker-core/src/agents/pi/__tests__/cindySubagentForeground.test.ts": {
+      "realWaits": 2
+    },
+    "packages/maker-core/src/agents/pi/__tests__/cindySubagentParentWatchdog.test.ts": {
+      "realWaits": 2
+    },
+    "packages/maker-core/src/agents/pi/__tests__/cindySubagentRunner.test.ts": {
+      "realWaits": 1
+    },
+    "packages/maker-core/src/agents/pi/__tests__/cindySubagentSource.test.ts": {
+      "sourceReads": 3
+    },
+    "packages/maker-core/src/agents/pi/__tests__/pi-auto-review-dispatch.test.ts": {
+      "sourceReads": 1
+    },
+    "packages/maker-core/src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts": {
+      "sourceReads": 1
+    },
+    "packages/maker-core/src/agents/pi/__tests__/pi-startsession-cleanup.test.ts": {
+      "realWaits": 21,
+      "sourceReads": 3
+    },
+    "packages/maker-core/src/agents/pi/__tests__/pi-subagent-runs.test.ts": {
+      "realWaits": 3,
+      "sourceReads": 2
+    },
+    "packages/maker-core/src/session.origin.test.ts": {
+      "realWaits": 3
+    },
+    "packages/maker-core/src/session.vision-bridge.test.ts": {
+      "realWaits": 2
+    },
+    "packages/maker-pi-manager/src/__tests__/concurrency.test.ts": {
+      "realWaits": 2
+    },
+    "packages/maker-pi-manager/src/__tests__/server.test.ts": {
+      "realWaits": 5
+    },
+    "packages/maker-shared/src/__tests__/remoteDesktopViewerSource.test.ts": {
+      "sourceReads": 1
+    },
+    "packages/model-providers/src/__tests__/piNativeCatalog.test.ts": {
+      "resetModules": 2
+    },
+    "packages/remote-file-service/src/__tests__/rpc.test.ts": {
+      "realWaits": 2
+    }
+  }
+}

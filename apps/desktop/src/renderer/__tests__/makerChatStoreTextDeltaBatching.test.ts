@@ -97,10 +97,17 @@ import {
   makerChatStore,
   type ChatMessage,
 } from '@/lib/makerChatStore';
+import {
+  __resetComposerTypingActivityForTest,
+  isComposerTypingRecently,
+  markComposerTypingActivity,
+} from '@/lib/composerTypingActivity';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import * as sessionsBus from '@/lib/sessionsBus';
 import { setRemoteOptimisticAttachmentUrls } from '@/lib/composerDraftStore';
+import { getToastSnapshot, toast } from '@/lib/toast';
+import i18n from '@/i18n';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
   __resetStickySessionOriginForTest,
@@ -111,6 +118,7 @@ import {
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
+import { piReplyText, piReplyThinking } from '../../test/fixtures/piSuccessfulReply';
 
 const SESSION_ID = 'text-delta-batching';
 const MODEL = 'gpt-5';
@@ -137,6 +145,7 @@ let onDeviceLinkStatusChanged: ((data: unknown) => void) | undefined;
 let onPresenceChanged: ((data: unknown) => void) | undefined;
 let onRemotePush: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onDbMessageCreated: ((data: unknown) => void) | undefined;
+let onDbMessageDeleted: ((data: unknown) => void) | undefined;
 let onErrorPersisted: ((data: unknown, ownerStamp?: unknown) => void) | undefined;
 let onInputProjection: ((data: unknown) => void) | undefined;
 let onInteractionRequest: ((data: unknown) => void) | undefined;
@@ -255,6 +264,7 @@ function installElectronBridge(): void {
   onPresenceChanged = undefined;
   onRemotePush = undefined;
   onDbMessageCreated = undefined;
+  onDbMessageDeleted = undefined;
   onErrorPersisted = undefined;
   onInputProjection = undefined;
   onInteractionRequest = undefined;
@@ -297,8 +307,10 @@ function installElectronBridge(): void {
           return vi.fn();
         },
         send: vi.fn(async () => ({ accepted: true })),
-        resolveInteraction: vi.fn(async () => {}),
+        resolveInteraction: vi.fn(async () => ({ accepted: true })),
         submitPluginSetupInline: vi.fn(async () => {}),
+        assistPluginOauth: vi.fn(async () => ({ accepted: true })),
+        submitRemotePluginSecret: vi.fn(async () => ({ accepted: true })),
         getPendingInteractions,
         steer: vi.fn(async () => true),
         generateTitle: vi.fn(async () => ({ title: 't' })),
@@ -322,6 +334,10 @@ function installElectronBridge(): void {
       },
       localDb: {
         messages: {
+          onDeleted: (cb: (data: unknown) => void) => {
+            onDbMessageDeleted = cb;
+            return vi.fn();
+          },
           onCreated: (cb: (data: unknown) => void) => {
             onDbMessageCreated = cb;
             return vi.fn();
@@ -510,6 +526,103 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  // #7119: UI eligibility must survive the actual projection -> light subscriber
+  // path and disappear when an older host omits the optional field (unit).
+  it('projects host continuation eligibility to light subscribers and revokes missing eligibility', () => {
+    const notify = vi.fn();
+    const unsubscribe = makerChatStore.subscribeLight(SESSION_ID, notify);
+    const failed = projection(SESSION_ID, { error: 'capacity', errorCanContinue: true });
+    onInputProjection?.(failed);
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(true);
+    const afterEligible = notify.mock.calls.length;
+    onInputProjection?.(projection(SESSION_ID, { error: 'capacity' }));
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(false);
+    expect(notify.mock.calls.length).toBeGreaterThan(afterEligible);
+    unsubscribe();
+  });
+
+  // #7119 round 2: projection eligibility belongs to one error episode. Real
+  // status/event/persist ingress must revoke it without another projection,
+  // while a duplicate terminal or paired done for the same error preserves it.
+  it.each(['turn-start', 'replacement', 'recoverable', 'persisted', 'clear'] as const)(
+    'revokes continuation eligibility at the %s boundary without a projection', async (boundary) => {
+      onInputProjection?.(projection(SESSION_ID, { error: 'capacity', errorCanContinue: true }));
+      const terminal = (message: string, persistId?: string, errorStatus?: number) => onEvent?.({
+        sessionId: SESSION_ID, persistId,
+        event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message, errorStatus } },
+      });
+      terminal('capacity', 'eligible-error', 503);
+      onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'claude-code', data: {} } });
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(true);
+      if (boundary === 'turn-start') {
+        emitStatus({ status: 'Running', isRunning: true });
+        terminal('capacity');
+      } else if (boundary === 'replacement') {
+        terminal('different error', 'different-id');
+      } else if (boundary === 'recoverable') {
+        onEvent?.({ sessionId: SESSION_ID,
+          event: { type: 'error', source: 'claude-code', data: { isTerminal: false, message: 'retrying' } } });
+      } else if (boundary === 'persisted') {
+        onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'eligible-error' });
+      } else {
+        makerChatStore.clearError(SESSION_ID);
+        await flushPromises();
+      }
+      expect(makerChatStore.getLightSnapshot(SESSION_ID).errorCanContinue).toBe(false);
+    },
+  );
+
+  it.each(['local', 'remote'])('retains IM completion provenance through %s ingress and resets it for App turns', (source) => {
+    if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const emit = (event: unknown) => {
+      const payload = { sessionId: SESSION_ID, event };
+      if (source === 'remote') onRemotePush?.({ deviceId: 'device-1', channel: 'maker:event', payload });
+      else onEvent?.(payload);
+    };
+    const turnOrigin = { kind: 'user', surface: 'im' };
+    emit({ type: 'status', data: { isRunning: true }, turnOrigin });
+    emit({ type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {}, turnOrigin });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: false } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'status', data: { isRunning: true } });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(false);
+  });
+
+  it('repairs remote text before new deltas and ignores a repair after durable takeover', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (channel: string, payload: unknown, deviceId = 'device-1') => onRemotePush?.({ deviceId, channel, payload });
+    const text = (value: string) => ({ sessionId: SESSION_ID, persistId: 'assistant-1',
+      event: { type: 'text', data: { text: value, isFinal: false } } });
+    const repair = { ...text('prefix suffix'), event: { type: 'text', data: {
+      text: 'prefix suffix', isFinal: false, isFullText: true, createdAt: '2026-09-08T00:00:01Z',
+    } } };
+    send('maker:event', text(' suffix'));
+    send('maker:session-sync', repair);
+    send('maker:session-sync', repair);
+    send('maker:event', text(' tail'));
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'prefix suffix tail',
+        createdAt: '2026-09-08T00:00:01.000Z', isStreaming: true }),
+    ]);
+    send('maker:session-sync', { ...repair, event: { type: 'text', data: { text: 'wrong owner', isFullText: true, isFinal: false } } }, 'device-2');
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('prefix suffix tail');
+    send('local-db:messages:created', { sessionId: SESSION_ID, message: {
+      id: 'db-id', clientId: 'assistant-1', role: 'assistant', content: 'durable answer', createdAt: '2026-09-08T00:00:01Z',
+    } });
+    send('maker:session-sync', repair);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'durable answer', isStreaming: false }),
+    ]);
+  });
+
   const MULTI_SESSION_IDS = Array.from({ length: 10 }, (_, i) => `${SESSION_ID}-multi-${i}`);
   const LRU_SESSION_IDS = Array.from({ length: 21 }, (_, i) => `${SESSION_ID}-lru-${i}`);
 
@@ -531,6 +644,7 @@ describe('makerChatStore text delta batching', () => {
   });
 
   afterEach(() => {
+    __resetComposerTypingActivityForTest();
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
     makerChatStore.__resetRemoteTerminalTombstonesForTest();
@@ -541,6 +655,124 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  it.each([false, true])('updates the SDK id mirror but persists only in the primary window (sidebar=%s)', async (sidebar) => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { search: sidebar ? '?sidebarWindow=1' : '' },
+    });
+    const event = { sessionId: SESSION_ID, event: { type: 'session_id', source: 'claude-code', data: 'sdk-live-1' } };
+    onEvent?.(event);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).sdkSessionId).toBe('sdk-live-1');
+    onEvent?.(event);
+    await flushPromises();
+    expect(sessionService.update).toHaveBeenCalledTimes(sidebar ? 0 : 1);
+    if (!sidebar) expect(sessionService.update).toHaveBeenCalledWith(SESSION_ID, { sdkSessionId: 'sdk-live-1' });
+  });
+
+  it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {
+    const persisted = [
+      serverMessage({
+        id: 'pi-thinking-row', clientId: 'pi-thinking', sessionId: SESSION_ID, role: 'thinking',
+        content: { kind: 'thinking', text: piReplyThinking, durationMs: 20_000, isRedacted: false },
+        createdAt: '2026-08-31T12:34:19.000Z',
+      }),
+      serverMessage({
+        id: 'pi-text-row', clientId: 'pi-text', sessionId: SESSION_ID, role: 'assistant', content: piReplyText,
+        agentMeta: { model: 'z-ai/glm-5.3-flash', stopReason: 'stop' },
+        createdAt: '2026-08-31T12:34:19.001Z',
+      }),
+    ];
+    const echo = () => persisted.forEach((message) => onDbMessageCreated?.({ sessionId: SESSION_ID, message }));
+    if (dbFirst) echo();
+    onEvent?.({ sessionId: SESSION_ID, event: {
+      type: 'thinking', source: 'pi', data: { stage: 'final', blockId: 'pi-thinking', text: piReplyThinking, durationMs: 20_000 },
+    } });
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'pi-text', event: {
+      type: 'text', source: 'pi', data: { text: piReplyText.slice(0, 5), isFinal: false },
+    } });
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'pi-text', event: {
+      type: 'text', source: 'pi', data: { text: piReplyText, isFinal: true, isFullText: true },
+    } });
+    if (!dbFirst) echo();
+    vi.advanceTimersByTime(32);
+    const assertReply = () => expect(makerChatStore.getSnapshot(SESSION_ID).messages.map(({ role, content }) => ({ role, content })))
+      .toEqual([{ role: 'thinking', content: piReplyThinking }, { role: 'assistant', content: piReplyText }]);
+    assertReply();
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'done', source: 'pi', data: { status: 'completed', result: piReplyText } } });
+    assertReply();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce(persisted);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertReply();
+  });
+
+  it('keeps durable Pi notices separate before, during and after a streamed answer and history reload', async () => {
+    const notice = (clientId: string, content: string, createdAt: string) => serverMessage({
+      id: `${clientId}-row`, clientId, sessionId: SESSION_ID, role: 'assistant', content,
+      agentMeta: null, createdAt,
+    });
+    const enabled = notice('plan-enabled', 'Plan mode enabled.', '2026-09-20T00:00:01Z');
+    const user = serverMessage({
+      id: 'user-row', clientId: 'user-input', sessionId: SESSION_ID, role: 'user',
+      content: JSON.stringify({ text: 'Discuss the report' }), createdAt: '2026-09-20T00:00:02Z',
+    });
+    const during = notice('extension-warning', 'Extension warning', '2026-09-20T00:00:04Z');
+    const after = notice('extension-finished', 'Extension finished', '2026-09-20T00:00:05Z');
+    const reply = serverMessage({
+      id: 'reply-row', clientId: 'reply', sessionId: SESSION_ID, role: 'assistant',
+      content: 'Complete answer', createdAt: '2026-09-20T00:00:03Z',
+      agentMeta: { model: 'test-model', stopReason: 'stop', turnCompleted: true },
+    });
+    for (const message of [enabled, user]) onDbMessageCreated?.({ sessionId: SESSION_ID, message });
+    const sendText = (text: string, isFinal: boolean) => onEvent?.({
+      sessionId: SESSION_ID, persistId: 'reply', event: {
+        type: 'text', source: 'pi', data: { text, isFinal, ...(isFinal ? { isFullText: true } : {}) },
+      },
+    });
+    sendText('Complete ', false);
+    vi.advanceTimersByTime(32);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: during });
+    sendText('answer', false);
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((row) => row.clientId === 'reply')?.content)
+      .toBe('Complete answer');
+    sendText('Complete answer', true);
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: reply });
+    onDbMessageCreated?.({ sessionId: SESSION_ID, message: after });
+    onEvent?.({ sessionId: SESSION_ID, event: {
+      type: 'done', source: 'pi', data: { status: 'completed', result: 'Complete answer' },
+    } });
+    const assertRows = () => {
+      const rows = makerChatStore.getSnapshot(SESSION_ID).messages;
+      expect(rows.map((row) => row.clientId)).toEqual(['plan-enabled', 'user-input', 'reply', 'extension-warning', 'extension-finished']);
+      expect(rows.find((row) => row.clientId === 'reply')).toMatchObject({ content: 'Complete answer', isStreaming: false });
+    };
+    assertRows();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce([enabled, user, reply, during, after]);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertRows();
+  });
+
+  it('keeps runtime recovery commentary hidden even when the provider marks it final', () => {
+    onEvent?.({ sessionId: SESSION_ID, persistId: 'recovery-note', event: { type: 'text', source: 'codex',
+      data: { text: 'Internal recovery', isFinal: false, phase: 'final_answer', runtimeRecovery: true } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({ assistantPhase: 'commentary' });
+  });
+
+  it('preserves provider final phase through text batching before a turn completes', () => {
+    for (const text of ['First ', 'words']) onEvent?.({ sessionId: SESSION_ID, persistId: 'phase-answer',
+      event: { type: 'text', source: 'codex', data: { text, isFinal: false, phase: 'final_answer' } } });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toContainEqual(expect.objectContaining({
+      content: 'First words', assistantPhase: 'final_answer', isStreaming: true,
+    }));
   });
 
   it('coalesces consecutive text deltas into one store notification', () => {
@@ -567,6 +799,162 @@ describe('makerChatStore text delta batching', () => {
         isStreaming: true,
       }),
     ]);
+
+    unsubscribe();
+  });
+
+  it('stretches the delta notification cadence while the composer is being typed in, then restores it', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    expect(isComposerTypingRecently()).toBe(true);
+    emitTextDelta('a');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(0);
+
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(1);
+
+    emitTextDelta('b');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(2);
+
+    // 打字信号过期后恢复 32ms 节奏。
+    vi.advanceTimersByTime(1_000);
+    expect(isComposerTypingRecently()).toBe(false);
+    emitTextDelta('c');
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(3);
+
+    unsubscribe();
+  });
+
+  it('stretches the deferred high-frequency (non-text) notification cadence while the composer is being typed in', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'claude-code',
+        data: { toolUseId: 'tool-typing-1', toolName: 'Read', input: { file_path: 'a.ts' } },
+      },
+      persistId: 'tool-typing-1',
+    });
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(0);
+    vi.advanceTimersByTime(218);
+    expect(notifyCount).toBe(1);
+
+    unsubscribe();
+  });
+
+  it('notifies permission interaction requests synchronously even inside the typing window', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    emitTextDelta('need approval');
+    emitInteractionRequest({
+      kind: 'permission',
+      requestId: 'perm-typing-1',
+      toolName: 'Read',
+      input: { file_path: 'a.ts' },
+    });
+
+    expect(notifyCount).toBeGreaterThanOrEqual(1);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission?.requestId).toBe('perm-typing-1');
+
+    unsubscribe();
+  });
+
+  it('keeps turn start and done status frames immediate inside the typing window', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    markComposerTypingActivity();
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+    emitStatus({ status: 'Done', isRunning: false });
+    expect(notifyCount).toBe(2);
+
+    unsubscribe();
+  });
+
+  it('defers pure running status refresh frames through the deferred queue', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+
+    emitStatus({ status: 'Generating...', isRunning: true, tokenUsage: 5 });
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(2);
+
+    unsubscribe();
+  });
+
+  it('carries queued text into the deferred queue when a running status refresh frame arrives while typing', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    emitStatus({ status: 'Generating...', isRunning: true });
+    expect(notifyCount).toBe(1);
+
+    markComposerTypingActivity();
+    emitTextDelta('queued ');
+    emitStatus({ status: 'Generating...', isRunning: true, tokenUsage: 3 });
+    expect(notifyCount).toBe(1);
+
+    vi.advanceTimersByTime(250);
+    expect(notifyCount).toBe(2);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.map((m) => m.role)).toContain('assistant');
+
+    unsubscribe();
+  });
+
+  it('defers running status refresh frames that carry a turnOrigin (scheduled-task turns)', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    const turnOrigin = { kind: 'scheduled', surface: 'im' };
+    onEvent?.({
+      sessionId: SESSION_ID,
+      turnOrigin,
+      event: { type: 'status', source: 'claude-code', data: { status: 'Generating...', isRunning: true } },
+    });
+    expect(notifyCount).toBe(1);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      turnOrigin,
+      event: { type: 'status', source: 'claude-code', data: { status: 'Generating...', isRunning: true, tokenUsage: 7 } },
+    });
+    expect(notifyCount).toBe(1);
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(2);
 
     unsubscribe();
   });
@@ -1483,6 +1871,68 @@ describe('makerChatStore text delta batching', () => {
     await flushPromises();
   });
 
+  it.each([
+    ['UNSUPPORTED_CAPABILITY', 'REMOTE_UNSUPPORTED'],
+    ['PRECONDITION_FAILED', 'REMOTE_FAILED'],
+  ])('keeps %s visible on the current remote card without retaining private error details', async (code, expected) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    const api = vi.mocked(window.electronAPI.maker.assistPluginOauth);
+    api.mockRejectedValueOnce(new Error(`Error invoking remote method: Error: [${code}] private-provider-payload`));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    await flushPromises();
+    let state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(state.pluginSetupCommandError).toEqual({ requestId: 'plugin-setup-1', revision: 1, code: expected });
+    expect(state.pendingPluginSetup?.steps[0].phase).toBe('pending');
+    expect(JSON.stringify(state)).not.toContain('private-provider-payload');
+    let finish!: (result: { accepted: boolean }) => void;
+    api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight?.action).toBe('run_action');
+    finish({ accepted: true });
+    await flushPromises();
+  });
+
+  it.each(['cancel', 'revision', 'owner'])('discards a remote authorization failure after %s changes', async (change) => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...pluginSetupRequest(1), remoteOauth: true });
+    let reject!: (error: Error) => void;
+    vi.mocked(window.electronAPI.maker.assistPluginOauth).mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'run_action', 'oauth:google-account');
+    if (change === 'cancel') makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'cancel');
+    if (change === 'revision') emitInteractionRequest({ ...pluginSetupRequest(2), remoteOauth: true });
+    if (change === 'owner') setDataOwnerGeneration('owner-b');
+    const before = makerChatStore.getSnapshot(SESSION_ID).pluginSetupCommandInFlight;
+    reject(new Error('[UNSUPPORTED_CAPABILITY] private-provider-payload'));
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(state.pluginSetupCommandError).toBeNull();
+    expect(state.pluginSetupCommandInFlight).toBe(before);
+  });
+
+  it('reports remote secret submission failure without retaining the input or provider payload', async () => {
+    deviceLinkInvoke.mockResolvedValue(null);
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    emitInteractionRequest({ ...inlinePluginSetupRequest(1), remoteSecret: true });
+    const api = vi.mocked(window.electronAPI.maker.submitRemotePluginSecret);
+    api.mockRejectedValueOnce(new Error('[UNSUPPORTED_CAPABILITY] synthetic-private-token'));
+    makerChatStore.respondToPluginSetup(SESSION_ID, 'plugin-setup-1', 'submit_form', 'inline:api-key', { value: 'synthetic-private-token' });
+    await flushPromises();
+    const state = makerChatStore.getSnapshot(SESSION_ID);
+    expect(api).toHaveBeenCalledOnce();
+    expect(state.pluginSetupCommandError?.code).toBe('REMOTE_UNSUPPORTED');
+    expect(state.pluginSetupCommandInFlight).toBeNull();
+    expect(JSON.stringify(state)).not.toContain('synthetic-private-token');
+  });
+
   it('submits an inline Secret only through the local narrow API without retaining it', async () => {
     emitInteractionRequest(inlinePluginSetupRequest(1));
 
@@ -1622,6 +2072,250 @@ describe('makerChatStore text delta batching', () => {
         role: 'assistant',
         content: 'a',
       }),
+    ]);
+  });
+
+  it('does not append a second bubble when a DB snapshot arrives before the first batched delta', () => {
+    emitTextDelta('draft');
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'assistant-1', role: 'assistant', content: 'complete answer',
+        createdAt: '2026-06-15T00:00:05.000Z',
+      },
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete answer', isStreaming: false }),
+    ]);
+  });
+
+  it.each(['local', 'remote'] as const)('preserves newer queued text when an older item is retracted through %s ingress', (source) => {
+    if (source === 'remote') remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (channel: string, payload: unknown) => {
+      if (source === 'remote') onRemotePush?.({ deviceId: 'device-1', channel, payload });
+      else if (channel === 'maker:event') onEvent?.(payload);
+      else onDbMessageDeleted?.(payload);
+    };
+    const text = (persistId: string, value: string) => send('maker:event', {
+      sessionId: SESSION_ID, persistId,
+      event: { type: 'text', source: 'codex', data: { text: value, isFinal: false } },
+    });
+    text('old-a', 'Withdrawn');
+    vi.advanceTimersByTime(32);
+    text('new-b', 'Next');
+    vi.advanceTimersByTime(32);
+    text('new-b', ' pending');
+    send('local-db:messages:deleted', { sessionId: SESSION_ID, clientId: 'old-a', clientIds: ['old-a'] });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'new-b', content: 'Next pending', isStreaming: true }),
+    ]);
+    text('new-b', ' tail');
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('Next pending tail');
+    // Legacy deltas without persistId inherit the current stream identity.
+    send('maker:event', { sessionId: SESSION_ID,
+      event: { type: 'text', data: { text: ' anonymous', isFinal: false } } });
+    send('local-db:messages:deleted', { sessionId: SESSION_ID, clientId: 'old-a' });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('Next pending tail anonymous');
+    // Deleting the actual batch owner must still discard it without resurrection.
+    send('maker:event', { sessionId: SESSION_ID,
+      event: { type: 'text', data: { text: ' discarded', isFinal: false } } });
+    send('local-db:messages:deleted', { sessionId: SESSION_ID, clientId: 'new-b' });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(0);
+  });
+
+  it('calibrates an earlier finalized item in place without sealing a newer stream', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'pi', data: { text: 'draft', isFinal: true, isFullText: true } },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta('new answer', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const previousMeta = makerChatStore.getSnapshot(SESSION_ID).lastAgentMeta;
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'pi',
+        data: { text: 'corrected', isFinal: true, isFullText: true },
+        agentMeta: { model: 'earlier-model' },
+      },
+      persistId: 'assistant-1',
+    });
+    emitTextDelta(' tail', SESSION_ID, 'assistant-2');
+    vi.advanceTimersByTime(32);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.streamingClientId).toBe('assistant-2');
+    expect(snapshot.lastAgentMeta).toBe(previousMeta);
+    expect(snapshot.messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'corrected', isStreaming: false, model: 'earlier-model' }),
+      expect.objectContaining({ clientId: 'assistant-2', content: 'new answer tail', isStreaming: true }),
+    ]);
+  });
+
+  it('ignores late deltas and partial final blocks for an already finalized item', () => {
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-1', role: 'assistant', content: 'full answer', createdAt: new Date().toISOString() },
+    });
+    emitTextDelta('stale', SESSION_ID, 'assistant-1');
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'text', source: 'claude-code', data: { text: 'answer', isFinal: true } },
+      persistId: 'assistant-1',
+    });
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'full answer', isStreaming: false }),
+    ]);
+  });
+
+  it('replaces an in-flight prefix but preserves a durable item against a non-final snapshot', () => {
+    emitTextDelta('prefix', SESSION_ID, 'assistant-1');
+    vi.advanceTimersByTime(32);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'complete snapshot', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-1',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true }),
+    ]);
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-2', role: 'assistant', content: 'durable text', createdAt: new Date().toISOString() },
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'late streaming snapshot', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-2',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'assistant-2', content: 'durable text', isStreaming: false }),
+    ]));
+  });
+
+  it('merges current stream metadata from a remote full-text snapshot and preserves it when absent', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (channel: string, text: string, agentMeta?: Record<string, unknown>) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel,
+        payload: {
+          sessionId: SESSION_ID, persistId: 'assistant-1',
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal: false, isFullText: channel === 'maker:session-sync' },
+          },
+        },
+      });
+    };
+    pushText('maker:event', 'prefix');
+    vi.advanceTimersByTime(32);
+    // Leave a delta queued so the snapshot also exercises the batching boundary.
+    pushText('maker:event', ' queued');
+    pushText('maker:session-sync', 'complete snapshot', { model: 'old-model', botPrivateReply: true });
+    const agentMeta = {
+      model: 'updated-model', parentUuid: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+    };
+    // Metadata can change even when the authoritative text is identical.
+    pushText('maker:session-sync', 'complete snapshot', agentMeta);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-1', streamingText: 'complete snapshot', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true,
+        model: 'updated-model', parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+
+    pushText('maker:session-sync', 'complete snapshot without metadata');
+    pushText('maker:event', ' tail');
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingText: 'complete snapshot without metadata tail', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        content: 'complete snapshot without metadata tail', model: 'updated-model',
+        parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+  });
+
+  it('preserves durable text and newer stream metadata when an older snapshot arrives', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (persistId: string, text: string, agentMeta: Record<string, unknown>, isFinal: boolean) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel: isFinal ? 'maker:event' : 'maker:session-sync',
+        payload: {
+          sessionId: SESSION_ID, persistId,
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal, isFullText: true },
+          },
+        },
+      });
+    };
+    pushText('assistant-1', 'old answer', { model: 'old-model' }, true);
+    const currentMeta = { model: 'current-model', parentUuid: 'current-parent', botPrivateReply: false };
+    pushText('assistant-2', 'new answer', currentMeta, false);
+    pushText('assistant-2', 'new answer complete', currentMeta, false);
+    pushText('assistant-1', 'repaired old answer', {
+      model: 'repaired-model', parentUuid: 'old-parent', turnCompleted: true, botPrivateReply: true,
+    }, false);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-2', streamingText: 'new answer complete', lastAgentMeta: currentMeta,
+      messages: [
+        expect.objectContaining({
+          clientId: 'assistant-1', content: 'old answer', isStreaming: false,
+          model: 'old-model',
+        }),
+        expect.objectContaining({
+          clientId: 'assistant-2', content: 'new answer complete', isStreaming: true,
+          model: 'current-model', parentToolUseId: 'current-parent', botPrivateReply: false,
+        }),
+      ],
+    });
+  });
+
+  it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {
+    const start = {
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'start', blockId: 'thinking-replayed', startedAt: Date.now() } },
+    };
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'reasoning' } },
+    });
+    onEvent?.(start);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'reasoning', isStreaming: true }),
+    ]);
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: {
+        clientId: 'thinking-replayed', role: 'thinking',
+        content: { kind: 'thinking', text: 'finished reasoning', durationMs: 5000, isRedacted: false },
+        createdAt: new Date().toISOString(),
+      },
+    });
+    onEvent?.(start);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'thinking', source: 'pi', data: { stage: 'delta', blockId: 'thinking-replayed', text: 'late delta' } },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'thinking-replayed', content: 'finished reasoning', isStreaming: false }),
     ]);
   });
 
@@ -1841,7 +2535,7 @@ describe('makerChatStore text delta batching', () => {
 
     vi.advanceTimersByTime(32);
     expect(notifyCount).toBe(1);
-    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
     unsubscribe();
   });
 
@@ -1900,7 +2594,25 @@ describe('makerChatStore text delta batching', () => {
     }
   });
 
-  it('does not starve a Map-only sidebar patch behind 8 continuously active sessions', () => {
+  it.each(['user', 'assistant'] as const)(
+    'does not invent a sorting timestamp for a persisted %s message',
+    (role) => {
+      vi.mocked(sessionsBus.emitPatch).mockClear();
+      emitDbMessageCreated({
+        clientId: 'goal-round-message',
+        role,
+        content: 'goal intermediate round',
+        createdAt: '2026-10-24T12:00:00.000Z',
+      });
+      vi.runOnlyPendingTimers();
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+        expect.objectContaining({ clientId: 'goal-round-message', role }),
+      ]);
+      expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not advance sidebar activity for repeated tool DB echoes during streaming', () => {
     const patchOnlySessionId = MULTI_SESSION_IDS[8];
     onEvent?.({
       sessionId: patchOnlySessionId,
@@ -1936,7 +2648,6 @@ describe('makerChatStore text delta batching', () => {
         },
       });
     }
-    // 完全相同的 DB echo 让 setState 走 no-op，只剩 sidebar patch 待发。
     emitDbMessageCreated(persistedTool, patchOnlySessionId);
 
     vi.advanceTimersByTime(32);
@@ -1954,10 +2665,10 @@ describe('makerChatStore text delta batching', () => {
     }
     vi.advanceTimersByTime(32);
 
-    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
-    expect(sessionsBus.emitPatch).toHaveBeenCalledWith(patchOnlySessionId, {
-      updatedAt: expect.any(String),
-    });
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(patchOnlySessionId).messages).toEqual([
+      expect.objectContaining({ clientId: 'fair-tool-row', role: 'tool_use' }),
+    ]);
   });
 
   it('flushes pending text before a closed status finalizes the session', () => {
@@ -2606,6 +3317,489 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
   });
 
+  // 错误落库后交给历史(用户没在看、或之后离开过)，绑定随 live 横幅一起清掉；main 投影随后
+  // 又把同一条错误点亮。关闭时按已加载历史的尾部错误行认领：同一次错误才标记，绝不标无关行。
+  const errorTailUserRow = serverMessage({
+    id: 'tail-user-row',
+    clientId: 'tail-user',
+    sessionId: SESSION_ID,
+    role: 'user',
+    content: JSON.stringify({ text: 'hi' }),
+    createdAt: '2026-10-16T00:00:01.000Z',
+  });
+  function persistedErrorRow(
+    clientId: string,
+    message: string,
+    extra: Record<string, unknown> = {},
+    createdAt = '2026-10-16T00:00:02.000Z',
+  ): Message {
+    return serverMessage({
+      id: `${clientId}-row`,
+      clientId,
+      sessionId: SESSION_ID,
+      role: 'error',
+      content: { message, ...extra },
+      createdAt,
+    });
+  }
+  async function reloadHistory(rows: Message[]): Promise<void> {
+    vi.mocked(messageService.list).mockResolvedValueOnce(rows);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).historyLoaded).toBe(true);
+  }
+
+  it.each([
+    ['main 落库的普通错误', 'main'],
+    ['界面补写的 Key 失效错误', 'deferred'],
+  ] as const)('后台落库后被投影重新点亮的%s，点关闭标记尾部同一行', async (_label, writer) => {
+    const message = LITELLM_INVALID_PROXY_TOKEN;
+    if (writer === 'main') {
+      onInputProjection?.(projection(SESSION_ID, { error: message }));
+      onEvent?.({
+        sessionId: SESSION_ID,
+        persistId: 'err-persist-worker',
+        event: {
+          type: 'error',
+          source: 'claude-code',
+          data: { isTerminal: true, message, errorStatus: 401 },
+        },
+      });
+    } else {
+      vi.mocked(window.electronAPI.modelAccess.retry).mockResolvedValueOnce({
+        state: 'failed',
+        source: null,
+        endpoint: null,
+        errorCode: 'NETWORK_ERROR',
+        accountTier: null,
+      });
+      input.persistTurnErrorDeferred.mockResolvedValueOnce('err-persist-worker');
+      onInputProjection?.(
+        projection(SESSION_ID, {
+          error: message,
+          recovery: { kind: 'active-turn', item: activeTurnRecoveryItem() },
+          errorRetryText: 'retry:user-client',
+        }),
+      );
+      emitGatewayProxyTokenFailure({
+        isTerminal: true,
+        reason: 'gateway-proxy-token-invalid',
+        message,
+      });
+    }
+    await flushPromises();
+    await flushPromises();
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-worker' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    await reloadHistory([
+      errorTailUserRow,
+      persistedErrorRow(
+        'err-persist-worker',
+        message,
+        writer === 'deferred' ? { reason: 'gateway-proxy-token-invalid' } : {},
+      ),
+    ]);
+    // 打开 Worker / 任何一次投影推送：main 仍未处置这次错误。
+    onInputProjection?.(projection(SESSION_ID, { error: message }));
+    makerChatStore.enterView(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(message);
+
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-worker');
+    expect(makerChatStore.getSnapshot(SESSION_ID).disposedErrorPersistId).toBe('err-persist-worker');
+    makerChatStore.leaveView(SESSION_ID);
+  });
+
+  it('看过后离开视图、再被投影点亮的错误，点关闭标记尾部同一行', async () => {
+    const message = 'worker turn failed';
+    makerChatStore.enterView(SESSION_ID);
+    onInputProjection?.(projection(SESSION_ID, { error: message }));
+    onEvent?.({
+      sessionId: SESSION_ID,
+      persistId: 'err-persist-viewed',
+      event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message } },
+    });
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-viewed' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(message);
+
+    makerChatStore.leaveView(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBeNull();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-viewed', message)]);
+    onInputProjection?.(projection(SESSION_ID, { error: message }));
+    makerChatStore.enterView(SESSION_ID);
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-viewed');
+    makerChatStore.leaveView(SESSION_ID);
+  });
+
+  it('error 事件带出的 HTTP 状态后缀不影响认领尾部同一行', async () => {
+    // 落库行不存 errorStatus；横幅文案末尾的「(HTTP 500)」要去掉再比。
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-status', 'upstream failed')]);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'claude-code',
+        data: { isTerminal: true, message: 'upstream failed', errorStatus: 500 },
+      },
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe('upstream failed (HTTP 500)');
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-status');
+  });
+
+  it('认领到的行落库标记失败时撤掉跳过标记，尾部错误提示重新出现', async () => {
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-fail', 'worker turn failed')]);
+    onInputProjection?.(projection(SESSION_ID, { error: 'worker turn failed' }));
+    vi.mocked(messageService.dismissError).mockRejectedValueOnce(new Error('db busy'));
+
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    await flushPromises();
+
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-fail');
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    // 与 CCAgentSessionView 尾部错误提示同一判定：最后一条未处置、也不是被跳过的那一行。
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.messages.at(-1)).toEqual(
+      expect.objectContaining({ clientId: 'err-persist-fail', role: 'error' }),
+    );
+    expect(snapshot.messages.at(-1)?.errorDismissed).toBeFalsy();
+    expect(snapshot.disposedErrorPersistId).toBeNull();
+  });
+
+  // Codex review：本机错误 A 交给历史后，scheduler 发送前失败可直接把错误换成 B，中间没有
+  // 新一轮启动，也没有 error:null 投影。关闭 B 只能标 B 的行，不能标 A。
+  it('发送前失败直接换成新错误 B：关闭时 B 未落库则不标 A，B 落库后只补标 B', async () => {
+    onInputProjection?.(projection(SESSION_ID, { error: 'error A' }));
+    onEvent?.({
+      sessionId: SESSION_ID,
+      persistId: 'err-persist-A',
+      event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'error A' } },
+    });
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-A', 'error A')]);
+
+    // B 还没落库：尾部仍是 A，文案不同。
+    onInputProjection?.(projection(SESSION_ID, { error: 'error B' }));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).not.toHaveBeenCalled();
+
+    // B 随后落库：在途投影再点亮 B(用户已关过它)，落库信号不绑这个重亮的横幅，补标 B 的行。
+    const rowsWithB = [
+      errorTailUserRow,
+      persistedErrorRow('err-persist-A', 'error A'),
+      persistedErrorRow('err-persist-B', 'error B', {}, '2026-10-16T00:00:03.000Z'),
+    ];
+    onInputProjection?.(projection(SESSION_ID, { error: 'error B' }));
+    vi.mocked(messageService.list).mockResolvedValueOnce(rowsWithB);
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(1);
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-B');
+
+    // 重载后尾部是已被跳过的 B；再关一次重亮的横幅也不会去标 A。
+    onInputProjection?.(projection(SESSION_ID));
+    await reloadHistory(rowsWithB);
+    onInputProjection?.(projection(SESSION_ID, { error: 'error B' }));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(1);
+  });
+
+  it('历史未加载或尾部不是未处置的 error 行时不标记任何行', async () => {
+    // 历史未加载。
+    onInputProjection?.(projection(SESSION_ID, { error: 'error A' }));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+
+    // 尾部是普通消息。
+    await reloadHistory([persistedErrorRow('err-persist-old', 'error A'), {
+      ...errorTailUserRow,
+      createdAt: '2026-10-16T00:00:05.000Z',
+    }]);
+    onInputProjection?.(projection(SESSION_ID, { error: 'error A' }));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.at(-1)?.role).toBe('user');
+
+    // 尾部 error 行已处置。
+    makerChatStore.purgeSession(SESSION_ID);
+    await reloadHistory([
+      errorTailUserRow,
+      persistedErrorRow('err-persist-done', 'error A', { dismissed: true }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.at(-1)).toEqual(
+      expect.objectContaining({ clientId: 'err-persist-done', errorDismissed: true }),
+    );
+    onInputProjection?.(projection(SESSION_ID, { error: 'error A' }));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+
+    expect(messageService.dismissError).not.toHaveBeenCalled();
+  });
+
+  // 人工 review：A 已交给历史，同文案的 B 被投影点亮、落库信号到达前就被关掉。兜底只看得到
+  // 尾部的 A；B 落库后必须补标，否则刷新后 B 又冒出来。
+  async function closeSameTextErrorBeforeItPersists(
+    message: string,
+    extra: Partial<AgentInputProjection> = {},
+  ): Promise<void> {
+    onInputProjection?.(projection(SESSION_ID, { ...extra, error: message }));
+    onEvent?.({
+      sessionId: SESSION_ID,
+      persistId: 'err-persist-A',
+      event: { type: 'error', source: 'claude-code', data: { isTerminal: true, message } },
+    });
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-A' });
+    await reloadHistory([errorTailUserRow, persistedErrorRow('err-persist-A', message)]);
+
+    onInputProjection?.(projection(SESSION_ID, { ...extra, error: message }));
+    input.clearError.mockResolvedValueOnce(projection(SESSION_ID, extra));
+    makerChatStore.clearError(SESSION_ID);
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(1);
+    expect(messageService.dismissError).toHaveBeenCalledWith(SESSION_ID, 'err-persist-A');
+  }
+  function persistedRowsWithB(message: string, bExtra: Record<string, unknown> = {}): Message[] {
+    return [
+      errorTailUserRow,
+      persistedErrorRow('err-persist-A', message, { dismissed: true }),
+      persistedErrorRow('err-persist-B', message, bExtra, '2026-10-16T00:00:03.000Z'),
+    ];
+  }
+
+  it('同文案的新错误落库前被关闭：落库信号到达后补标那一行，刷新后不再出现', async () => {
+    const message = 'worker turn failed';
+    await closeSameTextErrorBeforeItPersists(message);
+
+    vi.mocked(messageService.list).mockResolvedValueOnce(persistedRowsWithB(message));
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(2);
+    expect(messageService.dismissError).toHaveBeenLastCalledWith(SESSION_ID, 'err-persist-B');
+    expect(makerChatStore.getSnapshot(SESSION_ID).disposedErrorPersistId).toBe('err-persist-B');
+
+    // 历史重载即使先于这次写读到 B 未处置，尾部横幅也跳过 B。
+    await reloadHistory(persistedRowsWithB(message));
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.messages.at(-1)?.clientId).toBe('err-persist-B');
+    expect(snapshot.disposedErrorPersistId).toBe('err-persist-B');
+
+    // 只补标一次：之后再有行落库不再去读、也不再标。
+    const listCalls = vi.mocked(messageService.list).mock.calls.length;
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-C' });
+    await flushPromises();
+    expect(vi.mocked(messageService.list).mock.calls.length).toBe(listCalls);
+    expect(messageService.dismissError).toHaveBeenCalledTimes(2);
+  });
+
+  // Greptile review：关闭请求返回前，在途的同文案投影又把横幅点亮；落库信号此时不能绑到这个
+  // 重亮的横幅，否则走不到补标，横幅随后被清掉，这一行仍未处置。
+  it('关闭后同文案横幅被在途投影重新点亮：落库信号不绑定横幅，仍补标那一行', async () => {
+    const message = 'worker turn failed';
+    await closeSameTextErrorBeforeItPersists(message);
+    onInputProjection?.(projection(SESSION_ID, { error: message }));
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(message);
+
+    vi.mocked(messageService.list).mockResolvedValueOnce(persistedRowsWithB(message));
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).errorPersistId).toBeNull();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(2);
+    expect(messageService.dismissError).toHaveBeenLastCalledWith(SESSION_ID, 'err-persist-B');
+
+    // 关闭请求生效后的投影清掉横幅；重载历史后尾部是 B，但已被跳过，不再出提示。
+    onInputProjection?.(projection(SESSION_ID));
+    await reloadHistory(persistedRowsWithB(message));
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.error).toBeNull();
+    expect(snapshot.messages.at(-1)?.clientId).toBe('err-persist-B');
+    expect(snapshot.disposedErrorPersistId).toBe('err-persist-B');
+  });
+
+  it.each([
+    ['新一轮启动', () => emitStatus({ status: 'Running', isRunning: true })],
+    [
+      '投影带来文案不同的新错误',
+      () => {
+        onInputProjection?.(projection(SESSION_ID, { error: 'another failure' }));
+        // 新错误在别处被关掉(横幅还亮着时落库信号会直接绑到它，走不到补标)。
+        onInputProjection?.(projection(SESSION_ID));
+      },
+    ],
+    [
+      '队列出现新消息',
+      () =>
+        onInputProjection?.(
+          projection(SESSION_ID, { pendingQueue: [activeTurnRecoveryItem('next', 'next-client')] }),
+        ),
+    ],
+  ] as const)('关闭后%s，之后同文案的行落库不再补标', async (_label, invalidate) => {
+    const message = 'worker turn failed';
+    await closeSameTextErrorBeforeItPersists(message);
+
+    invalidate();
+    // 意图已作废：B 落库信号到达时不再去读，也不标。
+    const listCalls = vi.mocked(messageService.list).mock.calls.length;
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(vi.mocked(messageService.list).mock.calls.length).toBe(listCalls);
+    expect(messageService.dismissError).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex / Greptile review：没被受理的发送/插话没有产生新一轮，不能提前作废补标意图。
+  const heldQueue: Partial<AgentInputProjection> = {
+    pendingQueue: [activeTurnRecoveryItem('held', 'held-client')],
+    queuePaused: true,
+  };
+  it.each([
+    [
+      'sendMessage 被 beforeEnqueue 拒绝',
+      {},
+      () =>
+        makerChatStore.sendMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+          undefined,
+          undefined,
+          { beforeEnqueue: async () => false },
+        ),
+    ],
+    [
+      // 已有暂停队列时发送先乐观排进队列，再跑 beforeEnqueue；乐观项不算队列增长。
+      'sendMessage 在已有暂停队列时被 beforeEnqueue 拒绝',
+      heldQueue,
+      () =>
+        makerChatStore.sendMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+          undefined,
+          undefined,
+          { beforeEnqueue: async () => false },
+        ),
+    ],
+    [
+      'steerMessage 被在飞插话拒绝',
+      {},
+      () => {
+        onInputProjection?.(projection(SESSION_ID, { steeringQueueClientIds: ['steer-in-flight'] }));
+        return makerChatStore.steerMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+        );
+      },
+    ],
+    [
+      'steerMessage 被 beforeEnqueue 拒绝',
+      {},
+      () =>
+        makerChatStore.steerMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+          undefined,
+          undefined,
+          { beforeEnqueue: async () => false },
+        ),
+    ],
+    [
+      'steerMessage 被主进程拒绝且未物化进队列',
+      {},
+      () => {
+        input.steer.mockResolvedValueOnce(false);
+        return makerChatStore.steerMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+        );
+      },
+    ],
+  ] as const)('关闭后%s：意图保留，同文案的行落库后仍补标', async (_label, extra, send) => {
+    const message = 'worker turn failed';
+    await closeSameTextErrorBeforeItPersists(message, extra);
+
+    await expect(send()).resolves.toBe(false);
+    vi.mocked(messageService.list).mockResolvedValueOnce(persistedRowsWithB(message));
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(messageService.dismissError).toHaveBeenCalledTimes(2);
+    expect(messageService.dismissError).toHaveBeenLastCalledWith(SESSION_ID, 'err-persist-B');
+  });
+
+  it.each([
+    [
+      '发送被接受(直接派发、队列不增长)',
+      () => {
+        input.enqueue.mockResolvedValueOnce(projection(SESSION_ID));
+        return makerChatStore.sendMessage(
+          SESSION_ID,
+          'next',
+          MODEL,
+          EFFORT,
+          PERMISSION_MODE,
+          WORKING_DIR,
+        );
+      },
+    ],
+    [
+      '插话被主进程受理',
+      () =>
+        makerChatStore.steerMessage(SESSION_ID, 'next', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR),
+    ],
+  ] as const)('关闭后%s：意图作废，同文案的行落库不再补标', async (_label, send) => {
+    const message = 'worker turn failed';
+    await closeSameTextErrorBeforeItPersists(message);
+
+    await expect(send()).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(0);
+
+    const listCalls = vi.mocked(messageService.list).mock.calls.length;
+    onErrorPersisted?.({ sessionId: SESSION_ID, persistId: 'err-persist-B' });
+    await flushPromises();
+    await flushPromises();
+    expect(vi.mocked(messageService.list).mock.calls.length).toBe(listCalls);
+    expect(messageService.dismissError).toHaveBeenCalledTimes(1);
+  });
+
   it('does not treat a custom LiteLLM provider token error as Cindy credentials', async () => {
     onInputProjection?.(
       projection(SESSION_ID, {
@@ -3081,6 +4275,131 @@ describe('makerChatStore text delta batching', () => {
     expect(snap.messages.some((m) => m.role === 'user' && m.content === 'queued')).toBe(false);
   });
 
+  it.each(['sendMessage', 'steerMessage'] as const)('correlates voice input through %s without serializing the renderer callback', async (method) => {
+    const created = vi.fn<(id: string) => void>();
+    await expect(makerChatStore[method](SESSION_ID, 'spoken sentence', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+      undefined, undefined, { onInputCreated: created, beforeEnqueue: async () => true, slashCommandRanges: [] })).resolves.toBe(true);
+    expect(created).toHaveBeenCalledOnce();
+    const transport = method === 'sendMessage' ? input.enqueue : input.steer;
+    expect(transport).toHaveBeenCalledWith(SESSION_ID, expect.objectContaining({
+      clientId: created.mock.calls[0][0],
+      chatMessage: expect.objectContaining({ clientId: created.mock.calls[0][0], content: 'spoken sentence', slashCommandRanges: [] }),
+    }), expect.any(Object));
+    expect(JSON.stringify(transport.mock.calls)).not.toContain('onInputCreated');
+  });
+
+  it.each(['sendMessage', 'steerMessage'] as const)('cancels a retired voice call before %s reaches the main queue', async (method) => {
+    await expect(makerChatStore[method](SESSION_ID, 'cancelled speech', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+      undefined, undefined, { beforeEnqueue: async () => false })).resolves.toBe(false);
+    expect(input.enqueue).not.toHaveBeenCalled(); expect(input.steer).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages.some(m => m.content === 'cancelled speech')).toBe(false);
+  });
+
+  it('shows a local busy send before the enqueue projection settles', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let queued: AgentInputQueuedMessage | undefined;
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(
+      async (_sessionId: string, item: AgentInputQueuedMessage) => {
+        queued = item;
+        return new Promise<AgentInputProjection>((resolve) => {
+          resolveEnqueue = resolve;
+        });
+      },
+    );
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'local busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message', isPendingEnqueue: true }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([]);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: queued ? [queued] : [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([
+      expect.objectContaining({ text: 'local busy message' }),
+    ]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue[0]?.isPendingEnqueue).toBeUndefined();
+  });
+
+  it('keeps a busy send visible when enqueue immediately dispatches and projects an empty queue', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    let resolveEnqueue!: (value: AgentInputProjection) => void;
+    input.enqueue.mockImplementationOnce(async () => new Promise<AgentInputProjection>((resolve) => {
+      resolveEnqueue = resolve;
+    }));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'immediately dispatched message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toHaveLength(1);
+
+    resolveEnqueue(projection(SESSION_ID, { pendingQueue: [] }));
+    await expect(send).resolves.toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual([]);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({
+        role: 'user',
+        content: 'immediately dispatched message',
+        isPendingPersist: true,
+      }),
+    ]);
+  });
+
+  it('removes a locally optimistic busy send when enqueue fails before acceptance', async () => {
+    makerChatStore.__applyStatusUpdateForTest(SESSION_ID, {
+      sessionId: SESSION_ID,
+      status: 'running',
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      isRunning: true,
+    });
+    input.enqueue.mockRejectedValueOnce(new Error('transport unavailable'));
+
+    const send = makerChatStore.sendMessage(
+      SESSION_ID,
+      'failed busy message',
+      MODEL,
+      EFFORT,
+      PERMISSION_MODE,
+      WORKING_DIR,
+    );
+    await expect(send).resolves.toBe(false);
+    const snapshot = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snapshot.pendingQueue.some((item) => item.text === 'failed busy message')).toBe(false);
+    expect(snapshot.messages.some((item) => item.content === 'failed busy message')).toBe(false);
+  });
+
   it('dedupes the main DB-created ack for optimistic user bubbles', async () => {
     input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
 
@@ -3104,6 +4423,22 @@ describe('makerChatStore text delta batching', () => {
 
     const messages = makerChatStore.getSnapshot(SESSION_ID).messages;
     expect(messages.filter((m) => m.role === 'user' && m.content === 'accepted')).toHaveLength(1);
+  });
+
+  it('soft eviction skips a left window that still holds an unconfirmed local bubble', async () => {
+    input.enqueue.mockImplementationOnce(async (sessionId: string) => projection(sessionId));
+    makerChatStore.sendMessage(SESSION_ID, 'unconfirmed', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR);
+    await flushPromises();
+    makerChatStore.enterView(SESSION_ID)();
+    try {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget({ messages: 0, characters: 0 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+        expect.objectContaining({ content: 'unconfirmed', isPendingPersist: true }),
+      ]);
+    } finally {
+      makerChatStore.__activeViewTest.setSoftEvictionBudget(null);
+    }
   });
 
   it('shows a device-link busy send before remote preflight and enqueue settle', async () => {
@@ -4398,7 +5733,14 @@ describe('makerChatStore text delta batching', () => {
     ).toBeUndefined();
   });
 
-  it('calls the composer recovery callback when a deferred remote send later fails permanently', async () => {
+  // #6530: the specific source-access error must release the outbox into editable draft recovery.
+  it.each([
+    ['permission denied', false],
+    ['[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.', false],
+    // #6530 / r4322420405: the source failure proves no dispatch even if the target goes offline.
+    ['[DEVICE_LINK_MEDIA_ACCESS_DENIED] Cannot read the source attachment.', true],
+  ] as const)(
+    'calls the composer recovery callback after permanent failure: %s (offline=%s)', async (failure, offline) => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
     const recoveryUrl = 'cindy-media://blobs/recover-me.png';
     let enqueueAttempts = 0;
@@ -4420,9 +5762,12 @@ describe('makerChatStore text delta batching', () => {
         enqueueAttempts += 1;
         queued = args[1] as AgentInputQueuedMessage;
         if (enqueueAttempts === 1) throw new Error('[NOT_CONNECTED] target offline');
-        throw new Error('permission denied');
+        throw new Error(failure);
       }
-      if (channel === 'maker:input:get-projection') return projection(SESSION_ID);
+      if (channel === 'maker:input:get-projection') {
+        if (offline && enqueueAttempts >= 2) throw new Error('[NOT_CONNECTED] target offline');
+        return projection(SESSION_ID);
+      }
       throw new Error(`unexpected remote channel: ${channel}`);
     });
 
@@ -4449,6 +5794,10 @@ describe('makerChatStore text delta batching', () => {
     await flushPromises();
 
     expect(enqueueAttempts).toBe(2);
+    // #6530 real-device regression: keep the code until the visible banner localizes it.
+    if (failure.includes('DEVICE_LINK_MEDIA_ACCESS_DENIED')) {
+      expect(makerChatStore.getSnapshot(SESSION_ID).error).toContain('[DEVICE_LINK_MEDIA_ACCESS_DENIED]');
+    }
     expect(onRemoteOptimisticFailure).toHaveBeenCalledWith(queued?.clientId, expect.any(Error));
     expect(onRemoteOptimisticFailure.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(setRemoteOptimisticAttachmentUrls).mock.invocationCallOrder[
@@ -4646,6 +5995,56 @@ describe('makerChatStore text delta batching', () => {
     expect(restore).toHaveBeenCalledTimes(1);
   });
 
+  // #2281 / unit: exercise the public steer entry with each explicit mirror
+  // guard. Existing rejection tests protect error recovery, not immediate user
+  // feedback or the no-send boundary. ChatInput's false-result restore path is
+  // covered by chatInputAnnotationAbort.test.tsx.
+  it.each([
+    { steeringQueueClientIds: ['steer-in-flight'] },
+    { queueAbortPending: true },
+  ])('immediately reports an unsent composer steer without dispatching: %j', async (guard) => {
+    onInputProjection?.(projection(SESSION_ID, guard));
+    // A delayed refresh must not delay feedback or retry the rejected input.
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.getProjection.mockReturnValueOnce(new Promise<AgentInputProjection>((resolve) => {
+      resolveProjection = resolve;
+    }));
+    const before = makerChatStore.getSnapshot(SESSION_ID);
+    const onInputCreated = vi.fn();
+    const beforeEnqueue = vi.fn(async () => true);
+    const file: AttachedFile = {
+      id: 'draft-image', name: 'draft.png', path: 'draft.png', ext: '.png',
+      size: 10, category: 'image', mimeType: 'image/png',
+      annotationStrokes: [{ points: [{ x: 0.1, y: 0.2 }, { x: 0.3, y: 0.4 }] }],
+    };
+    try {
+      const result = makerChatStore.steerMessage(
+        SESSION_ID, 'keep my draft', MODEL, EFFORT, PERMISSION_MODE, WORKING_DIR,
+        [file], undefined, { onInputCreated, beforeEnqueue },
+      );
+      expect(getToastSnapshot()).toContainEqual(expect.objectContaining({
+        variant: 'warning', message: i18n.t('newChat.chatInput.steerNotSent'),
+      }));
+      await expect(result).resolves.toBe(false);
+      expect(makerChatStore.getSnapshot(SESSION_ID)).toBe(before);
+      expect(input.getProjection).toHaveBeenCalledWith(SESSION_ID);
+      resolveProjection(projection(SESSION_ID));
+      await flushPromises();
+      expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(before.messages);
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingQueue).toEqual(before.pendingQueue);
+      expect(input.steer).not.toHaveBeenCalled();
+      expect(input.enqueue).not.toHaveBeenCalled();
+      expect(onInputCreated).not.toHaveBeenCalled();
+      expect(beforeEnqueue).not.toHaveBeenCalled();
+      expect(messageService.create).not.toHaveBeenCalled();
+      expect(sessionService.touchUserSend).not.toHaveBeenCalled();
+      expect(window.electronAPI.cacheMediaForSession).not.toHaveBeenCalled();
+    } finally {
+      toast.dismissAll();
+      vi.advanceTimersByTime(300);
+    }
+  });
+
   it('drops a standalone late projection when the data owner changes', async () => {
     remoteProjectsStore.setDeviceSessions('device-1', 'Test Mac', [
       { id: SESSION_ID, status: 'active', title: 'Remote task' } as Session,
@@ -4702,6 +6101,9 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).queueInteractionLocks).toEqual([
       'new-owner-lock',
     ]);
+    // This session remains sticky-remote even after the local remote-project
+    // projection is cleared. Account teardown must not finalize it locally:
+    // the controlled Desktop owns the running task and its steer marker.
     expect(makerChatStore.getSnapshot(SESSION_ID).steeringQueueClientIds).toEqual([
       'already-steering',
     ]);
@@ -5180,6 +6582,54 @@ describe('makerChatStore text delta batching', () => {
       }
     },
   );
+
+  it('keeps the archived tombstone through an optimistic unarchive until the write confirms', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    remoteProjectsStore.setDeviceSessions(
+      'device-1',
+      'Test Mac',
+      [{ id: SESSION_ID, status: 'archived', title: 'Archived task' } as Session],
+      'archived',
+    );
+    onRemotePush?.({
+      deviceId: 'device-1',
+      channel: 'local-db:sessions:patched',
+      payload: { sessionId: SESSION_ID, patch: { status: 'archived' } },
+    });
+    const lateMessage = (id: string) => ({
+      deviceId: 'device-1',
+      channel: 'local-db:messages:created',
+      payload: {
+        sessionId: SESSION_ID,
+        message: serverMessage({
+          id,
+          sessionId: SESSION_ID,
+          clientId: `${id}-client`,
+          role: 'user',
+          content: id,
+          createdAt: '2026-08-02T00:00:00.000Z',
+        }),
+      },
+    });
+
+    // 恢复写库仍在途:投影已是 active,但墓碑只认分片里的权威行,迟到帧照旧丢弃。
+    const token = remoteProjectsStore.beginPendingStatus('device-1', SESSION_ID, 'active');
+    expect(
+      remoteProjectsStore.getMergedRemoteSessions().find((s) => s.id === SESSION_ID)?.status,
+    ).toBe('active');
+    onRemotePush?.(lateMessage('during-write'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库失败回滚 —— 墓碑仍在。
+    remoteProjectsStore.rollbackPendingStatus(token);
+    onRemotePush?.(lateMessage('after-rollback'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(false);
+
+    // 写库成功:显式释放墓碑,后续帧不再被丢弃,不必等 reseed。
+    makerChatStore.releaseRemoteArchivedTombstone(SESSION_ID, 'device-1');
+    onRemotePush?.(lateMessage('after-restore'));
+    expect(makerChatStore.__hasSessionForTest(SESSION_ID)).toBe(true);
+  });
 
   it('cancels a remote optimistic send that is still in preflight when the session is cleared', async () => {
     remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
@@ -6084,6 +7534,31 @@ describe('makerChatStore text delta batching', () => {
     expect(sentTexts).toEqual(['wait for preflight']);
   });
 
+  // #6351: the row update must change the live reply and survive history reload;
+  // translator/persistence tests cannot observe this renderer projection.
+  it('projects failed sampling metadata into live text and reloaded history', async () => {
+    emitTextDelta('Opening from a failed attempt');
+    vi.advanceTimersByTime(32);
+    const persisted = serverMessage({
+      id: 'failed-row', clientId: 'assistant-1', sessionId: SESSION_ID, role: 'assistant',
+      content: 'Opening from a failed attempt', createdAt: new Date().toISOString(),
+      agentMeta: { failedSamplingAttempt: { threadId: 'thread', turnId: 'turn', attempt: 1, itemId: 'item' },
+        turnCompleted: false, turnCostUsd: 0.1 },
+    });
+    emitDbMessageCreated(persisted);
+    const assertFailure = () => {
+      const replies = makerChatStore.getSnapshot(SESSION_ID).messages.filter(message => message.role === 'assistant');
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({ content: persisted.content, failedSamplingAttempt: true, turnCompleted: false });
+    };
+    assertFailure();
+    makerChatStore.purgeSession(SESSION_ID);
+    vi.mocked(messageService.list).mockResolvedValueOnce([persisted]);
+    makerChatStore.ensureInitialMessages(SESSION_ID);
+    await flushPromises();
+    assertFailure();
+  });
+
   it('hydrates existing runtime messages with authoritative DB-created timestamps', () => {
     vi.setSystemTime(new Date('2026-06-15T00:00:30.000Z'));
     emitTextDelta('draft');
@@ -6242,7 +7717,7 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
-  it('preserves terminal interaction state on late initial DB-created echoes', () => {
+  it('preserves terminal interaction state on late initial DB-created echoes', async () => {
     emitInteractionRequest(
       {
         kind: 'ask_user_question',
@@ -6263,6 +7738,7 @@ describe('makerChatStore text delta batching', () => {
 
     makerChatStore.answerUserQuestion(SESSION_ID, 'ask-terminal', { 'Continue?': 'Yes' });
     makerChatStore.respondToPlanReview(SESSION_ID, 'plan-terminal', false, 'Needs more detail');
+    await flushPromises();
 
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(
       expect.arrayContaining([
@@ -6839,6 +8315,21 @@ describe('makerChatStore text delta batching', () => {
       'existing-row-3',
       'newer-row-5',
     ]);
+  });
+
+  it('deduplicates history batches and previously duplicated runtime rows by message identity', () => {
+    const old: ChatMessage = {
+      clientId: 'assistant-1', role: 'assistant', content: 'old', isStreaming: false,
+      createdAt: '2026-06-15T00:00:03.000Z',
+    };
+    const latest = { ...old, content: 'latest' };
+    const persisted = { ...latest, id: 'db-1', rowid: 1 };
+    const other = { ...old, clientId: 'assistant-2', content: 'other' };
+    expect(makerChatStore.__mergeMessagesForTest([old, persisted, other], [])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([persisted, persisted, other], [old, latest])).toEqual([persisted, other]);
+    expect(makerChatStore.__mergeMessagesForTest([old], [latest, latest], { addOnly: true })).toEqual([latest]);
+    const stable = [persisted, other];
+    expect(makerChatStore.__mergeMessagesForTest([persisted], stable)).toBe(stable);
   });
 
   it('does not stop remote reconciliation on row-trimmed overlaps', () => {

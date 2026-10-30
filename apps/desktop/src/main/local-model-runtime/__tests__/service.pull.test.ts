@@ -6,8 +6,10 @@ import type { PausedPullRecord } from '../pausedPullStore.js';
 function memoryPausedStore(initial: PausedPullRecord[] = []) {
   const items = new Map(initial.map((item) => [item.name, item]));
   return {
-    read: async (name?: string) => (name ? items.get(name) ?? null : [...items.values()][0] ?? null),
-    readSync: (name?: string) => (name ? items.get(name) ?? null : [...items.values()][0] ?? null),
+    read: async (name?: string) =>
+      name ? (items.get(name) ?? null) : ([...items.values()][0] ?? null),
+    readSync: (name?: string) =>
+      name ? (items.get(name) ?? null) : ([...items.values()][0] ?? null),
     readAll: async () => [...items.values()],
     readAllSync: () => [...items.values()],
     write: async (
@@ -46,8 +48,47 @@ function hangingPull(signal?: AbortSignal) {
 }
 
 describe('local model pull state machine', () => {
+  it('returns no recommendation when only unvalidated candidates fit', () => {
+    const service = createLocalModelService({
+      platform: 'darwin',
+      arch: 'arm64',
+      totalmem: () => 16 * 1024 ** 3,
+      pausedPullStore: memoryPausedStore(),
+    });
+    expect(service.recommend()).toBeNull();
+  });
+
+  it('reads the latest accepted catalog and observes recommendation withdrawal', () => {
+    let snapshot: unknown = { version: 1, models: [], featuredIds: [] };
+    const service = createLocalModelService({
+      platform: 'darwin',
+      arch: 'arm64',
+      totalmem: () => 16 * 1024 ** 3,
+      pausedPullStore: memoryPausedStore(),
+      getLocalCatalog: () => snapshot,
+    });
+    expect(service.recommend()).toBeNull();
+    snapshot = {
+      version: 1,
+      featuredIds: ['remote'],
+      models: [
+        {
+          id: 'remote',
+          name: 'Remote model',
+          aliases: [],
+          variants: [{ libraryName: 'remote:4b', sizeBytes: 4 * 1024 ** 3, minUnifiedMemoryGb: 8 }],
+        },
+      ],
+    };
+    expect(service.recommend()?.libraryName).toBe('remote:4b');
+    snapshot = { version: 1, models: [], featuredIds: [] };
+    expect(service.recommend()).toBeNull();
+  });
+
   it('joins the same model and starts a second name in parallel', async () => {
-    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+      hangingPull(signal),
+    );
     const service = createLocalModelService({
       streamPull,
       pausedPullStore: memoryPausedStore(),
@@ -59,10 +100,12 @@ describe('local model pull state machine', () => {
     await vi.waitFor(() => {
       expect(streamPull).toHaveBeenCalledTimes(2);
     });
-    expect(service.activePulls().map((item) => item.name).sort()).toEqual([
-      'gpt-oss:20b',
-      'llama3.1:8b',
-    ]);
+    expect(
+      service
+        .activePulls()
+        .map((item) => item.name)
+        .sort(),
+    ).toEqual(['gpt-oss:20b', 'llama3.1:8b']);
     expect(streamPull.mock.calls.filter((call) => call[0] === 'gpt-oss:20b')).toHaveLength(1);
     await service.abortPull('pause', 'gpt-oss:20b');
     await service.abortPull('pause', 'llama3.1:8b');
@@ -88,7 +131,9 @@ describe('local model pull state machine', () => {
   });
 
   it('joins an untagged pull with its :latest alias', async () => {
-    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+      hangingPull(signal),
+    );
     const service = createLocalModelService({
       streamPull,
       pausedPullStore: memoryPausedStore(),
@@ -185,7 +230,9 @@ describe('local model pull state machine', () => {
   it('does not delete an untagged pull that Ollama already lists as :latest', async () => {
     const deleteModel = vi.fn(async () => undefined);
     const purgeCancelledPull = vi.fn(async () => undefined);
-    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+      hangingPull(signal),
+    );
     let installed: Array<{ name: string }> = [];
     const service = createLocalModelService({
       streamPull,
@@ -220,7 +267,9 @@ describe('local model pull state machine', () => {
 
   it('remembers a paused pull so a new service can resume or discard it', async () => {
     const pausedPullStore = memoryPausedStore();
-    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal));
+    const streamPull = vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+      hangingPull(signal),
+    );
     const first = createLocalModelService({
       streamPull,
       pausedPullStore,
@@ -257,7 +306,9 @@ describe('local model pull state machine', () => {
   it('keeps an in-flight pull after the process restarts', async () => {
     const pausedPullStore = memoryPausedStore();
     const first = createLocalModelService({
-      streamPull: vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal)),
+      streamPull: vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+        hangingPull(signal),
+      ),
       pausedPullStore,
       fetchImpl: async () => new Response(JSON.stringify({ models: [] })),
     });
@@ -283,7 +334,12 @@ describe('local model pull state machine', () => {
     const streamPull = vi.fn(
       (
         _name: string,
-        onEvent: (event: { status: string; digest?: string; completed?: number; total?: number }) => void,
+        onEvent: (event: {
+          status: string;
+          digest?: string;
+          completed?: number;
+          total?: number;
+        }) => void,
         signal?: AbortSignal,
       ) => {
         onEvent({ status: 'downloading', digest: 'sha256:ccc', completed: 1, total: 10 });
@@ -325,7 +381,12 @@ describe('local model pull state machine', () => {
     const streamPull = vi.fn(
       (
         _name: string,
-        onEvent: (event: { status: string; digest?: string; completed?: number; total?: number }) => void,
+        onEvent: (event: {
+          status: string;
+          digest?: string;
+          completed?: number;
+          total?: number;
+        }) => void,
         signal?: AbortSignal,
       ) => {
         onEvent({ status: 'downloading', digest: 'sha256:shared', completed: 1, total: 10 });
@@ -370,7 +431,9 @@ describe('local model pull state machine', () => {
     const purgeCancelledPull = vi.fn(async () => undefined);
     const pausedPullStore = memoryPausedStore();
     const first = createLocalModelService({
-      streamPull: vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) => hangingPull(signal)),
+      streamPull: vi.fn((_name: string, _onEvent: unknown, signal?: AbortSignal) =>
+        hangingPull(signal),
+      ),
       pausedPullStore,
       fetchImpl: async () => new Response(JSON.stringify({ models: [] })),
     });
@@ -403,7 +466,12 @@ describe('local model pull state machine', () => {
     const streamPull = vi.fn(
       (
         _name: string,
-        onEvent: (event: { status: string; digest?: string; completed?: number; total?: number }) => void,
+        onEvent: (event: {
+          status: string;
+          digest?: string;
+          completed?: number;
+          total?: number;
+        }) => void,
       ) => {
         onEvent({ status: 'downloading', digest: 'sha256:abc', completed: 1, total: 10 });
         return Promise.resolve();

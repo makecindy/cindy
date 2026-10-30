@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { VISIBLE_GAMEPAD_FAMILIES, resolveGamepadFamily } from '../xboxGamepad';
+import {
+  VISIBLE_GAMEPAD_FAMILIES,
+  isNintendoJoyConDevice,
+  resolveGamepadFamily,
+} from '../xboxGamepad';
 
 describe('visible gamepad accessories', () => {
-  it('publishes Xbox and PlayStation only', () => {
-    expect([...VISIBLE_GAMEPAD_FAMILIES]).toEqual(['xbox', 'playstation']);
+  it('publishes Xbox, PlayStation, Switch, and generic pads', () => {
+    expect([...VISIBLE_GAMEPAD_FAMILIES]).toEqual([
+      'xbox',
+      'playstation',
+      'nintendo',
+      'generic',
+    ]);
   });
 });
 
@@ -44,5 +53,15 @@ describe('resolveGamepadFamily', () => {
     expect(resolveGamepadFamily({ name: '8BitDo Pro 2' })).toBe('generic');
     expect(resolveGamepadFamily({ name: 'Game Controller' })).toBe('generic');
     expect(resolveGamepadFamily({})).toBe('generic');
+  });
+});
+
+describe('isNintendoJoyConDevice', () => {
+  it('recognizes Joy-Con names without splitting the Nintendo family', () => {
+    expect(isNintendoJoyConDevice({ name: 'Joy-Con (L)' })).toBe(true);
+    expect(isNintendoJoyConDevice({ name: 'JoyCon (R)' })).toBe(true);
+    expect(isNintendoJoyConDevice({ name: 'Pro Controller', category: 'Nintendo Switch' })).toBe(
+      false,
+    );
   });
 });

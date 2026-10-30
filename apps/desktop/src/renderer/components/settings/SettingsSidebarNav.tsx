@@ -1,3 +1,4 @@
+import type { SettingsSearchContext } from './settingsSearchTypes';
 import type { ComponentType, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
@@ -6,6 +7,7 @@ import {
   ChartColumn,
   CircleDollarSign,
   CircleHelp,
+  Database,
   FileUp,
   Info,
   Keyboard,
@@ -13,14 +15,17 @@ import {
   Mic,
   MonitorCog,
   MonitorSmartphone,
+  Palette,
   Plug,
   Settings2,
   Sparkles,
   Wrench,
+  Users,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { TAB_LABEL_KEY, type SettingsTab, type VisibleSettingsTab } from '@/lib/tabLabels';
+import { SettingsSearchBox } from './SettingsSearchBox';
 
 const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
 const NAV_ITEM_IDLE_CLASS =
@@ -59,6 +64,7 @@ type SettingsNavIcon = ComponentType<LucideProps>;
 
 const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   general: Settings2,
+  appearance: Palette,
   billing: CircleDollarSign,
   usage: ChartColumn,
   personalization: Sparkles,
@@ -68,55 +74,68 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   'agent-island': AgentIslandNavIcon,
   import: FileUp,
   'remote-control': MonitorSmartphone,
+  'shared-tasks': Users,
   ghosts: Plug,
   'builtin-tools': Wrench,
   'computer-use': MonitorCog,
   'im-bot': MessageCircle,
   help: CircleHelp,
   about: Info,
+  storage: Database,
 };
 
 interface SettingsSidebarNavProps {
   tabIds: readonly VisibleSettingsTab[];
+  searchContext?: SettingsSearchContext;
   activeTab: SettingsTab;
   onSelectTab: (tab: SettingsTab) => void;
+  onSelectSearchResult?: (result: { tab: SettingsTab; sectionId: string }) => void;
 }
 
 /** Settings left nav. Every item is an in-panel tab with a matching lucide mark. */
-export function SettingsSidebarNav({ tabIds, activeTab, onSelectTab }: SettingsSidebarNavProps) {
+export function SettingsSidebarNav({
+  tabIds,
+  searchContext,
+  activeTab,
+  onSelectTab,
+  onSelectSearchResult,
+}: SettingsSidebarNavProps) {
   const { t } = useTranslation();
 
   return (
-    <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
-      {tabIds.map((tabId) => {
-        const selected = activeTab === tabId;
-        const Icon = TAB_ICON[tabId];
-        return (
-          <button
-            key={tabId}
-            id={`settings-tab-${tabId}`}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            aria-controls={`settings-panel-${tabId}`}
-            onClick={() => onSelectTab(tabId)}
-            className={cn(NAV_ITEM_CLASS, selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
-          >
-            <Icon
-              size={15}
-              strokeWidth={1.8}
-              aria-hidden="true"
-              className={cn(
-                'shrink-0',
-                selected
-                  ? 'text-sidebar-item-active-foreground'
-                  : 'text-[var(--settings-menu-text)]',
-              )}
-            />
-            <span className="leading-none">{t(TAB_LABEL_KEY[tabId])}</span>
-          </button>
-        );
-      })}
-    </nav>
+    <>
+      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} onSelect={onSelectSearchResult} />
+      <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
+        {tabIds.map((tabId) => {
+          const selected = activeTab === tabId;
+          const Icon = TAB_ICON[tabId];
+          return (
+            <button
+              key={tabId}
+              id={`settings-tab-${tabId}`}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`settings-panel-${tabId}`}
+              onClick={() => onSelectTab(tabId)}
+              className={cn(NAV_ITEM_CLASS, selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
+            >
+              <Icon
+                size={15}
+                strokeWidth={1.8}
+                aria-hidden="true"
+                className={cn(
+                  'shrink-0',
+                  selected
+                    ? 'text-sidebar-item-active-foreground'
+                    : 'text-[var(--settings-menu-text)]',
+                )}
+              />
+              <span className="leading-none">{t(TAB_LABEL_KEY[tabId])}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </>
   );
 }

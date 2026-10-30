@@ -242,13 +242,21 @@ function targetsExist(version, targets) {
 
 /** 用 tar 解压归档到 destDir；GNU tar 从 stdin 读取 gzip 时必须显式传 -z。 */
 export async function extractArchive(archivePath, destDir) {
-  const args = archivePath.endsWith('.tar.gz') ? ['-xzf', '-'] : ['-xf', '-'];
-  const child = spawn('tar', args, { cwd: destDir, stdio: ['pipe', 'inherit', 'inherit'] });
+  // Windows bsdtar drops the first ZIP entry when the archive is streamed on
+  // stdin (Pi's first entry is pi.exe). Pass ZIP paths directly so every
+  // entry is extracted; keep streaming for tar.gz to support the existing
+  // cross-platform path and avoid shell redirection.
+  const isZip = archivePath.endsWith('.zip');
+  const args = isZip ? ['-xf', archivePath] : ['-xzf', '-'];
+  const child = spawn('tar', args, {
+    cwd: destDir,
+    stdio: isZip ? ['ignore', 'inherit', 'inherit'] : ['pipe', 'inherit', 'inherit'],
+  });
   const exit = new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', (code) => (code === 0 ? resolve() : reject(new Error(`tar exited with code ${code}`))));
   });
-  const input = pipeline(fs.createReadStream(archivePath), child.stdin);
+  const input = isZip ? Promise.resolve() : pipeline(fs.createReadStream(archivePath), child.stdin);
   try {
     await Promise.all([input, exit]);
   } catch (error) {

@@ -8,7 +8,7 @@
  *    红线：调用方可能把密钥内联在命令里，回显会经统一日志路径落盘。
  */
 
-import type { SshHostSnapshotLike, SshPoolLike } from '../types.js';
+import type { SshHostSnapshotLike, SshMcpDeps, SshPoolLike } from '../types.js';
 import type { SshToolResult } from './registry.js';
 
 // ── payload helpers（与 xdt-helper/_payload.ts 同形） ───────────────────────
@@ -44,15 +44,48 @@ export type SshErrorCode =
   | 'AMBIGUOUS_HOST'
   | 'SSH_AUTH_FAILED'
   | 'SSH_KEY_FILE_NOT_FOUND'
+  | 'SSH_AGENT_UNAVAILABLE'
+  | 'SSH_CONFIG_AUTH_UNSUPPORTED'
   | 'SSH_CONNECT_FAILED'
   | 'EXEC_TIMEOUT'
   | 'PLUGIN_DISABLED'
+  | 'HOST_ALREADY_EXISTS'
+  | 'INVALID_ARGS'
+  | 'SSH_CONFIG_RELOAD_REQUIRED'
+  | 'SSH_CONFIG_WRITE_FAILED'
   | 'INTERNAL';
+
+/**
+ * 主机只能用密码登录时的标准做法。askpass 代输入：本机任务命令行里的 ssh 要口令时，
+ * Cindy 直接向用户弹卡片索取并交回 ssh，值不经过模型（docs/product-rules/input-handoff.md §5）。
+ */
+export const PASSWORD_LOGIN_HINT =
+  '主机目前只能用密码登录时，先在本机任务的命令行运行 `ssh-copy-id -i ~/.ssh/<公钥>.pub [-p 端口] 用户@主机` 装上公钥'
+  + '（没有密钥就先 ssh-keygen 生成）：ssh 要密码时 Cindy 会直接弹卡片让用户输入，你看不到密码（macOS / Linux）。'
+  + '不要在聊天里向用户索要密码。';
 
 // ── host resolution ─────────────────────────────────────────────────────────
 
 /** ssh_list_hosts / HOST_NOT_FOUND 候选清单共用的精简视图。 */
-export function hostBrief(s: SshHostSnapshotLike): Record<string, unknown> {
+const REDACTION_FAILURE_TEXT = 'SSH error details are unavailable.';
+
+/** Fail closed if the host redactor is unavailable; never log either input. */
+export function safeRedactSensitiveText(
+  deps: Pick<SshMcpDeps, 'redactSensitiveText'>,
+  snapshot: SshHostSnapshotLike,
+  text: string,
+): string {
+  try {
+    return deps.redactSensitiveText(snapshot, text);
+  } catch {
+    return REDACTION_FAILURE_TEXT;
+  }
+}
+
+export function hostBrief(
+  s: SshHostSnapshotLike,
+  deps: Pick<SshMcpDeps, 'redactSensitiveText'>,
+): Record<string, unknown> {
   return {
     id: s.config.id,
     hostname: s.config.hostname,
@@ -61,7 +94,7 @@ export function hostBrief(s: SshHostSnapshotLike): Record<string, unknown> {
     authMethod: s.config.authMethod,
     status: s.status,
     ...(s.lastAuthLabel ? { lastAuthLabel: s.lastAuthLabel } : {}),
-    ...(s.lastError ? { lastError: s.lastError } : {}),
+    ...(s.lastError ? { lastError: safeRedactSensitiveText(deps, s, s.lastError) } : {}),
   };
 }
 
@@ -76,7 +109,11 @@ export type ResolveHostResult =
  *   3. 都没有 → HOST_NOT_FOUND，附现有主机清单引导用户去「设置 → 远程连接」添加
  *      （v1 刻意不支持连未配置的主机——那会退回"猜 key / 猜 agent"的老路）。
  */
-export function resolveHost(pool: SshPoolLike, nameOrIp: string): ResolveHostResult {
+export function resolveHost(
+  pool: SshPoolLike,
+  nameOrIp: string,
+  deps: Pick<SshMcpDeps, 'redactSensitiveText'>,
+): ResolveHostResult {
   const snapshots = pool.list();
   const byId = snapshots.find((s) => s.config.id === nameOrIp);
   if (byId) return { ok: true, snapshot: byId };
@@ -89,7 +126,7 @@ export function resolveHost(pool: SshPoolLike, nameOrIp: string): ResolveHostRes
       result: errorPayload(
         'AMBIGUOUS_HOST',
         `hostname "${nameOrIp}" 命中多台已配置主机，请改用唯一的 alias（candidates 里的 id 字段）指定。`,
-        { candidates: byHostname.map(hostBrief) },
+        { candidates: byHostname.map((snapshot) => hostBrief(snapshot, deps)) },
       ),
     };
   }
@@ -98,8 +135,8 @@ export function resolveHost(pool: SshPoolLike, nameOrIp: string): ResolveHostRes
     ok: false,
     result: errorPayload(
       'HOST_NOT_FOUND',
-      `"${nameOrIp}" 不在已配置的 SSH 主机里。请告知用户到「设置 → 远程连接」添加该主机（或确认 ~/.ssh/config 里的 alias 拼写），不要退回手拼 ssh 命令。`,
-      { configuredHosts: snapshots.map(hostBrief) },
+      `"${nameOrIp}" 不在已配置的 SSH 主机里。确认 alias 拼写；确实没配置时用 ssh_add_host 添加，不要退回手拼 ssh 命令。`,
+      { configuredHosts: snapshots.map((snapshot) => hostBrief(snapshot, deps)) },
     ),
   };
 }
@@ -147,6 +184,13 @@ const EXEC_TIMEOUT_RE = / timed out after \d+ms$/;
 /** desktop throwIpcError 的 `[CODE] message` 前缀编码。 */
 const IPC_CODE_RE = /^\[([A-Z0-9_]+)\]\s*/;
 
+/** 拆出 desktop throwIpcError 的错误码与正文；无前缀时 code 为 undefined。 */
+export function splitIpcError(err: unknown): { code?: string; detail: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = IPC_CODE_RE.exec(message);
+  return match ? { code: match[1], detail: message.slice(match[0].length) } : { detail: message };
+}
+
 export interface ClassifiedSshError {
   errorCode: SshErrorCode;
   hint: string;
@@ -155,10 +199,16 @@ export interface ClassifiedSshError {
 /**
  * best-effort 分类 deps.ensureReady / host.exec 抛出的错误。
  * 认证失败的 message 内含 authFailureHint 的可操作提示（如 ssh-copy-id 指引），
- * 原样透传进 hint 让 agent 转告用户——认证失败是确定性的，不要重试。
+ * 去掉 main-only 凭证路径后透传进 hint 让 agent 转告用户——认证失败是确定性的，
+ * 不要重试。
  */
-export function classifySshError(err: unknown): ClassifiedSshError {
-  const message = err instanceof Error ? err.message : String(err);
+export function classifySshError(
+  err: unknown,
+  deps: Pick<SshMcpDeps, 'redactSensitiveText'>,
+  snapshot?: SshHostSnapshotLike,
+): ClassifiedSshError {
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  const message = snapshot ? safeRedactSensitiveText(deps, snapshot, rawMessage) : rawMessage;
 
   if (EXEC_TIMEOUT_RE.test(message)) {
     return {
@@ -168,9 +218,8 @@ export function classifySshError(err: unknown): ClassifiedSshError {
     };
   }
 
-  const codeMatch = IPC_CODE_RE.exec(message);
-  const detail = codeMatch ? message.slice(codeMatch[0].length) : message;
-  switch (codeMatch?.[1]) {
+  const { code, detail } = splitIpcError(message);
+  switch (code) {
     case 'SSH_HOST_NOT_FOUND':
       return {
         errorCode: 'HOST_NOT_FOUND',
@@ -179,7 +228,7 @@ export function classifySshError(err: unknown): ClassifiedSshError {
     case 'SSH_AUTH_FAILED':
       return {
         errorCode: 'SSH_AUTH_FAILED',
-        hint: `SSH 认证失败（确定性错误，重试无效，请把提示转告用户处理）：${detail}`,
+        hint: `SSH 认证失败（确定性错误，重试无效）：${detail}。${PASSWORD_LOGIN_HINT}`,
       };
     case 'SSH_KEY_FILE_NOT_FOUND':
       return {
@@ -188,6 +237,16 @@ export function classifySshError(err: unknown): ClassifiedSshError {
         // doesn't mix an English prefix into the localized message — same
         // treatment the renderer toast applies.
         hint: `配置的私钥文件在本机磁盘上不存在/不可读（本机路径问题，不是网络或服务端错误）：${detail.replace(/^identity file not found:\s*/, '')}。请到「设置 → 远程连接」重新选择私钥或编辑主机的 Identity file 路径。`,
+      };
+    case 'SSH_AGENT_UNAVAILABLE':
+      return {
+        errorCode: 'SSH_AGENT_UNAVAILABLE',
+        hint: `SSH Agent 当前不可用（重复连接不会自行恢复）：${detail}。请启动 ssh-agent，并用 ssh-add 加载对应私钥后重试。`,
+      };
+    case 'SSH_CONFIG_AUTH_UNSUPPORTED':
+      return {
+        errorCode: 'SSH_CONFIG_AUTH_UNSUPPORTED',
+        hint: `此主机的部分 SSH 配置规则超出 Cindy 当前支持的子集（重复连接无效，终端 SSH 仍可能成功）：${detail}。请检查 Match、条件 Include、IdentityAgent、IdentitiesOnly 和公钥设置。`,
       };
     default:
       return {

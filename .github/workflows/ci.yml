@@ -2,6 +2,9 @@ name: client-ci
 
 on:
   pull_request:
+  # merge queue 把 PR 与最新 main(及排在前面的 PR)合成临时分支,在上面重跑必需检查
+  # (verify / Windows unit tests),全绿才合入。没有这个触发,队列会一直等到超时再把 PR 移出。
+  merge_group:
   push:
     branches:
       - main
@@ -52,10 +55,38 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 纯文本扫描、秒级返回：逐用例重置模块、真实等待和普通单测读源码文本只允许
+      # 比基线少（engineering-conventions.md §3.2 性能预算），在耗时步骤前快速失败。
+      - name: Check unit test hygiene
+        run: pnpm check:test-hygiene
+
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
-      # 两个 Linux 单测分片只负责 workspace unit tier。
+      # Linux 单测分片只负责 workspace unit tier。
       - name: Run test runner self-tests
         run: pnpm test:runner
+
+      # Cross-file security, permission, and design contracts are intentionally
+      # outside the ordinary behavior-test pool, but remain a required gate.
+      - name: Run Desktop and Mobile source-contract guards
+        run: pnpm test:guard
+
+      # No private service checkout or secrets: exercise production clients over real
+      # loopback WebSockets with bounded fault injection. Failure blocks verify.
+      - name: Run Device Link connection integration tests
+        run: |
+          pnpm --filter desktop exec tsc --project ../../scripts/device-link/tsconfig.json
+          pnpm test:device-link
+
+      # DS-7: candidate merge/head versus the event base; only mature colour
+      # consumers block. Geometry/adoption observations remain report-only.
+      - name: Check added design colours
+        env:
+          DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+          DESIGN_HEAD_REF: ${{ github.sha }}
+        run: pnpm check:design-colors --base-ref "$DESIGN_BASE_REF" --head-ref "$DESIGN_HEAD_REF"
+
+      - name: Check design inventory freshness
+        run: pnpm check:design-inventory
 
       - name: Check endpoint literals
         run: pnpm check:endpoints
@@ -87,7 +118,7 @@ jobs:
 
       - name: Validate SQLite migrations
         env:
-          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+          XDT_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'origin/main' }}
         run: pnpm --filter desktop db:validate
 
       - name: Run scheduler architecture guard
@@ -96,24 +127,25 @@ jobs:
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
 
-  # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。两个分片分别覆盖每个
+  # Linux 单测使用与 Windows 相同的确定性 Vitest 分片。四个分片分别覆盖每个
   # workspace 经 Vitest 切分后的测试文件，并集等于完整 unit tier；不重复 test:runner。
   linux-unit-shards:
-    name: Linux unit tests (${{ matrix.shard }}/2)
+    name: Linux unit tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/2
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
 
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Unit shards only read the working tree; full history and every remote
+        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
         with:
-          fetch-depth: 0
           lfs: true
 
       - name: Setup pnpm
@@ -139,9 +171,22 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
+      - name: Install Linux user-installer test tools
+        run: sudo apt-get update && sudo apt-get install --yes libarchive-tools binutils desktop-file-utils xdg-utils
+
       - name: Run client and package unit test shard
-        # 通过 pnpm 启动 runner，保留当前 pnpm 入口与 workspace 解析语义。
-        run: pnpm exec node scripts/test-workspaces.mjs --tier unit
+        # package script 会传递 npm_execpath，让子进程复用当前 pnpm 入口。
+        run: pnpm run test:workspaces --tier unit
+
+      # 真实进程与 Unix socket 覆盖独立执行一次，不混入日常 unit 或其他分片。
+      - name: Run Pi manager integration tests
+        if: matrix.shard == 1
+        run: pnpm run test:workspaces --tier integration --workspace @cindy/maker-pi-manager
+
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        if: matrix.shard == 1
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
   # 保留原 required check 名 verify；检查 job 或任一 Linux 分片失败、取消都阻断。
   verify:
@@ -152,7 +197,7 @@ jobs:
       - linux-unit-shards
     runs-on: ubuntu-latest
     steps:
-      - name: Require checks and both Linux unit shards
+      - name: Require checks and every Linux unit shard
         env:
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
@@ -160,18 +205,59 @@ jobs:
           test "$VERIFY_CHECKS_RESULT" = "success"
           test "$LINUX_UNIT_SHARDS_RESULT" = "success"
 
-  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。两个
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
   # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
+  # 只需执行一次的检查放在 windows-runner-checks，不压在任一分片的关键路径上。
   windows-unit-shards:
-    name: Windows unit tests (${{ matrix.shard }}/2)
+    name: Windows unit tests (${{ matrix.shard }}/4)
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
-      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/2
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/4
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Unit shards only read the working tree; full history and every remote
+        # branch cost ~0.5 min per shard (verify, runner and Git jobs keep depth 0).
+        with:
+          lfs: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Run client and package unit tests
+        # 通过 package script 传递
+        # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
+        run: pnpm run test:workspaces --tier unit
+
+  # Windows runner 自测和伴侣数据库回归各只需执行一次。单独并行运行，避免给
+  # 某一个 unit 分片额外叠加约 4 分钟、拖长整条关键路径。
+  windows-runner-checks:
+    name: Windows runner and database checks
+    runs-on: windows-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout client
@@ -200,20 +286,30 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: pnpm install:ripgrep
 
-      - name: Run client and package unit tests
-        run: pnpm test:unit
+      # 保留 Windows 路径、进程与锁的自测覆盖。
+      - name: Run Windows test runner self-tests
+        run: pnpm test:runner
 
-  # 保留稳定的必需检查名，并确保任一分片失败或取消都会阻断汇总门禁。
+      # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
+      - name: Run companion database regressions
+        run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
+
+  # 保留稳定的必需检查名，并确保任一分片或一次性检查失败、取消都会阻断汇总门禁。
   windows-unit:
     name: Windows unit tests
     if: ${{ always() }}
-    needs: windows-unit-shards
+    needs:
+      - windows-unit-shards
+      - windows-runner-checks
     runs-on: ubuntu-latest
     steps:
-      - name: Require both Windows unit shards
+      - name: Require every Windows unit shard and runner checks
         env:
           WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
-        run: test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
+          WINDOWS_RUNNER_CHECKS_RESULT: ${{ needs.windows-runner-checks.result }}
+        run: |
+          test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
+          test "$WINDOWS_RUNNER_CHECKS_RESULT" = "success"
 
   git-integration:
     name: Desktop Git integration

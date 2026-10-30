@@ -26,8 +26,12 @@ import path from 'node:path';
 export interface HostKeyStore {
   /** Trusted fingerprint for `key`, or null when the host is unknown. */
   get(key: string): Promise<string | null>;
-  /** Record (or overwrite) the trusted fingerprint for `key`. */
-  set(key: string, fingerprint: string): Promise<void>;
+  /**
+   * Record the trusted fingerprint for `key`. `shouldCommit` is checked inside
+   * the serialized write slot so a cancelled SSH attempt cannot persist after
+   * it has become stale while waiting for another host-key write.
+   */
+  set(key: string, fingerprint: string, shouldCommit?: () => boolean): Promise<void>;
   /**
    * Discard any in-memory cache so the next `get` or `set` re-reads from
    * the backing store. For in-memory stores this is a no-op.
@@ -74,10 +78,11 @@ export function decideHostKey(stored: string | null, presented: string): HostKey
  * 0600 (best-effort; chmod is a no-op on Windows).
  */
 export class FileHostKeyStore implements HostKeyStore {
-  private readonly filePath: string;
+  readonly filePath: string;
   private cache: Record<string, string> | null = null;
   private loadPromise: Promise<Record<string, string>> | null = null;
   private loadSettled = false; // true once loadPromise has resolved or rejected
+  // Reads share the write queue so an older disk load cannot overwrite a committed cache.
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(filePath: string) {
@@ -85,8 +90,13 @@ export class FileHostKeyStore implements HostKeyStore {
   }
 
   async get(key: string): Promise<string | null> {
-    const map = await this.load();
-    return map[key] ?? null;
+    const slot = this.writeChain.catch(() => {}).then(async () => {
+      const map = await this.load();
+      return map[key] ?? null;
+    });
+    // Keep failures observable to this caller without poisoning subsequent operations.
+    this.writeChain = slot.then(() => undefined, () => undefined);
+    return slot;
   }
 
   reload(): void {
@@ -105,7 +115,7 @@ export class FileHostKeyStore implements HostKeyStore {
     }
   }
 
-  async set(key: string, fingerprint: string): Promise<void> {
+  async set(key: string, fingerprint: string, shouldCommit?: () => boolean): Promise<void> {
     // Load inside the slot, not outside. If reload() is called between a
     // caller's get() and their set() (post-load/pre-persist window), an
     // outside-slot load returns a stale map reference and the conflict check
@@ -114,6 +124,7 @@ export class FileHostKeyStore implements HostKeyStore {
     // permanently poison all subsequent writes.
     const mySlot = this.writeChain.catch(() => {}).then(async () => {
       const map = await this.load();
+      if (shouldCommit && !shouldCommit()) return;
       if (map[key] === fingerprint) return; // concurrent winner already did our work
       if (map[key] !== undefined) {
         // A concurrent first-use already claimed this key with a different
@@ -132,6 +143,24 @@ export class FileHostKeyStore implements HostKeyStore {
     });
     this.writeChain = mySlot;
     await mySlot;
+  }
+
+  /** Replace only the fingerprint the user reviewed; never reset trust to first-use. */
+  async replace(key: string, expected: string, fingerprint: string, isCurrent: () => boolean): Promise<void> {
+    const slot = this.writeChain.catch(() => {}).then(async () => {
+      this.reload();
+      const map = await this.load();
+      if (!isCurrent() || map[key] !== expected) {
+        throw new Error('Host key details changed. Reconnect and review the current fingerprints.');
+      }
+      const next = { ...map, [key]: fingerprint };
+      await this.persist(next, isCurrent);
+      // Publish only after persistence succeeds, leaving the old trust on failure.
+      this.cache = next;
+      this.loadPromise = null;
+    });
+    this.writeChain = slot;
+    await slot;
   }
 
   /**
@@ -183,11 +212,19 @@ export class FileHostKeyStore implements HostKeyStore {
     return this.loadPromise;
   }
 
-  private async persist(map: Record<string, string>): Promise<void> {
+  private async persist(map: Record<string, string>, isCurrent?: () => boolean): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(map, null, 2), { mode: 0o600 });
-    await fs.rename(tmp, this.filePath);
+    try {
+      await fs.writeFile(tmp, JSON.stringify(map, null, 2), { mode: 0o600 });
+      // Writing the temporary file yields; the reviewed host may have changed meanwhile.
+      if (isCurrent && !isCurrent()) {
+        throw new Error('Host key details changed. Reconnect and review the current fingerprints.');
+      }
+      await fs.rename(tmp, this.filePath);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
+    }
     // Enforce mode even if the file pre-existed with looser perms.
     await fs.chmod(this.filePath, 0o600).catch(() => undefined);
   }

@@ -5,7 +5,8 @@
  *   - 文件名 = SHA-256 指纹(**主机侧对字节计算**;外部/插件自称的指纹一律无效);
  *   - 落盘 `userData/cindy-media/blobs/<指纹前2位>/<指纹>.<ext>`——256 抽屉是
  *     纯性能分桶(防单目录数万文件变卡,同 git objects),无任何语义;
- *   - 幂等写:同内容重复写入直接命中既有文件(天然去重);
+ *   - 幂等写:同内容重复写入先核验既有普通文件的尺寸与 SHA-256,正确才去重;
+ *     缺失补写,损坏按输入实算 hash 原子修复,symlink/目录/检查期间替换不当成去重;
  *   - 文件永不改名、永不搬家:指纹跟内容走,归属变化只动账本(ledger.ts)。
  *
  * URL 形态:`cindy-media://blobs/<指纹>.<ext>`,指纹即地址,永久稳定。
@@ -14,12 +15,16 @@
  */
 
 import { app } from 'electron';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
 const SCHEME = 'cindy-media';
 const HOST_BLOBS = 'blobs';
+/** Client-owned wallpaper bytes never share deletion ownership with account-ledger blobs. */
+export type BlobScope = 'blobs' | 'client-wallpaper';
+const destLocks = new Map<string, Promise<unknown>>();
 
 /** 指纹形状:SHA-256 十六进制,恰 64 位小写。 */
 const HASH_RE = /^[0-9a-f]{64}$/;
@@ -72,12 +77,18 @@ export interface WrittenBlob {
   deduplicated: boolean;
 }
 
-export function getBlobsRoot(): string {
-  return path.join(app.getPath('userData'), 'cindy-media', 'blobs');
+export function getBlobsRoot(scope: BlobScope = 'blobs'): string {
+  if (scope !== 'blobs' && scope !== 'client-wallpaper') throw new Error('cindy-media: invalid scope');
+  return path.join(app.getPath('userData'), 'cindy-media', scope);
 }
 
-export function blobUrl(hash: string, ext: string): string {
-  return `${SCHEME}://${HOST_BLOBS}/${hash}${ext}`;
+export function blobUrl(hash: string, ext: string, scope: BlobScope = 'blobs'): string {
+  return `${SCHEME}://${scope}/${hash}${ext}`;
+}
+
+/** Canonical extension used both when planning and writing a content-addressed file. */
+export function extForMime(mimeType: string): string | null {
+  return EXT_BY_MIME[mimeType] ?? null;
 }
 
 export function supportedMime(mimeType: string): boolean {
@@ -89,68 +100,343 @@ export function mimeForExt(ext: string): string | null {
   return MIME_BY_EXT[ext] ?? null;
 }
 
-/**
- * 写入一段字节:算指纹 → 分桶落盘(幂等)→ 返回指纹与地址。
- * 只写字节仓;账本记账(recordBlob/addRef)由调用方接着做。
- */
-export async function writeBlob(params: {
-  buffer: Uint8Array;
+/** File sources are private Host-owned downloads, never plugin-supplied paths. */
+export type BlobSource =
+  | { buffer: Uint8Array; filePath?: never }
+  | { filePath: string; buffer?: never };
+
+/** 写入内存或 Host 文件字节，复用相同的指纹、原子发布和去重校验。 */
+export async function writeBlob(params: BlobSource & {
   mimeType: string;
+  assertStillValid?: () => void;
+  scope?: BlobScope;
 }): Promise<WrittenBlob> {
-  const { buffer, mimeType } = params;
-  if (!buffer || buffer.byteLength === 0) {
-    throw new Error('cindy-media: empty buffer');
-  }
+  const { mimeType } = params;
   const ext = EXT_BY_MIME[mimeType];
-  if (!ext) {
-    throw new Error(`cindy-media: unsupported mime type: ${mimeType}`);
-  }
-
-  const hash = createHash('sha256').update(buffer).digest('hex');
-  const dir = path.join(getBlobsRoot(), hash.slice(0, 2));
-  await fs.mkdir(dir, { recursive: true });
-  const dest = path.join(dir, `${hash}${ext}`);
-
-  // 原子发布(review P1):先写同目录临时文件,再 link 到终点。直接 'wx' 写
-  // 终点的问题:进程半写崩溃会在终点留下截断文件,之后同内容 ingest 全部
-  // EEXIST 去重命中——内容寻址槽被永久毒化且无自愈;并发双写时后到者可能
-  // 在首写者完成前就 resolveSafe 读到半截字节。改为 tmp+link 后,终点路径
-  // 只会以完整字节出现;崩溃残留的只是 .tmp-* 垃圾(对账工具可辨识清理)。
-  let deduplicated = false;
-  const tmpPath = path.join(dir, `.tmp-${hash}-${process.pid}-${Date.now().toString(36)}`);
-  await fs.writeFile(tmpPath, buffer, { flag: 'wx' });
+  if (!ext) throw new Error(`cindy-media: unsupported mime type: ${mimeType}`);
+  const source = params.filePath !== undefined ? await fs.open(params.filePath, noFollowReadFlags()) : undefined;
   try {
-    // link 原子且目标已存在必 EEXIST——内容寻址下同名必同内容,命中即去重。
-    await fs.link(tmpPath, dest);
+    const hasher = createHash('sha256');
+    let bytes = 0;
+    if (source) {
+      if (!(await source.stat()).isFile()) throw new Error('cindy-media: source is not a regular file');
+      for await (const chunk of source.createReadStream({ autoClose: false, emitClose: false })) {
+        params.assertStillValid?.();
+        hasher.update(chunk);
+        bytes += chunk.byteLength;
+      }
+    } else if (params.buffer) {
+      hasher.update(params.buffer);
+      bytes = params.buffer.byteLength;
+    }
+    if (bytes === 0) throw new Error('cindy-media: empty buffer');
+    const hash = hasher.digest('hex');
+    const { dir, dest } = await prepareBlobDestination(hash, ext, params.scope);
+
+    return await withDestLock(dest, async () => {
+      // 同目录 tmp + link/rename 发布:终点不以半截内容出现;已存在分支
+      // (EEXIST 与不支持 hard-link 且 dest 已在)共用 inspectExistingBlob。
+      let deduplicated = false;
+      const tmpPath = path.join(dir, `.tmp-${hash}-${process.pid}-${randomUUID()}`);
+      try {
+        if (source) {
+          const output = await fs.open(tmpPath, 'wx', 0o600);
+          try {
+            for await (const chunk of source.createReadStream({ start: 0, autoClose: false, emitClose: false })) {
+              params.assertStillValid?.();
+              await output.writeFile(chunk);
+            }
+          } finally {
+            await output.close();
+          }
+        } else {
+          await fs.writeFile(tmpPath, params.buffer!, { flag: 'wx' });
+        }
+        try {
+          await fs.link(tmpPath, dest);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException)?.code;
+          if (code === 'EEXIST') {
+            deduplicated = await reconcileExistingBlob(tmpPath, dest, hash, bytes);
+          } else {
+            // 个别文件系统不支持硬链接(exFAT 等):已存在走同一校验出口,
+            // 缺失才 rename 发布。destExists 不得在未核验时当去重成功。
+            const destExists = await fs.lstat(dest).then(
+              () => true,
+              (accessErr: NodeJS.ErrnoException) => {
+                if (accessErr.code === 'ENOENT') return false;
+                throw accessErr;
+              },
+            );
+            if (destExists) {
+              deduplicated = await reconcileExistingBlob(tmpPath, dest, hash, bytes);
+            } else {
+              await publishByRename(tmpPath, dest, hash, bytes);
+            }
+          }
+        }
+
+        let finalState = await inspectExistingBlob(dest, hash, bytes);
+        if (finalState.kind !== 'ok') {
+          finalState = await rereadOnce(dest, hash, bytes);
+        }
+        if (finalState.kind !== 'ok') {
+          throw finalState.kind === 'invalid'
+            ? existingBlobError(finalState)
+            : new Error('cindy-media: blob destination did not match input hash');
+        }
+        await assertBlobPathContained(dest, params.scope);
+        return {
+          hash,
+          ext,
+          mimeType,
+          bytes,
+          url: blobUrl(hash, ext, params.scope),
+          deduplicated,
+        };
+      } finally {
+        await fs.rm(tmpPath, { force: true }).catch(() => {});
+      }
+    });
+  } finally {
+    await source?.close();
+  }
+}
+
+async function withDestLock<T>(dest: string, fn: () => Promise<T>): Promise<T> {
+  const previous = destLocks.get(dest) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => { release = resolve; });
+  const next = previous.then(() => done, () => done);
+  destLocks.set(dest, next);
+  try {
+    await previous.catch(() => undefined);
+    return await fn();
+  } finally {
+    release();
+    if (destLocks.get(dest) === next) destLocks.delete(dest);
+  }
+}
+
+type ExistingBlob =
+  | { kind: 'ok' }
+  | { kind: 'missing' }
+  | { kind: 'corrupt' }
+  | { kind: 'invalid'; reason: 'symlink' | 'directory' | 'non-regular' | 'replaced' };
+
+function isZeroDev(value: number | bigint): boolean {
+  return typeof value === 'bigint' ? value === 0n : value === 0;
+}
+
+function sameFileIdentity(left: Stats, right: Stats, platform = process.platform): boolean {
+  if (left.ino !== right.ino) return false;
+  if (left.dev === right.dev) return true;
+  // Windows path-based stat can report dev=0 while fd-based stat reports a
+  // real volume serial; treat either-side 0 as unknown device (fs-safe).
+  return platform === 'win32' && (isZeroDev(left.dev) || isZeroDev(right.dev));
+}
+
+async function lstatRegularDir(absPath: string): Promise<Stats> {
+  const st = await fs.lstat(absPath);
+  if (st.isSymbolicLink()) {
+    throw Object.assign(new Error('cindy-media: blob ancestor is a symlink'), { code: 'ELOOP' });
+  }
+  if (!st.isDirectory()) {
+    throw Object.assign(new Error('cindy-media: blob ancestor is not a directory'), { code: 'ENOTDIR' });
+  }
+  return st;
+}
+
+async function ensureContainedDir(absPath: string, parent: string): Promise<Stats> {
+  const st = await lstatRegularDir(absPath);
+  const resolvedParent = path.resolve(parent);
+  const resolvedChild = path.resolve(absPath);
+  const relative = path.relative(resolvedParent, resolvedChild);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('cindy-media: blob path out of bounds');
+  }
+  return st;
+}
+
+async function ensureChildDir(parent: string, name: string): Promise<string> {
+  const child = path.join(parent, name);
+  try {
+    await ensureContainedDir(child, parent);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+    try { await fs.mkdir(child, { recursive: false }); }
+    catch (mkdirErr) { if ((mkdirErr as NodeJS.ErrnoException)?.code !== 'EEXIST') throw mkdirErr; }
+    await ensureContainedDir(child, parent);
+  }
+  return child;
+}
+
+async function prepareBlobDestination(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<{ dir: string; dest: string }> {
+  getBlobsRoot(scope); // Validate before using the scope as a directory name.
+  const userData = path.resolve(app.getPath('userData'));
+  await lstatRegularDir(userData);
+  const mediaRoot = await ensureChildDir(userData, 'cindy-media');
+  const root = await ensureChildDir(mediaRoot, scope);
+  const dir = await ensureChildDir(root, hash.slice(0, 2));
+  const dest = path.join(dir, `${hash}${ext}`);
+  if (!path.resolve(dest).startsWith(root + path.sep)) {
+    throw new Error('cindy-media: blob path out of bounds');
+  }
+  return { dir, dest };
+}
+
+async function assertBlobPathContained(absPath: string, scope: BlobScope = 'blobs'): Promise<void> {
+  const userData = path.resolve(app.getPath('userData'));
+  const root = path.resolve(getBlobsRoot(scope));
+  if (!path.resolve(absPath).startsWith(root + path.sep)) {
+    throw new Error('cindy-media: blob path out of bounds');
+  }
+  const destStat = await fs.lstat(absPath);
+  if (destStat.isSymbolicLink()) throw Object.assign(new Error('cindy-media: blob destination is a symlink'), { code: 'ELOOP' });
+  let current = path.resolve(absPath);
+  while (current !== userData) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    await lstatRegularDir(parent);
+    current = parent;
+  }
+}
+
+function noFollowReadFlags(): number {
+  return fsConstants.O_RDONLY | (process.platform === 'win32' ? 0 : (fsConstants.O_NOFOLLOW ?? 0));
+}
+
+async function inspectExistingBlob(
+  absPath: string,
+  expectedHash: string,
+  expectedSize: number,
+): Promise<ExistingBlob> {
+  let pathStat: Stats;
+  try {
+    pathStat = await fs.lstat(absPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { kind: 'missing' };
+    throw err;
+  }
+  if (pathStat.isSymbolicLink()) return { kind: 'invalid', reason: 'symlink' };
+  if (pathStat.isDirectory()) return { kind: 'invalid', reason: 'directory' };
+  if (!pathStat.isFile()) return { kind: 'invalid', reason: 'non-regular' };
+  if (pathStat.size !== expectedSize) return { kind: 'corrupt' };
+
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(absPath, noFollowReadFlags());
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === 'EEXIST') {
-      deduplicated = true;
-    } else {
-      // 个别文件系统不支持硬链接(exFAT 等):退化为 rename 发布;目标已
-      // 存在时 Windows rename 抛错、POSIX 覆盖同内容,两者都视为去重。
-      const destExists = await fs.access(dest).then(
-        () => true,
-        () => false,
-      );
-      if (destExists) {
-        deduplicated = true;
-      } else {
-        await fs.rename(tmpPath, dest);
-      }
+    if (code === 'ENOENT') return { kind: 'missing' };
+    if (code === 'ELOOP') return { kind: 'invalid', reason: 'symlink' };
+    throw err;
+  }
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.isSymbolicLink() || !sameFileIdentity(pathStat, opened)) {
+      return { kind: 'invalid', reason: 'replaced' };
     }
+    if (opened.size !== expectedSize) return { kind: 'corrupt' };
+
+    const hasher = createHash('sha256');
+    const stream = handle.createReadStream({ autoClose: false, emitClose: false });
+    for await (const chunk of stream) hasher.update(chunk);
+    const digest = hasher.digest('hex');
+
+    const afterHandle = await handle.stat();
+    let afterPath: Stats;
+    try {
+      afterPath = await fs.lstat(absPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { kind: 'invalid', reason: 'replaced' };
+      throw err;
+    }
+    if (
+      !sameFileIdentity(opened, afterHandle) ||
+      !sameFileIdentity(opened, afterPath) ||
+      afterPath.isSymbolicLink() ||
+      !afterPath.isFile() ||
+      afterHandle.size !== expectedSize ||
+      afterPath.size !== expectedSize
+    ) {
+      return { kind: 'invalid', reason: 'replaced' };
+    }
+    return digest === expectedHash ? { kind: 'ok' } : { kind: 'corrupt' };
   } finally {
-    await fs.rm(tmpPath, { force: true }).catch(() => {});
+    await handle.close().catch(() => {});
+  }
+}
+
+async function rereadOnce(
+  dest: string,
+  expectedHash: string,
+  expectedSize: number,
+): Promise<ExistingBlob> {
+  return inspectExistingBlob(dest, expectedHash, expectedSize);
+}
+
+async function reconcileExistingBlob(
+  tmpPath: string,
+  dest: string,
+  expectedHash: string,
+  expectedSize: number,
+): Promise<boolean> {
+  const existing = await inspectExistingBlob(dest, expectedHash, expectedSize);
+  if (existing.kind === 'ok') return true;
+  if (existing.kind === 'missing' || existing.kind === 'corrupt') {
+    await publishByRename(tmpPath, dest, expectedHash, expectedSize);
+    return false;
+  }
+  const again = await rereadOnce(dest, expectedHash, expectedSize);
+  if (again.kind === 'ok') return true;
+  throw existingBlobError(again.kind === 'invalid' ? again : existing);
+}
+
+function existingBlobError(state: ExistingBlob): Error {
+  if (state.kind === 'invalid' && state.reason === 'symlink') {
+    return Object.assign(new Error('cindy-media: blob destination is a symlink'), { code: 'ELOOP' });
+  }
+  if (state.kind === 'invalid' && state.reason === 'directory') {
+    return Object.assign(new Error('cindy-media: blob destination is a directory'), { code: 'EISDIR' });
+  }
+  return Object.assign(new Error('cindy-media: blob destination is not a regular file'), {
+    code: 'EINVAL',
+  });
+}
+
+async function publishByRename(
+  tmpPath: string,
+  dest: string,
+  expectedHash: string,
+  expectedSize: number,
+): Promise<void> {
+  let destStat: Stats | null;
+  try {
+    destStat = await fs.lstat(dest);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+    destStat = null;
+  }
+  if (destStat && (destStat.isSymbolicLink() || destStat.isDirectory() || !destStat.isFile())) {
+    const again = await inspectExistingBlob(dest, expectedHash, expectedSize);
+    if (again.kind === 'ok') return;
+    throw existingBlobError(again.kind === 'invalid' ? again : { kind: 'invalid', reason: 'replaced' });
   }
 
-  return {
-    hash,
-    ext,
-    mimeType,
-    bytes: buffer.byteLength,
-    url: blobUrl(hash, ext),
-    deduplicated,
-  };
+  try {
+    await fs.rename(tmpPath, dest);
+  } catch (err) {
+    const again = await inspectExistingBlob(dest, expectedHash, expectedSize);
+    if (again.kind === 'ok') return;
+    throw err;
+  }
+
+  const published = await inspectExistingBlob(dest, expectedHash, expectedSize);
+  if (published.kind === 'ok') return;
+  const once = await inspectExistingBlob(dest, expectedHash, expectedSize);
+  if (once.kind === 'ok') return;
+  throw new Error('cindy-media: blob destination changed during publish');
 }
 
 /**
@@ -170,7 +456,7 @@ export function resolveSafe(url: string): { absPath: string; mimeType: string; h
  * 指纹 + 扩展名 → 磁盘位置(供 cindy-ghost:// 供图分支等"手里已是指纹"的
  * 调用方使用,复用同一套校验与双保险)。
  */
-export function resolveHashRef(hash: string, ext: string): {
+export function resolveHashRef(hash: string, ext: string, scope: BlobScope = 'blobs'): {
   absPath: string;
   mimeType: string;
   hash: string;
@@ -182,7 +468,7 @@ export function resolveHashRef(hash: string, ext: string): {
   if (!mimeType) {
     throw new Error('cindy-media: unsupported ext');
   }
-  const root = path.resolve(getBlobsRoot());
+  const root = path.resolve(getBlobsRoot(scope));
   const absPath = path.resolve(root, hash.slice(0, 2), `${hash}${ext}`);
   if (!absPath.startsWith(root + path.sep)) {
     throw new Error('cindy-media: path out of bounds');
@@ -229,6 +515,44 @@ export async function readFile(url: string): Promise<{ buffer: Buffer; mimeType:
   return { buffer, mimeType };
 }
 
+// UI-owned assets have a separate lifetime from account attachments. Generic
+// parseBlobUrl/resolveSafe intentionally do not accept this Host-only namespace.
+export function parseClientWallpaperUrl(url: string): { hash: string; ext: string } | null {
+  const match = new RegExp('^cindy-media://client-wallpaper/([0-9a-f]{64})([.]webp|[.]mp4)$').exec(url);
+  return match ? { hash: match[1], ext: match[2] } : null;
+}
+
+export async function readClientWallpaperFile(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
+  const parsed = parseClientWallpaperUrl(url);
+  if (!parsed) throw new Error('cindy-media: invalid client wallpaper url');
+  const { absPath, mimeType } = resolveHashRef(parsed.hash, parsed.ext, 'client-wallpaper');
+  await assertBlobPathContained(absPath, 'client-wallpaper');
+  return { buffer: await fs.readFile(absPath), mimeType };
+}
+
+/** Open a verified wallpaper video once; the response stream owns this handle. */
+export async function openClientWallpaperVideo(url: string) {
+  const parsed = parseClientWallpaperUrl(url);
+  if (parsed?.ext !== '.mp4') throw new Error('cindy-media: invalid client wallpaper video url');
+  const { absPath, mimeType } = resolveHashRef(parsed.hash, parsed.ext, 'client-wallpaper');
+  await assertBlobPathContained(absPath, 'client-wallpaper');
+  const before = await fs.lstat(absPath);
+  if (!before.isFile()) throw new Error('cindy-media: wallpaper is not a regular file');
+  const file = await fs.open(absPath, noFollowReadFlags() | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const stat = await file.stat();
+    await assertBlobPathContained(absPath, 'client-wallpaper');
+    const after = await fs.lstat(absPath);
+    if (!stat.isFile() || !sameFileIdentity(before, stat) || !sameFileIdentity(after, stat)) {
+      throw new Error('cindy-media: wallpaper changed while opening');
+    }
+    return { file, totalSize: stat.size, mimeType };
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
+}
+
 // ── 回收器 / 对账底层能力(第 5 步)──────────────────────────────────────
 // 本模块仍然只管字节:下面的枚举与删除不看账本,"该不该删"由 recycler.ts
 // 按账本判定后才调用这里。
@@ -253,8 +577,8 @@ export interface BlobDirListing {
 const BUCKET_RE = /^[0-9a-f]{2}$/;
 
 /** 遍历 256 个分桶,枚举字节仓全量文件(stat 失败的条目跳过,当作已消失)。 */
-export async function listBlobFiles(): Promise<BlobDirListing> {
-  const root = getBlobsRoot();
+export async function listBlobFiles(scope: BlobScope = 'blobs'): Promise<BlobDirListing> {
+  const root = getBlobsRoot(scope);
   const listing: BlobDirListing = { entries: [], strayPaths: [], tmpFiles: [] };
   let buckets: string[];
   try {
@@ -289,6 +613,7 @@ export async function listBlobFiles(): Promise<BlobDirListing> {
         continue;
       }
       try {
+        if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
         const st = await fs.stat(abs);
         listing.entries.push({ hash, ext, bytes: st.size, mtimeMs: st.mtimeMs, absPath: abs });
       } catch {
@@ -300,8 +625,12 @@ export async function listBlobFiles(): Promise<BlobDirListing> {
 }
 
 /** 删除单个 blob 文件(recycler 在账删成功且复查无重录后才调用);不存在视为成功。 */
-export async function deleteBlobFile(hash: string, ext: string): Promise<void> {
-  const { absPath } = resolveHashRef(hash, ext);
+export async function deleteBlobFile(hash: string, ext: string, scope: BlobScope = 'blobs'): Promise<void> {
+  const { absPath } = resolveHashRef(hash, ext, scope);
+  if (scope !== 'blobs') {
+    try { await assertBlobPathContained(absPath, scope); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  }
   await fs.rm(absPath, { force: true });
 }
 
@@ -310,8 +639,8 @@ export async function deleteBlobFile(hash: string, ext: string): Promise<void> {
  * maxAgeMs 的——正在进行的 writeBlob 临时文件寿命是毫秒级,年龄门槛防
  * 误杀在途写入。
  */
-export async function listStaleTmpFiles(maxAgeMs: number): Promise<string[]> {
-  const { tmpFiles } = await listBlobFiles();
+export async function listStaleTmpFiles(maxAgeMs: number, scope: BlobScope = 'blobs'): Promise<string[]> {
+  const { tmpFiles } = await listBlobFiles(scope);
   const cutoff = Date.now() - maxAgeMs;
   const stale: string[] = [];
   for (const abs of tmpFiles) {
@@ -326,10 +655,11 @@ export async function listStaleTmpFiles(maxAgeMs: number): Promise<string[]> {
 }
 
 /** 清理写入中途崩溃残留的超龄 `.tmp-*` 文件,返回删除数。 */
-export async function cleanupTmpFiles(maxAgeMs: number): Promise<number> {
+export async function cleanupTmpFiles(maxAgeMs: number, scope: BlobScope = 'blobs'): Promise<number> {
   let removed = 0;
-  for (const abs of await listStaleTmpFiles(maxAgeMs)) {
+  for (const abs of await listStaleTmpFiles(maxAgeMs, scope)) {
     try {
+      if (scope !== 'blobs') await assertBlobPathContained(abs, scope);
       await fs.rm(abs, { force: true });
       removed++;
     } catch {

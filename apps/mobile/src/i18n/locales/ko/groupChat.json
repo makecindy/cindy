@@ -1,0 +1,395 @@
+{
+  "title": "그룹 채팅",
+  "memberSeparator": ", ",
+  "memberCount_one": "멤버 {{count}}명",
+  "memberCount_other": "멤버 {{count}}명",
+  "organizer": "담당자",
+  "waitingConfirm": "{{name}} 님이 확인을 기다리고 있어요",
+  "loadFailedTitle": "이 그룹 채팅을 불러올 수 없습니다",
+  "loadFailedDescription": "지금은 컴퓨터에서 이 그룹 채팅을 불러올 수 없습니다. 다시 시도하거나 동료 목록으로 돌아가세요.",
+  "unavailableTitle": "이 그룹 채팅을 더 이상 사용할 수 없습니다",
+  "unavailableDescription": "삭제되었을 수 있습니다. 동료 페이지로 돌아가 다른 그룹 채팅이나 동료를 열어 보세요.",
+  "list": {
+    "noMessages": "아직 메시지가 없습니다",
+    "empty": "아직 그룹 채팅이 없습니다. +를 눌러 동료 몇 명을 모아 보세요.",
+    "running": "동료가 작업 중"
+  },
+  "create": {
+    "title": "새 그룹 채팅",
+    "nameLabel": "그룹 이름",
+    "namePlaceholder": "예: 주말 나들이",
+    "nameRequired": "그룹 이름을 입력하세요",
+    "membersLabel": "동료 선택",
+    "selectedCount_one": "{{count}}명 선택됨, 최대 {{max}}명",
+    "selectedCount_other": "{{count}}명 선택됨, 최대 {{max}}명",
+    "close": "닫기",
+    "submitShort": "만들기",
+    "submit": "그룹 채팅 만들기",
+    "failed": "그룹 채팅을 만들지 못했습니다. 잠시 후 다시 시도하세요."
+  },
+  "memberStatus": {
+    "paused": "일시 중지됨",
+    "unavailable": "사용 불가"
+  },
+  "mention": {
+    "all": "모두",
+    "allHint": "모두 답변",
+    "label": "동료 멘션"
+  },
+  "composer": {
+    "label": "그룹 채팅 메시지",
+    "placeholder": "그룹에 말을 걸어 보세요. @로 동료를 지정하면 그 동료만 답합니다…",
+    "noMembers": "지금 답할 수 있는 동료가 없습니다. 그룹 설정에서 동료를 추가하세요",
+    "tooLong": "메시지가 너무 깁니다. 최대 {{max}}자까지 보낼 수 있습니다",
+    "sendFailed": "메시지를 보내지 못했습니다. 잠시 후 다시 시도하세요",
+    "stopFailed": "이번 라운드를 멈추지 못했습니다. 다시 시도하세요",
+    "stop": "이번 라운드 중지",
+    "more": "더 보기",
+    "division": "역할 분담하기",
+    "divisionDescription": "담당자가 먼저 역할을 나누고, 동료들이 한 단계씩 진행합니다",
+    "divisionBusy": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+    "divisionTag": "역할 분담",
+    "removeDivision": "역할 분담 해제",
+    "placeholderDivision": "하고 싶은 일을 적어 주세요. 담당자가 먼저 역할을 나눕니다…",
+    "placeholderPlanProposed": "담당이나 단계를 바꾸려면 그냥 말해 주세요…",
+    "placeholderPlanWaiting": "{{name}} 님에게 고칠 점이 있으면 그냥 말해 주세요…",
+    "placeholderPlanRunning": "보내는 말은 작업 중인 {{name}} 님에게 전달됩니다…",
+    "send": "보내기"
+  },
+  "timeline": {
+    "newMessages_one": "새 메시지 {{count}}개",
+    "newMessages_other": "새 메시지 {{count}}개",
+    "emptyTitle": "이 그룹에는 아직 메시지가 없습니다",
+    "emptyDescription": "한마디 하면 동료들이 이어서 대화합니다. @로 동료를 지정하면 그 동료만 답합니다.",
+    "roundEnded": "동료들이 말을 마쳤습니다",
+    "continue": "토론 계속하기",
+    "continueFailed": "토론을 이어 가지 못했습니다. 다시 시도하세요",
+    "nextStep": "다음 단계:",
+    "continuePlan": "다음 단계 시작",
+    "continuePlanFailed": "다음 단계를 시작하지 못했습니다. 다시 시도하세요",
+    "stepFailed": "{{name}} 님이 끝내지 못했습니다",
+    "retryStep": "다시 시도",
+    "retryFailed": "이 단계를 다시 시도하지 못했습니다. 잠시 후 다시 시도하세요",
+    "endPlan": "역할 분담 끝내기",
+    "planDone_one": "{{count}}단계를 모두 마쳤습니다",
+    "planDone_other": "{{count}}단계를 모두 마쳤습니다",
+    "planDoneGeneric": "역할 분담을 마쳤습니다",
+    "olderOnComputer": "이전 메시지는 컴퓨터에서 확인하세요"
+  },
+  "quote": {
+    "label": "{{name}} 인용: {{summary}}",
+    "deleted": "원본 메시지가 삭제되었습니다",
+    "attachments": "{{name}} 등 {{total}}개",
+    "unavailable": "이 메시지를 찾을 수 없습니다."
+  },
+  "notice": {
+    "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
+    "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
+    "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
+    "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
+    "planFailed": "{{name}} 님이 역할 분담을 정하지 못했습니다. 다시 시도해 보세요",
+    "planStopped": "역할 분담을 중지했습니다",
+    "workdirUnavailable": "{{name}} 님이 작업 디렉터리를 찾지 못했습니다",
+    "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
+    "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
+    "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+    "runtimeFailure": {
+      "REMOTE_DEVICE_LIMIT": {
+        "summary": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.",
+        "advice": "동료 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하세요.",
+        "details": "동료의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요."
+      },
+      "REMOTE_TOTAL_LIMIT": {
+        "summary": "{{name}}이(가) 답장할 수 없습니다. 원격 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다.",
+        "advice": "원격 컴퓨터 소유자에게 사용하지 않는 세션을 정리하거나 한도를 높여 달라고 요청하세요.",
+        "details": "해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요."
+      },
+      "IMAGE_INPUT_UNSUPPORTED": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 현재 모델은 이미지를 지원하지 않습니다.",
+        "advice": "이미지를 지원하는 모델로 전환하세요.",
+        "details": "이미지 지원 모델로 전환하거나 설정 → 개인화 → 비전 브리지에서 비전 모델을 활성화하고 설정한 뒤 메시지를 다시 보내세요."
+      },
+      "MODEL_UNAVAILABLE": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 사용 가능한 모델이 없습니다.",
+        "advice": "동료 설정에서 사용 가능한 모델을 선택하세요.",
+        "details": "동료 설정에서 연결된 사용 가능한 모델을 선택한 뒤 메시지를 다시 보내세요."
+      },
+      "AUTH_REQUIRED": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 모델 연결에 재인증이 필요합니다.",
+        "advice": "모델 제공자에 다시 연결하세요.",
+        "details": "설정에서 모델 제공자에 다시 연결한 뒤 메시지를 다시 보내세요."
+      },
+      "RATE_LIMITED": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 모델 요청이 너무 많습니다.",
+        "advice": "잠시 후 메시지를 다시 보내세요.",
+        "details": "잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요."
+      },
+      "UPSTREAM_OVERLOADED": {
+        "summary": "{{name}}이(가) 답변할 수 없습니다. 모델 서비스가 일시적으로 혼잡합니다.",
+        "advice": "잠시 후 메시지를 다시 보내세요.",
+        "details": "잠시 후 메시지를 다시 보내거나 다른 사용 가능한 모델을 선택해 주세요."
+      },
+      "QUOTA_EXCEEDED": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 모델 사용량 한도에 도달했습니다.",
+        "advice": "사용 한도를 확인하거나 다른 모델을 선택하세요.",
+        "details": "제공자의 할당량을 확인하거나 다른 사용 가능한 모델을 선택하세요."
+      },
+      "NETWORK_ERROR": {
+        "summary": "{{name}}이(가) 답변하지 못했습니다. 네트워크 연결에 실패했습니다.",
+        "advice": "네트워크 또는 프록시를 확인하세요.",
+        "details": "네트워크나 프록시를 확인한 뒤 메시지를 다시 보내세요."
+      },
+      "RUNTIME_TIMEOUT": {
+        "summary": "{{name}}의 답변 시간이 초과되었습니다.",
+        "advice": "메시지를 다시 보내세요.",
+        "details": "메시지를 다시 보내거나 다른 사용 가능한 모델을 선택하세요."
+      },
+      "RUNTIME_ERROR": {
+        "summary": "{{name}}이(가) 이번에는 답변하지 못했습니다.",
+        "advice": "메시지를 다시 보내세요.",
+        "details": "메시지를 다시 보내세요. 계속 실패하면 로그를 확인하고 문제를 신고하세요."
+      }
+    },
+    "runtimeFailureSetupHint": "모델이나 설정을 변경하려면 이 동료가 실행되는 컴퓨터에서 변경하세요."
+  },
+  "plan": {
+    "intro_one": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+    "intro_other": "이 일은 {{count}}단계로 나눠서 이렇게 분담할게요:",
+    "missing": "이 계획을 더 이상 불러올 수 없습니다",
+    "start": "시작하기",
+    "dismiss": "필요 없어요",
+    "editHint": "담당이나 단계를 바꾸려면 그냥 말해 주세요",
+    "autoNote": "단계가 끝나면 자동으로 다음 단계가 시작됩니다.",
+    "pauseNote": "한 단계가 끝날 때마다 멈추고, ‘다음 단계 시작’을 누를 때까지 기다립니다.",
+    "superseded": "업데이트됨",
+    "dismissed": "사용 안 함",
+    "stopped": "중지됨",
+    "stepDone": "완료",
+    "stepRunning": "진행 중",
+    "stepFailed": "끝내지 못함",
+    "stepPending": "시작 전",
+    "stepMenuTitle": "이 단계를 맡을 동료",
+    "removeStep": "이 단계 삭제",
+    "keepOneStep": "최소 한 단계는 남겨야 합니다",
+    "startFailed": "역할 분담을 시작하지 못했습니다. 다시 시도하세요",
+    "dismissFailed": "이 계획을 끝내지 못했습니다. 다시 시도하세요",
+    "editFailed": "이 단계를 바꾸지 못했습니다. 다시 시도하세요",
+    "editStepHint": "담당을 바꾸거나 이 단계를 삭제합니다",
+    "reassignStepHint": "이 단계의 담당을 바꿉니다",
+    "eyebrow_one": "분담 · {{count}}단계",
+    "eyebrow_other": "분담 · {{count}}단계",
+    "awaitingStart": "시작 대기",
+    "progressRunning": "진행 중 {{current}} / {{total}}",
+    "progressDone": "완료 {{done}} / {{total}}",
+    "allDone": "모두 완료"
+  },
+  "speaking": {
+    "stopping": "중지 중…",
+    "planning": "역할을 나누는 중…",
+    "step": "작업 중…"
+  },
+  "task": {
+    "state": {
+      "started": "진행 중",
+      "waiting": "확인 대기 중",
+      "completed": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨",
+      "timed-out": "시간 초과"
+    }
+  },
+  "files": {
+    "onComputer": "파일은 컴퓨터에 있습니다. 컴퓨터에서 열어 주세요",
+    "loading": "불러오는 중…",
+    "unavailable": "지금 불러올 수 없음",
+    "untitled": "첨부 파일"
+  },
+  "settings": {
+    "open": "그룹 설정",
+    "title": "그룹 설정",
+    "members": "멤버",
+    "remove": "내보내기",
+    "removeNamed": "{{name}} 님을 그룹에서 내보내기",
+    "minMembers": "그룹 채팅에는 동료가 {{min}}명 이상 있어야 합니다",
+    "maxMembers": "최대 {{max}}명",
+    "noMoreBots": "추가할 수 있는 다른 동료가 없습니다",
+    "nameSaveFailed": "그룹 이름을 저장하지 못했습니다. 입력 내용은 유지됩니다. 다시 시도해 주세요.",
+    "membersSaveFailed": "멤버를 업데이트하지 못했습니다. 다시 시도하세요",
+    "replyMode": "아무도 @멘션되지 않았을 때",
+    "replyModeAll": "누구나 답할 수 있음",
+    "replyModeMentioned": "@된 동료만 답함",
+    "replyModeNote": "더 보탤 말이 없는 동료는 말하지 않습니다. 한 라운드는 최대 3바퀴, 메시지 10개까지이며, 그 후에는 ‘토론 계속하기’를 누를 때까지 기다립니다.",
+    "replyModeNoteQueue": "동료들이 한 명씩 차례로 답하고, 처음 5명은 자동으로 이어집니다. 동료의 메시지를 인용하거나 그 스레드에 답장해도 부를 수 있습니다.",
+    "replyModeSaveFailed": "답변 방식을 저장하지 못했습니다. 다시 시도하세요",
+    "delete": "그룹 채팅 삭제",
+    "deleteNote": "이 그룹 채팅과 그 안의 메시지만 삭제됩니다. 동료 자체와 동료의 기억, 개인 대화에는 영향이 없습니다.",
+    "deleteConfirmTitle": "‘{{name}}’을(를) 삭제할까요?",
+    "deleteFailed": "그룹 채팅을 삭제하지 못했습니다. 잠시 후 다시 시도하세요",
+    "speakingMode": "발언 순서",
+    "speakingModeAuto": "자동",
+    "speakingModeSequential": "항상 차례대로",
+    "speakingModeAutoNote": "멘션이 없거나 @모두이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
+    "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
+    "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
+    "setOrganizer": "담당자로 지정",
+    "setOrganizerNamed": "{{name}} 님을 담당자로 지정",
+    "organizerNote": "담당자가 각 단계를 누가 맡을지 정합니다. 기본값은 첫 번째 동료입니다.",
+    "organizerSaveFailed": "담당자를 바꾸지 못했습니다. 다시 시도하세요",
+    "projectDir": "프로젝트 폴더",
+    "projectDirNone": "선택 안 함",
+    "projectDirNote": "역할 분담으로 일할 때 동료들이 여기서 작업합니다. 선택하지 않아도 되며, 그러면 이 그룹 채팅 전용 폴더를 사용합니다. git 프로젝트를 선택하면 역할 분담마다 새 worktree와 브랜치를 만들어, 지금 작업 중인 코드는 건드리지 않습니다.",
+    "add": "동료 추가",
+    "projectDirOnComputer": "컴퓨터에서 선택하거나 바꿀 수 있습니다",
+    "memberActions": "{{name}} 작업",
+    "retry": "다시 시도",
+    "conflict": "그룹 설정이 변경되었습니다. 확인한 후 다시 저장해 주세요. 입력 내용은 유지됩니다.",
+    "archive": "그룹 채팅 보관",
+    "archiveConfirmTitle": "“{{name}}” 그룹을 보관할까요?",
+    "archiveNote": "그룹 소유자만 보관할 수 있습니다. 새 메시지를 보낼 수 없게 되지만 기록은 유지됩니다.",
+    "description": "그룹 소개",
+    "descriptionSaveFailed": "그룹 소개를 저장하지 못했습니다.",
+    "makeAdmin": "관리자로 지정",
+    "removeAdmin": "관리자 해제",
+    "roles": {
+      "owner": "소유자",
+      "admin": "관리자",
+      "member": "멤버",
+      "guest": "게스트"
+    },
+    "cloudStatus": {
+      "loading": "설정 불러오는 중…",
+      "permission": "그룹 소유자와 관리자만 이 설정을 변경할 수 있습니다.",
+      "unavailable": "그룹 설정을 불러오지 못했습니다. 다시 시도하세요."
+    }
+  },
+  "errors": {
+    "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
+    "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+    "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
+    "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
+    "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",
+    "planOpen": "역할 분담이 진행 중입니다. 끝내거나 중지한 뒤 새로 시작하세요",
+    "planClosed": "이 계획은 이미 끝났거나 업데이트되었습니다",
+    "invalidAttachment": "첨부 파일을 읽을 수 없어요. 다시 선택한 후 보내 주세요.",
+    "attachmentUnavailable": "휴대폰에서 첨부 파일을 가져오지 못했어요. 기기 연결을 확인하고 다시 시도해 주세요.",
+    "attachmentTooLarge": "첨부 파일이 100 MB를 초과해요. 더 작은 파일을 선택해 주세요.",
+    "mediaUploadFailed": "채팅 서비스에 첨부 파일을 업로드하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "authRequired": "로그인이 만료되었어요. 컴퓨터에서 다시 로그인해 주세요.",
+    "chatUnavailable": "채팅 서비스에 연결할 수 없어요. 네트워크를 확인하고 다시 시도해 주세요.",
+    "importPending": "그룹 기록을 동기화하고 있어요. 잠시 후 다시 시도해 주세요.",
+    "requestTimeout": "아직 작업 결과를 확인하지 못했어요. 새로고침하여 확인한 후 다시 시도해 주세요.",
+    "permissionDenied": "이 그룹을 관리할 권한이 없어요.",
+    "serviceError": "채팅 서비스에서 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    "groupArchived": "보관된 그룹에서는 이 작업을 수행할 수 없어요.",
+    "quoteUnavailable": "인용한 메시지가 삭제되었거나 더 이상 볼 수 없습니다. 인용을 해제했으니 다시 보내세요.",
+    "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
+    "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
+    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
+  },
+  "followUp": {
+    "next": "분담 · 다음 단계",
+    "failedStep": "{{step}}단계를 끝내지 못했어요"
+  },
+  "server": {
+    "attachmentTooLarge": "그룹 첨부 파일은 {{size}} MB 이하여야 합니다. 더 작은 파일을 선택하세요.",
+    "offline": "그룹 채팅에 연결할 수 없습니다. 다시 시도해 주세요.",
+    "loadFailed": "그룹 채팅을 불러올 수 없습니다. 다시 시도해 주세요.",
+    "loadOlder": "이전 메시지 불러오기",
+    "attachmentFailed": "첨부 파일을 열지 못했습니다. 다시 시도해 주세요.",
+    "attachmentPreviewLoading": "첨부 파일을 불러오는 중…",
+    "attachmentPreviewFailed": "이 첨부 파일을 미리 볼 수 없습니다. 다시 시도하세요.",
+    "attachmentPreviewTooLarge": "파일이 10MB를 초과해 모바일에서 미리 볼 수 없습니다.",
+    "attachmentPreviewBinary": "이 첨부 파일은 읽을 수 있는 텍스트가 아니어서 미리 볼 수 없습니다.",
+    "attachmentPreviewTruncated": "미리보기는 최대 10,000줄, 100,000자까지 표시합니다.",
+    "attachmentPreviewEmpty": "이 파일은 비어 있습니다.",
+    "attachmentPreviewRetry": "다시 시도",
+    "attachmentPreviewOpenOutside": "브라우저에서 열기",
+    "attachmentPreviewClose": "첨부 파일 미리보기 닫기",
+    "previewUnavailable": "미리보기를 불러올 수 없습니다",
+    "endpointUnavailable": "그룹 채팅 서비스 설정을 사용할 수 없습니다. 다시 시도해 주세요."
+  },
+  "lifecycle": {
+    "dissolve": "그룹 해산",
+    "dissolveNote": "이 작업은 되돌릴 수 없습니다. 모든 멤버의 메시지 전송이 중단되고 진행 중인 작업이 멈추며 초대가 만료됩니다. 멤버는 기존에 열람할 수 있었던 기록을 계속 볼 수 있습니다.",
+    "hide": "내 목록에서 제거",
+    "hideNote": "내 모든 기기의 목록에서 이 채팅을 제거합니다. 멤버 자격, 기록, 진행 중인 작업 및 다른 멤버에게 영향을 주지 않습니다.",
+    "leave": "그룹 나가기",
+    "leaveNote": "나와 내 동료가 이 그룹에서 나갑니다. 새 메시지를 받지 못하며 그룹 기록을 볼 수 없게 됩니다.",
+    "unavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
+    "dissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
+    "failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
+    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
+  },
+  "mask": {
+    "toolAccess": "도구 권한",
+    "catchup": {
+      "title": "나를 멘션한 메시지",
+      "me": "나",
+      "markAll": "모두 읽음으로 표시",
+      "empty": "읽지 않은 멘션이 없습니다",
+      "thread": "스레드",
+      "main": "그룹 채팅",
+      "answered": "대신 답변함"
+    },
+    "title": "AI 대신 답장 모드",
+    "settings": "AI 대신 답장 설정",
+    "companion": "내 파트너",
+    "choose": "파트너 선택",
+    "enabled": "자동 대신 답장",
+    "triggerLabel": "작동 방식",
+    "resumeAfter": "부재 후 재개",
+    "start": "시작 시간",
+    "end": "종료 시간",
+    "startManual": "지금 시작",
+    "stop": "대신 답장 중지",
+    "todos": "나와 관련된 할 일 정리",
+    "digestLabel": "요약 받기",
+    "saving": "저장 중…",
+    "saveError": "저장하지 못했어요. 기존 설정이 유지됩니다. 다시 시도해 주세요.",
+    "retry": "다시 시도",
+    "loading": "설정 불러오는 중…",
+    "takeover": "직접 답장",
+    "resume": "AI 대신 답장 재개",
+    "status": {
+      "enabled": "활성",
+      "paused": "일시 중지",
+      "off": "꺼짐",
+      "offline": "오프라인",
+      "waiting": "대기 중",
+      "unbound": "미설정"
+    },
+    "detail": {
+      "paused": "이 대화를 직접 이어받았어요",
+      "off": "자동 대신 답장 꺼짐",
+      "offline": "답장 일시 중지 · 컴퓨터 오프라인",
+      "waiting": "수동 시작 대기",
+      "unbound": "파트너 미선택",
+      "enabled": "파트너가 대신 답장할 준비가 됐어요"
+    },
+    "trigger": {
+      "always": "항상 활성화",
+      "manual": "수동 작동",
+      "scheduled": "예약 작동"
+    },
+    "digest": {
+      "daily": "매일",
+      "manual": "수동"
+    },
+    "minutes": "{{count}}분",
+    "presence": "직접 참여 중 · 부재 {{minutes}}분 후 재개",
+    "scheduledWait": "{{time}}에 시작",
+    "attribution": "{{name}}가 {{owner}} 대신 답장했어요",
+    "digestNow": "지금 정리",
+    "digestWorking": "정리 중…",
+    "digestSent": "파트너 채팅으로 보냈어요",
+    "digestFailed": "정리하지 못했어요. 다시 시도하세요.",
+    "digestEmpty": "새로 정리할 내용이 없어요",
+    "access": {
+      "chat": "그룹 내 대화만",
+      "tools": "도구와 정보 사용 승인됨",
+      "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
+      "toolsHint": "멤버는 파트너의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
+      "confirm": "확인"
+    }
+  }
+}

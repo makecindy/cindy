@@ -1,3 +1,4 @@
+import { normalizeProviderRequest } from '@cindy/model-compat';
 /**
  * Bridge handler ——
  *
@@ -31,12 +32,13 @@ import type {
 } from './types.js';
 
 /**
- * maker 的 effort 档(minimal/low/medium/high/xhigh/max)→ Responses 端点接受的 4 档。
- * Responses(codex / api.x.ai)只认 low/medium/high/xhigh:minimal 收敛到 low、max 收敛到 xhigh。
+ * Higher efforts require an explicit per-model capability; providers without one keep the
+ * historical xhigh ceiling. Codex subscription capabilities differ from the public API.
  * 无输入 / 无法识别 → undefined(translateRequest 回退默认档)。
  */
-function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEffort | undefined {
-  switch ((raw ?? '').trim().toLowerCase()) {
+function normalizeReasoningEffort(raw: string | undefined, supported?: readonly string[]): ResponsesReasoningEffort | undefined {
+  const effort = (raw ?? '').trim().toLowerCase();
+  switch (effort) {
     case 'minimal':
     case 'low':
       return 'low';
@@ -45,8 +47,11 @@ function normalizeReasoningEffort(raw: string | undefined): ResponsesReasoningEf
     case 'high':
       return 'high';
     case 'xhigh':
+      return 'xhigh';
     case 'max':
     case 'ultra':
+      if (supported?.includes(effort)) return effort;
+      if (effort === 'ultra' && supported?.includes('max')) return 'max';
       return 'xhigh';
     default:
       return undefined;
@@ -177,6 +182,11 @@ function parseSsePayloads(body: string): unknown[] {
   return payloads;
 }
 
+/** 缺少 Content-Type 时仅识别 SSE 起始字段；正文已受非流式 16 MiB 上限保护。 */
+function looksLikeSse(body: string): boolean {
+  return /^(?:(?:event|data|id|retry):|:)/.test(body.trimStart());
+}
+
 /** image block 的粗估 token 占位(Anthropic 图像典型 ~1100-1600 tok;粗估用中值,免 stringify 整段 base64)。 */
 const IMAGE_BLOCK_ESTIMATE_CHARS = 1400 * 4;
 
@@ -223,7 +233,7 @@ export interface BridgeSessionPrefs {
   /** 用户选定的思维深度档(maker 6 档,handler 内收敛到 Responses 4 档);缺省走默认档。 */
   reasoningEffort?: string;
   /** Fast 模式;仅 provider 声明了 fastServiceTier 时映射成 service_tier。 */
-  fast?: boolean;
+  fast?: boolean | 'ultrafast';
 }
 
 /** createResponsesHandler 的 handle 入参 —— 与 compat-proxy LocalRequestHandler 的 args 同形 + prefs。 */
@@ -339,11 +349,14 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // reasoning 档:host 经 prefs 闭包传入用户选定 effort(CC 不会把非 Anthropic 模型的 effort
     // 放进请求体,由 host 从会话态解析);模型不支持 reasoning → 'none'。
     const reasoningSupported = provider.supportsReasoning ? provider.supportsReasoning(realModel) : true;
-    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort);
+    const prefEffort = normalizeReasoningEffort(prefs?.reasoningEffort, provider.supportedReasoningEfforts?.(realModel));
     const reasoningEffort = !reasoningSupported ? 'none' : prefEffort;
 
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。
-    const serviceTier = prefs?.fast === true && provider.fastServiceTier ? provider.fastServiceTier : undefined;
+    const fastModel = prefs?.fast === true ? provider.fastModel?.(realModel) : undefined;
+    const serviceTier = !fastModel && prefs?.fast === true ? provider.fastServiceTier : undefined;
+    // Cindy's existing usage variant uses priority for Fast pricing, independently of wire service_tier.
+    const priceTier = fastModel ? 'priority' : serviceTier ?? 'default';
 
     // 上游服务端工具(如 xAI x_search):只由 provider 按 model 静态声明,不受会话态影响,
     // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
@@ -358,25 +371,33 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       && provider.prefix === 'xai/'
       && realModel === 'grok-4.6';
     const responsesReq = translateRequest(parsed, {
-      model: realModel,
+      model: fastModel ?? realModel,
       promptCacheKey: sessionId,
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
       reasoningEffort,
       serviceTier,
-      providerPrefix: provider.prefix,
+      providerPrefix: provider.reasoningNamespace ?? provider.prefix,
+      preserveReasoningState: provider.preserveReasoningState,
       serverSideTools,
       // 生产控制面 = provider 配置(按 model 恒定,前缀稳定);dev-only strict spike
       // 仅作诊断证据路径叠加,默认关闭,不得当生产开关用。
       strictFunctionTools: provider.strictFunctionTools?.(realModel) === true
         || (wireDiagnosticsEnabled && opts.wireDiagnosticsStrict === true),
     });
+    let finalRequest: unknown;
+    try {
+      finalRequest = normalizeProviderRequest(responsesReq, { harness: 'claude-code', protocol: 'openai-responses', upstreamBase: provider.upstreamBase, model: responsesReq.model });
+    } catch {
+      writeJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'request cannot be represented by the selected provider protocol' } });
+      return;
+    }
     const diagnostics = wireDiagnosticsEnabled
       ? new WireDiagnosticsSession(log, {
         requestId: ctx.reqId ?? reqId,
         bridgeReqId: reqId,
         wireModel,
         realModel,
-        providerPrefix: provider.prefix,
+        providerPrefix: provider.reasoningNamespace ?? provider.prefix,
         downstreamStreaming,
       })
       : null;
@@ -396,7 +417,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           // 由下游缓冲满足。
           accept: 'text/event-stream',
         },
-        body: JSON.stringify(responsesReq),
+        body: JSON.stringify(finalRequest),
         signal: abort.signal,
       });
     } catch (err) {
@@ -454,7 +475,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       const rateLimit = parseRateLimitHeaders(upstream.headers);
       if (rateLimit) {
         try {
-          provider.onRateLimit(rateLimit);
+          provider.onRateLimit(rateLimit, providerHeaders);
         } catch {
           /* 回调异常不影响流转发 */
         }
@@ -468,7 +489,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
     // 同时兼容个别上游直接给 Responses JSON 的情况。
     if (!downstreamStreaming) {
-      const translator = new SseTranslator(wireModel, serviceTier ?? 'default');
+      const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
       const collector = new AnthropicMessageCollector();
       const collect = (event: AnthropicSseEvent): void => {
         diagnostics?.recordDownstreamEvent(event);
@@ -477,7 +498,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       try {
         const body = await readBodyWithLimit(upstream, MAX_NON_STREAM_BODY_BYTES);
         if (!body.trim()) throw new Error('provider returned an empty response body');
-        if (upstreamIsSse) {
+        if (upstreamIsSse || (!upstreamContentType && looksLikeSse(body))) {
           for (const event of parseSsePayloads(body)) {
             diagnostics?.recordUpstreamEvent(event);
             for (const output of translator.push(event)) collect(output);
@@ -534,7 +555,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     // 用 wireModel(带前缀,如 chatgpt/gpt-5.5)而非 realModel 构造 —— message_start 回显带前缀 id,
     // CC 的 modelUsage 据此记账,下游 usage 可按前缀区分订阅轮,不与真网关同名裸模型混淆。
-    const translator = new SseTranslator(wireModel, serviceTier ?? 'default');
+    const translator = new SseTranslator(wireModel, priceTier, provider.reasoningNamespace);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

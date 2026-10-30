@@ -10,6 +10,7 @@ import {
   parseGhostSetupInteractionCommand,
   projectInteractionRequestForRemote,
   projectPendingInteractionsForRemote,
+  sanitizeGhostSetupSnapshotForDesktop,
   sanitizeGhostSetupRequestForRemote,
   sanitizeGhostSetupSnapshotForRemote,
   type GhostSetupInteractionSnapshot,
@@ -281,7 +282,18 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       ],
     };
 
-    const remote = sanitizeGhostSetupSnapshotForRemote(local);
+    const desktop = sanitizeGhostSetupSnapshotForDesktop(local);
+    expect(desktop.steps[0].action).toMatchObject({
+      form: { fields: [{ externalLink: { url: 'https://desktop-only.example/keys' } }] },
+    });
+    expect(desktop.steps[0]).not.toHaveProperty('errorMessage');
+    for (const url of ['http://unsafe.example/keys', 'https://user:secret@example.com/keys', 'javascript:alert(1)']) {
+      const unsafe = structuredClone(local);
+      if (unsafe.steps[0].action?.kind === 'inline_form')
+        unsafe.steps[0].action.form.fields[0].externalLink = { url };
+      expect(JSON.stringify(sanitizeGhostSetupSnapshotForDesktop(unsafe))).not.toContain('externalLink');
+    }
+    const remote = sanitizeGhostSetupSnapshotForRemote(desktop);
 
     expect(remote).not.toBe(local);
     expect(remote.steps[0]).toMatchObject({

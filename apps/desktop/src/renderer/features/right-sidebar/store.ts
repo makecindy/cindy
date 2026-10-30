@@ -11,7 +11,7 @@
  *  - subscribe(listener) 接收 sessionId-aware 通知;消费方(RightSidebarShell)通过
  *    React 的 useSyncExternalStore 订阅当前 sessionId 的桶变化。
  *
- * 错误暴露走 caller 的 catch + console.error;Phase 7 加 toast 统一暴露。
+ * 错误暴露走 caller 的 catch + console.error;Phase 7 收尾:添加失败由 Shell 按错误码 toast 统一暴露。
  *
  * 模块单例 → RightSidebar 整树 unmount/remount(session 切换时 MainLayout L553 条件渲染)也不丢数据。
  */
@@ -26,8 +26,13 @@ import { getTabKind } from './registry';
 import { browserWebviewPool } from './lib/browserWebviewPool';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import { closeNativePopupForTab } from './lib/nativePopupTabs';
+import { isTabHostedHere } from './lib/tabHosting';
+import { isSidebarTabWindow } from '@/lib/sidebarTabWindow';
+import { isTabPoppedOut } from '@/lib/sidebarTabWindowState';
+import { clearTabGroup, setTabGroup, type TabGroupId } from './tabGroups';
 import type { TabKindId, TabState } from './types';
 import type { RsbWindowTabSnapshot } from '../../../shared/rightSidebarWindow';
+import type { SidebarTabReturnSnapshot } from '../../../shared/sidebarTabWindow';
 
 const log = createLogger('rightSidebar.store');
 
@@ -56,6 +61,15 @@ const memoryOnlySessions = new Set<string>();
 const pendingHandoffBuckets = new Map<string, TabBucket>();
 const closeInterceptors = new Map<string, TabCloseInterceptor>();
 const patchRevisions = new Map<string, number>();
+/**
+ * 正在关闭(乐观移除已生效、close IPC 在途)的 tabId。跨 renderer 刷新
+ * (refreshSessionFromDb)在这段窗口里仍能从 DB 读到该行,不能把它重新加回 cache。
+ */
+const closingTabIds = new Set<string>();
+/** 跨 renderer 变更广播的按会话合并计时器:弹出窗口里的 URL / title 连发不逐条重拉。 */
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const REFRESH_DEBOUNCE_MS = 120;
+let tabsChangeSubscribed = false;
 /**
  * 进行中的 tab 创建(tabId → 该 tab 是否**落库成功**)。
  *
@@ -496,22 +510,234 @@ export function getTabSnapshot(sessionId: string | null | undefined): RsbWindowT
   };
 }
 
-/** Import a non-persistable tab bucket received before the previous host is destroyed. */
-export function importTabSnapshot(snapshot: RsbWindowTabSnapshot): void {
+/**
+ * Import a non-persistable tab bucket received before the previous host is destroyed.
+ *
+ * `onlyTabIds`:页签独立窗口收到**后续**指派(搬入新页签)时,只把这些页签的数据并进现有桶,
+ * 其它页签保持本窗口当前的内存态——整桶替换会把窗口里刚改的 URL / 刚新建的页签抹掉。
+ */
+export function importTabSnapshot(
+  snapshot: RsbWindowTabSnapshot,
+  opts: { onlyTabIds?: ReadonlySet<string> } = {},
+): void {
   if (snapshot.persistable || !snapshot.sessionId) return;
+  if (opts.onlyTabIds) {
+    const existing = cache.get(snapshot.sessionId);
+    const incoming = snapshot.tabs
+      .filter((tab) => tab.id && tab.kind && opts.onlyTabIds!.has(tab.id))
+      .map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+    if (incoming.length === 0) return;
+    memoryOnlySessions.add(snapshot.sessionId);
+    const byId = new Map((existing?.tabs ?? []).map((tab) => [tab.id, tab]));
+    for (const tab of incoming) byId.set(tab.id, tab);
+    setBucket(snapshot.sessionId, {
+      hydrated: true,
+      tabs: [...byId.values()],
+      activeTabId: existing?.activeTabId ?? null,
+    });
+    return;
+  }
   const seen = new Set<string>();
-  const tabs: TabState[] = snapshot.tabs.filter((tab) => {
-    if (!tab.id || !tab.kind || seen.has(tab.id)) return false;
-    seen.add(tab.id);
-    return true;
-  }).map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
-  const activeTabId = snapshot.activeTabId && seen.has(snapshot.activeTabId)
-    ? snapshot.activeTabId
-    : null;
+  const tabs: TabState[] = snapshot.tabs
+    .filter((tab) => {
+      if (!tab.id || !tab.kind || seen.has(tab.id)) return false;
+      seen.add(tab.id);
+      return true;
+    })
+    .map((tab) => ({ ...tab, kind: tab.kind as TabKindId }));
+  const activeTabId =
+    snapshot.activeTabId && seen.has(snapshot.activeTabId) ? snapshot.activeTabId : null;
   const bucket: TabBucket = { hydrated: true, tabs, activeTabId };
   memoryOnlySessions.add(snapshot.sessionId);
   pendingHandoffBuckets.set(snapshot.sessionId, bucket);
   setBucket(snapshot.sessionId, bucket);
+}
+
+/** 页签正在关闭(乐观移除已生效、close IPC 在途)。弹出窗口据此推迟「页签已消失」的上报。 */
+export function isTabClosing(tabId: string): boolean {
+  return closingTabIds.has(tabId);
+}
+
+/**
+ * 页签已在别的 renderer 里被关掉(弹出窗口关页签后 main 的 closed 通知):只丢本地副本并
+ * 释放资源,不发 close IPC(数据库那一侧已由关掉它的一方处理;不可持久化会话本就没有)。
+ */
+export function removeTabLocally(sessionId: string, tabId: string): void {
+  const bucket = cache.get(sessionId);
+  const tab = bucket?.tabs.find((candidate) => candidate.id === tabId);
+  if (!bucket || !tab) return;
+  const tabs = bucket.tabs.filter((candidate) => candidate.id !== tabId);
+  const activeTabId = bucket.activeTabId === tabId ? (tabs[0]?.id ?? null) : bucket.activeTabId;
+  setBucket(sessionId, { tabs, activeTabId });
+  forgetClosedTab(sessionId, tabId, tab.kind);
+}
+
+/** 弹出窗口合并回侧边栏时交回的单页签内存态(仅不可持久化会话;其余返回 null)。 */
+export function getSingleTabSnapshot(
+  sessionId: string | null | undefined,
+  tabId: string,
+): SidebarTabReturnSnapshot | null {
+  if (!sessionId) return null;
+  const bucket = cache.get(sessionId);
+  if (!bucket?.hydrated || shouldPersist(sessionId)) return null;
+  const tab = bucket.tabs.find((t) => t.id === tabId);
+  if (!tab) return null;
+  return { sessionId, tab: { id: tab.id, kind: tab.kind, state: tab.state } };
+}
+
+/**
+ * 页签从弹出窗口回到侧边栏(不可持久化会话):用交回的内存态覆盖本 renderer 里
+ * 该页签的数据副本。页签在本 renderer 的桶里从未消失(弹出期间只是不投影),
+ * 所以只做替换;桶未加载时无处可放,记日志丢弃(重开会话即重建)。
+ */
+export function importReturnedTabState(snapshot: SidebarTabReturnSnapshot): void {
+  const bucket = cache.get(snapshot.sessionId);
+  if (!bucket?.hydrated) {
+    log.warn('returned tab state dropped: session bucket not hydrated here', {
+      sessionId: snapshot.sessionId,
+      tabId: snapshot.tab.id,
+    });
+    return;
+  }
+  const idx = bucket.tabs.findIndex((t) => t.id === snapshot.tab.id);
+  const restored: TabState = {
+    id: snapshot.tab.id,
+    kind: snapshot.tab.kind as TabKindId,
+    state: snapshot.tab.state,
+  };
+  // 窗口里新建、主窗从未见过的页签(窗口崩溃时 main 带回快照):追加回桶里,不让它随窗口消失。
+  if (idx < 0) {
+    setBucket(snapshot.sessionId, { tabs: [...bucket.tabs, restored] });
+    return;
+  }
+  const tabs = [...bucket.tabs];
+  tabs[idx] = { ...tabs[idx], ...restored };
+  setBucket(snapshot.sessionId, { tabs });
+}
+
+function tabsEqual(a: readonly TabState[], b: readonly TabState[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] === b[i]) continue;
+    if (a[i].id !== b[i].id || a[i].kind !== b[i].kind) return false;
+    if (JSON.stringify(a[i].state) !== JSON.stringify(b[i].state)) return false;
+  }
+  return true;
+}
+
+/**
+ * 跨 renderer 刷新:另一个 renderer(弹出的单页签窗口 ↔ 主窗侧边栏)改动了该会话
+ * 的页签持久化数据后,按 SQLite 合并本地桶。合并规则(唯一判据 isTabHostedHere):
+ *   - 本 renderer **承载**的页签以本地为准(乐观更新与在途写不被对方的旧快照覆盖);
+ *   - 非承载页签以 DB 为准:对方新增的加进来、对方关掉的拿掉、状态取 DB;
+ *   - `forceTabIds` 里的页签无条件取 DB(页签刚从弹出窗口交回,状态镜像可能已把
+ *     它标回「本地承载」,但本地副本是弹出前的旧值);
+ *   - 本地有、DB 没有的页签:创建还在途的保留,其余视为已被对方(或会话删除)关掉,
+ *     承载方顺带释放它的资源;正在关闭的页签不回加;
+ *   - activeTabId 以本地为准,只有对方**新建并激活**的、且由本 renderer 承载的
+ *     页签才接管激活位(弹出的文件浏览器里「在浏览器打开」→ 侧边栏新页签直接可见)。
+ * 本 renderer 没加载过该会话时无需合并(下次 ensureHydrated 自然读到最新)。
+ */
+export async function refreshSessionFromDb(
+  sessionId: string,
+  opts: { forceTabIds?: readonly string[] } = {},
+): Promise<void> {
+  const ipc = ipcApi();
+  if (!ipc || !shouldPersist(sessionId)) return;
+  const before = cache.get(sessionId);
+  if (!before?.hydrated) return;
+  const generation = cacheGeneration;
+  let result: RightSidebarTabsListResult;
+  try {
+    result = (await ipc.list({ sessionId })) as RightSidebarTabsListResult;
+  } catch (err) {
+    log.warn('refreshSessionFromDb list failed', { sessionId, err });
+    return;
+  }
+  if (generation !== cacheGeneration) return;
+  const current = cache.get(sessionId);
+  if (!current?.hydrated) return;
+  if (result.persistable === false) {
+    markMemoryOnlySession(sessionId);
+    return;
+  }
+  const force = new Set(opts.forceTabIds ?? []);
+  const keepLocal = (tabId: string) => !force.has(tabId) && isTabHostedHere(tabId);
+  const localById = new Map(current.tabs.map((tab) => [tab.id, tab]));
+  const dbTabs: TabState[] = result.tabs.map((row) => ({
+    id: row.id,
+    kind: row.kind as TabKindId,
+    state: sanitizeHydratedTabState(row.kind, row.state),
+  }));
+  const dbIds = new Set(dbTabs.map((tab) => tab.id));
+  const merged: TabState[] = [];
+  const newlyAdded = new Set<string>();
+  for (const dbTab of dbTabs) {
+    const local = localById.get(dbTab.id);
+    if (local && keepLocal(dbTab.id)) {
+      merged.push(local);
+      continue;
+    }
+    if (!local) {
+      if (closingTabIds.has(dbTab.id)) continue;
+      newlyAdded.add(dbTab.id);
+    }
+    merged.push(dbTab);
+  }
+  current.tabs.forEach((local, index) => {
+    if (dbIds.has(local.id)) return;
+    if (pendingTabCreates.has(local.id)) {
+      merged.splice(Math.min(index, merged.length), 0, local);
+      return;
+    }
+    if (closingTabIds.has(local.id)) return;
+    if (keepLocal(local.id)) forgetClosedTab(sessionId, local.id, local.kind);
+  });
+  let activeTabId = current.activeTabId;
+  if (
+    result.activeTabId &&
+    result.activeTabId !== activeTabId &&
+    newlyAdded.has(result.activeTabId) &&
+    isTabHostedHere(result.activeTabId)
+  ) {
+    activeTabId = result.activeTabId;
+  }
+  if (activeTabId !== null && !merged.some((tab) => tab.id === activeTabId)) {
+    activeTabId = merged[0]?.id ?? null;
+  }
+  if (activeTabId === current.activeTabId && tabsEqual(current.tabs, merged)) return;
+  setBucket(sessionId, { tabs: merged, activeTabId });
+}
+
+function scheduleRefreshFromDb(sessionId: string): void {
+  const existing = refreshTimers.get(sessionId);
+  if (existing) clearTimeout(existing);
+  refreshTimers.set(
+    sessionId,
+    setTimeout(() => {
+      refreshTimers.delete(sessionId);
+      void refreshSessionFromDb(sessionId).catch((err) => {
+        log.warn('refreshSessionFromDb failed', { sessionId, err });
+      });
+    }, REFRESH_DEBOUNCE_MS),
+  );
+}
+
+/** 惰性订阅 main 的页签变更广播(整个 renderer 只订一次;无桥环境静默)。 */
+function ensureTabsChangeSubscription(): void {
+  if (tabsChangeSubscribed) return;
+  const ipc = ipcApi();
+  if (!ipc?.onChanged) return;
+  tabsChangeSubscribed = true;
+  try {
+    ipc.onChanged(({ sessionId }) => {
+      if (typeof sessionId !== 'string' || !sessionId) return;
+      scheduleRefreshFromDb(sessionId);
+    });
+  } catch (err) {
+    tabsChangeSubscribed = false;
+    log.warn('subscribe right sidebar tabs change failed', { err });
+  }
 }
 
 /**
@@ -545,6 +771,7 @@ export function findSessionIdByTabId(tabId: string): string | null {
 /** 首次访问 sessionId 触发 IPC list 拉取;后续命中 cache 即 noop。dedupe 并发请求。 */
 export async function ensureHydrated(sessionId: string): Promise<void> {
   if (!sessionId) return;
+  ensureTabsChangeSubscription();
   const current = cache.get(sessionId);
   if (current?.hydrated) return;
   const pending = pendingHandoffBuckets.get(sessionId);
@@ -603,17 +830,19 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
  * `opts.activate === false`:追加 tab 但**不抢激活位**(cache 与 DB 的 active 都
  * 保持原样)。钉住面板的跨会话自动补挂用 —— 用户切到某会话时补挂的页签不该
  * 把他正看着的 tab 顶掉。默认 true 维持既有语义(用户手动加 tab = 看它)。
+ * `opts.groupId`:新页签落在哪个页签组(缺省右侧组);乐观插入前就登记,首帧不闪组。
  */
 export async function addTab(
   sessionId: string,
   kind: TabKindId,
   initialState: unknown = null,
-  opts?: { onOptimisticAdd?: (tabId: string) => void; activate?: boolean },
+  opts?: { onOptimisticAdd?: (tabId: string) => void; activate?: boolean; groupId?: TabGroupId },
 ): Promise<TabState> {
   const activate = opts?.activate !== false;
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
-    throw new Error(
+    throw createIpcError(
+      'RIGHT_SIDEBAR_TOO_MANY_TABS',
       `session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`,
     );
   }
@@ -621,6 +850,7 @@ export async function addTab(
   const id = makeTabId();
   const position = prev.tabs.length;
   const newTab: TabState = { id, kind, state: initialState };
+  if (opts?.groupId) setTabGroup(id, opts.groupId);
   setBucket(sessionId, {
     tabs: [...prev.tabs, newTab],
     activeTabId: activate ? id : prev.activeTabId,
@@ -695,6 +925,7 @@ export async function addOrFocusSingletonTab(
   sessionId: string,
   kind: TabKindId,
   initialState: unknown = null,
+  opts?: { groupId?: TabGroupId },
 ): Promise<TabState> {
   const bucket = getBucket(sessionId);
   const existing = bucket.tabs.find((t) => t.kind === kind);
@@ -704,7 +935,7 @@ export async function addOrFocusSingletonTab(
     }
     return existing;
   }
-  return addTab(sessionId, kind, initialState);
+  return addTab(sessionId, kind, initialState, opts);
 }
 
 /**
@@ -808,9 +1039,18 @@ function forgetClosedTab(sessionId: string, tabId: string, kind: TabKindId): voi
   const key = tabStateWriteKey(sessionId, tabId);
   patchRevisions.delete(key);
   persistedStateBaselines.delete(key);
+  clearTabGroup(tabId);
   if (kind === 'web-browser') browserWebviewPool.release(tabId);
   unmarkPopupSpawnedTab(tabId);
   closeNativePopupForTab(tabId);
+  // 被弹出到独立窗口的页签在侧边栏里被关掉(agent close / 关闭全部 / 会话删除):
+  // 它的窗口没有内容可交回,直接销毁。弹出窗口自己承载的页签关闭时由
+  // SidebarTabWindowLayout 感知 bucket 变化后关窗,不走这里。
+  if (!isSidebarTabWindow() && isTabPoppedOut(tabId)) {
+    void window.electronAPI?.sidebarTabWindow?.closeForTab(tabId).catch((err) => {
+      log.warn('close sidebar tab window for closed tab failed', { tabId, err });
+    });
+  }
 }
 
 /**
@@ -871,6 +1111,7 @@ export async function closeTab(
     }
   }
 
+  closingTabIds.add(tabId);
   const mutation = enqueueCloseMutation(sessionId, async () => {
     // 队列内重取快照:排在前面的关闭可能已经动过这个 bucket(甚至已经关掉了本
     // tab)。用旧快照算 nextTabs / 回滚基线正是并发出错的根源。
@@ -1006,6 +1247,8 @@ export async function closeTab(
       }
       throw err;
     }
+  }).finally(() => {
+    closingTabIds.delete(tabId);
   });
   return mutation;
 }
@@ -1019,8 +1262,16 @@ export async function closeAllTabs(sessionId: string): Promise<void> {
 }
 
 /** 切换激活 tab —— 同 id 即 noop。失败回滚。 */
-export async function setActiveTab(sessionId: string, tabId: string | null): Promise<void> {
+export async function setActiveTab(sessionId: string, tabId: string | null, options?: { userInitiated?: boolean }): Promise<void> {
   const prev = getBucket(sessionId);
+  // 目标页签活在弹出的独立窗口里:侧边栏没有它的 body 可切,「激活它」= 把那扇
+  // 窗口叫到前台(用户点单例入口 / agent focus 都走这里)。
+  if (tabId !== null && !isSidebarTabWindow() && isTabPoppedOut(tabId)) {
+    const focus = window.electronAPI?.sidebarTabWindow?.focus;
+    if (options) await focus?.(tabId, options);
+    else await focus?.(tabId);
+    return;
+  }
   if (tabId === prev.activeTabId) return;
   // closeTab 已把关闭中的 tab 从 bucket 乐观移除:若此时用户点击该 tab(或
   // 并发命令调 setActiveTab),activeTabId 会指向 tabs 里不存在的 id —— sidebar
@@ -1148,6 +1399,10 @@ export function _resetStore(): void {
   closeInterceptors.clear();
   pendingTabCreates.clear();
   closeMutationQueues.clear();
+  closingTabIds.clear();
+  for (const timer of refreshTimers.values()) clearTimeout(timer);
+  refreshTimers.clear();
+  tabsChangeSubscribed = false;
   resetStateWriteQueue();
   listeners.clear();
 }

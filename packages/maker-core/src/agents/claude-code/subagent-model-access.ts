@@ -17,11 +17,33 @@ export type ResolveClaudeSubagentModelAccess = (
   model: string,
 ) => ClaudeSubagentModelAccessResult | Promise<ClaudeSubagentModelAccessResult>;
 
+export type ResolveClaudeSubagentModelContextWindow = (
+  model: string,
+) => number | undefined;
+
 export function normalizeClaudeSubagentModel(model: string): string {
   const normalized = model.trim().toLowerCase();
   return normalized.endsWith('[1m]')
     ? normalized.slice(0, -'[1m]'.length)
     : normalized;
+}
+
+/** Add or remove Claude Code's explicit 1M context wire suffix for a known model. */
+export function claudeSubagentModelWithContextWindow(
+  model: string,
+  contextWindow: number | undefined,
+): string {
+  const trimmed = model.trim();
+  if (
+    !trimmed
+    || typeof contextWindow !== 'number'
+    || !Number.isFinite(contextWindow)
+    || contextWindow <= 0
+  ) {
+    return trimmed;
+  }
+  const bare = trimmed.replace(/\[1m\]$/i, '');
+  return contextWindow >= 1_000_000 ? `${bare}[1m]` : bare;
 }
 
 /**
@@ -56,33 +78,73 @@ export function buildClaudeSubagentModelGuardHooks(
   resolveAccess: ResolveClaudeSubagentModelAccess | undefined,
   forcedModel?: string,
   onDeny?: (model: string) => void,
+  resolveContextWindow?: ResolveClaudeSubagentModelContextWindow,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
-  if (!resolveAccess) return {};
+  if (!resolveAccess && !resolveContextWindow) return {};
 
   const guard: HookCallback = async (input) => {
     if (input.hook_event_name !== 'PreToolUse') return { continue: true };
     const pre = input as PreToolUseHookInput;
     const model = effectiveClaudeSubagentModel(forcedModel, pre.tool_name, pre.tool_input);
-    if (!model) return { continue: true };
-
-    let access: ClaudeSubagentModelAccessResult;
-    try {
-      access = await resolveAccess(model);
-    } catch {
-      return { continue: true };
+    const toolInput = typeof pre.tool_input === 'object' && pre.tool_input !== null
+      ? pre.tool_input as Record<string, unknown>
+      : undefined;
+    const requestedModel = typeof toolInput?.model === 'string' ? toolInput.model : undefined;
+    const modelToRewrite = requestedModel ?? forcedModel;
+    let wireModel: string | undefined;
+    if (modelToRewrite && resolveContextWindow) {
+      try {
+        wireModel = claudeSubagentModelWithContextWindow(
+          modelToRewrite,
+          resolveContextWindow(normalizeClaudeSubagentModel(modelToRewrite)),
+        );
+      } catch {
+        // Context metadata is advisory; an unavailable live resolver must not
+        // block an otherwise valid Agent/Task invocation.
+        wireModel = undefined;
+      }
     }
-    if (access.status !== 'denied') return { continue: true };
+    const updatedInput = requestedModel && wireModel && wireModel !== requestedModel
+      ? { ...toolInput, model: wireModel }
+      : undefined;
+    const continueWithUpdatedInput = updatedInput
+      ? {
+          continue: true as const,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse' as const,
+            updatedInput,
+          },
+        }
+      : { continue: true as const };
 
-    onDeny?.(model);
-    return {
-      continue: true,
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: claudeSubagentModelDenialReason(model, access.reason),
-      },
-    };
+    if (!model) return continueWithUpdatedInput;
+
+    if (resolveAccess) {
+      let access: ClaudeSubagentModelAccessResult;
+      try {
+        access = await resolveAccess(model);
+      } catch {
+        return continueWithUpdatedInput;
+      }
+      if (access.status === 'denied') {
+        onDeny?.(model);
+        return {
+          continue: true,
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: claudeSubagentModelDenialReason(model, access.reason),
+          },
+        };
+      }
+    }
+    return continueWithUpdatedInput;
   };
 
-  return { PreToolUse: [{ hooks: [guard] }] };
+  return {
+    PreToolUse: [
+      { matcher: 'Agent', hooks: [guard] },
+      { matcher: 'Task', hooks: [guard] },
+    ],
+  };
 }

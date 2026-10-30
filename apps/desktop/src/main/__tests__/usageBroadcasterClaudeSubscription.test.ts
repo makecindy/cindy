@@ -10,10 +10,14 @@ const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   exec: vi.fn(async () => undefined),
   getCurrentDbClientUserId: vi.fn(() => 'user-1'),
+  tapWindowBroadcast: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
+}));
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
 vi.mock('../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -43,6 +47,7 @@ describe('claude subscription snapshot hydration race', () => {
     mocks.queryOne.mockReset();
     mocks.exec.mockReset().mockResolvedValue(undefined);
     mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
+    mocks.tapWindowBroadcast.mockReset();
   });
 
   it('does not drop the very first snapshot after main start (owner init is not invalidation)', async () => {
@@ -268,4 +273,94 @@ describe('claude subscription snapshot hydration race', () => {
     const current = await broadcaster.readClaudeSubscriptionUsageSnapshot();
     expect(current).toBeNull();
   });
+
+  it('taps record and clear broadcasts for device-link forwarding (merged snapshot / null)', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+
+    await broadcaster.recordClaudeSubscriptionUsageSnapshot({
+      fiveHour: { utilization: 10 }, source: 'unified-headers', updatedAt: 1,
+    });
+    const tapped = mocks.tapWindowBroadcast.mock.calls.find(
+      ([channel]) => channel === 'usage:claude-subscription-changed',
+    );
+    expect(tapped?.[1]).toMatchObject({ fiveHour: { utilization: 10 } });
+
+    mocks.tapWindowBroadcast.mockClear();
+    await broadcaster.clearClaudeSubscriptionUsageSnapshot();
+    // 登出 / 换号清除也要同步到控制端(null 让远程 chip 回占位态)。
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      'usage:claude-subscription-changed',
+      null,
+    );
+  });
+
+  it('taps codex account broadcasts with the authoritative combined payload', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+
+    await broadcaster.recordCodexAccountUsageSnapshot({
+      source: 'codex-app-server',
+      limitId: 'codex',
+      primary: { usedPercent: 3, windowMinutes: 10_080 },
+    });
+
+    const tapped = mocks.tapWindowBroadcast.mock.calls.find(
+      ([channel]) => channel === 'usage:codex-account-changed',
+    );
+    // 转发的是组合 payload(远程镜像按整帧替换消费)。
+    expect(tapped?.[1]).toMatchObject({ limitId: 'codex' });
+  });
+
+  it('taps xai rate-limit record and clear broadcasts', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+
+    broadcaster.recordXaiRateLimitSnapshot({ source: 'cli-chat-proxy' } as never);
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      'usage:xai-rate-limit-changed',
+      expect.objectContaining({ updatedAt: expect.any(Number) }),
+    );
+
+    mocks.tapWindowBroadcast.mockClear();
+    broadcaster.clearXaiRateLimitSnapshot();
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('usage:xai-rate-limit-changed', null);
+  });
+
+  // MagicLizi P1 (#3789): independent xAI accounts must never write into or clear the builtin
+  // remote mirror; they forward on the provider-scoped channel like Codex named accounts.
+  it('keeps independent xAI account rate-limit record and clear off the builtin channel', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.tapWindowBroadcast.mockClear();
+
+    broadcaster.recordXaiRateLimitSnapshot({ source: 'cli-chat-proxy' } as never, 'xai-second');
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith('usage:xai-rate-limit-changed', expect.anything());
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      'usage:xai-provider-rate-limit-changed',
+      { providerId: 'xai-second', snapshot: expect.objectContaining({ updatedAt: expect.any(Number) }) },
+    );
+
+    mocks.tapWindowBroadcast.mockClear();
+    broadcaster.clearXaiRateLimitSnapshot('xai-second');
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith('usage:xai-rate-limit-changed', expect.anything());
+    expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(
+      'usage:xai-provider-rate-limit-changed',
+      { providerId: 'xai-second', snapshot: null },
+    );
+  });
+});
+
+
+it('keeps named Codex and subscription pushes in their provider-scoped channels', async () => {
+  vi.resetModules();
+  mocks.tapWindowBroadcast.mockClear();
+  mocks.queryOne.mockResolvedValue(null);
+  const broadcaster = await import('../usageBroadcaster');
+  await broadcaster.recordCodexAccountUsageSnapshot({ source: 'codex-app-server',
+    primary: { usedPercent: 70 } }, 'second-account');
+  expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith('usage:codex-account-changed', expect.anything());
+  expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('usage:codex-provider-account-changed',
+    expect.objectContaining({ providerId: 'second-account', snapshot: expect.objectContaining({ primary: { usedPercent: 70 } }) }));
+  broadcaster.broadcastSubscriptionAccountUsage('claude-2', null);
+  expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('usage:subscription-provider-account-changed',
+    { providerId: 'claude-2', snapshot: null });
 });

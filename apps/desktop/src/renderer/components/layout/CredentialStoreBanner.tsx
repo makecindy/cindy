@@ -12,7 +12,7 @@
  *  - ✕ 关闭是**进程内**记忆(模块级,与 ControlledBanner 的模块级缓存同模式):
  *    路由切换 / remount 不复活,重启后若仍故障会重新出现;flag 回 false 时清除
  *    dismiss 记忆,下次再故障必须重新提示;
- *  - 解决步骤按平台分支:macOS 给钥匙串检查指引,其它平台给通用重启/重登指引。
+ *  - 与登录页共用恢复帮助:平台指引、完整退出步骤和私下诊断出口,不引导删除凭证。
  *
  * 颜色走既有语义豁免 token(--warning-fg / --warning-bg-soft,双模式同值/自适配),
  * 不引入新 token,无需 DESIGN.md §10 豁免表登记。
@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { TriangleAlert, X } from 'lucide-react';
 
 import { useAuth } from '@/contexts/AuthContext';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { CredentialStoreHelpDialog } from '@/components/auth/CredentialStoreHelpDialog';
 import { Tip } from '@/components/ui/tooltip';
 
 // 进程内 dismiss 记忆:MainLayout 在路由切换间会重挂本组件,用组件态存 dismiss
@@ -42,8 +42,6 @@ export function CredentialStoreBanner() {
   // dismiss 后触发一次重渲染让横幅立即消失;真值存模块级变量。
   const [, setDismissTick] = useState(0);
 
-  const isMac = window.electronAPI?.platform === 'darwin';
-
   // 凭证库恢复后清 dismiss 记忆:下次再故障必须重新出现,不能被上次的 ✕ 吞掉。
   useEffect(() => {
     if (!credentialStoreUnavailable) dismissedInProcess = false;
@@ -55,14 +53,6 @@ export function CredentialStoreBanner() {
     dismissedInProcess = true;
     setDismissTick((n) => n + 1);
   };
-
-  // 恢复步骤:macOS 多一条钥匙串检查;两个平台都以「重启 → 仍不行再重登」收尾,
-  // 与 main 侧「首次失败不 clearAuth」的取向一致——不引导用户上来就丢登录态。
-  const steps = [
-    ...(isMac ? [t('credentialStore.dialog.stepMacKeychain')] : []),
-    t('credentialStore.dialog.stepRestart'),
-    t('credentialStore.dialog.stepRelogin'),
-  ];
 
   return (
     <>
@@ -96,22 +86,7 @@ export function CredentialStoreBanner() {
           </button>
         </Tip>
       </div>
-      <ConfirmDialog
-        open={helpOpen}
-        onOpenChange={setHelpOpen}
-        title={t('credentialStore.dialog.title')}
-        description={t('credentialStore.dialog.intro')}
-        content={
-          <ol className="list-decimal space-y-1.5 pl-5 text-sm text-[var(--text-secondary-mid)]">
-            {steps.map((step) => (
-              <li key={step}>{step}</li>
-            ))}
-          </ol>
-        }
-        confirmText={t('credentialStore.dialog.confirm')}
-        showCancel={false}
-        onConfirm={() => setHelpOpen(false)}
-      />
+      <CredentialStoreHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </>
   );
 }

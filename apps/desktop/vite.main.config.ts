@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv } from 'vite';
 import { desktopClientBuildEnv } from '../../scripts/shared/client-endpoint-build-env.mjs';
+import { cindyRuntimeSourcePlugin } from './cindy-runtime-source';
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 // 登录 scenario fixtures 的生产空 stub(implementation-plan Step 0 WHAT4 生产排除
@@ -10,6 +11,11 @@ const loginFixturesStub = path.resolve(
   configDir,
   '../../packages/auth-client/fixtures/loginScenarios.production-stub.ts',
 );
+
+// Git operations can deliver a burst of file events. Waiting briefly before a
+// development rebuild lets Rollup invalidate that burst as one graph update,
+// keeping the watcher peak bounded without changing packaged builds.
+const DEV_WATCH_BUILD_DELAY_MS = 250;
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
@@ -28,6 +34,7 @@ export default defineConfig(({ mode }) => {
       ? (process.env[key] ?? '')
       : (allEnv[key] ?? '');
   return {
+    plugins: [cindyRuntimeSourcePlugin(path.resolve(configDir, '../..'), mode === 'development')],
     resolve: {
       // 仅 fixtures 生产排除条件(v6.17 允许范围):production 构建把
       // '@cindy/auth-client/fixtures' 整模块替换为空 stub,dev 构建保留真模块。
@@ -102,6 +109,8 @@ export default defineConfig(({ mode }) => {
       ),
     },
     build: {
+      watch:
+        mode === 'development' ? { buildDelay: DEV_WATCH_BUILD_DELAY_MS } : undefined,
       rollupOptions: {
         output: {
           // Keep the vendored @cindy/browser-control-runtime (including its
@@ -120,6 +129,9 @@ export default defineConfig(({ mode }) => {
             const norm = id.replace(/\\/g, '/');
             if (norm.includes('/packages/browser-control-runtime/')) {
               return 'browser-control-runtime';
+            }
+            if (norm.includes('/packages/opencli-vendor/')) {
+              return norm.endsWith('/cli-manifest.json') || norm.endsWith('/cindy/catalog.ts') || norm.endsWith('/cindy/selection.json') ? 'browser-recipe-catalog' : 'browser-recipes';
             }
             return undefined;
           },

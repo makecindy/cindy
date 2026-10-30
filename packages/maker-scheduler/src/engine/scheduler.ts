@@ -15,6 +15,7 @@ import type {
   ScriptCapability,
   ScriptExecutionConfig,
   PreRunHookRunResult,
+  ScheduleMutationGuard,
 } from '../types.js';
 import { SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
@@ -32,6 +33,23 @@ import { nextCronOrMonthlyFire } from './monthlyClamp.js';
 function nextIntervalFire(baseMs: number, intervalMs: number, now: number): number {
   const planned = baseMs + intervalMs;
   return planned > now ? planned : now + intervalMs;
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+}
+
+function assertScheduleMutationGuard(expected: ScheduleMutationGuard | undefined, current: Schedule): void {
+  if (!expected) return;
+  const expectedSchedule = { ...expected };
+  delete expectedSchedule.effectiveWorkingDir;
+  if (stableJson(expectedSchedule) !== stableJson(current)) {
+    throw new Error('Schedule changed; refresh before executing the approved action');
+  }
 }
 
 const SCRIPT_CAPABILITY_SET: ReadonlySet<ScriptCapability> = new Set(SCRIPT_CAPABILITIES);
@@ -56,9 +74,39 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  // A bound agent run only overrides its task's location with an explicit model
+  // selection. Reject a local-only patch instead of silently inheriting remote.
+  if (schedule.modelAgentDeviceId === '' && (schedule.targetSessionId || schedule.persistentSession) &&
+    (schedule.executionMode ?? 'agent') === 'agent' &&
+    (!schedule.modelAgentKind || !schedule.model?.trim())) {
+    throw new Error('Explicit scheduled Agent location for a bound task requires a Harness and model');
+  }
+  if (schedule.modelAgentDeviceId !== undefined && (
+    typeof schedule.modelAgentDeviceId !== 'string' ||
+    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+      !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
+  )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
+  if (schedule.modelAgentKind != null) {
+    if (!['claude-code', 'codex', 'pi'].includes(schedule.modelAgentKind) || !schedule.model?.trim()) {
+      throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
+    }
+  }
+  if (schedule.agentDeviceId !== undefined) {
+    // 运行位置只配显式模型:那台电脑的默认模型无法在本机解析。
+    // 与创建任务时 agentDeviceId 的校验同一口径。
+    if (typeof schedule.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.agentDeviceId)) {
+      throw new Error('agentDeviceId must be a valid device id');
+    }
+    if (schedule.modelAgentDeviceId === undefined && (schedule.executionMode ?? 'agent') === 'script') {
+      throw new Error('script execution does not support agentDeviceId');
+    }
+    if (schedule.modelAgentDeviceId === undefined && !schedule.model?.trim()) {
+      throw new Error('agentDeviceId requires an explicit model');
+    }
+  }
   if ((schedule.executionMode ?? 'agent') !== 'script') {
     // 堵 update 逃逸:script 任务(prompt 合法为空)经 patch 只切 executionMode='agent'
     // 时,若不校验会落库空提示词的 agent 任务,触发即烧一轮空输入。checkAgentPrompt
@@ -69,14 +117,17 @@ function validateScheduleExecutionShape(
     }
     return;
   }
+  if (schedule.modelAgentDeviceId) {
+    throw new Error('script execution does not support remote model sources; select a local model before switching modes');
+  }
   if (!schedule.scriptConfig?.command.trim()) {
     throw new Error('script execution requires a non-empty command');
   }
   if (schedule.workspaceKind !== 'project' || !schedule.workingDir?.trim()) {
     throw new Error('script execution requires a local project workspace');
   }
-  if (schedule.useWorktree || schedule.targetSessionId || schedule.persistentSession) {
-    throw new Error('script execution does not support worktrees or bound sessions');
+  if (schedule.useWorktree || schedule.persistentSession) {
+    throw new Error('script execution does not support worktrees or persistent sessions');
   }
   // silentWhenIdle 的静默协议依赖 agent 在会话里调 silence 工具,script 任务无
   // agent、该语义整体不适用;显式传入按不支持字段拒绝(UI 提交层恒为 false)。
@@ -106,6 +157,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -771,7 +823,7 @@ export class Scheduler extends EventEmitter {
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
-        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire', schedule);
       }
       const result = await this.runner.fire(schedule, {
         runId,
@@ -1006,7 +1058,9 @@ export class Scheduler extends EventEmitter {
   // - 副作用：recurring=false 的任务被手动 runNow 后 lastFiredAt 落地，
   //   重启 app 时 computeNextFireAt 会返回 undefined → 不会再被 cron 触发。
   //   这反而更贴合"Once"语义：用户手动跑过一次就视作用完。
-  async runNow(id: string): Promise<{ runId: string }> {
+  // Internal callers with their own durable queue may own the deferred retry.
+  // This option is not exposed through schedule CRUD or public MCP arguments.
+  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }): Promise<{ runId: string; deferred?: boolean }> {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
@@ -1017,15 +1071,17 @@ export class Scheduler extends EventEmitter {
       phase: 'loading',
     });
     try {
-      return await this.runNowInner(id, runId);
+      return await this.runNowInner(id, runId, options);
     } finally {
       this.finishInflightAttempt(runId);
     }
   }
 
-  private async runNowInner(id: string, runId: string): Promise<{ runId: string }> {
+  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard }): Promise<{ runId: string; deferred?: boolean }> {
     const schedule = await this.storage.get(id);
-    if (!schedule) throw new Error(`Schedule not found: ${id}`);
+    if (!schedule || (schedule.source === 'bot' && !options?.internalRoutine))
+      throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(options?.expectedSchedule, schedule);
     this.updateInflightAttempt(runId, 'persisting', schedule);
     const firedAt = this.clock.now();
     const initialRun: ScheduleRun = {
@@ -1078,11 +1134,15 @@ export class Scheduler extends EventEmitter {
     this.updateInflightAttempt(runId, 'running');
     try {
       if (schedule.targetSessionId) {
-        await this.validateTargetSession?.(schedule.targetSessionId, 'fire');
+        await this.validateTargetSession?.(schedule.targetSessionId, 'fire', schedule);
       }
       const result = await this.runner.fire(schedule, {
         runId,
         firedAt,
+        deferToCaller: options?.deferToCaller,
+        canDispatch: options?.canDispatch,
+        ...(options?.expectedSchedule?.effectiveWorkingDir
+          ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
         onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
@@ -1119,6 +1179,7 @@ export class Scheduler extends EventEmitter {
     // 顺延(手动触发撞忙也礼让,与 cron 路径一致):撤销预插的 running run、不通知。
     // runNow 正常路径不动 nextFireAt;但顺延必须把 nextFireAt 前移到短延后,让 cron
     // tick 在会话空闲后接力真跑(否则手动触发撞忙就石沉大海)。
+    // deferToCaller 由宿主持久队列接力，保留原 nextFireAt，不建立第二个重试来源。
     if (deferred && !wasAborted) {
       try {
         await this.storage.deleteRun(runId);
@@ -1133,7 +1194,7 @@ export class Scheduler extends EventEmitter {
       // ② 对 recurring=false 的 Once 任务,lastFiredAt 一旦落地,重启时
       // computeNextFireAt 会因 lastFiredAt 已设而返回 undefined → 顺延的重试被吞掉。
       const updated = await this.storage.update(schedule.id, {
-        nextFireAt: retryAt,
+        nextFireAt: options?.deferToCaller ? schedule.nextFireAt : retryAt,
         lastFiredAt: schedule.lastFiredAt,
       });
       if (updated && updated.status === 'active') {
@@ -1142,7 +1203,7 @@ export class Scheduler extends EventEmitter {
       // 'deferred' 配对先前的 'fired'(清 UI running 态、不留可见 run);'changed' revalidate。
       this.emitEvent({ type: 'deferred', scheduleId: schedule.id, runId });
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
-      return { runId };
+      return { runId, deferred: true };
     }
 
     if (stallAborted) {
@@ -1239,14 +1300,17 @@ export class Scheduler extends EventEmitter {
   // ---------- CRUD ----------
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
-    return this.storage.list(filter);
+    return (await this.storage.list(filter)).filter((schedule) => schedule.source !== 'bot');
   }
 
   async get(id: string): Promise<Schedule | null> {
-    return this.storage.get(id);
+    const schedule = await this.storage.get(id);
+    return schedule?.source === 'bot' ? null : schedule;
   }
 
   async listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]> {
+    if ((await this.storage.get(scheduleId))?.source === 'bot')
+      throw new Error(`Schedule not found: ${scheduleId}`);
     return this.storage.listRuns(scheduleId, limit);
   }
 
@@ -1258,7 +1322,7 @@ export class Scheduler extends EventEmitter {
    * - 成功 → emit 'changed'，订阅 useRuns 的 UI 自动刷新。
    */
   async deleteRun(runId: string): Promise<void> {
-    const target = await this.storage.deleteRun(runId);
+    const target = await this.storage.deleteRun(runId, { excludeBotSchedules: true });
     if (!target) throw new Error(`Schedule run not found: ${runId}`);
     if (target.status === 'running') {
       this.logger?.warn?.('deleteRun removed a running row', { runId, scheduleId: target.scheduleId });
@@ -1267,6 +1331,7 @@ export class Scheduler extends EventEmitter {
   }
 
   async create(input: CreateScheduleInput): Promise<Schedule> {
+    if ((input as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     input = this.normalizeManagedWorkingDir(input);
     const now = this.clock.now();
     const id = this.generateId();
@@ -1301,10 +1366,13 @@ export class Scheduler extends EventEmitter {
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
       preRunHook: input.preRunHook ?? undefined,
+      agentDeviceId: input.agentDeviceId ?? undefined,
       executionMode: input.executionMode ?? 'agent',
       scriptConfig: normalizeScriptConfig(input.scriptConfig),
       manual,
       persistentSession: input.persistentSession ?? false,
+      // A missing choice may be a reminder, even when a pre-run hook gates delivery.
+      // Only a caller that knows this is a check may opt into quiet reporting.
       silentWhenIdle: input.silentWhenIdle ?? false,
       status: 'active',
       createdAt: now,
@@ -1313,7 +1381,7 @@ export class Scheduler extends EventEmitter {
     };
     validateScheduleExecutionShape(schedule);
     if (schedule.targetSessionId) {
-      await this.validateTargetSession?.(schedule.targetSessionId, 'create');
+      await this.validateTargetSession?.(schedule.targetSessionId, 'create', schedule);
     }
     const inserted = await this.storage.insert(schedule);
     this.activeSchedules.set(id, inserted);
@@ -1321,8 +1389,8 @@ export class Scheduler extends EventEmitter {
     return inserted;
   }
 
-  async update(id: string, patch: UpdateScheduleInput): Promise<Schedule> {
-    return this.serializeScheduleMutation(id, () => this.updateUnlocked(id, patch));
+  async update(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    return this.serializeScheduleMutation(id, () => this.updateUnlocked(id, patch, expected));
   }
 
   /**
@@ -1332,15 +1400,18 @@ export class Scheduler extends EventEmitter {
   async updateFromCurrent(
     id: string,
     buildPatch: (current: Schedule) => Promise<UpdateScheduleInput>,
+    expected?: ScheduleMutationGuard,
   ): Promise<Schedule> {
     return this.serializeScheduleMutation(id, async () => {
-      const current = await this.storage.get(id);
+      const current = await this.get(id);
       if (!current) throw new Error(`Schedule not found: ${id}`);
-      return this.updateUnlocked(id, await buildPatch(current));
+      assertScheduleMutationGuard(expected, current);
+      return this.updateUnlocked(id, await buildPatch(current), expected);
     });
   }
 
-  private async updateUnlocked(id: string, patch: UpdateScheduleInput): Promise<Schedule> {
+  private async updateUnlocked(id: string, patch: UpdateScheduleInput, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    if ((patch as Partial<Schedule>).source === 'bot') throw new Error('invalid schedule source');
     patch = this.normalizeManagedWorkingDir(patch);
     // patch 显式给了真实 workingDir 而未指明 workspaceKind 时,同步翻成 project
     // (与 create 的推断对称)—— 否则 dialogue 任务被改了目录后仍是 dialogue,
@@ -1363,8 +1434,50 @@ export class Scheduler extends EventEmitter {
     if (Object.prototype.hasOwnProperty.call(patch, 'preRunHook') && patch.preRunHook === null) {
       updates.preRunHook = undefined;
     }
-    const existing = await this.storage.get(id);
+    const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(expected, existing);
+    // Old clients can rename an automation without losing its route. A model edit,
+    // however, must carry the location once one has been explicitly selected.
+    if (existing.modelAgentDeviceId !== undefined && patch.modelAgentDeviceId === undefined &&
+      !Object.prototype.hasOwnProperty.call(patch, 'modelAgentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId', 'agentDeviceId'] as const).some(
+        (key) => Object.prototype.hasOwnProperty.call(patch, key) && patch[key] !== existing[key],
+      )) throw new Error('Editing this scheduled model route requires a newer client');
+    // Agent-only quiet reporting does not apply when changing to script mode.
+    // Keep explicit invalid combinations subject to the existing validation.
+    if (patch.executionMode === 'script' && existing.executionMode !== 'script'
+      && patch.silentWhenIdle === undefined) {
+      updates.silentWhenIdle = false;
+    }
+    // 换引擎(agentKind 变了)时,上一引擎的 model / providerId / effort 是另一套模型
+    // 目录里的路由,对新引擎没有意义,patch 没显式给就丢弃(带 key 的 undefined →
+    // storage 清列 NULL),让任务回到新引擎的默认路由。否则陈旧路由会被原样带过去:
+    // fire 时路由守卫对「没有任何来源提供该模型」的组合放行,runner 再把绑定会话的
+    // 凭证/模型切到这条跑不通的路由上,每轮都以上游拒绝失败,会话 meta 也被写坏
+    // (伙伴接管期用 Codex 模型钉过的任务改回 Claude Code 后即复现)。
+    // 显式给了(含带 key 的 undefined)按调用方意图,不覆盖。fastMode 同属完整运行路由
+    // (harness + provider + model + effort + fastMode),旧引擎的 Fast 开关同样不该
+    // 潜伏到下一次切回 Codex/Pi 时复活(codex review),未显式给则关掉。
+    if (patch.agentKind !== undefined && patch.agentKind !== existing.agentKind) {
+      for (const key of ['model', 'providerId', 'effort'] as const) {
+        if (!Object.prototype.hasOwnProperty.call(patch, key)) updates[key] = undefined;
+      }
+      if (!Object.prototype.hasOwnProperty.call(patch, 'fastMode')) updates.fastMode = false;
+    }
+    // 运行位置与来源/模型成对:来源属于那台电脑的目录。改了路由却没带运行位置的
+    // 调用方(旧版手机端 / 旧版桌面远程编辑不认识这个字段)选的是本机目录,
+    // 沿用旧位置会把本机来源派到另一台电脑上,所以回到本机。路由原样回传不算改。
+    if (
+      !Object.prototype.hasOwnProperty.call(patch, 'agentDeviceId') &&
+      (['agentKind', 'modelAgentKind', 'model', 'providerId'] as const).some((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key) &&
+        (patch[key] || undefined) !== (existing[key] || undefined))
+    ) {
+      updates.agentDeviceId = undefined;
+    } else if ((patch as { agentDeviceId?: string | null }).agentDeviceId === null) {
+      updates.agentDeviceId = undefined;
+    }
     const candidate: Schedule = { ...existing, ...updates };
     validateScheduleExecutionShape(
       candidate,
@@ -1375,7 +1488,7 @@ export class Scheduler extends EventEmitter {
       },
     );
     if (candidate.targetSessionId) {
-      await this.validateTargetSession?.(candidate.targetSessionId, 'update');
+      await this.validateTargetSession?.(candidate.targetSessionId, 'update', candidate);
     }
     // expired 是一次性任务已消费的终态。编辑后的配置若已经表达为“循环且非手动”，
     // 继续保留 expired 会让持久化状态与排期语义冲突：即使算出了 nextFireAt，任务也
@@ -1470,14 +1583,17 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async pause(id: string, opts?: { exemptRunId?: string }): Promise<Schedule> {
+  async pause(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<Schedule> {
     return this.serializeScheduleMutation(id, () => this.pauseUnlocked(id, opts));
   }
 
   private async pauseUnlocked(
     id: string,
-    opts?: { exemptRunId?: string },
+    opts?: { exemptRunId?: string; internalRoutine?: true },
   ): Promise<Schedule> {
+    const schedule = await this.storage.get(id);
+    if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
+      throw new Error(`Schedule not found: ${id}`);
     // 先中断这条 schedule 名下所有 in-flight run。pause 语义 = 立刻停 + 不再触发,
     // in-flight 跑完才算停就跟用户预期不符(且老行为还会更新 lastFinishedAt 把 schedule
     // 数据弄脏)。abort 触发后 fireOne 的 wasAborted 分支会自己把 run 标 'aborted'。
@@ -1492,13 +1608,14 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async resume(id: string): Promise<Schedule> {
-    return this.serializeScheduleMutation(id, () => this.resumeUnlocked(id));
+  async resume(id: string, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    return this.serializeScheduleMutation(id, () => this.resumeUnlocked(id, expected));
   }
 
-  private async resumeUnlocked(id: string): Promise<Schedule> {
-    const existing = await this.storage.get(id);
+  private async resumeUnlocked(id: string, expected?: ScheduleMutationGuard): Promise<Schedule> {
+    const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    assertScheduleMutationGuard(expected, existing);
     const now = this.clock.now();
     // 与 create/update 对齐：恢复 interval 任务前也验证它保留的 cron 元数据，不能
     // 重新激活一条未来清 interval 后必坏的记录。
@@ -1522,7 +1639,7 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
-  async delete(id: string, opts?: { exemptRunId?: string }): Promise<void> {
+  async delete(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
     return this.serializeScheduleMutation(id, () => this.deleteUnlocked(id, opts));
   }
 
@@ -1549,7 +1666,10 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string }): Promise<void> {
+  private async deleteUnlocked(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<void> {
+    const schedule = await this.storage.get(id);
+    if (!schedule || (schedule.source === 'bot' && !opts?.internalRoutine))
+      throw new Error(`Schedule not found: ${id}`);
     // 先中断 in-flight,等它们 settle,再删 schedule 行。否则被删 schedule 名下的
     // in-flight run 会继续跑到底(原行为),用户点删除后看到的是"还在跑"。
     // abort + 等待逻辑见 abortInflightAndWait。

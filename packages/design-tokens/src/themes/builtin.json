@@ -1,0 +1,4931 @@
+{
+  "themes": {
+    "atom-one-light": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_BG}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_SOFT_BG}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_BG}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_SOFT_BG}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_BG}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-border-transparent-mixed}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_DEEP}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-accent-pure-cta-fg}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_BG}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-confirm-btn-primary-text}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_DEEP}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-perm-allow-btn-text}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_SOFT_BG}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-ELEVATED_BG_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-primary-foreground}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.value-settings-btn-primary-text}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-HOVER_BG}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-TEXT_PRIMARY}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-SURFACE_BG}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.atom-one-light.palette-BLUE_PRIMARY}"
+      }
+    },
+    "cindy-dark": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-hsl}",
+        "$description": "页底 -> HSL"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-elevated}",
+        "$description": "卡片/输入框"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-elevated-soft}",
+        "$description": "hover/chip"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-card-ivory}",
+        "$description": "卡片/输入框"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-chip}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-chip-alt}",
+        "$description": "hover/chip"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-hover-soft}",
+        "$description": "墨水 白 4%: 柔和悬停(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-hover-hsl}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-on-card}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "switch-track-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-track-off}",
+        "$description": "关闭态轨道:值与依据见决策表(用户调参 2026-08-05)"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-track-on}",
+        "$description": "开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)"
+      },
+      "switch-thumb-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-thumb-light}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名"
+      },
+      "switch-thumb-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-thumb-light}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名"
+      },
+      "fast-toggle-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-switch-track-off}",
+        "$description": "Fast/思考小开关的关闭轨道跟随开关关闭轨道:文字改墨水后不再借用禁用文字色,两类开关关闭态一致并保住 3:1(2026-10-22 用户裁决随附)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "switch-track-off",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "status-badge-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-status-badge-fg}",
+        "$description": "反相深字: 平移"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-border-default}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-border-default-hsl}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-border-shadcn-hsl}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-border-transparent-mixed}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary-on-dark}",
+        "$description": "深底/红底前景白"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary-emphasis}",
+        "$description": "墨水 白 100%: 强调文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary-inv}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary-body-strong}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-primary-hsl}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-secondary}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-secondary-cross}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-secondary-mid}",
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-tertiary}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-tertiary-stone}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-tertiary-mid}",
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-tertiary-hsl}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-disabled}",
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-disabled-tertiary}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-cta-bg}",
+        "$description": "E1D 反相中性底"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-cta-bg-pure}",
+        "$description": "E1D 反相中性底"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-emphasis}",
+        "$description": "E1D 反相中性底"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-soft}",
+        "$description": "E1D pressed 中性"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-hover}",
+        "$description": "E1D hover 中性"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-pure-cta-fg}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-agent-actions-rail}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ask-checkbox-border}",
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-header-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ask-header-chip-bg}",
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-send-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ask-send-disabled-bg}",
+        "$description": "菜单 hover/提问卡纸片档"
+      },
+      "ask-option-list-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ask-option-list-bg}",
+        "$description": "菜单 hover/提问卡纸片档"
+      },
+      "ask-option-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ask-option-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-background}",
+        "$description": "页底 -> HSL"
+      },
+      "chat-input-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-chat-input-bg}",
+        "$description": "卡片/输入框"
+      },
+      "chat-input-border-focus": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-chat-input-border-focus}",
+        "$description": "聚焦描边: 三级色 30% 派生"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-chat-input-chip-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-chat-input-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-placeholder-subtle": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
+        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-placeholder",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "thinking-body-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-secondary}",
+        "$description": "思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-secondary",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-color-primary}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "caret-accent": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-caret-accent}",
+        "$description": "用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-bg}",
+        "$description": "卡片/输入框"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-btn-primary-bg}",
+        "$description": "E1D C 类裁决 1:反相中性"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-btn-primary-text}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-btn-secondary-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-btn-secondary-hover}",
+        "$description": "中性 alpha hover"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-btn-secondary-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-confirm-title}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-file-chip-bg}",
+        "$description": "墨水 白 13%: 加深底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-file-remove-bg}",
+        "$description": "墨水 白 66%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-info-700}",
+        "$description": "信息/链接蓝"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-model-trigger-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "model-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-model-item-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-msg-link}",
+        "$description": "链接蓝"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-msg-scrollbar-hover}",
+        "$description": "墨水 白 13%: 加深底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "msg-user-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-msg-user-bg}",
+        "$description": "卡片/输入框"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-muted}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-muted-foreground}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "perm-auto-selected-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-auto-selected-text}",
+        "$description": "auto approval 功能色(E5D 定稿 2026-07-17,light/dark 同值)"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-allow-btn-bg}",
+        "$description": "E1D C 类裁决 2:反相中性"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-allow-btn-text}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg:随反相浅钮的深翻译层(修复 2026-07-19:原页面级深灰在浅钮上吞掉近黑字)"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-allow-kbd-border}",
+        "$description": "边框:同上"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-code-bg}",
+        "$description": "柔和 hover/代码块底"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-perm-item-selected-bg}",
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-plan-outline-active-bg}",
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-plan-toolbar-btn-hover-bg}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-popover}",
+        "$description": "卡片 -> HSL"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-primary-foreground}",
+        "$description": "白前景"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-search-match-fg}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-secondary}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-btn-primary-text}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-btn-secondary-hover-bg}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-integration-avatar-bg}",
+        "$description": "hover/chip"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-logout-bg}",
+        "$description": "卡片/输入框"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-menu-bg-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-menu-bg-selected}",
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-source-link}",
+        "$description": "可访问链接蓝"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-theme-auto-dark}",
+        "$description": "Auto 预览: 新暗色底"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-action-icon}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "cmd-palette-item-meta": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-cmd-palette-item-meta}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-item-active-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-item-active-foreground}",
+        "$description": "Soft selected pill with same-polarity readable foreground."
+      },
+      "sidebar-item-active-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-item-active-border}",
+        "$description": "用户三次改稿 2026-07-20:选中胶囊彻底去描边"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-item-active}",
+        "$description": "Soft selected pill with same-polarity readable foreground."
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-splash-bg}",
+        "$description": "页底 -> HSL"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-splash-text}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-splash-text-destructive}",
+        "$description": "destructive splash text"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-splash-text-muted}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-titlebar-icon}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-tooltip-bg}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-tooltip-text}",
+        "$description": "tooltip 白字"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-update-btn-border}",
+        "$description": "E1D 中性底(实心胶囊,与 bg 同色)"
+      },
+      "update-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-update-btn-bg}",
+        "$description": "E1D §15.10 反相中性:dark 浅底,承载深字"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-update-btn-text}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "update-btn-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-update-btn-hover}",
+        "$description": "E1D §15.10 四态 hover(实心,非 alpha 叠加)"
+      },
+      "accent-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-accent-foreground}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "panel-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-panel-bg}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-primary}",
+        "$description": "E1D C 类裁决 3:反相中性 HSL"
+      },
+      "ring": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-ring}",
+        "$description": "固定蓝(E5D 定稿 2026-07-17 #417CDD HSL,取代 #3b82f6)"
+      },
+      "settings-theme-auto-light": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-theme-auto-light}",
+        "$description": "Auto 预览: 新页底(暖象牙)"
+      },
+      "foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-foreground}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "input": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-input}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "secondary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-secondary-foreground}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "popover-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-popover-foreground}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-titlebar}",
+        "$description": "页底 -> HSL"
+      },
+      "titlebar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-titlebar-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-button-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-titlebar-button-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-control-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-titlebar-control-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar}",
+        "$description": "页底 -> HSL"
+      },
+      "sidebar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-item-hover}",
+        "$description": "玻璃面 hover 半透明化 2026-07-21:白 9% 叠加(原实色 hsl(0 2.2% 18%) 在暗玻璃底上的等价叠加量),壁纸可继续透过"
+      },
+      "sidebar-search-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-search-bg}",
+        "$description": "页底 -> HSL"
+      },
+      "sidebar-search-input-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-search-input-bg}",
+        "$description": "玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 9% 方向相反,可区分\"可输入\")"
+      },
+      "sidebar-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-muted}",
+        "$description": "墨水 白 55%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-translucent-main": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-translucent-main}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "surface-translucent-overlay": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-translucent-overlay}",
+        "$description": "浮层玻璃: 平移"
+      },
+      "composer-pill-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-composer-pill-bg}",
+        "$description": "composer pill"
+      },
+      "composer-pill-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-composer-pill-icon}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-bg}",
+        "$description": "R4 D1/D2 反相中性可用底"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-icon}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "send-btn-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-disabled-bg}",
+        "$description": "禁用底/option hover 档"
+      },
+      "send-btn-disabled-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-disabled-icon}",
+        "$description": "禁用图标"
+      },
+      "send-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-hover-bg}",
+        "$description": "E1D 反相中性 hover(lead 四态)"
+      },
+      "send-btn-pressed-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-send-btn-pressed-bg}",
+        "$description": "E1D 反相中性 pressed(lead 四态)"
+      },
+      "completion-badge-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-completion-badge-fg}",
+        "$description": "反相深字: 平移"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-bg}",
+        "$description": "composer pill"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-bg-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-bg-pressed}",
+        "$description": "墨水 白 10%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-bg}",
+        "$description": "卡片/输入框"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-bg-hover}",
+        "$description": "墨水 白 6%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-border}",
+        "$description": "墨水 白 10%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-icon-bg}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-segment-track-bg}",
+        "$description": "直映: 页底(纯中性)"
+      },
+      "create-agent-send-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-send-disabled-bg}",
+        "$description": "禁用底/option hover 档"
+      },
+      "create-agent-send-disabled-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-send-disabled-icon}",
+        "$description": "墨水 白 30%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-send-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-send-icon}",
+        "$description": "反相深字(浅钮上)"
+      },
+      "md-table-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-md-table-bg}",
+        "$description": "表格条纹: 平移"
+      },
+      "ask-badge-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-chip}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-chip",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "cmd-palette-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-surface-hover}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-hover",
+            "wrapper": "var",
+            "mode": "dark"
+          }
+        }
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-icon}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-control-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-icon}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-quick-card-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-create-agent-segment-inactive-text}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-integration-avatar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-settings-integration-avatar-border}"
+      },
+      "sidebar-list-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-list-muted}",
+        "$description": "墨水 白 40%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-nav-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-nav-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-user-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-bg-hover}"
+      },
+      "sidebar-user-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-border}"
+      },
+      "sidebar-user-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-sidebar-user-card-text}",
+        "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-dark.value-segmented-hover-bg}"
+      }
+    },
+    "cindy-light": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hsl}",
+        "$description": "页底 -> HSL"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-elevated}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-elevated-soft}",
+        "$description": "阶梯: 次级卡片"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-card-ivory}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-chip}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-chip-alt}",
+        "$description": "阶梯: 次级卡片"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover-soft}",
+        "$description": "墨水 黑 3.5%: 柔和悬停(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover-hsl}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-on-card}",
+        "$description": "裁决: 中性反相前景,不作红 CTA 专用"
+      },
+      "switch-track-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-switch-track-off}",
+        "$description": "关闭态轨道: 悬停底加深后由 #888888 加深到 #808080,压在悬停行上保住 3:1(2026-10-22 用户裁决)"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-switch-track-on}",
+        "$description": "开启态轨道:蓝色 #417CDD(用户裁决 2026-09-15)"
+      },
+      "switch-thumb-on": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-background}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "background",
+            "wrapper": "hsl",
+            "mode": "light"
+          }
+        }
+      },
+      "switch-thumb-off": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-on-card}",
+        "$description": "Switch 滑块:用户批准 HTML 效果 2026-09-16;暗色近白,浅色沿用原有别名",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-on-card",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "fast-toggle-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-switch-track-off}",
+        "$description": "Fast/思考小开关的关闭轨道跟随开关关闭轨道:文字改墨水后不再借用禁用文字色,两类开关关闭态一致并保住 3:1(2026-10-22 用户裁决随附)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "switch-track-off",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "status-badge-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-status-badge-fg}",
+        "$description": "§7 必炸点:值经队列震荡后按 HEAD 冻结(#1F1F1F,5.61:1 × #FF6600 ≥4.5),批准依据:用户亲批方案 2026-07-17"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-border-default}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-border-default-hsl}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-border-shadcn-hsl}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-border-transparent-mixed}",
+        "$description": "light transparent / dark 边框"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary-on-dark}",
+        "$description": "深底/红底前景白"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary-emphasis}",
+        "$description": "墨水 黑 95%: 强调文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary-inv}",
+        "$description": "反相文字"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary-body-strong}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-primary-hsl}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-secondary}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-secondary-cross}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-secondary-mid}",
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-tertiary}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-tertiary-stone}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-tertiary-mid}",
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-tertiary-hsl}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-disabled}",
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-disabled-tertiary}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-cta-bg}",
+        "$description": "E1D 反相中性底(用户批准 2026-07-17,不用红)"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-cta-bg-pure}",
+        "$description": "E1D 反相中性底"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-emphasis}",
+        "$description": "E1D 反相中性底"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-soft}",
+        "$description": "E1D pressed 中性(soft→pressed)"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-hover}",
+        "$description": "E1D hover 中性"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-pure-cta-fg}",
+        "$description": "E1D 中性字(非白)"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-agent-actions-rail}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-ask-checkbox-border}",
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-option-list-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-ask-option-list-bg}",
+        "$description": "ask 卡选项列表面: 纯白浮在 #F8F8F8 卡底上(2026-07-23 ask 卡整改)"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-background}",
+        "$description": "页底 -> HSL"
+      },
+      "chat-input-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-chat-input-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "chat-input-border-focus": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-chat-input-border-focus}",
+        "$description": "聚焦描边: 三级色 30% 派生"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-chat-input-chip-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-chat-input-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "chat-input-placeholder-subtle": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-placeholder}",
+        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-placeholder",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "thinking-body-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-secondary}",
+        "$description": "思考过程正文用次要档(2026-10-23 用户裁决:三级在墨水阶梯里过淡,浅色 3.2、深色 3.8;次要浅色与改前持平 4.8、深色 6.1)",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "text-secondary",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-color-primary}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "caret-accent": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-caret-accent}",
+        "$description": "用户改稿 2026-07-18:光标撤红改回蓝(对齐 focus 蓝 #417CDD)"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-btn-primary-bg}",
+        "$description": "E1D C 类裁决 1:普通确认反相中性(danger 确认另设)"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-btn-primary-text}",
+        "$description": "E1D 反相中性字"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-btn-secondary-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-btn-secondary-hover}",
+        "$description": "中性 alpha hover"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-btn-secondary-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-confirm-title}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-file-chip-bg}",
+        "$description": "墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-file-remove-bg}",
+        "$description": "墨水 黑 70%: 说明文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-info-700}",
+        "$description": "信息/链接蓝"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-model-trigger-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "model-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-model-item-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-msg-link}",
+        "$description": "链接蓝"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-msg-scrollbar-hover}",
+        "$description": "墨水 黑 10%: 加深底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "msg-user-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-msg-user-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-muted}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-muted-foreground}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "perm-auto-selected-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-auto-selected-text}",
+        "$description": "auto approval 功能色(E5D 定稿 2026-07-17,light/dark 同值)"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-allow-btn-bg}",
+        "$description": "E1D C 类裁决 2:反相中性(警示由橙 chip 承担)"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-allow-btn-text}",
+        "$description": "E1D 反相中性字"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg:随反相深钮的浅翻译层(修复 2026-07-19:原页面级浅灰在深钮上字底同亮)"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-allow-kbd-border}",
+        "$description": "边框:同上"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-code-bg}",
+        "$description": "代码块底: 卡片锚定(比卡片暗 ~2.6%)"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-perm-item-selected-bg}",
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-plan-outline-active-bg}",
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-plan-toolbar-btn-hover-bg}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-popover}",
+        "$description": "卡片 -> HSL"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-primary-foreground}",
+        "$description": "白前景"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-search-match-fg}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-secondary}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-btn-primary-text}",
+        "$description": "E1D 中性字"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-btn-secondary-hover-bg}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-text-placeholder}",
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-integration-avatar-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-logout-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-menu-bg-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-menu-bg-selected}",
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-source-link}",
+        "$description": "可访问链接蓝"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-theme-auto-dark}",
+        "$description": "Auto 预览: 新暗色底"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-action-icon}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "cmd-palette-item-meta": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-cmd-palette-item-meta}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-item-active-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-item-active-foreground}",
+        "$description": "Soft selected pill with same-polarity readable foreground."
+      },
+      "sidebar-item-active-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-item-active-border}",
+        "$description": "用户三次改稿 2026-07-20:选中胶囊彻底去描边"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-item-active}",
+        "$description": "Soft selected pill with same-polarity readable foreground."
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-splash-bg}",
+        "$description": "页底 -> HSL"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-splash-text}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-splash-text-destructive}",
+        "$description": "正文 -> HSL"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-splash-text-muted}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-titlebar-icon}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-tooltip-bg}",
+        "$description": "tooltip 深底"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-tooltip-text}",
+        "$description": "tooltip 白字"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-update-btn-border}",
+        "$description": "E1D 中性底(实心胶囊,与 bg 同色)"
+      },
+      "update-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-update-btn-bg}",
+        "$description": "E1D §15.10 反相中性:light 深底,承载浅字"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-update-btn-text}",
+        "$description": "E1D 中性字(#FCFCFC on #3C3F43 = 10.32:1)"
+      },
+      "update-btn-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-update-btn-hover}",
+        "$description": "E1D §15.10 四态 hover(实心,非 alpha 叠加)"
+      },
+      "accent-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-accent-foreground}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "panel-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-panel-bg}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "primary": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-primary}",
+        "$description": "E1D C 类裁决 3:反相中性 HSL"
+      },
+      "ring": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-ring}",
+        "$description": "固定蓝(E5D 定稿 2026-07-17 #417CDD HSL,取代 #3b82f6)"
+      },
+      "settings-theme-auto-light": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-theme-auto-light}",
+        "$description": "Auto 预览: 新页底"
+      },
+      "foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-foreground}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "input": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-input}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "secondary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-secondary-foreground}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "popover-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-popover-foreground}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-titlebar}",
+        "$description": "页底 -> HSL"
+      },
+      "titlebar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-titlebar-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-button-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-titlebar-button-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "titlebar-control-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-titlebar-control-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar}",
+        "$description": "侧栏兜底: 与侧栏玻璃同色(无玻璃平台回落用)"
+      },
+      "sidebar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-item-hover}",
+        "$description": "玻璃面 hover 半透明化 2026-07-21:黑 5% 叠加(原实色 #F1F1F1 在白底上的等价叠加量),毛玻璃侧栏上壁纸可继续透过"
+      },
+      "sidebar-search-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-search-bg}",
+        "$description": "侧栏搜索区: 同侧栏面"
+      },
+      "sidebar-search-input-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-search-input-bg}",
+        "$description": "暖化"
+      },
+      "sidebar-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-muted}",
+        "$description": "墨水 黑 56%: 次要文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "surface-translucent-main": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-translucent-main}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "surface-translucent-overlay": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-translucent-overlay}",
+        "$description": "浮层玻璃: 暖化"
+      },
+      "composer-pill-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-composer-pill-bg}",
+        "$description": "近白档"
+      },
+      "composer-pill-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-composer-pill-icon}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-bg}",
+        "$description": "R4 D1/D2 反相中性可用底(不用红,用户裁决)"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-icon}",
+        "$description": "R4 反相中性字"
+      },
+      "send-btn-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-disabled-bg}",
+        "$description": "R4 唤醒态禁用灰底(§2.6)"
+      },
+      "send-btn-disabled-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-disabled-icon}",
+        "$description": "R4 禁用灰字(§2.6 send 图标)"
+      },
+      "send-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-hover-bg}",
+        "$description": "E1D 反相中性 hover(lead 四态)"
+      },
+      "send-btn-pressed-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-send-btn-pressed-bg}",
+        "$description": "E1D 反相中性 pressed(lead 四态)"
+      },
+      "ask-badge-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-ask-badge-bg}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-header-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-ask-header-chip-bg}",
+        "$description": "墨水 黑 8%: 选中/按下(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "cmd-palette-item-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-cmd-palette-item-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-control-bg}",
+        "$description": "近白档"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-control-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-control-icon}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-control-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-bg}",
+        "$description": "直映: 卡片/输入框(留暖近白)"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-bg-hover}",
+        "$description": "墨水 黑 5%: 悬停/标签底(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-border}",
+        "$description": "墨水 黑 8%: 边框/分割线(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-icon}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-icon-bg}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-quick-card-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-segment-inactive-text}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-segment-track-bg}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "create-agent-send-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-send-disabled-bg}",
+        "$description": "直映: 页底(暖象牙)"
+      },
+      "create-agent-send-disabled-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-send-disabled-icon}",
+        "$description": "墨水 黑 32%: 占位/禁用文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "md-table-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-md-table-bg}",
+        "$description": "表格条纹: 跟页底暖化"
+      },
+      "settings-integration-avatar-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-settings-integration-avatar-border}",
+        "$description": "阶梯: 头像描边"
+      },
+      "sidebar-list-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-list-muted}",
+        "$description": "墨水 黑 44%: 三级文字(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-nav-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-nav-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "sidebar-user-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-user-card-bg-hover}",
+        "$description": "正文色 6% 派生"
+      },
+      "sidebar-user-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-user-card-border}",
+        "$description": "正文色 10% 派生"
+      },
+      "sidebar-user-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-sidebar-user-card-text}",
+        "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
+      },
+      "ask-option-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover-soft}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-hover-soft",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "ask-send-disabled-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-elevated-soft}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-elevated-soft",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "completion-badge-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-completion-badge-fg}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-hover",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-surface-hover-soft}",
+        "$extensions": {
+          "com.cindy.desktop": {
+            "cssAlias": "surface-hover-soft",
+            "wrapper": "var",
+            "mode": "light"
+          }
+        }
+      },
+      "create-agent-send-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-create-agent-send-icon}"
+      },
+      "slider-track": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-track}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-fill": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-fill}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "slider-thumb": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-slider-thumb}",
+        "$description": "Slider 用户定稿 2026-09-17;与 Switch 独立"
+      },
+      "segmented-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-bg}"
+      },
+      "segmented-selected-border": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-selected-border}"
+      },
+      "segmented-option-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-option-fg}"
+      },
+      "segmented-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.cindy-light.value-segmented-hover-bg}"
+      }
+    },
+    "default-dark": {
+      "perm-auto-selected-text": {
+        "$type": "color",
+        "$value": "{reference.themes.default-dark.value-perm-auto-selected-text}",
+        "$description": "E5D 定稿 2026-07-17"
+      }
+    },
+    "default-light": {
+      "perm-auto-selected-text": {
+        "$type": "color",
+        "$value": "{reference.themes.default-light.value-perm-auto-selected-text}",
+        "$description": "E5D 定稿 2026-07-17"
+      }
+    },
+    "eclipse": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_SOFT}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_SOFT}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_SOFT}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY_HSL}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CARD_NAVY_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-HOVER_NAVY}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_SOFT}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-SURFACE_NAVY}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEXT_PRIMARY}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.eclipse.palette-TEAL_PRIMARY}"
+      }
+    },
+    "github-dark": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_SOFT}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-accent-pure-cta-fg}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "status-badge-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-status-badge-fg}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-confirm-btn-primary-text}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_SOFT}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_SOFT}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-perm-allow-btn-text}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG_HSL}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-ELEVATED_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.value-settings-btn-primary-text}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-HOVER_BG}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_SOFT}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-SURFACE_BG}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-TEXT_PRIMARY}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.github-dark.palette-BLUE_PRIMARY}"
+      }
+    },
+    "material-ocean-hc": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_SOFT}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_SOFT}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_SOFT}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG_HSL}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-ELEVATED_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-HOVER_BG}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_SOFT}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-SURFACE_BG}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEXT_PRIMARY}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.material-ocean-hc.palette-TEAL_PRIMARY}"
+      }
+    },
+    "monokai-pro": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_SOFT}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_SOFT}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_SOFT}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG_HSL}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-ELEVATED_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-HOVER_BG}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_SOFT}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-SURFACE_BG}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-TEXT_PRIMARY}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.monokai-pro.palette-YELLOW_PRIMARY}"
+      }
+    },
+    "one-dark-pro": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG_HSL}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_SOFT}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG_HSL}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG_HSL}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "send-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "send-btn-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_SOFT}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_SOFT}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG_HSL}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG_HSL}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-ELEVATED_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HOVER_BG}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_SOFT}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-SURFACE_BG}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-TEXT_PRIMARY}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HINT_TEXT}"
+      }
+    },
+    "solarized-light": {
+      "surface": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "surface-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG_HSL}"
+      },
+      "surface-elevated": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-elevated}"
+      },
+      "surface-elevated-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-elevated-soft}"
+      },
+      "surface-card-ivory": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-card-ivory}"
+      },
+      "surface-chip": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "surface-chip-alt": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-chip-alt}"
+      },
+      "surface-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-hover}"
+      },
+      "surface-hover-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "surface-hover-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-hover-hsl}"
+      },
+      "surface-on-card": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-surface-on-card}"
+      },
+      "border-default": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "border-default-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG_HSL}"
+      },
+      "border-shadcn-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG_HSL}"
+      },
+      "border-transparent-mixed": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-border-transparent-mixed}"
+      },
+      "text-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-on-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-inv": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-body-strong": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "text-primary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY_HSL}"
+      },
+      "text-secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-cross": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY}"
+      },
+      "text-secondary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY}"
+      },
+      "text-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-stone": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-mid": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "text-tertiary-hsl": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "text-disabled": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_DISABLED}"
+      },
+      "text-disabled-tertiary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_DISABLED}"
+      },
+      "accent-cta-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "accent-cta-bg-pure": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "accent-emphasis": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "accent-soft": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_DEEP}"
+      },
+      "accent-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_DEEP}"
+      },
+      "accent-pure-cta-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-accent-pure-cta-fg}"
+      },
+      "switch-track-on": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_DEEP}",
+        "$description": "官方绿 #859900 对 thumb 2.97/对 surface 2.62 低于 3:1,取深绿变体(用户裁决 2026-08-05)"
+      },
+      "accent": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-accent}"
+      },
+      "agent-actions-rail": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "ask-checkbox-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "background": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG_HSL}"
+      },
+      "chat-input-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "create-agent-control-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "create-agent-control-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "create-agent-control-bg-pressed": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-create-agent-control-bg-pressed}"
+      },
+      "create-agent-control-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "create-agent-control-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-control-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "create-agent-quick-card-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "create-agent-quick-card-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-quick-card-icon-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "create-agent-quick-card-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "create-agent-segment-inactive-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY}"
+      },
+      "create-agent-segment-track-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "chat-input-chip-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "chat-input-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "color-primary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "confirm-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-confirm-bg}"
+      },
+      "confirm-btn-primary-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "confirm-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-confirm-btn-primary-text}"
+      },
+      "confirm-btn-secondary-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "confirm-btn-secondary-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-confirm-btn-secondary-hover}"
+      },
+      "confirm-btn-secondary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "confirm-title": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "drop-overlay-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-drop-overlay-bg}"
+      },
+      "file-chip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "file-remove-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "info-700": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_DEEP}"
+      },
+      "model-trigger-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-model-trigger-hover}"
+      },
+      "msg-link": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "msg-scrollbar-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY}"
+      },
+      "msg-user-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "muted": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG_HSL}"
+      },
+      "muted-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "perm-auto-selected-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}",
+        "$description": "自动审批的色相标识,与 bypass 橙拉开"
+      },
+      "perm-allow-btn-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "perm-allow-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-perm-allow-btn-text}"
+      },
+      "perm-allow-kbd-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "perm-allow-kbd-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+      },
+      "perm-code-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-perm-code-bg}"
+      },
+      "perm-item-selected-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "plan-outline-active-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "plan-toolbar-btn-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-plan-toolbar-btn-hover-bg}"
+      },
+      "popover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-popover}"
+      },
+      "primary-foreground": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-primary-foreground}"
+      },
+      "search-match-fg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-search-match-fg}"
+      },
+      "secondary": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG_HSL}"
+      },
+      "settings-btn-primary-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-settings-btn-primary-text}"
+      },
+      "settings-btn-secondary-hover-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-settings-btn-secondary-hover-bg}"
+      },
+      "text-placeholder": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_DISABLED}"
+      },
+      "settings-integration-avatar-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "settings-logout-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "settings-menu-bg-hover": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-settings-menu-bg-hover}"
+      },
+      "settings-menu-bg-selected": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+      },
+      "settings-source-link": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "settings-theme-auto-dark": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "sidebar-action-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "sidebar-item-active": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-CHIP_BG_HSL}"
+      },
+      "splash-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG_HSL}"
+      },
+      "splash-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "splash-text-destructive": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY_HSL}"
+      },
+      "splash-text-muted": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_TERTIARY_HSL}"
+      },
+      "titlebar-icon": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_SECONDARY_HSL}"
+      },
+      "tooltip-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-TEXT_PRIMARY}"
+      },
+      "tooltip-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-SURFACE_BG}"
+      },
+      "update-btn-border": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "update-btn-text": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-HINT_TEXT}"
+      },
+      "search-match-bg": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.value-search-match-bg}"
+      }
+    }
+  }
+}

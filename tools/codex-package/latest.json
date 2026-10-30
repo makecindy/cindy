@@ -1,0 +1,52 @@
+{
+  "version": "0.166.0",
+  "tag_name": "rust-v0.166.0",
+  "name": "0.166.0",
+  "published_at": "2026-10-29T19:47:53Z",
+  "layoutVersion": 1,
+  "variant": "codex",
+  "runtimeAssets": {
+    "darwin-arm64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-apple-darwin.tar.gz",
+      "sha256": "55a440cb579f970abe7c79ab181e54b0ea4c419be99f333bbd868eebac9c21f0",
+      "size": 165951869,
+      "target": "aarch64-apple-darwin",
+      "entrypoint": "bin/codex"
+    },
+    "darwin-x64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-apple-darwin.tar.gz",
+      "sha256": "1cb65690230be5982c654ba2655e3a3b594dce9c55b780e78bfdfeff829d7ad9",
+      "size": 180076524,
+      "target": "x86_64-apple-darwin",
+      "entrypoint": "bin/codex"
+    },
+    "linux-x64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254",
+      "size": 199694962,
+      "target": "x86_64-unknown-linux-musl",
+      "entrypoint": "bin/codex"
+    },
+    "linux-arm64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "7821b77dda2e6283fb1f63f3165177a271da8833e857cf673c6ca1c9db3bfcc6",
+      "size": 187370368,
+      "target": "aarch64-unknown-linux-musl",
+      "entrypoint": "bin/codex"
+    },
+    "win32-x64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-x86_64-pc-windows-msvc.tar.gz",
+      "sha256": "d559bb88e74d471265857b93b7f19bc250dae527673b9191b33534478093f6bc",
+      "size": 202589789,
+      "target": "x86_64-pc-windows-msvc",
+      "entrypoint": "bin/codex.exe"
+    },
+    "win32-arm64": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-package-aarch64-pc-windows-msvc.tar.gz",
+      "sha256": "9383152a72f97bb5dd148493c8214e4fed38d805aa2c3297cb3739f7f130becf",
+      "size": 187024318,
+      "target": "aarch64-pc-windows-msvc",
+      "entrypoint": "bin/codex.exe"
+    }
+  }
+}

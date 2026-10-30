@@ -1,0 +1,181 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  botProfileContentChanged,
+  botProfileModelSelectionChanged,
+  mergeBotProfileCapabilities,
+  normalizeBotProfileModelChain,
+} from '../botProfileVersioning';
+
+describe('Bot Profile versioning', () => {
+  it('removes retired built-in references while preserving other choices and stale-form edits', () => {
+    const previous = { toolCapabilityVersion: 1, toolsetMode: 'allowlist',
+      toolsets: ['ios-simulator', 'docs'], tools: ['ios-simulator', 'browser'],
+      mcpMode: 'allowlist', mcpServers: ['private-mcp'], permissions: 'ask' };
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false,
+      capabilities: { toolsets: ['ios-simulator', 'contacts'] },
+      capabilityBaseline: { toolsets: ['ios-simulator', 'docs'] },
+    });
+    expect(next).toEqual({ ...previous, toolsets: ['contacts'], tools: ['browser'] });
+    expect(previous.toolsets).toEqual(['ios-simulator', 'docs']);
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it('creates a new version when only the SOUL identity changes', () => {
+    expect(
+      botProfileContentChanged({
+        previousCapabilities: { skills: ['recipe'] },
+        nextCapabilities: { skills: ['recipe'] },
+        previousIdentitySource: 'A helpful cook',
+        nextIdentitySource: 'A playful pastry chef',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not create a version for metadata-only updates', () => {
+    expect(
+      botProfileContentChanged({
+        previousCapabilities: { skills: ['recipe'] },
+        nextCapabilities: { skills: ['recipe'] },
+        previousIdentitySource: 'A helpful cook',
+        nextIdentitySource: 'A helpful cook',
+      }),
+    ).toBe(false);
+  });
+
+  it('keeps capability updates and Skills from the same save', () => {
+    expect(
+      mergeBotProfileCapabilities({
+        previous: { model: 'old-model', memory: true, skills: ['old-skill'] },
+        capabilities: { model: 'new-model', memory: false },
+        skills: [' new-skill ', 42, '', 'second-skill'],
+        hasSkills: true,
+      }),
+    ).toEqual({
+      model: 'new-model',
+      memory: false,
+      toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit',
+      skills: ['new-skill', 'second-skill'],
+    });
+  });
+
+  it('normalizes and caps the persisted route chain at the Main boundary', () => {
+    const routes = Array.from({ length: 7 }, (_, index) => ({
+      harness: index % 2 === 0 ? 'pi' : 'codex',
+      model: `model-${index}`,
+      providerId: `provider-${index}`,
+      effort: 'high',
+      fastMode: false,
+    }));
+    routes.splice(1, 0, { ...routes[0]! });
+    const next = normalizeBotProfileModelChain({
+      modelChain: routes,
+      modelChainOverride: routes,
+      model: 'stale',
+      harness: 'claude',
+    });
+    expect(next.modelChain).toHaveLength(5);
+    expect(next.modelChainOverride).toHaveLength(5);
+    expect(next).toMatchObject({
+      harness: 'pi',
+      model: 'model-0',
+      providerId: 'provider-0',
+      effort: 'high',
+      fastMode: false,
+    });
+  });
+
+  it('rejects an explicitly empty or invalid route chain', () => {
+    expect(() => normalizeBotProfileModelChain({ modelChain: [] })).toThrow(/at least one/i);
+    expect(() => normalizeBotProfileModelChain({
+      modelChain: [{ harness: 'pi', model: 'ok' }],
+      modelChainOverride: [{ harness: 'pi', model: ' ' }],
+    })).toThrow(/modelChainOverride/i);
+  });
+});
+
+/**
+ * 性别与 userContextSource 同款,住在档案 JSON 里而不是自己一列。它必须能穿过
+ * 每一次能力更新活下来 —— 否则用户在设置里动一下工具开关,阵容里那个「她」就
+ * 悄悄变回按名字称呼(2026-08-21 实机发现渲染层传了性别、主进程根本没接)。
+ */
+describe('角色性别随档案存活', () => {
+  it('更新能力时保留已有性别', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { gender: 'female', skills: ['contract'] },
+      capabilities: { model: 'x', harness: 'claude' },
+      hasSkills: false,
+    });
+    expect(next.gender).toBe('female');
+  });
+
+  it('只改技能同样保留', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { gender: 'male' },
+      skills: ['a'],
+      hasSkills: true,
+    });
+    expect(next.gender).toBe('male');
+  });
+});
+
+it('distinguishes model selections from identity and capability-only refreshes', () => {
+  const route = { harness: 'codex', model: 'model-a', providerId: 'openai', effort: 'medium', fastMode: false };
+  const previous = { modelChain: [route], modelChainOverride: [route], skills: [] };
+  expect(botProfileModelSelectionChanged(previous, { ...previous, skills: ['writing'] })).toBe(false);
+  expect(botProfileModelSelectionChanged(previous, { ...previous, modelChainOverride: null })).toBe(true);
+  for (const patch of [{ harness: 'pi' }, { model: 'model-b' }, { providerId: 'xd' }, { effort: 'high' }, { fastMode: true }]) {
+    expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
+  }
+});
+
+
+describe('independent task model configuration', () => {
+  const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
+  it('preserves the complete route without changing the primary model or its selection revision', () => {
+    const before = { modelChainOverride: null, model: 'primary' };
+    const after = normalizeBotProfileModelChain({ ...before, taskModelOverride: route });
+    expect(after).toEqual({ ...before, taskModelOverride: route });
+    expect(botProfileModelSelectionChanged(before, after)).toBe(false);
+    expect(normalizeBotProfileModelChain({ ...after, taskModelOverride: null }).taskModelOverride).toBeNull();
+    expect(normalizeBotProfileModelChain(before)).toEqual(before);
+  });
+  it.each([{ ...route, harness: 'unknown' }, { ...route, model: '' }, { ...route, fastMode: 'true' }])('rejects incomplete task routes: %j', taskModelOverride => {
+    expect(() => normalizeBotProfileModelChain({ taskModelOverride })).toThrow();
+  });
+});
+
+
+describe('shared tools migration', () => {
+  it.each(['ask', 'auto', 'trusted'])('opens legacy lists without changing %s permissions', (permissions) => {
+    const previous = { permissions, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: ['imported'], memory: false };
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toMatchObject({ toolCapabilityVersion: 1, toolsetMode: 'inherit', mcpMode: 'inherit', permissions, memory: false, mcpServers: ['imported'] });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it.each([
+    [{ toolsetMode: 'allowlist', toolsets: ['browser'], mcpMode: 'allowlist', mcpServers: [] }, 'inherit', 'inherit'],
+    [{ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ toolsets: ['docs'], mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ toolsetMode: 'inherit', toolsets: ['docs'], mcpMode: 'inherit', mcpServers: ['private'] }, 'inherit', 'inherit'],
+    [{ tools: ['files', 'browser', 'mcp'] }, 'inherit', 'inherit'],
+    [{ mcpMode: 'allowlist', mcpServers: ['companion_connections'] }, 'inherit', 'inherit'],
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: [], mcpMode: 'allowlist', mcpServers: [] }, 'allowlist', 'allowlist'],
+    [{ toolCapabilityVersion: 1, toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'allowlist', mcpServers: ['private'] }, 'allowlist', 'allowlist'],
+  ] as const)('migrates legacy lists and preserves versioned choices: %j', (previous, toolsetMode, mcpMode) => {
+    const next = mergeBotProfileCapabilities({ previous, hasSkills: false });
+    expect(next).toEqual({ ...previous, toolCapabilityVersion: 1, toolsetMode, mcpMode });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false })).toEqual(next);
+  });
+
+  it('persists an explicit selection after migration and preserves concurrent selections', () => {
+    const next = mergeBotProfileCapabilities({
+      previous: { toolCapabilityVersion: 1, toolsetMode: 'inherit', toolsets: [] },
+      capabilities: { toolsetMode: 'allowlist', toolsets: ['docs'] },
+      capabilityBaseline: { toolsets: [] }, hasSkills: false,
+    });
+    expect(mergeBotProfileCapabilities({ previous: next, hasSkills: false }))
+      .toMatchObject({ toolsetMode: 'allowlist', toolsets: ['docs'], mcpMode: 'inherit' });
+  });
+});

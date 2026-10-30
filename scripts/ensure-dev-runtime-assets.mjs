@@ -21,10 +21,15 @@ import {
   ensureBinary,
   currentPlatformKey,
   SUPPORTED_BINARY_KINDS,
+  updateScriptForKind,
 } from './ensure-agent-binaries.mjs';
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
+import { buildTrackpad } from '../apps/desktop/native/trackpad/build.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+if (process.platform === 'darwin') {
+  buildTrackpad(path.join(ROOT, 'apps/desktop/resources/tools/trackpad/cindy-trackpad.node'));
+}
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
 
@@ -156,7 +161,7 @@ async function ensureAgentBinaries() {
       await ensureBinary(kind, platform);
     } catch (e) {
       err(`无法准备 ${kind} 的 dev 二进制（${platform}）：${e.message}`);
-      err(`请检查网络 / 上游可用性，或手动运行 "pnpm update:${kind}"。`);
+      err(`请检查网络 / 上游可用性，或手动运行 "pnpm update:${updateScriptForKind(kind)}"。`);
       process.exit(1);
     }
   }

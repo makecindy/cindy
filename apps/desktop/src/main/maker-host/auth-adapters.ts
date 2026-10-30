@@ -1,3 +1,6 @@
+import { cindyManagedSkillRoots, listCindyManagedSkills } from './managed-skills.js';
+import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterAuthChange } from './provider-presentation-store.js';
+import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
 /**
  * apps/desktop/src/main/maker-host/auth-adapters.ts
  *
@@ -14,6 +17,7 @@
  */
 
 import { app, safeStorage } from 'electron';
+import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,9 +39,27 @@ import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
 import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
-import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
-import { inspectCodexAuthLink, relinkSharedCodexAuth } from './codex-auth-link.js';
-import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
+import {
+  prepareSharedGlobalSkillLinks,
+  SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE,
+  sharedGlobalSkillLinksFingerprint,
+} from './shared-global-skills.js';
+import { PreparationCache } from './preparation-cache.js';
+import {
+  prepareBuiltInSkills,
+  migrateBuiltInGlobalSkillLinks,
+  resolveBundledSystemSkillsRoot,
+} from './built-in-skills.js';
+import {
+  copyCodexAuthSnapshot,
+  inspectCodexAuthLink,
+  relinkSharedCodexAuth,
+  resolveWindowsAclPrincipal,
+} from './codex-auth-link.js';
+import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
+import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
+
+export { resolveWindowsAclPrincipal } from './codex-auth-link.js';
 import {
   CODEX_USER_DISCONNECT_REASON,
   clearInvalidatedSystemCodexAuthMarker,
@@ -67,19 +89,11 @@ import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
 } from './codex-gateway-config.js';
-import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
-import {
-  clearClaudeAiOAuth,
-  hasClaudeAiOAuth,
-  hasClaudeAiOAuthUnbound,
-} from './claude-credentials-store.js';
-import {
-  disconnectClaudeAiOAuth,
-  getClaudeAiOAuthForSpawn,
-  getValidClaudeAiOAuth,
-  invalidateClaudeOAuthRefresh,
-  setClaudeOAuthInvalidGrantHandler,
-} from './claude-oauth-refresh.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
+import { hasClaudeNativeLogin } from './claude-native-auth.js';
+import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';
+import { claudeCliNetworkEnv } from './claude-native-cli.js';
+import { ensureLegacyClaudeConfigMigrated } from './claude-legacy-config-migration.js';
 import { isAnthropicCompatProxyHandleReady } from './anthropic-compat-proxy-host.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
@@ -98,6 +112,7 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  captureNativeProviderAuthorizationGeneration,
   isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
   isNativeProviderAuthSharedSystemCredential,
@@ -120,6 +135,19 @@ const log = createLogger('auth-adapters');
  * （见 `log-upload/sourceAllowlist` 的 `DENIED_SUB_SCOPES`）。本机日志照常写全，只是不上报。
  */
 const assetPrepLog = createLogger('auth-adapters:asset-prep');
+
+function preparationScope(): { key: string; ownerId: string | null; current: () => boolean } {
+  const owner = getActiveAppSession();
+  return {
+    key: JSON.stringify([owner.dataOwnerId, owner.generation, isAppSessionBoundaryPending()]),
+    ownerId: owner.dataOwnerId,
+    current: () => {
+      const latest = getActiveAppSession();
+      return !isAppSessionBoundaryPending() && latest.generation === owner.generation
+        && latest.dataOwnerId === owner.dataOwnerId;
+    },
+  };
+}
 /**
  * 凭证文件的落盘 / 权限 / 硬链操作失败诊断。这些消息(icacls/chmod 的 `{ file }`、`fsp.rm` 与
  * `relinkSharedCodexAuth` 的 `error.message`)会带 `auth.json` / `models_cache.json` 等**凭证文件
@@ -144,9 +172,9 @@ export function getCodexHome(): string {
   return path.join(app.getPath('userData'), 'codex-home');
 }
 
-/** 本机 codex CLI 默认的 auth.json 路径 (~/.codex/auth.json), 用于 reconcile 比对凭证。 */
+/** Dev 优先同区域 Release、再回退本机 Codex；packaged 保持本机 Codex 来源。 */
 function getSystemCodexAuthPath(): string {
-  return path.join(os.homedir(), '.codex', 'auth.json');
+  return getPreferredSharedCodexAuthPath(getActiveAppSession().dataOwnerId);
 }
 
 // 失效标记 (auth-invalidated-system.json) 的读写与决策拆在 codex-auth-invalidation.ts
@@ -172,12 +200,7 @@ async function readCodexAccountId(authPath: string): Promise<string | null> {
 function codexAccountIdFromAuthJson(raw: string): string | null {
   try {
     const obj = JSON.parse(raw) as { tokens?: { account_id?: unknown; id_token?: unknown } };
-    if (typeof obj.tokens?.account_id === 'string' && obj.tokens.account_id.length > 0) {
-      return obj.tokens.account_id;
-    }
-    if (typeof obj.tokens?.id_token === 'string') {
-      return chatgptWorkspaceIdFromIdToken(obj.tokens.id_token);
-    }
+    return codexWorkspaceIdFromTokens(obj.tokens);
   } catch {
     /* 解析失败 → null */
   }
@@ -208,42 +231,24 @@ function readCodexRecoveryCredentialProof(
   }
 }
 
-interface ChatgptIdTokenClaims {
-  chatgpt_account_id?: unknown;
-  sub?: unknown;
-  'https://api.openai.com/auth'?: { chatgpt_account_id?: unknown };
-}
-
-function readChatgptIdTokenClaims(idToken: string): ChatgptIdTokenClaims | null {
-  try {
-    const part = idToken.split('.')[1];
-    if (!part) return null;
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(Buffer.from(b64, 'base64').toString('utf-8')) as ChatgptIdTokenClaims;
-  } catch {
-    return null;
-  }
-}
-
-/** Strict workspace identity; unlike header compatibility it never falls back to JWT sub. */
-function chatgptWorkspaceIdFromIdToken(idToken: string): string | null {
-  const claims = readChatgptIdTokenClaims(idToken);
-  const nested = claims?.['https://api.openai.com/auth']?.chatgpt_account_id;
-  if (typeof nested === 'string' && nested.length > 0) return nested;
-  const topLevel = claims?.chatgpt_account_id;
-  return typeof topLevel === 'string' && topLevel.length > 0 ? topLevel : null;
-}
-
 /**
  * 从 id_token JWT 提取 ChatGPT 账号 id（chatgpt-account-id 头用）。
  * 优先 `https://api.openai.com/auth`.chatgpt_account_id，回落顶层 chatgpt_account_id / sub。
  * export 供 anthropic-responses-bridge-host 复用(同一 auth.json、同一 claim 布局,单点维护)。
  */
 export function chatgptAccountIdFromIdToken(idToken: string): string | null {
-  const workspaceId = chatgptWorkspaceIdFromIdToken(idToken);
+  const workspaceId = codexWorkspaceIdFromTokens({ id_token: idToken });
   if (workspaceId) return workspaceId;
   const sub = readChatgptIdTokenClaims(idToken)?.sub;
   return typeof sub === 'string' && sub.length > 0 ? sub : null;
+}
+
+/** HTTP header identity only; workspace/recovery checks must keep the strict parser. */
+export function chatgptAccountIdFromTokens(
+  tokens: { account_id?: unknown; id_token?: unknown } | undefined,
+): string | null {
+  if (typeof tokens?.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
+  return typeof tokens?.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
 }
 
 /**
@@ -253,14 +258,15 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
  * app-server / CLI 负责（本函数只读当下值）；文件缺失 / 非 chatgpt 模式 / 解析失败 → null
  * （调用方据此跳过 codex 这条标题来源，不抛）。
  */
-function readCodexOneShotCredsFromDisk(): { accessToken: string; accountId: string } | null {
-  if (!isNativeProviderAuthBound('openai')) return null;
+function readCodexOneShotCredsFromDisk(providerId?: string): { accessToken: string; accountId: string } | null {
+  const independent = !!providerId && providerId !== 'openai';
+  if (independent ? !codexAccountState(providerId!).authenticated : !isNativeProviderAuthBound('openai')) return null;
   try {
-    const codexHome = getCodexHome();
+    const codexHome = independent ? codexAccountHome(providerId!) : getCodexHome();
     const authPath = path.join(codexHome, 'auth.json');
     // logout 的 durable marker 是提交点。Windows 文件锁可能让旧 auth.json 暂时残留，
     // oneShot 直读也必须服从同一断开语义，不能绕过 adapter 继续使用旧账号。
-    if (shouldSuppressLocalCodexAuth(codexHome, authPath)) return null;
+    if (!independent && shouldSuppressLocalCodexAuth(codexHome, authPath)) return null;
     const raw = fs.readFileSync(authPath, 'utf-8');
     const obj = JSON.parse(raw) as {
       tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown };
@@ -300,7 +306,7 @@ export function isCodexAuthInheritedFromSystemCli(): boolean {
     const codexHome = getCodexHome();
     const localAuth = path.join(codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
-    const systemAuth = getSystemCodexAuthPath();
+    const systemAuth = path.join(os.homedir(), '.codex', 'auth.json');
     if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
     return pathsReferToSameFileSync(localAuth, systemAuth);
   } catch {
@@ -480,17 +486,9 @@ export async function clearCodexAuthBoundaryStateBeforeLogin(
 /**
  * Windows: 用 icacls 把文件权限收紧为"仅当前用户 Full"。
  * 失败仅 stderr 告警, 不抛 —— userData ACL + 0o600 已经是双保险, icacls 是第三道。
+ * principal 解析单源迁至 codex-auth-link(#3469 的 ACL 自愈也要用,反向 import
+ * 会成环);这里 re-export 保持既有导入路径不变。
  */
-export function resolveWindowsAclPrincipal(
-  env: Partial<Pick<NodeJS.ProcessEnv, 'USERDOMAIN' | 'USERNAME'>> = process.env,
-  fallbackUsername = os.userInfo().username,
-): string {
-  const username = env.USERNAME?.trim() || fallbackUsername.trim();
-  const domain = env.USERDOMAIN?.trim();
-  if (!domain || username.includes('\\') || username.includes('@')) return username;
-  return `${domain}\\${username}`;
-}
-
 async function tightenAclWindows(file: string): Promise<void> {
   const principal = resolveWindowsAclPrincipal();
   try {
@@ -530,27 +528,39 @@ export function readClaudeApiKey(): string | null {
 }
 
 /**
- * cc 401 回调(getFreshSubscriptionToken)的总预算。必须显著小于 cc 侧
- * oauth_token_refresh control 请求的 30s 超时(反编译 eqf=30000),超时快速返回 null
- * 让 cc 落磁盘兜底,不把 turn 吊在锁等待 + 慢网络上。
+ * 会话启动判定 Claude 订阅登录态时可接受的缓存年龄。登录态可能在 Cindy 之外变化
+ * (终端里 `claude auth logout`),过期即重读 `claude auth status`(约 0.1–0.3s)。
  */
-export const CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS = 12_000;
+const CLAUDE_CLI_STATUS_MAX_AGE_MS = 60_000;
+
+/**
+ * Claude 订阅(本机 Claude Code 登录)的会话鉴权态。凭证只在 CLI 里:这里只看
+ * CLI 登录态与 Cindy 使用许可,不读、不递任何 token。
+ */
+async function claudeNativeLoginState(): Promise<AuthState> {
+  const login = await readClaudeNativeLogin({ maxAgeMs: CLAUDE_CLI_STATUS_MAX_AGE_MS });
+  return login
+    ? { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' }
+    : { authenticated: false, errorReason: 'no_oauth' };
+}
+
+/**
+ * 未指定来源的会话能否交给本机 Claude Code 登录:订阅只服务 Anthropic 一方模型。
+ * 其它模型(用户来源的裸 id 等)CLI 直连会被 Anthropic 拒,仍经 loopback proxy 的
+ * 隐式桥按模型路由(凭证由 host 注入,子进程只带占位 key)。未传模型的旧调用方按可服务处理。
+ */
+function claudeSubscriptionServesModel(model: string | undefined): boolean {
+  return model === undefined || isAnthropicWireModel(model);
+}
 
 /** Claude AuthAdapter —— 只回鉴权 env, endpoint / behavior flag 走 runtime-configs.ts。 */
 export class DesktopClaudeAuthAdapter implements AuthAdapter {
-  private pendingSharedSkillsPrep: Promise<void> | null = null;
+  private readonly sharedSkillsPreparation = new PreparationCache(30_000);
+  /** Last reported set of persistent projection warnings; each set is logged once. */
+  private reportedPersistentSkillWarnings = '[]';
 
   /** invalidate() 触发时把 auth state 推给 renderer(maker-host 装配注入,对齐 codex)。 */
   private onInvalidatedBroadcast?: (reason: string) => void;
-
-  constructor() {
-    // 订阅 refresh token 被服务端作废(锁内确认的 invalid_grant)→ 清态 + 广播重登提示,
-    // 不让用户停在「显示已连接、会话连环 401」的假状态。纯内存接线,构造期零文件系统
-    // 副作用(authAdaptersImportPurity 约定)。
-    setClaudeOAuthInvalidGrantHandler(() => {
-      void this.invalidate('claude_oauth_refresh_invalid_grant');
-    });
-  }
 
   /** maker-host 注入: invalidate() 触发后给 renderer push auth state。 */
   setOnInvalidatedBroadcast(cb: (reason: string) => void): void {
@@ -558,31 +568,12 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   /**
-   * 订阅凭证被服务端作废时的收尾:清系统凭证(cc 对 invalid_grant 同样清盘)+ 失效
-   * 刷新器 + 广播 UI 重登。对齐 DesktopCodexAuthAdapter.invalidate 模式。
+   * 本机 Claude Code 登录已失效(如在终端里 `claude auth logout`):广播重新登录提示。
+   * 不撤销 Cindy 的使用许可 —— 用户在 CLI 里重新登录后无需再到 Cindy 里授权一次。
    */
   async invalidate(reason: string): Promise<void> {
     log.warn('claude auth invalidated', { reason });
-    invalidateClaudeOAuthRefresh();
-    try {
-      if (hasClaudeAiOAuth()) clearClaudeAiOAuth();
-      // 凭证删除是 best-effort 的(clearClaudeAiOAuth 的 unlink 失败静默吞掉)。删干净了就
-      // **不**留抑制标记 —— 服务端作废不是用户意图,本机 CLI 重新登录后仍应享有设计内的自动
-      // 继承;可一旦没删掉,slot 空 + 凭证还在,下一次可信读取就会把这份刚被作废的凭证认领
-      // 回来、拿它重启发现,再 401、再 invalidate,在「已连接 / 失效」之间打转
-      // (PR #548 review)。所以按残留与否分流。
-      const residual = hasClaudeAiOAuthUnbound();
-      unbindNativeProviderAuth('anthropic', residual ? { revoked: true } : undefined);
-      if (residual) {
-        log.warn('claude credential still present after invalidate; suppressing auto-claim', {
-          reason,
-        });
-      }
-    } catch (e) {
-      log.warn('clear claude oauth on invalidate failed', {
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
+    const presentation = retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {
         this.onInvalidatedBroadcast(reason);
@@ -590,35 +581,83 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
         log.warn('onInvalidatedBroadcast threw', { error: (e as Error).message });
       }
     }
+    await presentation;
   }
 
   async ensureSharedGlobalSkills(): Promise<void> {
-    if (this.pendingSharedSkillsPrep) return this.pendingSharedSkillsPrep;
-    this.pendingSharedSkillsPrep = this.runEnsureSharedGlobalSkills().finally(() => {
-      this.pendingSharedSkillsPrep = null;
+    const scope = preparationScope();
+    // The opt-in setting and root listings are part of the key so a cached completion
+    // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
+    const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
+    await this.sharedSkillsPreparation.ensure(key, async () => {
+      const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
+      return success && scope.current();
     });
-    return this.pendingSharedSkillsPrep;
   }
 
-  private async runEnsureSharedGlobalSkills(): Promise<void> {
+  private async runEnsureSharedGlobalSkills(ownerId: string | null): Promise<boolean> {
     try {
-      const ownerId = getActiveAppSession().dataOwnerId;
-      const result = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-        prepareSharedGlobalSkillLinks({
+      const result = await withSharedGlobalSkillProjectionMutation(ownerId, async () => {
+        // Bundle publication keeps every managed Agent link on one stable
+        // active pointer. The stable-owner boundary prevents a passive profile
+        // from participating in that transaction.
+        const preparedBuiltIns = await prepareBuiltInSkills({
+          bundledRoot: resolveBundledSystemSkillsRoot({
+            isPackaged: app.isPackaged,
+            appPath: app.getAppPath(),
+            resourcesPath: process.resourcesPath,
+          }),
+          userDataDir: app.getPath('userData'),
+          appDataDir: app.getPath('appData'),
+        });
+        const migrationWarnings = preparedBuiltIns.projectionSafe
+          ? await migrateBuiltInGlobalSkillLinks({ userDataDir: app.getPath('userData'), appDataDir: app.getPath('appData') })
+          : [];
+        const sharedProjection = await prepareSharedGlobalSkillLinks({
           assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-        }),
-      );
+        });
+        const persistent = new Set(sharedProjection.persistentWarnings);
+        return {
+          warnings: [
+            ...preparedBuiltIns.warnings,
+            ...migrationWarnings,
+            ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
+          ],
+          persistentWarnings: sharedProjection.persistentWarnings,
+        };
+      });
       for (const warning of result.warnings) {
         assetPrepLog.warn('shared global skill warning', { warning });
       }
+      // The sync opt-out and user-owned conflicting paths are stable state, not failures:
+      // report each distinct set once and let the completion cache hold past them.
+      const persistentSignature = JSON.stringify([...result.persistentWarnings].sort());
+      if (persistentSignature !== this.reportedPersistentSkillWarnings) {
+        this.reportedPersistentSkillWarnings = persistentSignature;
+        for (const warning of result.persistentWarnings) {
+          if (warning === SHARED_GLOBAL_SKILL_SYNC_DISABLED_NOTICE) {
+            assetPrepLog.info('shared global skill notice', { warning });
+          } else {
+            assetPrepLog.warn('shared global skill warning', { warning });
+          }
+        }
+      }
+      return result.warnings.length === 0;
     } catch (error) {
       assetPrepLog.warn('prepare shared global skills failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
+    if (options?.providerId && subscriptionAccountKind(options.providerId)) {
+      if (!isAnthropicCompatProxyHandleReady()) {
+        return { authenticated: false, errorReason: 'proxy_not_ready' };
+      }
+      return subscriptionAccountState(options.providerId);
+    }
     if (!safeStorage.isEncryptionAvailable()) {
       return { authenticated: false, errorReason: 'no_encryption' };
     }
@@ -634,43 +673,30 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
       }
       return { authenticated: true, identity: 'Provider · Proxy', authSource: 'api-key' };
     }
-    // 连了 Claude.ai 订阅(系统 Claude Code 凭证库有 OAuth 登录,或经本 app 浏览器授权写入)
-    // → cc 走 oauth-spawn:子进程携带订阅 OAuth token,因此「Anthropic 订阅」成为本会话可
-    // per-session 选中的来源(选中即直连 api.anthropic.com)。默认仍走网关(网关 key 由 proxy
-    // 旁路按请求注入)。授权≠自动走订阅,要在模型列表显式选中才走。
-    // per-session / 默认路由强依赖 loopback proxy,proxy 没起来直接拒授权,fail-closed ——
-    // 不让「OAuth token + 直连」裸奔(规则 9)。
-    if (hasClaudeAiOAuth()) {
-      if (!isAnthropicCompatProxyHandleReady()) {
-        return { authenticated: false, errorReason: 'proxy_not_ready' };
-      }
-      return { authenticated: true, identity: 'Claude.ai · OAuth', authSource: 'oauth' };
-    }
+    // Claude 订阅:由 CLI 用本机 Claude Code 的登录直连 Anthropic(不经 loopback proxy)。
     if (options?.credentialMode === 'oauth-bearer') {
-      return { authenticated: false, errorReason: 'no_oauth' };
+      return claudeNativeLoginState();
     }
-    // 未连订阅 → gateway-spawn:鉴权前提 = XD 网关 key 存在(现状,字节级不变)。
-    const apiKey = readClaudeApiKey();
-    return apiKey ? { authenticated: true } : { authenticated: false, errorReason: 'no_key' };
+    // 未指定来源:有网关 key 就走网关(与未连订阅时一致);没有才交给本机 Claude Code
+    // 登录(authSource 'oauth' → maker-core 按订阅会话起 CLI,见 env-builder nativeCliAuth)。
+    // 非 Anthropic 模型不交给订阅:不带 authSource,仍经 proxy 隐式桥(getAuthEnv 给占位 key)。
+    if (readClaudeApiKey()) return { authenticated: true };
+    const native = await claudeNativeLoginState();
+    if (!native.authenticated) return { authenticated: false, errorReason: 'no_key' };
+    return claudeSubscriptionServesModel(options?.model) ? native : { authenticated: true };
   }
 
   async triggerLogin(): Promise<AuthState> {
-    // Claude 登录入口在 renderer:gateway 模式走 useApiKey hook 填 gateway key;
-    // oauth 模式走 Settings 里粘贴 `claude setup-token` 产出的 token(CLAUDE_OAUTH_TOKEN_SET IPC)。
-    // main 侧无 spawn 式登录流程,保留此位为扩展位。
-    throw new Error('use renderer (useApiKey / Claude OAuth token paste) to trigger Claude login');
+    // Claude 登录入口在 renderer:网关 key 走 useApiKey hook;Claude 订阅走设置页的
+    // CLAUDE_OAUTH_LOGIN IPC(拉起内置 CLI 的 `claude auth login`,见 claude-native-cli)。
+    throw new Error('use renderer (useApiKey / Claude Code login in Settings) to trigger Claude login');
   }
 
   async logout(): Promise<void> {
-    // 连了订阅时,logout 清系统 Claude.ai OAuth 凭证(⚠️ 会同时登出本地 claude),
-    // **不动** gateway api_key(它是 XD 托管 key,网关来源 + oneShot 都还要用)。
-    if (hasClaudeAiOAuth()) {
-      // disconnect = 先失效刷新器再清凭证(唯一正确入口,见 claude-oauth-refresh 文档)
-      // —— 否则「已断开」状态下在途刷新回写会让凭证复活。
-      disconnectClaudeAiOAuth();
-      // 用户显式登出:留撤销标记。凭证删除是 best-effort(文件删除吞错),残留凭证不该在
-      // 下一次读连接态时被自动认领回来(PR #548 review)。
-      unbindNativeProviderAuth('anthropic', { revoked: true });
+    // Only disconnect Cindy's native subscription binding; keep system and Gateway credentials.
+    // 看绑定而不是内存里的 CLI 登录态:登录态未读到时也不能误删网关 key。
+    if (isNativeProviderAuthBound('anthropic') || isNativeProviderAuthRevoked('anthropic')) {
+      await disconnectClaudeNativeLogin();
       return;
     }
     // 经统一 store 移除本机 XD 网关 key。store.remove 把"文件本不存在"视为成功
@@ -688,91 +714,50 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
     await this.ensureSharedGlobalSkills();
     const env: Record<string, string> = {};
-    if (options?.credentialMode === 'gateway-key') {
+    if (options?.providerId && subscriptionAccountKind(options.providerId) === 'claude') {
+      // 独立 Claude 账号已停用(getState 拒绝授权),不递任何凭证。
+    } else if (options?.credentialMode === 'gateway-key') {
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
     } else if (options?.credentialMode === 'provider-oauth') {
       // 真实供应商凭证只留在 host/proxy;占位 key 仅用于通过 CC CLI 本地鉴权检查。
       env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
-    } else if (hasClaudeAiOAuth()) {
-      // 连了订阅(oauth-spawn):经 CLAUDE_CODE_OAUTH_TOKEN 显式把订阅 access token 递给
-      // cc 子进程(官方桌面宿主协议)。cc 2.1.198 起 CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST
-      // (env-builder 无条件注入) 的语义扩大为「凭证也由 host 全权提供」—— 设了 flag 的子进程
-      // **完全不读**系统凭证库,旧的「不注入、让 cc 自读 ~/.claude」方案在新 CLI 上直接
-      // "Not logged in"(2026-07-03 线上事故:0.0.139 升 cc 2.1.186→2.1.198 后订阅会话全挂)。
-      // token 到期刷新随之转移到 host:getClaudeAiOAuthForSpawn **不阻塞 spawn**——立即
-      // 注入现值,临期只触发后台单飞刷新(新会话首响应不吃刷新 RTT,规则 10);旧 token 若
-      // 已彻底失效,turn 中的 401 由 SDK getOAuthToken 回调走 getFreshSubscriptionToken 兜底。
-      // scopes / subscriptionType / rateLimitTier 一并递入 —— cc env-token 分支默认 scopes 只有
-      // user:inference,不递会丢订阅身份细节(feature gate / beta header 判定用)。
-      // **绝不**注入 ANTHROPIC_API_KEY —— 它与 OAuth 共存会触发 cc 的 shouldDisableAuth 反而
-      // 关掉 Anthropic 鉴权(计划 R4)。provider 路由模型要用的 gateway key 不走子进程 env,
-      // 由本地 proxy 旁路注入(setClaudeProxyGatewayKeyReader)。
-      // (getState 已 gate:无凭证 / proxy 没起来时不授权,不会裸奔到这里 spawn。)
-      const oauth = getClaudeAiOAuthForSpawn();
-      if (oauth?.accessToken) {
-        Object.assign(env, claudeOAuthSpawnEnv(oauth));
-      }
     } else if (options?.credentialMode === 'oauth-bearer') {
-      // 显式订阅模式没有 OAuth 时,getState 已 fail-closed;这里保持不注入 key。
+      // Claude 订阅:不递凭证,CLI 读自己的登录;只补系统代理(CLI 不读系统代理设置)。
+      Object.assign(env, await claudeCliNetworkEnv());
     } else {
+      // 未指定来源:与 getState 同序 —— 有网关 key 走网关;否则 Anthropic 模型交给本机
+      // Claude Code 登录,其它模型经 proxy 隐式桥(只带占位 key,真实凭证由 proxy 注入)。
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
+      else if (hasClaudeNativeLogin()) {
+        if (claudeSubscriptionServesModel(options?.model)) Object.assign(env, await claudeCliNetworkEnv());
+        else env.ANTHROPIC_API_KEY = CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+      }
     }
-    // dev 多实例隔离:设了 XDT_USER_DATA_DIR(device-link 本地联调跑多实例)时,把
-    // Claude Code 的配置目录也切到 userData 下。否则多实例共用全局 ~/.claude
-    // (~/.claude.json / projects 下的 transcripts)会互相干扰,无法当作两台独立设备。
-    // 仅 dev(非 packaged)生效,生产忽略;auth 走 ANTHROPIC_API_KEY,重定向 config
-    // dir 不影响鉴权。process.env 路线行不通(CLAUDE_CONFIG_DIR 在 boot 期被
-    // stripSensitiveAnthropicEnv 清掉),故经 getAuthEnv 注入子进程 env(覆盖优先)。
-    if (process.env.XDT_USER_DATA_DIR && !app.isPackaged && !process.env.CLAUDE_CONFIG_DIR) {
-      env.CLAUDE_CONFIG_DIR = path.join(app.getPath('userData'), 'claude-home');
-    }
+    // 所有来源都用 CLI 默认配置目录(dev 多实例与正式版一致,不设 CLAUDE_CONFIG_DIR):
+    // 订阅会话的凭证库按配置目录区分,隔离会看不到本机已有的 Claude Code 登录。
+    // 旧版 dev 隔离在 <userData>/claude-home 的转录,拉起 CLI 前补拷到默认目录供 resume。
+    await ensureLegacyClaudeConfigMigrated();
     return env;
   }
 
   /**
    * host 侧直连 LLM 调用(oneShot 起标题 / skillReview)的凭证。
    *
-   * 仅连了订阅(oauth-spawn)时需要特殊处理:此时 getAuthEnv() 不带 ANTHROPIC_API_KEY(只注入订阅 token),
-   * oneShot 拿不到 key。固定回 gateway key + **直连 gateway endpoint**(绕开 loopback proxy 的
-   * 路由)—— 避免 oneShot 这种无 system prompt 的轻任务被路由去 api.anthropic.com 撞
-   * claude.ai OAuth 策略(无 Claude Code 身份段会被拒)。
+   * 连了 Claude 订阅时固定回 gateway key + **直连 gateway endpoint**(绕开 loopback proxy 的
+   * 路由)—— host 自己的请求绝不使用订阅(订阅只归 CLI)。
    * 未连订阅回 null → oneShot 走旧路径(getAuthEnv.ANTHROPIC_API_KEY + runtimeConfig.endpoint),零改动。
    */
   async getOneShotAuth(): Promise<{ apiKey: string; baseURL?: string } | null> {
-    if (!hasClaudeAiOAuth()) return null;
+    if (!hasClaudeNativeLogin()) return null;
     const apiKey = readClaudeApiKey();
     if (!apiKey) return null;
     return { apiKey, baseURL: claudeUpstreamEndpoint() };
   }
 
-  /**
-   * cc 子进程 turn 中途 401 时经 SDK oauth_token_refresh control 回调走到这里
-   * (见 maker-core claude-code getOAuthToken 接线)。forceRefresh 语义 = 锁内比对后
-   * 按需刷:凭证库已比失败 token 新 → 直接返回不刷(防多会话同时 401 连环旋转);
-   * 仍旧才单飞刷新;失败返回 null(绝不把已知坏 token 递回去)。
-   *
-   * 超时预算 12s —— 必须显著小于 cc 侧 control 请求的 30s(反编译 eqf=30000):
-   * 超时快速返回 null 让 cc 落磁盘兜底(host 刷新总会写回凭证库,在途刷新即使超过
-   * 预算也会完成写回,cc 第二条恢复路 tengu_oauth_401_recovered_from_disk 能捡到),
-   * 不把整个 turn 吊在一次慢网络上。
-   */
-  async getFreshSubscriptionToken(staleToken?: string): Promise<string | null> {
-    const timeout = new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS).unref?.(),
-    );
-    // staleToken = 该会话实际撞 401 的那枚(spawn 注入 / 上次回调返回)。库值已比它新
-    // (后台预续期换代)时刷新器直接返回库值,不再消耗一次轮换 —— 防多个长会话对同
-    // 一枚旧 token 群体 401 时串行连环旋转。
-    const refresh = getValidClaudeAiOAuth({ forceRefresh: true, staleToken }).then(
-      (oauth) => oauth?.accessToken ?? null,
-    );
-    return Promise.race([refresh, timeout]);
-  }
-
-  // cancelLogin 不实现 —— Claude 走 renderer useApiKey hook 的同步弹窗式登录,
-  // 没有需要 abort 的子进程。BaseAgent.cancelLogin 调到这里时是 no-op (interface 可选)。
+  // getFreshSubscriptionToken 不实现 —— 订阅 token 由 CLI 自己刷新,Cindy 不持有。
+  // cancelLogin 不实现 —— Claude 登录由设置页经 CLAUDE_OAUTH_LOGIN IPC 拉起 CLI(可取消)。
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -790,6 +775,7 @@ type PendingCodexLogin = {
 };
 
 type CodexDisconnectIntent = {
+  ownerScopeKey: string;
   /** 显式 logout / 用户取消是单调升级意图；后到的 server invalidation 不能把它降级。 */
   explicitRequested: boolean;
   /** 当前磁盘 marker 已足以抑制残留 local auth；unlink 失败时仍可继续安全收口。 */
@@ -929,12 +915,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   private lastKnownCodexCredentialScope: AuthState['credentialScope'] = undefined;
 
   /**
-   * 进行中的 ensureGlobalCodexAssets 调用 —— 同一时刻并发进入直接复用同一 Promise,
-   * 避免重复 stat / copy。每次 codex session start 都会过一遍 getAuthEnv → ensure,
-   * 没有缓存时连续启动会触发并发竞态 (功能正确但浪费 io)。结束后置 null 不做长期缓存,
-   * 因为源文件 (~/.codex/AGENTS.md) 随时可能被用户改, 仍需要后续调用触发新一轮检查。
+   * Plugin capability enforcement is always rechecked after concurrent callers
+   * settle. Skill projections also refresh at each launch so a removed or
+   * disabled approved source cannot survive in a cached Codex discovery root.
    */
-  private pendingAssetsPrep: Promise<void> | null = null;
+  private readonly pendingAssetsPrep = new PreparationCache(0);
 
   /**
    * 进行中的 reconcileWithSystemCodex 调用 —— 多个调用点 (构造 / getState / getAuthEnv /
@@ -980,6 +965,16 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
   private devOAuthWritesBlocked(): boolean {
     return !app.isPackaged && !this.trustedDevOAuthWriteOverride();
+  }
+
+  /**
+   * An isolated Dev may consume the Release login, but its Codex child must not
+   * receive the Release auth inode: Codex can refresh auth.json in place.
+   */
+  private shouldSnapshotReleaseCodexAuth(systemAuth: string, myAuth: string): boolean {
+    if (!this.devOAuthWritesBlocked()) return false;
+    if (path.resolve(systemAuth) !== path.resolve(getReleaseCodexAuthPath())) return false;
+    return path.resolve(systemAuth) !== path.resolve(myAuth);
   }
 
   private warnDevOAuthWriteOverride(action: string): void {
@@ -1095,6 +1090,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private claimDetectedCodexOAuthBinding(sessionAtStart: ActiveAppSession): void {
     if (this.pendingLogin || this.loginCancellationOpen) return;
+    const authPath = path.join(this.codexHome, 'auth.json');
+    if (
+      this.devOAuthWritesBlocked() &&
+      path.resolve(getSystemCodexAuthPath()) === path.resolve(authPath)
+    ) {
+      // Shared Dev may consume an existing Release binding, but must never
+      // create or repair that binding on the Release profile.
+      return;
+    }
     const session = getActiveAppSession();
     if (isAppSessionBoundaryPending()) return;
     if (
@@ -1104,7 +1108,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     if (this.oauthInvalidatedReason) return;
-    const authPath = path.join(this.codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return;
     const recoveryMarker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
     const recoveryOwnerId =
@@ -1221,12 +1224,28 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const myAuth = path.join(this.codexHome, 'auth.json');
 
     if (!existsSync(systemAuth)) return;
+    if (path.resolve(systemAuth) === path.resolve(myAuth)) {
+      this.lastKnownCodexCredentialScope = 'system-shared';
+      return;
+    }
 
     const topology = await inspectCodexAuthLink(systemAuth, myAuth);
     if (topology.healthy && topology.linkType === 'hardlink') {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
     if (topology.healthy && (process.platform === 'win32' || topology.linkType === 'symlink')) {
+      if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+        const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+        if (snapshot.kind === 'copied') {
+          markNativeProviderAuthSharedSystemCredential('openai');
+          log.info('codex auth.json detached into a read-only Release snapshot');
+        } else {
+          credPathLog.warn('failed to detach Release auth snapshot; shared link left intact', {
+            error: snapshot.error?.message,
+          });
+          throw snapshot.error ?? new Error('Failed to detach Release auth snapshot');
+        }
+      }
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1284,6 +1303,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
+    if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
+      const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+      if (hasLocalEntry && !topology.healthy) {
+        this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
+      }
+      if (snapshot.kind === 'copied') {
+        markNativeProviderAuthSharedSystemCredential('openai');
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        log.info('codex auth.json copied from Release login for read-only Dev use');
+      } else {
+        credPathLog.warn('Release auth snapshot failed, auth.json left intact', {
+          error: snapshot.error?.message,
+        });
+        throw snapshot.error ?? new Error('Failed to copy Release auth snapshot');
+      }
+      return;
+    }
     const { kind, error, linkType } = await relinkSharedCodexAuth(systemAuth, myAuth);
     if (hasLocalEntry && !topology.healthy) {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
@@ -1291,11 +1327,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     switch (kind) {
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
-        log.info('codex auth.json linked with ~/.codex (shared)', { linkType });
+        log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
       case 'link-unsupported':
         // 共享链接不支持时 myAuth 一字未动。
-        credPathLog.warn('shared link to ~/.codex failed, auth.json left intact', {
+        credPathLog.warn('shared OpenAI auth link failed, auth.json left intact', {
           error: error?.message,
         });
         break;
@@ -1305,7 +1341,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         break;
       case 'recovered':
         // 替换中途 myAuth 一度丢失但已从 ~/.codex 重建 —— 用户无感, 仅记一笔。
-        credPathLog.warn('reconcile swap failed but auth.json recovered from ~/.codex', {
+        credPathLog.warn('reconcile swap failed but auth.json recovered from shared source', {
           error: error?.message,
         });
         break;
@@ -1319,28 +1355,26 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async ensureGlobalCodexAssets(): Promise<void> {
-    if (this.pendingAssetsPrep) return this.pendingAssetsPrep;
-    this.pendingAssetsPrep = this.runEnsureGlobalCodexAssets().finally(() => {
-      this.pendingAssetsPrep = null;
+    const scope = preparationScope();
+    await this.pendingAssetsPrep.ensure(scope.key, async () => {
+      await this.runEnsureGlobalCodexSkills(scope.ownerId);
+      await this.runEnsureGlobalCodexPlugins();
+      return true;
     });
-    return this.pendingAssetsPrep;
   }
 
-  private async runEnsureGlobalCodexAssets(): Promise<void> {
-    // Load-bearing order: Codex skill linking scans ~/.agents/skills, so shared
-    // links must populate that directory before prepareCodexGlobalSkillsLinks runs.
-    const ownerId = getActiveAppSession().dataOwnerId;
-    const sharedOutcome = await withSharedGlobalSkillProjectionMutation(ownerId, () =>
-      prepareSharedGlobalSkillLinks({
-        assertOwnerStable: () => assertGhostSkillProjectionBoundaryStableForOwner(ownerId),
-      }),
-    ).then(
-      (r) => ({ ok: true as const, label: 'shared-skills' as const, warnings: r.warnings }),
-      (err: Error) => ({ ok: false as const, label: 'shared-skills' as const, err }),
-    );
+  private async runEnsureGlobalCodexSkills(ownerId: string | null): Promise<boolean> {
+    // Load-bearing order: prepare the private built-in roots and the ~/.agents/skills
+    // projection before Codex snapshots discovery. That shared pass (same call, same
+    // owner guard) runs inside ensureSharedGlobalSkills and reports its own warnings, so
+    // Codex does not repeat it; per-launch freshness of the approved catalog comes from
+    // prepareCodexGlobalSkillsLinks below.
+    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
 
-    const [skillsOutcome, rulesOutcome, pluginsOutcome] = await Promise.all([
-      prepareCodexGlobalSkillsLinks(this.codexHome).then(
+    const [skillsOutcome, rulesOutcome] = await Promise.all([
+      withSharedGlobalSkillProjectionMutation(ownerId, async () =>
+        prepareCodexGlobalSkillsLinks(this.codexHome, { managedRoots: await cindyManagedSkillRoots(), managedSkills: await listCindyManagedSkills() }),
+      ).then(
         (r) => ({ ok: true as const, label: 'skills' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'skills' as const, err }),
       ),
@@ -1348,20 +1382,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         (r) => ({ ok: true as const, label: 'rules' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'rules' as const, err }),
       ),
-      prepareCodexGlobalPluginsBridge(this.codexHome, {
-        capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
-      }).then(
-        (r) => ({
-          ok: true as const,
-          label: 'plugins' as const,
-          warnings: r.warnings,
-          routingFailures: r.routingFailures,
-        }),
-        (err: Error) => ({ ok: false as const, label: 'plugins' as const, err }),
-      ),
     ]);
 
-    for (const outcome of [sharedOutcome, skillsOutcome, rulesOutcome, pluginsOutcome]) {
+    const outcomes = [skillsOutcome, rulesOutcome];
+    // A failed verified catalog must not fall back to yesterday's projections.
+    if (!skillsOutcome.ok) throw skillsOutcome.err;
+    for (const outcome of outcomes) {
       if (!outcome.ok) {
         assetPrepLog.warn('prepare Codex global asset failed', {
           asset: outcome.label,
@@ -1371,6 +1397,21 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       for (const warning of outcome.warnings) {
         assetPrepLog.warn('Codex global asset warning', { asset: outcome.label, warning });
+      }
+    }
+    return outcomes.every((outcome) => outcome.ok && outcome.warnings.length === 0);
+  }
+
+  private async runEnsureGlobalCodexPlugins(): Promise<void> {
+    const pluginsOutcome = await prepareCodexGlobalPluginsBridge(this.codexHome, {
+      capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+    }).then(
+      (r) => ({ ok: true as const, warnings: r.warnings, routingFailures: r.routingFailures }),
+      (err: Error) => ({ ok: false as const, err }),
+    );
+    if (pluginsOutcome.ok) {
+      for (const warning of pluginsOutcome.warnings) {
+        assetPrepLog.warn('Codex global asset warning', { asset: 'plugins', warning });
       }
     }
     if (!pluginsOutcome.ok) {
@@ -1422,6 +1463,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
+    if (isCodexAccountProvider(options?.providerId)) return codexAccountState(options!.providerId!);
     const state = await this.readState({ credentialMode: options?.credentialMode });
     const stateWithWritePolicy = this.devOAuthWritesBlocked()
       ? { ...state, oauthWritesBlocked: true }
@@ -1657,6 +1699,39 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return fingerprint ? JSON.stringify(fingerprint) : null;
   }
 
+  /** Bind a host-owned request to the same credential and durable authorization as native Codex. */
+  captureOAuthDispatchProof(accessToken: string, accountId: string | null, providerId = 'openai'): (() => boolean) | null {
+    const independent = providerId !== 'openai';
+    const authenticated = () => independent
+      ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    if (!authenticated()) return null;
+    const home = independent ? codexAccountHome(providerId) : this.codexHome;
+    const authPath = path.join(home, 'auth.json');
+    const credential = () => {
+      const value = currentCodexCredentialGeneration(authPath);
+      return value ? JSON.stringify(value) : null;
+    };
+    // Independent accounts authorize against their existing account record;
+    // inherited OpenAI uses the native provider authorization record.
+    const authorization = () => independent
+      ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
+      : captureNativeProviderAuthorizationGeneration('openai');
+    const credentialGeneration = credential();
+    const authorizationGeneration = authorization();
+    if (!credentialGeneration || !authorizationGeneration || authorizationGeneration === 'null') return null;
+    try {
+      const raw = fs.readFileSync(authPath, 'utf8');
+      const auth = JSON.parse(raw) as { tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown } };
+      if (auth.tokens?.access_token !== accessToken || chatgptAccountIdFromTokens(auth.tokens) !== accountId) return null;
+    } catch {
+      return null;
+    }
+    const isCurrent = () => authenticated()
+      && credential() === credentialGeneration
+      && authorization() === authorizationGeneration;
+    return isCurrent() ? isCurrent : null;
+  }
+
   /** Bracket one account-level RPC with compare-and-commit recovery confirmation. */
   async verifyRecoveryWithAccountRpc<T>(read: () => Promise<T>): Promise<T> {
     const proof = this.captureRecoveryVerificationProof();
@@ -1697,7 +1772,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         expires_at?: unknown;
         tokens?: { access_token?: unknown };
       };
-      const identity = typeof obj.account?.email === 'string' ? obj.account.email : undefined;
+      // Display metadata only: use the same token claims as independently added accounts.
+      // Parsing a label must not change the authentication decision below.
+      const identity = typeof obj.account?.email === 'string' && obj.account.email.trim()
+        ? obj.account.email
+        : parseCodexAccountIdentity(raw)?.label;
       const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
       // authSource='oauth' 必须与 spawn fallback 的判定同源(hasCodexOAuthLogin =
       // auth.json 含 access_token,见下方 getAccessToken 的字段路径)。`codex login
@@ -1718,7 +1797,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   triggerLogin(opts?: AuthLoginOptions): Promise<AuthState> {
-    if (this.devOAuthWritesBlocked()) {
+    if (opts?.mode !== 'local' && this.devOAuthWritesBlocked()) {
       return Promise.resolve({
         authenticated: false,
         errorReason: 'dev_oauth_write_blocked',
@@ -1806,6 +1885,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     opts?: AuthLoginOptions,
     isCancelled: () => boolean = () => false,
   ): Promise<AuthState> {
+    const loginOwner = getActiveAppSession();
     this.ensureInvalidationMarkerLoaded();
     this.loginAborted = false;
     this.loginCancellationOpen = true;
@@ -1826,6 +1906,78 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
       if (!this.isolatedAuthSanitized) {
         return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
+      }
+    }
+    if (opts?.mode === 'local') {
+      const owner = getActiveAppSession();
+      const systemAuth = getSystemCodexAuthPath();
+      const localAuth = path.join(this.codexHome, 'auth.json');
+      const ownerCurrent = () => {
+        const current = getActiveAppSession();
+        return !isAppSessionBoundaryPending() &&
+          !!owner.dataOwnerId && current.generation === loginOwner.generation &&
+          current.dataOwnerId === loginOwner.dataOwnerId;
+      };
+      const stillCurrent = () => ownerCurrent() && !this.loginAborted && !isCancelled();
+      try {
+        if (!stillCurrent()) {
+          return { authenticated: false, errorReason: 'login_cancelled' };
+        }
+        const invalidated = getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, localAuth);
+        if (invalidated && invalidated.reason !== CODEX_USER_DISCONNECT_REASON) {
+          return { authenticated: false, errorReason: invalidated.reason };
+        }
+        const raw = fs.readFileSync(systemAuth, 'utf8');
+        const identity = parseCodexAccountIdentity(raw);
+        const tokens = JSON.parse(raw).tokens;
+        if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
+        if (!existsSync(localAuth) || !pathsReferToSameFileSync(localAuth, systemAuth)) {
+          fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
+          // Retain the existing read-only Dev exception; writable runtimes must share
+          // the native credential rather than rotate an independent refresh-token copy.
+          if (this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
+            const result = await copyCodexAuthSnapshot(systemAuth, localAuth);
+            if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
+          } else {
+            await relinkSharedCodexAuth(systemAuth, localAuth);
+            if (!pathsReferToSameFileSync(localAuth, systemAuth)) throw new Error('Local auth link failed');
+          }
+        }
+        if (!stillCurrent()) {
+          return { authenticated: false, errorReason: 'login_cancelled' };
+        }
+        bindNativeProviderAuth('openai', { sharedSystem: true });
+        if (!clearInvalidatedSystemCodexAuthMarker(this.codexHome)) {
+          unbindNativeProviderAuth('openai', { revoked: true });
+          return { authenticated: false, errorReason: 'auth_boundary_clear_failed' };
+        }
+        this.devReadOnlyDetached = false;
+        this.suppressSystemCodexReconcile = false;
+        this.oauthInvalidatedReason = null;
+        this.oauthInvalidatedCredentialScope = undefined;
+        this.oauthRecoveryRequiredReason = null;
+        this.oauthRecoveryCredentialScope = undefined;
+        this.memoryOnlyInvalidatedSystemCredential = null;
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        this.loginCancellationOpen = false;
+        await retainProviderPresentationAfterAuthChange('openai');
+        if (!ownerCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        if (!stillCurrent()) return this.disconnectCodexOAuth().then(() => ({
+          authenticated: false, errorReason: 'login_cancelled',
+        }));
+        await this.notifyCodexLoginSuccess();
+        if (!ownerCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        // Match browser finalization: a late Cancel must revoke Cindy's committed binding.
+        // Return the promise so failed cleanup is not swallowed by the local setup catch.
+        if (!stillCurrent()) return this.disconnectCodexOAuth().then(() => ({
+          authenticated: false, errorReason: 'login_cancelled',
+        }));
+        return { authenticated: true, authSource: 'oauth', identity: identity?.label, credentialScope: 'system-shared' };
+      } catch {
+        if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+        this.suppressSystemCodexReconcile = true;
+        writeInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, CODEX_USER_DISCONNECT_REASON, localAuth);
+        return { authenticated: false, errorReason: 'local_auth_unavailable' };
       }
     }
     await this.ensureGlobalCodexAssets();
@@ -1861,7 +2013,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
 
     // spawn codex login。POSIX 建独立进程组，取消/超时时连同回调 server 一起收割。
     return new Promise<AuthState>((resolve) => {
-      const mode: AgentLoginMode = opts?.mode ?? 'browser';
+      const mode = opts?.mode === 'device-code' ? 'device-code' : 'browser';
       const proc = spawn(binaryPath, codexLoginArgs(mode), {
         shell: false,
         env: { ...process.env, CODEX_HOME: this.codexHome },
@@ -2060,7 +2212,17 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (cancelledAfterStateRead) return cancelledAfterStateRead;
     if (!state.authenticated) return state;
 
-    // 真正拿到 OAuth 后才重启本地 codex host；失败只记日志，不翻转登录结果。
+    await this.notifyCodexLoginSuccess();
+    const cancelledAfterHostRestart = cancelFinalization();
+    if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
+    await retainProviderPresentationAfterAuthChange('openai');
+    const cancelledAfterPresentation = cancelFinalization();
+    if (cancelledAfterPresentation) return cancelledAfterPresentation;
+    return state;
+  }
+
+  /** All explicit OAuth entry points retire the old host after committing credentials. */
+  private async notifyCodexLoginSuccess(): Promise<void> {
     if (this.onLoginSuccess) {
       try {
         await this.onLoginSuccess();
@@ -2068,9 +2230,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         log.warn('onLoginSuccess threw', { error: (e as Error).message });
       }
     }
-    const cancelledAfterHostRestart = cancelFinalization();
-    if (cancelledAfterHostRestart) return cancelledAfterHostRestart;
-    return state;
   }
 
   /** Codex OAuth 子进程 abort —— 用户在浏览器授权流半路反悔时调。 */
@@ -2089,6 +2248,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }): Promise<void> {
     const explicitRequested = !opts?.preserveInvalidatedReason;
     if (this.logoutOperation) {
+      if (this.logoutIntent && !this.isCodexDisconnectCurrent(this.logoutIntent)) {
+        const requestedOwner = activeOwnerScopeKey();
+        // 新 owner 的显式断开不能合并进旧 owner 的操作，也不能假报成功。
+        return this.logoutOperation.catch(() => undefined).then(() => {
+          if (!isAppSessionBoundaryPending() && activeOwnerScopeKey() === requestedOwner) return this.logout(opts);
+        });
+      }
       // 登录可能在第一次 logout 之后排队、等待同一个 barrier。后来的 logout 仍代表更新的
       // 用户意图，必须把这份 queued login 标成 cancelled，不能只复用旧 Promise 后让它启动。
       this.cancelLogin();
@@ -2110,6 +2276,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         }
         if (!this.logoutIntent.acceptingIntent && this.logoutIntent.explicitRequested) {
           if (this.logoutIntent.devReadOnly) {
+            this.commitExplicitCodexDisconnectBoundary(this.logoutIntent);
+            unbindNativeProviderAuth('openai', { revoked: true });
             this.oauthInvalidatedReason = null;
             this.oauthInvalidatedCredentialScope = undefined;
             this.oauthRecoveryRequiredReason = null;
@@ -2134,11 +2302,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return this.logoutOperation;
     }
     const intent: CodexDisconnectIntent = {
+      ownerScopeKey: activeOwnerScopeKey(),
       explicitRequested,
       invalidationMarkerCommitted: opts?.invalidationMarkerCommitted === true,
       explicitBoundaryCommitted: false,
       acceptingIntent: true,
-      devReadOnly: this.devOAuthWritesBlocked(),
+      devReadOnly: !explicitRequested && this.devOAuthWritesBlocked(),
     };
     this.logoutIntent = intent;
     if (!intent.devReadOnly) this.warnDevOAuthWriteOverride('logout');
@@ -2156,6 +2325,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   private async runLogout(intent: CodexDisconnectIntent): Promise<void> {
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     this.ensureInvalidationMarkerLoaded();
     // 登出与在途登录串行：先取消并等它完全收口，防迟到的 auth.json 在登出后复活账号。
     const pendingLogin = this.pendingLogin?.promise;
@@ -2163,18 +2333,23 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     await this.disconnectCodexOAuth(intent);
   }
 
   private async runDevReadOnlyLogout(intent: CodexDisconnectIntent): Promise<void> {
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     const pendingLogin = this.pendingLogin?.promise;
     if (pendingLogin) {
       this.cancelLogin();
       await pendingLogin.catch(() => undefined);
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     this.devReadOnlyDetached = true;
     this.suppressSystemCodexReconcile = true;
     if (intent.explicitRequested) {
+      this.commitExplicitCodexDisconnectBoundary(intent);
+      unbindNativeProviderAuth('openai', { revoked: true });
       this.oauthInvalidatedReason = null;
       this.oauthInvalidatedCredentialScope = undefined;
       this.oauthRecoveryRequiredReason = null;
@@ -2190,8 +2365,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         });
       }
     }
+    if (!this.isCodexDisconnectCurrent(intent)) return;
     intent.acceptingIntent = false;
     if (intent.explicitRequested) {
+      this.commitExplicitCodexDisconnectBoundary(intent);
+      unbindNativeProviderAuth('openai', { revoked: true });
       this.oauthInvalidatedReason = null;
       this.oauthInvalidatedCredentialScope = undefined;
       this.oauthRecoveryRequiredReason = null;
@@ -2201,7 +2379,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     log.info('dev read-only Codex auth detached in memory; durable credentials unchanged');
   }
 
+  private isCodexDisconnectCurrent(intent: CodexDisconnectIntent): boolean {
+    return !isAppSessionBoundaryPending() && intent.ownerScopeKey === activeOwnerScopeKey();
+  }
+
   private commitExplicitCodexDisconnectBoundary(intent: CodexDisconnectIntent): boolean {
+    if (!this.isCodexDisconnectCurrent(intent)) return false;
     if (!intent.explicitRequested || intent.explicitBoundaryCommitted) return false;
     const persisted = writeInvalidatedSystemCodexAuthMarker(
       this.codexHome,
@@ -2229,16 +2412,20 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private async disconnectCodexOAuth(intent?: CodexDisconnectIntent): Promise<void> {
     const activeIntent: CodexDisconnectIntent = intent ?? {
+      ownerScopeKey: activeOwnerScopeKey(),
       explicitRequested: true,
       invalidationMarkerCommitted: false,
       explicitBoundaryCommitted: false,
       acceptingIntent: true,
       devReadOnly: false,
     };
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
     try {
-      await fsp.rm(authPath, { force: true });
+      if (!activeIntent.explicitRequested && path.resolve(authPath) !== path.resolve(getCodexCliAuthPath())) {
+        await fsp.rm(authPath, { force: true });
+      }
     } catch (err) {
       // 显式 logout 已在 durable marker 处完成线性化：即使 Windows 文件锁让旧文件
       // 暂时删不掉，所有 token 读取也会被 marker 抑制。继续做 host/cache/broadcast
@@ -2254,13 +2441,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         },
       );
     }
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     // ⚠️ 不删 sessions/ —— 历史上这里会 `rm -rf sessions/` 清空所有 thread 的 rollout
     // .jsonl(那是 resume 功能还不存在的年代留下的"登出即清本地状态"清理)。后来加了
     // 「从磁盘 rollout 续聊」(CodexAgent thread/resume) 和外部会话导入,xdt-maker 的会话
     // 续聊**依赖** rollout 文件存在。继续在登出/换账号时删 sessions/ 会让所有老会话
     // thread/resume 撞 "no rollout found" 永久坏掉(state DB 里 threads 行还在 → 留下指向
     // 已删文件的孤儿),且用户无法在多个 codex 账号间切换还各自保留会话历史。logout 只负责
-    // 撤销登录态(删 auth.json)即可,rollout 是用户数据,保留。
+    // 显式断开只停用 Cindy；凭证及 rollout 均保留。
     // 不删 config.toml (MCP 配置由 Boss 5 管)
     // 收割 app-server 子进程 (它内存里仍持有旧 token; 不杀的话切账号会用旧 token 撞 401,
     // 或泄露老账号会话给新账号)。dispose 幂等: host 没起过就 no-op。失败仅 stderr 告警。
@@ -2274,22 +2462,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // models_cache.json 没有账号 ID，必须与 auth 边界一起失效。先 dispose host 再删，
     // 降低 Windows 文件锁概率；删失败仍由 disconnect marker + 内存快照清空保证 fail-closed，
     // 下次登录前会再次清理并在锁未释放时拒绝继续。
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     await removeDesktopCodexModelsCache(this.codexHome);
+    if (!this.isCodexDisconnectCurrent(activeIntent)) return;
     // invalidation 可能在显式 logout 进行中改写 marker；结束前再提交一次显式边界，保证
     // 后到的用户意图永久胜出。该 helper 无 await，因此这里之后不会再接受竞态升级。
     activeIntent.acceptingIntent = false;
-    const explicitBoundaryCommittedNow = this.commitExplicitCodexDisconnectBoundary(activeIntent);
-    if (explicitBoundaryCommittedNow && existsSync(authPath)) {
-      try {
-        await fsp.rm(authPath, { force: true });
-      } catch (err) {
-        // 升级后的 durable marker 已记录当前残留 local fingerprint；锁住时 token reads 仍被
-        // 抑制，删除可以继续 fail-soft。
-        log.warn('remove Codex auth.json after late explicit disconnect upgrade failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    this.commitExplicitCodexDisconnectBoundary(activeIntent);
     // 只有用户显式登出才留下跨 provider 的 revoked 标记。服务端 token invalidation 只是
     // 清掉当前坏凭证，不能阻止用户在 ChatGPT App 重新登录后被 Cindy 自动认领。
     try {
@@ -2306,6 +2485,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
+    if (isCodexAccountProvider(options?.providerId)) {
+      const ownerId = getActiveAppSession().dataOwnerId;
+      await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+      return { CODEX_HOME: await withSharedGlobalSkillProjectionMutation(ownerId, async () =>
+        prepareCodexAccountHome(options!.providerId!, await cindyManagedSkillRoots(), await listCindyManagedSkills()),
+      ) };
+    }
     this.ensureInvalidationMarkerLoaded();
     await this.ensureGlobalCodexAssets();
     // proxy 路线: codex 始终经 loopback proxy 出口, spawn 鉴权分两路(见 prepareCodexExtraSpawnConfig):
@@ -2361,6 +2547,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return this.hasCodexOAuthLoginUnbound();
   }
 
+  /** Non-mutating account presentation for provider lists, including remote readers. */
+  async readAccountPresentationState(): Promise<AuthState> {
+    const credentialScope = this.readCodexCredentialScope();
+    if (!this.hasCodexOAuthLoginReadOnly()) return {
+      authenticated: false, credentialScope,
+      ...(this.oauthInvalidatedReason ? { errorReason: this.oauthInvalidatedReason } : {}),
+    };
+    const owner = getActiveAppSession().generation;
+    const state = await this.readLocalCodexAuthState();
+    if (getActiveAppSession().generation !== owner) return { authenticated: false };
+    return { ...state, credentialScope };
+  }
+
   /** Legacy upgrade probe; only used while claiming the first verified owner. */
   hasCodexOAuthLoginUnbound(): boolean {
     if (this.devReadOnlyDetached) return false;
@@ -2375,9 +2574,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
   }
 
-  readOneShotCreds(): { accessToken: string; accountId: string } | null {
-    if (this.devReadOnlyDetached) return null;
-    return readCodexOneShotCredsFromDisk();
+  readOneShotCreds(providerId?: string): { accessToken: string; accountId: string } | null {
+    if ((!providerId || providerId === 'openai') && this.devReadOnlyDetached) return null;
+    return readCodexOneShotCredsFromDisk(providerId);
   }
 
   /**
@@ -2387,7 +2586,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * token, and callers should only use it for short-lived OpenAI requests that
    * are covered by the active Codex login.
    */
-  async getAccessToken(): Promise<string | null> {
+  async getAccessToken(providerId?: string): Promise<string | null> {
+    if (providerId && providerId !== 'openai') return readCodexOneShotCredsFromDisk(providerId)?.accessToken ?? null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
@@ -2422,7 +2622,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * tokens.account_id nor a chatgpt_account_id claim is present; JWT sub is a
    * user id, not a workspace id, and must not bind reset-credit operations.
    */
-  async getAccountId(): Promise<string | null> {
+  async getAccountId(providerId?: string): Promise<string | null> {
+    if (providerId && providerId !== 'openai') return readCodexOneShotCredsFromDisk(providerId)?.accountId ?? null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
@@ -2447,8 +2648,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     context?: {
       credentialGeneration?: string | null;
       credentialAttribution?: 'unproven';
+      providerId?: string;
     },
   ): Promise<void> {
+    if (context?.providerId && isCodexAccountProvider(context.providerId)) {
+      // The host retires itself. An unattributed failure cannot invalidate a
+      // newer credential committed by a concurrent login for this provider.
+      return;
+    }
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
     if (this.devOAuthWritesBlocked()) {
       log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
@@ -2738,6 +2945,7 @@ export const desktopCodexAuthAdapter = new DesktopCodexAuthAdapter();
 
 export function readCodexOneShotCreds(
   adapter: DesktopCodexAuthAdapter = desktopCodexAuthAdapter,
+  providerId?: string,
 ): { accessToken: string; accountId: string } | null {
-  return adapter.readOneShotCreds();
+  return adapter.readOneShotCreds(providerId);
 }

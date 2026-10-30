@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { File } from 'lucide-react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { InlineReferenceChip } from '@/components/chat/InlineReferenceChip';
 
@@ -11,10 +11,7 @@ afterEach(cleanup);
 describe('InlineReferenceChip', () => {
   it('keeps one compact pill geometry with primary text and no close action', () => {
     const { container } = render(
-      <InlineReferenceChip
-        label="src/very-long-file-name.ts"
-        icon={<File />}
-      />,
+      <InlineReferenceChip label="src/very-long-file-name.ts" icon={<File />} />,
     );
     const chip = container.querySelector('[data-inline-reference-chip]');
     expect(chip?.className).toContain('rounded-full');
@@ -32,6 +29,7 @@ describe('InlineReferenceChip', () => {
     expect(screen.queryByRole('button')).toBeNull();
     expect(chip?.getAttribute('draggable')).toBeNull();
     expect(chip?.getAttribute('title')).toBeNull();
+    expect(chip?.getAttribute('tabindex')).toBeNull();
   });
 
   // 剪贴板契约。复制一段聊天消息时 Chromium 会把选区原样序列化进 text/html:
@@ -40,9 +38,7 @@ describe('InlineReferenceChip', () => {
   //   - `user-select: none` 让文字连 text/plain 都进不了剪贴板。
   // 两条都会让用户复制出来的消息**缺内容**,所以固化成回归测试。
   it('stays a <span> even when interactive, so pasted HTML keeps the label', () => {
-    const { container } = render(
-      <InlineReferenceChip label="endpoint.json" onClick={() => {}} />,
-    );
+    const { container } = render(<InlineReferenceChip label="endpoint.json" onClick={() => {}} />);
     const chip = container.querySelector('[data-inline-reference-chip]');
     expect(chip?.tagName).toBe('SPAN');
     expect(container.querySelector('button')).toBeNull();
@@ -69,12 +65,35 @@ describe('InlineReferenceChip', () => {
     const user = userEvent.setup();
     let clicks = 0;
     const { container } = render(
-      <InlineReferenceChip label="endpoint.json" onClick={() => { clicks += 1; }} />,
+      <InlineReferenceChip
+        label="endpoint.json"
+        onClick={() => {
+          clicks += 1;
+        }}
+      />,
     );
     const chip = container.querySelector('[data-inline-reference-chip]') as HTMLElement;
     chip.focus();
     await user.keyboard('{Enter}');
     await user.keyboard(' ');
     expect(clicks).toBe(2);
+  });
+
+  it('keeps primary activation and the keyboard menu independent', () => {
+    const onClick = vi.fn();
+    const onContextMenu = vi.fn();
+    render(
+      <InlineReferenceChip label="Reference" onClick={onClick} onContextMenu={onContextMenu} />,
+    );
+    const chip = screen.getByRole('button', { name: 'Reference' });
+    expect(chip.classList.contains('underline')).toBe(true);
+    expect(chip.classList.contains('cursor-pointer')).toBe(true);
+    fireEvent.keyDown(chip, { key: 'Enter', shiftKey: true });
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(onClick.mock.calls[0][0].shiftKey).toBe(true);
+    expect(onContextMenu).not.toHaveBeenCalled();
+    fireEvent.keyDown(chip, { key: 'F10', shiftKey: true });
+    expect(onContextMenu).toHaveBeenCalledOnce();
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });

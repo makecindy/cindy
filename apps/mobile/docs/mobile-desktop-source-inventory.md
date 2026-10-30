@@ -1,5 +1,7 @@
 # Cindy Mobile Desktop Source Inventory
 
+> 自动化范围修订（2026-09-27）：手机已移除旧 Scheduler 管理页和 Routines，包括「所有任务」下拉及伙伴资料入口；不再把查看、创建、编辑或运行规则列为手机交付、后续计划或验收项。PC 管理与执行、已有任务数据和运行历史保留。本文所有旧自动化管理实现、原型验证和计划记录仅作历史背景，不代表待恢复功能；当前边界以[伙伴运行时合同](../../../docs/product-rules/cindy-bots-runtime.md)为准。
+
 > 日期: 2026-06-17
 > 目标: 从桌面版源码逐项反推手机版远程控制需要覆盖的界面、内容、状态和测试条件。
 > V1 边界: 除完整协作 / Orca 编排外,把普通单会话远程控制和非协作附属能力做完整。协作会话 V1 只识别、只读、安全降级。
@@ -48,7 +50,7 @@ V1 的判断标准:
 | 会话详情 | 消息流、发送、停止、队列、pending interactions、基础会话动作 | diff、context/cost detail、fork/rewind、媒体增强 | 多窗/多 pane 级能力 |
 | 新会话 | 选择远程电脑、工作区、agent/model/permission/fast、首条消息 | extra dirs、附件、slash、@、语音 | 项目模板和高级工作流 |
 | 文件 | 工具引用文件卡、只读文件预览 | 文件树、文件 tabs、同目录 session tabs | 完整编辑器、dirty/conflict/save |
-| 自动化 | 查看 schedules、运行历史、run now、pause/resume | 创建/编辑普通 schedule、模板参数 | project automation 完整管理 |
+| 自动化管理 | 手机已移除，保留已有任务与运行历史 | 不再计划手机创建/编辑 | 不再计划手机高级管理；PC 功能保留 |
 | 协作 | 识别 lead/worker,安全只读提示 | worker 快速跳转 | 完整 Orca 移动编排 |
 
 ## 4. 手机信息架构
@@ -61,7 +63,7 @@ V1 的判断标准:
 | Devices | remote projects / controllable computers | 二级/调试入口。展示同账号电脑、不可控原因、撤权、同步失败和重新同步,不作为进入会话的必经路径。 |
 | Session | `/cc-agent/:sessionId` | 主控制面。消息流常驻,底部根据 pending interaction 或 composer 切换。 |
 | New | `/cc-agent/new` | 从选中电脑创建远程会话。手机不选择本机 cwd,只选择电脑端可用工作区。 |
-| Automations | `/cc-agent/scheduled` | 移动版计划任务。V1 先看和运行,V1B 创建/编辑。 |
+| Automations（已移除） | 桌面 Scheduler 继续保留 | 手机无管理入口，旧链接仅跳转设备页。 |
 | Files | `/cc-agent/files/:sessionId` | V1B 只读文件页。完整编辑留 V2。 |
 | Settings | 登录、设备、relay、debug | mock login / Feishu login / 退出、设备名、日志导出。手机版第一刀已拆成独立 `/settings` 主窗口;被控权限开关仍归桌面端设置。 |
 
@@ -483,7 +485,9 @@ V1B:
 - search 可 V1B。
 - edit mode V2。
 
-## 12. 自动化 / 计划
+## 12. 自动化 / 计划（桌面事实与手机历史设计）
+
+本节手机管理方案均已退役，不作为当前实现、后续排期或验收要求。桌面行为和已有任务运行历史不受影响。
 
 ### 12.1 SchedulerPage
 
@@ -846,13 +850,12 @@ V2 需要单独设计:
 - diff。
 - context/cost detail。
 - file preview。
-- automations read/run/pause/resume。
-- schedule create/edit basic。
+- 手机管理入口保持移除；既有任务与运行历史仍可保留。
 
 验收:
 
 - 非协作常用桌面能力在手机端有入口。
-- 文件编辑、完整 project automation、完整 Orca 明确降级。
+- 文件编辑、完整 Orca 明确降级；project automation 管理仅保留桌面端。
 
 ### Phase 7: 自动化回归和调优
 
@@ -879,7 +882,7 @@ V1 完成不是“能发消息”,而是以下条件全部成立:
 - Permission / Ask User / Plan Review 都可完成;Issue Confirm 提示回桌面端处理。
 - 模型、effort、permission、fast 与桌面 session 状态同步。
 - fork/rewind/diff/context/cost 有移动入口或明确 V1B 完成项。
-- 自动化计划至少可查看、运行、暂停、恢复;创建/编辑进入 V1B。
+- 手机不提供 Scheduler / Routines 管理；旧链接安全跳转，已有任务和运行历史保留。
 - 文件引用可查看;完整编辑器明确 V2。
 - 协作 session 可识别并安全降级。
 - iOS Simulator 和 Android Emulator 至少各有一条自动 smoke 路径。

@@ -6,6 +6,21 @@
 - **本地打开**：浏览器直接打开本目录 `index.html`（自包含，无需起服务）
 - 上游 review 的 UI 证据入口是本目录的 [`index.html`](./index.html)（仓内 `.html` 链接）；内网地址作为体验入口
 
+## 登录倒计时数据更新
+
+验证码重发统一为 60 秒。仓内提供可复现的机械更新入口，不依赖未入仓的 qa-hifi-demo 工具链：
+
+```bash
+node docs/design-previews/update-login-truth.mjs
+node docs/design-previews/update-login-truth.mjs --check
+pnpm check:dev-docs
+```
+
+该入口调用两份 `extract.mjs` 读取当前产品源码，同步 `truth.json` 和 HTML 内嵌数据，并保留
+原有 script 包装与安全转义；检查模式会比较提取结果、文件和内嵌数据。提取器同时读取 DS-8
+生成的颜色默认值。完整机械刷新也同步此前已发生的布局、文案和来源 hash 变化。
+此检查不替代下方 A–F 动态验收；既有 `report.json` 仍为已标注过期的历史快照。
+
 ## 本轮改了什么（demo 追平产品）
 
 本 demo 建于 2026-07-27，主题是当时那条**登录改版**分支。其移动端部分后来**未进 `main`**，

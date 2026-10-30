@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   useReviewFileDiffs: vi.fn(),
   useLastTurnFilter: vi.fn(),
   getTurnChangeSets: vi.fn(),
+  invoke: vi.fn(),
 }));
 
 vi.mock('../useReviewGitState', () => ({
@@ -71,7 +72,7 @@ describe('useReviewSource', () => {
     mocks.getTurnChangeSets.mockReset();
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { maker: { getTurnChangeSets: mocks.getTurnChangeSets } },
+      value: { maker: { getTurnChangeSets: mocks.getTurnChangeSets }, deviceLink: { invoke: mocks.invoke } },
     });
   });
 
@@ -117,6 +118,22 @@ describe('useReviewSource', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toBe(REVIEW_TURN_LOCAL_ONLY_ERROR);
+    expect(mocks.getTurnChangeSets).not.toHaveBeenCalled();
+  });
+
+  it('opens the selected remote message snapshot without reading local Git or local history', async () => {
+    const recordedDiff = diff('remote.txt');
+    mocks.invoke.mockResolvedValue({ ok: true, result: [{ id: 'set-1', state: 'complete', diffs: [recordedDiff] }] });
+    const { result } = renderHook(() => useReviewSource(
+      { kind: 'turn-set', targetSessionId: 'remote-task', changeSetIds: ['set-1'] },
+      'host-session',
+      { hideWhitespace: false, deviceLinkDeviceId: 'device', remoteHostId: null },
+    ));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.diffs).toEqual([recordedDiff]);
+    expect(mocks.invoke).toHaveBeenCalledWith('device', 'git-review:remote-op', [
+      { op: 'turn-get', payload: { sessionId: 'remote-task', ids: ['set-1'] } },
+    ]);
     expect(mocks.getTurnChangeSets).not.toHaveBeenCalled();
   });
 

@@ -1,0 +1,231 @@
+/**
+ * 伙伴发起的可追踪任务在消息流中的结构化标记。
+ *
+ * 事实源仍是 `bot_delegations` 行。这里是父任务消息流里的持久锚点，让 renderer 在原位
+ * 投影唯一任务卡与补充消息留痕。字段名 `botCollaboration` 为 v1 持久化兼容保留。
+ *
+ * 设计约束：
+ *  - 只增不改。老数据（没有本标记的镜像消息）继续按普通文本渲染，不回填、不迁移。
+ *  - 写进 `messages.agent_meta`（JSON 列）的 `botCollaboration` 字段，不动 schema。
+ *  - 只承载呈现所需的**冻结快照**（当时的名字），不做权限判据：能不能打开对方任务
+ *    仍由既有的会话可见性决定，本标记不放宽任何边界。
+ */
+
+/** 后台任务标记在某条消息上的用途。后三种只用于读取旧数据，不再生成或展示。 */
+export type BotCollaborationRole =
+  /** 父任务：启动时写下的任务卡锚点（空正文，只为承载卡片）。 */
+  | 'delegation-request'
+  /** Immutable receipt of one completed execution, separate from the original task anchor. */
+  | 'delegation-result'
+  /** 历史：父任务里的目标伙伴结果。 */
+  | 'guest-result'
+  /** 父任务：发起方给进行中任务追加消息的留痕。 */
+  | 'interjection'
+  /** 历史：目标伙伴主任务里的请求镜像。 */
+  | 'guest-request'
+  /** 历史：目标伙伴主任务里的终态镜像。 */
+  | 'result-mirror';
+
+export interface BotCollaborationMeta {
+  v: 1;
+  role: BotCollaborationRole;
+  delegationId: string;
+  /** 发起后台任务的伙伴。 */
+  fromBotId: string;
+  fromBotName: string;
+  /** 新数据恒为 null；非 null 只可能来自旧版具名伙伴任务。 */
+  toBotId: string | null;
+  toBotName: string;
+  /** 发起方任务；目标侧镜像据此回跳，看得到「这活是谁派的」。 */
+  parentSessionId: string | null;
+  /** 目标执行用的子任务；发起方侧据此跳过去看 TA 的完整对话。 */
+  childSessionId: string | null;
+  /** 委派目标摘要，用于卡片折叠态文案。 */
+  objective: string;
+  /**
+   * 仅 `interjection`：补充消息的首行摘要（≤ BOT_INTERJECTION_PREVIEW_MAX 字），
+   * 让主聊天留痕说清楚「告诉了后台任务什么」。完整指令仍只保存在后台任务里；
+   * 旧记录没有此字段，留痕回退为通用文案。
+   */
+  interjectionPreview?: string;
+  result?: {
+    /** Task title at completion; older receipts fall back to the known task title. */
+    title?: string;
+    /** Child task directory on its host; used to resolve remote artifact links. */
+    workingDir?: string;
+    runSequence: number;
+    status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
+    text: string;
+    /** Frozen failure detail, only revealed on demand; never the primary label. */
+    error?: string;
+    artifacts: Array<{ absolutePath: string }>;
+  };
+}
+
+/** Maximum trimmed note length, in UTF-16 code units; shared by delivery UI and host validation. */
+export const BOT_INTERJECTION_MAX_CHARS = 4_000;
+
+/** 补充消息留痕摘要的上限：只取首行，主聊天不复制完整指令。 */
+export const BOT_INTERJECTION_PREVIEW_MAX = 200;
+
+/** First non-empty line, bounded; never the full instruction. */
+export function botInterjectionPreview(text: string): string {
+  const line = text.split(/\r?\n/).map((value) => value.trim()).find(Boolean) ?? '';
+  return Array.from(line).slice(0, BOT_INTERJECTION_PREVIEW_MAX).join('');
+}
+
+const ROLES = new Set<BotCollaborationRole>([
+  'delegation-request',
+  'delegation-result',
+  'guest-result',
+  'interjection',
+  'guest-request',
+  'result-mirror',
+]);
+
+function optionalId(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string') return value;
+  return undefined;
+}
+
+/**
+ * 严格解析：形状不对一律当作「没有标记」，退回普通文本渲染。宁可少一张卡，
+ * 也不要把无法核实的身份贴到别人的气泡上。
+ */
+export function readBotCollaborationMeta(value: unknown): BotCollaborationMeta | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (raw.v !== 1) return null;
+  if (typeof raw.role !== 'string' || !ROLES.has(raw.role as BotCollaborationRole)) return null;
+  if (typeof raw.delegationId !== 'string' || !raw.delegationId) return null;
+  if (typeof raw.fromBotId !== 'string' || !raw.fromBotId) return null;
+  if (raw.toBotId !== null && (typeof raw.toBotId !== 'string' || !raw.toBotId)) return null;
+  if (typeof raw.fromBotName !== 'string' || typeof raw.toBotName !== 'string') return null;
+  if (typeof raw.objective !== 'string') return null;
+  const parentSessionId = optionalId(raw.parentSessionId);
+  const childSessionId = optionalId(raw.childSessionId);
+  if (parentSessionId === undefined || childSessionId === undefined) return null;
+  const receipt = raw as unknown as BotCollaborationMeta;
+  if (receipt.role === 'delegation-result' && (!receipt.result || !Number.isSafeInteger(receipt.result.runSequence)
+    || receipt.result.runSequence < 1 || !['completed', 'failed', 'cancelled', 'timed-out'].includes(receipt.result.status)
+    || (receipt.result.workingDir !== undefined && typeof receipt.result.workingDir !== 'string')
+    || (receipt.result.title !== undefined && typeof receipt.result.title !== 'string')
+    || (receipt.result.error !== undefined && typeof receipt.result.error !== 'string')
+    || typeof receipt.result.text !== 'string' || !Array.isArray(receipt.result.artifacts)
+    || receipt.result.artifacts.some((file) => !file || typeof file.absolutePath !== 'string'))) return null;
+  return {
+    v: 1,
+    role: raw.role as BotCollaborationRole,
+    delegationId: raw.delegationId,
+    fromBotId: raw.fromBotId,
+    fromBotName: raw.fromBotName,
+    toBotId: raw.toBotId,
+    toBotName: raw.toBotName,
+    parentSessionId,
+    childSessionId,
+    ...(receipt.result ? { result: receipt.result } : {}),
+    objective: raw.objective,
+    ...(raw.role === 'interjection' && typeof raw.interjectionPreview === 'string'
+      && botInterjectionPreview(raw.interjectionPreview)
+      ? { interjectionPreview: botInterjectionPreview(raw.interjectionPreview) }
+      : {}),
+  };
+}
+
+/** 委派相关消息的幂等 clientId 前缀，main 与测试共用同一份常量。 */
+export const BOT_DELEGATION_CLIENT_ID = {
+  resultRun: (delegationId: string, runSequence: number) =>
+    `bot-delegation-result:${delegationId}:${runSequence}`,
+  /** 父任务里的任务卡锚点。 */
+  parentRequest: (delegationId: string) => `bot-delegation-request:${delegationId}`,
+  /** 父任务里的结果回传（历史值，不可改）。 */
+  completion: (delegationId: string) => `bot-delegation-completion:${delegationId}`,
+  /** 同一任务结束后继续执行时，每一轮必须有独立的完成回执。首轮保持历史值兼容。 */
+  completionRun: (delegationId: string, runSequence: number) =>
+    runSequence <= 1
+      ? `bot-delegation-completion:${delegationId}`
+      : `bot-delegation-completion:${delegationId}:${runSequence}`,
+  /** 插话：投进子任务的那条。 */
+  interjection: (delegationId: string, token: string) =>
+    `bot-delegation-interject:${delegationId}:${token}`,
+  /** 插话：留在父任务里的留痕。 */
+  interjectionMirror: (delegationId: string, token: string) =>
+    `bot-delegation-interject-mirror:${delegationId}:${token}`,
+} as const;
+
+export type BotDelegationInterjectResult =
+  | {
+      ok: true;
+      delegationId: string;
+      childSessionId: string;
+      /** 子任务当时是否正忙：忙则本条进它的输入队列，当前回合结束后被读到。 */
+      queued: boolean;
+    }
+  | { ok: false; errorCode: string; message: string };
+
+/**
+ * Place a task anchor after its initiating explanation, preserving identity and all
+ * other message order. Hidden user triggers are boundaries too: a finished task
+ * must never migrate beneath the later completion reply. Each card follows the
+ * next visible explanation in its own turn; without one, it stays where it was.
+ */
+export function placeBotTaskCardsAfterIntroduction<T>(
+  messages: readonly T[],
+  classify: (message: T) => 'boundary' | 'task' | 'prose' | 'other',
+): T[] {
+  const output: T[] = [];
+  let turn: T[] = [];
+  const flush = () => {
+    // Match anchors to the nearest following prose, rather than the first prose
+    // of the turn: "I'll take a look" before dispatch is not its launch report.
+    let nextProse = -1;
+    const movable = new Set<number>();
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const kind = classify(turn[index]);
+      if (kind === 'prose') nextProse = index;
+      else if (kind === 'task' && nextProse >= 0) movable.add(index);
+    }
+    const pending: T[] = [];
+    for (let index = 0; index < turn.length; index += 1) {
+      if (movable.has(index)) pending.push(turn[index]);
+      else {
+        output.push(turn[index]);
+        if (classify(turn[index]) === 'prose') output.push(...pending.splice(0));
+      }
+    }
+    turn = [];
+  };
+  for (const message of messages) {
+    if (classify(message) === 'boundary') flush();
+    turn.push(message);
+  }
+  flush();
+  return output;
+}
+
+/** Only host-bound, frozen receipts may become attachments to a sealed reply. */
+export function readBotTaskResults(value: unknown): BotCollaborationMeta[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap(raw => {
+    const card = readBotCollaborationMeta(raw);
+    if (card?.role !== 'delegation-result' || !card.result) return [];
+    const key = botTaskResultKey(card);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [card];
+  });
+}
+
+export function botTaskResultKey(card: BotCollaborationMeta): string {
+  return BOT_DELEGATION_CLIENT_ID.resultRun(card.delegationId, card.result!.runSequence);
+}
+
+/** Completion ids are host-generated; never parse the model's prose for ownership. */
+export function taskResultClientIdForInput(clientId: string): string | null {
+  const match = /^bot-delegation-completion:([^:]+)(?::([1-9]\d*))?$/.exec(clientId);
+  if (!match) return null;
+  const run = match[2] ? Number(match[2]) : 1;
+  return Number.isSafeInteger(run) ? BOT_DELEGATION_CLIENT_ID.resultRun(match[1], run) : null;
+}

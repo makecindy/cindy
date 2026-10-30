@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { NativePullDownAction } from "@/platform/chrome";
 import {
-  buildHomeDisplayMenuItems,
   buildHomeDisplayPullDownActions,
   buildHomeScopeMenuItems,
   buildHomeScopePullDownActions,
-  homeDisplayMenuPatch,
   parseHomeScopePullDownAction,
+  homeDisplayActionPatch,
+  type HomeDisplayMenuState,
 } from "@/session/homeChromeMenus";
 import type { MobileHomeDeviceFilterItem } from "@/session/mobileHome";
 
@@ -26,49 +27,47 @@ function filter(
 }
 
 describe("home chrome menus", () => {
-  it("nests open and rename under each native device scope item", () => {
+  it("keeps cached offline and unknown computers without granting revoked access", () => {
+    const filters = ["offline", "unknown", "access_revoked", "remote_disabled"].map((state) =>
+      filter({ id: state, label: state, deviceId: state, available: false, state, sessionCount: 2 }));
+    expect(buildHomeScopeMenuItems(filters, "All").map((item) => item.key)).toEqual(["offline", "unknown"]);
+    expect(buildHomeScopePullDownActions(filters, "All").map((item) => item.id)).toEqual(["offline", "unknown"]);
+  });
+  it("selects native device scopes directly without a management submenu", () => {
+    const actions = buildHomeScopePullDownActions([
+      filter({ id: "all", label: "全部任务" }),
+      filter({ id: "mac", label: "MacBook", deviceId: "d1", selected: true }),
+      filter({ id: "offline", label: "旧电脑", deviceId: "d2", available: false }),
+    ], "全部任务");
+
+    expect(actions).toEqual([
+      { id: "all", title: "全部任务", state: "off" },
+      { id: "mac", title: "MacBook", state: "on" },
+    ]);
+    expect(actions.every((item) => !item.subactions)).toBe(true);
+  });
+
+  it("places host-advertised collections beside All Sessions", () => {
     const actions = buildHomeScopePullDownActions(
       [
         filter({ id: "all", label: "全部任务", selected: true }),
-        filter({
-          id: "mac",
-          label: "MacBook",
-          deviceId: "d1",
-          selected: false,
-        }),
-        filter({
-          id: "offline",
-          label: "旧电脑",
-          deviceId: "d2",
-          available: false,
-        }),
+        filter({ id: "mac", label: "MacBook", deviceId: "d1" }),
       ],
-      "全部任务",
-      {
-        openLabel: "打开",
-        renameLabel: "重命名",
-        showTasksLabel: "查看任务",
-      },
+      "所有任务",
+      [{ id: "teammates", title: "所有伙伴" }],
     );
 
-    expect(actions.map((item) => item.id)).toEqual(["all", "scope.submenu:mac"]);
-    expect(actions[1]?.subactions?.map((item) => item.id)).toEqual([
+    expect(actions.map((item) => item.id)).toEqual([
+      "all",
+      "scope.collection:teammates",
       "mac",
-      "scope.open:d1",
-      "scope.rename:d1",
     ]);
-    expect(parseHomeScopePullDownAction("scope.open:d1")).toEqual({
-      kind: "open",
-      deviceId: "d1",
+    expect(parseHomeScopePullDownAction("scope.collection:teammates")).toEqual({
+      kind: "collection",
+      collectionId: "teammates",
     });
-    expect(parseHomeScopePullDownAction("scope.rename:d1")).toEqual({
-      kind: "rename",
-      deviceId: "d1",
-    });
-    expect(parseHomeScopePullDownAction("mac")).toEqual({
-      kind: "select",
-      filterId: "mac",
-    });
+    expect(actions[2]).toEqual({ id: "mac", title: "MacBook", state: "off" });
+    expect(parseHomeScopePullDownAction("mac")).toEqual({ kind: "select", filterId: "mac" });
   });
 
   it("lists all-conversations and available devices, marking the selected one", () => {
@@ -96,115 +95,190 @@ describe("home chrome menus", () => {
     expect(items[1]?.label).toBe("MacBook");
   });
 
-  it("maps display rows and toggle/exclusive patches", () => {
-    const items = buildHomeDisplayMenuItems({
-      groupByProject: true,
-      groupByProjectLabel: "按项目分组",
-      groupDialogue: false,
-      groupDialogueLabel: "按对话分组",
-      projectOrder: "activity",
-      projectOrderActivityLabel: "按活动",
-      projectOrderCustomLabel: "手动",
-      showProjectOrder: true,
-      sortBy: "priority",
-      sortByPriorityLabel: "按优先级",
-      sortByTimeLabel: "按时间",
-      statusActiveLabel: "进行中",
-      statusAllLabel: "全部",
-      statusArchivedLabel: "已归档",
-      statusFilter: "active",
+  const displayState: HomeDisplayMenuState = {
+    groupByProject: true,
+    groupDialogue: false,
+    lastActivityFilter: "all",
+    projectFilter: "all",
+    projectOrder: "activity",
+    sortBy: "recency",
+    statusFilter: "active",
+    taskInfoFields: ["time"],
+    vendorFilter: "all",
+    viewMode: "list",
+  };
+  // 用 key 本身当文案,断言不依赖具体语言。
+  const t = (key: string, options?: Record<string, unknown>) =>
+    options?.count === undefined ? key : `${key}:${String(options.count)}`;
+  const build = (state: Partial<HomeDisplayMenuState> = {}) =>
+    buildHomeDisplayPullDownActions({
+      dialogueCount: 4,
+      projects: [
+        { count: 3, key: "p1", subtitle: "MacBook", title: "cindy" },
+        { count: 1, key: "p2", title: "dash" },
+      ],
+      state: { ...displayState, ...state },
+      t,
     });
+  const find = (actions: readonly NativePullDownAction[], id: string): NativePullDownAction | undefined => {
+    for (const action of actions) {
+      if (action.id === id) return action;
+      const nested = action.subactions ? find(action.subactions, id) : undefined;
+      if (nested) return nested;
+    }
+    return undefined;
+  };
 
-    expect(items.map((item) => item.key)).toEqual([
-      "groupByProject",
-      "groupDialogue",
-      "sort.recency",
-      "sort.priority",
-      "projectOrder.activity",
-      "projectOrder.custom",
-      "status.active",
-      "status.archived",
-      "status.all",
-    ]);
-    expect(items.find((item) => item.key === "groupByProject")?.label).toBe(
-      "✓ 按项目分组",
-    );
-    expect(items.find((item) => item.key === "sort.priority")?.label).toBe(
-      "✓ 按优先级",
-    );
-    expect(
-      homeDisplayMenuPatch("groupDialogue", {
-        groupByProject: true,
-        groupDialogue: false,
-      }),
-    ).toEqual({ groupDialogue: true });
-    expect(
-      homeDisplayMenuPatch("status.archived", {
-        groupByProject: true,
-        groupDialogue: false,
-      }),
-    ).toEqual({ statusFilter: "archived" });
-  });
-
-  it("hides project-order rows when grouping is off", () => {
-    const items = buildHomeDisplayMenuItems({
-      groupByProject: false,
-      groupByProjectLabel: "按项目分组",
-      groupDialogue: false,
-      groupDialogueLabel: "按对话分组",
-      projectOrder: "activity",
-      projectOrderActivityLabel: "按活动",
-      projectOrderCustomLabel: "手动",
-      showProjectOrder: true,
-      sortBy: "recency",
-      sortByPriorityLabel: "按优先级",
-      sortByTimeLabel: "按时间",
-      statusActiveLabel: "进行中",
-      statusAllLabel: "全部",
-      statusArchivedLabel: "已归档",
-      statusFilter: "all",
-    });
-    expect(items.some((item) => item.key.startsWith("projectOrder."))).toBe(
-      false,
-    );
-  });
-
-  it("compacts the native display menu so the last status row can fit", () => {
-    const actions = buildHomeDisplayPullDownActions({
-      groupByProject: true,
-      groupByProjectLabel: "按项目分组",
-      groupDialogue: false,
-      groupDialogueLabel: "对话归为一组",
-      groupHeading: "分组",
-      projectOrder: "activity",
-      projectOrderActivityLabel: "按最近活动",
-      projectOrderCustomLabel: "手动",
-      projectOrderHeading: "项目顺序",
-      showProjectOrder: true,
-      sortBy: "recency",
-      sortByPriorityLabel: "优先级",
-      sortByTimeLabel: "按时间排序",
-      sortHeading: "任务排序",
-      statusActiveLabel: "活跃",
-      statusAllLabel: "全部",
-      statusArchivedLabel: "已归档",
-      statusFilter: "active",
-      statusHeading: "状态",
-    });
-
-    expect(actions.map((item) => item.id)).toEqual([
+  it("mirrors the desktop display menu: setting rows with current values and submenus", () => {
+    const actions = build();
+    expect(actions.map((item) => item.id)).toEqual(["organize", "narrow", "appearance"]);
+    expect(actions.every((item) => item.displayInline && !item.preferredElementSize)).toBe(true);
+    expect(actions.flatMap((item) => item.subactions?.map((row) => row.id) ?? [])).toEqual([
       "group",
       "sort",
       "projectOrder",
       "status",
+      "filter",
+      "view",
+      "taskInfo",
+      "teammates",
     ]);
-    expect(
-      actions.every((item) => item.preferredElementSize === "medium"),
-    ).toBe(true);
-    expect(actions.at(-1)?.subactions?.map((item) => item.id)).toEqual([
-      "status.active",
-      "status.archived",
-      "status.all",
+    expect(find(actions, "group")?.subtitle).toBe("devices.list.menu.groupProject");
+    expect(find(actions, "sort")?.subtitle).toBe("devices.list.menu.sortBy.recency");
+    expect(find(actions, "sort")?.subactions?.map((item) => item.id)).toEqual([
+      "sort.priority",
+      "sort.recency",
+      "sort.created",
+    ]);
+    expect(find(actions, "sort.priority")?.subtitle).toBe("devices.list.menu.sortByPriorityTip");
+    expect(find(actions, "filter")?.subtitle).toBe("devices.list.menu.summaryNone");
+    expect(find(actions, "filter.reset")?.disabled).toBe(true);
+    expect(find(actions, "view")?.subtitle).toBe("devices.list.menu.view.list");
+    expect(find(actions, "taskInfo")?.subtitle).toBe("devices.list.menu.taskInfo.time");
+    expect(find(actions, "taskInfo")?.subactions?.map((item) => [item.id, item.state, item.keepPresented])).toEqual([
+      ["taskInfo.time", "on", true],
+      ["taskInfo.pr", "off", true],
+      ["taskInfo.tokens", "off", true],
+      ["taskInfo.cost", "off", true],
     ]);
   });
+
+  it("keeps the menu shape stable for every option that keeps the menu presented", () => {
+    // iOS 只能原地刷新结构相同的菜单;结构一变就得整份替换,打开中的菜单会退回根层。
+    // 不变量:任何 keepPresented 选项点下去后,菜单的 id 层级不变(只允许勾选 / 副标题 / 禁用变化)。
+    const shape = (actions: readonly NativePullDownAction[]): unknown =>
+      actions.map((action) => [action.id, action.subactions ? shape(action.subactions) : null]);
+    const keepPresentedIds = (actions: readonly NativePullDownAction[]): string[] =>
+      actions.flatMap((action) => [
+        ...(action.keepPresented ? [action.id] : []),
+        ...(action.subactions ? keepPresentedIds(action.subactions) : []),
+      ]);
+    for (const base of [displayState, { ...displayState, groupByProject: false }, { ...displayState, projectFilter: ["p1"] }]) {
+      const before = build(base);
+      const ids = keepPresentedIds(before);
+      expect(ids.length).toBeGreaterThan(0);
+      for (const id of ids) {
+        const patch = homeDisplayActionPatch(id, { ...displayState, ...base });
+        expect(patch, id).not.toBeNull();
+        expect(shape(build({ ...base, ...patch })), id).toEqual(shape(before));
+      }
+    }
+    // 「按项目分组」会增删「项目排序」子菜单,因此选完收起。
+    expect(find(build(), "group.project")?.keepPresented).toBeFalsy();
+  });
+
+  it("hides project sorting when tasks are not grouped by project", () => {
+    expect(find(build({ groupByProject: false }), "projectOrder")).toBeUndefined();
+    expect(find(build({ groupByProject: false, groupDialogue: false }), "group")?.subtitle)
+      .toBe("devices.list.menu.summaryNone");
+  });
+
+  it("lists every project plus chats in the project filter with counts", () => {
+    const projects = find(build({ projectFilter: ["p2"] }), "filter.projects");
+    expect(projects?.subtitle).toBe("devices.list.menu.filterSelectedProjects:1");
+    const rows = projects?.subactions?.flatMap((item) => item.subactions ?? []) ?? [];
+    expect(rows.map((item) => [item.id, item.state, item.subtitle])).toEqual([
+      ["filter.projects.all", "off", undefined],
+      ["filter.project:dialogue", "off", "4"],
+      ["filter.project:p1", "off", "MacBook · 3"],
+      ["filter.project:p2", "on", "1"],
+    ]);
+    // 「全部」时只勾「所有项目」(它是重置动作,点完收起);项目行只给明确选中的打勾。
+    const allRows = find(build(), "filter.projects")?.subactions?.flatMap((item) => item.subactions ?? []) ?? [];
+    expect(allRows.map((item) => [item.id, item.state, !!item.keepPresented])).toEqual([
+      ["filter.projects.all", "on", false],
+      ["filter.project:dialogue", "off", true],
+      ["filter.project:p1", "off", true],
+      ["filter.project:p2", "off", true],
+    ]);
+    const active = build({ lastActivityFilter: "7d", projectFilter: ["p2"], vendorFilter: "codex" });
+    expect(find(active, "filter")?.subtitle).toBe("devices.list.menu.filterSummaryActive:3");
+    expect(find(active, "filter.reset")?.disabled).toBe(false);
+  });
+
+  it("summarizes task info in the order the user checked it", () => {
+    expect(find(build({ taskInfoFields: ["cost", "time"] }), "taskInfo")?.subtitle).toBe(
+      "devices.list.menu.taskInfo.cost" + "devices.list.menu.summarySeparator" + "devices.list.menu.taskInfo.time",
+    );
+    expect(find(build({ taskInfoFields: [] }), "taskInfo")?.subtitle).toBe("devices.list.menu.summaryNone");
+  });
+
+  it("selects multiple teammates and explicitly returns to any source", () => {
+    const options = [{ key: "cindy", title: "Cindy" }, { key: "filo", title: "Filo" }];
+    let state = { ...displayState };
+    for (const key of ["cindy", "filo"]) state = { ...state, ...homeDisplayActionPatch(`filter.teammate:${key}`, state) };
+    const actions = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(state.teammateFilter).toEqual(["cindy", "filo"]);
+    expect(find(actions, "filter.teammates.all")?.state).toBe("off");
+    expect(find(actions, "filter.teammate:cindy")).toMatchObject({ state: "on", keepPresented: true });
+    expect(find(actions, "filter.teammate:filo")?.state).toBe("on");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:cindy", state) };
+    state = { ...state, ...homeDisplayActionPatch("filter.teammate:filo", state) };
+    expect(state.teammateFilter).toBe("all");
+    state = { ...state, ...homeDisplayActionPatch("filter.teammates.none", state) };
+    expect(state.teammateFilter).toBe("none");
+    const hidden = buildHomeDisplayPullDownActions({ state, teammates: options, projects: [], dialogueCount: 0, t });
+    expect(find(hidden, "filter.teammates.none")?.state).toBe("on");
+    expect(find(hidden, "filter.teammate:cindy")?.state).toBe("off");
+    expect(homeDisplayActionPatch("filter.teammate:cindy", state)).toEqual({ teammateFilter: ["cindy"] });
+    expect(homeDisplayActionPatch("filter.teammates.all", { ...state, teammateFilter: ["cindy"] })).toEqual({ teammateFilter: "all" });
+  });
+
+  it("maps menu actions to preference patches", () => {
+    expect(homeDisplayActionPatch("group.dialogue", displayState)).toEqual({ groupDialogue: true });
+    expect(homeDisplayActionPatch("group.project", displayState)).toEqual({ groupByProject: false });
+    expect(homeDisplayActionPatch("sort.created", displayState)).toEqual({ sortBy: "created" });
+    expect(homeDisplayActionPatch("projectOrder.custom", displayState)).toEqual({ projectOrder: "custom" });
+    expect(homeDisplayActionPatch("status.archived", displayState)).toEqual({ statusFilter: "archived" });
+    expect(homeDisplayActionPatch("filter.vendor.pi", displayState)).toEqual({ vendorFilter: "pi" });
+    expect(homeDisplayActionPatch("filter.lastActivity.30d", displayState)).toEqual({ lastActivityFilter: "30d" });
+    expect(homeDisplayActionPatch("filter.project:p1", displayState)).toEqual({ projectFilter: ["p1"] });
+    expect(homeDisplayActionPatch("filter.project:p1", { ...displayState, projectFilter: ["p1"] }))
+      .toEqual({ projectFilter: "all" });
+    expect(homeDisplayActionPatch("filter.projects.all", { ...displayState, projectFilter: ["p1"] }))
+      .toEqual({ projectFilter: "all" });
+    expect(homeDisplayActionPatch("filter.reset", displayState)).toEqual({
+      lastActivityFilter: "all",
+      projectFilter: "all",
+      teammateFilter: "all",
+      vendorFilter: "all",
+    });
+    expect(homeDisplayActionPatch("view.text", displayState)).toEqual({ viewMode: "text" });
+    expect(homeDisplayActionPatch("taskInfo.pr", displayState)).toEqual({ taskInfoFields: ["time", "pr"] });
+    expect(homeDisplayActionPatch("taskInfo.time", displayState)).toEqual({ taskInfoFields: [] });
+    expect(homeDisplayActionPatch("sort.bogus", displayState)).toBeNull();
+    expect(homeDisplayActionPatch("group", displayState)).toBeNull();
+  });
+  // Unit: the appearance submenu is distinct from filtering teammate-created tasks.
+  // Existing menu tests did not cover this independently checked, default-on action and the first click with no stored override.
+  it('keeps avatars checked by default and toggles an absent or explicit override', () => {
+    const menu = build().find(action => action.id === 'appearance')!;
+    const submenu = menu.subactions!.find(action => action.id === 'teammates')!;
+    expect(submenu.subactions).toEqual([{ id: 'teammates.showCollapsedAvatars', title: 'devices.list.menu.showCollapsedTeammateAvatars', state: 'on' }]);
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', displayState)).toEqual({ showCollapsedTeammateAvatars: false });
+    expect(find(build({ showCollapsedTeammateAvatars: false }), 'teammates.showCollapsedAvatars')?.state).toBe('off');
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: false })).toEqual({ showCollapsedTeammateAvatars: true });
+    expect(homeDisplayActionPatch('teammates.showCollapsedAvatars', { ...displayState, showCollapsedTeammateAvatars: true })).toEqual({ showCollapsedTeammateAvatars: false });
+  });
+
 });

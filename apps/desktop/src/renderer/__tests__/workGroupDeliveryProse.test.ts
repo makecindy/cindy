@@ -143,6 +143,34 @@ describe('交付正文不被收尾动作顶进「已工作 Xs」', () => {
 
     expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
   });
+
+  it('内嵌 markdown 图片的短正文平铺', () => {
+    const pictured = '图表如下 ![chart](https://example.com/chart.png)';
+
+    const items = groupWorkRuns(buildRenderItems(briefThenNotifyTurn(pictured)).items, false);
+
+    expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
+  });
+
+  it('内嵌 raw HTML <img> 的短正文平铺', () => {
+    const pictured = '缩略图:<img src="https://example.com/thumb.png" width="150">';
+
+    const items = groupWorkRuns(buildRenderItems(briefThenNotifyTurn(pictured)).items, false);
+
+    expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
+  });
+
+  it('带图片 / 文件附件的短正文平铺', () => {
+    const messages = briefThenNotifyTurn('报告在附件里。').map((message) =>
+      message.clientId === 'brief'
+        ? { ...message, files: [{ name: 'report.pdf', path: '/tmp/report.pdf' }] }
+        : message,
+    );
+
+    const items = groupWorkRuns(buildRenderItems(messages).items, false);
+
+    expect(topLevelMessageIds(items)).toEqual(['u1', 'brief', 'wrap']);
+  });
 });
 
 // ── 不回归:短进度旁白照旧折叠 ────────────────────────────────────────────────
@@ -156,6 +184,23 @@ describe('进度旁白仍然折进「已工作 Xs」', () => {
 
     expect(topLevelMessageIds(items)).toEqual(['u1', 'wrap']);
     expect(isFoldedIntoWorkGroup(items, 'brief')).toBe(true);
+  });
+
+  it('普通 markdown 链接不算图片,仍折叠', () => {
+    const items = groupWorkRuns(
+      buildRenderItems(briefThenNotifyTurn('先看 [PR](https://github.com/x/y/pull/1) 的 diff。')).items,
+      false,
+    );
+
+    expect(topLevelMessageIds(items)).toEqual(['u1', 'wrap']);
+  });
+
+  it('不带 src 的 img 或自定义 <img-wrapper> 元素不算图片,仍折叠', () => {
+    for (const body of ['说明里提到 <img> 标签。', '<img-wrapper src="https://example.com/a.png">']) {
+      const items = groupWorkRuns(buildRenderItems(briefThenNotifyTurn(body)).items, false);
+
+      expect(topLevelMessageIds(items)).toEqual(['u1', 'wrap']);
+    }
   });
 
   it('只有 2 项列表的旁白不算交付,仍折叠', () => {

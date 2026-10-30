@@ -1,6 +1,5 @@
 import type {
   AndroidMcpDeps,
-  IOSSimulatorMcpDeps,
   BrowserMcpDeps,
   ComputerMcpDeps,
   FeishuBotMcpHostDeps,
@@ -30,7 +29,6 @@ import { createCindyLspMcpServer, detectTypeScriptProject } from './lsp/index.js
 import { createBrowserMcpServer } from './browser/index.js';
 import { createComputerMcpServer } from './computer/index.js';
 import { createAndroidMcpServer } from './android/index.js';
-import { createIOSSimulatorMcpServer } from './ios-simulator/index.js';
 import { resolveLiziMcpSessionContext } from './session-context.js';
 
 export interface CreateLiziMcpProvidersOptions {
@@ -39,8 +37,6 @@ export interface CreateLiziMcpProvidersOptions {
    */
   enabled?: readonly LiziMcpId[];
   android?: AndroidMcpDeps;
-  /** Host-owned embedded iOS Simulator lifecycle and interaction tools. */
-  iosSimulator?: IOSSimulatorMcpDeps;
   /** Browser automation tools. Host injects the neutral runtime implementation. */
   browser?: BrowserMcpDeps;
   /** Local desktop computer-use tools backed by a host-managed external driver. */
@@ -50,8 +46,8 @@ export interface CreateLiziMcpProvidersOptions {
   /**
    * cindy_slack: Slack 网关工具(经 hook 通道由 slack-hook-server 以托管
    * user token 调 Slack 官方 MCP, 接替退役的 cindy-slack 意识)。
-   * workingDir 由 provider 从 ctx 绑定; isEnabled = 桥可用、绑定 confirmed 且
-   * 最近一次 welcome 宣告 slack-tools 能力(所有会话可见, 不按 source 门控)。
+   * workingDir 由 provider 从 ctx 绑定; 共享 bridge 预先注册稳定网关，
+   * 普通会话构建仍按绑定及服务端能力门控，实际调用始终复核实时连接与权限。
    * 对应可关插件 id 'slack'。
    */
   slackHook?: Omit<SlackHookMcpDeps, 'workingDir'>;
@@ -153,6 +149,9 @@ export function createLiziMcpProviders(
           name: 'cindy_browser',
           instance: createBrowserMcpServer({
             ...baseDeps,
+            recipeFiles: baseDeps.recipeFiles
+              ? () => baseDeps.recipeFiles!(resolveLiziMcpSessionContext(ctx).sessionId)
+              : undefined,
             getRuntime: () => {
               const inner = baseDeps.getRuntime();
               return {
@@ -182,20 +181,6 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_android',
         instance: createAndroidMcpServer(opts.android!, {
-          sessionId: ctx.sessionId,
-          getSessionContext: () => resolveLiziMcpSessionContext(ctx),
-        }),
-      }),
-    });
-  }
-
-  if (opts.iosSimulator && selected(enabled, 'ios_simulator')) {
-    providers.push({
-      name: 'cindy_ios_simulator',
-      toClaudeSdkConfig: (ctx) => ({
-        type: 'sdk',
-        name: 'cindy_ios_simulator',
-        instance: createIOSSimulatorMcpServer(opts.iosSimulator!, {
           sessionId: ctx.sessionId,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),
         }),
@@ -267,10 +252,29 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_feishu_bot',
         instance: createFeishuBotMcpServer({
-          getChatId: () =>
-            readFeishuChatId(ctx) ?? opts.feishuBot!.getOwnerOpenId() ?? null,
-          sendFile: opts.feishuBot!.sendFile,
-          sendMessage: opts.feishuBot!.sendMessage,
+          // 每个 host dep 都带上当前 tool-call 的 session:宿主据此选出这一轮真正要
+          // 出站的 bot(个人设置页那份,或触发本轮的伙伴自有连接)。
+          getChatId: async () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            return readFeishuChatId(current) ?? await opts.feishuBot!.getOwnerOpenId(current) ?? null;
+          },
+          sendFile: (chatId, absPath, displayName) =>
+            opts.feishuBot!.sendFile(chatId, absPath, displayName, resolveLiziMcpSessionContext(ctx)),
+          sendMessage: (chatId, text) => {
+            // Codex's shared bridge only has the calling session at tool-call time.
+            const current = resolveLiziMcpSessionContext(ctx);
+            return opts.feishuBot!.sendMessage(
+              chatId, text, readFeishuChatId(current) ? undefined : current.sessionId, current,
+            );
+          },
+          // 轮次内直通工具的作用域:逐轮租约,不来自模型参数;非飞书轮次为 null。
+          // 工作目录取本次 tool-call 的 session ctx(与 cindy_telegram_bot 同源)。
+          getLaneScope: () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            const scope = opts.feishuBot!.readLaneScope?.(current);
+            if (!scope) return null;
+            return current.workingDir ? { ...scope, workingDir: current.workingDir } : scope;
+          },
           // slack-hook 会话里按来源在构建期注入渠道路由提示,
           // 把「发给我」的默认通道钉死在会话自身渠道(规则 9)。
           sessionSource: readSessionSource(ctx),
@@ -304,11 +308,12 @@ export function createLiziMcpProviders(
   if (opts.slackHook && selected(enabled, 'cindy_slack')) {
     providers.push({
       name: 'cindy_slack',
-      // 会话构建期门控: 桥已注册、绑定 confirmed、最近一次成功 welcome 宣告
-      // slack-tools 才挂工具面。瞬时断线不撤 provider(避免重建 Codex),调用期由
-      // connected fail-closed 复查兜底;重连到不同 server 后 manager 会按新 welcome
-      // 刷新此 gate。server 侧还有 NOT_BOUND 的最终防线。
-      isEnabled: () => {
+      // Shared Codex/Pi bridges outlive Slack binding changes. Register the stable
+      // gateway before binding so an existing runtime can recover without closing
+      // unrelated sessions. Every call still reads the live bridge and its binding,
+      // connection, server capabilities and account authorization.
+      isEnabled: (ctx) => {
+        if ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir) return true;
         const bridge = opts.slackHook!.getBridge();
         if (bridge === null) return false;
         const a = bridge.availability();
@@ -318,7 +323,10 @@ export function createLiziMcpProviders(
         type: 'sdk',
         name: 'cindy_slack',
         instance: createSlackMcpGatewayServer({
+          compressInlineImage: opts.slackHook!.compressInlineImage,
           getBridge: opts.slackHook!.getBridge,
+          withAccountDataAccess: opts.slackHook!.withAccountDataAccess,
+          getSessionContext: () => resolveLiziMcpSessionContext(ctx),
           // 大结果落盘的钳制根: 绑定当前会话工作目录(空 = 只截断不落盘)
           ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
           ...(opts.slackHook!.logger !== undefined ? { logger: opts.slackHook!.logger } : {}),
@@ -330,8 +338,7 @@ export function createLiziMcpProviders(
   if (opts.scheduler && selected(enabled, 'cindy_scheduler')) {
     providers.push({
       name: 'cindy_scheduler',
-      // 第一版无门控：cc / codex 任何 session 都能用 schedule_* 工具。
-      // 与 IPC 层 maker.schedule.* 同源（renderer 也是任何窗口都能调）。
+      // Host 可按实时任务来源限制账号调度数据；独立 Renderer IPC 保持原路径。
       // 绑定 ctx 仅为 schedule_silence_current_run / schedule_notify_current_run 服务：
       // 它们据 sessionId 反查本会话当前 in-flight run,免去 agent 传 runId
       // (杜绝传参漂移 + caller-ownership)。
@@ -379,7 +386,9 @@ export function createLiziMcpProviders(
       toClaudeSdkConfig: (ctx) => ({
         type: 'sdk',
         name: 'cindy_helper',
-        instance: createXdtHelperMcpServer(opts.xdtHelper!, {
+        instance: createXdtHelperMcpServer({ ...opts.xdtHelper!,
+          ...(opts.xdtHelper!.botRoutines ? { botRoutines: { ...opts.xdtHelper!.botRoutines, scheduler: opts.scheduler } } : {}),
+        }, {
           agentKind: ctx.agentKind === 'codex' ? 'codex' : ctx.agentKind === 'pi' ? 'pi' : 'claude-code',
           workingDir: ctx.workingDir,
           ...(ctx.getSessionContext ? { getSessionContext: ctx.getSessionContext } : {}),
@@ -446,14 +455,22 @@ export function createLiziMcpProviders(
       // Codex 端: 第一次 host spawn 时 prepareCodexExtraSpawnConfig 调本函数, host
       //   长生命周期下后续 disable 不影响已 spawn 的 host (老 thread 仍看到 server,
       //   但 withStore 会用 MAKER_MEMORY_NOT_READY 兜底)。
-      isEnabled: () => opts.memory!.getManager().isEnabled(),
+      isEnabled: (ctx) =>
+        ctx.memoryScopeKey?.startsWith('bot:') === true
+        // Shared Codex/Pi bridges are assembled before a concrete Session
+        // exists. Keep the factory structurally present there; each Session
+        // descriptor still removes it when neither global nor Bot Memory applies.
+        || ((ctx.agentKind === 'codex' || ctx.agentKind === 'pi') && !ctx.workingDir)
+        || opts.memory!.getManager().isEnabled(),
       toClaudeSdkConfig: (ctx) => ({
         type: 'sdk',
         name: 'cindy_memory',
         instance: createCindyMemoryMcpServer({
           getManager: opts.memory!.getManager,
+          withAccountDataAccess: opts.memory!.withAccountDataAccess,
           workdir: ctx.workingDir,
           getSessionContext: () => resolveLiziMcpSessionContext(ctx),
+          beginWrite: opts.memory!.beginWrite,
           ...(opts.memory!.searchSessions ? { searchSessions: opts.memory!.searchSessions } : {}),
           ...(opts.memory!.logger ? { logger: opts.memory!.logger } : {}),
         }),
@@ -468,10 +485,10 @@ export function createLiziMcpProviders(
       // token); Codex host 长生命周期下运行期关闭由 withContacts 的
       // CONTACTS_NOT_READY 工具级拦截兜底。
       ...(opts.contacts.isEnabled ? { isEnabled: () => opts.contacts!.isEnabled!() } : {}),
-      toClaudeSdkConfig: () => ({
+      toClaudeSdkConfig: (ctx) => ({
         type: 'sdk',
         name: 'cindy_contacts',
-        instance: createCindyContactsMcpServer(opts.contacts!),
+        instance: createCindyContactsMcpServer({ ...opts.contacts!, getSessionContext: () => resolveLiziMcpSessionContext(ctx) }),
       }),
     });
   }

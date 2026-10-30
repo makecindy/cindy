@@ -56,6 +56,11 @@ export interface ProcessUsageEntry {
   processInstanceId?: string;
   /** 仅 Codex 条目可有；普通任务共享宿主与账户/模型控制面服务据此消歧。 */
   agentRole?: AgentProcessRole;
+  /**
+   * 本机 Agent 根进程承载的任务标题（main 在采样时从本地库解析，缺省 =
+   * 无归属或解析不可用）。只含标题文本，不含路径、id 或命令行。
+   */
+  sessionLabel?: string;
 }
 
 export interface ProcessMonitorSample {

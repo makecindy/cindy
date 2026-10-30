@@ -48,8 +48,13 @@
   },
   "presentation": {
     "grid": {
-      "today": "Today {{time}}", "yesterday": "Yesterday {{time}}", "empty": "Folder is empty",
-      "summaryMixed": "{{dirs}} folders, {{files}} files", "summaryDirs": "{{count}} folders", "summaryFiles": "{{count}} files", "workdir": "Working directory"
+      "today": "Today {{time}}",
+      "yesterday": "Yesterday {{time}}",
+      "empty": "Folder is empty",
+      "summaryMixed": "{{dirs}} folders, {{files}} files",
+      "summaryDirs": "{{count}} folders",
+      "summaryFiles": "{{count}} files",
+      "workdir": "Working directory"
     },
     "preview": {
       "nonText": {
@@ -66,8 +71,8 @@
       "idle": "The remote text preview is loaded on demand; file contents aren't fetched in bulk in the message list.",
       "failure": {
         "oversize": "File exceeds the remote preview limit · {{limit}} · Current size {{size}}",
-        "forbidden": "The controlled computer denied access to this path.",
-        "notFound": "The file wasn't found on the controlled computer.",
+        "forbidden": "The remote computer denied access to this path.",
+        "notFound": "The file wasn't found on the remote computer.",
         "readFailed": "Read failed.",
         "readFailedWithError": "Read failed: {{error}}",
         "default": "This file can't be previewed."
@@ -75,6 +80,14 @@
     }
   },
   "preview": {
+    "browserBack": "Back",
+    "browserForward": "Forward",
+    "browserMore": "More actions",
+    "browserShowSource": "View source",
+    "browserShowPage": "Back to webpage",
+    "browserShowDocument": "View document",
+    "browserAddToTask": "Add to current task",
+    "browserFileInfo": "File information",
     "done": "Done",
     "a11yShare": "Export and share",
     "copyPath": "Copy Path",
@@ -84,6 +97,8 @@
     "downloadFailed": "Download failed",
     "fetchingVideo": "Fetching video from your computer…",
     "fetchingAudio": "Fetching audio from your computer…",
+    "videoBuffering": "Buffering…",
+    "videoBufferingPercent": "Buffering {{percent}}%",
     "fetchAvFailed": "Fetch failed: {{detail}}",
     "fetchPdfFailed": "PDF fetch failed: {{detail}}",
     "fetchingPdf": "Fetching PDF from your computer…",
@@ -94,13 +109,15 @@
     "readFailed": "Read failed",
     "truncated2mb": "File exceeds 2 MB; showing the first 2 MB only",
     "truncatedLines": "Showing the first {{lines}} lines only",
+    "htmlUpdateMobile": "Update Cindy on this phone to preview webpages. You can still view the source.",
+    "htmlUpdateDesktop": "Update Cindy on the connected computer to preview this webpage.",
+    "htmlSnapshotTooLarge": "This folder is too large to preview. Move the webpage and its assets into a smaller folder.",
+    "htmlSnapshotFailed": "Could not load this webpage. Check the connection and try again.",
+    "htmlReload": "Reload webpage",
     "fetchingHtmlResources": "Fetching page resources…",
     "htmlResourcesMissing": "{{count}} page resource(s) could not be fetched; images or styles may be missing",
     "htmlResourcesTruncated": "Too many page resources; only the first {{limit}} were attempted",
     "htmlResourcesOverBudget": "{{count}} more resource(s) were skipped because the page's total size limit was reached",
-    "mdRendered": "Rendered",
-    "mdSource": "Source",
-    "mdViewA11y": "{{view}} view",
     "a11yViewImage": "View full image {{name}}",
     "fetchOriginalFailed": "Failed to fetch original: {{detail}}",
     "a11yRetryOriginal": "Retry fetching the original image",
@@ -109,7 +126,14 @@
     "originalFailedThumb": "Couldn't fetch the original; showing the thumbnail",
     "fetchingOriginalHint": "Thumbnail · fetching the original…",
     "a11yExportShareFile": "Export and share the original file",
-    "exportShare": "Export / Share"
+    "exportShare": "Export / Share",
+    "browserAddress": "Address",
+    "browserCancelAddress": "Cancel editing",
+    "browserReturnToFile": "Return to file",
+    "browserCopyAddress": "Copy address",
+    "browserCopiedAddress": "Address copied",
+    "browserInvalidAddress": "Enter a valid http or https address.",
+    "browserWebsiteFailed": "Unable to open this webpage. Try reloading."
   },
   "export": {
     "exportFailed": "Export failed",
@@ -117,6 +141,6 @@
     "exportTimeout": "Export timed out. Try again."
   },
   "gallery": {
-    "cacheMiss": "Remote media cache miss (cachedOnly)"
+    "cacheMiss": "This media isn't cached on your phone yet. Open it again once your computer is connected"
   }
 }

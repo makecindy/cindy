@@ -27,19 +27,19 @@ export function NotificationSection() {
       {/* 桌面通知 — 沿用原有卡片样式 */}
       <div
         className={cn(
-          'flex items-center justify-between gap-3 rounded-xl p-5',
+          'flex items-center justify-between gap-3 rounded-xl px-4 py-4',
           'bg-[var(--settings-theme-card-bg)]',
           'border border-[var(--settings-theme-card-border)]',
         )}
       >
         <div className="flex min-w-0 flex-col gap-1">
-          <p
+          <p id="settings-search-settings-notifications-sessionDoneLabel"
             className="text-13 font-medium text-[var(--settings-section-sublabel)]"
             style={{ letterSpacing: '0.12px' }}
           >
             {t('settings.notifications.sessionDoneLabel')}
           </p>
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)] opacity-70">
+          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
             {t('settings.notifications.sessionDoneHint')}
           </p>
         </div>

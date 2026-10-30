@@ -8,8 +8,9 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/AppText';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
+import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight, iconSize, radius, spacing, typeScale } from '@/theme/tokens';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 import type { MobileSessionAgentKind } from './sessionAgentSwitch';
 
@@ -47,17 +48,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   segmentDisabled: {
     opacity: 0.5,
   },
-  segmentPressed: {
-    opacity: 0.72,
-  },
+  segmentPressed: mobileInteractionStyles.pressed,
+  // 分段选项:选中只换色,字重恒为 500(mobile-design-guide §3);浅色字不配粗字重,故未选中用 textSecondary。
   text: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     fontSize: typeScale.footnote,
-    fontWeight: fontWeight.regular,
+    lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium,
   },
   textActive: {
     color: colors.ctaText,
-    fontWeight: fontWeight.medium,
   },
 });
 
@@ -89,7 +89,7 @@ export function MobileAgentSwitcher({ disabled = false, onChange, value }: Mobil
     <View accessibilityRole="tablist" style={styles.track} testID="modelSheet.agentSwitcher">
       {AGENTS.map((agent) => {
         const active = agent.kind === value;
-        const color = active ? colors.ctaText : colors.textTertiary;
+        const color = active ? colors.ctaText : colors.textSecondary;
         return (
           <Pressable
             accessibilityLabel={t('models.agentSwitch.browseAccessibility', { agent: agent.label })}

@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { VoiceInputController } from '../VoiceInputController.js';
 import { VoiceTimelineLogger } from '../VoiceTimelineLogger.js';
+import type { AudioGate } from '../SpeakerGate.js';
 import type {
   AsrEvent,
+  AudioTrace,
   AsrProvider,
   EditableRange,
   SpeechSegment,
@@ -69,6 +71,121 @@ function pcmChunk(amplitude: number): ArrayBuffer {
 }
 
 describe('VoiceInputController', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['silent', 'partial', 'opted_out', 'provider_error'] as const)('does not replay a recording when %s', async (scenario) => {
+    const asr = new FakeAsrProvider();
+    asr.recover = vi.fn(async () => {});
+    if (scenario === 'provider_error') {
+      asr.flush = async () => asr.emit({ type: 'error', message: 'permission denied', at: Date.now() });
+    }
+    const submitted = vi.fn(acceptSubmission);
+    const controller = new VoiceInputController({
+      asr, retryEmptyTranscript: scenario !== 'opted_out', stableWaitMs: 0,
+      logger: new VoiceTimelineLogger(),
+      callbacks: { onDraftChanged: () => {}, onSubmitted: submitted },
+    });
+    await controller.start();
+    controller.appendAudio(pcmChunk(scenario === 'silent' ? 0 : 1000));
+    if (scenario === 'partial') asr.emit({ type: 'partial', text: 'Already recognized', at: Date.now() });
+    await controller.stop();
+    expect(asr.recover).not.toHaveBeenCalled();
+    expect(submitted).toHaveBeenCalledTimes(scenario === 'partial' ? 1 : 0);
+    expect(controller.currentState).toBe(['silent', 'partial'].includes(scenario) ? 'done' : 'error');
+  });
+
+  it.each([true, false])('replays an audible empty recording once (recovered text: %s)', async (returnsText) => {
+    const asr = new FakeAsrProvider();
+    const submitted = vi.fn(acceptSubmission);
+    const onError = vi.fn();
+    const events: VoiceTimelineEvent[] = [];
+    asr.recover = vi.fn(async () => {
+      if (returnsText) asr.emit({ type: 'stable', text: 'Recovered words', at: Date.now() });
+    });
+    const flush = vi.spyOn(asr, 'flushAudio');
+    const controller = new VoiceInputController({
+      asr, retryEmptyTranscript: true, stableWaitMs: 0,
+      logger: new VoiceTimelineLogger((event) => events.push(event)),
+      callbacks: { onDraftChanged: () => {}, onSubmitted: submitted, onError },
+    });
+    await controller.start();
+    controller.appendAudio(pcmChunk(1000));
+    await controller.stop();
+    expect(asr.recover).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'asr_recovery_attempted', trigger: 'empty_transcript' }));
+    if (returnsText) {
+      expect(submitted).toHaveBeenCalledTimes(1);
+      expect(submitted.mock.calls[0][0]).toBe('Recovered words');
+      expect(onError).not.toHaveBeenCalled();
+      expect(controller.currentState).toBe('done');
+    } else {
+      expect(submitted).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(expect.any(String), 'empty_transcript', { transcriptKept: false });
+      expect(events).toContainEqual(expect.objectContaining({ type: 'error', code: 'empty_transcript' }));
+    }
+  });
+
+  it.each([false, true])('ignores an empty-result retry settling after cancellation and restart (reject: %s)', async (rejects) => {
+    vi.useFakeTimers();
+    let settle!: () => void;
+    const asr = new FakeAsrProvider();
+    asr.recover = () => new Promise<void>((resolve, reject) => {
+      settle = () => rejects ? reject(new Error('old recovery failed')) : resolve();
+    });
+    const flush = vi.spyOn(asr, 'flushAudio');
+    const stop = vi.spyOn(asr, 'stop');
+    const onError = vi.fn();
+    const submitted = vi.fn(acceptSubmission);
+    const controller = new VoiceInputController({
+      asr, retryEmptyTranscript: true, stableWaitMs: 0,
+      logger: new VoiceTimelineLogger(),
+      callbacks: { onDraftChanged: () => {}, onSubmitted: submitted, onError },
+    });
+    await controller.start();
+    controller.appendAudio(pcmChunk(1000));
+    const stopping = controller.stop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settle).toBeTypeOf('function');
+    await controller.cancel();
+    await controller.start();
+    settle();
+    await stopping;
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(controller.currentState).toBe('listening');
+    await controller.cancel();
+  });
+
+  it('does not flush or stop a new run after cancellation during gate finish', async () => {
+    let release!: () => void;
+    const asr = new FakeAsrProvider();
+    const flush = vi.spyOn(asr, 'flushAudio');
+    const stop = vi.spyOn(asr, 'stop');
+    const controller = new VoiceInputController({
+      asr,
+      audioGate: {
+        begin: () => {}, push: () => {}, abort: () => {},
+        finish: () => new Promise<void>((resolve) => { release = resolve; }),
+      },
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      callbacks: { onDraftChanged: () => {}, onSubmitted: () => undefined },
+    });
+    await controller.start();
+    const stopping = controller.stop();
+    await controller.cancel();
+    await controller.start();
+    release();
+    await stopping;
+    expect(flush).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(controller.currentState).toBe('listening');
+    await controller.cancel();
+  });
+
   it('starts without a global crypto implementation', async () => {
     const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
     Object.defineProperty(globalThis, 'crypto', {
@@ -249,6 +366,59 @@ describe('VoiceInputController', () => {
 
     expect(controller.currentState).toBe('done');
     expect(states.at(-1)).toBe('done');
+    expect(outcomes.at(-1)).toBe('no_speech');
+    expect(errors).toEqual([]);
+  });
+
+  it('treats a run the audio gate fully muted as no speech', async () => {
+    const asr = new FakeAsrProvider();
+    const outcomes: string[] = [];
+    const errors: string[] = [];
+    let emit: ((chunk: ArrayBuffer, trace?: AudioTrace) => void) | null = null;
+    const held: Array<{ chunk: ArrayBuffer; trace?: AudioTrace }> = [];
+    const audioGate: AudioGate = {
+      begin: (next) => {
+        emit = next;
+      },
+      push: (chunk, trace) => {
+        held.push({ chunk: new Int16Array(chunk.byteLength / 2).buffer, trace });
+      },
+      // Releases only while stop() awaits it, like the speaker gate's flush.
+      finish: async () => {
+        held.splice(0).forEach(({ chunk, trace }) => emit?.(chunk, trace));
+      },
+      abort: () => {
+        held.length = 0;
+      },
+    };
+    const controller = new VoiceInputController({
+      asr,
+      logger: new VoiceTimelineLogger(),
+      stableWaitMs: 0,
+      audioGate,
+      callbacks: {
+        onStateChanged: (_state, outcome) => {
+          if (outcome) outcomes.push(outcome);
+        },
+        onDraftChanged: () => {},
+        onSubmitted: () => undefined,
+        onError: (message) => errors.push(message),
+      },
+    });
+
+    await controller.start();
+    controller.appendAudio(pcmChunk(1_000), {
+      capturedAt: 0,
+      convertedAt: 0,
+      chunkIndex: 0,
+      sampleRate: 16_000,
+      durationMs: 10,
+    });
+    expect(asr.appended).toBe(0);
+    await controller.stop();
+
+    expect(asr.appended).toBe(1);
+    expect(controller.currentState).toBe('done');
     expect(outcomes.at(-1)).toBe('no_speech');
     expect(errors).toEqual([]);
   });

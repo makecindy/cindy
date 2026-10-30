@@ -13,7 +13,7 @@ describe('RolePillDropdown worker count summary', () => {
     expect(source).toContain('const activeCount = activeWorkerCount;');
     expect(source).toContain("t('orca.rolePill.workerCountSummary', {");
     expect(source).toContain('totalCount: totalWorkerCount');
-    expect(source).toContain('activeCount,');
+    expect(source).toContain('activeCount: runningCount,');
     // count 必须传给 i18next 以驱动复数选择 (en _one/_other)
     expect(source).toContain('count: totalWorkerCount');
     expect(source).not.toContain('{count} / {softLimit}');

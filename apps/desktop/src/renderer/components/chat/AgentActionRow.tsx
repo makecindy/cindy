@@ -1,3 +1,9 @@
+import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { Button } from '@/components/ui/button';
+import { ChatVideoView } from './ChatVideoView';
+import { ChatImageView } from './ChatImageView';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 /**
  * AgentActionRow
  * ---------------------------------------------------------------------------
@@ -39,8 +45,14 @@
  *     attachment chip.
  */
 
-import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check, ChevronDown, ChevronRight, File as FileIcon } from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
@@ -51,6 +63,7 @@ import {
 } from '@cindy/maker-shared';
 
 import { cn, basename } from '@/lib/utils';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Spinner } from '@/components/ui/spinner';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import {
@@ -58,12 +71,28 @@ import {
   verbLabelKeyForIntent,
   verbLabelKeyForRow,
 } from '@/lib/agent-actions/verbAggregator';
-import { statsForToolCall } from '@/lib/agent-actions/diffStats';
+import {
+  DIFF_MAIN_THREAD_MAX_CHARS,
+  DIFF_MAX_SEGMENTS,
+  diffSourcesForToolCall,
+  getDiffDetailsSync,
+  requestToolDiffDetails,
+  statsForToolCall,
+  type DiffDetails,
+  type ToolDiffDetails,
+} from '@/lib/agent-actions/diffStats';
 import { extractDisplayParam } from '@/lib/agent-actions/actionPresentation';
 import { SUPPORTED_IMAGE_EXTS, extractExt } from '@/lib/fileTypes';
 import { toLocalFileUrl, resolveToolFilePath } from '@/lib/localPathResolver';
 import { isBrowserOpenablePath } from '../../../shared/browserOpenableExts';
-import { isGhostCallToolName } from '../../../shared/ghost';
+import { isGhostCallToolName, isValidGhostId } from '../../../shared/ghost';
+import {
+  createPluginLogicalIdentity,
+  findInstalledGhostByIdentity,
+  findInstalledGhostByInstanceId,
+  resolveInstalledGhost,
+} from '../../../shared/pluginIdentity';
+import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
@@ -79,6 +108,7 @@ import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
+import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import {
   formatToolResultCompactionBytes,
   parseToolResultCompactionMarker,
@@ -281,16 +311,7 @@ function isToolAudioUrl(url: string): boolean {
  * renderer 据此从 ghostCardStore 取卡渲染;取不到令牌 = 走今日 generic 路径。
  */
 export function extractGhostCardId(toolResult: string): string | null {
-  if (!toolResult || typeof toolResult !== 'string') return null;
-  if (!toolResult.includes('xdt_card_id')) return null;
-  try {
-    const parsed = JSON.parse(toolResult) as { xdt_card_id?: unknown };
-    return typeof parsed.xdt_card_id === 'string' && parsed.xdt_card_id.length > 0
-      ? parsed.xdt_card_id
-      : null;
-  } catch {
-    return null;
-  }
+  return getToolResultMetadata(toolResult).cardId;
 }
 
 /**
@@ -301,19 +322,73 @@ export function extractGhostCardId(toolResult: string): string | null {
  * 采纳,锚不上回退本调用位置渲染(老意识/坏锚零影响)。
  */
 export function extractAnchorCardId(toolResult: string): string | null {
-  if (!toolResult || typeof toolResult !== 'string') return null;
-  if (!toolResult.includes('xdt_anchor_card_id')) return null;
-  try {
-    const parsed = JSON.parse(toolResult) as { xdt_anchor_card_id?: unknown };
-    return typeof parsed.xdt_anchor_card_id === 'string' && parsed.xdt_anchor_card_id.length > 0
-      ? parsed.xdt_anchor_card_id
-      : null;
-  } catch {
-    return null;
-  }
+  return getToolResultMetadata(toolResult).anchorId;
 }
 
 export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
+  // Callers may filter/append their own list; never lend out the cached array.
+  return getToolResultMetadata(toolResult).media.slice();
+}
+
+interface ToolResultMetadata {
+  cardId: string | null;
+  anchorId: string | null;
+  media: ToolMediaItem[];
+}
+
+const EMPTY_TOOL_METADATA: ToolResultMetadata = { cardId: null, anchorId: null, media: [] };
+// Bound both count and retained text. Large historical tool outputs must not turn
+// a small entry-count cache into unbounded retention. Parsed JSON is never kept.
+const TOOL_METADATA_MAX_ENTRIES = 512;
+const TOOL_METADATA_MAX_CHARACTERS = 32 * 1024 * 1024;
+const toolMetadataCache = new Map<string, ToolResultMetadata>();
+let toolMetadataCharacters = 0;
+let toolMetadataOwner = getDataOwnerGeneration();
+
+function getToolResultMetadata(toolResult: string): ToolResultMetadata {
+  const owner = getDataOwnerGeneration();
+  if (owner !== toolMetadataOwner) {
+    toolMetadataCache.clear();
+    toolMetadataCharacters = 0;
+    toolMetadataOwner = owner;
+  }
+  if (!toolResult || typeof toolResult !== 'string') return EMPTY_TOOL_METADATA;
+  const cached = toolMetadataCache.get(toolResult);
+  if (cached) {
+    toolMetadataCache.delete(toolResult);
+    toolMetadataCache.set(toolResult, cached);
+    return cached;
+  }
+  let metadata = EMPTY_TOOL_METADATA;
+  if (/xdt_(?:card_id|anchor_card_id|image_url|video_url|audio_url)/.test(toolResult)) {
+    try {
+      const parsed = JSON.parse(toolResult) as Record<string, unknown> | null;
+      if (parsed && typeof parsed === 'object') {
+        metadata = {
+          cardId: toolResult.includes('xdt_card_id') && typeof parsed.xdt_card_id === 'string' && parsed.xdt_card_id.length > 0
+            ? parsed.xdt_card_id : null,
+          anchorId: toolResult.includes('xdt_anchor_card_id') && typeof parsed.xdt_anchor_card_id === 'string' && parsed.xdt_anchor_card_id.length > 0
+            ? parsed.xdt_anchor_card_id : null,
+          media: extractParsedToolResultMedia(toolResult, parsed),
+        };
+      }
+    } catch {
+      // Malformed and ordinary text results have no media/card metadata.
+    }
+  }
+  if (toolResult.length <= TOOL_METADATA_MAX_CHARACTERS) {
+    toolMetadataCache.set(toolResult, metadata);
+    toolMetadataCharacters += toolResult.length;
+    while (toolMetadataCache.size > TOOL_METADATA_MAX_ENTRIES || toolMetadataCharacters > TOOL_METADATA_MAX_CHARACTERS) {
+      const oldest = toolMetadataCache.keys().next().value!;
+      toolMetadataCache.delete(oldest);
+      toolMetadataCharacters -= oldest.length;
+    }
+  }
+  return metadata;
+}
+
+function extractParsedToolResultMedia(toolResult: string, parsed: Record<string, unknown>): ToolMediaItem[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
   // 快速否定:不含任何 xdt_*_url 字面量直接 short-circuit。
   if (
@@ -324,19 +399,6 @@ export function extractToolResultMedia(toolResult: string): ToolMediaItem[] {
     return [];
   }
   try {
-    const parsed = JSON.parse(toolResult) as {
-      xdt_image_url?: unknown;
-      xdt_image_urls?: unknown;
-      xdt_video_url?: unknown;
-      xdt_video_urls?: unknown;
-      xdt_audio_urls?: unknown;
-      xdt_audio_tracks?: unknown;
-      xdt_audio_in_card?: unknown;
-      xdt_images_in_card?: unknown;
-      _xdt_render_image?: unknown;
-      _xdt_model_files?: unknown;
-      _xdt_audio_tracks?: unknown;
-    };
     if (parsed._xdt_render_image === false) return [];
     const modelFiles = parseModelFiles(parsed._xdt_model_files);
     // Track which image index we're at across xdt_image_url + xdt_image_urls
@@ -556,7 +618,9 @@ type FileChangeDescriptor = Extract<ToolUseDescriptor, { kind: 'fileChange' }>;
 function buildDiffPayload(
   descriptor: ToolUseDescriptor,
   inp: Record<string, unknown> | null,
+  analysis?: ToolDiffDetails | null,
 ): ToolPayloadMode | null {
+  const detailByKey = new Map(analysis?.segments.map((segment) => [segment.key, segment.details]));
   if (descriptor.kind === 'fileChange') {
     return {
       kind: 'diff',
@@ -579,7 +643,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'edit:0', oldString: o, newString: n }],
+          diffs: [
+            { key: 'edit:0', oldString: o, newString: n, analysis: detailByKey.get('edit:0') },
+          ],
         },
       ],
     };
@@ -592,7 +658,9 @@ function buildDiffPayload(
         {
           key: filePath,
           filePath,
-          diffs: [{ key: 'write:0', oldString: '', newString: c }],
+          diffs: [
+            { key: 'write:0', oldString: '', newString: c, analysis: detailByKey.get('write:0') },
+          ],
         },
       ],
     };
@@ -600,23 +668,37 @@ function buildDiffPayload(
   // pi edit:声明 schema 的 edits[] 与 legacy 顶层 {oldText,newText} 两种形态,
   // 由共享的 piEditReplacements 归一化(只认一种会让另一种退化成空 diff)。
   if (toolName === 'edit') {
+    const allEdits = piEditReplacements(inp);
+    const visibleEdits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
         {
           key: filePath,
           filePath,
-          diffs: piEditReplacements(inp).map((edit, index) => ({
+          diffs: visibleEdits.map((edit, index) => ({
             key: `edit:${index}`,
             oldString: edit.oldText,
             newString: edit.newText,
+            analysis: detailByKey.get(`edit:${index}`),
           })),
+          ...(allEdits.length > visibleEdits.length
+            ? {
+                copyDiffs: allEdits.map((edit, index) => ({
+                  key: `edit:${index}`,
+                  oldString: edit.oldText,
+                  newString: edit.newText,
+                })),
+                omittedDiffCount: allEdits.length - visibleEdits.length,
+              }
+            : {}),
         },
       ],
     };
   }
   if (toolName === 'MultiEdit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    const allEdits = Array.isArray(inp.edits) ? inp.edits : [];
+    const edits = allEdits.slice(0, DIFF_MAX_SEGMENTS);
     return {
       kind: 'diff',
       files: [
@@ -627,8 +709,24 @@ function buildDiffPayload(
             const er = e as Record<string, unknown> | null;
             const o = er && typeof er.old_string === 'string' ? er.old_string : '';
             const n = er && typeof er.new_string === 'string' ? er.new_string : '';
-            return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+            return {
+              key: `edit:${index}`,
+              oldString: String(o),
+              newString: String(n),
+              analysis: detailByKey.get(`edit:${index}`),
+            };
           }),
+          ...(allEdits.length > edits.length
+            ? {
+                copyDiffs: allEdits.map((e, index) => {
+                  const er = e as Record<string, unknown> | null;
+                  const o = er && typeof er.old_string === 'string' ? er.old_string : '';
+                  const n = er && typeof er.new_string === 'string' ? er.new_string : '';
+                  return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+                }),
+                omittedDiffCount: allEdits.length - edits.length,
+              }
+            : {}),
         },
       ],
     };
@@ -648,6 +746,13 @@ export interface AgentActionRowProps {
    * isSessionStreaming 计算后传入;缺省按已完成渲染(历史消息路径)。
    */
   status?: 'running' | 'done';
+  /**
+   * Host-resolved descriptor of a remote single-line activity. Its input is not on this
+   * device, so the row never re-describes a partial input.
+   */
+  descriptorOverride?: ToolUseDescriptor;
+  /** Replaces the row's own details: a remote line opens its whole work group instead. */
+  onActivateOverride?: () => void;
 }
 
 type LightboxState =
@@ -684,14 +789,18 @@ export function AgentActionRow({
   showRawCommand = false,
   intentOverride,
   status = 'done',
+  descriptorOverride,
+  onActivateOverride,
 }: AgentActionRowProps) {
   const { t } = useTranslation();
-  const compactedToolResult = parseToolResultCompactionMarker(toolResult);
+  const processMedia = useMemo(() => readToolProcessMedia(toolResult), [toolResult]);
+  const resultText = readToolProcessText(toolResult);
+  const compactedToolResult = parseToolResultCompactionMarker(resultText);
   const displayedToolResult = compactedToolResult
     ? t('chat.toolResultCompacted', {
         size: formatToolResultCompactionBytes(compactedToolResult.originalBytes),
       })
-    : toolResult;
+    : resultText;
   // 会话文件来源:remote 时 Read 图片走远程媒体改写、文件打开走远程分流。
   const fileCtx = useChatSessionFile();
   const toolName = message.toolName ?? '';
@@ -704,7 +813,22 @@ export function AgentActionRow({
   const ghostInfo = useMemo(() => {
     if (!isGhostCallToolName(toolName) || !inp) return null;
     const gid = typeof inp.ghost_id === 'string' ? inp.ghost_id : '';
-    const hit = installedGhosts.find((g) => g.manifest.id === gid);
+    const namespace = inp.namespace;
+    const identity = isValidGhostId(gid) &&
+      (namespace === null || (typeof namespace === 'string' && isValidPluginNamespace(namespace)))
+      ? createPluginLogicalIdentity(namespace, gid)
+      : null;
+    // 裸 ID 与 main 侧一样按唯一逻辑身份解析；实例键才按物理键精确查找。
+    const bareIdResult = namespace === undefined && isValidGhostId(gid)
+      ? resolveInstalledGhost(installedGhosts, gid)
+      : null;
+    const hit = identity
+      ? findInstalledGhostByIdentity(installedGhosts, identity)
+      : bareIdResult?.status === 'unique'
+        ? bareIdResult.ghost
+        : namespace === undefined && !isValidGhostId(gid)
+          ? findInstalledGhostByInstanceId(installedGhosts, gid)
+          : undefined;
     return {
       name: hit?.manifest.name ?? (gid || 'ghost'),
       tool: typeof inp.tool === 'string' ? inp.tool : '',
@@ -712,10 +836,11 @@ export function AgentActionRow({
   }, [toolName, inp, installedGhosts]);
 
   const descriptor = useMemo(() => {
+    if (descriptorOverride) return descriptorOverride;
     const resolved = describeToolUse(toolName, inp);
     if (!intentOverride || resolved.kind !== 'command' || resolved.description) return resolved;
     return { ...resolved, intent: intentOverride };
-  }, [toolName, inp, intentOverride]);
+  }, [toolName, inp, intentOverride, descriptorOverride]);
   const isFileChange = descriptor.kind === 'fileChange';
   // command 类带模型 description 时,description 自含动词语义("查看工作区
   // 状态"),再渲染英文动词 label 会变成"Ran 查看工作区状态"的中英混排 —
@@ -763,7 +888,59 @@ export function AgentActionRow({
   const userFacingToolResult = displayedToolResult
     ? (humanizeDocumentToolResult(toolName, displayedToolResult) ?? displayedToolResult)
     : null;
-  const stats = useMemo(() => statsForToolCall(toolName, inp), [toolName, inp]);
+  const diffSources = useMemo(() => diffSourcesForToolCall(toolName, inp), [toolName, inp]);
+  const syncDiff = useMemo<ToolDiffDetails | null>(() => {
+    if (!diffSources || diffSources.truncated) return null;
+    // Apply the budget to the complete tool call, not each segment. A
+    // MultiEdit with many individually-small replacements must still stay off
+    // the renderer thread.
+    const totalChars = diffSources.segments.reduce(
+      (total, segment) => total + segment.oldString.length + segment.newString.length,
+      0,
+    );
+    if (totalChars > DIFF_MAIN_THREAD_MAX_CHARS) return null;
+    const segments = diffSources.segments.map((segment) => ({
+      key: segment.key,
+      details: getDiffDetailsSync(segment.oldString, segment.newString),
+    }));
+    if (segments.some((segment) => !segment.details)) return null;
+    const resolvedSegments = segments as Array<{ key: string; details: DiffDetails }>;
+    return {
+      stats: segments.reduce(
+        (total, segment) => ({
+          add: total.add + (segment.details?.stats.add ?? 0),
+          del: total.del + (segment.details?.stats.del ?? 0),
+        }),
+        { add: 0, del: 0 },
+      ),
+      segments: resolvedSegments,
+      truncated: false,
+    };
+  }, [diffSources]);
+  const initialStats = useMemo(
+    () => syncDiff?.stats ?? statsForToolCall(toolName, inp),
+    [inp, syncDiff, toolName],
+  );
+  const [asyncDiff, setAsyncDiff] = useState<ToolDiffDetails | null>(null);
+
+  // Small edits stay synchronous for a stable first paint. Larger edits are
+  // analysed off-thread; the same result is passed to the lightbox on click.
+  useEffect(() => {
+    let active = true;
+    if (!diffSources || syncDiff || initialStats !== null) {
+      setAsyncDiff(null);
+      return () => {
+        active = false;
+      };
+    }
+    void requestToolDiffDetails(toolName, inp).then((result) => {
+      if (active) setAsyncDiff(result);
+    });
+    return () => {
+      active = false;
+    };
+  }, [diffSources, initialStats, inp, syncDiff, toolName]);
+  const stats = asyncDiff?.truncated ? null : (asyncDiff?.stats ?? initialStats);
   const isFilePathTool = FILE_PATH_TOOLS.has(toolName);
   const filePath = descriptor.kind === 'file' ? descriptor.filePath : '';
   const singleFileChange =
@@ -784,7 +961,11 @@ export function AgentActionRow({
    *   - Read → 文稿/图片 lightbox
    */
   const onActivate = async (anchor: HTMLElement) => {
-    const diffPayload = buildDiffPayload(descriptor, inp);
+    if (onActivateOverride) {
+      onActivateOverride();
+      return;
+    }
+    const diffPayload = buildDiffPayload(descriptor, inp, asyncDiff ?? syncDiff);
     if (diffPayload) {
       triggerRef.current = anchor;
       setLightbox({ kind: 'payload', payload: diffPayload });
@@ -836,6 +1017,7 @@ export function AgentActionRow({
   // Claude 取 file_path，Codex 单文件 change 取目标路径 —— 模型可能给相对
   // 路径(见 onActivate 注释),菜单动作统一经 resolveToolFilePath 补成绝对路径。
   const fileChipMenu = useFileChipContextMenu({
+    fileName: chipFilePath,
     getAbsPath: () => resolveToolFilePath(chipFilePath, fileCtx.workingDir),
     canOpenInBrowser: isBrowserOpenablePath(chipFilePath),
   });
@@ -881,7 +1063,7 @@ export function AgentActionRow({
             'min-w-0 max-w-full',
           )}
         >
-          <FileIcon size={12} className="shrink-0 text-[var(--chat-input-chip-icon)]" />
+          <FileTypeIcon name={chipFilePath} size={12} className="shrink-0 text-[var(--chat-input-chip-icon)]" />
           <span className="truncate">{displayParam.text}</span>
         </span>
       );
@@ -905,23 +1087,36 @@ export function AgentActionRow({
 
   const onRowKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (!chipFilePath) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      activateInlineLinkFromKeyboard(e);
+      return;
+    }
     if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
     e.preventDefault();
     e.stopPropagation();
     const chipRect = fileChipRef.current?.getBoundingClientRect();
     const rowRect = e.currentTarget.getBoundingClientRect();
     const rect = chipRect ?? rowRect;
-    fileChipMenu.openAt(rect.left, rect.bottom + 2);
+    fileChipMenu.openAt(rect.left, rect.bottom + 2, e.currentTarget);
   };
 
   return (
     <div className="flex flex-col" data-message-client-id={message.clientId}>
       <button
         type="button"
-        onClick={(e) => void onActivate(e.currentTarget)}
+        onClick={(e) => {
+          const anchor = e.currentTarget;
+          if (chipFilePath) fileChipMenu.onActivate(e, () => onActivate(anchor));
+          else void onActivate(anchor);
+        }}
+        onAuxClick={(e) => {
+          if (e.button !== 1 || !chipFilePath) return;
+          const anchor = e.currentTarget;
+          fileChipMenu.onActivate(e, () => onActivate(anchor));
+        }}
         onContextMenu={onRowContextMenu}
         onKeyDown={onRowKeyDown}
-        aria-expanded={isInlineExpand ? expanded : undefined}
+        aria-expanded={isInlineExpand && !onActivateOverride ? expanded : undefined}
         aria-label={
           ghostInfo
             ? `${rowVerbLabel} ${ghostInfo.name} ${ghostInfo.tool}`
@@ -932,13 +1127,13 @@ export function AgentActionRow({
               : rowVerbLabel
         }
         className={cn(
-          'group flex w-full items-center gap-[6px]',
+          'group flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
           ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
-          'focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+          'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           'text-left',
         )}
       >
@@ -982,6 +1177,14 @@ export function AgentActionRow({
           className="min-w-0 truncate px-2 pb-[3px] pl-[30px] font-mono text-12 leading-[1.5] text-[var(--msg-tool-card-chevron)]"
         >
           {rawCommand}
+        </div>
+      )}
+      {readFailedImageDelivery(resultText) && <GeneratedImageRetry imageId={readFailedImageDelivery(resultText)!} />}
+      {processMedia.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-3 py-2 pl-8" data-tool-process-media="true">
+          {processMedia.map((media) => media.kind === 'image'
+            ? <ChatImageView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />
+            : <ChatVideoView key={media.url} src={media.url} variant="tool-output" sessionId={fileCtx.sessionId} filename={media.url.split('/').pop() ?? media.kind} />)}
         </div>
       )}
       {chipFilePath ? fileChipMenu.menu : null}
@@ -1052,4 +1255,21 @@ export function AgentActionRow({
       )}
     </div>
   );
+}
+
+function GeneratedImageRetry({ imageId }: { imageId: string }) {
+  const { t } = useTranslation();
+  const { sessionId, origin } = useChatSessionFile();
+  const [pending, setPending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <div className="flex flex-wrap items-center gap-2 py-2 pl-8 text-13 text-muted-foreground">
+    <span role="status">{t(failed ? 'chat.imageDelivery.retryFailed' : 'chat.imageDelivery.failed')}</span>
+    {sessionId && !(origin.kind === 'device' && isSharedTaskPeer(origin.deviceId)) && <Button variant="secondary" size="sm" disabled={pending} onClick={async () => {
+      setPending(true); setFailed(false);
+      try {
+        if (origin.kind === 'device') await window.electronAPI.deviceLink.invoke(origin.deviceId, 'maker:images:retry', [sessionId, imageId]);
+        else await window.electronAPI.maker.input.retryImageDelivery(sessionId, imageId);
+      } catch { setFailed(true); } finally { setPending(false); }
+    }}>{t(pending ? 'chat.imageDelivery.retrying' : 'chat.imageDelivery.retry')}</Button>}
+  </div>;
 }

@@ -35,7 +35,7 @@ vi.mock('../../client/current.js', () => ({
   getDbClient: () => ({ drizzle: h.db }),
 }));
 
-import { registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
+import { hasAssignedBotWorkbenchTab, registerRightSidebarTabsIpc } from '../rightSidebarTabs.js';
 import { assertTrustedAppRendererEvent } from '../../../security/trustedAppRenderer.js';
 
 function createDb(): Database.Database {
@@ -57,6 +57,8 @@ function createDb(): Database.Database {
     CREATE INDEX right_sidebar_tabs_session_idx ON right_sidebar_tabs (session_id, position);
     CREATE UNIQUE INDEX right_sidebar_tabs_subagents_singleton_idx
       ON right_sidebar_tabs (session_id) WHERE kind = 'subagents';
+    CREATE UNIQUE INDEX right_sidebar_tabs_bot_artifacts_singleton_idx
+      ON right_sidebar_tabs (session_id) WHERE kind = 'bot-artifacts';
   `);
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s1');
   sqlite.prepare(`INSERT INTO sessions (id) VALUES (?)`).run('s2');
@@ -89,6 +91,16 @@ describe('rightSidebarTabs IPC', () => {
     h.handlers.clear();
     createDb();
     registerRightSidebarTabsIpc();
+  });
+
+  it('matches a popped-out Bot workbench only by session, assigned tab and Bot id', async () => {
+    await invoke('local-db:right-sidebar-tabs:upsert', {
+      id: 'workbench-1', sessionId: 's1', kind: 'bot-workbench', position: 0, state: { botId: 'bot-1' },
+    });
+    expect(await hasAssignedBotWorkbenchTab('s1', ['workbench-1'], 'bot-1')).toBe(true);
+    expect(await hasAssignedBotWorkbenchTab('s1', ['other-tab'], 'bot-1')).toBe(false);
+    expect(await hasAssignedBotWorkbenchTab('s1', ['workbench-1'], 'bot-2')).toBe(false);
+    expect(await hasAssignedBotWorkbenchTab('s2', ['workbench-1'], 'bot-1')).toBe(false);
   });
 
   it('rejects every read and write handler before parsing untrusted payloads', async () => {
@@ -328,6 +340,12 @@ describe('rightSidebarTabs IPC', () => {
         invoke('local-db:right-sidebar-tabs:ensure-singleton', {
           sessionId: 's1',
           kind: 'web-browser',
+        }),
+      ).rejects.toThrow(/INVALID_PARAMS/);
+      await expect(
+        invoke('local-db:right-sidebar-tabs:ensure-singleton', {
+          sessionId: 's1',
+          kind: 'bot-artifacts',
         }),
       ).rejects.toThrow(/INVALID_PARAMS/);
     });

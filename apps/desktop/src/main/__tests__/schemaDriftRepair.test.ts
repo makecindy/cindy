@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { getTableName, isTable } from 'drizzle-orm';
 
+import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory';
 import * as localSchema from '../localDb/schema';
 
 vi.mock('../logger', () => ({
@@ -62,7 +63,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('repairs missing partial indexes with their WHERE clauses', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       const report = repairSchemaDrift(db);
 
@@ -112,7 +113,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('does not back up when metadata drift has no physical schema repair actions', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       // 先构造完整物理 schema；上层即使仍检测到 migration-history drift，也不应备份。
       expect(repairSchemaDrift(db).residual).toEqual([]);
@@ -129,7 +130,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('backs up before a real schema repair and skips backup on the second pass', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     const events: string[] = [];
     try {
       const backup = vi.fn(async () => {
@@ -167,7 +168,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('does not mutate schema when the required backup fails', async () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       const result = await repairSchemaDriftWithBackup(db, {
         backup: async () => null,
@@ -196,7 +197,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('returns an empty report (never residual) when db connection is already closed', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     db.close();
     expect(db.open).toBe(false);
 
@@ -207,7 +208,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('records residual when a missing partial index cannot be recreated', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       // 两条 active 记录共享同一个 lead_session_id，会让 partial unique index 创建失败。
       db.exec(`
@@ -246,7 +247,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('restores a missing FTS row map before later inserts, updates, and deletes', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       expect(repairSchemaDrift(db).residual).toEqual([]);
       db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
@@ -275,7 +276,7 @@ describe('repairSchemaDrift', () => {
   });
 
   it('rebuilds stale FTS content while restoring a missing row map', () => {
-    const db = new Database(':memory:');
+    const db = createBetterSqliteDatabase(':memory:');
     try {
       expect(repairSchemaDrift(db).residual).toEqual([]);
       db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
@@ -298,6 +299,22 @@ describe('repairSchemaDrift', () => {
           content: 'canonical',
         },
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('CJK 分词后的健康库再跑 FTS 修复是 no-op', () => {
+    const db = createBetterSqliteDatabase(':memory:');
+    try {
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      db.prepare("INSERT INTO sessions(id, created_at, updated_at) VALUES ('s1', 1, 1)").run();
+      insertSearchMessage(db, 'm1', '登录报错了');
+      expect(ftsRows(db).map((row) => row.content)).toEqual(['登 录 报 错 了']);
+      const before = ftsRows(db);
+
+      expect(repairSchemaDrift(db).residual).toEqual([]);
+      expect(ftsRows(db)).toEqual(before);
     } finally {
       db.close();
     }

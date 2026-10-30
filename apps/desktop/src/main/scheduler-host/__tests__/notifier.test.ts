@@ -4,7 +4,7 @@ import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { FeishuIM } from '@cindy/im';
 
 import { showDesktopSessionEvent } from '../../notificationService';
-import { sendMobileSessionNotify } from '../../device-link';
+import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../../device-link';
 import { DesktopNotifier } from '../notifier';
 
 vi.mock('../../notificationService', () => ({
@@ -15,6 +15,11 @@ vi.mock('../../notificationService', () => ({
 vi.mock('../../device-link', () => ({
   getMobileNotifyGeneration: vi.fn(() => 7),
   sendMobileSessionNotify: vi.fn(() => true),
+}));
+
+const isSessionNotificationsMutedSync = vi.fn((_sessionId: string): boolean => false);
+vi.mock('../../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: (sessionId: string) => isSessionNotificationsMutedSync(sessionId),
 }));
 
 const schedule = {
@@ -35,8 +40,11 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 }
 
 function createNotifier(opts?: {
+  hasUnrecoveredMatchingFailure?: (run: ScheduleRun) => Promise<boolean>;
+  sendFeishuSessionNotification?: (sessionId: string, text: string) => Promise<void>;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
+  isAgentIslandEnabled?: () => boolean;
   publishMarkdown?: ReturnType<typeof vi.fn>;
 }): {
   notifier: DesktopNotifier;
@@ -48,6 +56,8 @@ function createNotifier(opts?: {
   const warn = vi.fn();
   const publishMarkdown = opts?.publishMarkdown ?? vi.fn(async () => undefined);
   const notifier = new DesktopNotifier({
+    hasUnrecoveredMatchingFailure: opts?.hasUnrecoveredMatchingFailure,
+    sendFeishuSessionNotification: opts?.sendFeishuSessionNotification,
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
       getOwnerOpenId: vi.fn(() => 'ou_owner'),
@@ -55,6 +65,7 @@ function createNotifier(opts?: {
     } as unknown as FeishuIM,
     logger: { warn },
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
+    isAgentIslandEnabled: opts?.isAgentIslandEnabled ?? (() => false),
     wecomGroupPublisher: { publishMarkdown },
   });
   return { notifier, sendMarkdownText, warn, publishMarkdown };
@@ -63,6 +74,22 @@ function createNotifier(opts?: {
 describe('DesktopNotifier desktop status mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isSessionNotificationsMutedSync.mockReset().mockReturnValue(false);
+  });
+
+  it('「消息免打扰」任务只断个人提醒，共享群通知照旧', async () => {
+    isSessionNotificationsMutedSync.mockReturnValue(true);
+    const { notifier, sendMarkdownText, publishMarkdown } = createNotifier();
+
+    await notifier.notify(
+      { ...schedule, notify: { desktop: true, feishu: true, wecomGroup: true } } as Schedule,
+      run('success'),
+    );
+
+    expect(isSessionNotificationsMutedSync).toHaveBeenCalledWith('session-1');
+    expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(publishMarkdown).toHaveBeenCalled();
   });
 
   it('maps a successful run to done', async () => {
@@ -115,6 +142,37 @@ describe('DesktopNotifier desktop status mapping', () => {
 
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
   });
+
+  it('lets Agent Island replace a desktop notification for a session-bound run', async () => {
+    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+    await notifier.notify(schedule, run('failed'));
+
+    expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps a desktop error notification when Agent Island cannot represent the failed run', async () => {
+    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+    await notifier.notify(schedule, { ...run('failed'), sessionId: undefined });
+
+    expect(showDesktopSessionEvent).toHaveBeenCalledWith(expect.any(Function), {
+      sessionId: '',
+      title: '每日检查',
+      kind: 'error',
+    });
+  });
+
+  it.each(['success', 'aborted', 'interrupted'] as const)(
+    'does not bypass Agent Island for a sessionless %s run',
+    async (status) => {
+      const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+
+      await notifier.notify(schedule, { ...run(status), sessionId: undefined });
+
+      expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it('mobile 正文带运行结果摘要:成功用 resultText,失败用 errorMsg', async () => {
     const { notifier } = createNotifier();
@@ -220,4 +278,55 @@ describe('DesktopNotifier desktop status mapping', () => {
     expect(published).not.toContain('cindy-media://');
     expect(published).not.toContain('C:/private/report.txt');
   });
+});
+
+
+describe('Feishu notification origin receipt', () => {
+  it('passes the original run session to the receipt writer', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => undefined);
+    const { notifier, sendMarkdownText } = createNotifier({ sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledWith('session-1', expect.any(String));
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+  });
+
+  it('does not resend a notification if receipt persistence fails', async () => {
+    const sendFeishuSessionNotification = vi.fn(async () => { throw new Error('receipt write failed'); });
+    const { notifier, sendMarkdownText, warn } = createNotifier({ sendFeishuSessionNotification });
+    await notifier.notify({ ...schedule, notify: { desktop: false, feishu: true } }, run('success'));
+    expect(sendFeishuSessionNotification).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownText).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+  });
+});
+
+
+it('keeps repeated quiet failures in history without repeating personal or external notifications', async () => {
+  vi.clearAllMocks();
+  const { notifier, sendMarkdownText, publishMarkdown } = createNotifier({ hasUnrecoveredMatchingFailure: async () => true });
+  await notifier.notify({ ...schedule, silentWhenIdle: true, notify: { desktop: true, feishu: true, wecomGroup: true } }, { ...run('failed'), errorMsg: 'check failed' });
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  expect(sendMarkdownText).not.toHaveBeenCalled();
+  expect(publishMarkdown).not.toHaveBeenCalled();
+  await notifier.notify({ ...schedule, silentWhenIdle: false }, run('success'));
+  expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+});
+
+it('still reports a failure if its dedup history cannot be read', async () => {
+  vi.clearAllMocks();
+  const { notifier } = createNotifier({ hasUnrecoveredMatchingFailure: async () => { throw new Error('unavailable'); } });
+  await notifier.notify({ ...schedule, silentWhenIdle: true }, run('failed'));
+  expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
+});
+
+
+it('does not notify a replacement account after the failure history read crosses logout', async () => {
+  vi.clearAllMocks();
+  vi.mocked(getMobileNotifyGeneration).mockReturnValueOnce(7).mockReturnValueOnce(8);
+  const { notifier, sendMarkdownText } = createNotifier({ hasUnrecoveredMatchingFailure: async () => false });
+  await notifier.notify({ ...schedule, silentWhenIdle: true, notify: { desktop: true, feishu: true } }, run('failed'));
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMarkdownText).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
 });

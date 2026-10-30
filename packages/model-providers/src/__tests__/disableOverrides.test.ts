@@ -130,7 +130,8 @@ describe('rail 过滤(suspended)', () => {
 
   it('sourcesForModel / effectiveSourceIdForModel 不解析到 suspended 来源', () => {
     expect(sourcesForModel(views, 'claude-opus-5', 'claude-code').map((p) => p.id)).toEqual(['beta']);
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
   });
 });
 
@@ -144,8 +145,9 @@ describe('来源过滤(模型级停用拷贝)', () => {
     expect(sourcesForModel(views, 'claude-opus-5', 'claude-code').map((p) => p.id)).toEqual(['beta']);
   });
 
-  it('effectiveSourceIdForModel 落到启用拷贝;全部拷贝停用时解析为 null', () => {
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+  it('显式停用来源不替换账号；隐式默认仍选择启用拷贝', () => {
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
     const allDisabled = buildRegistry(CATALOG, ALL_CONNECTED, {}, {
       disabledModels: { 'alpha:claude-opus-5': true, 'beta:claude-opus-5': true },
     });
@@ -153,7 +155,7 @@ describe('来源过滤(模型级停用拷贝)', () => {
   });
 
   it('actualSourceIdForModel(实际路由口径)保留停用拷贝:运行中会话的展示跟真实路由', () => {
-    // 准入口径(effective)解析到替代来源 beta;实际路由口径(actual)必须仍是会话
+    // 准入口径(effective)拒绝停用来源;实际路由口径(actual)必须仍是会话
     // 真正在用的来源 —— 显式点名的停用来源原样保留,隐式解析仍落原生默认
     // (PR #744 review 第五轮:图标/价格/Fast/选中行豁免不能显示成替代来源)。
     expect(actualSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('alpha');
@@ -176,7 +178,8 @@ describe('retired tombstone 的新路由与运行中会话分层', () => {
   const views = buildRegistry(retiredCatalog, ALL_CONNECTED, {});
 
   it('effective 新路由跳过 retired；actual 仍保留运行中会话的真实来源', () => {
-    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('beta');
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(effectiveSourceIdForModel(views, null, 'claude-opus-5', 'claude-code')).toBe('beta');
     expect(actualSourceIdForModel(views, 'alpha', 'claude-opus-5', 'claude-code')).toBe('alpha');
   });
 

@@ -1,3 +1,4 @@
+import { assertSessionCreationCurrent, currentSessionCreationSignal, runSessionCreationAttempt } from '../localDb/sessionRuntimeCleanup.js';
 import type { AgentKind } from '@cindy/maker-core';
 
 import { MAKER_INVOKE } from './channels.js';
@@ -20,6 +21,8 @@ function remoteRouteErrorCode(err: unknown): IpcErrorCode | null {
   if (msg.includes('[REMOTE_PROVIDER_UPDATING]')) return 'REMOTE_PROVIDER_UPDATING';
   if (msg.includes('[REMOTE_PROVIDER_UNSUPPORTED]')) return 'REMOTE_PROVIDER_UNSUPPORTED';
   if (msg.includes('[REMOTE_NATIVE_OAUTH_UNAVAILABLE]')) return 'REMOTE_NATIVE_OAUTH_UNAVAILABLE';
+  // maker-core workspace-settings-guard:工作区设置会改写 Claude 订阅会话的上游 / 鉴权。
+  if (msg.includes('[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE]')) return 'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE';
   // 轮 40-w4-t3 HIGH:远端 Pi 会话启动时 Cindy AI gateway endpoint 未就绪 ——
   // maker-core 抛 [REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE](含 raw 实现细节
   // runtimeConfig.remoteEndpoint is empty)。不映射会让用户看到不可操作的英文
@@ -50,6 +53,9 @@ export interface MakerSessionCreateResultSession {
 export interface MakerSessionCreateHandlerDeps<
   TSession extends MakerSessionCreateResultSession = MakerSessionCreateResultSession,
 > {
+  /** Captured per creation; prevents another account with the same UUID cancelling it. */
+  creationOwner?: () => object;
+  closeCancelledSession?: (session: TSession) => Promise<void>;
   bootstrapSession(opts: MakerSessionCreateOpts): Promise<{
     session: TSession;
     didInjectOrcaInstructions: boolean;
@@ -89,6 +95,7 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
     );
 
     const run = async () => {
+      assertSessionCreationCurrent();
       let bootstrapped: Awaited<ReturnType<typeof deps.bootstrapSession>>;
       try {
         bootstrapped = await deps.bootstrapSession(o);
@@ -110,38 +117,62 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
       }
       const { session, didInjectOrcaInstructions, didInjectProjectContext } = bootstrapped;
 
-      deps.logCreateSession({
-        agentKind: o.agentKind,
-        model: o.model,
-        fastMode: o.fastMode ?? 'default',
-        workDir: o.workingDir,
-        providedId: !!o.id,
-        usedOrcaInstructions: didInjectOrcaInstructions,
-        usedProjectContext: didInjectProjectContext,
-        extraDirsCount: o.extraDirs?.length ?? 0,
-      });
-
-      if (o.orcaRole === 'lead') {
-        await deps.markOrcaRoleIfNeeded(session.id, o.orcaRole);
-      }
-      deps.markKnownNonOrcaIfApplicable(session.id, o);
-      if (o.orcaRole === 'worker' && !o.resumeSessionId) {
-        deps.sendWorkerReadyMessage(session);
-      }
-      deps.broadcastSessionCreated(session.id);
-
-      return {
-        sessionId: session.id,
-        agentKind: session.agentKind,
-        workDir: session.workDir,
-        capabilities: session.capabilities,
-        usedProjectContext: didInjectProjectContext,
+      const signal = currentSessionCreationSignal(session.id);
+      let closing = false;
+      const closeCancelled = () => {
+        if (closing) return;
+        closing = true;
+        void deps.closeCancelledSession?.(session).catch(error => {
+          deps.warnStderr(session.agentKind, 'Cancelled creation cleanup failed: ' + String(error));
+        });
       };
+      signal?.addEventListener('abort', closeCancelled, { once: true });
+      if (signal?.aborted) closeCancelled();
+      try {
+        assertSessionCreationCurrent();
+        deps.logCreateSession({
+          agentKind: o.agentKind,
+          model: o.model,
+          fastMode: o.fastMode ?? 'default',
+          workDir: o.workingDir,
+          providedId: !!o.id,
+          usedOrcaInstructions: didInjectOrcaInstructions,
+          usedProjectContext: didInjectProjectContext,
+          extraDirsCount: o.extraDirs?.length ?? 0,
+        });
+
+        if (o.orcaRole === 'lead') {
+          await deps.markOrcaRoleIfNeeded(session.id, o.orcaRole);
+        }
+        assertSessionCreationCurrent();
+        deps.markKnownNonOrcaIfApplicable(session.id, o);
+        if (o.orcaRole === 'worker' && !o.resumeSessionId) {
+          deps.sendWorkerReadyMessage(session);
+        }
+        deps.broadcastSessionCreated(session.id);
+
+        return {
+          sessionId: session.id,
+          agentKind: session.agentKind,
+          workDir: session.workDir,
+          capabilities: session.capabilities,
+          usedProjectContext: didInjectProjectContext,
+        };
+      } finally { signal?.removeEventListener('abort', closeCancelled); }
     };
 
     const explicitSessionId = typeof o.id === 'string' && o.id ? o.id : null;
+    const owner = deps.creationOwner?.();
+    const create = () => {
+      if (owner && deps.creationOwner?.() !== owner) {
+        throw new Error('[REMOTE_AGENT_EXPIRED] The task owner has changed.');
+      }
+      return explicitSessionId && deps.creationOwner
+        ? runSessionCreationAttempt(explicitSessionId, deps.creationOwner, run)
+        : run();
+    };
     return explicitSessionId && deps.withSessionLock
-      ? deps.withSessionLock(explicitSessionId, run)
-      : run();
+      ? deps.withSessionLock(explicitSessionId, create)
+      : create();
   });
 }

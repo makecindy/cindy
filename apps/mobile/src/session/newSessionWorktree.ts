@@ -25,7 +25,7 @@ export type NewSessionWorktreeIneligibleReason =
 
 /**
  * worktree 开关的资格状态:
- *  - probing:探测中(目录/设备刚变化,结果未回)→ 开关禁用 + 「检测环境中…」;
+ *  - probing:探测中(目录/设备刚变化,结果未回)→ 首次探测不显示开关行，重探沿用上次定论;
  *  - recovering:瞬时断连/超时，页面会自动重试 → 开关禁用 + 恢复连接 caption;
  *  - eligible:可用,携带 create 所需的 baseRepo(repoRoot)与 sourceBranch(当前分支);
  *  - ineligible:环境不满足 → 开关禁用 + 原因 caption;
@@ -186,6 +186,13 @@ export async function isExactRemoteSessionClaimed(
  * proves absence. Incidental text containing NOT_FOUND remains unknown.
  */
 export function isExplicitRemoteNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  // Missing invoke handlers reuse the transport's NOT_FOUND code while the
+  // host is starting or an older host lacks the channel; that is not proof
+  // that the remote session row was deleted.
+  if (/(?:no local IPC handler|handler not registered|no handler registered)/i.test(message)) {
+    return false;
+  }
   if (error && typeof error === 'object' && !Array.isArray(error)) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === 'string' && code.trim().toUpperCase() === 'NOT_FOUND') {
@@ -193,8 +200,7 @@ export function isExplicitRemoteNotFoundError(error: unknown): boolean {
     }
   }
   if (!(error instanceof Error)) return false;
-  return /^(?:\[NOT_FOUND\]|Error invoking remote method(?: '[^']+')?: Error: \[NOT_FOUND\])(?:\s|$)/
-    .test(error.message);
+  return /^(?:\[NOT_FOUND\]|Error invoking remote method(?: '[^']+')?: Error: \[NOT_FOUND\])(?:\s|$)/.test(message);
 }
 
 /**
@@ -244,6 +250,24 @@ export function worktreeEligibilityFromError(error: unknown): NewSessionWorktree
   if (remoteErrorText(error).includes('DEVICE_UNRESPONSIVE')) return { status: 'recovering' };
   if (isTransientRemoteError(error)) return { status: 'recovering' };
   return { status: 'detect-failed' };
+}
+
+/**
+ * 探测 effect 的**起始**状态(#4046):
+ *  - 设备或目录还没选全 → probing(探测尚未开始,UI 不暴露该行);
+ *  - 设备与目录都在、但链路不在 online → recovering(「连接恢复中,正在自动重试…」)。
+ *    完全断网时 effect 会在发请求前直接返回,永远进不了 catch,若仍停在 probing 就是
+ *    永久的「检测环境中…」;online / connectionEpoch / presenceVersion 变化即重探。
+ *  - 三者齐备 → probing,随后由请求结果 / 抛错归并覆盖。
+ * 创建门禁不变:probing / recovering 都 fail-closed(shouldBlockNewSessionCreateForWorktree)。
+ */
+export function initialWorktreeProbeEligibility(input: {
+  hasDevice: boolean;
+  hasWorkingDir: boolean;
+  online: boolean;
+}): NewSessionWorktreeEligibility {
+  if (input.hasDevice && input.hasWorkingDir && !input.online) return { status: 'recovering' };
+  return { status: 'probing' };
 }
 
 /**
@@ -327,25 +351,71 @@ export function isWorktreeChannelNotAllowedError(error: unknown): boolean {
   return remoteErrorText(error).includes('CHANNEL_NOT_ALLOWED');
 }
 
+/** 已有定论的资格(探测中 / 恢复中 / 探测失败都不算定论)。 */
+export type NewSessionWorktreeSettledEligibility = Extract<
+  NewSessionWorktreeEligibility,
+  { status: 'eligible' | 'ineligible' | 'unsupported' }
+>;
+
+/** 某个设备 + 目录最近一次有定论的探测结果；不含连接代次，重连重探时仍可沿用。 */
+export interface NewSessionWorktreeSettledSnapshot {
+  target: NewSessionWorktreeBranchTarget;
+  eligibility: NewSessionWorktreeSettledEligibility;
+}
+
+function isSettledWorktreeEligibility(
+  eligibility: NewSessionWorktreeEligibility,
+): eligibility is NewSessionWorktreeSettledEligibility {
+  return eligibility.status === 'eligible'
+    || eligibility.status === 'ineligible'
+    || eligibility.status === 'unsupported';
+}
+
 /**
- * 开关行是否显示:正常情况下是 project + workingDir + 通道可用；若老端不支持但
- * 镜像仍为 ON，保留已勾选的关闭入口，不能把用户锁在 fail-closed 状态。
- *
- * 2026-08-07 用户裁决(对齐桌面 WorktreeChipsRow):勾选记忆只对具备资格的目录
- * 生效——探测**成功**且确认不合格(ineligible:非 git / 无 git / 已在 worktree 内)
- * 时开关行隐藏、创建按普通会话放行,记忆保留;probing / detect-failed 不算确认,
- * 维持显示 + fail closed,一次断连不能把用户要求的隔离静默降级。
+ * 开关行展示用的定论:当前探测已有定论就用当前的；还没有时(重连 / presence 变化
+ * 触发的重探、恢复中重试)沿用同设备 + 目录上一次定论，避免开关行闪掉再出现。
+ * 只决定显示，不参与创建门禁——门禁仍按实时资格 fail closed。
+ */
+export function settleWorktreeEligibilityForDisplay(
+  eligibility: NewSessionWorktreeEligibility,
+  target: NewSessionWorktreeBranchTarget,
+  previous: NewSessionWorktreeSettledSnapshot | null,
+): NewSessionWorktreeSettledSnapshot | null {
+  if (isSettledWorktreeEligibility(eligibility)) return { target, eligibility };
+  if (
+    previous
+    && previous.target.deviceId === target.deviceId
+    && previous.target.workingDir.trim() === target.workingDir.trim()
+  ) {
+    return previous;
+  }
+  return null;
+}
+
+/**
+ * 开关行是否显示(2026-10-11 用户裁决:宁可检测出来再出现，也不要先出现再消失):
+ *  - 必须是 project + 已选目录;
+ *  - 定论为 eligible 才显示；从未有定论(首次探测中)不显示;
+ *  - 确认不合格(ineligible)隐藏，创建按普通会话放行(2026-08-07 裁决);
+ *  - 已勾选但创建被拦住时(老端 unsupported、恢复中、探测失败)必须显示，
+ *    让用户看到原因并能关掉，不把用户锁在 fail-closed 状态。实时恢复中 / 探测失败
+ *    优先于沿用的旧定论(含旧 ineligible)，因为创建门禁按实时资格拦截。
  */
 export function shouldShowWorktreeToggle(input: {
   workspaceKind: 'project' | 'dialogue';
   workingDir: string;
+  /** 实时资格。 */
   eligibility: NewSessionWorktreeEligibility;
+  /** settleWorktreeEligibilityForDisplay 的结果。 */
+  settled: NewSessionWorktreeSettledEligibility | null;
   enabled: boolean;
 }): boolean {
-  return input.workspaceKind === 'project'
-    && input.workingDir.trim().length > 0
-    && input.eligibility.status !== 'ineligible'
-    && (input.eligibility.status !== 'unsupported' || input.enabled);
+  if (input.workspaceKind !== 'project' || input.workingDir.trim().length === 0) return false;
+  if (input.settled?.status === 'eligible') return true;
+  if (!input.enabled) return false;
+  return input.eligibility.status === 'recovering'
+    || input.eligibility.status === 'detect-failed'
+    || input.settled?.status === 'unsupported';
 }
 
 /**

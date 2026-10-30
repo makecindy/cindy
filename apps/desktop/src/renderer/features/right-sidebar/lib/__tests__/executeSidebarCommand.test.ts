@@ -14,6 +14,9 @@ vi.mock('../../store', () => ({
 vi.mock('../openInSidebarBrowser', () => ({
   openUrlInSidebarBrowser: vi.fn(async () => undefined),
 }));
+vi.mock('../openPluginTaskTab', () => ({
+  openPluginTaskTab: vi.fn(async () => undefined),
+}));
 vi.mock('../openInSidebarFileBrowser', () => ({
   openDirInSidebarFileBrowser: vi.fn(async () => undefined),
   openExternalFileInSidebarFileBrowser: vi.fn(async () => undefined),
@@ -33,6 +36,7 @@ import {
   ensureOrcaWorkersTab,
 } from '../../plugins/orca-workers/actions';
 import { executeSidebarCommand } from '../executeSidebarCommand';
+import { openPluginTaskTab } from '../openPluginTaskTab';
 import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
@@ -43,6 +47,13 @@ import { openSubagentsTab } from '../openSubagentsTab';
 
 describe('executeSidebarCommand', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  // PR #6939 discussion_r4357929340：分离宿主执行命令不能降级已验证的点击来源。
+  // unit：真实 executor 的输出是传给开页入口的来源协议；原用例未覆盖插件命令。
+  it.each([true, false, undefined])('preserves plugin task intent, defaulting old commands to passive: %s', async (userInitiated) => {
+    await executeSidebarCommand({ type: 'open-plugin-task', sessionId: 's1', instanceId: 'sim', userInitiated });
+    expect(openPluginTaskTab).toHaveBeenCalledWith('s1', 'sim', { userInitiated: userInitiated === true });
+  });
 
   it('dispatches every command kind to the current renderer host implementation', async () => {
     const searchJump = {

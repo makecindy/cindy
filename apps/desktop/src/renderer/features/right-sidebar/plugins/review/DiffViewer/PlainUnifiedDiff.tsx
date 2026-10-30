@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -406,14 +407,10 @@ export function PlainUnifiedDiff({
           <span className="ml-2">{notice}</span>
         </span>
         {diff.kind === 'too-large' && onOpenFile && (
-          <button
-            type="button"
-            onClick={() => onOpenFile(diff)}
-            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] border border-[var(--border-default)] bg-[var(--surface-elevated)] px-2 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
-          >
+          <Button variant="secondary" size="xs" compact type="button" onClick={() => onOpenFile(diff)}>
             <ExternalLink size={12} />
             <span>{t('rightSidebar.review.openFile')}</span>
-          </button>
+          </Button>
         )}
       </div>
     );

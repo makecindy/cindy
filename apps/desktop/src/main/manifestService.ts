@@ -19,9 +19,11 @@ import * as canaryFlagStore from './canaryFlagStore';
 
 import { resolveUpdateChannel, type UpdateChannel } from '@cindy/maker-shared/update-channel';
 
+import { supportsBetaUpdateChannel } from '../shared/updateChannelCapability';
 import { createLogger } from './logger';
 import { getClientEndpoint } from './clientEndpointsService';
 import { isBetaChannelEnabled } from './updateChannelStore';
+import { parseAppUpdateVersion } from './updateVersionPolicy';
 
 const log = createLogger('manifestService');
 
@@ -90,6 +92,7 @@ export interface Manifest {
   /** Linux manifests omit agent assets; packaged Linux uses its official runtime fallback. */
   claudeCode?: ClaudeCodeManifest;
   codex?: CodexManifest;
+  codexPackage?: CodexManifest;
   ripgrep?: RipgrepManifest;
   pi?: PiManifest;
 }
@@ -97,6 +100,8 @@ export interface Manifest {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const REQUEST_TIMEOUT_MS = 30_000;
+// Metadata only: bound accumulation even when a server keeps streaming a 200.
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +114,13 @@ let cachedChannel: UpdateChannel | null = null;
  * 不写缓存、返回 null,让调用方(agent prepare / 更新轮询)下次按新渠道重新 fetch。
  */
 let manifestEpoch = 0;
+const manifestListeners = new Set<(manifest: Manifest) => void>();
+
+/** Observers cannot delay or fail application update checks. */
+export function onManifestFetched(listener: (manifest: Manifest) => void): () => void {
+  manifestListeners.add(listener);
+  return () => { manifestListeners.delete(listener); };
+}
 
 function currentUpdateChannel(): UpdateChannel {
   return resolveUpdateChannel(canaryFlagStore.read(), isBetaChannelEnabled());
@@ -176,30 +188,50 @@ export async function fetchManifest(
     try {
       const request = net.request(url);
       let body = '';
+      let bodyBytes = 0;
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let aborted = false;
 
       const finish = (value: Manifest | null, abortRequest = false): void => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        signal?.removeEventListener('abort', onAbort);
-        if (abortRequest) request.abort();
-        resolve(value);
+        if (!settled) {
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          resolve(value);
+        }
+        // Promise settlement must not prevent late response/error cleanup.
+        if (abortRequest && !aborted) {
+          aborted = true;
+          request.abort();
+        }
       };
       const onAbort = (): void => finish(null, true);
+      const timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
       signal?.addEventListener('abort', onAbort, { once: true });
 
-      timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
-
       request.on('response', (response) => {
+        // Keep an error listener even on responses discarded at the headers.
+        response.on('error', () => finish(null, true));
+        response.on('aborted', () => finish(null, true));
+        if (settled) {
+          finish(null, true);
+          return;
+        }
         if (response.statusCode !== 200) {
           log.info('HTTP %d for %s', response.statusCode, url);
-          finish(null);
+          // Unread Electron responses retain the native loader and data pipe.
+          finish(null, true);
           return;
         }
 
         response.on('data', (chunk) => {
+          if (settled) return;
+          bodyBytes += Buffer.byteLength(chunk);
+          if (bodyBytes > MAX_RESPONSE_BYTES) {
+            body = '';
+            finish(null, true);
+            return;
+          }
           body += chunk.toString();
         });
         response.on('end', () => {
@@ -218,17 +250,24 @@ export async function fetchManifest(
             cachedChannel = channel;
             log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
             finish(json);
+            for (const listener of manifestListeners) {
+              try { listener(json); } catch { /* an optional observer cannot fail the update */ }
+            }
           } catch (err) {
             log.error('JSON parse failed:', err);
             finish(null);
           }
         });
-        response.on('error', () => finish(null));
       });
 
-      request.on('error', () => finish(null));
+      request.on('error', () => finish(null, true));
 
       try {
+        // A signal can be cancelled while the request is being constructed.
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
         request.end();
       } catch {
         finish(null, true);
@@ -277,10 +316,29 @@ export function clearCachedManifest(): void {
  * 「manifest 之后才判 isInstalled」顺序)——所以「能不能开」必须提前探明,
  * 而不是等用户重启后才发现坏了。
  *
- * HTTP 200 之后还要能解析出 app.version。截断 JSON / 错误页不能当成渠道可用。
+ * HTTP 200 之后还要能解析出 app.version；Linux 还必须带完整可信的 .deb 元数据。
+ * 截断 JSON / 错误页 / 不完整安装清单都不能当成渠道可用。
  * 不写 cache、不改当前发布通道。dev 不联网,直接返回 true。
  */
+function isUsableBetaManifest(manifest: Manifest): boolean {
+  if (!parseAppUpdateVersion(manifest.app?.version)) return false;
+  if (process.platform !== 'linux') return true;
+
+  const installer = manifest.app.installer;
+  return Boolean(
+    installer &&
+      typeof installer.file === 'string' &&
+      installer.file.endsWith('.deb') &&
+      typeof installer.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/i.test(installer.sha256) &&
+      typeof installer.size === 'number' &&
+      Number.isFinite(installer.size) &&
+      installer.size > 0,
+  );
+}
+
 export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
+  if (!supportsBetaUpdateChannel(process.platform, process.arch)) return Promise.resolve(false);
   if (isDev()) return Promise.resolve(true);
   const url = `${getBaseUrl()}/manifest-${getPlatformKey()}-beta.json?t=${Date.now()}`;
   return new Promise<boolean>((resolve) => {
@@ -288,7 +346,6 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
       const request = net.request(url);
       let body = '';
       let settled = false;
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       const finish = (value: boolean, abortRequest = false): void => {
         if (settled) return;
         settled = true;
@@ -296,7 +353,7 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
         if (abortRequest) request.abort();
         resolve(value);
       };
-      timeout = setTimeout(() => finish(false, true), timeoutMs);
+      const timeout = setTimeout(() => finish(false, true), timeoutMs);
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           response.on('data', () => {});
@@ -310,7 +367,7 @@ export function probeBetaManifest(timeoutMs = 8_000): Promise<boolean> {
         response.on('end', () => {
           try {
             const json = JSON.parse(body) as Manifest;
-            finish(typeof json.app?.version === 'string' && json.app.version.length > 0);
+            finish(isUsableBetaManifest(json));
           } catch {
             finish(false);
           }

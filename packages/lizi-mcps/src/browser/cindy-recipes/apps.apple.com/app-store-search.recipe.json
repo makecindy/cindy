@@ -1,0 +1,35 @@
+{
+  "id": "app-store-search",
+  "match": [
+    "apps.apple.com"
+  ],
+  "description": "搜索 App Store 应用，返回开发者、评分、价格、版本、更新时间与官方链接。",
+  "access": "read",
+  "inputs": {
+    "query": {
+      "required": true,
+      "description": "应用关键词"
+    },
+    "country": {
+      "required": true,
+      "description": "两位地区代码，例如 cn、us、nz"
+    }
+  },
+  "steps": [
+    {
+      "action": "navigate",
+      "url": "https://apps.apple.com/us/charts/iphone"
+    },
+    {
+      "action": "wait",
+      "loadState": "load"
+    },
+    {
+      "action": "evaluate",
+      "as": "result",
+      "fn": "async () => {\n const country = '{{country|js}}';\n if (!/^[a-z]{2}$/i.test(country)) throw new Error('country 必须是两位地区代码');\n const params = new URLSearchParams({term: '{{query|js}}', entity: 'software', country, limit: '20'});\n const response = await fetch('https://itunes.apple.com/search?' + params, {credentials: 'omit', signal: AbortSignal.timeout(20000)});\n if (!response.ok) throw new Error('Apple 搜索返回 HTTP ' + response.status);\n const data = await response.json();\n if (!Array.isArray(data.results)) throw new Error('Apple 搜索响应格式发生变化');\n return {country, results: data.results.map(app => ({id: String(app.trackId), name: app.trackName, developer: app.artistName, rating: app.averageUserRating, ratingCount: app.userRatingCount, price: app.price, currency: app.currency, version: app.version, updatedAt: app.currentVersionReleaseDate, url: app.trackViewUrl}))};\n}",
+      "timeoutMs": 30000
+    }
+  ],
+  "output": "{{result}}"
+}

@@ -23,17 +23,24 @@ import {
   type GamepadFamily,
   type XboxGamepadPreviewInput,
 } from '../../shared/xboxGamepad.js';
-import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from '../security/trustedAppRenderer.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../security/trustedAppRenderer.js';
 import { createWorkLouderCodexActiveWindowRouter } from '../worklouder-codex/actionWindow.js';
 import { XboxGamepadController } from './controller.js';
 import { createXboxGamepadHost } from './host.js';
-import { createLayoutPreviewLease, layoutPreviewOwnerFromEvent } from '../input-devices/previewLease.js';
+import {
+  createLayoutPreviewLease,
+  layoutPreviewOwnerFromEvent,
+} from '../input-devices/previewLease.js';
 import { createXboxGamepadSettingsIpc } from './settingsIpc.js';
 import {
   readXboxGamepadSettings,
   resetXboxGamepadSettings,
   writeXboxGamepadSettingsPatch,
 } from './settingsStore.js';
+import { computeSwitch2UsbWanted } from './switch2UsbWanted.js';
 
 const log = createLogger('xbox-gamepad');
 
@@ -97,9 +104,41 @@ const host = createXboxGamepadHost((message) => {
   controller.handleHostMessage(message);
 });
 let previewFamily: GamepadFamily | null = null;
+let taskSlotsSuspended = false;
+let hostWanted = false;
+let disposed = false;
 const layoutPreviewLease = createLayoutPreviewLease((active) => {
+  if (!active) previewFamily = null;
   controller.setLayoutPreviewActive(active, active ? previewFamily : null);
+  syncHost();
 });
+
+function syncHost(): void {
+  if (disposed) return;
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+    controller.markUnavailable();
+    return;
+  }
+  const accessories = controller.getAccessories();
+  const wanted =
+    previewFamily !== null ||
+    (!taskSlotsSuspended &&
+      GAMEPAD_FAMILIES.some((family) => accessories[family].settings.deviceEnabled));
+  host.setSwitch2UsbWanted(
+    computeSwitch2UsbWanted({
+      taskSlotsSuspended,
+      nintendoDeviceEnabled: accessories.nintendo.settings.deviceEnabled,
+      previewFamily,
+    }),
+  );
+  if (wanted === hostWanted) return;
+  hostWanted = wanted;
+  if (wanted) host.start();
+  else {
+    host.stop();
+    controller.resetHostState();
+  }
+}
 
 let inputDeviceRegistered = false;
 let settingsIpcRegistered = false;
@@ -116,15 +155,21 @@ export function registerXboxGamepadInputDevice(): void {
       },
       updateSessionActivity: () => undefined,
       resumeTaskSlots: async () => {
+        taskSlotsSuspended = false;
         controller.applySettings(family, readXboxGamepadSettings(family));
+        syncHost();
       },
       suspendTaskSlots: () => {
+        taskSlotsSuspended = true;
         controller.applySettings(family, {
           ...readXboxGamepadSettings(family),
           deviceEnabled: false,
         });
+        syncHost();
       },
       dispose: async () => {
+        disposed = true;
+        hostWanted = false;
         host.stop();
       },
     });
@@ -137,8 +182,11 @@ export function registerXboxGamepadSettingsIpc(): void {
   for (const family of GAMEPAD_FAMILIES) {
     controller.applySettings(family, readXboxGamepadSettings(family));
   }
-  if (process.platform === 'darwin') host.start();
-  else controller.markUnavailable();
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    syncHost();
+  } else {
+    controller.markUnavailable();
+  }
   installFocusHooks();
 
   const handlers = createXboxGamepadSettingsIpc({
@@ -146,12 +194,22 @@ export function registerXboxGamepadSettingsIpc(): void {
     getState: () => controller.getAccessories(),
     writeSettings: writeXboxGamepadSettingsPatch,
     resetSettings: resetXboxGamepadSettings,
-    applySettings: (family, settings) => controller.applySettings(family, settings),
+    applySettings: (family, settings) => {
+      controller.applySettings(family, settings);
+      syncHost();
+    },
     probeDevice: () => host.probe(),
     setLayoutPreviewActive: (active, family, event) => {
-      previewFamily = family;
-      layoutPreviewLease.setActive(active, layoutPreviewOwnerFromEvent(event));
-      if (active) controller.setLayoutPreviewActive(true, family);
+      const owner = layoutPreviewOwnerFromEvent(event);
+      if (active) {
+        if (!owner) return;
+        previewFamily = family;
+        layoutPreviewLease.setActive(true, owner);
+        controller.setLayoutPreviewActive(true, family);
+        syncHost();
+        return;
+      }
+      layoutPreviewLease.setActive(false, owner);
     },
   });
 

@@ -21,6 +21,7 @@ import {
 } from './localDb/betterSqliteFactory.js';
 import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
+import { recordModelVisibilityAdoption } from './localDb/modelVisibilityAdoption.js';
 
 export const LOCAL_PROFILE_MIGRATION_TMP_SUFFIX = '.local-profile-migration-tmp';
 export const LOCAL_PROFILE_MIGRATION_MARKER_SUFFIX = '.local-profile-migration.json';
@@ -164,6 +165,7 @@ const realFs: LocalProfileDataMigrationFs = {
       // The open target handle was synced immediately before close; only the
       // parent directory entry still needs an explicit barrier here.
       syncMarkerDirectory(target);
+      recordModelVisibilityAdoption(target);
       updatePendingDatabaseCopyMarker(pending, {
         version: DB_COPY_PENDING_VERSION,
         attemptId,
@@ -894,7 +896,10 @@ async function recoverIncompleteDatabasePublication(
   }
   if (marker.phase === 'published') {
     // The snapshot was fully flushed before marker cleanup. Preserve the
-    // target and retire only the bookkeeping marker.
+    // target and retire only the bookkeeping marker. Its adoption receipt was
+    // persisted before `published`: leave it intact so readModelVisibilityAdoption
+    // can reject a replacement file. Older publications without a receipt must
+    // not acquire new permission to import local model preferences here.
     if (!targetState.mainExists) {
       for (const suffix of DB_SIDECAR_SUFFIXES) {
         await deps.fs.removeIfExists(`${targetDb}${suffix}`);
@@ -1039,10 +1044,15 @@ async function copyDatabaseAtomically(
     // Claim the target with a no-replace filesystem primitive. Never use
     // rename here: a later initializer must lose with EEXIST rather than
     // overwrite the database already published by the first initializer.
+    recordModelVisibilityAdoption(targetDb, dbTmp);
     const linked = await claimDatabaseTargetWithoutReplacement(deps, dbTmp, targetDb);
     if (!linked) return false;
     published = true;
     flushPublishedDatabase(targetDb);
+    // Both publication paths already have a durable receipt: hard links retain
+    // the snapshot identity; exclusive copy records its own before publication.
+    // Do not rewrite it here: a Windows backup exchange interrupted after
+    // publication could leave only a .bak and block catalog initialization.
     if (deps.hasExclusiveSourceAccess && !deps.hasExclusiveSourceAccess()) {
       throw new Error('local profile database adoption deferred: concurrent live instance');
     }

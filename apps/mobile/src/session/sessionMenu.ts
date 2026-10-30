@@ -5,6 +5,7 @@
  * 置顶 / 归档 / 删除)+「会话信息」二级入口;二级 = 用量 / 工作目录 / 附加引用目录 / 标识。
  * 全部为纯函数,不碰 IO;交互副作用(clipboard / Alert / 远端写)由组件层承担。
  */
+import { isSharedTaskPeer } from '@cindy/device-link';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { i18n } from '@/i18n';
@@ -13,17 +14,24 @@ import { normalizeExtraDirs } from '@/session/newSession';
 import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import { sessionWorktreeInfo } from '@/session/sessionWorktree';
 import type { RemoteSession } from '@/session/types';
-import {
-  normalizeRemoteMoney,
-  remoteMoneySymbol,
-  type RemoteMoney,
-} from '@/session/remoteMoney';
+import { formatRemoteMoney, resolveSessionTotalMoney } from '@/session/remoteMoney';
 
-/** 菜单 sheet 的两级视图:一级操作菜单 / 二级会话信息。 */
-export type SessionMenuView = 'menu' | 'info';
+/**
+ * 菜单 sheet 的打开位置:一级操作菜单 / 二级会话信息 / 直接进入重命名编辑态
+ * (双击任务标题的入口;确定或取消后直接收起菜单)。
+ */
+export type SessionMenuView = 'menu' | 'info' | 'rename';
+
+/** 菜单里是否提供重命名:Host 托管、协同 Worker、共享任务访客都不提供。 */
+export function sessionMenuAllowsRename(
+  session: Pick<RemoteSession, 'deviceLinkDeviceId' | 'orcaRole'>,
+  messageOnly: boolean,
+): boolean {
+  return !messageOnly && session.orcaRole !== 'worker' && !isSharedTaskPeer(session.deviceLinkDeviceId ?? '');
+}
 
 export interface SessionMenuChip {
-  id: 'pinned' | 'archived' | 'readonly' | 'collab';
+  id: 'pinned' | 'archived' | 'collab';
   label: string;
 }
 
@@ -46,14 +54,10 @@ export interface SessionMenuAction {
   testID: string;
 }
 
-export function buildSessionMenuHeader(
-  session: RemoteSession,
-  input: { readOnlyReason?: string | null },
-): SessionMenuHeaderModel {
+export function buildSessionMenuHeader(session: RemoteSession): SessionMenuHeaderModel {
   const chips: SessionMenuChip[] = [];
   if (session.pinnedAt) chips.push({ id: 'pinned', label: i18n.t('session.menu.chipPinned') });
   if (session.status === 'archived') chips.push({ id: 'archived', label: i18n.t('session.menu.chipArchived') });
-  if (input.readOnlyReason) chips.push({ id: 'readonly', label: i18n.t('session.menu.chipReadOnly') });
   const collabLabel = sessionCollaborationLabel(session);
   if (collabLabel) chips.push({ id: 'collab', label: collabLabel });
 
@@ -157,9 +161,11 @@ export function removeSessionExtraDir(
   return normalizeExtraDirs(current ?? undefined).filter((dir) => dir !== path);
 }
 
-/** 会话深链(一级「复制链接」的复制值)。 */
-export function sessionMenuCopyLink(session: Pick<RemoteSession, 'id'>): string {
-  return buildMobileSessionDeepLink(session.id);
+/** 会话深链(一级「复制链接」的复制值),冻结会话所在设备(可达优先,与打开会话同口径)。 */
+export function sessionMenuCopyLink(
+  session: Pick<RemoteSession, 'id' | 'canonicalDeviceId' | 'deviceLinkDeviceId'>,
+): string {
+  return buildMobileSessionDeepLink(session.id, { session });
 }
 
 /** Android 返回键 / 关闭手势的两段式收敛:info 先回 menu,menu 才关 sheet。 */
@@ -229,20 +235,8 @@ function buildSessionMenuMetaLine(session: RemoteSession): string {
 
 function buildSessionMenuUsageSummary(session: RemoteSession): string | null {
   const parts: string[] = [];
-  const totalMoney = normalizeRemoteMoney(session.totalMoney);
-  const legacyCostUsd = readPositiveNumber(session.totalCostUsd);
-  const displayMoney =
-    totalMoney && totalMoney.amount > 0
-      ? totalMoney
-      : legacyCostUsd === null
-        ? null
-        : {
-            amount: legacyCostUsd,
-            currency: 'USD' as const,
-            approximate: false,
-            kind: 'actual-cost' as const,
-          };
-  if (displayMoney) parts.push(formatMoney(displayMoney));
+  const displayMoney = resolveSessionTotalMoney(session);
+  if (displayMoney) parts.push(formatRemoteMoney(displayMoney));
   const contextTokens = readPositiveNumber(session.contextTokens);
   const contextWindow = readPositiveNumber(session.contextWindow);
   if (contextTokens !== null && contextWindow !== null) {
@@ -264,11 +258,4 @@ function lastPathPart(path: string): string {
 
 function readPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function formatMoney(money: RemoteMoney): string {
-  const symbol = remoteMoneySymbol(money.currency);
-  if (money.amount >= 10) return `${symbol}${Math.round(money.amount)}`;
-  if (money.amount >= 0.01) return `${symbol}${money.amount.toFixed(2)}`;
-  return `<${symbol}0.01`;
 }

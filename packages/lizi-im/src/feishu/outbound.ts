@@ -25,7 +25,7 @@ import { open as openFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import * as Lark from '@larksuiteoapi/node-sdk';
 
-import { getLog } from './moduleScope.js';
+import { getLog, scopeSlot } from './moduleScope.js';
 import { buildInteractiveCardV1, buildMarkdownCardV2 } from './cards.js';
 import { decodeLaneUserId } from './codec.js';
 import * as ownerGuard from './ownerGuard.js';
@@ -43,7 +43,10 @@ import type { BotCredentials } from './internal-types.js';
 const FEISHU_FILE_SIZE_LIMIT = 30 * 1024 * 1024;
 /** 10 MB per image when sending as `msg_type:image`. */
 const FEISHU_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const HANDLE_PATH_HELPER_TIMEOUT_MS = 5_000;
+// PowerShell's first Add-Type invocation can be slow on hosted Windows
+// runners (Defender scans the generated compiler artifacts). Keep the helper
+// bounded and fail closed, but allow that one-time startup to finish.
+const HANDLE_PATH_HELPER_TIMEOUT_MS = 15_000;
 const HANDLE_PATH_HELPER_MAX_BYTES = 256 * 1024;
 
 /**
@@ -341,32 +344,43 @@ for (my $index = 0; $index < @segments; $index += 1) {
 print STDOUT '1';
 `;
 
-let client: Lark.Client | null = null;
-let creds: BotCredentials | null = null;
+const out_SLOT = Symbol('feishu.out');
+function createOutState() {
+  return {
+    client: null as Lark.Client | null,
+    creds: null as BotCredentials | null,
+    lastBoundCreds: null as BotCredentials | null,
+    accountEpoch: 0,
+    laneAnchors: new Map<string, LaneAnchorState>(),
+    patchableOpeners: new Map<string, string>(),
+    openerTriggers: new Map<string, string>(),
+    deferredOpenerConsumes: [] as DeferredOpenerConsume[],
+    evictedOpeners: [] as string[],
+    openThreadByTrigger: new Map< string, { ts: number; promise: Promise<OpenThreadOutcome> } >(),
+    cardLanes: new Map<string, { ts: number; lane: string }>(),
+  };
+}
+/** 本实例(FeishuScope)的模块状态; 没有 scope 时落在默认实例上。 */
+const S = () => scopeSlot(out_SLOT, createOutState);
 
 /** 最近一次 bind 的账号身份 — 跨 unbind 保留, 用于判「账号是否真替换」。 */
-let lastBoundCreds: BotCredentials | null = null;
 
 function sameBoundAccount(next: BotCredentials): boolean {
-  return (
-    lastBoundCreds !== null &&
-    lastBoundCreds.appId === next.appId &&
-    lastBoundCreds.service === next.service
-  );
+  const bound = S().lastBoundCreds;
+  return bound !== null && bound.appId === next.appId && bound.service === next.service;
 }
 
 /**
  * 账号代次 — 账号身份变化(换账号 bind / 明确清凭证)时递增: 在途的排空/兜底
  * 续段据此丢弃, 旧账号的终态不得经新账号的 client 呈现。
  */
-let accountEpoch = 0;
 
 function clearAccountScopedOutboundState(): void {
-  laneAnchors.clear();
-  patchableOpeners.clear();
-  openerTriggers.clear();
+  S().laneAnchors.clear();
+  S().patchableOpeners.clear();
+  S().openerTriggers.clear();
   clearDeferredOpenerConsumes();
-  accountEpoch += 1;
+  S().accountEpoch += 1;
 }
 
 /**
@@ -376,12 +390,12 @@ function clearAccountScopedOutboundState(): void {
  */
 export function forgetBoundAccount(): void {
   clearAccountScopedOutboundState();
-  lastBoundCreds = null;
+  S().lastBoundCreds = null;
 }
 
 /** 当前账号代次(清凭证递增) — 在途排空续段比对用。 */
 export function getAccountEpoch(): number {
-  return accountEpoch;
+  return S().accountEpoch;
 }
 
 export function bindClient(c: BotCredentials): void {
@@ -389,9 +403,9 @@ export function bindClient(c: BotCredentials): void {
   // 重连(reconnectSavedCredentials: stop → start 同凭证)时 turn 仍在跑, 未消费
   // 的 opener / 锚点必须仍可被认领, 否则答案无处 patch、话题出站没有 reply 根。
   if (!sameBoundAccount(c)) clearAccountScopedOutboundState();
-  lastBoundCreds = c;
-  creds = c;
-  client = new Lark.Client({
+  S().lastBoundCreds = c;
+  S().creds = c;
+  S().client = new Lark.Client({
     appId: c.appId,
     appSecret: c.appSecret,
     domain: c.service === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu,
@@ -399,9 +413,9 @@ export function bindClient(c: BotCredentials): void {
 }
 
 export function unbindClient(): void {
-  client = null;
-  creds = null;
-  cardLanes.clear();
+  S().client = null;
+  S().creds = null;
+  S().cardLanes.clear();
   // patchableOpeners / laneAnchors 不随 unbind 清空(见 bindClient 的账号替换清理)。
 }
 
@@ -417,6 +431,8 @@ interface LaneAnchorState {
   queue: string[];
   /** 当前回合持有的锚点。 */
   held: string | null;
+  /** Trigger owned by the claimed opener, separate from a later pending opener. */
+  heldOpenerTrigger?: string;
   /** 普通群: held 是否已用于引用回复(用过则后续 chat_id 直发)。 */
   quotedHeld: boolean;
   /**
@@ -426,18 +442,17 @@ interface LaneAnchorState {
   inThreadReply: boolean;
 }
 
-const laneAnchors = new Map<string, LaneAnchorState>();
 
 /** wsClient 在 owner 群触发时登记回挂锚点。 */
 export function pushReplyAnchor(laneUserId: string, messageId: string): void {
-  const state = laneAnchors.get(laneUserId) ?? {
+  const state = S().laneAnchors.get(laneUserId) ?? {
     queue: [],
     held: null,
     quotedHeld: false,
     inThreadReply: false,
   };
   state.queue.push(messageId);
-  laneAnchors.set(laneUserId, state);
+  S().laneAnchors.set(laneUserId, state);
 }
 
 // ── patchable opener (开话题开场白卡 = 本轮流式卡) ──────────────────────────
@@ -445,22 +460,21 @@ export function pushReplyAnchor(laneUserId: string, messageId: string): void {
 // 回复, 而是直接 patch 这张卡 — 话题里第一条可见内容就是答案。lane → opener
 // 卡的映射由 wsClient 在 openThread 成功后登记, streamingText.start 认领。
 
-const patchableOpeners = new Map<string, string>();
 
 /**
  * 开场白卡对应的触发消息 id(lane → 群主流触发消息)。开场白 patch/替换失败
  * 被撤回后, 话题里不再有合法锚点 — 回拨到触发消息并带 reply_in_thread 回复
  * 才能落回话题(触发消息本人在群主流)。
  */
-const openerTriggers = new Map<string, string>();
 
 export function pushPatchableOpener(
   laneUserId: string,
   messageId: string,
   triggerMessageId?: string,
 ): void {
-  patchableOpeners.set(laneUserId, messageId);
-  if (triggerMessageId) openerTriggers.set(laneUserId, triggerMessageId);
+  S().patchableOpeners.set(laneUserId, messageId);
+  if (triggerMessageId) S().openerTriggers.set(laneUserId, triggerMessageId);
+  else S().openerTriggers.delete(laneUserId);
 }
 
 /**
@@ -469,12 +483,10 @@ export function pushPatchableOpener(
  * 失败的降级群 lane / 话题内 @)返回 null, 走新建流式卡的老路。
  */
 export function claimPatchableOpener(laneUserId: string): string | null {
-  const openerId = patchableOpeners.get(laneUserId);
+  const openerId = S().patchableOpeners.get(laneUserId);
   if (!openerId) return null;
-  patchableOpeners.delete(laneUserId);
-  // openerTriggers 保留 — patch/替换失败撤回开场白卡时需要回拨锚点
-  // (rearmAnchorToTrigger 消费); 正常认领成功则随下次 push 覆盖或账号替换清空。
-  const state = laneAnchors.get(laneUserId) ?? {
+  S().patchableOpeners.delete(laneUserId);
+  const state = S().laneAnchors.get(laneUserId) ?? {
     queue: [],
     held: null,
     quotedHeld: false,
@@ -483,9 +495,11 @@ export function claimPatchableOpener(laneUserId: string): string | null {
   // 锚点队列头正常就是这张开场白卡; 对不上说明顺序被破坏, 保守起见仍保留队列。
   if (state.queue[0] === openerId) state.queue.shift();
   state.held = openerId;
+  state.heldOpenerTrigger = S().openerTriggers.get(laneUserId);
+  S().openerTriggers.delete(laneUserId);
   state.quotedHeld = true;
   state.inThreadReply = false;
-  laneAnchors.set(laneUserId, state);
+  S().laneAnchors.set(laneUserId, state);
   return openerId;
 }
 
@@ -501,7 +515,6 @@ export type DeferredOpenerConsume = (
 ) & { epoch: number };
 
 const MAX_DEFERRED_OPENER_CONSUMES = 50;
-const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
 
 /**
  * 容量淘汰的开场白卡 id — 条目被挤掉时其 opener 已被原子预留(不可再认领),
@@ -509,12 +522,11 @@ const deferredOpenerConsumes: DeferredOpenerConsume[] = [];
  */
 // 上限防御撤除: 每个条目只是短消息 id, 且连接恢复排空即清 — 有界淘汰会
 // 再次静默丢卡(阈值从 51 推迟到 101 而已), 不留可收口记录违背设计。
-const evictedOpeners: string[] = [];
 
 /** 账号替换时清空暂存消费(属旧账号的开场白卡, 新账号不需要)。 */
 function clearDeferredOpenerConsumes(): void {
-  deferredOpenerConsumes.length = 0;
-  evictedOpeners.length = 0;
+  S().deferredOpenerConsumes.length = 0;
+  S().evictedOpeners.length = 0;
 }
 
 export function deferOpenerConsume(
@@ -523,23 +535,23 @@ export function deferOpenerConsume(
     | { spec: InteractiveCardSpec }
   ),
 ): void {
-  deferredOpenerConsumes.push({ ...entry, epoch: accountEpoch });
-  while (deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
-    const evicted = deferredOpenerConsumes.shift();
+  S().deferredOpenerConsumes.push({ ...entry, epoch: S().accountEpoch });
+  while (S().deferredOpenerConsumes.length > MAX_DEFERRED_OPENER_CONSUMES) {
+    const evicted = S().deferredOpenerConsumes.shift();
     if (evicted) {
-      evictedOpeners.push(evicted.openerId);
+      S().evictedOpeners.push(evicted.openerId);
     }
   }
 }
 
 /** 取出被容量淘汰的开场白卡 id(清空), 连接恢复排空时撤回。 */
 export function drainEvictedOpeners(): string[] {
-  return evictedOpeners.splice(0, evictedOpeners.length);
+  return S().evictedOpeners.splice(0, S().evictedOpeners.length);
 }
 
 /** 取出全部暂存的消费(清空), 调用方在连接就绪后排空。 */
 export function drainDeferredOpenerConsumes(): DeferredOpenerConsume[] {
-  return deferredOpenerConsumes.splice(0, deferredOpenerConsumes.length);
+  return S().deferredOpenerConsumes.splice(0, S().deferredOpenerConsumes.length);
 }
 
 /**
@@ -551,12 +563,12 @@ export function takeMatchingDeferredOpenerConsume(
   userId: string,
   kind: 'markdown' | 'spec',
 ): DeferredOpenerConsume | undefined {
-  for (let i = deferredOpenerConsumes.length - 1; i >= 0; i--) {
-    const entry = deferredOpenerConsumes[i]!;
+  for (let i = S().deferredOpenerConsumes.length - 1; i >= 0; i--) {
+    const entry = S().deferredOpenerConsumes[i]!;
     if (entry.userId !== userId) continue;
     if (kind === 'markdown' && !('markdown' in entry)) continue;
     if (kind === 'spec' && !('spec' in entry)) continue;
-    deferredOpenerConsumes.splice(i, 1);
+    S().deferredOpenerConsumes.splice(i, 1);
     return entry;
   }
   return undefined;
@@ -564,9 +576,9 @@ export function takeMatchingDeferredOpenerConsume(
 
 /** 按 openerId 取出暂存消费 — 原兜底发送认领本轮条目, 避免同 lane 后续发送误领。 */
 export function takeDeferredOpenerConsumeById(openerId: string): DeferredOpenerConsume | undefined {
-  const index = deferredOpenerConsumes.findIndex((entry) => entry.openerId === openerId);
+  const index = S().deferredOpenerConsumes.findIndex((entry) => entry.openerId === openerId);
   if (index < 0) return undefined;
-  return deferredOpenerConsumes.splice(index, 1)[0];
+  return S().deferredOpenerConsumes.splice(index, 1)[0];
 }
 
 /**
@@ -575,7 +587,7 @@ export function takeDeferredOpenerConsumeById(openerId: string): DeferredOpenerC
  * 不应消费上一轮遗留的 opener。
  */
 export function getOpenerTrigger(laneUserId: string): string | undefined {
-  return openerTriggers.get(laneUserId);
+  return S().openerTriggers.get(laneUserId);
 }
 
 /**
@@ -583,20 +595,17 @@ export function getOpenerTrigger(laneUserId: string): string | undefined {
  * reply_in_thread 标记)。兜底发送向触发消息 reply 且 reply_in_thread=true,
  * 仍落回话题 — 而不是向已删除的开场白卡 reply 失败。无触发记录返回 false。
  */
-export function rearmAnchorToTrigger(laneUserId: string): boolean {
-  const triggerId = openerTriggers.get(laneUserId);
-  openerTriggers.delete(laneUserId);
+export function rearmAnchorToTrigger(laneUserId: string, expectedOpenerId: string): boolean {
+  // A delayed recall must not replace the anchor claimed by a newer round.
+  const state = S().laneAnchors.get(laneUserId);
+  if (!state || state.held !== expectedOpenerId) return false;
+  const triggerId = state.heldOpenerTrigger;
   if (!triggerId) return false;
-  const state = laneAnchors.get(laneUserId) ?? {
-    queue: [],
-    held: null,
-    quotedHeld: false,
-    inThreadReply: false,
-  };
+  delete state.heldOpenerTrigger;
   state.held = triggerId;
   state.quotedHeld = true;
   state.inThreadReply = true;
-  laneAnchors.set(laneUserId, state);
+  S().laneAnchors.set(laneUserId, state);
   return true;
 }
 
@@ -613,23 +622,28 @@ type SendTarget =
  * 不到, 以「流式建卡」为回合锚点领取点在本编排下成立: agent turn 恒以流式卡
  * 开场, 一次性回复(slash 提示等)则一条消息领取一次。
  */
-function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean }): SendTarget | null {
+function resolveSendTarget(userId: string, opts?: { advanceRound?: boolean; threadTs?: string }): SendTarget | null {
   const lane = decodeLaneUserId(userId);
+  if (!lane && opts?.threadTs) {
+    if (!opts.threadTs.startsWith('om_')) throw new Error('Invalid Feishu reply message id');
+    return { kind: 'reply', messageId: opts.threadTs, replyInThread: true };
+  }
   if (!lane) return { kind: 'open_id', id: userId };
 
-  const state = laneAnchors.get(userId) ?? {
+  const state = S().laneAnchors.get(userId) ?? {
     queue: [],
     held: null,
     quotedHeld: false,
     inThreadReply: false,
   };
-  laneAnchors.set(userId, state);
+  S().laneAnchors.set(userId, state);
   // 领取条件: advanceRound(流式建卡 = 新回合)必领; 其余出站只在完全没有
   // 持有时领(首次一次性回复)。回合中途的卡片/文件**不领** — 队列里可能已经
   // 排着下一轮的触发锚点, 中途领取会把下一轮的锚点偷来错挂。队列空时保留
   // held: 话题 lane 复用旧锚点仍落回正确话题(话题内任意消息都是合法锚点)。
   if ((opts?.advanceRound || !state.held) && state.queue.length > 0) {
     state.held = state.queue.shift() ?? null;
+    delete state.heldOpenerTrigger;
     state.quotedHeld = false;
     state.inThreadReply = false;
   }
@@ -655,7 +669,7 @@ async function createMessage(
   msgType: string,
   content: string,
   uuid?: string,
-): Promise<{ messageId: string }> {
+): Promise<{ messageId: string; chatId?: string }> {
   const c = ensureClient();
   if (target.kind === 'reply') {
     const res = await c.im.v1.message.reply({
@@ -677,11 +691,38 @@ async function createMessage(
   });
   const id = res.data?.message_id ?? '';
   if (!id) throw new Error('[feishu/outbound] create: no message_id in response');
-  return { messageId: id };
+  return { messageId: id, chatId: res.data?.chat_id };
 }
 
-function requireSendTarget(userId: string, opts?: { advanceRound?: boolean }): SendTarget {
-  const target = resolveSendTarget(userId, opts);
+/** Notification receipt used by the host to link replies to the originating session. */
+export async function sendNotification(userId: string, markdown: string): Promise<{ messageId: string; chatId?: string }> {
+  return createMessage({ kind: 'open_id', id: userId }, 'interactive', JSON.stringify(buildInteractiveCardV1({ body: markdown, buttons: [] })));
+}
+
+async function requireSendTarget(userId: string, opts?: { advanceRound?: boolean; threadTs?: string }): Promise<SendTarget> {
+  let target = resolveSendTarget(userId, opts);
+  const lane = decodeLaneUserId(userId);
+  if (!target && lane?.threadId) {
+    // A persisted topic lane survives restart, unlike its in-memory reply anchor.
+    // Recover from that exact thread; never fall back to the group main timeline.
+    const epoch = S().accountEpoch;
+    const res = await ensureClient().im.v1.message.list({
+      params: { container_id_type: 'thread', container_id: lane.threadId,
+        sort_type: 'ByCreateTimeDesc', page_size: 50 },
+    });
+    if (epoch !== S().accountEpoch) throw new Error('Feishu account replaced during anchor recovery');
+    ensureClient();
+    if (res.code !== 0) throw new Error(`Feishu topic anchor lookup failed: ${res.code}`);
+    const anchor = res.data?.items?.find((item) =>
+      !item.deleted && item.message_id?.startsWith('om_') &&
+      item.thread_id === lane.threadId && item.chat_id === lane.chatId);
+    // Inbound may have supplied an anchor while the lookup was in flight.
+    target = resolveSendTarget(userId, opts);
+    if (!target && anchor?.message_id) {
+      pushReplyAnchor(userId, anchor.message_id);
+      target = resolveSendTarget(userId, opts);
+    }
+  }
   if (!target) {
     throw new Error(
       `[feishu/outbound] no reply anchor for topic lane ...${userId.slice(-8)} — message dropped`,
@@ -690,12 +731,25 @@ function requireSendTarget(userId: string, opts?: { advanceRound?: boolean }): S
   return target;
 }
 
+/** Keep lookup and delivery on the same account across their async boundary. */
+async function withSendTarget<T>(
+  userId: string,
+  opts: { advanceRound?: boolean; threadTs?: string } | undefined,
+  send: (target: SendTarget) => Promise<T>,
+): Promise<T> {
+  return runWithPinnedAccount({ client: ensureClient(), epoch: S().accountEpoch }, async () => {
+    const target = await requireSendTarget(userId, opts);
+    ensureClient();
+    return send(target);
+  });
+}
+
 export function getBoundClient(): Lark.Client | null {
-  return client;
+  return S().client;
 }
 
 export function getBoundCreds(): BotCredentials | null {
-  return creds;
+  return S().creds;
 }
 
 interface PinnedAccount {
@@ -717,19 +771,20 @@ export function runWithPinnedAccount<T>(
 export function isPinnedAccountCurrent(): boolean {
   const pin = pinnedAccount.getStore();
   if (!pin) return true;
-  return pin.epoch === accountEpoch;
+  return pin.epoch === S().accountEpoch;
 }
 
 function ensureClient(): Lark.Client {
   const pin = pinnedAccount.getStore();
   if (pin) {
-    if (pin.epoch !== accountEpoch) {
+    if (pin.epoch !== S().accountEpoch) {
       throw new Error(
         '[feishu/outbound] pinned Feishu account was replaced — send aborted',
       );
     }
     return pin.client;
   }
+  const client = S().client;
   if (!client)
     throw new Error('[feishu/outbound] Lark.Client not bound — feishu connection not established');
   return client;
@@ -737,8 +792,8 @@ function ensureClient(): Lark.Client {
 
 // ── basic text ────────────────────────────────────────────────────────────────
 
-export async function sendText(userId: string, text: string): Promise<{ messageId: string }> {
-  return createMessage(requireSendTarget(userId), 'text', JSON.stringify({ text }));
+export async function sendText(userId: string, text: string, opts?: { threadTs?: string }): Promise<{ messageId: string }> {
+  return withSendTarget(userId, opts, (target) => createMessage(target, 'text', JSON.stringify({ text })));
 }
 
 /** 直接回复某条消息(非 owner 群 @ 的礼貌回应等 — 不走 lane 锚点)。 */
@@ -782,27 +837,23 @@ const OPEN_THREAD_DEDUP_TTL_MS = 10 * 60_000;
 const OPEN_THREAD_DEDUP_MAX_ENTRIES = 200;
 /** 超时/断线后用同一 uuid 再打 reply 的次数(不含首次)。 */
 const OPEN_THREAD_UNCERTAIN_RETRIES = 2;
-const openThreadByTrigger = new Map<
-  string,
-  { ts: number; promise: Promise<OpenThreadOutcome> }
->();
 
 function pruneOpenThreadDedup(): void {
   const now = Date.now();
-  for (const [triggerId, entry] of openThreadByTrigger) {
-    if (now - entry.ts > OPEN_THREAD_DEDUP_TTL_MS) openThreadByTrigger.delete(triggerId);
+  for (const [triggerId, entry] of S().openThreadByTrigger) {
+    if (now - entry.ts > OPEN_THREAD_DEDUP_TTL_MS) S().openThreadByTrigger.delete(triggerId);
   }
-  while (openThreadByTrigger.size > OPEN_THREAD_DEDUP_MAX_ENTRIES) {
+  while (S().openThreadByTrigger.size > OPEN_THREAD_DEDUP_MAX_ENTRIES) {
     let oldestKey: string | undefined;
     let oldestTs = Number.POSITIVE_INFINITY;
-    for (const [triggerId, entry] of openThreadByTrigger) {
+    for (const [triggerId, entry] of S().openThreadByTrigger) {
       if (entry.ts < oldestTs) {
         oldestTs = entry.ts;
         oldestKey = triggerId;
       }
     }
     if (oldestKey === undefined) break;
-    openThreadByTrigger.delete(oldestKey);
+    S().openThreadByTrigger.delete(oldestKey);
   }
 }
 
@@ -824,15 +875,15 @@ function pruneOpenThreadDedup(): void {
  */
 export function openThread(replyToMessageId: string): Promise<OpenThreadOutcome> {
   const now = Date.now();
-  const cached = openThreadByTrigger.get(replyToMessageId);
+  const cached = S().openThreadByTrigger.get(replyToMessageId);
   if (cached && now - cached.ts <= OPEN_THREAD_DEDUP_TTL_MS) return cached.promise;
 
   const promise = doOpenThread(replyToMessageId).then((outcome) => {
     // unconfirmed 不是稳定结论: 清掉缓存, 重投再用同一 uuid 取回原消息。
-    if (outcome.kind === 'unconfirmed') openThreadByTrigger.delete(replyToMessageId);
+    if (outcome.kind === 'unconfirmed') S().openThreadByTrigger.delete(replyToMessageId);
     return outcome;
   });
-  openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
+  S().openThreadByTrigger.set(replyToMessageId, { ts: now, promise });
   pruneOpenThreadDedup();
   return promise;
 }
@@ -845,7 +896,7 @@ export function openThread(replyToMessageId: string): Promise<OpenThreadOutcome>
  * 重试提示正是设计意图。
  */
 export function evictOpenThreadOutcome(replyToMessageId: string): void {
-  openThreadByTrigger.delete(replyToMessageId);
+  S().openThreadByTrigger.delete(replyToMessageId);
 }
 
 /**
@@ -1037,17 +1088,19 @@ export async function addReaction(messageId: string, emojiType: string): Promise
 
 /**
  * 撤销之前 addReaction 返回的 reaction_id 对应的表情。
- * 失败 swallow,因为这是 ack 的清理动作,不应影响 turn 结束流程。
+ * 失败向调用方抛出，让状态切换保留原 token；终态由编排层尽力清理。
  */
 export async function removeReaction(messageId: string, reactionId: string): Promise<void> {
-  const log = getLog();
   try {
-    await ensureClient().im.v1.messageReaction.delete({
+    const response = await ensureClient().im.v1.messageReaction.delete({
       path: { message_id: messageId, reaction_id: reactionId },
     });
+    const rejected = feishuBusinessRejectReason(response);
+    if (rejected) throw new Error(`removeReaction failed: ${rejected}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`[feishu/outbound] removeReaction failed (non-fatal): ${msg}`);
+    getLog().warn(`[feishu/outbound] removeReaction failed (non-fatal): ${msg}`);
+    throw err;
   }
 }
 
@@ -1064,24 +1117,23 @@ export async function removeReaction(messageId: string, reactionId: string): Pro
 
 const CARD_LANE_TTL_MS = 31 * 24 * 60 * 60 * 1000;
 const CARD_LANE_MAX_ENTRIES = 512;
-const cardLanes = new Map<string, { ts: number; lane: string }>();
 
 function pruneCardLanes(): void {
   const now = Date.now();
-  for (const [messageId, entry] of cardLanes) {
-    if (now - entry.ts > CARD_LANE_TTL_MS) cardLanes.delete(messageId);
+  for (const [messageId, entry] of S().cardLanes) {
+    if (now - entry.ts > CARD_LANE_TTL_MS) S().cardLanes.delete(messageId);
   }
-  while (cardLanes.size > CARD_LANE_MAX_ENTRIES) {
+  while (S().cardLanes.size > CARD_LANE_MAX_ENTRIES) {
     let oldestKey: string | undefined;
     let oldestTs = Number.POSITIVE_INFINITY;
-    for (const [messageId, entry] of cardLanes) {
+    for (const [messageId, entry] of S().cardLanes) {
       if (entry.ts < oldestTs) {
         oldestTs = entry.ts;
         oldestKey = messageId;
       }
     }
     if (oldestKey === undefined) break;
-    cardLanes.delete(oldestKey);
+    S().cardLanes.delete(oldestKey);
   }
 }
 
@@ -1089,7 +1141,7 @@ function pruneCardLanes(): void {
 /** 登记交互卡的发卡 lane(按钮回调 resolveCardLane 反查用)。 */
 export function registerCardLane(userId: string, messageId: string): void {
   if (!decodeLaneUserId(userId)) return;
-  cardLanes.set(messageId, { ts: Date.now(), lane: userId });
+  S().cardLanes.set(messageId, { ts: Date.now(), lane: userId });
   pruneCardLanes();
 }
 
@@ -1100,7 +1152,7 @@ export function registerCardLane(userId: string, messageId: string): void {
  */
 export function resolveCardLane(messageId: string, chatId: string): string | null {
   pruneCardLanes();
-  const entry = cardLanes.get(messageId);
+  const entry = S().cardLanes.get(messageId);
   if (!entry) return null;
   const lane = decodeLaneUserId(entry.lane);
   if (!lane || lane.chatId !== chatId) return null;
@@ -1110,7 +1162,7 @@ export function resolveCardLane(messageId: string, chatId: string): string | nul
 export async function sendInteractive(
   userId: string,
   spec: InteractiveCardSpec,
-  opts?: { deliverToOwnerDm?: boolean; ownerDmNote?: string },
+  opts?: { deliverToOwnerDm?: boolean; ownerDmNote?: string; threadTs?: string },
 ): Promise<{ messageId: string }> {
   // 授权卡改投宿主私聊(群 lane 专用语义): 群里的授权卡只有 owner 能答且
   // 消不掉。owner 未知时保持原 lane 投递, 不吞掉这次交互(telegram 同口径)。
@@ -1123,11 +1175,11 @@ export async function sendInteractive(
     return createMessage({ kind: 'open_id', id: owner }, 'interactive', JSON.stringify(card));
   }
   const card = buildInteractiveCardV1(spec);
-  const result = await createMessage(
-    requireSendTarget(userId),
+  const result = await withSendTarget(userId, opts, (target) => createMessage(
+    target,
     'interactive',
     JSON.stringify(card),
-  );
+  ));
   registerCardLane(userId, result.messageId);
   return result;
 }
@@ -1167,12 +1219,13 @@ export async function patchCardRaw(messageId: string, cardJson: unknown): Promis
 export async function sendCardRaw(
   userId: string,
   cardJson: unknown,
+  opts?: { threadTs?: string; advanceRound?: boolean },
 ): Promise<{ messageId: string }> {
-  return createMessage(
-    requireSendTarget(userId, { advanceRound: true }),
+  return withSendTarget(userId, { advanceRound: true, ...opts }, (target) => createMessage(
+    target,
     'interactive',
     JSON.stringify(cardJson),
-  );
+  ));
 }
 
 /** Send a terminal-output mirror directly to a parent group main timeline. */
@@ -1238,13 +1291,14 @@ export async function sendFile(
   userId: string,
   absPath: string,
   displayName?: string,
+  opts?: { threadTs?: string },
 ): Promise<FeishuSendFileResult> {
-  const target = resolveSendTarget(userId);
-  if (!target) {
-    getLog().error(`[feishu/outbound] sendFile: no reply anchor for topic lane ...${userId.slice(-8)}`);
+  try {
+    return await withSendTarget(userId, opts, (target) => sendFileToTarget(target, absPath, displayName));
+  } catch {
+    getLog().error('[feishu/outbound] sendFile: target or delivery unavailable');
     return { ok: false, reason: 'SEND_FAIL' };
   }
-  return sendFileToTarget(target, absPath, displayName);
 }
 
 /** Re-send an already uploaded terminal-output file to a parent group main timeline. */
@@ -1710,6 +1764,7 @@ export async function uploadImage(absPath: string): Promise<string | null> {
 
 export interface ResolvedReplyMessage {
   replyContext: NonNullable<IMMessageEvent['replyContext']>;
+  attachments?: AttachmentRef[];
 }
 
 function renderReplyMessageText(
@@ -1739,22 +1794,28 @@ function replaceFetchedMentions(
 }
 
 /**
- * 精确读取一条飞书普通回复所引用的原消息。全程 pin 到开始时的 client;
- * 账号换代后调用方会用 connection generation 丢弃结果, 不会串进新账号。
- *
- * 任何读取、解析失败都降级为 null, 当前 turn 继续走既有群历史上下文路径。
- * 跨群 parent_id fail closed, 防止异常事件带出别处内容。被引附件只渲染
- * [图片]/[文件] 占位, 不在 transport 层提前下载或并入当前消息附件:正文要先
- * 经 host 的注入扫描, 且引用附件不应按触发消息语义落库。
+ * Fetch a quote (including merge-forward descendants) from the originating chat.
+ * Keep resource ownership for the host to download after screening the text.
  */
 export async function resolveReplyMessage(
   messageId: string,
   expectedChatId: string,
 ): Promise<ResolvedReplyMessage | null> {
-  const c = client;
+  const c = S().client;
   if (!c) return null;
+  return resolveReplyWithClient(c, messageId, expectedChatId);
+}
+
+async function resolveReplyWithClient(
+  c: Lark.Client,
+  messageId: string,
+  expectedChatId: string,
+  readBudget = { remaining: 21 },
+): Promise<ResolvedReplyMessage | null> {
   const log = getLog();
   try {
+    if (readBudget.remaining <= 0) return null;
+    readBudget.remaining--;
     const res = await c.im.v1.message.get({
       params: { user_id_type: 'open_id', with_sender_name: true },
       path: { message_id: messageId },
@@ -1764,28 +1825,62 @@ export async function resolveReplyMessage(
       log.warn(`[feishu/outbound] reply context fetch rejected: ${rejected}`);
       return null;
     }
-    const item = res.data?.items?.[0];
-    if (!item || item.deleted) return null;
-    if (item.chat_id !== expectedChatId) {
-      log.warn('[feishu/outbound] reply context dropped: parent message belongs to another chat');
-      return null;
-    }
-
-    const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
-    const text = replaceFetchedMentions(
-      renderReplyMessageText(parsed),
-      item.mentions,
-    );
+    const items = res.data?.items ?? [];
+    const root = items.find((item) => item.message_id === messageId);
+    if (!root || root.deleted || root.chat_id !== expectedChatId) return null;
+    const authorOf = (item: typeof root): string =>
+      (item.sender?.sender_name || (item.sender?.sender_type === 'app' ? 'bot' : 'user'))
+        .replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 64);
+    const attachments: AttachmentRef[] = [];
+    const visited = new Set<string>();
+    const render = async (item: typeof root): Promise<string> => {
+      if (!item.message_id || item.deleted || visited.has(item.message_id)) return '';
+      // The envelope is checked against the triggering chat above. Forwarded
+      // children belong through upper_message_id, even when their original chat differs.
+      visited.add(item.message_id);
+      if (item.msg_type === 'merge_forward') {
+        let children = items.filter((child) => child.upper_message_id === item.message_id);
+        // Some responses include only the immediate level. Fetch deeper envelopes
+        // with the same client; never follow arbitrary message IDs from body text.
+        if (!children.length && item !== root && readBudget.remaining > 0) {
+          try {
+            readBudget.remaining--;
+            const nested = await c.im.v1.message.get({
+              params: { user_id_type: 'open_id', with_sender_name: true },
+              path: { message_id: item.message_id },
+            });
+            if (!feishuBusinessRejectReason(nested)) {
+              const extra = nested.data?.items ?? [];
+              for (const child of extra) {
+                if (!items.some((known) => known.message_id === child.message_id)) items.push(child);
+              }
+              children = items.filter((child) => child.upper_message_id === item.message_id);
+            }
+          } catch {
+            // Preserve a visible unreadable marker and all readable siblings.
+          }
+        }
+        const lines: string[] = [];
+        for (const child of children) {
+          const text = await render(child);
+          if (text) lines.push(`[${authorOf(child)}] ${text}`);
+        }
+        return lines.length ? `[合并转发消息]\n${lines.join('\n')}`
+          : readBudget.remaining <= 0 ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：未能读取子消息]';
+      }
+      const parsed = parseIncoming(item.msg_type ?? '', item.body?.content ?? '');
+      attachments.push(...parsed.attachments.map((ref) => ({ ...ref, messageId: item.message_id })));
+      return replaceFetchedMentions(renderReplyMessageText(parsed), item.mentions);
+    };
+    const text = await render(root);
     if (!text) return null;
-
-    const isBot = item.sender?.sender_type === 'app';
-    const author = item.sender?.sender_name?.trim() || (isBot ? 'bot' : 'user');
     return {
       replyContext: {
-        author,
+        author: authorOf(root),
         text,
-        ...(isBot ? { isBot: true } : {}),
+        ...(root.sender?.sender_type === 'app' ? { isBot: true } : {}),
       },
+      ...(attachments.length ? { attachments } : {}),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1817,8 +1912,7 @@ export interface ChatHistoryPage {
 
 /**
  * 按页拉群/话题历史(群 lane 触发时 adapter 拼上下文用)。倒序拉一页, 返回
- * 页内升序。话题 lane 传 threadId 走 thread 容器, 只回本话题消息; 群主流
- * 不传, 调用方自行按 thread_id 过滤(chat 容器会混入话题消息)。
+ * 页内升序。展开转发前按 threadId 筛选; 缺省只保留群主流。
  *
  * 需要「获取群组中所有消息」权限。**失败(权限不足/网络)直接抛错** — 调用方
  * 需要区分「真的没有历史」与「拉取失败」来做降级提示, 不能吞成空数组。
@@ -1829,8 +1923,11 @@ export async function fetchChatHistoryPage(args: {
   threadId?: string;
   pageToken?: string;
   pageSize?: number;
+  excludeMessageId?: string;
+  /** Mutable per-turn allowance, shared by every page and nested message.get. */
+  mergeForwardReadBudget?: { remaining: number };
 }): Promise<ChatHistoryPage> {
-  const c = client;
+  const c = S().client;
   if (!c) throw new Error('feishu client not bound');
   const res = await c.im.v1.message.list({
     params: {
@@ -1847,13 +1944,20 @@ export async function fetchChatHistoryPage(args: {
   }
   const items = res.data?.items ?? [];
   const out: RecentChatMessage[] = [];
+  const readBudget = args.mergeForwardReadBudget ?? { remaining: 20 };
   for (const item of items) {
     if (!item.message_id || item.deleted) continue;
+    if (item.message_id === args.excludeMessageId || (item.thread_id ?? '') !== (args.threadId ?? '')) continue;
     const msgType = item.msg_type ?? '';
     const rawContent = item.body?.content ?? '';
     let text = '';
     let attachments: AttachmentRef[] = [];
-    if (
+    if (msgType === 'merge_forward') {
+      const exhausted = readBudget.remaining <= 0;
+      const resolved = exhausted ? null : await resolveReplyWithClient(c, item.message_id, args.chatId, readBudget);
+      text = resolved?.replyContext.text ?? (exhausted ? '[合并转发消息：读取预算已用完]' : '[合并转发消息：读取失败]');
+      attachments = resolved?.attachments ?? [];
+    } else if (
       msgType === 'text' ||
       msgType === 'post' ||
       msgType === 'image' ||
@@ -1895,7 +1999,7 @@ export async function fetchChatHistoryPage(args: {
  */
 export async function getChatName(chatId: string): Promise<string | null> {
   const log = getLog();
-  const c = client;
+  const c = S().client;
   if (!c) return null;
   try {
     const res = await c.im.v1.chat.get({ path: { chat_id: chatId } });
@@ -1909,6 +2013,153 @@ export async function getChatName(chatId: string): Promise<string | null> {
     log.warn(`[feishu/outbound] chat.get failed: ${msg}`);
     return null;
   }
+}
+
+
+// ── Agent 直通 Open API(cindy_feishu_bot 轮次内工具) ────────────────────────
+// 这些函数不走 lane 锚点 / opener 消费: 它们是 Agent 在轮次里显式操作当前对话的
+// 能力(查群信息、成员、置顶、撤回自己的消息、任意 Open API)。目标 chat / message
+// 由桌面侧逐轮作用域钉死, 这里只负责把 SDK 返回与业务码折成稳定的错误形态。
+
+/**
+ * 飞书 Open API 调用失败(HTTP 4xx/5xx 或 2xx 带非零业务码)。`code` 是飞书业务码
+ * (如 99991663 权限不足、230001 无权发消息), `httpStatus` 是 HTTP 状态(业务码拒绝时
+ * 为 200)。MCP 层据此给模型稳定的 errorCode, 不把 axios 内部结构透给模型。
+ */
+export class FeishuApiError extends Error {
+  readonly code: number | undefined;
+  readonly httpStatus: number | undefined;
+  readonly apiMsg: string;
+  constructor(args: { code?: number; httpStatus?: number; msg: string }) {
+    super(`feishu api ${args.httpStatus ?? ''} code=${args.code ?? '?'} ${args.msg}`.replace(/\s+/g, ' ').trim());
+    this.name = 'FeishuApiError';
+    this.code = args.code;
+    this.httpStatus = args.httpStatus;
+    this.apiMsg = args.msg;
+  }
+}
+
+function toFeishuApiError(err: unknown): FeishuApiError {
+  if (err instanceof FeishuApiError) return err;
+  const r = (err as { response?: { status?: number; data?: { code?: number; msg?: string } } })?.response;
+  if (r && (typeof r.status === 'number' || r.data)) {
+    return new FeishuApiError({
+      code: typeof r.data?.code === 'number' ? r.data.code : undefined,
+      httpStatus: typeof r.status === 'number' ? r.status : undefined,
+      msg: r.data?.msg ?? (err instanceof Error ? err.message : String(err)),
+    });
+  }
+  return new FeishuApiError({ msg: err instanceof Error ? err.message : String(err) });
+}
+
+/** 2xx 带非零业务码 → 抛 FeishuApiError; 否则原样返回响应体。 */
+function unwrapApiResponse<T extends { code?: number; msg?: string }>(res: T): T {
+  if (typeof res?.code === 'number' && res.code !== 0) {
+    throw new FeishuApiError({ code: res.code, httpStatus: 200, msg: res.msg ?? 'rejected' });
+  }
+  return res;
+}
+
+export type FeishuApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+
+/**
+ * 以本连接 bot 的 tenant_access_token 调任意飞书 Open API。`path` 形如
+ * `/open-apis/im/v1/chats/{chat_id}`(SDK 自动拼 Feishu / Lark 域名并带 token)。
+ * 返回响应体(含 `code` / `msg` / `data`); HTTP 错误或业务码非零一律抛 FeishuApiError。
+ */
+export async function callApi(args: {
+  method: FeishuApiMethod;
+  path: string;
+  params?: Record<string, unknown>;
+  data?: unknown;
+}): Promise<Record<string, unknown>> {
+  const c = ensureClient();
+  const url = args.path.startsWith('/') ? args.path.slice(1) : args.path;
+  try {
+    const res = await c.request<Record<string, unknown>>({
+      method: args.method,
+      url,
+      ...(args.params ? { params: args.params } : {}),
+      ...(args.data !== undefined ? { data: args.data } : {}),
+    });
+    return unwrapApiResponse((res ?? {}) as { code?: number; msg?: string }) as Record<string, unknown>;
+  } catch (err) {
+    throw toFeishuApiError(err);
+  }
+}
+
+/** 群 / 私聊会话信息(需「获取群信息」权限)。 */
+export async function getChatInfo(chatId: string): Promise<Record<string, unknown>> {
+  const res = await callApi({ method: 'GET', path: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}` });
+  return (res.data as Record<string, unknown> | undefined) ?? {};
+}
+
+export interface FeishuChatMembersPage {
+  items: Array<{ memberId: string; name: string }>;
+  memberTotal: number | null;
+  nextPageToken: string | null;
+}
+
+/** 群成员一页(open_id + 名字), 需「获取群成员列表」权限。 */
+export async function listChatMembers(
+  chatId: string,
+  opts?: { pageToken?: string; pageSize?: number },
+): Promise<FeishuChatMembersPage> {
+  const res = await callApi({
+    method: 'GET',
+    path: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
+    params: {
+      member_id_type: 'open_id',
+      page_size: String(Math.min(Math.max(opts?.pageSize ?? 100, 1), 100)),
+      ...(opts?.pageToken ? { page_token: opts.pageToken } : {}),
+    },
+  });
+  const data = (res.data ?? {}) as {
+    items?: Array<{ member_id?: string; name?: string }>;
+    member_total?: number;
+    has_more?: boolean;
+    page_token?: string;
+  };
+  return {
+    items: (data.items ?? [])
+      .filter((m) => typeof m.member_id === 'string')
+      .map((m) => ({ memberId: m.member_id as string, name: m.name ?? '' })),
+    memberTotal: typeof data.member_total === 'number' ? data.member_total : null,
+    nextPageToken: data.has_more && data.page_token ? data.page_token : null,
+  };
+}
+
+/** 读一条消息的原始体(类型 / 发送者 / 内容 JSON 字串 / 时间)。 */
+export async function getMessage(messageId: string): Promise<Record<string, unknown> | null> {
+  const res = await callApi({ method: 'GET', path: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}` });
+  const items = (res.data as { items?: Array<Record<string, unknown>> } | undefined)?.items;
+  return items?.[0] ?? null;
+}
+
+/** 群内置顶 / 取消置顶一条消息(bot 需在群里且有「置顶消息」权限)。 */
+export async function pinMessage(messageId: string): Promise<void> {
+  await callApi({ method: 'POST', path: '/open-apis/im/v1/pins', data: { message_id: messageId } });
+}
+
+export async function unpinMessage(messageId: string): Promise<void> {
+  await callApi({ method: 'DELETE', path: `/open-apis/im/v1/pins/${encodeURIComponent(messageId)}` });
+}
+
+/** 撤回一条消息; 与 recallOwnMessage 不同, 失败抛 FeishuApiError 让调用方看到原因。 */
+export async function recallMessage(messageId: string): Promise<void> {
+  await callApi({ method: 'DELETE', path: `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}` });
+}
+
+/** 以 markdown 卡片回复某条消息(reply 容器, 不走 lane 锚点)。 */
+export async function replyMarkdownText(
+  replyToMessageId: string,
+  markdown: string,
+): Promise<{ messageId: string }> {
+  return createMessage(
+    { kind: 'reply', messageId: replyToMessageId },
+    'interactive',
+    JSON.stringify(buildMarkdownCardV2(markdown)),
+  );
 }
 
 async function sendImageMessage(

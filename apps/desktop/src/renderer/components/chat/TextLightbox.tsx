@@ -1,3 +1,6 @@
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * TextLightbox
  * ---------------------------------------------------------------------------
@@ -17,9 +20,10 @@
  * the backdrop and Esc close.
  */
 
+import { CHAT_LIGHTBOX_ICON_BUTTON_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, ExternalLink, FileText, Folder, TriangleAlert, X } from 'lucide-react';
+import { Copy, Download, ExternalLink, Folder, TriangleAlert, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
@@ -28,7 +32,12 @@ import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
 import { detectRenderable } from '@/lib/textPreview';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
-import { chatFileErrorText, fetchChatFileToCache } from '@/lib/remoteFileOpen';
+import { observeFileTransferProgressText } from '@/lib/fileTransferProgress';
+import {
+  chatFileErrorText,
+  downloadRemoteChatEntry,
+  fetchChatFileToCache,
+} from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import { PlaintextEditor, type PlaintextEditorHandle } from '@/components/markdown/PlaintextEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -114,8 +123,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   const sessionFileCtx = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(sessionFileCtx.origin) ? sessionFileCtx.origin : null;
   const [remoteCopy, setRemoteCopy] = useState<{ cachePath: string; stale: boolean } | null>(null);
-  // 远端取回进度(chat-file:fetch 的 TRANSFER push,relPath 键 = 原始 absPath)。
-  const [fetchProgress, setFetchProgress] = useState<{ received: number; total: number } | null>(null);
+  const [fetchProgressText, setFetchProgressText] = useState<string | null>(null);
   const isClosingRef = useRef(false);
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<PlaintextEditorHandle>(null);
@@ -211,11 +219,16 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
   // response so we don't have to re-statically encode the MB number in two places.
   useEffect(() => {
     let cancelled = false;
+    setFetchProgressText(null);
+    const progress = remoteOrigin ? observeFileTransferProgressText(setFetchProgressText) : null;
     (async () => {
       try {
         // 远程:先取回缓存副本(同 identity 与侧边栏共享,命中秒回),再读副本。
         if (remoteOrigin) {
-          const fetched = await fetchChatFileToCache(remoteOrigin, sessionFileCtx.workingDir, filePath);
+          const fetched = await fetchChatFileToCache(
+            remoteOrigin, sessionFileCtx.workingDir, filePath, progress?.requestId,
+          );
+          progress?.dispose();
           if (cancelled) return;
           if (!fetched.ok) {
             setLoadState({ phase: 'error', message: chatFileErrorText(fetched.code) });
@@ -264,21 +277,15 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
           phase: 'error',
           message: err instanceof Error ? err.message : String(err),
         });
+      } finally {
+        progress?.dispose();
       }
     })();
     return () => {
       cancelled = true;
+      progress?.dispose();
     };
   }, [filePath, remoteOrigin, sessionFileCtx.workingDir, t]);
-
-  // 远程取回进度:大文件首拉可能秒级到分钟级,spinner 区显示百分比。
-  useEffect(() => {
-    if (!remoteOrigin || contentReady) return;
-    const off = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-      if (e.relPath === filePath) setFetchProgress({ received: e.received, total: e.total });
-    });
-    return off;
-  }, [remoteOrigin, contentReady, filePath]);
 
 
   useEffect(() => {
@@ -335,22 +342,24 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
     }
   }
 
-  // 远程会话:系统打开 / 目录定位一律对**本地缓存副本**进行(远端路径在本机
-  // 无意义,直呼 openPath 是误开本机同路径文件的隐患);copyPath 仍复制远端
-  // 原始路径(用户要的是"这个文件在远端哪里")。
+  // 远程会话:系统打开对**本地缓存副本**进行(远端路径在本机无意义,直呼
+  // openPath 是误开本机同路径文件的隐患),定位改为「下载到本地」(落到系统下载
+  // 文件夹);copyPath 仍复制远端原始路径(用户要的是"这个文件在远端哪里")。
   async function openInSystem() {
     const target = remoteOrigin ? remoteCopy?.cachePath : filePath;
     if (!target) return;
     const res = await window.electronAPI.openPath(target);
-    if (!res.success) {
+    if (shouldShowOpenPathError(res)) {
       toast.error(res.error || t('chat.textLightbox.openSystemFailed'));
     }
   }
 
   async function showInFolder() {
-    const target = remoteOrigin ? remoteCopy?.cachePath : filePath;
-    if (!target) return;
-    const res = await window.electronAPI.showItemInFolder({ filePath: target });
+    if (remoteOrigin) {
+      await downloadRemoteChatEntry(remoteOrigin, sessionFileCtx.workingDir, filePath);
+      return;
+    }
+    const res = await window.electronAPI.showItemInFolder({ filePath });
     if (!res.success) {
       toast.error(res.error || t('chat.textLightbox.openSystemFailed'));
     }
@@ -405,7 +414,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
       <div
         data-text-lightbox-card
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-[12px]',
+          'cursor-auto flex flex-col overflow-hidden rounded-xl',
           'border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
@@ -435,12 +444,13 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 onClick={copyPath}
                 className={cn(
                   'flex items-center gap-2 min-w-0',
-                  'rounded-[6px] px-1 -mx-1 py-0.5',
+                  'rounded-full px-1 -mx-1 py-0.5',
+                  CHAT_FOCUS_CLASS,
                   'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
                   'text-left cursor-pointer',
                 )}
               >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                <FileTypeIcon name={filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
                 <span
                   className={cn(
                     'font-semibold text-14',
@@ -484,20 +494,19 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={showInFolder}
+                  aria-label={remoteOrigin ? t('chat.remoteFile.downloadToLocal') : t('chat.lightbox.openInExplorer')}
                   disabled={!localActionsReady}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors',
-                    localActionsReady
-                      ? 'hover:bg-[var(--msg-code-inline-bg)] cursor-pointer'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
-                  <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                  {remoteOrigin ? (
+                    <Download size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                  ) : (
+                    <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                  )}
                 </button>
               </Tooltip.Trigger>
               <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
-                {remoteOrigin ? t('chat.remoteFile.revealLocalCopy') : t('chat.lightbox.openInExplorer')}
+                {remoteOrigin ? t('chat.remoteFile.downloadToLocal') : t('chat.lightbox.openInExplorer')}
               </Tooltip.Content>
             </Tooltip.Root>
             <Tooltip.Root>
@@ -505,14 +514,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={copyContent}
+                  aria-label={t('chat.textLightbox.copyAll')}
                   disabled={loadState.phase !== 'ready'}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors cursor-pointer',
-                    loadState.phase === 'ready'
-                      ? 'hover:bg-[var(--msg-code-inline-bg)]'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
                   <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
@@ -526,11 +530,8 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={handleClose}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                    'cursor-pointer',
-                  )}
+                  aria-label={t('chat.lightbox.close')}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
                   <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
@@ -554,10 +555,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             >
               <Spinner size={32} className="text-[var(--msg-tool-card-chevron)]" />
               <div>
-                {remoteOrigin ? t('chat.remoteFile.fetching') : t('chat.textLightbox.loading')}
-                {remoteOrigin && fetchProgress && fetchProgress.total > 0
-                  ? ` ${Math.min(100, Math.round((fetchProgress.received / fetchProgress.total) * 100))}%`
-                  : null}
+                {remoteOrigin
+                  ? fetchProgressText ?? t('chat.remoteFile.fetching')
+                  : t('chat.textLightbox.loading')}
               </div>
             </div>
           ) : (
@@ -602,23 +602,18 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
             >
               {t('chat.textLightbox.oversizeBody', { size: oversizeSizeText, limit: oversizeLimitMb })}
             </div>
-            <button
+            <Button
+              variant="cta"
+              size="lg"
+              compact
               type="button"
               onClick={openInSystem}
               disabled={!localActionsReady}
-              className={cn(
-                'mt-2 inline-flex items-center gap-2 rounded-[9999px]',
-                'bg-[var(--lightbox-cta-bg)] px-5 py-[10px]',
-                'text-14 font-medium text-[var(--lightbox-cta-fg)]',
-                'transition-colors',
-                localActionsReady
-                  ? 'hover:bg-[var(--lightbox-cta-hover)] cursor-pointer'
-                  : 'opacity-40 cursor-not-allowed',
-              )}
+              className="mt-2"
             >
               <ExternalLink size={14} />
               {t('chat.textLightbox.openInSystem')}
-            </button>
+            </Button>
           </div>
         )}
 

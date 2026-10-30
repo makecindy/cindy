@@ -1,9 +1,23 @@
+import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
+import { runPluginUsageTransaction } from './pluginUsageTx.js';
+import { runTaskTagsTransaction } from './taskTagsTx.js';
+import { recordMediaSpend } from './mediaSpendTx.js';
+import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
+import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../../sharedTaskClosureSql.js';
+import { botProfileModelSelectionChanged } from '../../../../shared/botModelChain.js';
+import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
+import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
+import { normalizeBotName } from '../../../../shared/botCreation.js';
+import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
 // 默认热路径走 file worker（dbWorker.ts + dispatcher），这里要和同名 tx handler 保持一致。
 
 import type Database from 'better-sqlite3';
 
-import type { DbTxName } from '../../client/tx/types.js';
+import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/types.js';
+import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
+import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
 import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
@@ -25,17 +39,45 @@ import {
   wechatStopAll,
   wechatUnbindCleanup,
 } from './wechatTx.js';
+import {
+  botGroupsAppendMessage,
+  botGroupsArchiveLanes,
+  botGroupsCreate,
+  botGroupsCreatePlan,
+  botGroupsDelete,
+  botGroupsRemovePlanStep,
+  botGroupsSetMembers,
+  botGroupsSettleStep,
+} from './botGroupsTx.js';
+import type {
+  BotGroupsCreateLaneArgs,
+  BotGroupsCreateLaneResult,
+  BotsArchiveChannelLanesArgs,
+  BotsCreateChannelLaneArgs,
+  BotsCreateThreadLaneArgs,
+} from '../../client/tx/types.js';
 
 const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1_000, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
 
 export function tx(db: Database.Database, args: unknown): unknown {
+  const name = expectString(asRecord(args, 'tx args').name, 'name');
+  return batchAutoReviewProjection(db, name, () => dispatchTransaction(db, args));
+}
+
+function dispatchTransaction(db: Database.Database, args: unknown): unknown {
   const payload = asRecord(args, 'tx args');
   const name = expectString(payload.name, 'name') as DbTxName;
   const txArgs = payload.args;
 
   switch (name) {
+    case 'chatCache.execute':
+      return runChatCacheTransaction(db, txArgs as ChatCacheTransaction);
+    case 'usage.recordMediaSpend':
+      return recordMediaSpend(db, txArgs as import('../../client/tx/types.js').MediaSpendArgs);
+    case 'authorization.readProjection':
+      return readAutoReviewProjectionTransaction(db, txArgs);
     case 'codex.importMessages':
       return codexImportMessages(db, txArgs);
     case 'claude.importMessages':
@@ -76,6 +118,17 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'sessions.setTerminalStatus':
+      return sessionsSetTerminalStatus(db, txArgs);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(db, txArgs);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'pluginUsage.execute': return runPluginUsageTransaction(db, txArgs);
+    case 'taskTags.execute':
+      return runTaskTagsTransaction(db, txArgs);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(db, txArgs);
     case 'toolResults.compactSession':
       return compactSessionToolResults(db, txArgs);
     case 'session.agentSwitchFallback':
@@ -96,6 +149,71 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return imDeleteBindings(db, txArgs);
     case 'im.replaceBinding':
       return imReplaceBinding(db, txArgs);
+    case 'bots.createProfile':
+      return botsCreateProfile(db, txArgs);
+    case 'bots.updateProfile':
+      return botsUpdateProfile(db, txArgs);
+    case 'bots.updateAttention':
+      return botsUpdateAttention(db, txArgs);
+    case 'bots.reconcileCanonicalLink':
+      return botsReconcileCanonicalLink(db, txArgs);
+    case 'bots.replaceCanonicalSession':
+      return botsReplaceCanonicalSession(db, txArgs);
+    case 'bots.prepareRuntime':
+      return botsPrepareRuntime(db, txArgs);
+    case 'bots.finishRuntime':
+      return botsFinishRuntime(db, txArgs);
+    case 'bots.finishDelegation':
+      return botsFinishDelegation(db, txArgs);
+    case 'bots.reparentDelegations':
+      return botsReparentDelegations(db, txArgs);
+    case 'bots.createDelegation':
+      return botsCreateDelegation(db, txArgs);
+    case 'bots.reopenDelegation':
+      return botsReopenDelegation(db, txArgs);
+    case 'bots.pauseLifecycle':
+      return botsPauseLifecycle(db, txArgs);
+    case 'bots.resumeLifecycle':
+      return botsResumeLifecycle(db, txArgs);
+    case 'bots.archiveLifecycle':
+      return botsArchiveLifecycle(db, txArgs);
+    case 'bots.deleteProfile':
+      return botsDeleteProfile(db, txArgs);
+    case 'bots.prepareProfileDeletion':
+      expectString(asRecord(txArgs, 'args').botId, 'botId');
+      return undefined;
+    case 'bots.reconcileLanePermission':
+      return botsReconcileLanePermission(db, txArgs);
+    case 'bots.persistSessionPermission':
+      return botsPersistSessionPermission(db, txArgs);
+    case 'bots.createGroupLane':
+      return botsCreateGroupLane(db, txArgs as BotGroupsCreateLaneArgs);
+    case 'bots.createRoutineLane':
+      return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs, 'routine');
+    case 'bots.createChannelLane':
+      return botsCreateChannelLane(db, txArgs as BotsCreateChannelLaneArgs);
+    case 'bots.createThreadLane':
+      return botsCreateThreadLane(db, txArgs as BotsCreateThreadLaneArgs);
+    case 'bots.archiveChannelLanes':
+      return botsArchiveChannelLanes(db, txArgs as BotsArchiveChannelLanesArgs);
+    case 'botGroups.create':
+      return botGroupsCreate(db, txArgs as Parameters<typeof botGroupsCreate>[1]);
+    case 'botGroups.setMembers':
+      return botGroupsSetMembers(db, txArgs as Parameters<typeof botGroupsSetMembers>[1]);
+    case 'botGroups.delete':
+      return botGroupsDelete(db, txArgs as Parameters<typeof botGroupsDelete>[1]);
+    case 'botGroups.archiveLanes':
+      return botGroupsArchiveLanes(db, txArgs as Parameters<typeof botGroupsArchiveLanes>[1]);
+    case 'botGroups.appendMessage':
+      return botGroupsAppendMessage(db, txArgs as Parameters<typeof botGroupsAppendMessage>[1]);
+    case 'botGroups.createPlan':
+      return botGroupsCreatePlan(db, txArgs as Parameters<typeof botGroupsCreatePlan>[1]);
+    case 'botGroups.settleStep':
+      return botGroupsSettleStep(db, txArgs as Parameters<typeof botGroupsSettleStep>[1]);
+    case 'botGroups.removePlanStep':
+      return botGroupsRemovePlanStep(db, txArgs as Parameters<typeof botGroupsRemovePlanStep>[1]);
+    case 'im.rotateSession':
+      return imRotateSession(db, txArgs);
     case 'wechatActivateBindingEpoch':
       return wechatActivateBindingEpoch(db, txArgs);
     case 'wechatCommitPollBatch':
@@ -130,11 +248,1397 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return wechatRefreshOutboxContexts(db, txArgs);
     case 'wechatUnbindCleanup':
       return wechatUnbindCleanup(db, txArgs);
+    case 'skillUsage.applyMutation':
+      return skillUsageApplyMutation(db, txArgs);
     case 'session.importShare':
       return sessionImportShare(db, txArgs);
     default:
       throw Object.assign(new Error(`unknown tx: ${name}`), { code: 'UNKNOWN_TX' });
   }
+}
+
+function recentWorkdirsMergeWindowsIdentity(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    db.prepare(
+      `INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)`,
+    ).run(representativePath, newestTimestamp);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  })();
+}
+
+function recentWorkdirsRemoveWindowsIdentity(db: Database.Database, args: unknown): { changes: number } {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  return db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  })();
+}
+
+function recentWorkdirWindowsIdentityRows(
+  db: Database.Database,
+  path: string,
+): Array<{ rowid: number; path: string; lastUsedAt: number }> {
+  const identity = path.toLowerCase();
+  const rows = db
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all() as Array<{ rowid: number; path: string; lastUsedAt: number }>;
+  return rows.filter((row) => row.path.toLowerCase() === identity);
+}
+
+function projectAliasesReplaceIdentity(
+  db: Database.Database,
+  args: unknown,
+): { projectKey: string; alias: string; updatedAt: number } | null {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') throw invalidArgs('foldCase must be a boolean');
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return db.transaction(() => {
+    const rows = db.prepare('SELECT project_key AS projectKey FROM project_aliases').all() as Array<{ projectKey: string }>;
+    const removeAlias = db.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    db.prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)').run(projectKey, alias, updatedAt);
+    return { projectKey, alias, updatedAt };
+  })();
+}
+
+/** Main → worker internal flag: absent keeps the original behavior. */
+function expectOptionalFlag(value: unknown, name: string): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw invalidArgs(`${name} must be a boolean`);
+  return value;
+}
+
+function botsCreateProfile(db: Database.Database, args: unknown): void {
+  const p = asRecord(args, 'bots.createProfile args');
+  const id = expectString(p.id, 'id');
+  const now = expectNumber(p.now, 'now');
+  const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  db.transaction(() => {
+    const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
+    const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
+      FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+      WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
+    if ((!allowDuplicateName && rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName')))) ||
+        (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+      throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
+    }
+    db.prepare(`INSERT INTO bot_profiles
+      (id, display_name, description, avatar, avatar_color, status, current_version,
+       canonical_session_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'active', 1, NULL, ?, ?)`)
+      .run(id, expectString(p.displayName, 'displayName'), expectString(p.description, 'description'),
+        expectString(p.avatar, 'avatar'), expectString(p.avatarColor, 'avatarColor'), now, now);
+    db.prepare(`INSERT INTO bot_profile_versions
+      (id, bot_id, version, identity_source, capabilities_json, created_at)
+      VALUES (?, ?, 1, ?, ?, ?)`)
+      .run(`${id}:v1`, id, expectString(p.identitySource, 'identitySource'),
+        expectString(p.capabilitiesJson, 'capabilitiesJson'), now);
+    if (p.botAvatarRef !== undefined) {
+      const ref = asRecord(p.botAvatarRef, 'botAvatarRef');
+      const hash = expectString(ref.hash, 'botAvatarRef.hash');
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('botAvatarRef.hash is invalid');
+      db.prepare(`INSERT INTO media_refs
+        (id, hash, ref_kind, ref_id, origin_kind, created_at)
+        VALUES (?, ?, 'bot-avatar', ?, 'user', ?)`)
+        .run(expectString(ref.id, 'botAvatarRef.id'), hash, id, expectNumber(ref.createdAt, 'botAvatarRef.createdAt'));
+    }
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, NULL, 'created', '{}', ?)`)
+      .run(`${id}:created:${now}`, id, now);
+  })();
+}
+
+function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersion: number } {
+  const p = asRecord(args, 'bots.updateProfile args');
+  const id = expectString(p.id, 'id');
+  const expectedVersion = expectNumber(p.expectedCurrentVersion, 'expectedCurrentVersion');
+  const now = expectNumber(p.now, 'now');
+  const allowDuplicateName = expectOptionalFlag(p.allowDuplicateName, 'allowDuplicateName');
+  const avatarRef = p.botAvatarRef === undefined
+    ? null
+    : asRecord(p.botAvatarRef, 'botAvatarRef');
+  const clearAvatarRefs = p.clearBotAvatarRefs === undefined
+    ? false
+    : p.clearBotAvatarRefs === true;
+  if (p.clearBotAvatarRefs !== undefined && typeof p.clearBotAvatarRefs !== 'boolean') {
+    throw new Error('clearBotAvatarRefs must be a boolean');
+  }
+  if (avatarRef && p.avatar === undefined) {
+    throw new Error('botAvatarRef requires an avatar address');
+  }
+  if (p.clearScheduledModelBaseline !== undefined && typeof p.clearScheduledModelBaseline !== 'boolean') {
+    throw new Error('clearScheduledModelBaseline must be a boolean');
+  }
+  return db.transaction(() => {
+    const current = db.prepare('SELECT current_version AS currentVersion, display_name AS displayName, avatar FROM bot_profiles WHERE id = ?')
+      .get(id) as { currentVersion: number; displayName: string; avatar: string } | undefined;
+    if (!current) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
+    if (current.currentVersion !== expectedVersion) {
+      throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
+      throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (!allowDuplicateName && p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
+      const name = normalizeBotName(expectString(p.displayName, 'displayName'));
+      const others = db.prepare("SELECT display_name AS name FROM bot_profiles WHERE id != ? AND status != 'archived'").all(id) as Array<{ name: string }>;
+      if (others.some(row => normalizeBotName(row.name) === name)) throw Object.assign(new Error('A companion with this name already exists'), { code: 'ALREADY_EXISTS' });
+    }
+    if (p.preserveUpdatedAt !== undefined && typeof p.preserveUpdatedAt !== 'boolean') {
+      throw new Error('preserveUpdatedAt must be a boolean');
+    }
+    const fields = p.preserveUpdatedAt === true ? ['updated_at = updated_at'] : ['updated_at = ?'];
+    const values: unknown[] = p.preserveUpdatedAt === true ? [] : [now];
+    for (const [key, column] of [
+      ['displayName', 'display_name'], ['description', 'description'], ['avatar', 'avatar'],
+      ['avatarColor', 'avatar_color'], ['status', 'status'],
+    ] as const) {
+      if (p[key] !== undefined) {
+        fields.push(`${column} = ?`);
+        values.push(expectString(p[key], key));
+      }
+    }
+    for (const [key, column] of [
+      ['hiddenAt', 'hidden_at'], ['pinnedAt', 'pinned_at'],
+    ] as const) {
+      if (p[key] !== undefined) {
+        fields.push(`${column} = ?`);
+        values.push(p[key] === null ? null : expectNumber(p[key], key));
+      }
+    }
+    const editsContent = p.profileContentChanged === true;
+    const permissionMode = p.canonicalPermissionMode === undefined ? undefined
+      : expectString(p.canonicalPermissionMode, 'canonicalPermissionMode');
+    if (permissionMode !== undefined && !['ask', 'auto', 'bypassPermissions'].includes(permissionMode)) {
+      throw new Error('Invalid canonical permission mode');
+    }
+    const latest = editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true
+      ? db.prepare('SELECT capabilities_json AS json, identity_source AS identity FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
+        .get(id, expectedVersion) as { json: string; identity: string } | undefined
+      : undefined;
+    if ((editsContent || permissionMode !== undefined || p.clearScheduledModelBaseline === true) && !latest) {
+      throw Object.assign(new Error('Bot profile version missing'), { code: 'PRECONDITION_FAILED' });
+    }
+    const latestConfig = latest ? asRecord(JSON.parse(latest.json), 'capabilities') : undefined;
+    const nextConfig = editsContent
+      ? asRecord(JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson')), 'capabilities')
+      : latestConfig ? { ...latestConfig } : undefined;
+    const permission = permissionMode === 'bypassPermissions' ? 'trusted' : permissionMode;
+    if (nextConfig && latestConfig) {
+      // Composer saves can change permissions in place without losing the version
+      // CAS. Preserve that latest value unless this is an explicit permission edit.
+      if (permission !== undefined) nextConfig.permissions = permission;
+      else if (Object.prototype.hasOwnProperty.call(latestConfig, 'permissions')) nextConfig.permissions = latestConfig.permissions;
+      else delete nextConfig.permissions;
+    }
+    // A same-value settings edit can become a real change while waiting to commit.
+    // Reaccepting the same saved model is a durable selection event too. Give
+    // it a version so cold sends can distinguish it from a legacy restore.
+    const changed = editsContent || p.clearScheduledModelBaseline === true
+      || (permission !== undefined && latestConfig?.permissions !== permission);
+    const nextVersion = changed ? expectedVersion + 1 : expectedVersion;
+    if (changed) {
+      fields.push('current_version = ?');
+      values.push(nextVersion);
+    }
+    values.push(id);
+    db.prepare(`UPDATE bot_profiles SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    if (avatarRef) {
+      const refId = expectString(avatarRef.id, 'botAvatarRef.id');
+      const hash = expectString(avatarRef.hash, 'botAvatarRef.hash');
+      if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error('botAvatarRef.hash is invalid');
+      db.prepare(`INSERT INTO media_refs
+        (id, hash, ref_kind, ref_id, origin_kind, created_at)
+        VALUES (?, ?, 'bot-avatar', ?, 'user', ?)`)
+        .run(refId, hash, id, expectNumber(avatarRef.createdAt, 'botAvatarRef.createdAt'));
+      db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-avatar' AND ref_id = ? AND id <> ?")
+        .run(id, refId);
+    } else if (clearAvatarRefs) {
+      db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-avatar' AND ref_id = ?").run(id);
+    }
+    if (changed) {
+      db.prepare(`INSERT INTO bot_profile_versions
+        (id, bot_id, version, identity_source, capabilities_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(`${id}:v${nextVersion}`, id, nextVersion, p.identitySource === undefined ? latest!.identity : expectString(p.identitySource, 'identitySource'),
+          JSON.stringify(nextConfig), now);
+      if (p.clearScheduledModelBaseline === true || botProfileModelSelectionChanged(latestConfig ?? {}, nextConfig ?? {})) {
+        // Save the pending choice in the same transaction as the profile. A
+        // paused runtime may not receive its refresh before restart/account exit.
+        const targets = db.prepare(`SELECT id, scheduled_model_baseline AS baseline,
+          agent_kind AS agentKind, model, provider_id AS providerId, effort, fast_mode AS fastMode
+          FROM sessions WHERE id IN
+          (SELECT session_id FROM bot_session_links WHERE bot_id = ?
+            AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+          .all(id) as Array<{ id: string; baseline: string | null; agentKind: string; model: string;
+            providerId: string | null; effort: string; fastMode: number | string }>;
+
+        const update = db.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?');
+        for (const target of targets) {
+          // A save must also fence a begin that read a null baseline, or begins
+          // before the async profile refresh. This record is never restored:
+          // only acceptance of this permanent choice may consume it.
+          const baseline = parseScheduledModelBaseline(target.baseline) ?? parseScheduledModelBaseline(JSON.stringify({
+            scopeId: `${target.id}:profile:${nextVersion}`, agentKind: dbToMakerAgentKind(target.agentKind),
+            model: target.model, providerId: target.providerId, effort: target.effort,
+            fastMode: fastModeFromStorage(target.fastMode),
+          }));
+          if (baseline) update.run(JSON.stringify({ ...baseline, pendingBotProfileVersion: nextVersion }), target.id);
+        }
+      }
+      // Hermes capability epoch: the permanent canonical Chat, the Bot's
+      // group-chat lanes and its IM channel lanes follow the latest Profile on
+      // their next runtime bootstrap. Route/worker links remain pinned to their
+      // creation version.
+      db.prepare(`UPDATE bot_session_links SET profile_version = ?
+        WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL`)
+        .run(nextVersion, id);
+    }
+    if (permissionMode !== undefined) {
+      const mode = permissionMode;
+      // Group and IM channel lanes run under the same permission profile as the
+      // Bot's canonical Chat (per-turn group policies still apply on top).
+      db.prepare(`UPDATE sessions SET permission_mode = ? WHERE id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+        .run(mode, id);
+    }
+    return { currentVersion: nextVersion };
+  })();
+}
+
+const BOT_DURABLE_ATTENTION_REASONS = new Set([
+  'agent_blocked',
+  'missing_config',
+  'provider_auth_or_access',
+  'provider_quota_limit',
+]);
+
+/**
+ * Profile-level attention follows a single monotonic clock. A delayed success
+ * or failure from an older Session must never overwrite a newer observation.
+ */
+function botsUpdateAttention(
+  db: Database.Database,
+  args: unknown,
+): { changed: boolean } {
+  const p = asRecord(args, 'bots.updateAttention args');
+  const botId = expectString(p.botId, 'botId');
+  const observedAt = expectNumber(p.observedAt, 'observedAt');
+  const reason = p.reason === null ? null : expectString(p.reason, 'reason');
+  if (reason !== null && !BOT_DURABLE_ATTENTION_REASONS.has(reason)) {
+    throw Object.assign(new Error('unsupported Bot attention reason'), { code: 'INVALID_PARAMS' });
+  }
+  const result = reason === null
+    ? db.prepare(`UPDATE bot_profiles
+        SET attention_reason = NULL, attention_at = NULL
+        WHERE id = ? AND attention_at IS NOT NULL AND attention_at <= ?`)
+        .run(botId, observedAt)
+    : db.prepare(`UPDATE bot_profiles
+        SET attention_reason = ?, attention_at = ?
+        WHERE id = ? AND (attention_at IS NULL OR attention_at <= ?)`)
+        .run(reason, observedAt, botId, observedAt);
+  return { changed: result.changes > 0 };
+}
+
+function botsReplaceCanonicalSession(
+  db: Database.Database,
+  args: unknown,
+): {
+  created: boolean;
+  canonicalSessionId: string | null;
+  archivedCanonicalSessionId: string | null;
+} {
+  const p = asRecord(args, 'bots.replaceCanonicalSession args');
+  const botId = expectString(p.botId, 'botId');
+  const expectedCanonical =
+    p.expectedCanonicalSessionId === null
+      ? null
+      : expectString(p.expectedCanonicalSessionId, 'expectedCanonicalSessionId');
+  const compatibilityMissingCanonicalSessionId =
+    p.compatibilityMissingCanonicalSessionId == null
+      ? null
+      : expectString(
+          p.compatibilityMissingCanonicalSessionId,
+          'compatibilityMissingCanonicalSessionId',
+        );
+  const expectedVersion = expectNumber(p.expectedProfileVersion, 'expectedProfileVersion');
+  const s = asRecord(p.session, 'session');
+  const now = expectNumber(p.now, 'now');
+  return db.transaction(() => {
+    const bot = db
+      .prepare(
+        `SELECT status, current_version AS currentVersion
+      FROM bot_profiles WHERE id = ?`,
+      )
+      .get(botId) as { status: string; currentVersion: number } | undefined;
+    if (!bot) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
+    if (bot.status !== 'active')
+      throw Object.assign(new Error('Bot 已暂停，不能创建新的任务'), {
+        code: 'PRECONDITION_FAILED',
+      });
+    const canonicalLink = db
+      .prepare(
+        `SELECT session_id AS sessionId FROM bot_session_links
+      WHERE bot_id = ? AND role = 'canonical'`,
+      )
+      .get(botId) as { sessionId: string } | undefined;
+    // The compatibility mirror is never runtime authority. Legacy rows are
+    // promoted into bot_session_links by bots.reconcileCanonicalLink before
+    // this transaction is called; without a link we fail the caller's CAS.
+    const canonicalSessionId = canonicalLink?.sessionId ?? null;
+    if (canonicalSessionId !== expectedCanonical) {
+      return { created: false, canonicalSessionId, archivedCanonicalSessionId: null };
+    }
+    if (bot.currentVersion !== expectedVersion) {
+      throw Object.assign(new Error('Bot Profile 已更新，请刷新后重试'), {
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+    const version = db
+      .prepare('SELECT version FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
+      .get(botId, bot.currentVersion) as { version: number } | undefined;
+    if (!version)
+      throw Object.assign(new Error('Bot 当前 Profile 版本不存在'), {
+        code: 'PRECONDITION_FAILED',
+      });
+    const sessionId = expectString(s.id, 'session.id');
+    // A healthy canonical task is permanent. Long conversations compact in
+    // place; replacement is reserved for a missing/deleted task.
+    if (canonicalSessionId) {
+      const previous = db
+        .prepare('SELECT status FROM sessions WHERE id = ?')
+        .get(canonicalSessionId) as { status: string } | undefined;
+      if (previous && previous.status !== 'deleted') {
+        return { created: false, canonicalSessionId, archivedCanonicalSessionId: null };
+      }
+    }
+    insertBotSession(db, { ...s, id: sessionId, parentSessionId: null });
+    let archived: string | null = null;
+    let missingCanonicalSessionId: string | null = compatibilityMissingCanonicalSessionId;
+    if (canonicalSessionId) {
+      const previous = db
+        .prepare('SELECT source, status FROM sessions WHERE id = ?')
+        .get(canonicalSessionId) as { source: string; status: string } | undefined;
+      if (!previous) missingCanonicalSessionId = canonicalSessionId;
+      db.prepare(
+        `UPDATE bot_session_links SET role = 'history', archived_at = ?
+        WHERE bot_id = ? AND session_id = ? AND role = 'canonical'`,
+      ).run(now, botId, canonicalSessionId);
+      if (previous?.source === 'bot') {
+        if (previous.status !== 'deleted') {
+          db.prepare("UPDATE sessions SET status = 'archived', updated_at = ? WHERE id = ?").run(
+            now,
+            canonicalSessionId,
+          );
+        }
+        // Even a soft-deleted canonical Session can own queued descendants;
+        // hand them the same terminal cleanup path during recovery.
+        archived = canonicalSessionId;
+      }
+    }
+    db.prepare(
+      `INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'canonical', NULL, ?, NULL)`,
+    ).run(`${botId}:${sessionId}`, botId, sessionId, version.version, now);
+    db.prepare('UPDATE bot_profiles SET canonical_session_id = ?, updated_at = ? WHERE id = ?').run(
+      sessionId,
+      now,
+      botId,
+    );
+    const canonicalEventType = canonicalSessionId || missingCanonicalSessionId
+      ? 'canonical-recovered'
+      : 'canonical-created';
+    db.prepare(
+      `INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      `${botId}:${canonicalEventType}:${sessionId}`,
+      botId,
+      sessionId,
+      canonicalEventType,
+      JSON.stringify({
+        previousCanonicalSessionId: canonicalSessionId,
+        missingCanonicalSessionId,
+        profileVersion: version.version,
+      }),
+      now,
+    );
+    return { created: true, canonicalSessionId: sessionId, archivedCanonicalSessionId: archived };
+  })();
+}
+
+function botsReconcileCanonicalLink(
+  db: Database.Database,
+  args: unknown,
+): {
+  status:
+    | 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  canonicalSessionId: string | null;
+} {
+  const p = asRecord(args, 'bots.reconcileCanonicalLink args');
+  const botId = expectString(p.botId, 'botId');
+  const now = expectNumber(p.now, 'now');
+  return db.transaction(() => {
+    const bot = db.prepare(`SELECT canonical_session_id AS canonicalSessionId,
+      current_version AS currentVersion FROM bot_profiles WHERE id = ?`).get(botId) as { canonicalSessionId: string | null; currentVersion: number } | undefined;
+    if (!bot) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
+
+    const links = db.prepare(`SELECT id, session_id AS sessionId, profile_version AS profileVersion
+      FROM bot_session_links WHERE bot_id = ? AND role = 'canonical'`).all(botId) as Array<{
+      id: string;
+      sessionId: string;
+      profileVersion: number;
+    }>;
+    if (links.length > 1) {
+      throw Object.assign(new Error('Bot 存在多个 canonical link，拒绝自动选择'), {
+        code: 'PRECONDITION_FAILED',
+      });
+    }
+
+    const authoritative = links[0]?.sessionId ?? null;
+    if (authoritative) {
+      const session = db.prepare('SELECT status FROM sessions WHERE id = ?').get(authoritative) as
+        { status: string } | undefined;
+      if (!session || session.status === 'deleted') {
+        return { status: 'missing-session' as const, canonicalSessionId: null };
+      }
+      if (bot.canonicalSessionId === authoritative) {
+        return { status: 'unchanged' as const, canonicalSessionId: authoritative };
+      }
+      db.prepare('UPDATE bot_profiles SET canonical_session_id = ?, updated_at = ? WHERE id = ?')
+        .run(authoritative, now, botId);
+      db.prepare(`INSERT INTO bot_lifecycle_events
+        (id, bot_id, session_id, event_type, payload_json, created_at)
+        VALUES (?, ?, ?, 'canonical-mirror-repaired', ?, ?)`).run(
+          `${botId}:canonical-mirror-repaired:${authoritative}:${now}`,
+          botId,
+          authoritative,
+          JSON.stringify({ previousCanonicalSessionId: bot.canonicalSessionId }),
+          now,
+        );
+      return { status: 'repaired-mirror' as const, canonicalSessionId: authoritative };
+    }
+
+    if (!bot.canonicalSessionId) {
+      return { status: 'missing-pointer' as const, canonicalSessionId: null };
+    }
+
+    const legacySession = db.prepare(`SELECT source, status FROM sessions WHERE id = ?`)
+      .get(bot.canonicalSessionId) as { source: string; status: string } | undefined;
+    if (!legacySession || legacySession.status === 'deleted') {
+      return { status: 'missing-session' as const, canonicalSessionId: null };
+    }
+    if (legacySession.source !== 'bot') {
+      return { status: 'conflict' as const, canonicalSessionId: null };
+    }
+    const existingLink = db.prepare(`SELECT bot_id AS botId, role FROM bot_session_links
+      WHERE session_id = ?`).get(bot.canonicalSessionId) as { botId: string; role: string } | undefined;
+    if (existingLink) {
+      return { status: 'conflict' as const, canonicalSessionId: null };
+    }
+
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'canonical', NULL, ?, NULL)`).run(
+        `${botId}:${bot.canonicalSessionId}`,
+        botId,
+        bot.canonicalSessionId,
+        bot.currentVersion,
+        now,
+      );
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, ?, 'canonical-migrated', ?, ?)`).run(
+        `${botId}:canonical-migrated:${bot.canonicalSessionId}:${now}`,
+        botId,
+        bot.canonicalSessionId,
+        JSON.stringify({ profileVersion: bot.currentVersion }),
+        now,
+      );
+    return { status: 'migrated' as const, canonicalSessionId: bot.canonicalSessionId };
+  })();
+}
+
+function botsPrepareRuntime(db: Database.Database, args: unknown): void {
+  const p = asRecord(args, 'bots.prepareRuntime args');
+  const s = asRecord(p.snapshot, 'snapshot');
+  const preparedAt = expectNumber(s.preparedAt, 'snapshot.preparedAt');
+  db.transaction(() => {
+    db.prepare(`INSERT INTO bot_runtime_snapshots
+      (id, bot_id, session_id, profile_version, agent_kind, working_dir, memory_scope_key,
+       configured_json, resolved_json, status, prepared_at, applied_at, failed_at, failure_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, NULL, NULL, NULL)`)
+      .run(expectString(s.id, 'snapshot.id'), expectString(s.botId, 'snapshot.botId'),
+        expectString(s.sessionId, 'snapshot.sessionId'), expectNumber(s.profileVersion, 'snapshot.profileVersion'),
+        expectString(s.agentKind, 'snapshot.agentKind'), expectString(s.workingDir, 'snapshot.workingDir'),
+        nullableString(s.memoryScopeKey), expectString(s.configuredJson, 'snapshot.configuredJson'),
+        expectString(s.resolvedJson, 'snapshot.resolvedJson'), preparedAt);
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, ?, 'runtime-prepared', ?, ?)`)
+      .run(expectString(p.eventId, 'eventId'), expectString(s.botId, 'snapshot.botId'),
+        expectString(s.sessionId, 'snapshot.sessionId'), expectString(p.eventPayloadJson, 'eventPayloadJson'), preparedAt);
+  })();
+}
+
+function botsFinishRuntime(db: Database.Database, args: unknown): boolean {
+  const p = asRecord(args, 'bots.finishRuntime args');
+  const status = expectString(p.status, 'status');
+  const finishedAt = expectNumber(p.finishedAt, 'finishedAt');
+  return db.transaction(() => {
+    const write = status === 'failed'
+      ? db.prepare(`UPDATE bot_runtime_snapshots SET status = 'failed', applied_at = NULL,
+          failed_at = ?, failure_json = ? WHERE id = ? AND status = 'prepared'`)
+          .run(finishedAt, nullableString(p.failureJson), expectString(p.snapshotId, 'snapshotId'))
+      : db.prepare(`UPDATE bot_runtime_snapshots SET status = ?, applied_at = ?,
+          failed_at = NULL, failure_json = NULL WHERE id = ? AND status = 'prepared'`)
+          .run(status, finishedAt, expectString(p.snapshotId, 'snapshotId'));
+    if (write.changes !== 1) return false;
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(expectString(p.eventId, 'eventId'), expectString(p.botId, 'botId'),
+        expectString(p.sessionId, 'sessionId'), expectString(p.eventType, 'eventType'),
+        expectString(p.eventPayloadJson, 'eventPayloadJson'), finishedAt);
+    return true;
+  })();
+}
+
+
+
+function insertBotSession(db: Database.Database, s: Record<string, unknown>): void {
+  db.prepare(`INSERT INTO sessions
+    (id, title, working_dir, workspace_kind, model, effort, permission_mode, status,
+     sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window,
+     fast_mode, plan_mode_enabled, cleared_at, pinned_at, user_send_at, agent_kind,
+     orca_role, parent_session_id, forked_at_message_id, worktree_path, extra_dirs,
+     remote_host_id, provider_id, source, created_at, updated_at, agent_device_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NULL, 0, 0, 0, 0, ?, 0, NULL, NULL, NULL,
+     ?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(expectString(s.id, 'session.id'), expectString(s.title, 'session.title'),
+      nullableString(s.workingDir), expectString(s.workspaceKind, 'session.workspaceKind'),
+      expectString(s.model, 'session.model'), expectString(s.effort, 'session.effort'),
+      expectString(s.permissionMode, 'session.permissionMode'), fastModeToStorage(s.fastMode),
+      expectString(s.agentKind, 'session.agentKind'),
+      nullableString(s.parentSessionId),
+      expectString(s.extraDirs, 'session.extraDirs'), nullableString(s.remoteHostId), nullableString(s.providerId),
+      expectString(s.source, 'session.source'), expectNumber(s.createdAt, 'session.createdAt'),
+      expectNumber(s.updatedAt, 'session.updatedAt'), nullableString(s.agentDeviceId));
+}
+
+/** One hidden lane per (group, Bot); reuses an active lane instead of creating a second. */
+function botsCreateGroupLane(db: Database.Database, args: BotGroupsCreateLaneArgs): BotGroupsCreateLaneResult {
+  const p = asRecord(args, 'bots.createGroupLane args');
+  const botId = expectString(p.botId, 'botId');
+  const groupId = expectString(p.groupId, 'groupId');
+  const routeKey = expectString(p.routeKey, 'routeKey');
+  const s = asRecord(p.session, 'session');
+  const sessionId = expectString(s.id, 'session.id');
+  const createdAt = expectNumber(s.createdAt, 'session.createdAt');
+  if (expectString(s.source, 'session.source') !== 'bot') throw new Error('Group lane must be a Bot session');
+  return db.transaction(() => {
+    const member = db.prepare('SELECT 1 FROM bot_group_members WHERE group_id = ? AND bot_id = ?')
+      .get(groupId, botId);
+    if (!member) throw Object.assign(new Error('伙伴已不在该群聊'), { code: 'MEMBER_UNAVAILABLE' });
+    const profile = db.prepare('SELECT status, current_version AS version FROM bot_profiles WHERE id = ?')
+      .get(botId) as { status: string; version: number } | undefined;
+    if (!profile || profile.status !== 'active') {
+      throw Object.assign(new Error('伙伴当前不可用'), { code: 'MEMBER_UNAVAILABLE' });
+    }
+    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+      INNER JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'group' AND l.route_key = ? AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
+    if (existing) return { sessionId: existing.sessionId, created: false };
+    insertBotSession(db, s);
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'group', ?, ?, NULL)`)
+      .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
+    const permission = botsReconcileLanePermission(db, { sessionId });
+    return { sessionId, created: true,
+      ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
+  })();
+}
+
+/**
+ * One hidden IM channel lane per (Bot, route key); reuses an active lane instead
+ * of creating a second. Unlike group lanes there is no member table: the
+ * connection binding (owner-scoped setting) is the authority, checked by Main.
+ */
+function botsCreateChannelLane(db: Database.Database, args: BotsCreateChannelLaneArgs, role: 'channel' | 'routine' = 'channel'): BotGroupsCreateLaneResult {
+  const p = asRecord(args, 'bots.createChannelLane args');
+  const botId = expectString(p.botId, 'botId');
+  const routeKey = expectString(p.routeKey, 'routeKey');
+  if (!routeKey.startsWith(role === 'routine' ? 'routine:' : 'im:')) throw new Error('Invalid companion lane route key');
+  const s = asRecord(p.session, 'session');
+  const sessionId = expectString(s.id, 'session.id');
+  const createdAt = expectNumber(s.createdAt, 'session.createdAt');
+  if (expectString(s.source, 'session.source') !== 'bot') throw new Error('Channel lane must be a Bot session');
+  return db.transaction(() => {
+    const profile = db.prepare('SELECT status, current_version AS version FROM bot_profiles WHERE id = ?')
+      .get(botId) as { status: string; version: number } | undefined;
+    if (!profile || profile.status !== 'active') {
+      throw Object.assign(new Error('伙伴当前不可用'), { code: 'BOT_UNAVAILABLE' });
+    }
+    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+      INNER JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = ? AND l.route_key = ? AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(botId, role, routeKey) as { sessionId: string } | undefined;
+    if (existing) return { sessionId: existing.sessionId, created: false };
+    insertBotSession(db, s);
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`)
+      .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, role, routeKey, createdAt);
+    const permission = botsReconcileLanePermission(db, { sessionId });
+    return { sessionId, created: true,
+      ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
+  })();
+}
+
+/**
+ * A private-chat topic lane (`role = 'thread'`). The root must be a visible user or
+ * companion message in this Bot's current canonical Chat; one lane per root.
+ */
+function botsCreateThreadLane(db: Database.Database, args: BotsCreateThreadLaneArgs): BotGroupsCreateLaneResult {
+  const p = asRecord(args, 'bots.createThreadLane args');
+  const botId = expectString(p.botId, 'botId');
+  const routeKey = expectString(p.routeKey, 'routeKey');
+  const rootSessionId = expectString(p.rootSessionId, 'rootSessionId');
+  const rootClientId = expectString(p.rootClientId, 'rootClientId');
+  if (routeKey !== `dm-thread:${rootSessionId}:${rootClientId}`) throw new Error('Thread lane route key does not match its root');
+  const s = asRecord(p.session, 'session');
+  const sessionId = expectString(s.id, 'session.id');
+  const createdAt = expectNumber(s.createdAt, 'session.createdAt');
+  if (expectString(s.source, 'session.source') !== 'bot') throw new Error('Thread lane must be a Bot session');
+  return db.transaction(() => {
+    const profile = db.prepare('SELECT status, current_version AS version FROM bot_profiles WHERE id = ?')
+      .get(botId) as { status: string; version: number } | undefined;
+    if (!profile || profile.status !== 'active') {
+      throw Object.assign(new Error('伙伴当前不可用'), { code: 'BOT_UNAVAILABLE' });
+    }
+    const root = db.prepare(`SELECT 1 FROM messages m
+      INNER JOIN bot_session_links l ON l.session_id = m.session_id
+      INNER JOIN sessions s ON s.id = m.session_id
+      WHERE m.session_id = ? AND m.client_id = ? AND m.role IN ('user', 'assistant') AND m.rewind_at IS NULL
+        AND l.bot_id = ? AND l.role = 'canonical' AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(rootSessionId, rootClientId, botId);
+    if (!root) throw Object.assign(new Error('原消息已不在私聊里'), { code: 'ROOT_UNAVAILABLE' });
+    const existing = db.prepare(`SELECT l.session_id AS sessionId FROM bot_session_links l
+      INNER JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'thread' AND l.route_key = ? AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'
+      LIMIT 1`).get(botId, routeKey) as { sessionId: string } | undefined;
+    if (existing) return { sessionId: existing.sessionId, created: false };
+    insertBotSession(db, s);
+    db.prepare(`INSERT INTO bot_session_links
+      (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+      VALUES (?, ?, ?, ?, 'thread', ?, ?, NULL)`)
+      .run(`${botId}:${sessionId}`, botId, sessionId, profile.version, routeKey, createdAt);
+    const permission = botsReconcileLanePermission(db, { sessionId });
+    return { sessionId, created: true,
+      ...(permission.canonicalSessionId ? { permissionRepairCanonicalSessionId: permission.canonicalSessionId } : {}) };
+  })();
+}
+
+/** Archive IM channel lanes (link + session) by exact route key or connection prefix. */
+function botsArchiveChannelLanes(
+  db: Database.Database,
+  args: BotsArchiveChannelLanesArgs,
+): { archivedSessionIds: string[] } {
+  const p = asRecord(args, 'bots.archiveChannelLanes args');
+  const routeKey = nullableString(p.routeKey);
+  const routeKeyPrefix = nullableString(p.routeKeyPrefix);
+  const exceptBotId = nullableString(p.exceptBotId);
+  const now = expectNumber(p.now, 'now');
+  if ((routeKey === null) === (routeKeyPrefix === null)) {
+    throw new Error('Exactly one of routeKey / routeKeyPrefix is required');
+  }
+  const scope = routeKey ?? routeKeyPrefix!;
+  if (!scope.startsWith('im:')) throw new Error('Channel lane route key must start with im:');
+  return db.transaction(() => {
+    const rows = db.prepare(`SELECT bot_id AS botId, session_id AS sessionId FROM bot_session_links
+      WHERE role = 'channel' AND archived_at IS NULL
+        AND (route_key = ? OR (? IS NOT NULL AND substr(route_key, 1, length(?)) = ?))`)
+      .all(routeKey, routeKeyPrefix, routeKeyPrefix, routeKeyPrefix) as Array<{ botId: string; sessionId: string }>;
+    const targets = exceptBotId ? rows.filter((row) => row.botId !== exceptBotId) : rows;
+    const archiveLink = db.prepare('UPDATE bot_session_links SET archived_at = ? WHERE session_id = ?');
+    const archiveSession = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+      WHERE id = ? AND status = 'active'`);
+    for (const row of targets) {
+      archiveLink.run(now, row.sessionId);
+      archiveSession.run(now, row.sessionId);
+    }
+    return { archivedSessionIds: targets.map((row) => row.sessionId) };
+  })();
+}
+
+function botsFinishDelegation(
+  db: Database.Database,
+  args: unknown,
+): { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string } | null {
+  const p = asRecord(args, 'bots.finishDelegation args');
+  return db.transaction(() => {
+    const values: unknown[] = [
+      expectString(p.status, 'status'), nullableString(p.resultSummary),
+      expectString(p.outputArtifactsJson, 'outputArtifactsJson'), nullableString(p.lastError),
+    ];
+    const tokenSet = p.tokensUsed === undefined ? '' : ', tokens_used = ?';
+    if (p.tokensUsed !== undefined) values.push(expectNumber(p.tokensUsed, 'tokensUsed'));
+    const completedAt = expectNumber(p.completedAt, 'completedAt');
+    values.push(completedAt, completedAt, expectString(p.delegationId, 'delegationId'));
+    let receiptGuard = '';
+    if (p.expectedRunSequence !== undefined) {
+      receiptGuard += ' AND run_sequence = ?';
+      values.push(expectNumber(p.expectedRunSequence, 'expectedRunSequence'));
+    }
+    if (p.expectedExecution !== undefined) {
+      const receipt = asRecord(p.expectedExecution, 'expectedExecution');
+      receiptGuard += " AND json_extract(permission_snapshot_json, '$.taskExecution.runSequence') = run_sequence AND json_extract(permission_snapshot_json, '$.taskExecution.instanceId') = ? AND json_extract(permission_snapshot_json, '$.taskExecution.generation') = ?";
+      values.push(expectString(receipt.instanceId, 'instanceId'), expectNumber(receipt.generation, 'generation'));
+    }
+    const row = db.prepare(`UPDATE bot_delegations SET status = ?, result_summary = ?, output_artifacts_json = ?, last_error = ?
+      ${tokenSet}, pending_interaction_json = NULL, completed_at = ?, completion_delivered_at = NULL, updated_at = ?
+      WHERE id = ? AND status IN ('queued','running','waiting') ${receiptGuard}
+      RETURNING id, parent_session_id AS parentSessionId, child_session_id AS childSessionId, target_bot_id AS targetBotId, run_sequence AS runSequence, status`)
+      .get(...values) as
+      | { id: string; parentSessionId: string | null; childSessionId: string | null; targetBotId: string | null; runSequence: number; status: string }
+      | undefined;
+    if (!row) return null;
+    if (row.childSessionId && row.targetBotId !== null) {
+      // Only legacy Bot-to-Bot execution containers have this archive lifecycle.
+      // An independent Session (target_bot_id IS NULL) outlives a turn, including
+      // failure/cancellation: visibility and explicit archive belong to its user.
+      db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+        WHERE id = ? AND status = 'active'`)
+        .run(completedAt, row.childSessionId);
+      // 保留 route_key('delegation:<id>')作为来源标记:bot_delegations 行会随发起伙伴
+      // 的删除级联消失,之后只有它能证明这段 history 是"别人派给我的",不是自己的私聊
+      // (botHistoryScope.listBotRecallSessionIds)。route_key 的其它读者都只认 group 键。
+      db.prepare(`UPDATE bot_session_links SET role = 'history',
+        archived_at = ? WHERE session_id = ?`)
+        .run(completedAt, row.childSessionId);
+    }
+    return row;
+  })();
+}
+
+function botsReparentDelegations(
+  db: Database.Database,
+  args: unknown,
+): { delegationIds: string[] } {
+  const p = asRecord(args, 'bots.reparentDelegations args');
+  const botId = expectString(p.botId, 'botId');
+  const previousParentSessionId = expectString(p.previousParentSessionId, 'previousParentSessionId');
+  const nextParentSessionId = expectString(p.nextParentSessionId, 'nextParentSessionId');
+  const at = expectNumber(p.now, 'now');
+  return db.transaction(() => {
+    const rows = db.prepare(`SELECT id, child_session_id AS childSessionId
+      FROM bot_delegations
+      WHERE requesting_bot_id = ? AND parent_session_id = ?
+        AND target_bot_id IS NULL`)
+      .all(botId, previousParentSessionId) as Array<{
+        id: string;
+        childSessionId: string | null;
+      }>;
+    if (rows.length === 0) return { delegationIds: [] };
+    db.prepare(`UPDATE bot_delegations SET parent_session_id = ?, updated_at = ?
+      WHERE requesting_bot_id = ? AND parent_session_id = ?
+        AND target_bot_id IS NULL`)
+      .run(nextParentSessionId, at, botId, previousParentSessionId);
+    const updateChild = db.prepare(`UPDATE sessions SET parent_session_id = ?, updated_at = ?
+      WHERE id = ? AND status <> 'deleted'`);
+    for (const row of rows) {
+      if (row.childSessionId) updateChild.run(nextParentSessionId, at, row.childSessionId);
+    }
+    return { delegationIds: rows.map((row) => row.id) };
+  })();
+}
+
+function botsCreateDelegation(db: Database.Database, args: unknown): void {
+  const p = asRecord(args, 'bots.createDelegation args');
+  const d = asRecord(p.delegation, 'delegation');
+  const requestingBotId = expectString(d.requestingBotId, 'delegation.requestingBotId');
+  const maxActiveChildren = expectNumber(p.maxActiveChildren, 'maxActiveChildren');
+  const createdAt = expectNumber(d.createdAt, 'delegation.createdAt');
+  db.transaction(() => {
+    const count = db.prepare(`SELECT COUNT(*) AS count FROM bot_delegations
+      WHERE requesting_bot_id = ? AND status IN ('queued','running','waiting')`)
+      .get(requestingBotId) as { count: number };
+    if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
+    // null = 委派给一条普通 Cindy 任务(非 Bot),不建 bot_session_links 行。
+    const targetBotId = nullableString(d.targetBotId);
+    const targetProfileVersion = d.targetProfileVersion === null || d.targetProfileVersion === undefined
+      ? null
+      : expectNumber(d.targetProfileVersion, 'delegation.targetProfileVersion');
+    const s = asRecord(p.session, 'session');
+    insertBotSession(db, s);
+    const childSessionId = expectString(d.childSessionId, 'delegation.childSessionId');
+    const delegationId = expectString(d.id, 'delegation.id');
+    if (targetBotId) {
+      db.prepare(`INSERT INTO bot_session_links
+        (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+        VALUES (?, ?, ?, ?, 'delegation', ?, ?, NULL)`)
+        .run(`${targetBotId}:${childSessionId}`, targetBotId, childSessionId,
+          targetProfileVersion,
+          `delegation:${delegationId}`, createdAt);
+    }
+    db.prepare(`INSERT INTO bot_delegations
+      (id, requesting_bot_id, target_bot_id, parent_session_id, child_session_id, objective,
+       context_refs_json, artifact_refs_json, permission_snapshot_json, lineage_json,
+       target_profile_version, depth, budget_tokens, tokens_used, status, result_summary,
+       last_error, created_at, accepted_at, completed_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, NULL, 0, 'queued', NULL, NULL, ?, NULL, NULL, ?)`)
+      .run(delegationId, requestingBotId, targetBotId,
+        expectString(d.parentSessionId, 'delegation.parentSessionId'), childSessionId,
+        expectString(d.objective, 'delegation.objective'), expectString(d.contextRefsJson, 'delegation.contextRefsJson'),
+        expectString(d.permissionSnapshotJson, 'delegation.permissionSnapshotJson'),
+        expectString(d.lineageJson, 'delegation.lineageJson'),
+        targetProfileVersion,
+        expectNumber(d.depth, 'delegation.depth'),
+        createdAt, createdAt);
+  })();
+}
+
+function botsReopenDelegation(
+  db: Database.Database,
+  args: unknown,
+): { reopened: boolean; previousParentSessionId: string | null } {
+  const p = asRecord(args, 'bots.reopenDelegation args');
+  const delegationId = expectString(p.delegationId, 'delegationId');
+  const requestingBotId = expectString(p.requestingBotId, 'requestingBotId');
+  const expectedStatus = expectString(p.expectedStatus, 'expectedStatus');
+  if (!['completed', 'failed', 'cancelled', 'timed-out'].includes(expectedStatus)) {
+    throw new Error('bots.reopenDelegation expectedStatus must be terminal');
+  }
+  const targetBotId = nullableString(p.targetBotId);
+  const targetProfileVersion = p.targetProfileVersion === null || p.targetProfileVersion === undefined
+    ? null
+    : expectNumber(p.targetProfileVersion, 'targetProfileVersion');
+  const reopenedAt = expectNumber(p.reopenedAt, 'reopenedAt');
+  const maxActiveChildren = expectNumber(p.maxActiveChildren, 'maxActiveChildren');
+
+  return db.transaction(() => {
+    const current = db.prepare(`SELECT requesting_bot_id AS requestingBotId,
+      target_bot_id AS targetBotId, target_profile_version AS targetProfileVersion,
+      parent_session_id AS parentSessionId, child_session_id AS childSessionId, status
+      FROM bot_delegations WHERE id = ?`).get(delegationId) as
+      | {
+          requestingBotId: string;
+          targetBotId: string | null;
+          targetProfileVersion: number | null;
+          parentSessionId: string | null;
+          childSessionId: string | null;
+          status: string;
+        }
+      | undefined;
+    if (
+      !current
+      || current.requestingBotId !== requestingBotId
+      || current.targetBotId !== targetBotId
+      || current.targetProfileVersion !== targetProfileVersion
+      || current.status !== expectedStatus
+    ) {
+      return { reopened: false, previousParentSessionId: current?.parentSessionId ?? null };
+    }
+    const count = db.prepare(`SELECT COUNT(*) AS count FROM bot_delegations
+      WHERE requesting_bot_id = ? AND id <> ? AND status IN ('queued','running','waiting')`)
+      .get(requestingBotId, delegationId) as { count: number };
+    if (count.count >= maxActiveChildren) throw new Error('BOT_DELEGATION_CONCURRENCY_LIMIT');
+
+    const childSessionId = expectString(p.childSessionId, 'childSessionId');
+    if (targetBotId === null) {
+      // Recheck in the transaction, after any asynchronous worktree lookup.
+      // Never resurrect an explicitly archived/deleted task or replace history.
+      const child = db.prepare('SELECT status FROM sessions WHERE id = ?').get(childSessionId) as
+        { status: string } | undefined;
+      if (current.childSessionId !== childSessionId || child?.status !== 'active') {
+        return { reopened: false, previousParentSessionId: current.parentSessionId };
+      }
+      db.prepare('UPDATE sessions SET parent_session_id = ?, updated_at = ? WHERE id = ?')
+        .run(expectString(p.parentSessionId, 'parentSessionId'), reopenedAt, childSessionId);
+    } else {
+      insertBotSession(db, asRecord(p.session, 'session'));
+    }
+    if (p.worktreePath != null) {
+      db.prepare('UPDATE sessions SET worktree_path = ? WHERE id = ?')
+        .run(expectString(p.worktreePath, 'worktreePath'), childSessionId);
+    }
+    if (targetBotId) {
+      db.prepare(`INSERT INTO bot_session_links
+        (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+        VALUES (?, ?, ?, ?, 'delegation', ?, ?, NULL)`)
+        .run(`${targetBotId}:${childSessionId}`, targetBotId, childSessionId,
+          targetProfileVersion, `delegation:${delegationId}`, reopenedAt);
+    }
+    const updated = db.prepare(`UPDATE bot_delegations SET
+      parent_session_id = ?, child_session_id = ?, objective = ?,
+      permission_snapshot_json = ?, status = 'queued', result_summary = NULL,
+      output_artifacts_json = '[]', pending_interaction_json = NULL, last_error = NULL, tokens_used = 0,
+      run_sequence = run_sequence + 1, accepted_at = NULL, completed_at = NULL,
+      completion_delivered_at = NULL, updated_at = ?
+      WHERE id = ? AND status = ?`).run(
+      expectString(p.parentSessionId, 'parentSessionId'),
+      childSessionId,
+      expectString(p.objective, 'objective'),
+      expectString(p.permissionSnapshotJson, 'permissionSnapshotJson'),
+      reopenedAt,
+      delegationId,
+      expectedStatus,
+    );
+    if (updated.changes !== 1) throw new Error('BOT_DELEGATION_REOPEN_RACE');
+    return { reopened: true, previousParentSessionId: current.parentSessionId };
+  })();
+}
+
+function botsPauseLifecycle(db: Database.Database, args: unknown): void {
+  const p = asRecord(args, 'bots.pauseLifecycle args');
+  const botId = expectString(p.botId, 'botId');
+  const at = expectNumber(p.at, 'at');
+  db.transaction(() => {
+    const profile = db.prepare(`UPDATE bot_profiles SET status = 'paused', updated_at = ?
+      WHERE id = ? AND status = ?`)
+      .run(at, botId, expectString(p.expectedProfileStatus, 'expectedProfileStatus'));
+    if (profile.changes !== 1) throw Object.assign(
+      new Error('Bot 生命周期已被另一处操作更新'),
+      { code: 'PRECONDITION_FAILED' },
+    );
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, ?, 'pause-requested', ?, ?)`)
+      .run(expectString(p.eventId, 'eventId'), botId, nullableString(p.canonicalSessionId), '{}', at);
+  })();
+}
+
+function botsResumeLifecycle(db: Database.Database, args: unknown): void {
+  const p = asRecord(args, 'bots.resumeLifecycle args');
+  const botId = expectString(p.botId, 'botId');
+  const at = expectNumber(p.at, 'at');
+  db.transaction(() => {
+    const profile = db.prepare(`UPDATE bot_profiles SET status = 'active', updated_at = ?
+      WHERE id = ? AND status = ?`)
+      .run(at, botId, expectString(p.expectedProfileStatus, 'expectedProfileStatus'));
+    if (profile.changes !== 1) throw Object.assign(
+      new Error('Bot 生命周期已被另一处操作更新'),
+      { code: 'PRECONDITION_FAILED' },
+    );
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, ?, 'resumed', ?, ?)`)
+      .run(expectString(p.eventId, 'eventId'), botId, nullableString(p.canonicalSessionId), '{}', at);
+  })();
+}
+
+function botsArchiveLifecycle(db: Database.Database, args: unknown): { sessions: number } {
+  const p = asRecord(args, 'bots.archiveLifecycle args');
+  const botId = expectString(p.botId, 'botId');
+  const at = expectNumber(p.at, 'at');
+  return db.transaction(() => {
+    const sessions = db.prepare(`UPDATE sessions SET status = 'archived', updated_at = ?
+          WHERE source = 'bot' AND id IN (SELECT session_id FROM bot_session_links WHERE bot_id = ?)`)
+        .run(at, botId).changes;
+    db.prepare("UPDATE bot_session_links SET role = 'history', archived_at = ? WHERE bot_id = ?")
+      .run(at, botId);
+    const profile = db.prepare(`UPDATE bot_profiles SET status = 'archived', canonical_session_id = NULL,
+      updated_at = ? WHERE id = ? AND status = ?`)
+      .run(at, botId, expectString(p.expectedProfileStatus, 'expectedProfileStatus'));
+    if (profile.changes !== 1) throw Object.assign(new Error('Bot 生命周期已被另一处操作更新'), { code: 'PRECONDITION_FAILED' });
+    db.prepare(`INSERT INTO bot_lifecycle_events
+      (id, bot_id, session_id, event_type, payload_json, created_at)
+      VALUES (?, ?, ?, 'archived', ?, ?)`)
+      .run(expectString(p.eventId, 'eventId'), botId, nullableString(p.canonicalSessionId),
+        JSON.stringify({ worktreeDisposition: expectString(p.worktreeDisposition, 'worktreeDisposition'), sessions }), at);
+    return { sessions };
+  })();
+}
+
+function tableColumns(db: Database.Database, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+/**
+ * Keep the other teammate's records when this profile row goes away.
+ * Delegation targets are foreign keys; null them before delete so cascade cannot
+ * remove the requester's task. Direct messages are address text, not profile keys.
+ */
+function botsPersistSessionPermission(
+  db: Database.Database,
+  args: unknown,
+): { updated: boolean } {
+  const p = asRecord(args, 'bots.persistSessionPermission args');
+  const sessionId = expectString(p.sessionId, 'sessionId');
+  const mode = expectString(p.mode, 'mode');
+  if (!['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].includes(mode)) {
+    throw Object.assign(new Error('invalid permission mode'), { code: 'INVALID_PARAMS' });
+  }
+  const profilePermission = mode === 'bypassPermissions' ? 'trusted' : mode === 'auto' ? 'auto' : mode === 'ask' ? 'ask' : null;
+  return db.transaction(() => {
+    const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    if (!session) return { updated: false };
+    if (!profilePermission) {
+      db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
+        .run(mode, Date.now(), sessionId);
+      return { updated: true };
+    }
+    const link = db.prepare(`SELECT bot_id AS botId FROM bot_session_links
+      WHERE session_id = ? AND role IN ('canonical', 'channel', 'group', 'thread', 'routine')
+        AND archived_at IS NULL`).get(sessionId) as { botId: string } | undefined;
+    if (link) {
+      const profile = db.prepare('SELECT current_version AS version FROM bot_profiles WHERE id = ?')
+        .get(link.botId) as { version: number } | undefined;
+      const version = profile
+        ? db.prepare('SELECT capabilities_json AS json FROM bot_profile_versions WHERE bot_id = ? AND version = ?')
+          .get(link.botId, profile.version) as { json: string } | undefined
+        : undefined;
+      if (!profile || !version) {
+        throw Object.assign(new Error('Bot profile version missing'), { code: 'PRECONDITION_FAILED' });
+      }
+      let config: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(version.json) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('unreadable');
+        config = parsed as Record<string, unknown>;
+      } catch {
+        throw Object.assign(new Error('Bot profile capabilities are unreadable'), { code: 'PRECONDITION_FAILED' });
+      }
+      if (config.permissions !== profilePermission) {
+        const next = JSON.stringify({ ...config, permissions: profilePermission });
+        const changed = db.prepare(`UPDATE bot_profile_versions SET capabilities_json = ?
+          WHERE bot_id = ? AND version = ? AND capabilities_json = ?`).run(next, link.botId, profile.version, version.json);
+        if (changed.changes !== 1) {
+          throw Object.assign(new Error('Bot profile changed while saving permission'), { code: 'PRECONDITION_FAILED' });
+        }
+      }
+    }
+    if (link) {
+      db.prepare(`UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE source = 'bot' AND status = 'active' AND id IN
+        (SELECT session_id FROM bot_session_links WHERE bot_id = ?
+          AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
+        .run(mode, Date.now(), link.botId);
+    } else {
+      db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
+        .run(mode, Date.now(), sessionId);
+    }
+    return { updated: true };
+  })();
+}
+
+/** Repair conflicting Bot snapshots from the active canonical Chat, not the widest lane. */
+function botsReconcileLanePermission(db: Database.Database, args: unknown): { mode: string | null; changed: boolean; canonicalSessionId?: string } {
+  const sessionId = expectString(asRecord(args, 'args').sessionId, 'sessionId');
+  return db.transaction(() => {
+    const row = db.prepare(`SELECT v.capabilities_json AS json, l.bot_id AS botId, l.role,
+        s.permission_mode AS previousMode FROM bot_session_links l
+      JOIN sessions s ON s.id = l.session_id
+      JOIN bot_profiles p ON p.id = l.bot_id
+      LEFT JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+      WHERE l.session_id = ? AND l.role IN ('canonical', 'channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active' AND p.status = 'active'`).get(sessionId) as
+      { json: string | null; botId: string; role: string; previousMode: string } | undefined;
+    if (!row) return { mode: null, changed: false };
+    let parsed: unknown;
+    try { parsed = typeof row.json === 'string' ? JSON.parse(row.json) : null; }
+    catch { parsed = null; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw Object.assign(new Error('Bot profile capabilities are unreadable'), { code: 'PRECONDITION_FAILED' });
+    }
+    const config = parsed as Record<string, unknown>;
+    const canonical = db.prepare(`SELECT s.id, s.permission_mode AS mode FROM bot_session_links l
+      JOIN sessions s ON s.id = l.session_id
+      WHERE l.bot_id = ? AND l.role = 'canonical' AND l.archived_at IS NULL
+        AND s.source = 'bot' AND s.status = 'active'`).get(row.botId) as { id: string; mode: string } | undefined;
+    if (canonical && ['ask', 'auto', 'bypassPermissions'].includes(canonical.mode)) {
+      const permission = canonical.mode === 'bypassPermissions' ? 'trusted' : canonical.mode;
+      const staleLane = db.prepare(`SELECT 1 FROM bot_session_links l JOIN sessions s ON s.id = l.session_id
+        WHERE l.bot_id = ? AND l.role IN ('channel', 'group', 'thread', 'routine') AND l.archived_at IS NULL
+          AND s.source = 'bot' AND s.status = 'active' AND s.permission_mode != ? LIMIT 1`)
+        .get(row.botId, canonical.mode);
+      if (config.permissions !== permission || staleLane) {
+        // The read and cascade share this transaction: a later explicit tightening
+        // cannot be undone by an earlier snapshot. Preserve all other capabilities.
+        botsPersistSessionPermission(db, { sessionId: canonical.id, mode: canonical.mode });
+        return { mode: canonical.mode, changed: row.previousMode !== canonical.mode, canonicalSessionId: canonical.id };
+      }
+      return { mode: canonical.mode, changed: false };
+    }
+    // Legacy session-only modes have no Profile equivalent. Do not convert them
+    // implicitly; lanes retain the configured Profile when no three-way mode exists.
+    if (row.role === 'canonical') return { mode: null, changed: false };
+    const mode = config.permissions === 'trusted' ? 'bypassPermissions' : config.permissions === 'auto' ? 'auto' : 'ask';
+    const changed = db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ? AND permission_mode != ?')
+      .run(mode, Date.now(), sessionId, mode).changes > 0;
+    return { mode, changed };
+  })();
+}
+
+function detachSharedHistoryForProfileDeletion(db: Database.Database, botId: string): void {
+  const delegationColumns = tableColumns(db, 'bot_delegations');
+  if (delegationColumns.has('target_bot_id')) {
+    db.prepare('UPDATE bot_delegations SET target_bot_id = NULL WHERE target_bot_id = ?').run(botId);
+  }
+  const messageColumns = tableColumns(db, 'bot_direct_messages');
+  const profileColumns = tableColumns(db, 'bot_profiles');
+  if (!messageColumns.has('sender_bot_id') || !messageColumns.has('sender_name') || !profileColumns.has('display_name')) return;
+  const profile = db.prepare('SELECT display_name AS name FROM bot_profiles WHERE id = ?').get(botId) as
+    { name?: string } | undefined;
+  const name = profile?.name?.trim();
+  if (!name) return;
+  db.prepare(`UPDATE bot_direct_messages
+    SET sender_name = ?
+    WHERE sender_bot_id = ? AND (sender_name IS NULL OR sender_name = '')`).run(name, botId);
+  if (messageColumns.has('recipient_bot_id') && messageColumns.has('recipient_name')) {
+    db.prepare(`UPDATE bot_direct_messages
+      SET recipient_name = ?
+      WHERE recipient_bot_id = ? AND (recipient_name IS NULL OR recipient_name = '')`).run(name, botId);
+  }
+}
+
+function botsDeleteProfile(
+  db: Database.Database,
+  args: unknown,
+): { sessionIds: string[]; status: 'archived' | 'deleted' } {
+  const p = asRecord(args, 'bots.deleteProfile args');
+  const botId = expectString(p.botId, 'botId');
+  const sessionIds = [...new Set(expectArray(p.sessionIds, 'sessionIds').map((value, index) =>
+    expectString(value, `sessionIds.${index}`),
+  ))];
+  if (typeof p.keepTaskHistory !== 'boolean') {
+    throw new Error('keepTaskHistory must be a boolean');
+  }
+  const keepTaskHistory = p.keepTaskHistory;
+  const at = expectNumber(p.at, 'at');
+  const status: 'archived' | 'deleted' = keepTaskHistory ? 'archived' : 'deleted';
+  return db.transaction(() => {
+    const profile = db.prepare('SELECT status FROM bot_profiles WHERE id = ?').get(botId) as
+      { status: string }
+      | undefined;
+    if (!profile) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
+    if (profile.status !== 'archived') throw Object.assign(
+      new Error('永久删除前 Bot 必须已归档'),
+      { code: 'PRECONDITION_FAILED' },
+    );
+
+    // Profile foreign keys cascade into delegations that target this Bot.
+    // Detach those references first; direct-message rows are not profile keys.
+    detachSharedHistoryForProfileDeletion(db, botId);
+
+    const allSessionIds = [...new Set(sessionIds)];
+    if (sessionIds.length > 0) {
+      const placeholders = sessionIds.map(() => '?').join(',');
+      const owned = db.prepare(`SELECT DISTINCT sessions.id
+        FROM sessions
+        INNER JOIN bot_session_links ON bot_session_links.session_id = sessions.id
+        WHERE bot_session_links.bot_id = ? AND sessions.source = 'bot'
+          AND sessions.id IN (${placeholders})`)
+        .all(botId, ...sessionIds) as Array<{ id: string }>;
+      if (owned.length !== sessionIds.length) throw Object.assign(
+        new Error('只能分离属于该 Bot 的任务'),
+        { code: 'PRECONDITION_FAILED' },
+      );
+      // Group-chat lanes and IM channel lanes hold only hidden channel turns;
+      // they are never kept as standalone task history. The group / IM chat
+      // keeps what was said.
+      const hasLinkRoles = tableColumns(db, 'bot_session_links').has('role');
+      if (hasLinkRoles) {
+        db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+          WHERE source = 'bot' AND id IN (${placeholders}) AND id IN
+            (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))`)
+          .run(at, ...sessionIds, botId);
+      }
+      db.prepare(`UPDATE sessions SET source = 'desktop', status = ?, updated_at = ?
+        WHERE source = 'bot' AND id IN (${placeholders})${hasLinkRoles ? ` AND id NOT IN
+          (SELECT session_id FROM bot_session_links WHERE bot_id = ? AND role IN ('group', 'channel'))` : ''}`)
+        .run(status, at, ...sessionIds, ...(hasLinkRoles ? [botId] : []));
+    }
+
+    const hasMediaRefs = Boolean(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_refs'",
+    ).get());
+    if (hasMediaRefs) {
+      // The profile row and its private avatar reference are one deletion unit.
+      // A process crash can no longer leave user-owned media permanently pinned.
+      db.prepare("DELETE FROM media_refs WHERE ref_kind = 'bot-avatar' AND ref_id = ?")
+        .run(botId);
+    }
+    const deleted = db.prepare("DELETE FROM bot_profiles WHERE id = ? AND status = 'archived'")
+      .run(botId);
+    if (deleted.changes !== 1) throw Object.assign(
+      new Error('Bot 生命周期已被另一处操作更新'),
+      { code: 'PRECONDITION_FAILED' },
+    );
+    return { sessionIds: allSessionIds, status };
+  })();
+}
+
+function skillUsageApplyMutation(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'skillUsage.applyMutation args');
+  const kind = expectString(payload.kind, 'kind');
+
+  if (kind === 'persist') {
+    const rawSource = asRecord(payload.source, 'source');
+    const source = {
+      rawFilePath: expectString(rawSource.rawFilePath, 'source.rawFilePath'),
+      analyzerVersion: expectString(rawSource.analyzerVersion, 'source.analyzerVersion'),
+      agentKind: expectString(rawSource.agentKind, 'source.agentKind'),
+      sessionId: expectString(rawSource.sessionId, 'source.sessionId'),
+      sdkSessionId: expectString(rawSource.sdkSessionId, 'source.sdkSessionId'),
+      mtimeMs: expectNumber(rawSource.mtimeMs, 'source.mtimeMs'),
+      sizeBytes: expectNumber(rawSource.sizeBytes, 'source.sizeBytes'),
+      scannedAt: expectNumber(rawSource.scannedAt, 'source.scannedAt'),
+    };
+    const exposures = expectArray(payload.exposures, 'exposures').map((raw, index) => {
+      const row = asRecord(raw, `exposures.${index}`);
+      return {
+        id: expectString(row.id, `exposures.${index}.id`),
+        rawFilePath: expectString(row.rawFilePath, `exposures.${index}.rawFilePath`),
+        rawLineNo: expectNumber(row.rawLineNo, `exposures.${index}.rawLineNo`),
+        sessionId: expectString(row.sessionId, `exposures.${index}.sessionId`),
+        sdkSessionId: expectString(row.sdkSessionId, `exposures.${index}.sdkSessionId`),
+        agentKind: expectString(row.agentKind, `exposures.${index}.agentKind`),
+        skillName: expectString(row.skillName, `exposures.${index}.skillName`),
+        skillPath: nullableString(row.skillPath),
+        skillDocumentHash: nullableString(row.skillDocumentHash),
+        exposureContentHash: expectString(row.exposureContentHash, `exposures.${index}.exposureContentHash`),
+        documentHashSource: expectString(row.documentHashSource, `exposures.${index}.documentHashSource`),
+        source: expectString(row.source, `exposures.${index}.source`),
+        toolUseId: nullableString(row.toolUseId),
+        seenAt: expectNumber(row.seenAt, `exposures.${index}.seenAt`),
+        toolCallCount: expectNumber(row.toolCallCount, `exposures.${index}.toolCallCount`),
+        repeatedToolCallCount: expectNumber(row.repeatedToolCallCount, `exposures.${index}.repeatedToolCallCount`),
+        toolErrorCount: expectNumber(row.toolErrorCount, `exposures.${index}.toolErrorCount`),
+        commandCallCount: expectNumber(row.commandCallCount, `exposures.${index}.commandCallCount`),
+        commandFailureCount: expectNumber(row.commandFailureCount, `exposures.${index}.commandFailureCount`),
+      };
+    });
+
+    const upsertSource = db.prepare(`
+      INSERT INTO skill_usage_sources (
+        raw_file_path, analyzer_version, agent_kind, session_id, sdk_session_id,
+        mtime_ms, size_bytes, last_scanned_at, status, error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL)
+      ON CONFLICT(raw_file_path) DO UPDATE SET
+        analyzer_version = excluded.analyzer_version,
+        agent_kind = excluded.agent_kind,
+        session_id = excluded.session_id,
+        sdk_session_id = excluded.sdk_session_id,
+        mtime_ms = excluded.mtime_ms,
+        size_bytes = excluded.size_bytes,
+        last_scanned_at = excluded.last_scanned_at,
+        status = 'ok',
+        error = NULL
+    `);
+    const deleteExposure = db.prepare(
+      'DELETE FROM skill_usage_exposures WHERE raw_file_path = ? AND analyzer_version = ?',
+    );
+    const insertExposure = db.prepare(`
+      INSERT INTO skill_usage_exposures (
+        id, analyzer_version, raw_file_path, raw_line_no, session_id, sdk_session_id, agent_kind,
+        skill_name, skill_path, skill_document_hash, exposure_content_hash, document_hash_source,
+        source, tool_use_id, seen_at, tool_call_count, repeated_tool_call_count,
+        tool_error_count, command_call_count, command_failure_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    db.transaction(() => {
+      upsertSource.run(
+        source.rawFilePath,
+        source.analyzerVersion,
+        source.agentKind,
+        source.sessionId,
+        source.sdkSessionId,
+        source.mtimeMs,
+        source.sizeBytes,
+        source.scannedAt,
+      );
+      deleteExposure.run(source.rawFilePath, source.analyzerVersion);
+      for (const exposure of exposures) {
+        insertExposure.run(
+          `${source.analyzerVersion}:${exposure.id}`,
+          source.analyzerVersion,
+          exposure.rawFilePath,
+          exposure.rawLineNo,
+          exposure.sessionId,
+          exposure.sdkSessionId,
+          exposure.agentKind,
+          exposure.skillName,
+          exposure.skillPath,
+          exposure.skillDocumentHash,
+          exposure.exposureContentHash,
+          exposure.documentHashSource,
+          exposure.source,
+          exposure.toolUseId,
+          exposure.seenAt,
+          exposure.toolCallCount,
+          exposure.repeatedToolCallCount,
+          exposure.toolErrorCount,
+          exposure.commandCallCount,
+          exposure.commandFailureCount,
+        );
+      }
+    })();
+    return;
+  }
+
+  if (kind === 'deleteBefore') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    const recentSince = expectNumber(payload.recentSince, 'recentSince');
+    db.transaction(() => {
+      db.prepare(
+        'DELETE FROM skill_usage_exposures WHERE analyzer_version = ? AND seen_at < ?',
+      ).run(analyzerVersion, recentSince);
+      db.prepare(`
+        DELETE FROM skill_usage_sources
+        WHERE analyzer_version = ? AND mtime_ms < ?
+          AND raw_file_path NOT IN (SELECT raw_file_path FROM skill_usage_exposures)
+      `).run(analyzerVersion, recentSince);
+    })();
+    return;
+  }
+
+  if (kind === 'promote') {
+    const analyzerVersion = expectString(payload.analyzerVersion, 'analyzerVersion');
+    db.transaction(() => {
+      db.prepare(`
+        INSERT INTO migration_meta (key, value)
+        VALUES ('skill_usage_analyzer_version', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(analyzerVersion);
+      db.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
+    })();
+    return;
+  }
+
+  throw invalidArgs(`unknown skill usage mutation: ${kind}`);
 }
 
 /** Remove every stale startup binding as one all-or-nothing repair. */
@@ -230,7 +1734,7 @@ function sessionAgentSwitchFallback(db: Database.Database, args: unknown): void 
   transaction();
 }
 
-/** 同一任务换干净原生会话：清 sdk_session_id + 追加隐藏 context_rebuild，不改可见消息。 */
+/** 同一任务换干净原生会话：清 SDK/旧用量 + 追加隐藏 context_rebuild，不改可见消息。 */
 function contextRebuild(db: Database.Database, args: unknown): void {
   const payload = asRecord(args, 'context.rebuild args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -244,11 +1748,18 @@ function contextRebuild(db: Database.Database, args: unknown): void {
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
   const transaction = db.transaction(() => {
-    const sessionResult = db
-      .prepare(
-        'UPDATE sessions SET sdk_session_id = NULL, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
-      )
-      .run(updatedAt, sessionId, expectedClearedAt);
+    const replacement = payload.replacementRoute === undefined
+      ? null : asRecord(payload.replacementRoute, 'replacementRoute');
+    const sessionResult = replacement
+      ? db.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL, model = ?, provider_id = ?, effort = COALESCE(?, effort), fast_mode = ? WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1) AND sdk_session_id = ? AND status != ?',
+        ).run(updatedAt, expectString(replacement.model, 'replacementRoute.model'),
+          nullableString(replacement.providerId), nullableString(replacement.effort),
+          fastModeToStorage(replacement.fastMode), sessionId, expectedClearedAt,
+          expectString(replacement.expectedSdkSessionId, 'replacementRoute.expectedSdkSessionId'), 'deleted')
+      : db.prepare(
+          'UPDATE sessions SET sdk_session_id = NULL, context_tokens = 0, updated_at = ?, list_message_count = NULL WHERE id = ? AND ifnull(cleared_at, -1) = ifnull(?, -1)',
+        ).run(updatedAt, sessionId, expectedClearedAt);
     if (sessionResult.changes !== 1) {
       throw Object.assign(new Error(`Session missing or clear-boundary changed: ${sessionId}`), {
         code: 'PRECONDITION_FAILED',
@@ -281,7 +1792,37 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
       : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
   const transaction = db.transaction(() => {
     let changes = 0;
-    if (guarded) {
+    // The preflight read in Main can race with a user send. Keep the opening
+    // admission in this transaction, including a script fallback's next insert.
+    if (payload.requireNoUserMessage === true
+      && (!payload.publication || payload.publication === 'publish')
+      && db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND role = 'user' LIMIT 1").get(sessionId)) {
+      throw Object.assign(new Error('User already spoke before the opening was stored'), {
+        code: 'MESSAGE_USER_ALREADY_SPOKE',
+      });
+    }
+    // Connection-local stages never enter history, counts or persistent FTS.
+    // SQLite discards them automatically when this worker exits.
+    if (payload.publication) {
+      db.exec('CREATE TEMP TABLE IF NOT EXISTS cindy_pending_message_publications (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, tool_use_id TEXT, agent_meta TEXT, agent_kind TEXT, created_at INTEGER NOT NULL)');
+    }
+    if (payload.publication === 'publish') {
+      changes = db.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?',
+      ).run(id, sessionId, clientId).changes;
+      if (changes > 0) db.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ?').run(id, sessionId);
+    } else if (payload.publication === 'rollback') {
+      // CAS the complete published row; never remove a replacement or edited row.
+      changes = db.prepare(
+        'DELETE FROM messages WHERE id = ? AND session_id = ? AND client_id = ? AND role = ? AND content = ? AND tool_use_id IS ? AND agent_meta IS ? AND agent_kind IS ? AND created_at = ? AND rewind_at IS NULL',
+      ).run(id, sessionId, clientId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (payload.publication === 'discard') {
+      changes = db.prepare('DELETE FROM temp.cindy_pending_message_publications WHERE id = ? AND session_id = ? AND client_id = ?').run(id, sessionId, clientId).changes;
+    } else if (payload.publication === 'stage') {
+      changes = db.prepare(
+        'INSERT INTO temp.cindy_pending_message_publications (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
+    } else if (guarded) {
       changes = db
         .prepare(
           `INSERT INTO messages (
@@ -318,7 +1859,7 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
         .run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt)
         .changes;
     }
-    if (changes > 0) {
+    if (changes > 0 && (!payload.publication || payload.publication === 'publish' || payload.publication === 'rollback')) {
       if (role === 'user' || role === 'assistant') {
         db.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
@@ -487,7 +2028,7 @@ function messageDelete(
     );
     const targets = clientIds.map((clientId) => {
       const target = selectTarget.get(sessionId, clientId) as
-        | { id: string; clientId: string; toolUseId: string | null }
+        { id: string; clientId: string; toolUseId: string | null }
         | undefined;
       if (!target) {
         throw Object.assign(new Error(`Message 不存在或不可删除: ${clientId}`), {
@@ -681,7 +2222,8 @@ function sessionsRenameTitles(db: Database.Database, args: unknown): Array<{
         expectedCurrentTitle,
         expectedUpdatedAtMs,
         expectedUpdatedAtMs,
-      ) as { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
+      ) as
+        | { id: string; title: string | null; workingDir: string | null; updatedAt: number } | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 标题或 updatedAt 已变化: ${sessionId}`), {
           code: 'PRECONDITION_FAILED',
@@ -715,6 +2257,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   title: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
+  remoteHostId: string | null;
+  source: string | null;
   status: 'active' | 'archived';
 }> {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -722,14 +2266,15 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     expectString(id, 'sessionId'),
   );
   const status = expectString(payload.status, 'status');
+  const closeSharedTasks = payload.closeSharedTasks === true;
   if (status !== 'active' && status !== 'archived') {
     throw invalidArgs(`invalid status: ${status}`);
   }
   const selectSession = db.prepare(
-    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -737,6 +2282,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       title: string | null;
       workingDir: string | null;
       workspaceKind: string | null;
+      remoteHostId: string | null;
+      source: string | null;
       status: 'active' | 'archived';
     }> = [];
     const now = Date.now();
@@ -750,17 +2297,27 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
           code: 'PRECONDITION_FAILED',
         });
       }
+      if ((existing as { source?: unknown }).source === 'bot') {
+        throw Object.assign(new Error(`Bot 任务必须通过 Bot 生命周期管理: ${sessionId}`), {
+          code: 'PRECONDITION_FAILED',
+        });
+      }
       const updated = updateSession.get(status, now, sessionId) as
-        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null }
+        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
         | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
+      }
+      if (closeSharedTasks && status === 'archived') {
+        db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
       }
       applied.push({
         sessionId: updated.id,
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }
@@ -771,8 +2328,49 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     title: string | null;
     workingDir: string | null;
     workspaceKind: string | null;
+    remoteHostId: string | null;
+    source: string | null;
     status: 'active' | 'archived';
   }>;
+}
+
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
+/** Atomically persist a terminal task status and its local-close fence. */
+function sessionsSetTerminalStatus(db: Database.Database, args: unknown): SessionsSetTerminalStatusResult {
+  const payload = asRecord(args, 'sessions.setTerminalStatus args');
+  const sessionId = expectString(payload.sessionId, 'sessionId');
+  const status = expectString(payload.status, 'status');
+  if (status !== 'archived' && status !== 'deleted') throw invalidArgs('invalid terminal status: ' + status);
+  const transaction = db.transaction((): SessionsSetTerminalStatusResult => {
+    const existing = db.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId) as
+      | { id: string; status: string; source: string } | undefined;
+    if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
+    if (existing.source === 'bot' && !db.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    const now = Date.now();
+    if (status === 'archived' || status === 'deleted') db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const updated = db.prepare(
+      'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    ).get(status, now, sessionId) as {
+      id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null;
+    } | undefined;
+    if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
+    // Hidden children must become unreachable in the same commit as the parent.
+    // A failure in either the status write or its closure fence rolls back all rows.
+    const deletedSideChats = status === 'deleted' && existing.source !== 'side-chat'
+      ? db.prepare(`UPDATE sessions SET status = 'deleted', updated_at = ?
+          WHERE parent_session_id = ? AND source = 'side-chat' AND status <> 'deleted'
+          RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind,
+            remote_host_id AS remoteHostId, source`).all(now, sessionId) as SessionsSetTerminalStatusResult['deletedSideChats']
+      : [];
+    for (const child of deletedSideChats) {
+      db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
+    }
+    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+  });
+  return transaction();
 }
 
 function invalidateSessionListProjection(db: Database.Database, sessionId: string): void {
@@ -792,6 +2390,12 @@ function compactSessionToolResults(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
 
+  // Runtime-only function; no persisted schema/trigger depends on it.
+  db.function('tool_result_diagnostics', { deterministic: true }, (content: unknown) => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
+
   const selectSession = db.prepare(`
     SELECT id
       FROM sessions
@@ -800,7 +2404,7 @@ function compactSessionToolResults(
      LIMIT 1
   `);
   // Archived/deleted tool results are intentionally treated uniformly. Ordinary
-  // rows only pay for the fixed-prefix check. JSON validation runs solely for
+  // rows only pay for the fixed-prefix check when selecting candidates. JSON validation runs solely for
   // the tiny set of rows that look like our marker, preventing an unrelated
   // tool result with the same prefix from being skipped forever.
   const uncompactedContentPredicate = `
@@ -826,12 +2430,12 @@ function compactSessionToolResults(
   `);
   const compactMessages = db.prepare(`
     UPDATE messages
-       SET content = json_object(
+       SET content = json_patch(json_object(
          'type', 'tool_result_compacted',
          'version', 1,
          'originalBytes', octet_length(content),
          'compactedAt', ?
-       )
+       ), json_object('diagnostics', json(tool_result_diagnostics(content))))
      WHERE session_id = ?
        AND role = 'tool_result'
        AND (${uncompactedContentPredicate}) = 1
@@ -849,6 +2453,86 @@ function compactSessionToolResults(
       compactedRows,
       originalBytes: compactedRows > 0 ? summary.originalBytes : 0,
     };
+  })();
+}
+
+function imRotateSession(
+  db: Database.Database,
+  args: unknown,
+): { previousStatus: 'active' | 'archived' | 'deleted' | null } {
+  const payload = asRecord(args, 'im.rotateSession args');
+  const session = asRecord(payload.session, 'im.rotateSession session');
+  const previousSessionId = nullableString(payload.previousSessionId);
+  const detachBinding = payload.detachBinding === null
+    ? null
+    : asRecord(payload.detachBinding, 'im.rotateSession detachBinding');
+  const now = expectNumber(payload.now, 'now');
+  const readPrevious = db.prepare('SELECT status FROM sessions WHERE id = ? LIMIT 1');
+  const insertCurrent = db.prepare(
+    `INSERT INTO sessions (
+      id, title, working_dir, workspace_kind, model, effort, permission_mode,
+      fast_mode, status, agent_kind, provider_id, source, im_bot_context_id,
+      im_user_id, im_default_route, agent_device_id, created_at, updated_at, user_send_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const retirePrevious = db.prepare(
+    `UPDATE sessions
+     SET status = CASE WHEN status = 'deleted' THEN 'deleted' ELSE 'archived' END,
+         im_bot_context_id = NULL,
+         im_user_id = NULL,
+         updated_at = ?
+     WHERE id = ?`,
+  );
+  const deleteBinding = db.prepare(
+    `DELETE FROM im_bindings
+     WHERE channel = ? AND bot_context_id = ? AND user_id = ? AND scope_key = ?
+       AND target_session_id = ?`,
+  );
+  return db.transaction(() => {
+    const previous = previousSessionId === null
+      ? undefined
+      : readPrevious.get(previousSessionId) as { status: string } | undefined;
+    insertCurrent.run(
+      expectString(session.id, 'session.id'),
+      expectString(session.title, 'session.title'),
+      expectString(session.workingDir, 'session.workingDir'),
+      expectString(session.workspaceKind, 'session.workspaceKind'),
+      expectString(session.model, 'session.model'),
+      expectString(session.effort, 'session.effort'),
+      expectString(session.permissionMode, 'session.permissionMode'),
+      fastModeToStorage(session.fastMode),
+      expectString(session.agentKind, 'session.agentKind'),
+      nullableString(session.providerId),
+      expectString(session.source, 'session.source'),
+      expectString(session.imBotContextId, 'session.imBotContextId'),
+      expectString(session.imUserId, 'session.imUserId'),
+      nullableString(session.imDefaultRoute),
+      nullableString(session.agentDeviceId),
+      now,
+      now,
+      now,
+    );
+    // IM rotation archives the previous task inside this transaction, so hand
+    // its shared-task authority to the journal before the old route disappears.
+    // The runtime will revoke local access and retry the server close from this
+    // durable terminal record, even when the relay is offline.
+    if (previousSessionId !== null) {
+      db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, previousSessionId);
+    }
+    if (previousSessionId !== null) retirePrevious.run(now, previousSessionId);
+    if (detachBinding !== null) {
+      deleteBinding.run(
+        expectString(detachBinding.channel, 'detachBinding.channel'),
+        expectString(detachBinding.botContextId, 'detachBinding.botContextId'),
+        expectString(detachBinding.userId, 'detachBinding.userId'),
+        expectString(detachBinding.scopeKey, 'detachBinding.scopeKey'),
+        expectString(detachBinding.targetSessionId, 'detachBinding.targetSessionId'),
+      );
+    }
+    const status = previous?.status;
+    const previousStatus: 'active' | 'archived' | 'deleted' | null =
+      status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
+    return { previousStatus };
   })();
 }
 
@@ -996,7 +2680,24 @@ function rewindCommit(db: Database.Database, args: unknown): void {
   const sdkSessionId =
     typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(
+    payload.nativeForkAnchorSessionMap,
+  );
   const now = expectNumber(payload.now, 'now');
+  const expectedClearedAt =
+    payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
+      ? null
+      : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  const nativeContextReset = payload.nativeContextReset === undefined
+    ? null
+    : (() => {
+        const reset = asRecord(payload.nativeContextReset, 'nativeContextReset');
+        return {
+          markerId: expectString(reset.markerId, 'nativeContextReset.markerId'),
+          markerClientId: expectString(reset.markerClientId, 'nativeContextReset.markerClientId'),
+          markerContent: expectString(reset.markerContent, 'nativeContextReset.markerContent'),
+        };
+      })();
   const rows = db
     .prepare(
       `SELECT id, client_id, role, created_at, agent_meta, tool_use_id
@@ -1050,8 +2751,38 @@ function rewindCommit(db: Database.Database, args: unknown): void {
             AND started_at >= ?`,
       )
     : null;
+  const updateAgentMeta = db.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   const transaction = db.transaction(() => {
+    const session = db
+      .prepare('SELECT cleared_at FROM sessions WHERE id = ?')
+      .get(sessionId) as { cleared_at: number | null } | undefined;
+    if (!session) {
+      throw Object.assign(new Error(`Session missing: ${sessionId}`), { code: 'NOT_FOUND' });
+    }
+    const currentClearedAt = session.cleared_at ?? null;
+    if ((currentClearedAt ?? -1) !== (expectedClearedAt ?? -1)) {
+      throw Object.assign(
+        new Error(`CLEAR_GENERATION_CHANGED: clear-boundary changed for ${sessionId}`),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
+    if (currentClearedAt !== null && targetCreatedAt <= currentClearedAt) {
+      throw Object.assign(
+        new Error(`CLEAR_GENERATION_CHANGED: target is at or before /clear for ${sessionId}`),
+        { code: 'PRECONDITION_FAILED' },
+      );
+    }
     for (const id of idsToRewind) updateMessage.run(now, id);
+    // 保留下来的消息若持有旧 thread 的原生 turn 锚点,随 thread 替换一起重映射
+    // (与 fork.session 复制消息时的处理一致),软删与重映射同一事务。
+    if (nativeForkAnchorSessionMap.size > 0) {
+      const rewoundIds = new Set(idsToRewind);
+      for (const row of rows) {
+        if (rewoundIds.has(row.id) || !row.agent_meta) continue;
+        const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
+        if (remapped !== row.agent_meta) updateAgentMeta.run(remapped, row.id);
+      }
+    }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
       const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
@@ -1066,7 +2797,25 @@ function rewindCommit(db: Database.Database, args: unknown): void {
       // work from the branch the user explicitly withdrew.
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
-    if (sdkSessionId) {
+    if (nativeContextReset) {
+      db.prepare(
+        `UPDATE sessions
+           SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
+               codex_plan_json = NULL, sdk_session_id = NULL,
+               list_preview = NULL, list_preview_role = NULL, list_message_count = NULL
+         WHERE id = ?`,
+      ).run(now, now, sessionId);
+      db.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)",
+      ).run(
+        nativeContextReset.markerId,
+        nativeContextReset.markerClientId,
+        sessionId,
+        nativeContextReset.markerContent,
+        now,
+        now,
+      );
+    } else if (sdkSessionId) {
       db.prepare(
         `UPDATE sessions
            SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0,
@@ -1366,6 +3115,9 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const targetRowid = nullableNumber(payload.targetRowid);
   const newSession = asRecord(payload.newSession, 'newSession');
   const uuidMap = normalizeUuidMap(payload.uuidMap);
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(
+    payload.nativeForkAnchorSessionMap,
+  );
   const legacyTranscriptParentUuids = normalizeStringSet(
     payload.legacyTranscriptParentUuids,
     'legacyTranscriptParentUuids',
@@ -1374,55 +3126,59 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
   const detachAgentSwitchSessions = payload.detachAgentSwitchSessions === true;
   const resetHandoffBoundaryClientId = nullableString(payload.resetHandoffBoundaryClientId);
   const newMessageIds = normalizeNewMessageIds(payload.newMessageIds);
-  const sourceMessages = db
-    .prepare(
-      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
-       FROM messages
-      WHERE session_id = ?
-        AND (? IS NULL OR created_at > ?)
-        AND (
-          created_at < ?
-          OR (? IS NOT NULL AND created_at = ? AND rowid < ?)
-        )
-        AND rewind_at IS NULL
-      ORDER BY created_at ASC, rowid ASC`,
-  ).all(
-    sourceSessionId,
-    sourceClearedAt,
-    sourceClearedAt,
-    targetCreatedAt,
-    targetRowid,
-    targetCreatedAt,
-    targetRowid,
-  ) as Array<{
-    client_id: string;
-    role: string;
-    content: string;
-    tool_use_id: string | null;
-    agent_meta: string | null;
-    agent_kind: string | null;
-    created_at: number;
-  }>;
-  if (newMessageIds.length !== sourceMessages.length) {
-    throw invalidArgs(
-      `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
-    );
-  }
   const insertMessage = db.prepare(
     `INSERT INTO messages
       (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
   );
   const transaction = db.transaction(() => {
+    if (newSession.source === 'side-chat' && !db.prepare(
+      "SELECT 1 FROM sessions WHERE id = ? AND status = 'active' AND cleared_at IS ?",
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source task changed while opening side chat');
+    }
+    if (payload.recoveryMarker != null && !db.prepare(
+      'SELECT 1 FROM sessions WHERE id = ? AND cleared_at IS ?',
+    ).get(sourceSessionId, sourceClearedAt)) {
+      throw invalidArgs('Source history changed while preparing recovery fork');
+    }
+    const sourceMessages = db.prepare(
+      `SELECT client_id, role, content, tool_use_id, agent_meta, agent_kind, created_at
+       FROM messages
+       WHERE session_id = ?
+         AND (? IS NULL OR created_at > ?)
+         AND (created_at < ? OR (? IS NOT NULL AND created_at = ? AND rowid < ?))
+         AND rewind_at IS NULL
+       ORDER BY created_at ASC, rowid ASC`,
+    ).all(sourceSessionId, sourceClearedAt, sourceClearedAt, targetCreatedAt,
+      targetRowid, targetCreatedAt, targetRowid) as ForkSourceMessage[];
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      if (computeForkSourceMessagesDigest(sourceMessages)
+        !== expectString(marker.sourceMessagesDigest, 'recoveryMarker.sourceMessagesDigest')) {
+        throw invalidArgs('Source history changed while preparing recovery fork');
+      }
+    }
+    if (newMessageIds.length !== sourceMessages.length) {
+      throw invalidArgs(
+        `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
+      );
+    }
+    const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
+    // Keep inherited history strictly before the side-chat visibility boundary,
+    // without moving the child into the future or changing source timestamps.
+    const historyTimeOffset = newSession.source === 'side-chat'
+      ? sourceMessages.reduce((offset, message) => Math.max(offset, message.created_at - childCreatedAt + 1), 0)
+      : 0;
     db.prepare(
       `INSERT INTO sessions (
         id, title, working_dir, model, provider_id, effort, permission_mode, status,
         sdk_session_id, total_token_usage, total_cost_usd, context_tokens,
-        context_window, fast_mode, cleared_at, pinned_at, user_send_at,
+        context_window, context_window_runtime, fast_mode, cleared_at, pinned_at, user_send_at,
         agent_kind, workspace_kind, codex_history_has_product_prompt,
-        parent_session_id, forked_at_message_id,
+        parent_session_id, forked_at_message_id, agent_device_id,
         created_at, updated_at
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       expectString(newSession.id, 'newSession.id'),
       expectString(newSession.title, 'newSession.title'),
@@ -1437,7 +3193,8 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
       expectNumber(newSession.totalCostUsd, 'newSession.totalCostUsd'),
       expectNumber(newSession.contextTokens, 'newSession.contextTokens'),
       expectNumber(newSession.contextWindow, 'newSession.contextWindow'),
-      newSession.fastMode ? 1 : 0,
+      nullableNumber(newSession.contextWindowRuntime),
+      fastModeToStorage(newSession.fastMode),
       nullableNumber(newSession.clearedAt),
       nullableNumber(newSession.pinnedAt),
       nullableNumber(newSession.userSendAt),
@@ -1450,9 +3207,14 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
           : 0,
       nullableString(newSession.parentSessionId),
       nullableString(newSession.forkedAtMessageId),
+      nullableString(newSession.agentDeviceId),
       expectNumber(newSession.createdAt, 'newSession.createdAt'),
       expectNumber(newSession.updatedAt, 'newSession.updatedAt'),
     );
+    if (newSession.source === 'side-chat') {
+      db.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
+        .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
+    }
     for (let i = 0; i < sourceMessages.length; i += 1) {
       const message = sourceMessages[i];
       const ids = newMessageIds[i];
@@ -1466,19 +3228,47 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
           resetHandoffBoundaryClientId,
         }),
         message.tool_use_id,
-        remapAgentMetaUuid(
+        remapForkedAgentMeta(
           message.agent_meta,
           uuidMap,
           legacyTranscriptParentUuids,
           toolParentUuids,
+          nativeForkAnchorSessionMap,
         ),
         message.agent_kind,
-        message.created_at,
+        message.created_at - historyTimeOffset,
       );
     }
+    if (payload.recoveryMarker != null) {
+      const marker = asRecord(payload.recoveryMarker, 'recoveryMarker');
+      const markerCreatedAt = newSession.source === 'side-chat'
+        ? childCreatedAt
+        : expectNumber(marker.createdAt, 'recoveryMarker.createdAt');
+      db.prepare(
+        "INSERT INTO messages (id, client_id, session_id, role, content, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?, ?)",
+      ).run(
+        expectString(marker.id, 'recoveryMarker.id'),
+        expectString(marker.clientId, 'recoveryMarker.clientId'),
+        expectString(newSession.id, 'newSession.id'),
+        expectString(marker.content, 'recoveryMarker.content'),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        markerCreatedAt,
+        markerCreatedAt,
+      );
+      const content = asRecord(JSON.parse(expectString(marker.content, 'recoveryMarker.content')), 'recoveryMarker content');
+      insertMessage.run(
+        expectString(marker.id, 'recoveryMarker.id') + ':card',
+        expectString(marker.clientId, 'recoveryMarker.clientId') + ':card',
+        expectString(newSession.id, 'newSession.id'),
+        'assistant', '', null,
+        JSON.stringify({ contextRebuild: { reason: content.reason, handoff: content.handoff } }),
+        expectString(newSession.agentKind, 'newSession.agentKind'),
+        markerCreatedAt,
+      );
+    }
+    return { messageCount: sourceMessages.length };
   });
-  transaction();
-  return { messageCount: sourceMessages.length };
+  return transaction();
 }
 
 /** 复制边界只保留可见语义；vendor session 绑定必须属于父分支。 */
@@ -1569,7 +3359,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
       expectNumber(rawSession.totalCostUsd, 'session.totalCostUsd'),
       expectNumber(rawSession.contextTokens, 'session.contextTokens'),
       expectNumber(rawSession.contextWindow, 'session.contextWindow'),
-      rawSession.fastMode ? 1 : 0,
+      fastModeToStorage(rawSession.fastMode),
       rawSession.planModeEnabled ? 1 : 0,
       expectString(rawSession.agentKind, 'session.agentKind'),
       nullableString(rawSession.orcaRole),
@@ -1612,6 +3402,7 @@ function sessionImportShare(db: Database.Database, args: unknown): { messageCoun
     const replacementUpdatedAt = expectNumber(session.updatedAt, 'session.updatedAt');
     for (const replacedSession of replaceSessions) {
       deleteReplacedSession.run(replacementUpdatedAt, replacedSession.id);
+      db.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(replacementUpdatedAt, replacedSession.id);
     }
     let messageCount = insertSessionWithMessages(session, messages);
     if (orca) {
@@ -1729,6 +3520,9 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
   const jobs = expectArray(payload.jobs, 'jobs');
   const errMsg = truncate(expectString(payload.errMsg, 'errMsg'), 2000);
   const now = expectNumber(payload.now, 'now');
+  // #3416:确定性失败(如 INVALID_MODEL)重试永远不可能成功,terminal=true 时
+  // 整批直接进 'failed' 终态,不再烧 5 次退避尝试。缺省 false 保持旧语义。
+  const terminal = payload.terminal === true;
   const updReschedule = db.prepare(
     `UPDATE embedding_jobs
         SET attempts = ?, last_error = ?, scheduled_at = ?
@@ -1745,7 +3539,7 @@ function embeddingRecordFailures(db: Database.Database, args: unknown): { failCo
       const job = asRecord(rawJob, 'failure job');
       const rowid = expectNumber(job.rowid, 'job.rowid');
       const nextAttempts = expectNumber(job.attempts, 'job.attempts') + 1;
-      if (nextAttempts >= MAX_ATTEMPTS) {
+      if (terminal || nextAttempts >= MAX_ATTEMPTS) {
         updFail.run(nextAttempts, errMsg, rowid);
         failCount++;
       } else {
@@ -1808,13 +3602,18 @@ function orcaRemoveWorker(db: Database.Database, args: unknown): string | null {
   const payload = asRecord(args, 'orca.removeWorker args');
   const workerId = expectString(payload.workerId, 'workerId');
   const now = expectNumber(payload.now, 'now');
-  const selectWorker = db.prepare('SELECT session_id AS sessionId FROM orca_workers WHERE id = ? LIMIT 1');
+  const selectWorker = db.prepare('SELECT session_id AS sessionId, execution_device_id AS deviceId, remote_released_at AS releasedAt FROM orca_workers WHERE id = ? LIMIT 1');
   const deleteWorker = db.prepare('DELETE FROM orca_workers WHERE id = ?');
   const archiveSession = db.prepare("UPDATE sessions SET status = 'archived', orca_role = NULL, updated_at = ? WHERE id = ? AND status != 'deleted'");
   const transaction = db.transaction(() => {
-    const row = selectWorker.get(workerId) as { sessionId: string } | undefined;
+    const row = selectWorker.get(workerId) as { sessionId: string; deviceId: string | null; releasedAt: number | null } | undefined;
     if (!row) return null;
-    deleteWorker.run(workerId);
+    // 回滚先隐藏代理并释放 label；远端 stop/release 未确认前必须保留持久重试路由。
+    if (row.deviceId && row.releasedAt == null) {
+      db.prepare('UPDATE orca_workers SET label = NULL, updated_at = ? WHERE id = ?').run(now, workerId);
+    } else {
+      deleteWorker.run(workerId);
+    }
     const archived = archiveSession.run(now, row.sessionId);
     return archived.changes > 0 ? row.sessionId : null;
   });
@@ -1914,9 +3713,32 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
     if (!activeTeam) {
       throw new Error(`Orca team ${teamId} is no longer active`);
     }
+    if (payload.remoteExecution !== undefined) {
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      if (remote.proxySession !== undefined) {
+        const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?)").run(
+          sessionId, expectString(proxy.title, 'proxySession.title'),
+          expectString(proxy.model, 'proxySession.model'),
+          proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
+          expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
+          expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
+        );
+      }
+    }
     if (payload.focused === true) {
       db.prepare('UPDATE orca_workers SET focused = 0, updated_at = ? WHERE team_id = ? AND focused = 1').run(now, teamId);
     }
+    const persistRemoteExecution = () => {
+      if (payload.remoteExecution === undefined) return;
+      const remote = asRecord(payload.remoteExecution, 'remoteExecution');
+      const deviceId = expectString(remote.deviceId, 'remoteExecution.deviceId');
+      const remoteSessionId = expectString(remote.remoteSessionId, 'remoteExecution.remoteSessionId');
+      db.prepare('UPDATE orca_workers SET execution_device_id = ?, remote_session_id = ? WHERE session_id = ?').run(deviceId, remoteSessionId, sessionId);
+      db.prepare("UPDATE sessions SET orca_role = 'worker' WHERE id = ?").run(sessionId);
+      db.prepare('DELETE FROM orca_remote_opens WHERE device_id = ? AND remote_session_id = ?').run(deviceId, remoteSessionId);
+    };
     const existing = db.prepare('SELECT * FROM orca_workers WHERE id = ? LIMIT 1').get(id) as Record<string, unknown> | undefined;
     if (existing) {
       db.prepare('UPDATE orca_workers SET team_id = ?, session_id = ?, status = ?, label = ?, worktree_branch = ?, role = ?, focused = ?, idle_since = ?, updated_at = ? WHERE id = ?').run(
@@ -1931,6 +3753,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         id,
       );
+      persistRemoteExecution();
       return;
     }
     const bySession = db.prepare('SELECT * FROM orca_workers WHERE session_id = ? LIMIT 1').get(sessionId) as Record<string, unknown> | undefined;
@@ -1946,6 +3769,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
         now,
         sessionId,
       );
+      persistRemoteExecution();
       return;
     }
     db.prepare('INSERT INTO orca_workers (id, team_id, session_id, status, label, worktree_branch, role, focused, idle_since, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(
@@ -1961,6 +3785,7 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       now,
       now,
     );
+    persistRemoteExecution();
   })();
 }
 
@@ -2200,11 +4025,12 @@ function extractContentText(content: unknown): string {
   return parts.join('\n\n');
 }
 
-function remapAgentMetaUuid(
+function remapForkedAgentMeta(
   raw: string | null,
   map: Map<string, string>,
   legacyTranscriptParentUuids: Set<string> = new Set(),
   toolParentUuids: Set<string> = new Set(),
+  nativeForkAnchorSessionMap: Map<string, string> = new Map(),
 ): string | null {
   if (!raw || raw === 'null') return raw;
   let parsed: Record<string, unknown>;
@@ -2238,7 +4064,43 @@ function remapAgentMetaUuid(
     if (mapped) next.transcriptParentUuid = mapped;
     else delete next.transcriptParentUuid;
   }
+  const nativeForkAnchor = next.nativeForkAnchor;
+  if (
+    next.turnCompleted === true &&
+    isRecord(nativeForkAnchor) &&
+    nativeForkAnchor.agentKind === 'codex' &&
+    nativeForkAnchor.kind === 'turn' &&
+    typeof nativeForkAnchor.id === 'string' &&
+    nativeForkAnchor.id &&
+    typeof nativeForkAnchor.sdkSessionId === 'string'
+  ) {
+    const mapped = nativeForkAnchorSessionMap.get(nativeForkAnchor.sdkSessionId);
+    if (mapped) next.nativeForkAnchor = { ...nativeForkAnchor, sdkSessionId: mapped };
+  }
   return JSON.stringify(next);
+}
+
+/** 只重映射 nativeForkAnchor.sdkSessionId,不动 uuid / parent 链(rewind 不复制消息)。 */
+function remapNativeForkAnchorSession(raw: string, map: Map<string, string>): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!isRecord(parsed)) return raw;
+  const nativeForkAnchor = parsed.nativeForkAnchor;
+  if (
+    !isRecord(nativeForkAnchor) ||
+    nativeForkAnchor.agentKind !== 'codex' ||
+    nativeForkAnchor.kind !== 'turn' ||
+    typeof nativeForkAnchor.sdkSessionId !== 'string'
+  ) {
+    return raw;
+  }
+  const mapped = map.get(nativeForkAnchor.sdkSessionId);
+  if (!mapped || mapped === nativeForkAnchor.sdkSessionId) return raw;
+  return JSON.stringify({ ...parsed, nativeForkAnchor: { ...nativeForkAnchor, sdkSessionId: mapped } });
 }
 
 function normalizeStringSet(value: unknown, label: string): Set<string> {
@@ -2247,17 +4109,32 @@ function normalizeStringSet(value: unknown, label: string): Set<string> {
 }
 
 function normalizeUuidMap(value: unknown): Map<string, string> {
+  return normalizeStringMap(value, 'uuidMap');
+}
+
+function normalizeNativeForkAnchorSessionMap(value: unknown): Map<string, string> {
+  return value === undefined
+    ? new Map()
+    : normalizeStringMap(value, 'nativeForkAnchorSessionMap');
+}
+
+function normalizeStringMap(value: unknown, label: string): Map<string, string> {
   if (Array.isArray(value)) {
     return new Map(
       value.map((entry) => {
-        if (!Array.isArray(entry) || entry.length !== 2) throw invalidArgs('uuidMap entries must be pairs');
-        return [expectString(entry[0], 'uuidMap.key'), expectString(entry[1], 'uuidMap.value')];
+        if (!Array.isArray(entry) || entry.length !== 2) {
+          throw invalidArgs(`${label} entries must be pairs`);
+        }
+        return [
+          expectString(entry[0], `${label}.key`),
+          expectString(entry[1], `${label}.value`),
+        ];
       }),
     );
   }
-  const record = asRecord(value, 'uuidMap');
+  const record = asRecord(value, label);
   return new Map(
-    Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, `uuidMap.${key}`)]),
+    Object.entries(record).map(([key, mapped]) => [key, expectString(mapped, `${label}.${key}`)]),
   );
 }
 

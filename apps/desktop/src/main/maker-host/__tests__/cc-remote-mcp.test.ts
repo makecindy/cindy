@@ -10,24 +10,39 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import type { CodexHttpBridge } from '../../mcp-integrations/codexHttpBridge.js';
-import { buildCcRemoteHttpMcpServers } from '../cc-remote-mcp.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+  isFrozenBuiltinPluginAllowed,
+} from '../../mcp-integrations/codexBuiltinToolPolicy.js';
+import { buildCcRemoteHttpMcpServers, prepareCcRemoteQueryMcp } from '../cc-remote-mcp.js';
+import { isBotToolsetAvailableOnTarget } from '../../../shared/botRemoteCapabilities.js';
+import { resolveBotAllowedBuiltinPluginIds } from '../plugins/types.js';
 
 function fakeBridge() {
-  const registered = new Map<string, {
-    sessionId: string;
-    sessionInstanceId?: string;
-    agentKind: string;
-    vendorOptions: unknown;
-  }>();
-  const bridge = {
-    registerSessionCtx: vi.fn((sessionId: string, ctx: {
+  const registered = new Map<
+    string,
+    {
       sessionId: string;
       sessionInstanceId?: string;
       agentKind: string;
       vendorOptions: unknown;
-    }) => {
-      registered.set(sessionId, ctx);
-    }),
+    }
+  >();
+  const bridge = {
+    registerSessionCtx: vi.fn(
+      (
+        sessionId: string,
+        ctx: {
+          sessionId: string;
+          sessionInstanceId?: string;
+          agentKind: string;
+          vendorOptions: unknown;
+        },
+      ) => {
+        registered.set(sessionId, ctx);
+      },
+    ),
     unregisterSessionCtx: vi.fn((sessionId: string, expectedCtx?: unknown) => {
       if (expectedCtx !== undefined && registered.get(sessionId) !== expectedCtx) return;
       registered.delete(sessionId);
@@ -42,9 +57,88 @@ function fakeBridge() {
 
 const HOST = { id: 'host-1' } as unknown as RemoteHost;
 
+describe('prepareCcRemoteQueryMcp', () => {
+  it.each(['bridge', 'forward', 'token', 'missing-helper', 'policy', 'instance'] as const)(
+    'rejects a Bot query on %s failure, cleans partial injection, and permits retry', async (failure) => {
+      const { bridge, registered } = fakeBridge();
+      let recovered = false;
+      const openQuery = vi.fn();
+      const prepare = () => prepareCcRemoteQueryMcp({
+        host: HOST, sessionId: 'bot-session', workingDir: '/remote/bot', botSession: true,
+        sessionInstanceId: !recovered && failure === 'instance' ? undefined : 'bot-instance',
+        makerMemoryEnabled: true,
+        vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]:
+          !recovered && failure === 'policy' ? ['memory'] : ['memory', 'xdt_helper'] },
+      }, {
+        ensureBridgeStarted: async () => !recovered && failure === 'bridge' ? null : {
+          port: 38080, bridge,
+          serverNames: !recovered && failure === 'missing-helper' ? ['cindy_memory'] : ['cindy_memory', 'cindy_helper'],
+        },
+        ensureForward: async () => {
+          if (!recovered && failure === 'forward') throw new Error('forward unavailable');
+          return 47921;
+        },
+        getBridgeToken: () => !recovered && failure === 'token' ? null : 'remote-test-token',
+      });
+
+      await expect(prepare().then(openQuery)).rejects.toThrow();
+      expect(openQuery).not.toHaveBeenCalled();
+      expect(registered.size).toBe(0);
+
+      recovered = true;
+      const injected = await prepare();
+      expect(injected.servers.cindy_helper).toBeDefined();
+      expect(registered.size).toBe(1);
+      injected.cleanup();
+      expect(registered.size).toBe(0);
+    },
+  );
+
+  it.each(['bridge', 'forward'] as const)('keeps optional MCP degradation for ordinary queries (%s)', async (failure) => {
+    const { bridge, registered } = fakeBridge();
+    const onOptionalInjectionError = vi.fn();
+    const injected = await prepareCcRemoteQueryMcp({
+      host: HOST, sessionId: 'ordinary', sessionInstanceId: 'ordinary-instance', workingDir: '/remote/project',
+      vendorOptions: {},
+    }, {
+      ensureBridgeStarted: async () => failure === 'bridge' ? null : { port: 38080, bridge, serverNames: ['cindy_orca'] },
+      ensureForward: async () => { throw new Error('forward unavailable'); },
+      getBridgeToken: () => 'remote-test-token',
+      onOptionalInjectionError,
+    });
+    expect(injected.servers).toEqual({});
+    expect(registered.size).toBe(0);
+    expect(onOptionalInjectionError).toHaveBeenCalledTimes(failure === 'forward' ? 1 : 0);
+  });
+});
+
 describe('buildCcRemoteHttpMcpServers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([true, false])('injects the helper only for an identified Bot (bot=%s)', async (botSession) => {
+    const { bridge, registered } = fakeBridge();
+    const allowed = resolveBotAllowedBuiltinPluginIds([{
+      id: 'xdt_helper',
+      available: isBotToolsetAvailableOnTarget({
+        agentKind: 'claude-code', remoteHostId: HOST.id, toolsetId: 'xdt_helper',
+      }),
+    }], []);
+    const { servers, cleanup } = await buildCcRemoteHttpMcpServers({
+      host: HOST, sessionId: 'bot-session', sessionInstanceId: 'bot-instance', workingDir: '/remote/bot', botSession,
+      vendorOptions: { [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: allowed },
+    }, {
+      ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_helper', 'cindy_orca'], bridge }),
+      ensureForward: async () => 47921, getBridgeToken: () => 'remote-test-token', isCollabEnabled: () => false,
+    });
+    expect(Object.keys(servers)).toEqual(botSession ? ['cindy_helper'] : []);
+    if (botSession) {
+      expect(servers.cindy_helper).toEqual({ type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_helper?session=bot-session&instance=bot-instance', headers: { Authorization: 'Bearer remote-test-token' } });
+      expect(registered.get('bot-session')).toMatchObject({ sessionInstanceId: 'bot-instance', remoteHostId: 'host-1' });
+    }
+    cleanup();
+    expect(registered.size).toBe(0);
   });
 
   it('returns empty when the bridge is unavailable', async () => {
@@ -79,6 +173,65 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(servers).toEqual({});
     expect(registered.size).toBe(0); // 不注册任何 session ctx
     expect(() => cleanup()).not.toThrow();
+  });
+
+  it('does not inject collaboration when the frozen Bot Toolset disables it', async () => {
+    const { bridge, registered } = fakeBridge();
+    const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-no-collab',
+        workingDir: '/remote/repo',
+        vendorOptions: {
+          [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['collab'],
+        },
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+    expect(servers).toEqual({});
+    expect(fingerprint).toBe('disabled');
+    expect(registered.size).toBe(0);
+  });
+
+  /**
+   * 远端 Bot 会话的 Maker Memory scope key 必须写进注册的 session ctx。
+   * 不写的话 cindy_memory 的 withStore 只剩 buildMemoryScopeKey(workingDir,
+   * remoteHostId) 回落 —— 本地 prompt 段注入的是 `bot:<botId>` 索引,工具却写
+   * 远端项目记忆(伙伴记忆终验发现的两张皮)。
+   */
+  it('registers the Bot Maker Memory scope key on the remote session ctx', async () => {
+    const { bridge, registered } = fakeBridge();
+    await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-remote-1',
+        workingDir: '/remote/repo',
+        makerMemoryEnabled: true,
+        makerMemoryScopeKey: 'bot:bot-release-helper',
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge', 'cindy_memory'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+    expect(registered.get('bot-remote-1')).toMatchObject({
+      memoryScopeKey: 'bot:bot-release-helper',
+    });
   });
 
   it('flags needsFreshStart when the bridge token is unavailable (R21 P2)', async () => {
@@ -122,7 +275,11 @@ describe('buildCcRemoteHttpMcpServers', () => {
     // 此前注入注册过 ctx 的 session, collab 禁用后 build 必须摘掉它 —
     // 否则 ?session=<id> 的授权路由在禁用后仍可用到 bridge 关闭。
     const { bridge, registered } = fakeBridge();
-    registered.set('s-disable', { sessionId: 's-disable', agentKind: 'claude-code', vendorOptions: {} });
+    registered.set('s-disable', {
+      sessionId: 's-disable',
+      agentKind: 'claude-code',
+      vendorOptions: {},
+    });
     const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
       { host: HOST, sessionId: 's-disable', workingDir: '/remote/repo' },
       {
@@ -243,7 +400,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
       },
     );
     cleanup();
-    expect(spies.unregisterSessionCtx).toHaveBeenCalledWith('s1', expect.objectContaining({ sessionId: 's1' }));
+    expect(spies.unregisterSessionCtx).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ sessionId: 's1' }),
+    );
   });
 
   it('re-registering the same session overwrites instead of accumulating (resume/rebuild)', async () => {
@@ -272,7 +432,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
       getBridgeToken: async () => 'tok',
       synthesizeVendorOptions: async () => ({}),
     };
-    const first = await buildCcRemoteHttpMcpServers({ host: HOST, sessionId: 's1', workingDir: '/a' }, deps);
+    const first = await buildCcRemoteHttpMcpServers(
+      { host: HOST, sessionId: 's1', workingDir: '/a' },
+      deps,
+    );
     await buildCcRemoteHttpMcpServers({ host: HOST, sessionId: 's1', workingDir: '/b' }, deps);
     first.cleanup();
     expect(registered.has('s1')).toBe(true);
@@ -292,7 +455,12 @@ describe('buildCcRemoteHttpMcpServers', () => {
       orcaWorkerSessionId: 's1',
     };
     await buildCcRemoteHttpMcpServers(
-      { host: HOST, sessionId: 's1', workingDir: '/remote/repo', vendorOptions: workerVendorOptions },
+      {
+        host: HOST,
+        sessionId: 's1',
+        workingDir: '/remote/repo',
+        vendorOptions: workerVendorOptions,
+      },
       {
         ensureBridgeStarted: async () => ({ port: 38080, serverNames: ['cindy_orca'], bridge }),
         ensureForward: vi.fn(async () => 47921),
@@ -386,7 +554,11 @@ describe('buildCcRemoteHttpMcpServers', () => {
         synthesizeVendorOptions: async () => ({}),
       },
     );
-    expect(Object.keys(servers).sort()).toEqual(['cindy_memory', 'cindy_orca', 'orca_worker_bridge']);
+    expect(Object.keys(servers).sort()).toEqual([
+      'cindy_memory',
+      'cindy_orca',
+      'orca_worker_bridge',
+    ]);
     expect(servers.cindy_memory).toEqual({
       type: 'http',
       url: 'http://127.0.0.1:47921/mcp/cindy_memory?session=s1',
@@ -394,7 +566,10 @@ describe('buildCcRemoteHttpMcpServers', () => {
     });
     // ctx 必须带 remoteHostId — cindy_memory 据此把远端路径隔离到
     // ssh:<hostId>:<path> 的独立 store。
-    expect(registered.get('s1')).toMatchObject({ remoteHostId: 'host-1', workingDir: '/remote/repo' });
+    expect(registered.get('s1')).toMatchObject({
+      remoteHostId: 'host-1',
+      workingDir: '/remote/repo',
+    });
   });
 
   it('injects only cindy_memory when collab is disabled but the session Maker Memory flag is on', async () => {
@@ -477,5 +652,109 @@ describe('buildCcRemoteHttpMcpServers', () => {
     expect(first.fingerprint).toBeDefined();
     expect(replacement.fingerprint).toBeDefined();
     expect(first.fingerprint).not.toBe(replacement.fingerprint);
+  });
+  /*
+    注入面不得宽于执行面 —— 冻结策略两键必须与调用期同判据。
+    ------------------------------------------------------------------
+    bridge 在调用期用 isFrozenBuiltinPluginAllowed(ctx.vendorOptions, pluginId)
+    (codexHttpBridge.ts) 判定,语义是「allowed 键存在时以 allowed 为准,否则才看
+    disabled」。而伙伴会话**会**写 allowed 键:maker-host/index.ts 在
+    botRuntimeSnapshot 存在时把伙伴配置的 toolset 白名单写进
+    CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,且不分 agentKind —— SSH 远端的
+    Claude Code 伙伴会话同样带着它。
+
+    这里过去只读 disabled 一键,于是「白名单里没有 collab、collab 又不在 disabled
+    列表里」时,注入侧放行、调用侧拒绝:远端 agent 看得见一整排协同工具,每次调用
+    都被拒。下面两个用例把注入侧与执行侧的判据钉在一起。
+  */
+  it('does not advertise collab when the Bot toolset allowlist omits it', async () => {
+    const { bridge, registered } = fakeBridge();
+    const vendorOptions = {
+      // 伙伴只勾了 memory —— collab 不在白名单里,但也不在 disabled 列表里。
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory'],
+    };
+    // 前提校验:调用期判据确实会拒绝 collab。
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(false);
+
+    const { servers, fingerprint } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-allowlist-no-collab',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    // 执行面会拒 → 注入面就不该通告。
+    expect(servers).toEqual({});
+    expect(fingerprint).toBe('disabled');
+    expect(registered.size).toBe(0);
+  });
+
+  it('still advertises collab when the allowlist contains it', async () => {
+    const { bridge } = fakeBridge();
+    const vendorOptions = {
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: ['memory', 'collab'],
+    };
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(true);
+
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'bot-allowlist-with-collab',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    expect(Object.keys(servers).sort()).toEqual(['cindy_orca', 'orca_worker_bridge']);
+  });
+
+  it('keeps the disabled-only behaviour byte-for-byte when no allowlist is present', async () => {
+    // allowed 键不存在 → 回落到 disabled 语义,行为与改动前逐字一致。
+    const { bridge } = fakeBridge();
+    const vendorOptions = { [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: ['browser'] };
+    expect(isFrozenBuiltinPluginAllowed(vendorOptions, 'collab')).toBe(true);
+
+    const { servers } = await buildCcRemoteHttpMcpServers(
+      {
+        host: HOST,
+        sessionId: 'plain-remote',
+        workingDir: '/remote/repo',
+        vendorOptions,
+      },
+      {
+        ensureBridgeStarted: async () => ({
+          port: 38080,
+          serverNames: ['cindy_orca', 'orca_worker_bridge'],
+          bridge,
+        }),
+        ensureForward: vi.fn(async () => 47921),
+        getBridgeToken: async () => 'persistent-test-token',
+        isCollabEnabled: () => true,
+      },
+    );
+
+    expect(Object.keys(servers).sort()).toEqual(['cindy_orca', 'orca_worker_bridge']);
   });
 });

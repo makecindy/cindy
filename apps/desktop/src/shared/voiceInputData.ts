@@ -1,3 +1,4 @@
+import { normalizeVoiceConversationPreferences, normalizeVoiceConversationSelection, normalizeSentencePlaybackOverrides, type VoiceConversationSelection } from './voiceConversation';
 import type {
   DictationDictionaryAdviceInput,
   DictationDictionaryLearningAction,
@@ -6,6 +7,22 @@ import type {
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import {
+  coalesceDictionaryLearningActions,
+  DEFAULT_SPEAKER_GATE_STRICTNESS,
+  DICTIONARY_CANDIDATE_PROMOTION_COUNT,
+  isSpeakerGateStrictness,
+  type SpeakerGateStrictness,
+} from '@cindy/voice-input-core';
+export {
+  compactVoiceInputHistoryIfNeeded,
+  estimateVoiceInputHistoryContextChars,
+  MAX_REFINEMENT_HISTORY_ITEM_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES,
+  VOICE_INPUT_HISTORY_HEADER,
+} from '@cindy/voice-input-core';
 
 import { CURRENT_CINDY_REGION } from './brandRegion';
 import { SUPPORTED_LOCALES, type SupportedLocale } from './locale';
@@ -68,6 +85,12 @@ export interface VoiceInputDictionaryCandidate {
 }
 
 export interface VoiceInputSettings {
+  /** Explicit speech selection; absent means follow the available catalog. */
+  conversationSelection?: VoiceConversationSelection | null;
+  /** Per-companion overrides; absence inherits the default without copying it. */
+  conversationSelections?: Record<string, VoiceConversationSelection | null>;
+  /** Missing entries follow the enabled default; false waits for the complete reply. */
+  conversationSentencePlayback?: Record<string, boolean>;
   language: VoiceInputLanguage;
   microphoneDeviceId: string | null;
   muteSystemAudio: boolean;
@@ -93,6 +116,27 @@ export interface VoiceInputSettings {
    * 在当时的默认值上,以后改默认值也带不动他们,「恢复默认」也失去意义。
    */
   dictionarySyncEnabledOverride?: boolean | null;
+  /**
+   * 是否允许在输入框里按住鼠标左键呼出语音输入(**有效值** = 默认 + 用户 override)。
+   * 输入框不显示任何提示,只在设置里打开后生效。
+   *
+   * 读这个字段即可;写请走 {@link composerLongPressEnabledOverride}。
+   */
+  composerLongPressEnabled: boolean;
+  /** 用户对上面那个开关的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。 */
+  composerLongPressEnabledOverride?: boolean | null;
+  /**
+   * 「识别我的声音」:听写时按本机录入的声纹静音旁人。需要先下载模型并录入声纹;
+   * 声纹缺失或模型未就绪时即使为 true 也不过滤。按设备、按账号保存,不跨设备同步。
+   */
+  speakerFilterEnabled: boolean;
+  /**
+   * 声纹过滤的灵敏度(**有效值** = 默认 + 用户 override)。阈值随验证数据会调,
+   * 未自定义的用户跟随版本默认。写请走 {@link speakerFilterStrictnessOverride}。
+   */
+  speakerFilterStrictness: SpeakerGateStrictness;
+  /** 用户对灵敏度的显式选择;`undefined` = 从未自定义,跟随当前版本默认值。 */
+  speakerFilterStrictnessOverride?: SpeakerGateStrictness | null;
   dictionaryEntries: VoiceInputDictionaryEntry[];
   dictionaryCandidates: VoiceInputDictionaryCandidate[];
   suppressedAutomaticDictionaryTexts: string[];
@@ -110,6 +154,21 @@ export interface VoiceInputDataSnapshot {
   history: VoiceInputHistoryEntry[];
 }
 
+/**
+ * settings 写入 patch。两个带 override 语义的开关额外接受 `null`:
+ * **不是**写入「关闭」,而是「恢复默认」—— 删除 override、重新跟随当前版本默认值
+ * (`docs/dev-rules/configuration-and-overrides.md` §4)。传 `undefined` 做不到这件事:
+ * patch 是展开合并的,`undefined` 会被现有值盖掉。main 侧 VoiceInputDataStore
+ * 按同一规则转写成 `*Override = null`。
+ */
+export type VoiceInputSettingsPatch = Partial<
+  Omit<VoiceInputSettings, 'dictionarySyncEnabled' | 'composerLongPressEnabled' | 'speakerFilterStrictness'>
+> & {
+  dictionarySyncEnabled?: boolean | null;
+  composerLongPressEnabled?: boolean | null;
+  speakerFilterStrictness?: SpeakerGateStrictness | null;
+};
+
 export type VoiceInputDictionaryLearningEvidence = Pick<
   DictationDictionaryAdviceInput,
   'source' | 'rawTranscriptText' | 'beforeText' | 'afterText' | 'context'
@@ -118,6 +177,12 @@ export type VoiceInputDictionaryLearningEvidence = Pick<
 /** 词典跨设备同步的系统默认值。改这里即可让未自定义的用户随版本跟随。 */
 export const DEFAULT_DICTIONARY_SYNC_ENABLED = true;
 
+/**
+ * 长按输入框语音输入默认开启。设置页不展示开关；手动配置仍可通过
+ * composerLongPressEnabledOverride 显式关闭，删除 override 恢复默认。
+ */
+export const DEFAULT_COMPOSER_LONG_PRESS_ENABLED = true;
+
 export const MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_ENTRIES = 1_000;
 export const MAX_VOICE_INPUT_DICTIONARY_CANDIDATES = 200;
@@ -125,15 +190,6 @@ export const MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS = 120;
 export const MAX_VOICE_INPUT_DICTIONARY_ALIASES = 8;
 export const MAX_VOICE_INPUT_DICTIONARY_CSV_BYTES = 5 * 1024 * 1024;
 export const MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES = 5;
-// 历史块只作术语/口语风格参考，术语纠错主要由用户字典 + alias hints 承载。
-// 线上日志实测（2026-06-21 ~ 07-04，1050 次听写）：历史从 33k 涨到 96k chars
-// 期间采纳率 / no_change 率 / 术语修正率均无变化，而它占 refine prompt 约八成
-// token（单次 42k+）。预算据此收紧到 ~12k chars（≈ 最近三四十条）。
-export const VOICE_INPUT_HISTORY_COMPACT_CHARS = 12_000;
-export const VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS = 8_000;
-export const VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES = 40;
-export const MAX_REFINEMENT_HISTORY_ITEM_CHARS = 360;
-export const VOICE_INPUT_HISTORY_HEADER = '语音输入历史（旧到新，仅作术语、别名和用词风格参考）：';
 export const VOICE_INPUT_MODIFIER_SHORTCUT_CODES: readonly VoiceInputModifierShortcutCode[] = [
   'MetaLeft',
   'MetaRight',
@@ -472,6 +528,9 @@ export function getDefaultVoiceInputSettings(
     autoDictionaryEnabled: true,
     // 有效值 = 默认;override 缺省不写(见 dictionarySyncEnabledOverride 注释)。
     dictionarySyncEnabled: DEFAULT_DICTIONARY_SYNC_ENABLED,
+    composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED,
+    speakerFilterEnabled: false,
+    speakerFilterStrictness: DEFAULT_SPEAKER_GATE_STRICTNESS,
     dictionaryEntries: [],
     dictionaryCandidates: [],
     suppressedAutomaticDictionaryTexts: [],
@@ -487,12 +546,18 @@ export function normalizeVoiceInputSettings(
   const defaults = getDefaultVoiceInputSettings(platform, region);
   if (!raw || typeof raw !== 'object') return defaults;
   const candidate = raw as Partial<VoiceInputSettings>;
+  const conversationSelections = normalizeVoiceConversationPreferences(candidate.conversationSelections);
+  const conversationSentencePlayback = normalizeSentencePlaybackOverrides(candidate.conversationSentencePlayback);
   const legacyPlayStartSound = (candidate as { playStartSound?: unknown }).playStartSound;
   const shortcut =
     'shortcut' in candidate
       ? normalizeVoiceInputShortcut(candidate.shortcut)
       : defaults.shortcut;
   return {
+    ...(normalizeVoiceConversationSelection(candidate.conversationSelection)
+      ? { conversationSelection: normalizeVoiceConversationSelection(candidate.conversationSelection) } : {}),
+    ...(Object.keys(conversationSelections).length ? { conversationSelections } : {}),
+    ...(Object.keys(conversationSentencePlayback).length ? { conversationSentencePlayback } : {}),
     language: isVoiceInputLanguage(candidate.language) ? candidate.language : defaults.language,
     microphoneDeviceId:
       typeof candidate.microphoneDeviceId === 'string' && candidate.microphoneDeviceId.trim().length > 0
@@ -528,6 +593,12 @@ export function normalizeVoiceInputSettings(
     // 区分「用户选的」和「当时的默认」——按规则 §3 只做一次性兼容:仅当它与当前
     // 默认不同时才当作用户的显式选择,相同则视为未自定义。
     ...normalizeDictionarySyncOverride(candidate),
+    ...normalizeComposerLongPressOverride(candidate),
+    speakerFilterEnabled:
+      typeof candidate.speakerFilterEnabled === 'boolean'
+        ? candidate.speakerFilterEnabled
+        : defaults.speakerFilterEnabled,
+    ...normalizeSpeakerFilterStrictnessOverride(candidate),
     dictionaryEntries: normalizeVoiceInputDictionaryEntries(
       candidate.dictionaryEntries ?? (candidate as { customDictionary?: unknown }).customDictionary,
     ),
@@ -741,19 +812,20 @@ export function applyVoiceInputDictionaryLearningActions(
   const now = Date.now();
   let changed = false;
 
-  actions.forEach((action) => {
+  coalesceDictionaryLearningActions(actions).forEach((action) => {
     const text = normalizeVoiceInputDictionaryEntryText(action.term);
     const aliasTexts = action.aliases
       .map(normalizeVoiceInputDictionaryEntryText)
       .filter((alias): alias is string => Boolean(alias && alias !== text));
-    if (!text || aliasTexts.length === 0 || action.confidence === 'low') return;
+    if (!text || action.confidence === 'low') return;
 
     const key = dictionaryTextKey(text);
     const entryIndex = dictionaryEntries.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const candidateIndex = dictionaryCandidates.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const existingCandidate = candidateIndex >= 0 ? dictionaryCandidates[candidateIndex] : null;
 
-    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry') {
+    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry'
+      || (existingCandidate?.evidenceCount ?? 0) + 1 >= DICTIONARY_CANDIDATE_PROMOTION_COUNT) {
       if (entryIndex >= 0) {
         const entry = dictionaryEntries[entryIndex];
         const nextEntry: VoiceInputDictionaryEntry = {
@@ -886,35 +958,6 @@ export function normalizeVoiceInputHistory(raw: unknown): VoiceInputHistoryEntry
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function compactVoiceInputHistoryIfNeeded(entries: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
-  if (estimateVoiceInputHistoryContextChars(entries) <= VOICE_INPUT_HISTORY_COMPACT_CHARS) {
-    return entries;
-  }
-  // This is intentionally a rare reset, not a sliding cap. The history prefix
-  // grows append-only for prompt-cache reuse until it crosses the context
-  // budget, then we rewrite it to a compact recent base with enough headroom
-  // to accumulate a long new prefix. The lower target avoids re-compacting on
-  // the next few dictations, which would repeatedly invalidate the cache.
-  const recent = entries.slice(0, VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES);
-  let keepCount = recent.length;
-  while (
-    keepCount > 1 &&
-    estimateVoiceInputHistoryContextChars(recent.slice(0, keepCount)) > VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS
-  ) {
-    keepCount -= 1;
-  }
-  return recent.slice(0, keepCount);
-}
-
-export function estimateVoiceInputHistoryContextChars(newestFirst: ReadonlyArray<{ text: string }>): number {
-  const oldestFirst = normalizeVoiceInputHistoryTextEntries(newestFirst);
-  if (oldestFirst.length === 0) return 0;
-  return oldestFirst.reduce(
-    (total, entry) => total + 3 + entry.length,
-    VOICE_INPUT_HISTORY_HEADER.length,
-  );
-}
-
 export function createVoiceInputHistoryEntry(text: string, timestamp = Date.now()): VoiceInputHistoryEntry | null {
   const normalizedText = text.trim();
   if (!normalizedText) return null;
@@ -953,6 +996,31 @@ function normalizeDictionarySyncOverride(
 function legacyDictionarySyncOverride(value: unknown): boolean | undefined {
   if (typeof value !== 'boolean') return undefined;
   return value === DEFAULT_DICTIONARY_SYNC_ENABLED ? undefined : value;
+}
+
+/**
+ * 长按输入框开关的 override 归一。只认 override 字段:持久化里的有效值只是投影,
+ * 读它等于把写盘那一刻的默认值当成用户选择。该开关从一开始就带 override,没有
+ * 需要兼容的历史格式。
+ */
+function normalizeComposerLongPressOverride(
+  candidate: Partial<VoiceInputSettings>,
+): Pick<VoiceInputSettings, 'composerLongPressEnabled'> & { composerLongPressEnabledOverride?: boolean } {
+  const override = candidate.composerLongPressEnabledOverride;
+  if (typeof override !== 'boolean') {
+    return { composerLongPressEnabled: DEFAULT_COMPOSER_LONG_PRESS_ENABLED };
+  }
+  return { composerLongPressEnabled: override, composerLongPressEnabledOverride: override };
+}
+
+function normalizeSpeakerFilterStrictnessOverride(
+  candidate: Partial<VoiceInputSettings>,
+): Pick<VoiceInputSettings, 'speakerFilterStrictness'> & { speakerFilterStrictnessOverride?: SpeakerGateStrictness } {
+  const override = candidate.speakerFilterStrictnessOverride;
+  if (!isSpeakerGateStrictness(override)) {
+    return { speakerFilterStrictness: DEFAULT_SPEAKER_GATE_STRICTNESS };
+  }
+  return { speakerFilterStrictness: override, speakerFilterStrictnessOverride: override };
 }
 
 function isVoiceInputLanguage(value: unknown): value is VoiceInputLanguage {
@@ -1265,20 +1333,6 @@ function normalizeVoiceInputHistoryEntry(raw: unknown): VoiceInputHistoryEntry |
     text,
     createdAt,
   };
-}
-
-function normalizeVoiceInputHistoryTextEntries(newestFirst: ReadonlyArray<{ text: string }>): string[] {
-  return newestFirst
-    .slice()
-    .reverse()
-    .map((entry) => truncateContextText(entry.text, MAX_REFINEMENT_HISTORY_ITEM_CHARS))
-    .filter(Boolean);
-}
-
-function truncateContextText(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, maxChars).trim();
 }
 
 function createId(prefix: string, timestamp = Date.now(), seed = ''): string {

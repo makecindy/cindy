@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 // 仓库根的 ESM 工具脚本没有 TS declaration；Vitest 运行时可直接加载。
 // @ts-expect-error 见上方说明。
-import { findElectronBinaryIssue, getElectronPlatformBinaryRelPath, getElectronRepairMode } from '../../../../../scripts/ensure-deps.mjs';
+import { findElectronBinaryIssue, getElectronPlatformBinaryRelPath, getElectronRepairMode, resolveSystemTarCommand } from '../../../../../scripts/ensure-deps.mjs';
 // @ts-expect-error 见上方说明。
 import { commandContainsPath } from '../../../../../scripts/restart-desktop-remote.mjs';
 
@@ -33,6 +33,19 @@ describe('getElectronRepairMode', () => {
     ['linux', '25.1.0', 'install-js'],
   ])('%s + Node %s 使用 %s 修复模式', (platform, nodeVersion, expected) => {
     expect(getElectronRepairMode(platform, nodeVersion)).toBe(expected);
+  });
+});
+
+// Bug：Git Bash 里 pnpm install，PATH 先命中 Git 的 GNU tar，把 `C:\...` 当远程主机，Electron 解压失败。
+describe('resolveSystemTarCommand', () => {
+  it('Windows 用系统目录的 tar.exe，不按 PATH 找', () => {
+    const systemTar = 'D:\\Win\\System32\\tar.exe';
+    expect(resolveSystemTarCommand('win32', { SystemRoot: 'D:\\Win' }, (file: string) => file === systemTar)).toBe(systemTar);
+  });
+
+  it('系统目录里没有 tar.exe 时退回 PATH；其它平台照旧用 PATH', () => {
+    expect(resolveSystemTarCommand('win32', { SystemRoot: 'D:\\Win' }, () => false)).toBe('tar');
+    expect(resolveSystemTarCommand('darwin', {}, () => true)).toBe('tar');
   });
 });
 

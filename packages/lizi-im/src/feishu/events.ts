@@ -4,6 +4,9 @@
  * Module-internal event bus for the feishu channel. Status / conflict events
  * are mirrored to the IPC bridge by `ipc.ts`; the message / cardAction events
  * are exposed to the host via `FeishuIM.onMessage` / `.onCardAction`.
+ *
+ * 每个 FeishuScope 一条总线(多份 bot 实例互不串线); `feishuEvents` 是指向当前
+ * 作用域总线的转发器, 调用点写法不变。
  */
 
 import { EventEmitter } from 'node:events';
@@ -14,8 +17,9 @@ import type {
   IMStatus,
 } from '../types.js';
 import type { FeishuStatusUpdate } from './internal-types.js';
+import { getScope } from './moduleScope.js';
 
-interface FeishuChannelEvents {
+export interface FeishuChannelEvents {
   // Internal status (broadcast to renderer via IPC).
   status: (update: FeishuStatusUpdate) => void;
   conflict: (payload: { appId: string }) => void;
@@ -25,7 +29,7 @@ interface FeishuChannelEvents {
   imStatus: (status: IMStatus) => void;
 }
 
-class FeishuEventBus extends EventEmitter {
+export class FeishuEventBus extends EventEmitter {
   override on<K extends keyof FeishuChannelEvents>(
     event: K,
     listener: FeishuChannelEvents[K],
@@ -46,4 +50,24 @@ class FeishuEventBus extends EventEmitter {
   }
 }
 
-export const feishuEvents = new FeishuEventBus();
+/** 当前作用域的事件总线(转发器)。 */
+export const feishuEvents = {
+  on<K extends keyof FeishuChannelEvents>(event: K, listener: FeishuChannelEvents[K]): FeishuEventBus {
+    return getScope().events.on(event, listener);
+  },
+  off<K extends keyof FeishuChannelEvents>(event: K, listener: FeishuChannelEvents[K]): FeishuEventBus {
+    return getScope().events.off(event, listener);
+  },
+  emit<K extends keyof FeishuChannelEvents>(
+    event: K,
+    ...args: Parameters<FeishuChannelEvents[K]>
+  ): boolean {
+    return getScope().events.emit(event, ...args);
+  },
+  removeAllListeners(event?: keyof FeishuChannelEvents): FeishuEventBus {
+    return getScope().events.removeAllListeners(event);
+  },
+  listenerCount(event: keyof FeishuChannelEvents): number {
+    return getScope().events.listenerCount(event);
+  },
+};

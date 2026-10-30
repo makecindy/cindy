@@ -1,9 +1,9 @@
 /**
  * Learn 功能的跨进程共享类型 —— main / preload / renderer 单一来源。
  *
- * Learn 是系统级能力:把任意来源(自由文本描述、hub skill、本地会话用法证据)
- * 蒸馏成一个本地 skill 提案,经 diff 审查确认后才落盘到 ~/.agents/skills/。
- * 引擎实现在 apps/desktop/src/main/learn-host/。
+ * Learn 是由内置 Skill 触发、由系统托管的能力:把任意来源(自由文本描述、hub
+ * skill、本地会话用法证据)蒸馏成一个本地 skill 提案,经 diff 审查确认后才落盘
+ * 到 ~/.agents/skills/。状态机实现在 apps/desktop/src/main/learn-host/。
  */
 
 import type { ToolLoopErrorDetails } from '@cindy/maker-shared/tool-loop-error';
@@ -69,6 +69,8 @@ export interface LearnRunPublic {
   input: string;
   /** sourceKind='hub' 时的市场 slug。 */
   hubSlug?: string;
+  /** Hub 目录上下文；旧 run 缺失时默认公开目录。 */
+  hubCatalogScope?: 'market' | 'team';
   /** 蒸馏 session id(distilling 起有值,renderer 可跳转查看过程)。 */
   sessionId?: string;
   /** 触发 /learn 的会话 id(用于把状态卡插回原会话)。 */
@@ -105,6 +107,7 @@ export interface LearnStartRequest {
   input: string;
   sourceKind: LearnSourceKind;
   hubSlug?: string;
+  hubCatalogScope?: 'market' | 'team';
   originSessionId?: string;
 }
 

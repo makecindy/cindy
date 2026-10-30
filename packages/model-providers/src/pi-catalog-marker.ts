@@ -7,14 +7,17 @@ export function effectivePiWireProtocol(
   return value;
 }
 
+type HttpBridgeWireProtocol = Exclude<ProviderWireProtocol, 'google-generative-ai'>;
+
 interface PiProtocolModelLike {
+  api?: PiModelApi;
   piApi?: PiModelApi;
   route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol; requestPath?: string };
 }
 
 export interface ResolvedPiModelRoute {
   baseUrl: string;
-  wireProtocol: ProviderWireProtocol;
+  wireProtocol: HttpBridgeWireProtocol;
   requestPath?: string;
 }
 
@@ -26,8 +29,8 @@ export interface ResolvedPiModelRoute {
 export function resolvePiModelWireProtocol(
   model: PiProtocolModelLike | undefined,
   providerDefault: ProviderWireProtocol | undefined,
-): ProviderWireProtocol | null {
-  switch (model?.piApi) {
+): HttpBridgeWireProtocol | null {
+  switch (model?.api ?? model?.piApi) {
     case 'anthropic-messages':
       return 'anthropic-messages';
     case 'openai-responses':
@@ -35,9 +38,15 @@ export function resolvePiModelWireProtocol(
     case 'openai-completions':
       return 'openai-chat';
     case 'google-generative-ai':
+    case 'bedrock-converse-stream':
+    case 'azure-openai-responses':
+    case 'google-vertex':
+    case 'mistral-conversations':
       return null;
-    default:
-      return model?.route?.wireProtocol ?? providerDefault ?? null;
+    default: {
+      const wire = model?.route?.wireProtocol ?? providerDefault;
+      return wire === 'google-generative-ai' ? null : wire ?? null;
+    }
   }
 }
 

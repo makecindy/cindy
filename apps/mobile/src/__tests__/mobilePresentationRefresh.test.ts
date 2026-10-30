@@ -10,17 +10,6 @@ function read(relPath: string): string {
 }
 
 describe('mobile localized presentation refresh', () => {
-  it('renders the automation form title once', () => {
-    const source = read('app/automations/[deviceId].tsx');
-    const formHeader = source.slice(
-      source.indexOf('<View style={styles.formHeader}>'),
-      source.indexOf('{error ? <Text style={styles.formError}>'),
-    );
-
-    expect(formHeader.match(/devices\.automations\.form\.title\.edit/g)).toHaveLength(1);
-    expect(formHeader.match(/devices\.automations\.form\.title\.create/g)).toHaveLength(1);
-  });
-
   it('rebuilds the cached composer presentation when the language changes', () => {
     const source = read('app/sessions/[sessionId].tsx');
     const composerProjection = source.slice(
@@ -33,8 +22,8 @@ describe('mobile localized presentation refresh', () => {
 
   it('rebuilds localized session history and tail errors when the language changes', () => {
     const source = read('app/sessions/[sessionId].tsx');
-    const renderItems = source.slice(
-      source.indexOf('const renderItems = useMemo'),
+    const renderWindow = source.slice(
+      source.indexOf('const renderWindow = useMemo'),
       source.indexOf('// 只在本次 render 真正 commit 后更新 reconcile 基准'),
     );
     const tailBanner = source.slice(
@@ -42,7 +31,7 @@ describe('mobile localized presentation refresh', () => {
       source.indexOf('// 主按钮(重试 / 继续任务)'),
     );
 
-    expect(renderItems).toContain('i18nInstance.language');
+    expect(renderWindow).toContain('i18nInstance.language');
     expect(tailBanner).toContain('i18nInstance.language');
   });
 
@@ -74,11 +63,10 @@ describe('mobile localized presentation refresh', () => {
     expect(source).toContain('[i18nInstance.language, selectedSessions]');
   });
 
-  it('rebuilds remote and collaboration notices when the language changes', () => {
+  it('rebuilds remote notices when the language changes', () => {
     const source = read('app/sessions/[sessionId].tsx');
 
     expect(source).toContain('[connectionError, i18nInstance.language]');
-    expect(source.match(/\[currentSession\?\.orcaRole, i18nInstance\.language\]/g)).toHaveLength(2);
   });
 
   it('keeps new-task authentication errors raw until render time', () => {
@@ -86,22 +74,6 @@ describe('mobile localized presentation refresh', () => {
 
     expect(source).toContain('setError(raw)');
     expect(source).toContain('{describeAgentAuthError(error) ?? error}');
-  });
-
-  it('keeps schedule validation metadata until render time', () => {
-    const source = read('app/automations/[deviceId].tsx');
-
-    expect(source).toContain('setFormError(validation)');
-    expect(source).toContain('localizeScheduleDraftValidation(formError, mobilePresentationLocalizer)');
-    expect(source).toContain('error={formErrorText}');
-  });
-
-  it('keeps template-parameter validation metadata until render time', () => {
-    const source = read('app/automations/[deviceId].tsx');
-
-    expect(source).toContain('setFormError(paramError)');
-    expect(source).toContain('selectedTemplatePresentation,');
-    expect(source).toContain('localizeTemplateParamValidation(');
   });
 
   it('rebuilds localized session sections when the language changes', () => {
@@ -139,7 +111,7 @@ describe('mobile localized presentation refresh', () => {
     const source = read('src/session/SessionMenuSheet.tsx');
 
     expect(source).toContain(
-      '[accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick]',
+      '[accountUsage, i18nInstance.language, quotaBucketTables, session.model, visible, quotaStaleTick, countdownTick, t]',
     );
     expect(source).toContain('[codexRateLimits, i18nInstance.language]');
   });

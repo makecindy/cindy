@@ -1,24 +1,30 @@
 /**
- * 远程文件两段式导出 → presign 下载地址(浏览页长按「导出/分享」与预览页
- * 分享/下载共用)。结果按 path+mtime 缓存到 presign 过期,同一文件重看零导出;
- * 起始与每次状态轮询都走瞬断重试;isCancelled(页面卸载)时中止轮询。
+ * 浏览页与预览页共用文件读取接口，转换为分享/下载地址。
+ * 完整文件由共用读取层优先返回本地缓存、后台复验；流式地址保留独立有效期。
  */
-import { i18n } from '@/i18n';
-import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
-import { getCachedExportUrl, storeCachedExportUrl } from '@/session/fileBrowserCache';
-import type { MobileRemoteMediaPresignResult } from '@/session/remoteMedia';
-
-const EXPORT_POLL_INTERVAL_MS = 700;
-const EXPORT_TIMEOUT_MS = 120_000;
+import { i18n } from "@/i18n";
+import type { MobileMakerTransport } from "@/device-link/mobileMakerTransport";
+import {
+  getCachedExportUrl,
+  storeCachedExportUrl,
+} from "@/session/fileBrowserCache";
+import type { MobileRemoteMediaPresignResult } from "@/session/remoteMedia";
+import { peerMediaUri, releasePeerMedia } from "@/device-link/peerFileRegistry";
+import { errorText } from "@/debug/fileDiagnostics";
+import { mobileDebugLog } from "@/debug/mobileDebugLog";
 
 export interface ExportRemoteFileDeps {
-  maker: Pick<MobileMakerTransport, 'fileBrowser'>;
+  /** Retained preview URLs must not reuse short-lived full-file peer results. */
+  stream?: boolean;
+  maker: Pick<MobileMakerTransport, "fileBrowser">;
   deviceId: string;
   openLink: (deviceId: string) => Promise<unknown>;
   presignGet: (ossKey: string) => Promise<MobileRemoteMediaPresignResult>;
-  /** 取消信号(如页面卸载):轮询每轮检查,true 即中止,不再空转最长 2 分钟。 */
+  deleteOssObject?: (key: string) => void;
+  /** 取消信号(如页面卸载)，转成文件读取接口的 AbortSignal。 */
   isCancelled?: () => boolean;
+  /** 电脑上传到云存储期间的真实字节进度(缓存命中与直连不回调)。 */
+  onProgress?: (uploaded: number, total: number) => void;
 }
 
 export async function exportRemoteFileToUrl(
@@ -27,30 +33,74 @@ export async function exportRemoteFileToUrl(
   relPath: string,
   mtimeMs: number,
 ): Promise<string> {
-  const cached = getCachedExportUrl(deps.deviceId, workdir, relPath, mtimeMs);
-  if (cached) return cached;
-  const start = await withTransientRemoteRetry(async () => {
-    await deps.openLink(deps.deviceId);
-    return deps.maker.fileBrowser.exportFileStart(workdir, relPath);
-  });
-  if (!start.ok) throw new Error(start.message ?? i18n.t('files.export.exportFailed'));
-  const deadline = Date.now() + EXPORT_TIMEOUT_MS;
-  for (;;) {
-    if (deps.isCancelled?.()) throw new Error(i18n.t('files.export.leftPage'));
-    // 单次状态查询同样走瞬断重试:被控端导出任务仍在跑,轮询窗口内一次
-    // 掉线/超时不应让整个导出失败。
-    const status = await withTransientRemoteRetry(async () => {
-      await deps.openLink(deps.deviceId);
-      return deps.maker.fileBrowser.exportFileStatus(workdir, start.transferId);
+  const ownerScope = deps.maker.fileBrowser.cacheScope ?? deps.deviceId;
+  const scope = JSON.stringify([ownerScope, deps.stream === true ? "stream" : "file"]);
+  const cached = deps.stream === true ? getCachedExportUrl(scope, workdir, relPath, mtimeMs) : null;
+  if (cached) {
+    mobileDebugLog("debug", "files", "file export cache hit", { stream: deps.stream === true });
+    return cached;
+  }
+  const abort = new AbortController();
+  const check = () => {
+    if (deps.isCancelled?.()) abort.abort();
+  };
+  check();
+  const timer = setInterval(check, 100);
+  try {
+    if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));
+    const result = await deps.maker.fileBrowser.readBytes(
+      workdir,
+      relPath,
+      abort.signal,
+      () => deps.openLink(deps.deviceId),
+      { stream: deps.stream === true, onProgress: deps.onProgress,
+        retainBackground: async (fresh, isCurrent) => {
+          if (!fresh.ossKey || isCurrent?.() === false) return;
+          try {
+            const signed = await deps.presignGet(fresh.ossKey);
+            const local = await fresh.cacheDownload?.(signed.getUrl);
+            const uri = local && peerMediaUri(local);
+            if (uri) releasePeerMedia(uri);
+          } finally { if (isCurrent?.() !== false) deps.deleteOssObject?.(fresh.ossKey); }
+        },
+      },
+    );
+    check();
+    if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));
+    const local = peerMediaUri(result);
+    if (local) return local;
+    if (result.inlineBase64 !== undefined)
+      return `data:${result.mimeType};base64,${result.inlineBase64}`;
+    const presignStartedAt = Date.now();
+    const signed = await deps.presignGet(result.ossKey).catch((error: unknown) => {
+      mobileDebugLog("warn", "files", "file export presign failed", {
+        ms: Date.now() - presignStartedAt,
+        error: errorText(error),
+      });
+      throw error;
     });
-    if (!status.ok) throw new Error(status.message ?? i18n.t('files.export.exportFailed'));
-    if (status.state === 'done' && status.key) {
-      const presign = await deps.presignGet(status.key);
-      storeCachedExportUrl(deps.deviceId, workdir, relPath, mtimeMs, presign.getUrl, presign.expiresAt);
-      return presign.getUrl;
+    const downloaded = await result.cacheDownload?.(signed.getUrl);
+    const downloadedUri = downloaded && peerMediaUri(downloaded);
+    if (downloadedUri) {
+      deps.deleteOssObject?.(result.ossKey);
+      return downloadedUri;
     }
-    if (status.state === 'error') throw new Error(status.message ?? i18n.t('files.export.exportFailed'));
-    if (Date.now() > deadline) throw new Error(i18n.t('files.export.exportTimeout'));
-    await new Promise<void>((resolve) => setTimeout(resolve, EXPORT_POLL_INTERVAL_MS));
+    mobileDebugLog("debug", "files", "file export presigned", {
+      ms: Date.now() - presignStartedAt,
+      size: result.size,
+    });
+    check();
+    if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));
+    if (deps.stream === true) storeCachedExportUrl(
+      scope,
+      workdir,
+      relPath,
+      mtimeMs,
+      signed.getUrl,
+      signed.expiresAt,
+    );
+    return signed.getUrl;
+  } finally {
+    clearInterval(timer);
   }
 }

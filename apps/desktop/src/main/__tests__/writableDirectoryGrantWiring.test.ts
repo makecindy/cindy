@@ -24,7 +24,8 @@ describe('writable directory grant wiring', () => {
 
   it('uses the reserved local draft task id for picker scope and persisted session creation', () => {
     const draft = read('renderer/features/cc-agent/NewMakerDraftRoute.tsx');
-    expect(draft).toContain('const localDraftSessionIdRef = useRef(makeDraftSessionId())');
+    // An unsent task already opened from this draft keeps its id when the user comes back.
+    expect(draft).toContain('const localDraftSessionIdRef = useRef(provisionalDraftTaskIdForCurrentOwner() ?? makeDraftSessionId())');
     expect(draft).toContain('writableGrantScope={localDraftSessionIdRef.current}');
     expect(draft).toContain('const sessionId = localDraftSessionIdRef.current');
     expect(draft).toContain('goalSessionId = localDraftSessionIdRef.current');
@@ -39,7 +40,13 @@ describe('writable directory grant wiring', () => {
     expect(create.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
       create.indexOf('db.insert(sessions)'),
     );
+    // update handler 只做 adapter,业务体在 updateSessionInDb(MCP 会话操作工具共用同一路径)。
     const update = sessions.slice(updateStart, sessions.indexOf("'local-db:sessions:patch-meta'"));
-    expect(update).toContain('p.extraDirs !== undefined || p.writableDirs !== undefined');
+    expect(update).toContain('return updateSessionInDb(sid, p, opts)');
+    const updateBody = sessions.slice(
+      sessions.indexOf('export async function updateSessionInDb('),
+      sessions.indexOf('export async function patchSessionMetaInDb('),
+    );
+    expect(updateBody).toContain('p.extraDirs !== undefined || p.writableDirs !== undefined');
   });
 });

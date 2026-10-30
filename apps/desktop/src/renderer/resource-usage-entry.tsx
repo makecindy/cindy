@@ -14,8 +14,10 @@ import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettin
 import { getInitialThemeVariant } from './hooks/useTheme';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
+import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
+installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());

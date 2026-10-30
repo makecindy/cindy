@@ -1,3 +1,4 @@
+// guard: credentials-and-local-storage.md: restored credentials, account generations and realm activation must remain owned by the initiating account; static call-site contract.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -36,7 +37,7 @@ describe('auth weak-network bootstrap', () => {
       'activateMobileSessionRealm(storedSession.realm);',
     );
     const publishUserAt = restoreBody.indexOf('setUser(cachedUser);');
-    const publishOwnerAt = restoreBody.indexOf('setMobileAuthOwner(cachedUser.id);');
+    const publishOwnerAt = restoreBody.indexOf('setMobileAuthOwner(cachedUser.id, storedSession.realm);');
     expect(loadRealmAt).toBeGreaterThanOrEqual(0);
     expect(activateRealmAt).toBeGreaterThan(loadRealmAt);
     expect(publishOwnerAt).toBeGreaterThan(activateRealmAt);
@@ -63,7 +64,7 @@ describe('auth weak-network bootstrap', () => {
     const applyUserStart = authSource.indexOf('const applyUser = useCallback');
     const applyUserEnd = authSource.indexOf('\n  );', applyUserStart);
     const applyUserBody = authSource.slice(applyUserStart, applyUserEnd);
-    expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id);'))
+    expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id, activeAuthRealmRef.current);'))
       .toBeLessThan(applyUserBody.indexOf('setUser(next);'));
     expect(applyUserBody).toContain(
       'accountVaultKey(activeAuthRealmRef.current, next.id)',
@@ -254,5 +255,23 @@ describe('auth weak-network bootstrap', () => {
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_REFRESH_TOKEN_KEY)');
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_PENDING_OAUTH_KEY)');
     expect(bootstrap).toContain('deleteSecureItem(LEGACY_USER_PROFILE_KEY)');
+  });
+});
+
+// guard: Credential owner generation: account rollback must re-register the restored identity.
+describe("pushNotificationsRealm.test.ts call-site contracts", () => {
+it('re-registers the restored owner after an account-switch rollback', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/notifications/PushNotificationsBridge.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    const registrationStart = source.indexOf('// 登录态就绪后同步注册状态');
+    const registrationBody = source.slice(
+      registrationStart,
+      source.indexOf('// APNs token 轮换', registrationStart),
+    );
+
+    expect(registrationBody).toContain('auth.accountGeneration');
+    expect(registrationBody).toContain('syncPushRegistration(');
   });
 });

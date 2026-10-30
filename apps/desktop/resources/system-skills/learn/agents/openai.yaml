@@ -1,0 +1,5 @@
+interface:
+  display_name: "Learn"
+  short_description: "Distill a reusable Skill with Cindy"
+policy:
+  allow_implicit_invocation: false

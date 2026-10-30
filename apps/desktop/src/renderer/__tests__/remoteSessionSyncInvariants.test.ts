@@ -39,6 +39,10 @@ const makerChatStoreSrc = readFileSync(
   resolve(__dirname, '..', 'lib', 'makerChatStore.ts'),
   'utf8',
 );
+const sessionInterruptBannerModelSrc = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'sessionInterruptBannerModel.ts'),
+  'utf8',
+);
 const makerTransportSrc = readFileSync(
   resolve(__dirname, '..', 'lib', 'makerTransport.ts'),
   'utf8',
@@ -84,12 +88,12 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(sessionViewSrc).not.toContain('if (remoteSessionUnavailable) return false');
     expect(sessionViewSrc).not.toContain('remoteSessionUnavailableRef');
-    expect(sessionViewSrc).toContain('if (!remoteDeviceId) {');
+    expect(sessionViewSrc).toContain('if (!remoteDeviceId && !recoveringBaseline) {');
     expect(sessionViewSrc).not.toContain('beforeEnqueue: checkVendorReady');
     // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
     // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。
     expect(sessionViewSrc).toContain(
-      "disabled={remoteHandoffPreparing || session?.source === 'review'}",
+      "disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}",
     );
   });
   it('补选目录后的续发保持 delivery mode，并按本地/远端策略清理原 composer', () => {
@@ -108,15 +112,16 @@ describe('CCAgentSessionView 接线不变式', () => {
       /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\}/,
     );
   });
-  it('已有远程 session 断线时跳过来源门禁，远程草稿与本地任务仍保留门禁', () => {
+  it('已有设备互联任务与保留原路由的 SSH 任务跳过来源门禁，草稿与本地任务仍保留门禁', () => {
     expect(chatInputSrc).toContain(
-      'const enforceConnectedSourceGate = !sessionId || !deviceLinkDeviceId;',
+      'const enforceConnectedSourceGate = (!sessionId || !catalogDeviceId) && !preserveSshCodexRoute;',
     );
+    expect(chatInputSrc).toContain('const preserveSshCodexRoute = !!sessionId && !!sshCodexHostId &&');
     expect(chatInputSrc).toMatch(
       /const noConnectedSource =\s*enforceConnectedSourceGate &&\s*!!currentModelAgentKind/,
     );
     expect(chatInputSrc).toMatch(
-      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
+      /if\s*\(\s*enforceConnectedSourceGate\s*&&\s*!canAttemptBaselineRecovery\s*&&\s*currentModelAgentKind\s*&&[\s\S]*?\)\s*\{/,
     );
   });
   it('断线缓存的远程 session 可查看,但生命周期/元数据写操作必须走统一 gate', () => {
@@ -126,7 +131,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sidebarUpperSrc).toContain('isRemoteSessionWriteBlocked(session)');
     expect(sidebarUpperSrc).toContain('selectedSessions.some(isRemoteSessionWriteBlocked)');
     expect(sessionItemSrc).toContain(
-      'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
+      "const remoteWritesBlocked = isSharedTaskPeer(session.deviceLinkDeviceId ?? '') || isRemoteSessionWriteBlocked(session)",
     );
     expect(sessionCardSrc).toContain(
       'const remoteWritesBlocked = isRemoteSessionWriteBlocked(session)',
@@ -137,28 +142,54 @@ describe('CCAgentSessionView 接线不变式', () => {
     expect(sessionViewSrc).toContain('const handleStopSession = useCallback');
     expect(sessionViewSrc).toContain('if (remoteSessionUnavailable)');
     expect(sessionViewSrc).toContain('onStop={handleStopSession}');
-    expect(sessionHeaderSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindow\}[\s\S]*?openInNewWindow/,
+    for (const source of [sessionHeaderSrc, sessionItemSrc, sessionCardSrc]) {
+      expect(source).toMatch(/<SessionTaskMenu[\s\S]*?writeBlocked=\{remoteWritesBlocked\}/);
+      expect(source).toMatch(/onOpenInNewWindow=\{handleOpenInNewWindow(?:Select)?\}/);
+    }
+    const menuSource = readFileSync(
+      resolve(__dirname, '..', 'features', 'cc-agent', 'sidebar', 'SessionTaskMenu.tsx'),
+      'utf8',
     );
-    expect(sessionItemSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindowSelect\}[\s\S]*?openInNewWindow/,
-    );
-    expect(sessionCardSrc).toMatch(
-      /<DropdownMenuItem[\s\S]*?disabled=\{remoteWritesBlocked\}[\s\S]*?onSelect=\{handleOpenInNewWindowSelect\}[\s\S]*?openInNewWindow/,
-    );
+    expect(menuSource).toContain('const ownerActionsBlocked = writeBlocked || guest');
+    expect(menuSource).toContain("item('openInNewWindow', onOpenInNewWindow, ownerActionsBlocked)");
+    expect(menuSource).toContain('disabled={disabled}');
   });
-  it('live / 历史错误横幅都携带 SSH 与 device-link 执行端归属', () => {
+  it('live / 历史错误横幅都携带 SSH、device-link 与远程 Agent 执行端归属', () => {
     expect(sessionViewSrc).toMatch(
-      /<ErrorTailErrorBanner[\s\S]*?remoteHostId=\{session\?\.remoteHostId \?\? undefined\}[\s\S]*?deviceLinkDeviceId=\{remoteDeviceId\}/,
+      /<ErrorTailErrorBanner[\s\S]*?remoteHostId=\{session\?\.remoteHostId \?\? undefined\}[\s\S]*?deviceLinkDeviceId=\{remoteDeviceId\}[\s\S]*?agentDeviceId=\{session\?\.agentDeviceId\}/,
     );
     expect(sessionViewSrc).toMatch(
-      /<ErrorBanner[\s\S]*?remoteHostId=\{session\?\.remoteHostId \?\? undefined\}[\s\S]*?deviceLinkDeviceId=\{remoteDeviceId\}/,
+      /<ErrorBanner[\s\S]*?remoteHostId=\{session\?\.remoteHostId \?\? undefined\}[\s\S]*?deviceLinkDeviceId=\{remoteDeviceId\}[\s\S]*?agentDeviceId=\{session\?\.agentDeviceId\}/,
     );
   });
   it('远程活动镜像在 turn 执行或等待交互时压过中断时间戳启发式', () => {
     expect(sessionViewSrc).toContain('useRemoteSessionActivity(sessionId');
     expect(sessionViewSrc).toContain('agentStatus.isRunning || remoteTurnActive');
-    expect(sessionViewSrc).toContain('sessionInterruptAcked || remoteTurnActive');
+    // 决策模型接入了视图;ack / remote 反驳信号在模型内保持原有优先级。
+    expect(sessionViewSrc).toContain('resolveSessionInterruptCandidate({');
+    expect(sessionInterruptBannerModelSrc).toContain(
+      'if (input.acked || input.remoteTurnActive) return false;',
+    );
+  });
+  it('双时间戳中断候选必须等 main 真值确认,未确认不当作中断证据(#4513)', () => {
+    // 视图侧:候选出现(activeTurnStartedAt 变化)时向 main 回填一次权威运行态,
+    // main 说在飞则与 isRunning/remoteTurnActive 同样锁存 ack。
+    // 行为由 useSessionTurnActiveTruth.test.tsx 覆盖;这里只锁视图接线。
+    expect(sessionViewSrc).toContain('useSessionTurnActiveTruth({');
+    // 远程会话的真值问被控端:控制端本机 main 没有这个 turn,永远答 false。
+    expect(sessionViewSrc).toContain(
+      'const turnActiveDeviceId = remoteDeviceId ?? session?.deviceLinkDeviceId ?? null;',
+    );
+    // 链路恢复在线时重查:离线期间查询失败落 null,不重查会永久压住真中断横幅。
+    expect(sessionViewSrc).toContain("online: remoteConn === 'local' || remoteConn === 'connected',");
+    // 真值绑定所属会话:路由复用切会话时旧 true 不得锁存新会话的 ack(P1)。
+    expect(sessionViewSrc).toContain('mainTurnActiveForSession');
+    expect(sessionViewSrc).toContain(
+      'if (agentStatus.isRunning || remoteTurnActive || mainTurnActiveForSession === true) setSessionInterruptAcked(true);',
+    );
+    // 决策侧:null=未确认(查询在途/失败/不适用),不得把候选当中断证据;
+    // 只有 main 明确回答「不在 turn 中」才允许双时间戳候选渲染。
+    expect(sessionInterruptBannerModelSrc).toContain('if (input.mainTurnActive !== false) return false;');
   });
   it('断线 device-link project 不能从项目标题 + 入口创建远程 draft', () => {
     expect(projectNodeSrc).toContain(

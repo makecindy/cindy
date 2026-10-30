@@ -20,7 +20,8 @@ vi.mock('../logger-adapter.js', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'test-owner', generation: 1 }),
-  ownerScopedUserDataPath: (...parts: string[]) => path.join('/tmp/cindy-subagent-model-test', ...parts),
+  ownerScopedUserDataPath: (...parts: string[]) =>
+    path.join('/tmp/cindy-subagent-model-test', ...parts),
 }));
 
 import {
@@ -56,15 +57,7 @@ describe('subagent model settings store', () => {
   });
 
   it('defaults both agents to no override', () => {
-    expect(readSubagentModelSettings()).toEqual(
-      withDefaults({
-        codexEffort: null,
-        codexSubagentsEnabled: true,
-        codexUseCindySubagentPolicy: true,
-        codexMaxConcurrentSubagents: null,
-        codexAllowNestedSubagents: false,
-      }),
-    );
+    expect(readSubagentModelSettings()).toEqual(withDefaults());
   });
 
   it('persists only the configured Claude model', () => {
@@ -93,21 +86,13 @@ describe('subagent model settings store', () => {
     );
   });
 
-  it('persists the codex (model, providerId, effort) triple written in one patch', () => {
-    writeSubagentModelSettingsPatch({
-      codex: 'gpt-5.6-terra',
-      codexProviderId: 'openai',
-      codexEffort: 'medium',
-    });
+  it('persists smart routing as the only Codex override', () => {
+    writeSubagentModelSettingsPatch({ codexSmartSubagentRouting: true });
 
     expect(JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))).toEqual({
-      codex: 'gpt-5.6-terra',
-      codexProviderId: 'openai',
-      codexEffort: 'medium',
+      codexSmartSubagentRouting: true,
     });
-    expect(readSubagentModelSettings()).toEqual(
-      withDefaults({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'medium' }),
-    );
+    expect(readSubagentModelSettings()).toEqual(withDefaults({ codexSmartSubagentRouting: true }));
   });
 
   it('removes the override file when Claude returns to unspecified', () => {
@@ -129,71 +114,30 @@ describe('subagent model settings store', () => {
     expect(readSubagentModelSettings()).toEqual(withDefaults());
   });
 
-  it('persists guardrail overrides only when they differ from defaults', () => {
-    // 等于默认的值不落 key(override store 语义):enabled=true / Cindy 策略=true /
-    // nested=false / 并发 null 都是默认,写入后不产生 override。
-    writeSubagentModelSettingsPatch({
-      codexSubagentsEnabled: true,
-      codexUseCindySubagentPolicy: true,
-      codexAllowNestedSubagents: false,
-      codexMaxConcurrentSubagents: null,
-    });
-    expect(fs.existsSync(settingsFile)).toBe(false);
+  it('normalizes invalid smart-routing values to native mode', () => {
+    expect(__testing.normalize({ codexSmartSubagentRouting: 'yes' })).toEqual(withDefaults());
+  });
 
-    writeSubagentModelSettingsPatch({
-      codexSubagentsEnabled: false,
-      codexUseCindySubagentPolicy: false,
-      codexAllowNestedSubagents: true,
-      codexMaxConcurrentSubagents: 3,
-    });
-    expect(JSON.parse(fs.readFileSync(settingsFile, 'utf-8'))).toEqual({
-      codexSubagentsEnabled: false,
-      codexUseCindySubagentPolicy: false,
-      codexAllowNestedSubagents: true,
-      codexMaxConcurrentSubagents: 3,
-    });
-    expect(readSubagentModelSettings()).toEqual(
-      withDefaults({
+  it('removes retired Codex fixed-route and guardrail keys when settings are opened', () => {
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify({
+        codex: 'gpt-5.6-terra',
+        codexProviderId: 'openai',
+        codexEffort: 'high',
         codexSubagentsEnabled: false,
-        codexUseCindySubagentPolicy: false,
+        codexUseCindySubagentPolicy: true,
+        codexMaxConcurrentSubagents: 8,
         codexAllowNestedSubagents: true,
-        codexMaxConcurrentSubagents: 3,
       }),
+      'utf-8',
     );
-  });
 
-  it('clamps on-disk concurrency and rounds fractions (main store is the clamp source of truth)', () => {
-    expect(__testing.normalize({ codexMaxConcurrentSubagents: 99 }).codexMaxConcurrentSubagents).toBe(8);
-    expect(__testing.normalize({ codexMaxConcurrentSubagents: 0 }).codexMaxConcurrentSubagents).toBe(1);
-    expect(__testing.normalize({ codexMaxConcurrentSubagents: 3.7 }).codexMaxConcurrentSubagents).toBe(4);
-    expect(
-      __testing.normalize({ codexMaxConcurrentSubagents: Number.NaN }).codexMaxConcurrentSubagents,
-    ).toBeNull();
-    expect(
-      __testing.normalize({ codexMaxConcurrentSubagents: '5' }).codexMaxConcurrentSubagents,
-    ).toBeNull();
-  });
-
-  it('normalizes garbage guardrail booleans toward their semantic default', () => {
-    // 总开关 fail-open(保能力),Cindy 策略 fail-open(兼容),嵌套 fail-closed(少放权)。
-    const normalized = __testing.normalize({
-      codexSubagentsEnabled: 'nope',
-      codexUseCindySubagentPolicy: 'nope',
-      codexAllowNestedSubagents: 'yes',
-      codexEffort: 'warp-speed',
-    });
-    expect(normalized.codexSubagentsEnabled).toBe(true);
-    expect(normalized.codexUseCindySubagentPolicy).toBe(true);
-    expect(normalized.codexAllowNestedSubagents).toBe(false);
-    expect(normalized.codexEffort).toBeNull();
-  });
-
-  it('keeps an effort-only override without a model (legitimate upstream config)', () => {
-    // effort 不依附模型:agents.default_subagent_reasoning_effort 单独注入在上游
-    // 合法(子代理继承父模型、只改档位),手改文件表达它的能力按契约保留。
-    expect(__testing.normalize({ codexEffort: 'high' })).toEqual(
-      withDefaults({ codexEffort: 'high' }),
-    );
+    const state = readSubagentModelSettingsState();
+    expect(state.value).toEqual(withDefaults());
+    expect(state.customizedKeys).toEqual([]);
+    expect(state.isCustomized).toBe(false);
+    expect(fs.existsSync(settingsFile)).toBe(false);
   });
 
   it('drops an orphan on-disk providerId whose model is unspecified', () => {
@@ -220,16 +164,12 @@ describe('subagent model settings store', () => {
       __testing.normalize({
         claudeCode: '  claude-sonnet-4-6  ',
         claudeCodeProviderId: 42,
-        codex: 'bad\nmodel',
-        codexProviderId: '  xd  ',
+        codexSmartSubagentRouting: 'yes',
       }),
     ).toEqual(
       withDefaults({
         claudeCode: 'claude-sonnet-4-6',
         claudeCodeProviderId: null,
-        codex: null,
-        // codex 模型归一化为「不指定」后其来源随配对不变量一并清除,不留孤儿。
-        codexProviderId: null,
       }),
     );
   });
@@ -238,23 +178,11 @@ describe('subagent model settings store', () => {
     const current = withDefaults({
       claudeCode: 'claude-opus-5',
       claudeCodeProviderId: 'anthropic',
-      codex: 'gpt-5.5',
-      codexProviderId: 'xd',
-      codexEffort: 'high',
     });
     // 来源依附模型:显式清模型的 patch 未带 providerId 时,不得留下孤儿来源落盘。
     expect(reconcileSubagentModelSettingsPatch({ claudeCode: null }, current)).toEqual({
       claudeCode: null,
       claudeCodeProviderId: null,
-    });
-    // codexEffort 有意不参与配对清理(effort-only 是合法上游配置);UI 层负责在
-    // 「不指定」时原子清三键。
-    expect(
-      reconcileSubagentModelSettingsPatch({ codex: null, claudeCode: 'claude-opus-5' }, current),
-    ).toEqual({
-      codex: null,
-      codexProviderId: null,
-      claudeCode: 'claude-opus-5',
     });
     // 存储已有模型时,provider-only patch 原样通过。
     expect(
@@ -277,16 +205,11 @@ describe('subagent model settings store', () => {
 
   it('codexSpawnConfigChanged tracks spawn-affecting keys only', () => {
     const base = withDefaults();
-    // Provider 决定 runtime 模型改写与子线程路由，因此变化必须重启；claude* 仍走 env 通道。
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexProviderId: 'openai' }))).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ claudeCode: 'claude-opus-5' }))).toBe(false);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codex: 'gpt-5.6-terra' }))).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexEffort: 'low' }))).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexSubagentsEnabled: false }))).toBe(true);
-    expect(
-      codexSpawnConfigChanged(base, withDefaults({ codexUseCindySubagentPolicy: false })),
-    ).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexMaxConcurrentSubagents: 3 }))).toBe(true);
-    expect(codexSpawnConfigChanged(base, withDefaults({ codexAllowNestedSubagents: true }))).toBe(true);
+    expect(codexSpawnConfigChanged(base, withDefaults({ claudeCode: 'claude-opus-5' }))).toBe(
+      false,
+    );
+    expect(codexSpawnConfigChanged(base, withDefaults({ codexSmartSubagentRouting: true }))).toBe(
+      true,
+    );
   });
 });

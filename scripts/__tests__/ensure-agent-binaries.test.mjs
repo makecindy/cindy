@@ -11,7 +11,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import {
+  binaryRelativePathFor,
   binFileFor,
+  ensureCodexPackageLauncher,
   isValidBinary,
   isValidDirDist,
   listSiblingWorktreeRoots,
@@ -19,12 +21,65 @@ import {
   SUPPORTED_BINARY_KINDS,
   supportsCdnFallback,
   tryReuseFromSiblingWorktree,
+  tryReuseDirDistFromSiblingWorktree,
+  updateScriptForKind,
 } from '../ensure-agent-binaries.mjs';
 import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/dir-dist-manifest.mjs';
 
+// 测试价值：生产 ensureCodexPackageLauncher 为已验证包补入口并保持清单有效；
+// 回归 Codex shell 被旧系统 CLI 抢占。原覆盖只验证下载/复用，未覆盖包内入口。
+// 最小输入是有效但缺入口的包；node unit，POSIX 另执行一次脚本检查 argv 不变。
+test('Codex launcher preserves the manifest, updates managed files and leaves upstream files alone', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex launcher space-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'bin'));
+  fs.mkdirSync(path.join(root, 'codex-path'));
+  fs.writeFileSync(path.join(root, 'bin', 'codex'), '#!/bin/sh\nprintf \'%s\\0\' "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'codex-package.json'), JSON.stringify({ pathDir: 'codex-path' }));
+  writeDirDistManifest(root);
+  const destination = path.join(root, 'codex-path', 'codex');
+  const manifestPath = path.join(root, '.manifest');
+  assert.equal(verifyDirDistManifest(root), true);
+  ensureCodexPackageLauncher(root, 'darwin-arm64');
+  assert.equal(verifyDirDistManifest(root), true);
+  const content = fs.readFileSync(destination, 'utf8');
+  const previous = new Date('2000-01-01T00:00:00Z');
+  fs.utimesSync(destination, previous, previous);
+  fs.utimesSync(manifestPath, previous, previous);
+  ensureCodexPackageLauncher(root, 'darwin-arm64');
+  assert.equal(fs.statSync(destination).mtimeMs, previous.getTime());
+  assert.equal(fs.statSync(manifestPath).mtimeMs, previous.getTime());
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(destination).mode & 0o777, 0o755);
+    const args = ['a b', '"quoted"', "it's", '', '-n', '$HOME', '%^!'];
+    assert.deepEqual(execFileSync(destination, args), Buffer.from(args.join('\0') + '\0'));
+  }
+  fs.writeFileSync(destination, content.replace('exec ', '# old\nexec '));
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'linux-x64');
+  assert.equal(fs.readFileSync(destination, 'utf8'), content);
+  assert.equal(verifyDirDistManifest(root), true);
+  fs.writeFileSync(destination, 'upstream executable');
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'linux-x64');
+  assert.equal(fs.readFileSync(destination, 'utf8'), 'upstream executable');
+  assert.equal(verifyDirDistManifest(root), true);
+});
+
+test('Windows Codex targets never get a POSIX launcher, including cross-platform preparation', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launcher-win-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'codex-path'));
+  fs.writeFileSync(path.join(root, 'codex-package.json'), '{}');
+  writeDirDistManifest(root);
+  ensureCodexPackageLauncher(root, 'win32-x64');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'codex-path')), []);
+  assert.equal(verifyDirDistManifest(root), true);
+});
+
 test('directory distributions never use the single-binary CDN fallback', () => {
   assert.equal(supportsCdnFallback('pi'), false);
-  assert.equal(supportsCdnFallback('codex'), true);
+  assert.equal(supportsCdnFallback('codex'), false);
 });
 
 test('dev startup prepares every supported runtime, including Pi', () => {
@@ -44,6 +99,43 @@ const LFS_POINTER = [
   '',
 ].join('\n');
 
+test('directory reuse validates all assets, skips mismatches and replaces stale files', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reuse-dir-dist-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const makeSource = (name, version) => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'bin', 'codex'), Buffer.alloc(2048, 1), { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, 'asset.json'), 'good');
+    fs.writeFileSync(path.join(dir, '.version'), version);
+    writeDirDistManifest(dir);
+    return dir;
+  };
+  const old = makeSource('old', '1');
+  const damaged = makeSource('damaged', '2');
+  fs.writeFileSync(path.join(damaged, 'asset.json'), 'evil');
+  const good = makeSource('good', '2');
+  const destDir = makeSource('dest', '1');
+  fs.writeFileSync(path.join(destDir, 'stale'), 'old asset');
+  const options = {
+    binaryRelativePath: path.join('bin', 'codex'),
+    requiredFiles: ['asset.json'], version: '2', destDir,
+  };
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [old, damaged, path.join(root, 'missing')],
+  }), null);
+  assert.equal(fs.readFileSync(path.join(destDir, '.version'), 'utf8'), '1');
+  assert.equal(tryReuseDirDistFromSiblingWorktree({
+    ...options, candidates: [damaged, good],
+  }), good);
+  assert.equal(verifyDirDistManifest(destDir), true);
+  assert.equal(fs.existsSync(path.join(destDir, 'stale')), false);
+  assert.equal(fs.readFileSync(path.join(destDir, 'asset.json'), 'utf8'), 'good');
+  fs.writeFileSync(path.join(destDir, 'asset.json'), 'edit');
+  assert.equal(fs.readFileSync(path.join(good, 'asset.json'), 'utf8'), 'good');
+  assert.equal(fs.readdirSync(root).some((name) => name.startsWith('dest.reuse-')), false);
+});
+
 function tmpFile(name, contents) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-bin-test-'));
   const p = path.join(dir, name);
@@ -56,6 +148,12 @@ test('binFileFor: win32 gets .exe, other platforms get bare name', () => {
   assert.equal(binFileFor('rg', 'win32-x64'), 'rg.exe');
   assert.equal(binFileFor('claude', 'darwin-arm64'), 'claude');
   assert.equal(binFileFor('codex', 'linux-x64'), 'codex');
+});
+
+test('Codex dev runtime resolves the complete package entrypoint and updater', () => {
+  assert.equal(binaryRelativePathFor('codex', 'win32-x64'), path.join('bin', 'codex.exe'));
+  assert.equal(binaryRelativePathFor('codex', 'darwin-arm64'), path.join('bin', 'codex'));
+  assert.equal(updateScriptForKind('codex'), 'codex-package');
 });
 
 test('readInstalledVersion: trims content, null on missing/empty', () => {

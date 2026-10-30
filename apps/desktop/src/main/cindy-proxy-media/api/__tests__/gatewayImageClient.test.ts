@@ -2,6 +2,54 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createGatewayImageClient, GatewayImageError } from '../gatewayImageClient.js';
 
+describe('bounded Images responses', () => {
+  const request = (response: Response, maxResponseBytes: number) => createGatewayImageClient({
+    getApiKey: () => 'invalid-test-key',
+    proxy: { baseUrl: 'https://api.example.invalid', generatePath: '/images/generations', editPath: '/images/edits' },
+    fetchImplementation: vi.fn(async () => response), maxResponseBytes,
+  }).generateImage({ model: 'image', prompt: 'circle' });
+
+  it.each([undefined, '1'])('cancels an oversized stream with content-length %s before buffering it', async (length) => {
+    const cancel = vi.fn();
+    let reads = 0;
+    const stream = new ReadableStream({
+      pull(controller) { reads++; controller.enqueue(new Uint8Array(8)); }, cancel,
+    }, { highWaterMark: 0 });
+    await expect(request(new Response(stream, { headers: length ? { 'content-length': length } : {} }), 12)).rejects.toThrow(/response.*limit/);
+    expect(reads).toBe(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(stream.locked).toBe(false);
+  });
+
+  it('rejects declared oversize without reading, and releases the body', async () => {
+    const cancel = vi.fn();
+    const pull = vi.fn();
+    const stream = new ReadableStream({ pull, cancel }, { highWaterMark: 0 });
+    await expect(request(new Response(stream, { headers: { 'content-length': '13' } }), 12)).rejects.toThrow(/response.*limit/);
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(stream.locked).toBe(false);
+  });
+
+  it('accepts the exact byte limit and UTF-8 split across chunks', async () => {
+    const bytes = Buffer.from(JSON.stringify({ data: [{ url: 'https://img.example.invalid/猫.png' }] }));
+    const response = new Response(new ReadableStream({ start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      controller.close();
+    } }));
+    expect(await request(response, bytes.length)).toMatchObject({ data: [{ url: 'https://img.example.invalid/猫.png' }] });
+  });
+
+  it('also bounds error responses without exposing their contents', async () => {
+    const response = new Response(JSON.stringify({ error: { message: 'invalid-private-payload'.repeat(20) } }), { status: 500 });
+    const error = await request(response, 32).catch(error => error);
+    expect(error).toBeInstanceOf(GatewayImageError);
+    expect(error.message).toContain('byte limit');
+    expect(error.message).not.toContain('invalid-private-payload');
+    expect(error.body).toBeUndefined();
+  });
+});
+
 describe('gatewayImageClient error context', () => {
   it('保留 HTTP 状态、请求 model id、网关错误码和安全错误消息', async () => {
     const fetchImplementation = vi.fn(

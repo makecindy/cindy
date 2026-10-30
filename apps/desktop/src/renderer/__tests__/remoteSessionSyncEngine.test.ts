@@ -37,6 +37,26 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe('createRemoteSessionSyncEngine', () => {
+  it('keeps an offline running view quiet and resumes using the existing recovery path', async () => {
+    let available = false;
+    const deps = { canRead: () => available, subscribe: vi.fn(), unsubscribe: vi.fn(), reconcile: vi.fn(),
+      refreshList: vi.fn(), getLastEventAt: () => 0, isRunningNow: () => true,
+      queryTurnRunning: vi.fn(async () => true), finalize: vi.fn(), reconcileForce: vi.fn(),
+      onSuspectStall: vi.fn(), stallThresholdMs: 1, watchdogIntervalMs: 10 };
+    const engine = createRemoteSessionSyncEngine(() => ({ sessionId: SID, deviceId: DEV }), deps);
+    engine.subscribeHeavy(); engine.reconcileOnMount(); engine.startWatchdog();
+    engine.handleFocus(); engine.resync();
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (const call of [deps.subscribe, deps.reconcile, deps.queryTurnRunning, deps.refreshList, deps.onSuspectStall]) {
+      expect(call).not.toHaveBeenCalled();
+    }
+    available = true;
+    engine.handleOnline();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(deps.subscribe).toHaveBeenCalled();
+    expect(deps.reconcile).toHaveBeenCalled();
+    engine.dispose();
+  });
   it('subscribeHeavy 订阅正确重 topic;无 device/session → no-op', () => {
     const { engine, deps } = setup();
     engine.subscribeHeavy();

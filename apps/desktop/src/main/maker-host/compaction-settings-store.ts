@@ -2,13 +2,13 @@
  * compaction-settings-store —— Claude Code 与 Pi 的自动上下文压缩阈值。
  *
  * 文件:
- *   <userData>/compaction-settings.json       { "claudeCodeAutoCompactPct": 75 }
- *   <userData>/pi-compaction-settings.json    { "piAutoCompactPct": 75 }
+ *   <userData>/compaction-settings.json       { "claudeCodeAutoCompactPct": 90 }
+ *   <userData>/pi-compaction-settings.json    { "piAutoCompactPct": 90 }
  *
  * 两个 agent 使用独立 override 文件，恢复其中一个默认值不会覆盖另一个设置；Codex
  * 不读这两份设置。
  *
- * 默认 75 —— 对齐历史自动压缩默认阈值。范围固定 50–95，写入和读取都 clamp + round。
+ * 默认 90 —— Claude Code 与 Pi 对齐 Codex 的 90% 口径。范围固定 50–95，写入和读取都 clamp + round。
  * 同步 R/W —— 文件极小，Electron main 已是 background，不会卡 renderer 主线程。
  */
 
@@ -27,7 +27,7 @@ const log = desktopMakerLogger.child('compaction-settings-store');
 
 const MIN_PCT = 50;
 const MAX_PCT = 95;
-const DEFAULT_PCT = 75;
+const DEFAULT_PCT = 90;
 
 interface CompactionSettings {
   claudeCodeAutoCompactPct: number;

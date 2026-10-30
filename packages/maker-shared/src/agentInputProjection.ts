@@ -77,6 +77,31 @@ export interface AgentInputPluginResourceReference extends AgentInputReferenceBa
   description?: string;
 }
 
+/** One persistent Cindy Bot selected as the intended delegation or handoff target. */
+export interface AgentInputBotReference extends AgentInputReferenceBase {
+  kind: 'bot';
+  botId: string;
+  name: string;
+  /** Ephemeral state added by Main when the queued input is accepted. */
+  hostSnapshot?: AgentInputBotHostSnapshot;
+}
+
+/** One of the teammate's own Todo items, quoted by its owner from the teammate's 近况 panel. */
+export interface AgentInputTodoReference extends AgentInputReferenceBase {
+  kind: 'todo';
+  botId: string;
+  todoId: string;
+  title: string;
+}
+
+export interface AgentInputBotHostSnapshot {
+  availability: 'ready' | 'degraded' | 'failed' | 'unverified' | 'unavailable';
+  activity: 'working' | 'idle' | 'unknown';
+  activeDelegations: number;
+  /** Bounded host diagnosis; never raw capability or transcript data. */
+  reason?: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
@@ -84,7 +109,9 @@ export type AgentInputReference =
   | AgentInputProjectReference
   | AgentInputBrowserTabReference
   | AgentInputDesktopWindowReference
-  | AgentInputPluginResourceReference;
+  | AgentInputPluginResourceReference
+  | AgentInputBotReference
+  | AgentInputTodoReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -109,19 +136,63 @@ export function boundAgentReferenceText(
   return { text: text.slice(0, cap), truncated: true };
 }
 
+/** Stable identity of one quoted message across the composer and the session-reference resolver. */
+export function agentInputMessageReferenceKey(sessionId: string, messageClientId: string): string {
+  return `${sessionId}\u0000${messageClientId}`;
+}
+
+/**
+ * Messages whose body already reaches the model verbatim inside the user
+ * message. The quoted-history payload must not deliver those bodies a second
+ * time: a duplicate copy spends the shared quote budget and can arrive
+ * trimmed, so the model would see the same message twice — once complete,
+ * once mutilated.
+ */
+export function collectInlineMessageReferenceKeys(
+  references: readonly AgentInputReference[] | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const reference of references ?? []) {
+    if (reference.kind !== 'message') continue;
+    // No inline body, or a body that was cut at the reference cap: the quote
+    // still has to carry the message.
+    if (!reference.text?.trim()) continue;
+    if (reference.truncated === true) continue;
+    keys.add(agentInputMessageReferenceKey(reference.sessionId, reference.messageClientId));
+  }
+  return keys;
+}
+
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
 function stripDeepLinkPrefix(
   href: string,
-  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/',
+  route:
+    | 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/' | 'bot/'
+    | 'bot-todo/',
 ): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+export function buildBotReferenceHref(botId: string): string {
+  const scheme = allDeepLinkSchemes()[0];
+  return `${scheme}://bot/${encodeURIComponent(botId)}`;
+}
+
+export function parseBotReferenceHref(href: string): { botId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'bot/');
+  if (rest === null || rest.length > 256 || rest.includes('/') || rest.includes('?') || rest.includes('#')) {
+    return null;
+  }
+  const botId = decodeBoundedComponent(rest, 128);
+  if (!botId || botId.includes('/') || /[\u0000-\u001f\u007f\u2028\u2029]/.test(botId)) return null;
+  return { botId };
 }
 
 export function buildPluginResourceReferenceHref(args: {
@@ -263,6 +334,24 @@ function parseSessionHref(
   return { sessionId, messageClientId };
 }
 
+export function buildTodoReferenceHref(botId: string, todoId: string): string {
+  const scheme = allDeepLinkSchemes()[0];
+  return `${scheme}://bot-todo/${encodeURIComponent(botId)}/${encodeURIComponent(todoId)}`;
+}
+
+export function parseTodoReferenceHref(href: string): { botId: string; todoId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'bot-todo/');
+  if (rest === null || rest.length > 512 || rest.includes('?') || rest.includes('#')) return null;
+  const [rawBotId, rawTodoId, ...extra] = rest.split('/');
+  if (extra.length > 0 || !rawBotId || !rawTodoId) return null;
+  const botId = decodeBoundedComponent(rawBotId, 128);
+  const todoId = decodeBoundedComponent(rawTodoId, 128);
+  const invalid = (value: string | null) =>
+    !value || value.includes('/') || /[\u0000-\u001f\u007f\u2028\u2029]/.test(value);
+  if (invalid(botId) || invalid(todoId)) return null;
+  return { botId: botId!, todoId: todoId! };
+}
+
 function parseProjectHref(href: string): { workingDir: string } | null {
   const rest = stripDeepLinkPrefix(href, 'project/');
   if (rest === null) return null;
@@ -394,7 +483,71 @@ function readReference(
         : {}),
     };
   }
+  if (
+    candidate.kind === 'bot'
+    && nonEmptyString(candidate.name)
+    && candidate.name.length <= 128
+  ) {
+    const target = parseBotReferenceHref(candidate.href);
+    if (!target) return null;
+    const hostSnapshot = readBotHostSnapshot(candidate.hostSnapshot);
+    return {
+      kind: 'bot',
+      start,
+      end,
+      href: candidate.href,
+      botId: target.botId,
+      name: oneLine(candidate.name),
+      ...(hostSnapshot ? { hostSnapshot } : {}),
+    };
+  }
+  if (candidate.kind === 'todo') return readTodoReference(candidate, start, end);
   return null;
+}
+
+function readTodoReference(
+  candidate: Record<string, unknown>,
+  start: number,
+  end: number,
+): AgentInputTodoReference | null {
+  if (!nonEmptyString(candidate.title) || candidate.title.length > 300) return null;
+  const target = parseTodoReferenceHref(candidate.href as string);
+  if (!target) return null;
+  return {
+    kind: 'todo',
+    start,
+    end,
+    href: candidate.href as string,
+    botId: target.botId,
+    todoId: target.todoId,
+    title: oneLine(candidate.title),
+  };
+}
+
+function readBotHostSnapshot(value: unknown): AgentInputBotHostSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const availability = typeof candidate.availability === 'string'
+    ? candidate.availability
+    : '';
+  const activity = typeof candidate.activity === 'string' ? candidate.activity : '';
+  const activeDelegations = candidate.activeDelegations;
+  if (
+    !['ready', 'degraded', 'failed', 'unverified', 'unavailable'].includes(availability)
+    || !['working', 'idle', 'unknown'].includes(activity)
+    || !Number.isSafeInteger(activeDelegations)
+    || (activeDelegations as number) < 0
+    || (activeDelegations as number) > 10_000
+  ) return null;
+  const reason = typeof candidate.reason === 'string'
+    ? oneLine(candidate.reason).slice(0, 240)
+    : '';
+  return {
+    availability: availability as AgentInputBotHostSnapshot['availability'],
+    activity: activity as AgentInputBotHostSnapshot['activity'],
+    activeDelegations: activeDelegations as number,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 /** Validate untrusted persisted/remote reference metadata against its wire text. */
@@ -435,8 +588,8 @@ function formatReference(reference: AgentInputReference): string {
     const truncated = reference.truncated === true || bounded.truncated;
     return [
       '[Referenced message]',
-      `Session ID: ${reference.sessionId}`,
-      `Message ID: ${reference.messageClientId}`,
+      `Session ID: ${quotedMetadata(reference.sessionId)}`,
+      `Message ID: ${quotedMetadata(reference.messageClientId)}`,
       'Content:',
       bounded.text || '(message content unavailable)',
       ...(truncated ? ['[Content truncated]'] : []),
@@ -446,8 +599,8 @@ function formatReference(reference: AgentInputReference): string {
   if (reference.kind === 'session') {
     return [
       '[Referenced conversation]',
-      `Title: ${oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`}`,
-      `Session ID: ${reference.sessionId}`,
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`)}`,
+      `Session ID: ${quotedMetadata(reference.sessionId)}`,
       '[/Referenced conversation]',
     ].join('\n');
   }
@@ -484,10 +637,41 @@ function formatReference(reference: AgentInputReference): string {
       '[/Referenced plugin resource]',
     ].join('\n');
   }
+  if (reference.kind === 'bot') {
+    const snapshot = reference.hostSnapshot;
+    return [
+      '[Referenced Cindy Bot]',
+      `Name: ${quotedMetadata(oneLine(reference.name))}`,
+      `Bot ID: ${quotedMetadata(reference.botId)}`,
+      'Intent: the user explicitly selected this Bot as a collaboration target.',
+      'Resolution: the host already resolved this exact stable Bot ID. Do not list Bots, search chat history, or inspect another task runtime merely to identify or locate it.',
+      ...(snapshot
+        ? [
+            `Host status: availability=${snapshot.availability}; activity=${snapshot.activity}; active_tracked_tasks=${snapshot.activeDelegations}.`,
+            ...(snapshot.reason ? [`Host note: ${quotedMetadata(snapshot.reason)}`] : []),
+          ]
+        : [
+            "Host status: not refreshed. Do not invent availability or activity.",
+          ]),
+      "Action: infer intent from the surrounding request. Answer status questions from Host status without sending a new message. To contact this teammate, call send_to_agent once with this Bot ID. For independently tracked work or deliverables, use start_session_task instead; it does not target a Bot.",
+      "Boundary: Do not blindly forward the surrounding user text. A teammate message only confirms delivery and must never stand in for a tracked task.",
+      '[/Referenced Cindy Bot]',
+    ].join('\n');
+  }
+  if (reference.kind === 'todo') {
+    return [
+      '[Referenced todo]',
+      `Title: ${quotedMetadata(oneLine(reference.title))}`,
+      `Todo ID: ${quotedMetadata(reference.todoId)}`,
+      'Owner: the user picked this item from your own Todo list; the surrounding text says what to do with it.',
+      'Resolution: read it with list_teammate_todos and record any change with update_teammate_todo using this exact Todo ID. Do not create a new item for it.',
+      '[/Referenced todo]',
+    ].join('\n');
+  }
   return [
     '[Referenced project]',
-    `Name: ${oneLine(reference.name)}`,
-    `Working directory: ${reference.workingDir}`,
+    `Name: ${quotedMetadata(oneLine(reference.name))}`,
+    `Working directory: ${quotedMetadata(reference.workingDir)}`,
     '[/Referenced project]',
   ].join('\n');
 }
@@ -556,6 +740,8 @@ export function describeAgentInputReference(reference: AgentInputReference): str
     return oneLine(reference.title ?? reference.appName) || null;
   }
   if (reference.kind === 'plugin-resource') return oneLine(reference.label) || null;
+  if (reference.kind === 'bot') return oneLine(reference.name) || null;
+  if (reference.kind === 'todo') return oneLine(reference.title) || null;
   return oneLine(reference.text ?? '') || null;
 }
 

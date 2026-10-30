@@ -1,3 +1,5 @@
+import type { RequestTransformCtx, RequestTransform, RecoveryRule } from '@cindy/model-compat';
+export type { RequestTransformCtx, RequestTransform, RecoveryRule } from '@cindy/model-compat';
 /**
  * 公开类型 —— 给 host 注入 transform 链 / logger 用。
  *
@@ -14,54 +16,11 @@ import type { ServerResponse } from "node:http";
 import type { Transform } from "node:stream";
 
 import type { OutboundProxyResolver } from "./outbound-proxy.js";
+import type { OversizedBody } from './oversized-attachments.js';
 
-/**
- * 请求 transform 上下文。
- * - method/url/headers 是只读快照,transform 不应该尝试通过这些改写 outbound 请求
- *   (改 method/url 没意义,改 headers 通过专用 transform 接口未来再加)
- */
-export interface RequestTransformCtx {
-  /** Monotonic identifier shared with the eventual response observer for this request. */
-  readonly reqId: number;
-  readonly method: string;
-  readonly url: string;
-  readonly headers: Readonly<Record<string, string>>;
-  /**
-   * 本请求**最终**发往的上游 baseURL(routingTransform 的 per-request override 已生效,
-   * 与 ResponseObserverCtx.upstreamBase 同构)。仅在请求 transform 链的 ctx 里出现;
-   * routingTransform / localHandler 的 ctx 中为 undefined(路由尚未/无需解析)。
-   * 供「按目标上游做兼容改写」的 transform 使用(如跨供应商时转换上游读不懂的历史项),
-   * 避免 host 侧为判断路由去向而复刻整套路由逻辑。
-   */
-  readonly upstreamBase?: string;
-}
-
-/**
- * 请求 body transform。
- *
- * 允许返回 Promise（视觉桥等需要出网调用的 transform 用）。引擎用 isPromiseLike
- * 统一 await：同步 transform 返回值原样通过，语义与 async 化前逐字节一致。
- *
- * @returns
- *   - 新的 body 对象 → 代理用它替换原 body 转发上游
- *   - null            → 不改写,这一步跳过(还会继续跑后续 transform;全部跳过则字节透传)
- */
-export interface RequestTransform {
-  (
-    body: unknown,
-    ctx: RequestTransformCtx,
-  ): unknown | null | Promise<unknown | null>;
-  /**
-   * Error handling for this transform. The default keeps the historical fail-open behavior;
-   * transforms that must not expose their unadapted input upstream can reject the request.
-   */
-  errorMode?: 'reject-request';
-  /**
-   * Optional cleanup for request-scoped state created while evaluating this transform.
-   * Called once after a request that entered the transform chain finishes or closes.
-   */
-  onRequestSettled?: (requestId: number) => void;
-}
+/** Capture request ownership synchronously; only overflow invokes the returned recovery. */
+export type OversizedRequestRecovery = (ctx: RequestTransformCtx) =>
+  ((body: OversizedBody, targetBytes: number) => Promise<Buffer | null>) | null;
 
 /**
  * A bounded, request-local compactor used only when the inbound body is over
@@ -106,6 +65,8 @@ export type LocalRequestHandler = (args: {
  * 与 RequestTransform 职责分离:RequestTransform 改 body,RoutingTransform 只读、决定路由。
  */
 export interface RoutingDecision {
+  /** Trusted host-selected, versioned stream behavior (never a request header). */
+  compatibilityProfiles?: readonly string[];
   /** 覆盖本次请求的上游 URL(完整 `http(s)://host[:port][/basePath]`);省略 = 用默认 `opts.upstream`。 */
   upstreamOverride?: string;
   /**
@@ -128,6 +89,31 @@ export interface RoutingDecision {
    * 字段忽略、不发生任何上游转发。省略 = 转发语义,与本字段引入前字节级一致。
    */
   localHandler?: LocalRequestHandler;
+  /**
+   * Request-local dispatch-generation check. The proxy evaluates it after routing/async transforms
+   * and again before a transparent retry. Returning false rejects locally, so a retry can never
+   * reuse an endpoint/header decision after its owner generation changes.
+   *
+   * The callback is deliberately argument-free: it must close over only the host-side generation
+   * state needed for validation and never receives request headers/body or an Error.
+   */
+  dispatchGenerationValid?: () => boolean;
+  /**
+   * Optional request-local forwarding observer created by a trusted routing decision.
+   * It receives no request context or payload; the forwarding layer only supplies fixed terminal
+   * classifications and an HTTP status after the real upstream request starts.
+   */
+  forwardLifecycle?: ForwardLifecycleObserver;
+  /**
+   * Optional body rewrite bound to this route, including opaque multipart requests.
+   * Runs after the JSON transform chain (even when that chain is bypassed). A rejection
+   * fails the request locally; dispatch-generation and body-size checks still apply.
+   * contentType must describe the returned bytes, including any new multipart boundary.
+   */
+  transformRequestBody?: (
+    body: Buffer,
+    ctx: RequestTransformCtx,
+  ) => { body: Buffer; contentType?: string } | Promise<{ body: Buffer; contentType?: string }>;
 }
 
 /**
@@ -140,6 +126,28 @@ export type RoutingTransform = (
   body: unknown,
   ctx: RequestTransformCtx,
 ) => RoutingDecision | null | Promise<RoutingDecision | null>;
+
+export type ForwardLifecycleFailure =
+  | 'client-aborted'
+  | 'request-error'
+  | 'request-timeout'
+  | 'response-error'
+  | 'response-aborted'
+  | 'response-closed'
+  | 'retry-rejected'
+  | 'retry-error';
+
+/**
+ * Request-local forwarding lifecycle observer.
+ *
+ * The proxy deliberately exposes only fixed terminal classifications and an HTTP status. Raw
+ * targets, headers, bodies, response bytes, and Error objects stay inside the forwarding layer.
+ */
+export interface ForwardLifecycleObserver {
+  onStart?(): void;
+  onComplete?(status: number): void;
+  onFailure?(failure: ForwardLifecycleFailure, status?: number): void;
+}
 
 export interface ResponseObserverCtx {
   readonly reqId: number;
@@ -183,43 +191,6 @@ export type ResponseObserver = (
 export type ResponseTransform = (ctx: ResponseObserverCtx) => Transform | null | undefined;
 
 /**
- * 一条 400 透明重试规则。
- *
- * forward() 命中上游 400 时,按顺序找第一条 `enabled() && matches(decodedErrBodyText)
- * && strip(body) !== null` 的规则,用其 strip 结果重发一次(canRetry=false,防循环)。
- * 多条规则并列(例: encrypted_content / empty_thinking),互不耦合;regex 互斥,
- * 命中顺序仅在两条都可能匹配同一错误体时才有意义(实际不会)。
- */
-export interface RecoveryRule {
-  /** 诊断用稳定 id,进日志(例 'encrypted_content' / 'empty_thinking')。 */
-  id: string;
-  /** gate: false 时该规则完全跳过(thinking 永远 true;encrypted 跟 silentEncryptedRetry 设置)。 */
-  enabled: () => boolean;
-  /** 对解压后的 400 错误体文本判定是否命中本规则。
-   * 命名避开 `match`:与 String.prototype.match 同名会让 CodeQL 把动态文本误判为
-   * 正则模式(js/regex-injection 误报)。 */
-  matches: (decodedErrorBodyText: string) => boolean;
-  /** 改写请求 body;返回 null = 没有可改的东西(本规则不适用,继续找下一条)。 */
-  strip: (body: Buffer) => Buffer | null;
-  /** 命中并成功 strip 后触发(用于 Layer-2 markActive)。 */
-  onRetry?: (threadId: string, model: string) => void;
-  /** 取 threadId 的 header 候选名;省略用默认 DEFAULT_THREAD_ID_HEADERS。 */
-  threadIdHeaders?: readonly string[];
-  /**
-   * 别的规则命中 400/422 时,是否把本规则的 strip 顺手叠上去。
-   * 默认 true(encrypted / empty thinking 这类对任意上游都安全)。
-   * 语义绑在特定上游的规则必须显式 false,否则会在 GPT 的
-   * invalid_encrypted_content 重试里改写 OpenAI 历史。
-   */
-  applyOnUnmatchedRetry?: boolean;
-  /**
-   * 本规则作为主匹配时,是否还叠其它 extra strip。默认 true。
-   * xAI ModelInput 必须 false:叠 encrypted-content 会删掉本来可回放的 reasoning blob。
-   */
-  allowExtraRules?: boolean;
-}
-
-/**
  * 极简 logger 接口 —— 跟 maker-core/Logger 形态对齐,host 可以直接传同一个 logger 适配器进来。
  * 全可选,不传任何方法就完全静默。
  */
@@ -255,6 +226,30 @@ export interface ProxyOptions {
    * 传空数组 [] = 显式禁用所有 transform,纯透传。
    */
   transformRequest?: RequestTransform[];
+  /** Host-owned, request-frozen enforcement before routing, including opaque/local-handler paths.
+   * Throws fail closed. Ordinary requests return null and retain their zero-copy response path. */
+  requestGuard?: (ctx: RequestTransformCtx) => {
+    // Egress receives the resolved route; ingress has no upstream yet.
+    transformBody: (body: Buffer, ctx?: RequestTransformCtx) => Buffer;
+    response: (headers: Readonly<Record<string, number | string | string[] | undefined>>) => Transform;
+  } | null;
+  /** Optional message enforcement. Requires uncompressed RFC6455 negotiation. */
+  webSocketTransforms?: (ctx: { url: string; headers: Readonly<Record<string, string>> }) => {
+    outbound: Transform;
+    inbound: Transform;
+  };
+
+  /**
+   * Optional byte-preservation gate for non-chat endpoints sharing this proxy.
+   * Returning true skips every request-body transform for this request only.
+   */
+  bypassRequestTransforms?: (body: unknown, ctx: RequestTransformCtx) => boolean;
+  /**
+   * Opt selected opaque/non-JSON requests into routing without parsing their body.
+   * The routing transform receives `undefined`; the original bytes remain available
+   * to the forwarding path and can be preserved with `bypassRequestTransforms`.
+   */
+  routeOpaqueRequestBody?: (ctx: RequestTransformCtx) => boolean;
   /**
    * 可选: per-request 路由 override(按 body.model 等选上游 / 换鉴权 header)。
    * 不传 = 永远走 `upstream` + 透传 headers(字节级行为与不传时完全一致,向后兼容)。
@@ -297,12 +292,15 @@ export interface ProxyOptions {
   /** 监听 host,默认 127.0.0.1 (loopback only;不要改成 0.0.0.0) */
   host?: string;
   /**
-   * 可选: 单条请求 body 上限(字节),超限回 413。默认 32MB(Claude Code 场景足够)。
+   * 可选: 单条上游请求 body 上限(字节)。默认 32 MiB；无法恢复的超限请求回 413。
    * Codex 走 Responses API 每轮全量重发 thread 历史,长会话(贴图 base64 / 加密
    * reasoning blob)会越过默认值,desktop 侧对 codex proxy 显式调大。
-   * 注意: body 会整段缓冲进内存并 JSON.parse,该值同时就是单请求的内存 / 解析停顿预算。
+   * 正常 body 整段缓冲并 JSON.parse；启用附件恢复后，超限部分先落临时文件，
+   * 恢复到此上限以内才进入普通解析和转发。
    */
   maxRequestBodyBytes?: number;
+  /** Disk-backed, attachment-preserving recovery, only after the normal byte limit is exceeded. */
+  oversizedRequestRecovery?: OversizedRequestRecovery;
   /**
    * Optional compactor for bodies that exceed maxRequestBodyBytes.  Enabling
    * this also permits a bounded ingress window so the compactor can inspect a
@@ -345,7 +343,8 @@ export interface ProxyOptions {
    * 而 upgrade 请求没有 body、也未必带 session/thread header, 会 fallback 到默认
    * 上游。开了 WS 的 provider 是明确且唯一的, 上游可以直接给定, 不需要推导。
    *
-   * **WS 流量上以下能力一律不生效**(proxy 只做 socket 级转发, 不解析 WS 帧):
+   * **WS 流量上以下能力一律不生效**（默认 socket 级转发；显式 webSocketTransforms
+   * 可单独装配消息边界检查，不复用 HTTP 转换链）：
    * requestTransform / routingTransform 的 body 改写、recoveryRules、
    * responseObserver、maxRequestBodyBytes。放开某个 provider 的 WS 前必须确认
    * 它不依赖这些。
@@ -354,6 +353,25 @@ export interface ProxyOptions {
     readonly url: string;
     readonly headers: Readonly<Record<string, string>>;
   }) => string | null;
+  /** Optional host authentication immediately before opening an upstream socket.
+   * Replaces outbound headers, preserving only host-approved handshake metadata.
+   * The signal revokes pending and established connections with the owning runtime.
+   * authorize rechecks mutable route ownership before forwarding each outbound chunk,
+   * without decoding frames or changing compression negotiation.
+   * Omitted by existing callers, whose forwarding remains unchanged.
+   */
+  prepareWebSocketRequest?: (ctx: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => Promise<{
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    authorize?: () => boolean;
+    /** Observe a complete, bounded HTTP upgrade refusal without consuming its body. */
+    onUpgradeFailure?: (status: number, body: string) => Promise<void>;
+    /** Connection-bound message guards; requires webSocketTransforms (uncompressed negotiation). */
+    transforms?: () => { outbound: Transform; inbound: Transform };
+  }>;
   /**
    * 对带稳定 thread id、且此前已真实完成过上游 101 的 WebSocket 重连启用 Cindy 侧保活。
    * proxy 会先用已证明一致的协商参数接住该条客户端 socket，再以有界退避回探上游；只要
@@ -395,6 +413,15 @@ export interface ProxyHandle {
    * 重新走一次真实上游握手，不能继承旧路由的 Cindy 侧保活资格。
    */
   forgetWebSocketStateForThread?(threadId: string): number;
+  /**
+   * 指定 thread 是否仍持有一次成功上游 101 的握手证明（`retryProvenWebSocketUpgrades`）。
+   *
+   * 证明在 Codex 自己关掉连接后仍保留，直到 `forgetWebSocketStateForThread` 或协商
+   * 变化把它撤销。宿主据此判断「该 thread 走的是 thread 级 WS、只是此刻没有活连接」：
+   * 这种 thread 的下一次 upgrade 必然带同一 thread 头，拒绝它就能确定地把 transport
+   * 导回 HTTP；而从未握手过的 thread 只可能挂在匿名/预热连接上，拒绝无从下手。
+   */
+  hasProvenWebSocketForThread?(threadId: string): boolean;
   /** 优雅关闭 —— close listener + 等待 in-flight 请求结束(2s 超时强关) */
   dispose(): Promise<void>;
 }

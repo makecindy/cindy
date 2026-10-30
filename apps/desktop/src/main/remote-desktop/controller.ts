@@ -1,0 +1,1360 @@
+import { ClipboardTransfer } from './clipboardTransfer';
+import { createHash, randomUUID } from 'node:crypto';
+import { createLogger } from '../logger';
+import { DesktopHeartbeatHistory } from '../../shared/remoteDesktopDiagnostics';
+import type { ViewerDisplayHandle } from './viewerDisplay';
+import {
+  parseRemoteDesktopRequest,
+  REMOTE_DESKTOP_LEASE_MS,
+  REMOTE_DESKTOP_MAX_FRAME_BYTES,
+  type DesktopInput,
+  type RemoteDesktopWindow,
+  type RemoteDesktopCursorFrame,
+  type RemoteClipboardContent,
+  type RemoteDesktopVideoSettings,
+  type RemoteDesktopDisplayMode,
+  type RemoteDesktopCapabilities,
+  type RemoteDesktopDisplay,
+  type RemoteDesktopLease,
+  type RemoteDesktopPermissions,
+  type RemoteDesktopIceRequest,
+  type RemoteDesktopIceReply,
+  desktopPermissionReady,
+} from '@cindy/device-link';
+
+const log = createLogger('remote-desktop:controller');
+
+export type DesktopStopReason =
+  | 'host-stop'
+  | 'authorization-lost'
+  | 'authentication-changed'
+  | 'handoff-ended'
+  | 'heartbeat-expired'
+  | 'idle-timeout'
+  | 'peer-offline'
+  | 'signaling-lost'
+  | 'peer-closed'
+  | 'capture-exited'
+  | 'capture-stop'
+  | 'user-stop'
+  | 'remote-stop'
+  | 'takeover'
+  | 'resume-replaced'
+  | 'shutdown'
+  | 'disabled'
+  | 'display-changed'
+  | 'display-failed'
+  | 'input-failed';
+
+/** The one window a 代输入 live view shows; resolved by the host, never by a viewer. */
+export interface DesktopHandoffWindow {
+  requestId: string;
+  windowId: number;
+  pid: number;
+  displayId: string;
+  app: string;
+  title?: string;
+  /** Window size in points, so the viewer lays the picture out at its own shape. */
+  width: number;
+  height: number;
+}
+
+/** What a window lease may do; everything else reaches past the window. */
+const HANDOFF_WINDOW_OPS = new Set([
+  'stop',
+  'heartbeat',
+  'control',
+  'presentation',
+  'input',
+  'offer',
+  'ice',
+  'viewerHidden',
+  'frame',
+]);
+
+export interface DesktopControllerDeps {
+  /** Optional host setup before allocating the first lease or temporary output. */
+  prepare?(current: () => boolean): Promise<void>;
+  windowAction?(
+    action: 'list' | 'activate' | 'desktop' | 'workspaceLeft' | 'workspaceRight' | 'omarchyMenu',
+    id: string | undefined,
+    displayId: string,
+    current: () => boolean,
+  ): Promise<RemoteDesktopWindow[] | null>;
+  stopWindowActions?(): Promise<void>;
+  authorized(peer: string): boolean;
+  /**
+   * Trusted host authentication provider, never a controller-supplied flag.
+   * A nonempty ID identifies one verified credential session. Return null on
+   * expiry/revocation or while authentication is pending. A replacement session
+   * must have a new ID, even for the same peer. Omit only for legacy hosts that
+   * do not advertise credential authentication.
+   */
+  authenticationSession?(peer: string): string | null;
+  capabilities(): Promise<RemoteDesktopCapabilities>;
+  permissions?(action: 'check' | 'guide'): Promise<RemoteDesktopPermissions>;
+  frame(
+    displayId: string,
+    cursorOverlay?: boolean,
+    lease?: string,
+  ): Promise<string | RemoteDesktopCursorFrame | null>;
+  /** With `window`, input reaches only that window (a 代输入 live view). */
+  startInput(displayId: string, window?: DesktopHandoffWindow): Promise<void>;
+  /**
+   * 代输入 live view: the window a pending request is about, raised so it can be
+   * shown, or null when the request is not waiting for the owner. Only the host
+   * picks the window; a viewer names nothing but the request.
+   */
+  handoffWindow?(requestId: string, peer: string): Promise<DesktopHandoffWindow | null>;
+  /** Whether the request a window lease shows is still waiting; its lease ends when not. */
+  handoffCurrent?(requestId: string): boolean;
+  /** A window lease ended; the request's card catches up with the window. */
+  handoffEnded?(requestId: string): void;
+  input(events: DesktopInput[]): void;
+  stopInput(): void;
+  releaseInput?(): Promise<void>;
+  stopVideo(): void;
+  /**
+   * Hold the current video stream across a display change instead of stopping
+   * it. Returns false when the active capture cannot follow a display change.
+   */
+  pauseVideo?(): boolean;
+  /**
+   * Point a held video stream at the changed display. True only when the
+   * capture confirms a live stream follows it (e.g. not browser capture).
+   */
+  resumeVideo?(display: RemoteDesktopDisplay): Promise<boolean>;
+  lockScreen?(isCurrent: () => boolean, signal: AbortSignal): Promise<void>;
+  offer(
+    lease: RemoteDesktopLease,
+    sdp: string,
+    settings?: RemoteDesktopVideoSettings,
+    cursorOverlay?: boolean,
+    attemptId?: string,
+  ): Promise<string>;
+  ice?(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceReply>;
+  displayModes?(displayId: string): Promise<RemoteDesktopDisplayMode[]>;
+  /** Local hardware presence; must not hide displays when remote access is revoked. */
+  displayPresent?(displayId: string): boolean | Promise<boolean>;
+  resolution?(
+    displayId: string,
+    modeId: string,
+    beforeChange: () => void,
+    expected?: { width: number; height: number },
+  ): Promise<void>;
+  restoreResolution?(
+    displayId: string,
+    modeId: string,
+    beforeChange: () => void,
+    expected: { width: number; height: number },
+  ): Promise<void>;
+  createViewerDisplay?(
+    displayId: string,
+    isCurrent: () => boolean,
+    onFailure: () => void,
+  ): Promise<ViewerDisplayHandle>;
+  clipboard?(
+    action: 'copy' | 'paste',
+    text: string | undefined,
+    isCurrent: () => boolean,
+  ): Promise<string | void>;
+  clipboardContent?(
+    action: 'copy' | 'paste',
+    content: RemoteClipboardContent | undefined,
+    isCurrent: () => boolean,
+    options?: { sync?: boolean; version?: string },
+  ): Promise<RemoteClipboardContent | { version: string } | void>;
+  clipboardVersion?(): Promise<string>;
+  stopClipboardVersion?(): void;
+  privacyScreen?(enabled: boolean, isCurrent: () => boolean): Promise<void>;
+  stopPrivacyScreen?(): void;
+  hostMute?(enabled: boolean): Promise<void>;
+  stopHostMute?(): Promise<void>;
+  /** Pauses or resumes sending the lease's current video stream; rejects if not applied. */
+  viewerHidden?(lease: string, hidden: boolean): Promise<void>;
+  /** The lease entered or left view-only background viewing (phone picture-in-picture). */
+  videoBackground?(lease: string, background: boolean): void;
+  changed(): void;
+  now?: () => number;
+}
+
+/** One human lease, peer-bound, with finite lifetime even if the relay disappears. */
+export class RemoteDesktopController {
+  private active:
+    | (RemoteDesktopLease & {
+        peer: string;
+        readonly sourceDisplayId: string;
+        expires: number;
+        lastInputAt: number;
+        idleTimeoutMinutes?: number;
+        diagnostics: {
+          id: string;
+          startedAt: number;
+          heartbeats: DesktopHeartbeatHistory;
+          stopReason?: DesktopStopReason;
+        };
+        sequence: number;
+        authenticationSession: string | undefined;
+        backgroundViewing?: boolean;
+        clipboardSync?: boolean;
+        hostMute?: boolean;
+        lockOnExit?: boolean;
+        privacyLockOnExit?: boolean;
+        handoff?: DesktopHandoffWindow;
+      })
+    | null = null;
+  private idleStopped = new Set<string>();
+  private starting = false;
+  private viewerDisplay: ViewerDisplayHandle | null = null;
+  private displayRestoring: Promise<void> | null = null;
+  private originalResolution: {
+    displayId: string;
+    modeId: string;
+    width: number;
+    height: number;
+  } | null = null;
+  private resolutionWrite: Promise<void> | null = null;
+  private displayChanging = false;
+  private viewerGeometryManaged = false;
+  private locking = false;
+  private lockAbort: AbortController | null = null;
+  private stopping: Promise<void> | null = null;
+  private startingPeer: string | null = null;
+  private framePending = false;
+  private clipboardPending = false;
+  private syncGeneration = 0;
+  private privacyGeneration = 0;
+  private privacyOperation: { enabled: boolean; promise: Promise<{ enabled: boolean }> } | null =
+    null;
+  private stopClipboardSync(): void {
+    this.syncGeneration++;
+    this.deps.stopClipboardVersion?.();
+    if (this.active) this.active.clipboardSync = false;
+  }
+  private async clearSafety(): Promise<void> {
+    this.privacyGeneration++;
+    this.privacyOperation = null;
+    this.stopClipboardSync();
+    try {
+      this.deps.stopPrivacyScreen?.();
+    } finally {
+      await Promise.all([this.deps.stopHostMute?.(), this.deps.stopWindowActions?.()]);
+    }
+  }
+  /** Revoke input synchronously; optional OS restoration must never retain it
+   * or stop a replacement helper after an asynchronous restore settles.
+   */
+  private revokeControl(preserveSafety = false): Promise<void> {
+    if (this.active) this.active.controlling = false;
+    this.controlGeneration++;
+    this.clipboardTransfer.reset();
+    this.deps.stopInput();
+    // Repairing just the input helper must not expose a privacy-masked desktop
+    // or unmute the host without the viewer seeing a settings change.
+    const restoring = preserveSafety
+      ? Promise.resolve()
+      : this.clearSafety().catch((error) => {
+          log.warn('Safety restoration failed after control loss', error);
+          throw error;
+        });
+    this.deps.changed();
+    return restoring;
+  }
+  private clipboardTransfer = new ClipboardTransfer();
+  private lastFrame = -Infinity;
+  private controlGeneration = 0;
+  private inputStarting = false;
+  private inputRecoveryUsed = false;
+  private userStopped = new Map<string, string>();
+  private lastEnded: { peer: string; lease: string } | null = null;
+  constructor(private readonly deps: DesktopControllerDeps) {}
+  get state(): { peer: string; controlling: boolean } | null {
+    this.tick();
+    return this.active ? { peer: this.active.peer, controlling: this.active.controlling } : null;
+  }
+  get displayId(): string | null {
+    return this.active?.display.id ?? null;
+  }
+  /** Expected mirror events must not end the lease while its new geometry is prepared. */
+  get changingDisplay(): boolean {
+    return this.displayChanging;
+  }
+  displayGeometryMatches(id: string, width: number, height: number): boolean {
+    const display = this.active?.display;
+    return (
+      this.viewerGeometryManaged &&
+      display?.id === id &&
+      display.width === width &&
+      display.height === height
+    );
+  }
+  hasLease(lease: string): boolean {
+    this.tick();
+    return this.active?.lease === lease;
+  }
+  /** The single window this lease shows, when it is a 代输入 live view. */
+  handoffWindow(lease: string): DesktopHandoffWindow | null {
+    return this.active?.lease === lease ? (this.active.handoff ?? null) : null;
+  }
+  /** The 代输入 request finished: its live view has nothing left to show. */
+  endHandoff(requestId: string): void {
+    const active = this.active;
+    if (active?.handoff?.requestId === requestId)
+      void this.stop(active.peer, false, 'handoff-ended');
+  }
+  /** Phone picture-in-picture views the lease without input: nothing to pause or restore. */
+  get viewOnlyBackground(): boolean {
+    return this.active?.backgroundViewing === true && !this.active.controlling;
+  }
+  isBackgroundViewing(lease: string): boolean {
+    return this.active?.lease === lease && this.active.backgroundViewing === true;
+  }
+  private setBackgroundViewing(
+    active: NonNullable<RemoteDesktopController['active']>,
+    enabled: boolean,
+  ) {
+    if ((active.backgroundViewing === true) === enabled) return;
+    active.backgroundViewing = enabled;
+    this.deps.videoBackground?.(active.lease, enabled);
+  }
+  // Idle safety is elapsed time, independent of wall-clock corrections.
+  private idleNow(): number {
+    return this.deps.now?.() ?? performance.now();
+  }
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
+  private authenticationSession(peer: string): string | undefined {
+    if (!this.deps.authenticationSession) return undefined;
+    try {
+      const session = this.deps.authenticationSession(peer);
+      if (typeof session === 'string' && session.length > 0) return session;
+    } catch {
+      // Native errors must not carry credential diagnostics into invoke replies.
+    }
+    throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+  }
+  private authenticationCurrent(peer: string, session: string | undefined): boolean {
+    try {
+      return this.authenticationSession(peer) === session;
+    } catch {
+      // A failing native provider must revoke existing access, not preserve it.
+      return false;
+    }
+  }
+  tick(): void {
+    const active = this.active;
+    if (!active) return;
+    if (!this.deps.authorized(active.peer)) {
+      this.lockAbort?.abort();
+      void this.stop(undefined, false, 'authorization-lost');
+    } else if (!this.authenticationCurrent(active.peer, active.authenticationSession)) {
+      this.lockAbort?.abort();
+      void this.stop(undefined, false, 'authentication-changed');
+    } else if (active.handoff && this.deps.handoffCurrent?.(active.handoff.requestId) === false) {
+      // The 代输入 request finished: nothing is left to show.
+      void this.stop(undefined, false, 'handoff-ended');
+    } else if (
+      !this.locking &&
+      active.idleTimeoutMinutes &&
+      this.idleNow() - active.lastInputAt >= active.idleTimeoutMinutes * 60_000
+    ) {
+      this.idleStopped.add(active.peer);
+      this.userStopped.set(active.peer, active.lease);
+      void this.stop(active.peer, true, 'idle-timeout');
+    } else if (!this.locking && active.expires <= this.now()) {
+      void this.stop(undefined, undefined, 'heartbeat-expired');
+    }
+  }
+  /** Losing the signaling socket is expected while the phone shows PiP.
+   * Only an authorized, view-only presentation may outlive it, and only while
+   * the media channel keeps renewing the existing bounded lease. */
+  signalingLost(peer?: string): void {
+    this.tick();
+    const active = this.active;
+    if (
+      active &&
+      (!peer || active.peer === peer) &&
+      active.backgroundViewing &&
+      !active.controlling
+    )
+      return;
+    this.stop(peer, undefined, peer ? 'peer-offline' : 'signaling-lost');
+  }
+  stop(
+    peer?: string,
+    lockScreen = this.exitLockEnabled(),
+    reason: DesktopStopReason = 'host-stop',
+  ): Promise<void> {
+    if (peer && this.active?.peer !== peer) {
+      // Cancelling a takeover candidate must not revoke the current owner's work.
+      if (this.startingPeer === peer) this.startingPeer = null;
+      return Promise.resolve();
+    }
+    if (this.stopping) return this.stopping;
+    const active = this.active;
+    if (active && !active.diagnostics.stopReason) {
+      active.diagnostics.stopReason = reason;
+      const at = this.now();
+      const heartbeats = active.diagnostics.heartbeats.snapshot();
+      try {
+        log.debug('lease stopping', {
+          at,
+          session: active.diagnostics.id,
+          reason,
+          lockScreen,
+          controlling: active.controlling,
+          backgroundViewing: active.backgroundViewing === true,
+          // Wall timestamps correlate events and expose the existing lease deadline;
+          // subtracting them would misreport durations when the system clock changes.
+          startedAt: active.diagnostics.startedAt,
+          expiresAt: active.expires,
+          heartbeats,
+        });
+      } catch {
+        /* Diagnostics must never prevent revocation or cleanup. */
+      }
+    }
+    if (active && lockScreen && this.deps.lockScreen) {
+      // A protected connection that ends on loss of contact must not recover
+      // unattended and automatically unlock the computer again.
+      if (active.idleTimeoutMinutes) this.userStopped.set(active.peer, active.lease);
+      this.locking = true;
+      const cancellation = new AbortController();
+      this.lockAbort = cancellation;
+      active.controlling = false;
+      this.controlGeneration++;
+      this.deps.stopInput();
+      // The policy belongs to the host lease. Losing its heartbeat or receiving
+      // another stop must not cancel an accepted lock; revocation still can.
+      const pending = Promise.resolve()
+        .then(() =>
+          this.deps.lockScreen!(
+            () =>
+              this.active === active &&
+              !cancellation.signal.aborted &&
+              this.deps.authorized(active.peer) &&
+              this.authenticationCurrent(active.peer, active.authenticationSession),
+            cancellation.signal,
+          ),
+        )
+        .finally(async () => {
+          this.stopping = null;
+          this.lockAbort = null;
+          this.locking = false;
+          if (this.active === active) await this.stop(active.peer, false, reason);
+        });
+      this.stopping = pending;
+      // Timer/disconnect callers have no reply channel; explicit callers still
+      // receive the rejection. Privacy masks stay up until locking settles.
+      void pending.catch(() => log.warn('Screen lock failed while ending remote desktop'));
+      return pending;
+    }
+    if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
+    this.clipboardTransfer.reset();
+    this.controlGeneration++;
+    const restoring = this.clearSafety().catch(() =>
+      log.warn('Safety restoration failed after stop'),
+    );
+    this.active = null;
+    this.deps.stopInput();
+    this.deps.stopVideo();
+    if (active?.handoff) this.deps.handoffEnded?.(active.handoff.requestId);
+    this.viewerDisplay?.dispose();
+    // Retain the handle until restoration completes (or can be retried after failure).
+    // EOF releases it asynchronously; a new lease must not bind stale geometry.
+    if (!this.viewerDisplay?.restore) this.viewerDisplay = null;
+    if (this.viewerDisplay || this.originalResolution)
+      void this.restoreStoppedDisplay().catch(() => {});
+    this.viewerGeometryManaged = false;
+    this.deps.changed();
+    return restoring;
+  }
+  private exitLockEnabled(): boolean {
+    return (
+      (this.active?.lockOnExit ?? this.active?.privacyLockOnExit) === true ||
+      Boolean(this.active?.idleTimeoutMinutes)
+    );
+  }
+  /** A display change keeps the viewer's video only when it asked and capture can follow. */
+  private holdVideo(keepVideo: boolean | undefined): boolean {
+    if (keepVideo && this.deps.pauseVideo?.()) return true;
+    this.deps.stopVideo();
+    return false;
+  }
+  /** A held stream that cannot follow the new display is stopped like before. */
+  private async resumeVideo(display: RemoteDesktopDisplay): Promise<boolean> {
+    if (await this.deps.resumeVideo?.(display).catch(() => false)) return true;
+    this.deps.stopVideo();
+    return false;
+  }
+  private async temporaryResolution(
+    peer: string,
+    active: NonNullable<RemoteDesktopController['active']>,
+    modeId: string,
+    keepVideo?: boolean,
+    control?: boolean,
+  ): Promise<RemoteDesktopLease> {
+    if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+    if (!this.deps.resolution || !this.deps.displayModes)
+      throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+    if (this.inputStarting || this.clipboardPending || this.locking || this.starting)
+      throw new Error('DESKTOP_DISPLAY_BUSY');
+    const generation = this.controlGeneration;
+    const current = () => {
+      this.tick();
+      return this.active === active && active.controlling && this.controlGeneration === generation;
+    };
+    const requireCurrent = () => {
+      if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    };
+    this.displayChanging = true;
+    try {
+      this.deps.stopInput();
+      const videoKept = this.holdVideo(keepVideo);
+      await this.clearSafety();
+      requireCurrent();
+      await this.deps.releaseInput?.();
+      requireCurrent();
+      // Remove the temporary mirror before enumerating the physical monitor.
+      if (this.viewerDisplay) {
+        if (!this.viewerDisplay.restore) throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+        await this.viewerDisplay.restore(current);
+        requireCurrent();
+        this.viewerDisplay = null;
+      }
+      const modes = await this.deps.displayModes(active.sourceDisplayId);
+      requireCurrent();
+      const original = modes.find((mode) => mode.current);
+      const selected = modes.find((mode) => mode.id === modeId);
+      if (!original || !selected) throw new Error('DESKTOP_DISPLAY_MODE_MISSING');
+      this.originalResolution ??= {
+        displayId: active.sourceDisplayId,
+        modeId: original.id,
+        width: original.width,
+        height: original.height,
+      };
+      this.resolutionWrite = this.deps.resolution(
+        active.sourceDisplayId,
+        modeId,
+        requireCurrent,
+        selected,
+      );
+      await this.resolutionWrite;
+      requireCurrent();
+      const display = {
+        id: active.sourceDisplayId,
+        name: active.display.name,
+        width: selected.width,
+        height: selected.height,
+      };
+      const resumed = videoKept && (await this.resumeVideo(display));
+      requireCurrent();
+      active.display = display;
+      this.viewerGeometryManaged = true;
+      active.controlling = false;
+      this.controlGeneration++;
+      this.deps.changed();
+      const reply: RemoteDesktopLease = {
+        lease: active.lease,
+        display: active.display,
+        controlling: false,
+        ...(resumed ? { videoKept: true } : {}),
+      };
+      return control ? await this.withControl(peer, active, reply) : reply;
+    } catch (error) {
+      if (this.active === active) this.stop(peer, false, 'display-failed');
+      throw error;
+    } finally {
+      this.resolutionWrite = null;
+      this.displayChanging = false;
+    }
+  }
+  private restoreStoppedDisplay(): Promise<void> {
+    if (this.displayRestoring) return this.displayRestoring;
+    if (this.active || (!this.viewerDisplay && !this.originalResolution)) return Promise.resolve();
+    const handle = this.viewerDisplay;
+    const pending = (async () => {
+      // A disconnect can arrive while the native write is still in flight.
+      if (this.resolutionWrite) await this.resolutionWrite.catch(() => {});
+      await handle?.restore?.(() => !this.active && this.viewerDisplay === handle);
+      if (this.viewerDisplay === handle) this.viewerDisplay = null;
+      const original = this.originalResolution;
+      if (original) {
+        if ((await this.deps.displayPresent?.(original.displayId)) !== false)
+          await (this.deps.restoreResolution ?? this.deps.resolution)!(
+            original.displayId,
+            original.modeId,
+            () => {
+              if (this.active || this.originalResolution !== original)
+                throw new Error('DESKTOP_LEASE_EXPIRED');
+            },
+            original,
+          );
+        if (this.originalResolution === original) this.originalResolution = null;
+      }
+    })();
+    this.displayRestoring = pending;
+    void pending
+      .finally(() => {
+        if (this.displayRestoring === pending) this.displayRestoring = null;
+      })
+      .catch(() => {});
+    return pending;
+  }
+  /** Join the same restoration used by disconnects before the process exits. */
+  async stopAndRestore(): Promise<void> {
+    try {
+      await this.stop(undefined, undefined, 'shutdown');
+    } finally {
+      // Locking retains the lease until it settles, even on failure. Only then
+      // can restoration start; process shutdown must also await that work.
+      await this.restoreStoppedDisplay();
+    }
+  }
+  /**
+   * Input injection failed while the lease is still valid. Input belongs to the
+   * control bit, so release control and keep everything else: ending the lease
+   * here would tear down capture and media, and every phone tap would surface as
+   * a reconnect even though the desktop session itself is healthy. The viewer
+   * can ask again if recovery fails. Native failures opt into one immediate
+   * restart; layout changes only release until their geometry is confirmed.
+   * A pending start is cancelled, never recursively restarted.
+   */
+  async releaseControl(recoverInput = false): Promise<void> {
+    const active = this.active;
+    if (!active || (!active.controlling && !this.inputStarting)) return;
+    const recover =
+      recoverInput &&
+      active.controlling &&
+      !this.inputStarting &&
+      !this.inputRecoveryUsed &&
+      !this.starting &&
+      !this.displayChanging &&
+      !active.backgroundViewing;
+    if (recover) this.inputRecoveryUsed = true;
+    try {
+      const restoring = this.revokeControl(recover);
+      const generation = this.controlGeneration;
+      await restoring;
+      // A takeover can be awaiting capabilities before it changes the lease or
+      // generation. Its explicit decision takes precedence over this repair.
+      if (
+        !recover ||
+        this.starting ||
+        this.displayChanging ||
+        this.active !== active ||
+        generation !== this.controlGeneration
+      )
+        return;
+      this.require(active.peer, active.lease);
+      const restarting = this.takeControl(active.peer, active, true);
+      const restartGeneration = this.controlGeneration;
+      try {
+        await restarting;
+      } catch (error) {
+        if (this.active === active && restartGeneration === this.controlGeneration)
+          await this.revokeControl();
+        throw error;
+      }
+    } catch (error) {
+      // The viewer retains its picture and can retry via the normal permission
+      // path. No recursive restart if the replacement helper also fails.
+      if (recover) log.debug('Input recovery deferred', error);
+    }
+  }
+  /** Starts input for the lease's current display; shared by `control` and `autoControl`. */
+  private async takeControl(
+    peer: string,
+    active: NonNullable<RemoteDesktopController['active']>,
+    recovering = false,
+  ): Promise<void> {
+    if (this.locking) throw new Error('DESKTOP_BUSY');
+    if (this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
+    if (!recovering) this.inputRecoveryUsed = false;
+    this.setBackgroundViewing(active, false);
+    this.clipboardTransfer.reset();
+    const generation = ++this.controlGeneration;
+    if (!active.controlling) {
+      this.inputStarting = true;
+      try {
+        await (active.handoff
+          ? this.deps.startInput(active.display.id, active.handoff)
+          : this.deps.startInput(active.display.id));
+        if (
+          generation !== this.controlGeneration ||
+          this.active !== active ||
+          !this.deps.authorized(peer)
+        ) {
+          this.deps.stopInput();
+          throw new Error(
+            this.userStopped.get(peer) === active.lease
+              ? 'DESKTOP_STOPPED'
+              : 'DESKTOP_LEASE_EXPIRED',
+          );
+        }
+        this.require(peer, active.lease);
+        active.controlling = true;
+      } catch (error) {
+        // Leaving picture-in-picture kept the masks for a viewer about to resume
+        // control. If it cannot, a view-only lease must not stay masked and muted.
+        if (!recovering && this.active === active && generation === this.controlGeneration)
+          await this.clearSafety().catch((restoreError) =>
+            log.warn('Safety restoration failed after control reacquisition', restoreError),
+          );
+        throw error;
+      } finally {
+        this.inputStarting = false;
+      }
+    }
+    this.deps.changed();
+  }
+  /**
+   * `autoControl`: grant control inside the request that created or changed
+   * the lease. A refusal (input unavailable, permission missing) leaves the
+   * lease view only; the viewer then asks with `control` and shows that reply.
+   */
+  private async withControl(
+    peer: string,
+    active: NonNullable<RemoteDesktopController['active']>,
+    reply: RemoteDesktopLease,
+  ): Promise<RemoteDesktopLease> {
+    try {
+      await this.takeControl(peer, active);
+    } catch (error) {
+      // A replaced or stopped lease is not a refusal; report it as before.
+      if (this.active !== active) throw error;
+    }
+    return { ...reply, controlling: active.controlling };
+  }
+  /** Explicit local disconnect must not be undone by the phone's recovery. */
+  stopByUser(): void {
+    const target = this.active ?? this.lastEnded;
+    if (target) this.userStopped.set(target.peer, target.lease);
+    this.stop(undefined, undefined, 'user-stop');
+  }
+  async stopPrivacyByUser(): Promise<void> {
+    const active = this.active;
+    if (!active || !this.exitLockEnabled()) {
+      this.stopByUser();
+      return;
+    }
+    // Enter the existing lock/stop path before marking the lease stopped:
+    // subsequent phone input and recovery must be rejected while locking.
+    const ending = this.request(active.peer, { op: 'stop', lease: active.lease, lockScreen: true });
+    this.userStopped.set(active.peer, active.lease);
+    try {
+      await ending;
+    } finally {
+      if (this.active === active) this.stop(active.peer, undefined, 'user-stop');
+    }
+  }
+  private require(peer: string, lease: string) {
+    this.tick();
+    if (this.userStopped.get(peer) === lease)
+      throw new Error(this.idleStopped.has(peer) ? 'DESKTOP_IDLE_TIMEOUT' : 'DESKTOP_STOPPED');
+    const active = this.active;
+    if (!active || active.peer !== peer || active.lease !== lease)
+      throw new Error('DESKTOP_LEASE_EXPIRED');
+    return active;
+  }
+  /** Only the trusted capture renderer may forward live DataChannel pongs. */
+  viewHeartbeat(lease: string): void {
+    this.tick();
+    if (this.active?.lease === lease && this.active.backgroundViewing && !this.active.controlling) {
+      this.active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
+      this.active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'media-accepted' });
+    }
+  }
+  /** Also used by the exact capture renderer's DataChannel bridge. */
+  input(lease: string, sequence: number, events: unknown): void {
+    const active = this.active;
+    if (!active)
+      throw new Error(
+        [...this.userStopped.values()].includes(lease)
+          ? 'DESKTOP_STOPPED'
+          : 'DESKTOP_LEASE_EXPIRED',
+      );
+    const request = parseRemoteDesktopRequest({ op: 'input', lease, sequence, events });
+    if (request.op !== 'input') return;
+    this.require(active.peer, lease);
+    if (this.displayChanging) return; // Discard queued old-geometry input after authenticating it.
+    if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+    if (sequence <= active.sequence) return; // never replay a click after retries/reconnect
+    active.sequence = sequence;
+    const generation = this.controlGeneration;
+    this.deps.input(request.events);
+    // Release-only cleanup is generated automatically and is not human activity.
+    if (request.events.some((event) => event.kind !== 'release'))
+      active.lastInputAt = this.idleNow();
+    // Fresh user activity permits another repair, but an idle crash-looping
+    // helper cannot repeatedly restart itself after its ready handshake.
+    if (generation === this.controlGeneration) this.inputRecoveryUsed = false;
+  }
+  async request(peer: string, raw: unknown): Promise<unknown> {
+    const request = parseRemoteDesktopRequest(raw);
+    this.tick();
+    if (request.op === 'capabilities') {
+      // Protected hosts use a separate, minimal pre-auth handshake. The normal
+      // capabilities response includes display information and is post-auth.
+      const session = this.authenticationSession(peer);
+      if (session !== undefined && !this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+      const viewerDisplay = this.viewerDisplay;
+      const caps = await this.deps.capabilities();
+      if (!this.authenticationCurrent(peer, session))
+        throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      if (session !== undefined && !this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+      // Keep the handle alive across the read: stop clears the lease before the
+      // helper disappears, and restoration can settle while capabilities awaits.
+      const publicDisplays = caps.displays.filter(
+        (display) =>
+          display.id !== viewerDisplay?.displayId && display.id !== this.viewerDisplay?.displayId,
+      );
+      return {
+        ...caps,
+        displays: publicDisplays,
+        automaticReconnect: true,
+        idleLock: Boolean(this.deps.lockScreen),
+        connectionTakeover: true,
+        autoControl: caps.canControl === true,
+        resolutionRestore: Boolean(
+          caps.displayModes && this.deps.resolution && this.deps.displayModes,
+        ),
+        ...(this.deps.handoffWindow ? { handoffWindow: true } : {}),
+      };
+    }
+    if (!this.deps.authorized(peer)) throw new Error('DESKTOP_DISABLED');
+    if (request.op === 'permissions') {
+      const session = this.authenticationSession(peer);
+      if (!this.deps.permissions) throw new Error('DESKTOP_PERMISSIONS_UNAVAILABLE');
+      const permissions = await this.deps.permissions(request.action);
+      if (!this.authenticationCurrent(peer, session))
+        throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      return permissions;
+    }
+    if (request.op === 'start') {
+      const lease = await this.start(peer, request);
+      return request.control && this.active?.lease === lease.lease
+        ? this.withControl(peer, this.active, lease)
+        : lease;
+    }
+    return this.leaseRequest(peer, request);
+  }
+  private async start(
+    peer: string,
+    request: Extract<ReturnType<typeof parseRemoteDesktopRequest>, { op: 'start' }>,
+  ): Promise<RemoteDesktopLease> {
+    const authenticationSession = this.authenticationSession(peer);
+    if (request.resume && this.userStopped.has(peer))
+      throw new Error(this.idleStopped.has(peer) ? 'DESKTOP_IDLE_TIMEOUT' : 'DESKTOP_STOPPED');
+    if (request.handoff !== undefined && !this.deps.handoffWindow)
+      throw new Error('DESKTOP_HANDOFF_UNAVAILABLE');
+    // A window view resumes only as the same request's view; a display view only as itself.
+    const resumesActive =
+      request.resume &&
+      this.active?.peer === peer &&
+      (request.handoff !== undefined
+        ? this.active.handoff?.requestId === request.handoff
+        : !this.active.handoff && this.active.sourceDisplayId === request.displayId);
+    if (
+      this.locking ||
+      this.starting ||
+      this.displayChanging ||
+      (this.active && !request.takeover && !resumesActive)
+    )
+      throw new Error('DESKTOP_BUSY');
+    // Recovery must not grant another full idle period.
+    const lastInputAt = resumesActive ? this.active!.lastInputAt : this.idleNow();
+    this.starting = true;
+    this.startingPeer = peer;
+    const generation = this.controlGeneration;
+    try {
+      if (!this.active && (this.viewerDisplay || this.originalResolution))
+        await this.restoreStoppedDisplay();
+      if (!this.active && this.deps.prepare) {
+        const current = () =>
+          this.startingPeer === peer &&
+          generation === this.controlGeneration &&
+          this.deps.authorized(peer) &&
+          this.authenticationCurrent(peer, authenticationSession);
+        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        await this.deps.prepare(current);
+        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+      }
+      const caps = await this.deps.capabilities();
+      if (!this.authenticationCurrent(peer, authenticationSession))
+        throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      let handoff: DesktopHandoffWindow | undefined;
+      if (request.handoff !== undefined) {
+        handoff = (await this.deps.handoffWindow!(request.handoff, peer)) ?? undefined;
+        if (!handoff || handoff.requestId !== request.handoff)
+          throw new Error('DESKTOP_HANDOFF_ENDED');
+        if (!this.authenticationCurrent(peer, authenticationSession))
+          throw new Error('DESKTOP_AUTHENTICATION_REQUIRED');
+      }
+      const displayId = handoff?.displayId ?? request.displayId;
+      let display = caps.displays.find((d) => d.id === displayId);
+      if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
+      if (
+        this.startingPeer !== peer ||
+        generation !== this.controlGeneration ||
+        !this.deps.authorized(peer)
+      )
+        throw new Error('DESKTOP_DISABLED');
+      if (caps.permissions && !desktopPermissionReady(caps.permissions.screenRecording))
+        throw new Error('DESKTOP_SCREEN_PERMISSION_REQUIRED');
+      if (request.resume && this.userStopped.has(peer))
+        throw new Error(this.idleStopped.has(peer) ? 'DESKTOP_IDLE_TIMEOUT' : 'DESKTOP_STOPPED');
+      if (request.takeover && this.active) {
+        this.userStopped.set(this.active.peer, this.active.lease);
+        void this.stop(this.active.peer, false, 'takeover');
+      }
+      // A lost start reply can leave our own lease alive. Rotate it using the
+      // existing cleanup so the new viewer can restart its input sequence at 0.
+      else if (resumesActive) this.stop(peer, false, 'resume-replaced');
+      if (this.viewerDisplay || this.originalResolution) {
+        const restorationGeneration = this.controlGeneration;
+        await this.restoreStoppedDisplay();
+        const restored = await this.deps.capabilities();
+        if (
+          this.startingPeer !== peer ||
+          restorationGeneration !== this.controlGeneration ||
+          !this.deps.authorized(peer) ||
+          !this.authenticationCurrent(peer, authenticationSession)
+        )
+          throw new Error('DESKTOP_LEASE_EXPIRED');
+        display = restored.displays.find((d) => d.id === displayId);
+        if (!display) throw new Error('DESKTOP_DISPLAY_MISSING');
+      }
+      if (!request.resume) {
+        this.userStopped.delete(peer);
+        this.idleStopped.delete(peer);
+      }
+      const lease: RemoteDesktopLease = handoff
+        ? {
+            lease: randomUUID(),
+            // The picture is the window, so the viewer lays it out at the window's shape.
+            display: { ...display, width: handoff.width, height: handoff.height },
+            controlling: false,
+            window: { app: handoff.app, ...(handoff.title ? { title: handoff.title } : {}) },
+          }
+        : { lease: randomUUID(), display, controlling: false };
+      this.active = {
+        ...lease,
+        peer,
+        sourceDisplayId: display.id,
+        expires: this.now() + REMOTE_DESKTOP_LEASE_MS,
+        lastInputAt,
+        idleTimeoutMinutes:
+          !handoff && this.deps.lockScreen ? request.idleTimeoutMinutes : undefined,
+        diagnostics: {
+          id: createHash('sha256').update(lease.lease).digest('hex').slice(0, 16),
+          startedAt: this.now(),
+          heartbeats: new DesktopHeartbeatHistory(),
+        },
+        sequence: -1,
+        authenticationSession,
+        // Ending a look at one window never locks the whole computer.
+        lockOnExit: handoff ? undefined : request.lockOnExit,
+        ...(handoff ? { handoff } : {}),
+      };
+      this.deps.changed();
+      return lease;
+    } finally {
+      this.starting = false;
+      this.startingPeer = null;
+    }
+  }
+  private async leaseRequest(
+    peer: string,
+    request: Exclude<
+      ReturnType<typeof parseRemoteDesktopRequest>,
+      { op: 'capabilities' | 'permissions' | 'start' }
+    >,
+  ): Promise<unknown> {
+    const active = this.require(peer, request.lease);
+    if (active.handoff && !HANDOFF_WINDOW_OPS.has(request.op))
+      throw new Error('DESKTOP_HANDOFF_WINDOW_ONLY');
+    if (
+      this.displayChanging &&
+      !['stop', 'heartbeat', 'frame', 'input', 'viewerHidden'].includes(request.op)
+    )
+      throw new Error('DESKTOP_DISPLAY_BUSY');
+    switch (request.op) {
+      case 'windowAction': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.windowAction) throw new Error('DESKTOP_INPUT_UNSUPPORTED');
+        const generation = this.controlGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && this.controlGeneration === generation
+          );
+        };
+        const result = await this.deps.windowAction(
+          request.action,
+          request.action === 'activate' ? request.id : undefined,
+          active.display.id,
+          current,
+        );
+        if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+        return result;
+      }
+      case 'privacyScreen': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.privacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+        active.privacyLockOnExit = request.lockOnExit === true;
+        // Lock preference changes join the same mask/capture initialization.
+        if (this.privacyOperation?.enabled === request.enabled)
+          return this.privacyOperation.promise;
+        const generation = ++this.privacyGeneration;
+        // Masks outlive control while PiP views the lease; every revocation
+        // that must expose the desktop clears safety and bumps the generation.
+        const current = () => {
+          this.tick();
+          return this.active === active && generation === this.privacyGeneration;
+        };
+        const promise = this.deps
+          .privacyScreen(request.enabled, current)
+          .then(() => {
+            if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+            return { enabled: request.enabled };
+          })
+          .catch((error) => {
+            if (generation === this.privacyGeneration) this.privacyOperation = null;
+            throw error;
+          });
+        this.privacyOperation = { enabled: request.enabled, promise };
+        return promise;
+      }
+      case 'clipboardSync': {
+        if (request.enabled && (!active.controlling || !this.deps.clipboardVersion))
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        if (active.clipboardSync !== request.enabled) {
+          this.syncGeneration++;
+          this.clipboardTransfer.resetSync();
+        }
+        active.clipboardSync = request.enabled;
+        if (!request.enabled) this.deps.stopClipboardVersion?.();
+        return { enabled: request.enabled };
+      }
+      case 'hostMute': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.hostMute) throw new Error('DESKTOP_HOST_MUTE_UNAVAILABLE');
+        active.hostMute = request.enabled;
+        await this.deps.hostMute(request.enabled);
+        return { enabled: request.enabled };
+      }
+      case 'viewerHidden': {
+        if (!this.deps.viewerHidden) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+        await this.deps.viewerHidden(active.lease, request.hidden);
+        return { hidden: request.hidden };
+      }
+      case 'clipboardVersion': {
+        if (!active.controlling || !active.clipboardSync || !this.deps.clipboardVersion)
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        const generation = this.syncGeneration;
+        const version = await this.deps.clipboardVersion();
+        this.require(peer, request.lease);
+        if (!active.controlling || !active.clipboardSync || generation !== this.syncGeneration)
+          throw new Error('DESKTOP_LEASE_EXPIRED');
+        return { version };
+      }
+      case 'restoreViewerDisplay':
+      case 'viewerDisplay': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (this.inputStarting || this.clipboardPending || this.locking || this.starting)
+          throw new Error('DESKTOP_DISPLAY_BUSY');
+        if (!this.deps.createViewerDisplay) throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+        const generation = this.controlGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && generation === this.controlGeneration && active.controlling
+          );
+        };
+        this.displayChanging = true;
+        try {
+          // Wait for held keys/buttons to be released in the old coordinate space.
+          this.deps.stopInput();
+          const videoKept = this.holdVideo(request.keepVideo);
+          // Safety effects belong to the old capture/control session, even though
+          // resizing retains its lease. Invalidate pending enables before waiting.
+          await this.clearSafety();
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          if (this.deps.releaseInput) await this.deps.releaseInput();
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          if (request.op === 'restoreViewerDisplay' && !this.viewerDisplay?.restore)
+            throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+          if (!this.viewerDisplay) {
+            const handle = await this.deps.createViewerDisplay(active.display.id, current, () => {
+              if (this.active === active) this.stop(peer, undefined, 'display-failed');
+            });
+            if (!current()) {
+              handle.dispose();
+              throw new Error('DESKTOP_LEASE_EXPIRED');
+            }
+            this.viewerDisplay = handle;
+          }
+          let display =
+            request.op === 'restoreViewerDisplay'
+              ? await this.viewerDisplay.restore!(current)
+              : await this.viewerDisplay.resize(request.width, request.height, current);
+          if (
+            request.op === 'restoreViewerDisplay' &&
+            !(await this.deps.capabilities()).displays.some(
+              (item) => item.id === active.sourceDisplayId,
+            )
+          )
+            throw new Error('DESKTOP_DISPLAY_MISSING');
+          if (request.op === 'restoreViewerDisplay') {
+            this.viewerDisplay = null;
+            const original = this.originalResolution;
+            if (original) {
+              this.resolutionWrite = (this.deps.restoreResolution ?? this.deps.resolution)!(
+                original.displayId,
+                original.modeId,
+                () => {
+                  if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+                },
+                original,
+              );
+              await this.resolutionWrite;
+              if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+              this.originalResolution = null;
+              display = { ...display, width: original.width, height: original.height };
+            }
+          }
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          const resumed = videoKept && (await this.resumeVideo(display));
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          this.viewerGeometryManaged = true;
+          active.display = display;
+          active.controlling = false;
+          this.controlGeneration++;
+          this.deps.changed();
+          const reply: RemoteDesktopLease = {
+            lease: active.lease,
+            display,
+            controlling: false,
+            ...(resumed ? { videoKept: true } : {}),
+            ...(request.op === 'viewerDisplay'
+              ? {
+                  viewerDisplayRequest: { width: request.width, height: request.height },
+                }
+              : {}),
+          };
+          // Input restarts on the new geometry within the same request.
+          return request.control ? await this.withControl(peer, active, reply) : reply;
+        } catch (error) {
+          if (this.active === active) this.stop(peer, false, 'display-failed');
+          throw error;
+        } finally {
+          this.resolutionWrite = null;
+          this.displayChanging = false;
+        }
+      }
+      case 'stop': {
+        if (request.lockScreen && !this.deps.lockScreen)
+          throw new Error('DESKTOP_LOCK_UNAVAILABLE');
+        // Plain stop is also used for viewer recovery and display handoff.
+        // Explicit exit sends lockScreen; involuntary host stops use the policy.
+        await this.stop(peer, request.lockScreen === true && !active.handoff, 'remote-stop');
+        return { ok: true };
+      }
+      case 'heartbeat':
+        if (request.idleTimeoutMinutes !== undefined && !active.handoff && this.deps.lockScreen) {
+          if (active.idleTimeoutMinutes !== request.idleTimeoutMinutes)
+            active.lastInputAt = this.idleNow();
+          active.idleTimeoutMinutes = request.idleTimeoutMinutes;
+        }
+        if (request.lockOnExit !== undefined && !active.handoff)
+          active.lockOnExit = request.lockOnExit;
+        active.expires = this.now() + REMOTE_DESKTOP_LEASE_MS;
+        active.diagnostics.heartbeats.add({ receivedAt: this.now(), result: 'relay-accepted' });
+        return { controlling: active.controlling };
+      case 'presentation': {
+        this.setBackgroundViewing(active, request.enabled);
+        if (request.enabled) {
+          // PiP keeps watching the same lease: the masked, muted desktop stays
+          // protected; only input and clipboard sync need control.
+          await this.revokeControl(true);
+          this.stopClipboardSync();
+        } else {
+          this.deps.changed();
+        }
+        return { controlling: active.controlling };
+      }
+      case 'control': {
+        if (!request.enabled) {
+          if (this.locking) throw new Error('DESKTOP_BUSY');
+          await this.revokeControl();
+          return { controlling: active.controlling };
+        }
+        await this.takeControl(peer, active);
+        return { controlling: active.controlling };
+      }
+      case 'clipboardContent':
+      case 'clipboard': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (request.op === 'clipboardContent' && request.sync && !active.clipboardSync)
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        if (request.op === 'clipboard' ? !this.deps.clipboard : !this.deps.clipboardContent)
+          throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+        if (this.clipboardPending) throw new Error('DESKTOP_CLIPBOARD_BUSY');
+        const generation = this.controlGeneration;
+        const syncGeneration = this.syncGeneration;
+        const isCurrent = () => {
+          this.tick();
+          return (
+            this.active === active &&
+            active.controlling &&
+            generation === this.controlGeneration &&
+            !(
+              request.op === 'clipboardContent' &&
+              request.sync &&
+              (!active.clipboardSync || syncGeneration !== this.syncGeneration)
+            )
+          );
+        };
+        if (request.op === 'clipboard' || !request.sync) active.lastInputAt = this.idleNow();
+        this.clipboardPending = true;
+        try {
+          if (request.op === 'clipboardContent') {
+            const result = await this.clipboardTransfer.handle(
+              request,
+              isCurrent,
+              this.deps.clipboardContent!,
+            );
+            if (!isCurrent()) {
+              this.clipboardTransfer.reset();
+              throw new Error('DESKTOP_LEASE_EXPIRED');
+            }
+            return result;
+          }
+          const text = await this.deps.clipboard!(
+            request.action,
+            request.action === 'paste' ? request.text : undefined,
+            isCurrent,
+          );
+          this.require(peer, request.lease);
+          if (!isCurrent()) throw new Error('DESKTOP_VIEW_ONLY');
+          return request.action === 'copy' ? { text } : { ok: true };
+        } finally {
+          this.clipboardPending = false;
+        }
+      }
+      case 'input':
+        this.input(request.lease, request.sequence, request.events);
+        return { ok: true };
+      case 'frame': {
+        if (this.displayChanging) return { jpeg: null };
+        const display = active.display;
+        // Compatibility transport: one small frame in flight, no replaying frame queue.
+        if (this.framePending || this.now() - this.lastFrame < 250) return { jpeg: null };
+        this.framePending = true;
+        this.lastFrame = this.now();
+        try {
+          const jpeg = await this.deps.frame(
+            active.display.id,
+            request.cursorOverlay,
+            active.lease,
+          );
+          this.require(peer, request.lease); // revoke during capture must not leak the result
+          if (this.displayChanging || active.display !== display) return { jpeg: null };
+          const frame = typeof jpeg === 'object' && jpeg !== null ? jpeg : { jpeg };
+          // Cursor metadata does not turn a relay frame into a local media frame.
+          if (frame.jpeg && frame.jpeg.length > Math.ceil(REMOTE_DESKTOP_MAX_FRAME_BYTES / 3) * 4)
+            return { jpeg: null };
+          return frame;
+        } finally {
+          this.framePending = false;
+        }
+      }
+      case 'displayModes': {
+        if (!this.deps.displayModes) throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+        // The virtual capture display has only its current mode. System mode IDs
+        // belong to the monitor selected when this lease began.
+        const modes = await this.deps.displayModes(active.sourceDisplayId);
+        this.require(peer, request.lease);
+        return modes;
+      }
+      case 'resolution': {
+        if (request.temporary)
+          return this.temporaryResolution(
+            peer,
+            active,
+            request.modeId,
+            request.keepVideo,
+            request.control,
+          );
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
+        if (!this.deps.resolution) throw new Error('DESKTOP_DISPLAY_MODES_UNAVAILABLE');
+        if (this.inputStarting || this.clipboardPending || this.locking || this.starting)
+          throw new Error('DESKTOP_DISPLAY_BUSY');
+        const restoringViewer = this.viewerDisplay !== null;
+        const generation = this.controlGeneration;
+        const current = () => {
+          this.tick();
+          return (
+            this.active === active && active.controlling && generation === this.controlGeneration
+          );
+        };
+        const beforeChange = () => {
+          if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+          // Release old geometry before the native write can emit display events.
+          // Completion must not inspect or stop a replacement lease.
+          this.stop(peer, false, 'display-changed');
+        };
+        try {
+          if (this.viewerDisplay) {
+            this.displayChanging = true;
+            try {
+              this.deps.stopInput();
+              this.deps.stopVideo();
+              if (this.deps.releaseInput) await this.deps.releaseInput();
+              if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+              if (!this.viewerDisplay.restore)
+                throw new Error('DESKTOP_VIEWER_DISPLAY_UNAVAILABLE');
+              // Finish the helper's original-mode write before applying a system
+              // mode; otherwise delayed cleanup can overwrite the user's choice.
+              const restored = await this.viewerDisplay.restore(current);
+              if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+              if (restored.width <= 0 || restored.height <= 0)
+                throw new Error('DESKTOP_DISPLAY_MISSING');
+              const restoredCaps = await this.deps.capabilities();
+              if (!restoredCaps.displays.some((display) => display.id === active.sourceDisplayId))
+                throw new Error('DESKTOP_DISPLAY_MISSING');
+              this.viewerDisplay = null;
+              active.display = restored;
+            } finally {
+              this.displayChanging = false;
+            }
+          }
+          await this.deps.resolution(active.sourceDisplayId, request.modeId, beforeChange);
+          return { ok: true };
+        } catch (error) {
+          if (restoringViewer && current()) this.stop(peer, false, 'display-failed');
+          throw error;
+        }
+      }
+      case 'offer': {
+        const sdp = await this.deps.offer(
+          active,
+          request.sdp,
+          request.settings,
+          request.cursorOverlay,
+          request.attemptId,
+        );
+        this.require(peer, request.lease);
+        return { sdp };
+      }
+      case 'ice': {
+        if (!this.deps.ice) throw new Error('DESKTOP_VIDEO_UNAVAILABLE');
+        const result = await this.deps.ice(request);
+        this.require(peer, request.lease);
+        return result;
+      }
+    }
+  }
+}

@@ -1,10 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
+import { serializeMobileDebugRecord } from '@/debug/mobileDebugRecord';
 import {
   ApiError,
   apiFetchRaw,
   registerAccountUnavailableHandler,
 } from '@/api/client';
+import { __testing as relayRoutingTesting, setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -15,6 +18,48 @@ describe('apiFetchRaw', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    setMobileDebugSink(undefined);
+  });
+
+  it.each([
+    { response: new Response('private response body'), logged: 'SyntaxError' },
+    { response: { ok: true, status: 200,
+      json: async () => { throw new TypeError('response stream closed'); } }, logged: 'response stream closed' },
+  ])(
+    'rejects a failed successful-response body and logs its cause without body excerpts: $logged', async ({ response, logged }) => {
+      const logs: string[] = [];
+      setMobileDebugSink((level, scope, args) => { logs.push(serializeMobileDebugRecord(level, scope, args)); });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+      await expect(apiFetchRaw('/api/resource', { baseUrl: 'https://api.example.invalid' }))
+        .rejects.toMatchObject({ code: 'INVALID_RESPONSE', status: 200 });
+      expect(logs.join('')).toContain(logged);
+      expect(logs.join('')).not.toContain('private response body');
+    },
+  );
+
+  it('logs the original transport cause through the existing redactor before mapping the UI error', async () => {
+    const logs: string[] = [];
+    setMobileDebugSink((level, scope, args) => { logs.push(serializeMobileDebugRecord(level, scope, args)); });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network request failed', {
+      cause: new Error('proxy rejected CONNECT https://api.example.invalid/?key=private-key'),
+    })));
+    await expect(apiFetchRaw('/api/resource', { baseUrl: 'https://api.example.invalid' }))
+      .rejects.toMatchObject({ code: 'NETWORK_UNAVAILABLE' });
+    expect(logs.join('')).toContain('proxy rejected CONNECT');
+    expect(logs.join('')).not.toContain('private-key');
+  });
+
+  it('still accepts an explicitly empty 204 response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(apiFetchRaw('/api/resource', { baseUrl: 'https://api.example.invalid' })).resolves.toBeNull();
+  });
+
+  it('sends extra headers without letting them replace auth or content type', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    vi.stubGlobal('fetch', fetch);
+    await apiFetchRaw('/v1/preferences', { baseUrl: 'https://chat.example.invalid', token: 'tok',
+      headers: { 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer other', 'Content-Type': 'text/plain' } });
+    expect(fetch.mock.calls[0]![1].headers).toMatchObject({ 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer tok', 'Content-Type': 'application/json' });
   });
 
   it('classifies RN offline failures as a typed NETWORK_UNAVAILABLE ApiError (中文文案,可被重试层识别)', async () => {
@@ -61,6 +106,77 @@ describe('apiFetchRaw', () => {
       },
       body: undefined,
     }));
+  });
+
+  it('passes no-store to fetch and HTTP cache directives for native transports', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ iceServers: [], expiresAt: null }),
+    } as Response));
+    vi.stubGlobal('fetch', fetchMock);
+    await apiFetchRaw('/api/device-link/ice-servers', {
+      baseUrl: 'https://relay.example.com',
+      token: 'access-token',
+      cache: 'no-store',
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://relay.example.com/api/device-link/ice-servers',
+      expect.objectContaining({
+        cache: 'no-store',
+        headers: {
+          Authorization: 'Bearer access-token',
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store',
+          Pragma: 'no-cache',
+        },
+      }),
+    );
+  });
+
+  // PR #7145 r4371434693: caller cancellation must reach native fetch and
+  // settle promptly even if transport ignores abort; existing tests only timed out.
+  it.each([0, 100])('aborts caller-owned requests without a timeout/auth side effect (timeout=%s)', async timeoutMs => {
+    vi.useFakeTimers();
+    let nativeSignal: AbortSignal | null | undefined;
+    let finish!: (response: Response) => void;
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+      nativeSignal = init.signal; return new Promise<Response>(resolve => { finish = resolve; });
+    }));
+    const terminal = vi.fn(); const dispose = registerAccountUnavailableHandler(terminal);
+    const controller = new AbortController();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal, timeoutMs });
+    void request.catch(() => {});
+    try {
+      controller.abort();
+      expect(nativeSignal?.aborted).toBe(true);
+      await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+      finish(new Response(JSON.stringify({ error: { code: 'ACCOUNT_UNAVAILABLE' } }), { status: 401 }));
+      await Promise.resolve(); await Promise.resolve();
+      expect(terminal).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+    } finally { dispose(); finish(new Response('{}')); }
+  });
+
+  it('cancels while the response body is still pending', async () => {
+    vi.useFakeTimers();
+    let startedBody!: () => void;
+    const bodyStarted = new Promise<void>(resolve => { startedBody = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: () => {
+      startedBody(); return new Promise(() => {});
+    } })));
+    const controller = new AbortController();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal });
+    await bodyStarted; controller.abort();
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not start a fetch after its caller already cancelled', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(() => new Promise<Response>(() => {})); vi.stubGlobal('fetch', fetch);
+    const controller = new AbortController(); controller.abort();
+    const request = apiFetchRaw('/v1/media', { baseUrl: 'https://chat.example.invalid', signal: controller.signal }).catch(error => error);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(request).resolves.toMatchObject({ name: 'AbortError' });
   });
 
   it('aborts hung requests instead of leaving the UI in a connecting state', async () => {
@@ -112,10 +228,13 @@ describe('apiFetchRaw', () => {
   });
 
   it('parses top-level device-link relay errors', async () => {
+    const logs: string[] = [];
+    setMobileDebugSink((level, scope, args) => { logs.push(serializeMobileDebugRecord(level, scope, args)); });
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: false,
       status: 403,
-      json: async () => ({ code: 'REMOTE_DISABLED', message: 'remote disabled' }),
+      json: async () => ({ code: 'REMOTE_DISABLED', message: 'remote disabled',
+        details: { reason: 'private server details' } }),
     } as Response)));
 
     await expect(apiFetchRaw('/api/device-link/devices', {
@@ -124,7 +243,9 @@ describe('apiFetchRaw', () => {
       code: 'REMOTE_DISABLED',
       status: 403,
       message: 'remote disabled',
+      details: { reason: 'private server details' },
     });
+    expect(logs).toEqual([]);
   });
 
   it('notifies the terminal auth boundary for ACCOUNT_UNAVAILABLE', async () => {
@@ -161,5 +282,48 @@ describe('apiFetchRaw', () => {
     } finally {
       dispose();
     }
+  });
+});
+
+// Self-hosted relay (docs/self-hosted-relay-plan.md §5.3, §8): every device-link REST consumer goes
+// through apiFetchRaw, so this is where the account token must never reach a self-hosted relay and
+// where a relay 401 must lose any meaning for the Cindy account (no refresh code, no sign-out).
+describe('apiFetchRaw with a self-hosted relay', () => {
+  const RELAY = 'https://relay.home.example';
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    relayRoutingTesting.reset();
+  });
+
+  it('sends the relay credential instead of the account token; a relay 401 cannot sign the account out', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: RELAY, credential: 'relay-credential', signing: null });
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'ACCOUNT_UNAVAILABLE' } }), { status: 401 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const terminal = vi.fn();
+    const dispose = registerAccountUnavailableHandler(terminal);
+    try {
+      await expect(apiFetchRaw('/api/device-link/devices', { baseUrl: RELAY, token: 'account-token' }))
+        .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_INVALID', status: 401 });
+      const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+      expect(headers.Authorization).toBe('CindyRelay relay-credential');
+      expect(JSON.stringify(headers)).not.toContain('account-token');
+      expect(terminal).not.toHaveBeenCalled();
+    } finally { dispose(); }
+  });
+
+  it('never sends the account token to a known relay without a usable credential', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    // Credential missing on this phone (e.g. restored backup without THIS_DEVICE_ONLY keychain items).
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: RELAY, credential: null, signing: null });
+    await expect(apiFetchRaw('/api/device-link/devices', { baseUrl: RELAY, token: 'account-token' }))
+      .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_UNAVAILABLE' });
+    // Switched back to the official relay: a late request still holding the relay address stays blocked.
+    setActiveSelfHostedRelay(null);
+    await expect(apiFetchRaw('/api/device-link/media', { baseUrl: 'https://RELAY.home.example/', token: 'account-token' }))
+      .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_UNAVAILABLE' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

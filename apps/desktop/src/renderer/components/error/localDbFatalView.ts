@@ -8,11 +8,16 @@
  *   与 UpdateBanner 一致此时禁止 relaunch，防止装到旧补丁）——按钮转圈等待。
  * - `no-update`：无补丁可装（idle/error）——引导「重新检查更新」。
  */
-export type LocalDbFatalView = 'install-update' | 'preparing-update' | 'no-update';
+export type LocalDbFatalView =
+  'install-update' | 'preparing-update' | 'no-update' | 'retry-local-db';
 
 export type UpdateStatusValue = UpdateStatusPayload['status'];
 
-export function resolveLocalDbFatalView(status: UpdateStatusValue | undefined): LocalDbFatalView {
+export function resolveLocalDbFatalView(
+  status: UpdateStatusValue | undefined,
+  code?: string,
+): LocalDbFatalView {
+  if (code === 'DB_SCHEMA_LOCKED') return 'retry-local-db';
   switch (status) {
     case 'ready':
       return 'install-update';

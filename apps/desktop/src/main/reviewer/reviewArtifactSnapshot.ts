@@ -353,7 +353,7 @@ async function copyOpenFile(
  * approved path after consent cannot change the bytes sent to the model.
  */
 export async function materializeReviewArtifactSnapshots(input: {
-  workingDir: string;
+  workingDir: string | null;
   grant: ReviewExplicitArtifactGrant;
   owner: ReviewRunOwner;
   /** Test seam for deterministic lstat/open replacement coverage. */
@@ -366,7 +366,7 @@ export async function materializeReviewArtifactSnapshots(input: {
   ) {
     throw new Error('Review artifact snapshot owner is not ready');
   }
-  const canonicalWorkingDir = await fs.realpath(input.workingDir).catch(() => null);
+  const canonicalWorkingDir = input.workingDir ? await fs.realpath(input.workingDir).catch(() => null) : null;
   const snapshotPaths = new Map<string, string>();
   const liveDirectoryPaths: string[] = [];
   let snapshotRoot: string | null = null;

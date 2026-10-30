@@ -41,6 +41,7 @@ function makeSlot(
   let clock = 0;
   const deps: WorkspaceSlotDeps = {
     getGhost: () => workspaceGhost(),
+    getMutationTarget: () => 'original-installation',
     showDirectoryDialog: vi.fn(async () => '/Users/me/projects/demo'),
     resolveCallContext: vi.fn(() => ({ ghostId: 'ws-ghost', sessionId: 'sess-1' })),
     getSessionDirInfo: vi.fn(async () => ({
@@ -65,6 +66,130 @@ const DIR_REQ = {
   dir: '/Users/me/other/repo',
   callId: 'call-1',
 } as const;
+
+describe('workspace installed target boundary', () => {
+  it('does not grant a late selection after the plugin is disabled without a new receipt', async () => {
+    let enabled = true;
+    let finishDialog!: (directory: string) => void;
+    const service = makeService();
+    const { slot } = makeSlot({
+      getGhost: () => workspaceGhost({ enabled }),
+      showDirectoryDialog: () => new Promise<string>((resolve) => { finishDialog = resolve; }),
+    }, service);
+    const pending = slot.handleRequest('ws-ghost', PICK_REQ);
+    enabled = false;
+    finishDialog('/Users/me/projects/demo');
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unavailable installed target before asking for a directory', async () => {
+    const service = makeService();
+    const { slot, deps } = makeSlot({ getMutationTarget: () => null }, service);
+    expect(await slot.handleRequest('ws-ghost', PICK_REQ)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(deps.showDirectoryDialog).not.toHaveBeenCalled();
+    expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+  });
+
+  it.each(['relocated-installation', 'replacement-source', 'new-owner', null])(
+    'cancels a late directory selection when the target becomes %s', async (nextTarget) => {
+      let target: string | null = 'original-installation';
+      let finishDialog!: (directory: string) => void;
+      const service = makeService();
+      const { slot } = makeSlot({
+        getMutationTarget: () => target,
+        showDirectoryDialog: () => new Promise<string>((resolve) => { finishDialog = resolve; }),
+      }, service);
+      const pending = slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true });
+      target = nextTarget;
+      finishDialog('/Users/me/projects/demo');
+      expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+      expect(service.createDraftSession).not.toHaveBeenCalled();
+      expect(service.focusSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['reuse', 'create'] as const)('does not %s after the target changes during lookup', async (outcome) => {
+    let target = 'original-installation';
+    const service = makeService({
+      findActiveSessionByWorkdir: vi.fn(async () => {
+        target = 'replacement-source';
+        return outcome === 'reuse' ? 'existing-session' : null;
+      }),
+    });
+    const { slot } = makeSlot({ getMutationTarget: () => target }, service);
+    expect(await slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('passes the installed target guard to draft creation and refuses late focus', async () => {
+    let target = 'original-installation';
+    const service = makeService({
+      createDraftSession: vi.fn(async ({ shouldContinue }) => {
+        expect(shouldContinue?.()).toBe(true);
+        target = 'replacement-source';
+        expect(shouldContinue?.()).toBe(false);
+        return 'late-session';
+      }),
+    });
+    const { slot } = makeSlot({ getMutationTarget: () => target }, service);
+    expect(await slot.handleRequest('ws-ghost', { ...PICK_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the installed target when an authorized request leaves the ensure queue', async () => {
+    let secondCurrent = true;
+    let finishFirst!: (sessionId: string) => void;
+    const service = makeService({
+      createDraftSession: vi.fn(async () => 'second-session')
+        .mockImplementationOnce(() => new Promise<string>((resolve) => { finishFirst = resolve; })),
+    });
+    const { slot, deps } = makeSlot({
+      getMutationTarget: (id) => id === 'second-ghost' && !secondCurrent ? 'replacement-source' : id,
+    }, service);
+    const first = slot.handleRequest('first-ghost', PICK_REQ);
+    await vi.waitFor(() => expect(service.createDraftSession).toHaveBeenCalledOnce());
+    const second = slot.handleRequest('second-ghost', { ...PICK_REQ, focus: true });
+    await vi.waitFor(() => expect(deps.showDirectoryDialog).toHaveBeenCalledTimes(2));
+    secondCurrent = false;
+    finishFirst('first-session');
+    expect(await first).toMatchObject({ ok: true });
+    expect(await second).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.findActiveSessionByWorkdir).toHaveBeenCalledOnce();
+    expect(service.createDraftSession).toHaveBeenCalledOnce();
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['stat', 'session', 'review', 'confirm'] as const)(
+    'stops a dir request when its installed target changes during %s', async (phase) => {
+      let target = 'original-installation';
+      const service = makeService({ reviewPermissionAction: vi.fn(async () => {
+        if (phase === 'review') target = 'replacement-source';
+        return { verdict: 'ask' as const };
+      }) });
+      const { slot, deps } = makeSlot({
+        getMutationTarget: () => target,
+        resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+        isInsideWorkdir: () => false,
+        statDir: vi.fn(async () => { if (phase === 'stat') target = 'replacement-source'; return 'ok' as const; }),
+        getSessionDirInfo: vi.fn(async () => {
+          if (phase === 'session') target = 'replacement-source';
+          return { workingDir: '/Users/me/projects/demo', remoteHostId: null };
+        }),
+        confirmDir: vi.fn(async () => { target = 'replacement-source'; return { ok: true as const }; }),
+      }, service);
+      expect(await slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      expect(deps.getSessionDirInfo).toHaveBeenCalledTimes(phase === 'stat' ? 0 : 1);
+      expect(service.reviewPermissionAction).toHaveBeenCalledTimes(phase === 'stat' || phase === 'session' ? 0 : 1);
+      expect(deps.confirmDir).toHaveBeenCalledTimes(phase === 'confirm' ? 1 : 0);
+      expect(service.findActiveSessionByWorkdir).not.toHaveBeenCalled();
+      expect(service.createDraftSession).not.toHaveBeenCalled();
+      expect(service.focusSession).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe('workspaceSlot · 资格审与载荷校验', () => {
   it('未声明 workspace 能力 / 未启用 一律 PERMISSION_DENIED', async () => {
@@ -117,6 +242,7 @@ describe('workspaceSlot · pick 流(亲选即授权)', () => {
       dirAbs: '/Users/me/projects/demo',
       title: '选择项目',
       ghostId: 'ws-ghost',
+      shouldContinue: expect.any(Function),
     });
     expect(JSON.stringify(result)).not.toContain('/Users');
   });
@@ -377,5 +503,94 @@ describe('workspaceSlot · 骚扰钳制与失败面', () => {
     const result = await slot.handleRequest('ws-ghost', PICK_REQ);
     expect(result).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
     expect(JSON.stringify(result)).not.toContain('secret');
+  });
+});
+
+
+describe('workspace Auto review', () => {
+  it('does not focus after the call ends while creation is pending', async () => {
+    let active = true;
+    let finish!: (id: string) => void;
+    const service = makeService({ createDraftSession: vi.fn(() => new Promise<string>((resolve) => { finish = resolve; })) });
+    const { slot } = makeSlot({ resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1' } : null }, service);
+    const result = slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true });
+    await vi.waitFor(() => expect(service.createDraftSession).toHaveBeenCalledOnce());
+    const params = vi.mocked(service.createDraftSession).mock.calls[0][0];
+    expect(params.shouldContinue?.()).toBe(true);
+    active = false;
+    expect(params.shouldContinue?.()).toBe(false);
+    finish('committed-before-cancel');
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it('returns cancellation when the creation commit was prevented', async () => {
+    const service = makeService({ createDraftSession: vi.fn(async () => null) });
+    const { slot } = makeSlot({}, service);
+    expect(await slot.handleRequest('ws-ghost', { ...DIR_REQ, focus: true })).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.focusSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['allow', 'block', 'ask'] as const)('obeys %s for an outside directory', async (verdict) => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict, reason: 'reviewed' }));
+    const service = makeService({ reviewPermissionAction });
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+    }, service);
+    const result = await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).toHaveBeenCalledWith('sess-1', 'instance-1', expect.objectContaining({ kind: 'other', description: expect.stringContaining(DIR_REQ.dir) }));
+    expect(result.ok).toBe(verdict !== 'block');
+    expect(deps.confirmDir).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
+    expect(service.createDraftSession).toHaveBeenCalledTimes(verdict === 'block' ? 0 : 1);
+  });
+  it('does not create a workspace when the originating call ends during review', async () => {
+    let active = true;
+    const service = makeService({ reviewPermissionAction: async () => { active = false; return { verdict: 'allow' }; } });
+    const { slot } = makeSlot({ isInsideWorkdir: () => false,
+      resolveCallContext: () => active ? { ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' } : null,
+    }, service);
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+  });
+  it('does not review without a runtime instance identity', async () => {
+    const reviewPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false }, makeService({ reviewPermissionAction }));
+    await slot.handleRequest('ws-ghost', DIR_REQ);
+    expect(reviewPermissionAction).not.toHaveBeenCalled();
+    expect(deps.confirmDir).toHaveBeenCalledOnce();
+  });
+  it('rejects unavailable live authorization without showing confirmation or creating a draft', async () => {
+    const service = makeService({ captureSessionAuthorization: () => null });
+    const { slot, deps } = makeSlot({ isInsideWorkdir: () => false }, service);
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(deps.confirmDir).not.toHaveBeenCalled();
+    expect(service.createDraftSession).not.toHaveBeenCalled();
+  });
+  it.each(['review', 'confirm', 'lookup', 'commit'] as const)('rechecks captured authority after %s while the call remains active', async (phase) => {
+    let current = true;
+    const service = makeService({
+      captureSessionAuthorization: () => () => current,
+      reviewPermissionAction: async () => {
+        if (phase === 'review') current = false;
+        return { verdict: phase === 'confirm' ? 'ask' : 'allow' };
+      },
+      findActiveSessionByWorkdir: vi.fn(async () => {
+        if (phase === 'lookup') current = false;
+        return null;
+      }),
+      createDraftSession: vi.fn(async ({ shouldContinue }) => {
+        if (phase === 'commit') current = false;
+        expect(shouldContinue?.()).toBe(false);
+        return null;
+      }),
+    });
+    const { slot } = makeSlot({
+      isInsideWorkdir: () => false,
+      resolveCallContext: () => ({ ghostId: 'ws-ghost', sessionId: 'sess-1', sessionInstanceId: 'instance-1' }),
+      confirmDir: async () => { current = false; return { ok: true }; },
+    }, service);
+    expect(await slot.handleRequest('ws-ghost', DIR_REQ)).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(service.createDraftSession).toHaveBeenCalledTimes(phase === 'commit' ? 1 : 0);
+    expect(service.focusSession).not.toHaveBeenCalled();
   });
 });

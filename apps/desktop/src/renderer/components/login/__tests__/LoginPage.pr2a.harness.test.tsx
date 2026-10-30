@@ -33,6 +33,7 @@ const loginHook = vi.hoisted(() => ({
     clearError: vi.fn(),
   },
 }));
+const flashScrollbar = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -51,6 +52,7 @@ vi.mock('../../../../shared/brandRegion', () => ({
 }));
 vi.mock('@/hooks/useLogin', () => ({ useLogin: () => loginHook.value }));
 vi.mock('@/components/title-bar/WindowControls', () => ({ WindowControls: () => null }));
+vi.mock('@/lib/scrollbarAutoHide', () => ({ flashScrollbar }));
 
 import { LoginPage } from '../LoginPage';
 
@@ -175,14 +177,14 @@ describe('method-choice', () => {
     const hint = screen.getByTestId('login-sso-required-hint');
     expect(hint.textContent).toBe('login.ssoRequired');
     expect(hint.style.top).toBe('380px');
-    expect(hint.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(hint.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(screen.queryByTestId('login-method-personal')).toBeNull();
   });
 });
 
 /* ── verification-code 三态 + 倒计时接线(Step 3a) ── */
 describe('verification-code', () => {
-  it('empty:输入空 → 登录钮 disabled;phone 提交成功后入场即带 42s 倒计时', async () => {
+  it('empty:输入空 → 登录钮 disabled;phone 提交成功后入场即带 60s 倒计时', async () => {
     vi.useFakeTimers();
     // 全链时序:identifier(phone)提交 request-code 成功 → arm → 状态切 verification
     const providers = await scenarioClient('providers:both').getProviders();
@@ -207,17 +209,24 @@ describe('verification-code', () => {
 
     expect((screen.getByTestId('login-input') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('login.signIn').closest('button')?.disabled).toBe(true);
-    // 倒计时首帧 42(247:1614 样式:placeholder 色无 underline 不可交互)
+    // 倒计时首帧 60(247:1614 样式:次要档、无 underline、不可交互)
     const countdown = screen.getByTestId('login-resend-countdown');
-    expect(countdown.textContent).toBe('login.resendCountdown#42');
-    expect(countdown.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(countdown.textContent).toBe('login.resendCountdown#60');
+    expect(countdown.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(countdown.className).not.toContain('underline');
     // tick 后逐秒重算;到 0 切重发链接
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#41',
+      'login.resendCountdown#59',
     );
     act(() => vi.advanceTimersByTime(41_000));
+    expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
+      'login.resendCountdown#18',
+    );
+    expect(screen.queryByTestId('login-resend-link')).toBeNull();
+    act(() => vi.advanceTimersByTime(17_000));
+    expect(screen.queryByTestId('login-resend-link')).toBeNull();
+    act(() => vi.advanceTimersByTime(1_000));
     expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
     expect(screen.getByTestId('login-resend-link')).toBeTruthy();
   });
@@ -244,7 +253,7 @@ describe('verification-code', () => {
     expect(spin.className).toContain('motion-reduce:animate-none');
   });
 
-  it('identifier → verification-code 自动起算 42s(含 AuthContext 自动发码路径)', async () => {
+  it('identifier → verification-code 自动起算 60s(含 AuthContext 自动发码路径)', async () => {
     const view = mount(await identifierState());
     expect(screen.queryByTestId('login-resend-countdown')).toBeNull();
     loginHook.value = {
@@ -253,7 +262,7 @@ describe('verification-code', () => {
     };
     view.rerender(<LoginPage />);
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#42',
+      'login.resendCountdown#60',
     );
   });
 
@@ -271,10 +280,10 @@ describe('verification-code', () => {
       expect.objectContaining({ type: 'request-code', kind: 'email' }),
     );
     expect(screen.getByTestId('login-resend-countdown').textContent).toBe(
-      'login.resendCountdown#42',
+      'login.resendCountdown#60',
     );
     // 走到 0 → 再点一次但失败:不 arm,链接保持
-    act(() => vi.advanceTimersByTime(42_000));
+    act(() => vi.advanceTimersByTime(60_000));
     dispatchWithResult.mockResolvedValueOnce({ success: false, code: 'RATE_LIMITED' });
     await act(async () => {
       fireEvent.click(screen.getByTestId('login-resend-link'));
@@ -286,17 +295,67 @@ describe('verification-code', () => {
 
 /* ── account-selection / binding / browser-redirect / error / completed ── */
 describe('account-selection', () => {
-  it('outcome select_account → 双身份行 148/268(demo 行样式,左 icon 企业默认形)', async () => {
+  it('outcome select_account → 双身份行保持面板坐标 148/268', async () => {
     mount(await outcomeState('outcome:select-account'));
     expect(screen.getByTestId('login-panel-account-selection')).toBeTruthy();
+    const list = screen.getByTestId('login-account-list');
     const rows = screen.getAllByTestId('login-method-row');
     expect(rows.length).toBe(2);
-    expect(rows[0].style.top).toBe('148px');
-    expect(rows[1].style.top).toBe('268px');
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[0].style.top)).toBe(148);
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[1].style.top)).toBe(268);
+    expect(list.style.overflowY).toBe('hidden');
     expect(rows[0].textContent).toContain('Scenario User');
     expect(rows[0].textContent).toContain('login.personalAccount');
     expect(rows[1].textContent).toContain('Scenario Org User');
     expect(rows[1].textContent).toContain('Example Org');
+    expect(flashScrollbar).not.toHaveBeenCalled();
+  });
+
+  it('五个身份都能通过面板内滚动区域访问并选择第四个企业', async () => {
+    const dispatch = vi.fn(async () => true);
+    mount(
+      {
+        step: 'account-selection',
+        accounts: [
+          {
+            id: 'personal',
+            kind: 'personal',
+            role: 'owner',
+            displayName: 'weikailing',
+            email: 'weikailing@xd.com',
+            orgId: null,
+            orgName: null,
+          },
+          ...['心动网络', '平台测试企业', 'XDS', '22'].map((orgName, index) => ({
+            id: `org-${index + 1}`,
+            kind: 'org' as const,
+            role: 'admin' as const,
+            displayName: 'weikailing',
+            email: 'weikailing@xd.com',
+            orgId: `org-${index + 1}`,
+            orgName,
+          })),
+        ],
+      },
+      { dispatch },
+    );
+
+    const list = screen.getByTestId('login-account-list');
+    const rows = screen.getAllByTestId('login-method-row');
+    const content = list.firstElementChild as HTMLElement;
+    expect(rows).toHaveLength(5);
+    expect(list.style.overflowY).toBe('auto');
+    expect(Number.parseInt(content.style.height)).toBeGreaterThan(
+      Number.parseInt(list.style.height),
+    );
+    expect(Number.parseInt(list.style.top) + Number.parseInt(rows[2].style.top)).toBe(388);
+    expect(rows[3].textContent).toContain('XDS');
+    await vi.waitFor(() => expect(flashScrollbar).toHaveBeenCalledWith(list));
+
+    await act(async () => {
+      fireEvent.click(rows[3]);
+    });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'select-account', accountId: 'org-3' });
   });
 });
 
@@ -322,7 +381,7 @@ describe('binding', () => {
     expect(screen.getByText('login.binding.emailTitle')).toBeTruthy();
     const sentTo = screen.getByTestId('login-binding-sent-to');
     expect(sentTo.textContent).toBe('login.codeSentTo#bind@example.com');
-    expect(sentTo.getAttribute('style')).toContain('var(--login-control-placeholder)');
+    expect(sentTo.getAttribute('style')).toContain('var(--login-secondary-text)');
     expect(screen.queryByTestId('login-resend-link')).toBeNull();
     const button = screen.getByText('login.completeSignIn').closest('button') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
@@ -339,7 +398,9 @@ describe('browser-redirect / error / completed', () => {
     const ring = screen.getByRole('status');
     expect(ring.style.top).toBe('158px');
     expect(ring.style.width).toBe('64px');
-    expect(screen.getByText('login.cancel')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'login.cancel' }).dataset.testid).toBe(
+      'login-back-button',
+    );
   });
 
   it('error 全屏态:暂时无法登录 + 重试钮 + 错误码文案位(380)', () => {

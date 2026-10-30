@@ -8,12 +8,23 @@ import { DEEP_LINK_URL_PREFIX } from '../shared/deepLinkSchemes';
 import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
 
 export type OAuthResultPageLang = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko';
+
+/** Receipt is not token-exchange success. The authoritative result stays in the cloud card. */
+export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: string; body: string } {
+  return {
+    zh: { title: '已收到授权回调', body: '请返回 Cindy，查看远程设备的授权结果。' },
+    'zh-TW': { title: '已收到授權回呼', body: '請返回 Cindy，查看遠端裝置的授權結果。' },
+    en: { title: 'Authorization callback received', body: 'Return to Cindy to check the authorization result on the remote device.' },
+    ja: { title: '認証コールバックを受信しました', body: 'Cindy に戻り、リモートデバイスの認証結果を確認してください。' },
+    ko: { title: '인증 콜백을 받았습니다', body: 'Cindy로 돌아가 원격 기기의 인증 결과를 확인하세요.' },
+  }[lang];
+}
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
 export type OAuthResultPageTheme = 'light' | 'dark';
 
 /** 业务来源(三层 adapter 之一,PR3)。目前仅 desktop-login 切换到 wave4 新品牌卡。 */
 export type OAuthResultPageKind =
-  'desktop-login' | 'ghost-oauth' | 'claude-oauth' | 'xai-oauth' | 'generic-oauth';
+  'desktop-login' | 'ghost-oauth' | 'xai-oauth' | 'generic-oauth';
 
 /** 视觉三分类(三层 adapter 之三,callback-pages-classification.md 页壳改造点 1)。 */
 export type OAuthResultVisualKind = 'success' | 'failure' | 'neutral';
@@ -33,6 +44,8 @@ export interface OAuthResultPageInput {
   body: string;
   /** Raw diagnostic text rendered as escaped monospace detail. */
   detail?: string;
+  /** Success-only countdown template; must contain a `{{count}}` placeholder. */
+  closeCountdown?: string;
   /** Optional CTA, normally a cindy://focus/... link back to the app. */
   action?: { href: string; label: string };
   /** Preview-only override. Production omits it and follows the OS setting. */
@@ -40,7 +53,7 @@ export interface OAuthResultPageInput {
   /**
    * 三层 adapter(PR3,全部 optional——旧调用不传即 legacy 页壳,ghost/claude/
    * xai/generic 视觉零变化):
-   * - pageKind:业务来源;'desktop-login' → wave4 新品牌卡(680×680 r36 +
+   * - pageKind:业务来源;'desktop-login' → wave4 新品牌卡(成功 560×500、失败/警告 680×680,
    *   chibi 立绘 + U-10 跨视口缩放),其余值与缺省 = legacy 页壳。
    * - copyKind:文案族标签,不参与渲染分支,仅输出为 data-cindy-oauth-copy
    *   供测试与验收矩阵定位文案来源。
@@ -310,7 +323,9 @@ const RESULT_ICON: Record<OAuthResultPageVariant, string> = {
 };
 
 /**
- * 结果页内联布局脚本(U-10:整卡等比缩放 + 水平居中)。
+ * 结果页内联布局脚本(U-10:整卡等比缩放 + 水平居中),并在登录成功页尝试
+ * 自动关闭当前浏览器页面。成功卡和失败卡的尺寸由页面标记提供,这样成功态
+ * 可以在移除 CTA 后收紧卡片而不改变失败态的既有几何。
  *
  * 抽成导出常量而不是直接内联在模板串里,是为了让**需要它 CSP sha256 的一方直接对
  * 这段源文本取值**——托管回调把结果页搬到 auth-server 后,导出脚本要为每页算
@@ -318,25 +333,43 @@ const RESULT_ICON: Record<OAuthResultPageVariant, string> = {
  * 也会被 CodeQL 当成「对渲染结果做哈希」误报。直接引用常量则两端拿到同一份逐字节
  * 内容。
  *
- * 改动这里等于改动 CSP hash,必须重新导出模板并同步到 auth-server。
+ * `window.close()` 受浏览器的 script-closable 限制,失败时无副作用,正文仍告知用户
+ * 手动关闭页面。改动这里等于改动 CSP hash,必须重新导出模板并同步到 auth-server。
  */
 export const LOGIN_CALLBACK_LAYOUT_SCRIPT = `
-/* U-10 demo 冻结公式:卡内 680 几何零响应式,整卡等比缩放,transform-origin=top
-   center 语义经「缩放尺寸 wrapper + margin auto」实现水平居中;stage 布局高度取
-   缩放后尺寸,缩到仍放不下时溢出走 body 纵向滚动,不裁 CTA。 */
+/* U-10:整卡等比缩放,transform-origin=top center 语义经「缩放尺寸 wrapper +
+   margin auto」实现水平居中;stage 布局尺寸取页面标记,缩到仍放不下时溢出走
+   body 纵向滚动,不裁内容。 */
 (function(){
-var card=document.getElementById('card'),stage=document.getElementById('stage');
+var card=document.getElementById('card'),stage=document.getElementById('stage'),countdown=document.getElementById('close-countdown');
+var cardWidth=Number(stage.dataset.cardWidth)||680,cardHeight=Number(stage.dataset.cardHeight)||680;
 function fit(){
 var w=window.innerWidth,h=window.innerHeight;
 var topOffset=w<760?88:80;
-var scale=Math.min(1,(w-32)/680,(h-topOffset-24)/680);
+var scale=Math.min(1,(w-32)/cardWidth,(h-topOffset-24)/cardHeight);
 card.style.transform='scale('+scale+')';
-stage.style.width=(680*scale)+'px';
-stage.style.height=(680*scale)+'px';
+stage.style.width=(cardWidth*scale)+'px';
+stage.style.height=(cardHeight*scale)+'px';
 stage.style.marginTop=topOffset+'px';
 }
 window.addEventListener('resize',fit);
 fit();
+if(document.body.dataset.cindyOauthResult==='success'&&countdown){
+var remaining=3,timer;
+var template=countdown.dataset.template||'';
+function updateCountdown(){countdown.textContent=template.replace('{{count}}',String(remaining));}
+function attemptClose(){
+window.clearInterval(timer);
+countdown.remove();
+try{window.close();}catch(_){/* Browser may reject closing this tab. */}
+}
+updateCountdown();
+timer=window.setInterval(function(){
+remaining-=1;
+if(remaining<=0){attemptClose();return;}
+updateCountdown();
+},1000);
+}
 })();
 `;
 
@@ -344,11 +377,12 @@ fit();
  * wave4 新品牌回调卡(仅 pageKind='desktop-login',PR3)。
  *
  * 参数权威:callback-pages-classification.md「新设计三类卡片规格」(figma §6.1,
- * 卡 680×680 r36;White 卡 #FBFBFB/#D4D4D4、Dark 卡 #312F2F/#434343;页面底色
- * 浅 #EEEEEE/深 #2A2828,design.md §7.4 条 1)+ U-10 裁决(demo 冻结公式:
- * topOffset = w<760?88:80;scale = min(1,(w-32)/680,(h-topOffset-24)/680),
- * transform-origin=top center,水平居中,卡内 680 几何零响应式,缩不下时纵向
- * 滚动不裁 CTA)。色值按 token-decision-table 决策以可序列化常量内联(系统
+ * 失败/警告卡 680×680 r36;成功卡在移除 CTA 后采用 560×500 紧凑流式布局,
+ * 这是 2026-09-02 登录成功回调 UX 裁决对旧成功态 Figma 帧的覆盖。
+ * 2026-10-27 起卡片、描边、CTA 与页面底色同登录页墨水口径:卡 #FDFDF8 / #1F1F1F +
+ * 墨水线,CTA 同主按钮,页面底 = login-bg-base #F2F2ED / #181818)+ U-10 裁决(topOffset = w<760?88:80;scale 按
+ * 页面标记的卡片尺寸计算,transform-origin=top center,水平居中,缩不下时纵向
+ * 滚动不裁内容)。色值按 token-decision-table 决策以可序列化常量内联(系统
  * 浏览器页拿不到 renderer token,表内「browser callback main 使用同一份可
  * 序列化常量」)。hover 仅 hover-capable 设备生效(触摸浏览器无 hover 差异)。
  * detail 按 U-2 = 现网行为:错误码单行(nowrap + ellipsis),仍走 escapeHtml。
@@ -359,14 +393,27 @@ function renderBrandLoginCallbackPage(
   input: OAuthResultPageInput,
   visual: OAuthResultVisualKind,
 ): string {
+  const isSuccess = input.variant === 'success';
   const title = escapeHtml(input.title);
   const body = escapeHtml(input.body);
   const detail = input.detail ? `<p class="detail">${escapeHtml(input.detail)}</p>` : '';
-  const action = input.action
-    ? `<a class="cta" href="${escapeHtml(input.action.href)}">${escapeHtml(input.action.label)}</a>`
-    : '';
+  const action =
+    input.variant === 'success'
+      ? ''
+      : input.action
+        ? `<a class="cta" href="${escapeHtml(input.action.href)}">${escapeHtml(input.action.label)}</a>`
+        : '';
   const themeAttr = input.theme ? ` data-theme="${input.theme}"` : '';
   const copyAttr = input.copyKind ? ` data-cindy-oauth-copy="${escapeHtml(input.copyKind)}"` : '';
+  const layoutAttr = isSuccess ? ' data-cindy-oauth-layout="compact"' : '';
+  const cardWidth = isSuccess ? 560 : 680;
+  const cardHeight = isSuccess ? 500 : 680;
+  const cardClass = isSuccess ? 'card success' : 'card';
+  const initialCountdown = input.closeCountdown?.replaceAll('{{count}}', '3');
+  const closeCountdown =
+    isSuccess && input.closeCountdown
+      ? `<p class="close-countdown" id="close-countdown" data-template="${escapeHtml(input.closeCountdown)}">${escapeHtml(initialCountdown ?? '')}</p>`
+      : '';
   return `<!DOCTYPE html>
 <html lang="${escapeHtml(input.htmlLang)}"${themeAttr}>
 <head>
@@ -375,9 +422,9 @@ function renderBrandLoginCallbackPage(
 <meta name="color-scheme" content="light dark">
 <title>${title} · Cindy</title>
 <style>
-:root{color-scheme:light;--page:#eeeeee;--card:#fbfbfb;--card-border:#d4d4d4;--title:#252222;--body:#6f6f6f;--detail:#a3a3a3;--cta:#2a2828;--cta-border:#434343;--cta-text:#d4d4d4;--cta-hover:rgba(255,255,255,.08);--cta-active:rgba(0,0,0,.5)}
-:root[data-theme="dark"]{color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:#d4d4d4;--body:#6f6f6f;--detail:#737373;--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
-@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#2a2828;--card:#312f2f;--card-border:#434343;--title:#d4d4d4;--body:#6f6f6f;--detail:#737373;--cta:#eeeeee;--cta-border:#ffffff;--cta-text:#2a2828;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
+:root{color-scheme:light;--page:#f2f2ed;--card:#fdfdf8;--card-border:rgba(0,0,0,.08);--title:rgba(0,0,0,.88);--body:rgba(0,0,0,.56);--detail:rgba(0,0,0,.44);--cta:#3c3f43;--cta-border:#3c3f43;--cta-text:#fcfcfc;--cta-hover:rgba(0,0,0,.2);--cta-active:rgba(0,0,0,.4)}
+:root[data-theme="dark"]{color-scheme:dark;--page:#181818;--card:#1f1f1f;--card-border:rgba(255,255,255,.1);--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#eeeeee;--cta-text:#151515;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
+@media(prefers-color-scheme:dark){:root:not([data-theme]){color-scheme:dark;--page:#181818;--card:#1f1f1f;--card-border:rgba(255,255,255,.1);--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#eeeeee;--cta-text:#151515;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:var(--page);font-family:"HarmonyOS Sans SC",Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 .stage{position:relative;margin:0 auto 24px}
@@ -387,20 +434,28 @@ h1{position:absolute;left:42px;top:352px;width:598px;height:38px;margin:0;font-s
 .body{position:absolute;left:41px;top:396px;width:599px;height:23px;margin:0;font-size:20px;line-height:23px;font-weight:400;color:var(--body);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .detail{position:absolute;left:41px;top:434px;width:599px;margin:0;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:17px;color:var(--detail);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cta{position:absolute;left:70px;top:529px;width:540px;height:80px;border-radius:40px;background:var(--cta);border:1px solid var(--cta-border);color:var(--cta-text);font-size:24px;font-weight:700;display:grid;place-items:center;text-decoration:none;overflow:hidden}
-.cta::after{content:"";position:absolute;inset:0;border-radius:inherit;opacity:0;transition:opacity .15s ease}
-@media(hover:hover){.cta:hover::after{opacity:1;background:var(--cta-hover)}}
-.cta:active::after{opacity:1;background:var(--cta-active)}
+@media(hover:hover){.cta:hover{background-image:linear-gradient(var(--cta-hover),var(--cta-hover))}}
+.cta:active{background-image:linear-gradient(var(--cta-active),var(--cta-active))}
 .cta:focus-visible{outline:3px solid rgba(59,130,246,.5);outline-offset:3px}
+.card.success{width:560px;height:500px;display:flex;flex-direction:column;align-items:center;padding:48px 40px 44px}
+.card.success .visual{position:static;flex:0 0 240px;width:240px;height:240px}
+.card.success .content{display:flex;flex-direction:column;align-items:center;width:100%;margin-top:24px;gap:10px}
+.card.success h1{position:static;flex:0 0 auto;width:100%;height:auto;margin:0;font-size:32px;line-height:38px;white-space:normal;overflow:visible;text-overflow:clip}
+.card.success .body{position:static;flex:0 0 auto;width:100%;max-width:480px;height:auto;min-height:28px;margin:0;font-size:20px;line-height:28px;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+.card.success .close-countdown{flex:0 0 auto;margin:auto 0 0;color:var(--detail);font-size:16px;line-height:23px;text-align:center;white-space:nowrap}
 </style>
 </head>
-<body data-cindy-oauth-result="${input.variant}" data-cindy-oauth-visual="${visual}"${copyAttr}>
-<div class="stage" id="stage">
-<main class="card" id="card">
+<body data-cindy-oauth-result="${input.variant}" data-cindy-oauth-visual="${visual}"${layoutAttr}${copyAttr}>
+<div class="stage" id="stage" data-card-width="${cardWidth}" data-card-height="${cardHeight}">
+<main class="${cardClass}" id="card">
 <img class="visual" src="${LOGIN_CALLBACK_CHIBI[visual]}" alt="" onerror="this.style.visibility='hidden'">
+<div class="content">
 <h1>${title}</h1>
 <p class="body">${body}</p>
 ${detail}
 ${action}
+</div>
+${closeCountdown}
 </main>
 </div>
 <script>${LOGIN_CALLBACK_LAYOUT_SCRIPT}</script>

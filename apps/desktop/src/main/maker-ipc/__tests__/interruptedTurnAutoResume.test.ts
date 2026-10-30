@@ -5,14 +5,84 @@ import {
   INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
   InterruptedTurnAutoResumeGuard,
   interruptedTurnResumeDelayMs,
+  isAcceptedTurnContinuationOnlyReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   isSubstantiveProgressEvent,
+  shouldPreserveWaitingContinuationOnlyAutoResume,
+  shouldPreserveRuntimeFallbackAutoResume,
 } from '../interruptedTurnAutoResume.js';
+
+describe('runtime fallback rebuild ownership', () => {
+  it.each(['runtime-refresh', 'requested', 'unexpected', 'agent-switch', 'deleted'])('preserves the exact live retry only for its own rebuild: %s', closeReason => {
+    const input = { closeReason, leasedAttemptToken: 1, guardIsCurrentAttempt: true,
+      bookIsCurrentAttempt: true, coordinatorAttemptToken: 1, isAutoResumePending: true, hasLiveSchedule: true };
+    expect(shouldPreserveRuntimeFallbackAutoResume(input)).toBe(['runtime-refresh', 'requested', 'agent-switch'].includes(closeReason));
+    for (const stale of [{ leasedAttemptToken: undefined }, { guardIsCurrentAttempt: false },
+      { bookIsCurrentAttempt: false }, { coordinatorAttemptToken: 2 }, { isAutoResumePending: false }, { hasLiveSchedule: false }]) {
+      expect(shouldPreserveRuntimeFallbackAutoResume({ ...input, ...stale })).toBe(false);
+    }
+  });
+});
 
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  const availabilityError = "Error Code null: Service temporarily unavailable. The model's availability is currently degraded.";
+
+  it('recovers code-less service availability errors and opaque HTTP 503 errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 503 })).toBe(true);
+  });
+
+  it.each([400, 401, 402, 403, 404, 413, 429])(
+    'does not override explicit HTTP %s with availability wording', (errorStatus) => {
+      expect(isInterruptedTurnError({ message: availabilityError, errorStatus })).toBe(false);
+    },
+  );
+
+  it.each(
+    ['authentication_failed', 'authentication_error', 'billing_error', 'rate_limit', 'invalid_request', 'permission_error', 'insufficient_quota', 'context_length_exceeded']
+      .flatMap(sdkError => [undefined, 502, 503, 504, 529].map(errorStatus => ({ sdkError, errorStatus }))),
+  )(
+    'does not override $sdkError with availability wording or HTTP $errorStatus', ({ sdkError, errorStatus }) => {
+      expect(isInterruptedTurnError({ message: availabilityError, sdkError, errorStatus })).toBe(false);
+    },
+  );
+
+  it('leaves account usage limits to the reset-time wait instead of a quick reconnect', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 503, usageLimit: true })).toBe(false);
+    expect(
+      isInterruptedTurnError({ message: availabilityError, codexErrorInfo: 'usageLimitExceeded' }),
+    ).toBe(false);
+  });
+
+  it.each([502, 503, 504, 529])('still recovers HTTP %s without a rejection category', (errorStatus) => {
+    expect(isInterruptedTurnError({ message: 'opaque', sdkError: 'server_error', errorStatus })).toBe(true);
+  });
+
+  it('preserves text compatibility for unclassified server errors', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'Selected model is at capacity.', errorStatus: 500 })).toBe(true);
+    expect(isInterruptedTurnError({ message: 'opaque', errorStatus: 500 })).toBe(false);
+  });
+
+  it('does not layer host retries over exhausted Pi retries', () => {
+    expect(isInterruptedTurnError({ message: availabilityError, reason: 'pi-gateway-drop' })).toBe(false);
+  });
+
+  it('never automatically resumes a detected tool loop, even with network-like text', () => {
+    expect(isInterruptedTurnError({
+      reason: 'tool_use_loop_detected', message: 'Request timed out',
+      toolLoop: { kind: 'rotation', count: 128 },
+    })).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('tool_use_loop_detected')).toBe(false);
+  });
+  it.each(['bridge_upstream_response_idle_timeout', 'bridge_turn_no_event_timeout'])(
+    'does not continue a bridge timeout before the user input has executed: %s', (reason) => {
+    expect(isInterruptedTurnError({ reason, message: 'request timed out' })).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason(reason)).toBe(false);
+  });
   // 2026-07-30 实测的真实形态(Claude Code SDK 2.1.219 + Bedrock):SSE 流被中途切断,
   // terminal_reason='api_error'、sdkError='server_error'、无 HTTP 状态码。这条用例是
   // 回归锚 —— 上游改文案时它会先红。
@@ -66,6 +136,108 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  it('accepts stall / idle timeouts so heartbeat-only zombie running can auto-retry', () => {
+    // 用量心跳不再刷新看门狗之后，这两类 reason 就是「以为还在跑、其实没进展」。
+    // 必须走自动续跑，不能直接把 Continue 交还用户；额度耗尽才停。
+    expect(
+      isInterruptedTurnError({
+        reason: 'turn_no_event_timeout',
+        message: 'This turn produced no activity at all for 45 minutes.',
+      }),
+    ).toBe(true);
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream_response_idle_timeout',
+        message: 'The model stopped responding for a long time.',
+      }),
+    ).toBe(true);
+    expect(isInterruptedTurnError({ reason: 'turn_no_event_timeout' })).toBe(true);
+    expect(isInterruptedTurnError({ reason: 'upstream_response_idle_timeout' })).toBe(true);
+  });
+
+  it('marks accepted-turn timeouts as continuation-only', () => {
+    expect(isAcceptedTurnContinuationOnlyReason('turn_no_event_timeout')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('upstream_response_idle_timeout')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('codex_reconnect_stalled')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('empty-response')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('upstream-overload')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('turn-failed')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason(undefined)).toBe(false);
+  });
+
+  it('preserves waiting continuation-only auto-resume only across unexpected close', () => {
+    const waiting = {
+      closeReason: 'unexpected' as const,
+      leasedAttemptToken: 7,
+      guardIsCurrentAttempt: true,
+      bookIsCurrentAttempt: true,
+      coordinatorAttemptToken: 7,
+      hasLiveSchedule: true,
+      hasQueuedAutoResume: false,
+      isContinuationOnly: true,
+    };
+    // Session stall drain / Codex idle ACK-fail close / Claude interrupt-reject drain
+    // 都是 vendor 自己 close，Maker 没有显式 reason → unexpected。
+    expect(shouldPreserveWaitingContinuationOnlyAutoResume(waiting)).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, closeReason: 'requested' }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, closeReason: 'agent-switch' }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        leasedAttemptToken: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        leasedAttemptToken: undefined,
+        coordinatorAttemptToken: null,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, hasLiveSchedule: false }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+        closeReason: 'requested',
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        coordinatorAttemptToken: 8,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        guardIsCurrentAttempt: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        isContinuationOnly: false,
+      }),
+    ).toBe(false);
+  });
+
   it('rejects oversized-history classification so auto-resume cannot loop', () => {
     expect(
       isInterruptedTurnError({
@@ -90,7 +262,7 @@ describe('isInterruptedTurnError', () => {
   });
 
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
-    for (const reason of ['turn-failed', 'silent-stop-exhausted']) {
+    for (const reason of ['turn-failed', 'silent-stop-exhausted', 'output-limit']) {
       expect(
         isInterruptedTurnError({
           sdkError: 'server_error',
@@ -163,6 +335,48 @@ describe('isInterruptedTurnError', () => {
     expect(isInterruptedTurnError({ message: '503 Service Unavailable', errorStatus: 503 })).toBe(
       true,
     );
+  });
+
+  it('does not auto-resume when the inference gateway has no available OAuth accounts', () => {
+    const exact =
+      'API Error: 503 {"error":"No available OAuth accounts in pool","detail":"No available OAuth accounts: 12 cooling down."}';
+    expect(isInterruptedTurnError({ message: exact, errorStatus: 503 })).toBe(false);
+    expect(
+      isInterruptedTurnError({
+        message: '503 Service Unavailable: No available OAuth accounts: 12 cooling down.',
+      }),
+    ).toBe(false);
+    // A stable reason must not override this non-retryable provider signal.
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 503,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not broaden the OAuth-pool exception to a different HTTP status', () => {
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 400,
+      }),
+    ).toBe(false);
+    // The overload reason normally bypasses message checks. Keeping it retryable
+    // for a non-503 status proves the OAuth exception is scoped to HTTP 503.
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+      }),
+    ).toBe(false);
   });
 
   // 第三类:上游没容量。与 #844 的分工靠「本 turn 有没有产出」划清(见判定函数注释),

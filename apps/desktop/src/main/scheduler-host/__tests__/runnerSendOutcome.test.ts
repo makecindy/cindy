@@ -1,3 +1,4 @@
+import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type {
@@ -17,6 +18,7 @@ import type {
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  restoreArchivedSessionForSend: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
@@ -30,6 +32,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  restoreArchivedSessionForSend: mocks.restoreArchivedSessionForSend,
   touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -53,6 +56,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner';
+import { ScheduledModelSelectionBusyError } from '../../maker-ipc/scheduledModelSelection';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -127,6 +131,8 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     recurring: true,
     manual: false,
     agentKind: 'codex',
+    // 留空模型要靠默认解析(本 harness 未接),这里显式给模型。
+    model: 'gpt-6-astra',
     workspaceKind: 'project',
     workingDir: 'F:\\XDMaker',
     useWorktree: false,
@@ -299,7 +305,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
-  it('applies a deferred switch before heartbeat meta lookup and creates the target engine session', async () => {
+  it.each([false, true])('applies the route before heartbeat meta lookup (explicit selection: %s)', async (explicit) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => {
       order.push('send');
@@ -311,9 +317,9 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const releaseAgentSwitchLock = vi.fn(() => {
       order.push('release');
     });
-    const acquirePendingAgentSwitch = vi.fn(async () => {
+    const acquirePendingAgentSwitch = vi.fn(async (_id: string, _signal?: AbortSignal, selection?: ScheduledModelSelection) => {
       order.push('apply');
-      return releaseAgentSwitchLock;
+      return selection ? { release: releaseAgentSwitchLock, selection } : releaseAgentSwitchLock;
     });
     const { runner, maker } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
     vi.mocked(maker.getSessionMeta).mockImplementation(async () => {
@@ -340,14 +346,21 @@ describe('MakerScheduleRunner send outcome policy', () => {
         baseSchedule({
           targetSessionId: 'scheduler-session',
           agentKind: 'claude-code',
-          model: undefined,
+          model: explicit ? 'gpt-5.5-codex' : undefined,
+          ...(explicit ? { modelAgentKind: 'codex' as const, providerId: 'xd', effort: 'high', fastMode: true } : {}),
         }),
         ctx,
       ),
     ).rejects.toThrow(/cancelled-before-dispatch/);
 
     expect(order.slice(0, 2)).toEqual(['apply', 'meta']);
-    expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
+    if (explicit) {
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal, {
+        agentKind: 'codex', model: 'gpt-5.5-codex', providerId: 'xd', effort: 'high', fastMode: true,
+      });
+    } else {
+      expect(acquirePendingAgentSwitch).toHaveBeenCalledWith('scheduler-session', ctx.signal);
+    }
     expect(maker.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'scheduler-session',
@@ -357,6 +370,19 @@ describe('MakerScheduleRunner send outcome policy', () => {
     );
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['apply', 'meta', 'send', 'release']);
+  });
+
+
+  it('defers an explicit selection when the target is busy without dispatching', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const { runner, maker } = createRunnerHarness(h.session, {
+      acquirePendingAgentSwitch: vi.fn(async () => { throw new ScheduledModelSelectionBusyError('busy'); }),
+    });
+    const result = await runner.fire(baseSchedule({ targetSessionId: 'scheduler-session',
+      modelAgentKind: 'pi', model: 'grok-4.6' }), createFireContext());
+    expect(result).toMatchObject({ deferred: true, sessionId: 'scheduler-session' });
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
   });
 
   it('releases the heartbeat route lock before deferring to recent user activity', async () => {
@@ -397,7 +423,12 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it('releases the heartbeat route lock before reporting an archived target', async () => {
+  it.each([
+    { racing: false, target: { status: 'deleted' } },
+    { racing: true, target: { status: 'deleted' } },
+    { racing: false, target: { status: 'archived', orcaRole: 'worker' } },
+    { racing: true, target: { status: 'archived', orcaRole: 'worker' } },
+  ])('retires an unavailable managed/deleted target and releases its lock: %j', async ({ racing, target }) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => ({ accepted: true }));
     const releaseAgentSwitchLock = vi.fn(() => {
@@ -409,20 +440,91 @@ describe('MakerScheduleRunner send outcome policy', () => {
       order.push('notify');
     });
     mocks.getSessionRowSnapshot.mockResolvedValue({
-      status: 'archived',
+      ...target,
       userSendAt: null,
       providerId: null,
     });
+    if (racing) mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active', userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); });
+    runner.attachScheduler({ pause } as never);
 
     await expect(
       runner.fire(
         baseSchedule({ targetSessionId: 'scheduler-session' }),
         createFireContext(),
       ),
-    ).rejects.toThrow(/target session not available/);
+    ).resolves.toMatchObject({ skipped: true });
 
-    expect(order).toEqual(['release', 'notify']);
-    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(racing ? ['release', 'pause'] : ['pause']);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(racing ? 1 : 0);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // Scheduled input must keep both the business task and native history after
+  // restoration; the old archived-target test only covered pausing. Unit fixture.
+  it.each([false, true])('restores and completes in the original task without rearchiving (persistent=%s)', async (persistentSession) => {
+    const target = { status: 'archived', providerId: null, agentDeviceId: 'other-computer' };
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+    mocks.restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    const h = createSessionHarness(async (_message, options) => {
+      await options?.onAccepted?.();
+      h.emit({ type: 'done', sessionId: h.session.id, data: {} } as AgentEvent);
+      return { accepted: true };
+    });
+    const { runner, maker } = createRunnerHarness(h.session, {
+      acquirePendingAgentSwitch: async () => {
+        expect(target.status).toBe('active');
+        return vi.fn();
+      },
+    });
+    vi.mocked(maker.getSessionMeta).mockResolvedValue({ workDir: '/work', sdkSessionId: 'native-history', model: 'gpt-6-astra' } as never);
+    const pause = vi.fn();
+    const update = vi.fn();
+    runner.attachScheduler({ pause, update, isRunSilenced: () => false } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id, persistentSession }), createFireContext()))
+      .resolves.toMatchObject({ sessionId: h.session.id });
+    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      id: h.session.id, resumeSessionId: 'native-history', agentDeviceId: 'other-computer',
+    }));
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(target.status).toBe('active');
+    expect(mocks.restoreArchivedSessionForSend).toHaveBeenCalledOnce();
+    expect(pause).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('keeps the schedule active when the target is archived again during preparation', async () => {
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active' })
+      .mockResolvedValue({ status: 'archived' });
+    const release = vi.fn();
+    const { runner } = createRunnerHarness(h.session, { acquirePendingAgentSwitch: async () => release });
+    const pause = vi.fn();
+    const update = vi.fn();
+    runner.attachScheduler({ pause, update } as never);
+    await expect(runner.fire(baseSchedule({ targetSessionId: h.session.id, persistentSession: true }), createFireContext()))
+      .resolves.toMatchObject({ skipped: true, sessionId: h.session.id });
+    expect(release).toHaveBeenCalledOnce();
+    expect(pause).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['archived', 'deleted'])('keeps unavailable %s bot targets in the routine failure lifecycle', async (status) => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn(async () => () => { order.push('release'); });
+    const { runner, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    notifier.notify.mockImplementation(async () => { order.push('notify'); });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status, userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); throw new Error('Schedule not found: schedule-1'); });
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(baseSchedule({ source: 'bot', manual: true, targetSessionId: 'scheduler-session' }),
+      createFireContext())).rejects.toThrow(`target session not available (${status})`);
+    expect(order).toEqual(['release', 'pause', 'notify']);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
     expect(h.send).not.toHaveBeenCalled();
   });
 
@@ -462,7 +564,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const firePromise = runner.fire(baseSchedule(), ctx);
 
     await vi.waitFor(() => expect(h.send).toHaveBeenCalled());
-    await vi.waitFor(() => expect(beforeDispatchUserTurn).toHaveBeenCalledWith('scheduler-session'));
+    await vi.waitFor(() => expect(beforeDispatchUserTurn).toHaveBeenCalledWith('scheduler-session', undefined));
     expect(order).toEqual(['send', 'persist']);
 
     releaseBaseline?.();
@@ -569,6 +671,25 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps quota failures in scheduler notifications free of IM recovery instructions', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const message = 'You hit your spend cap set by the owner of your workspace.';
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+    const rejected = expect(firePromise).rejects.toThrow(message);
+
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'error', data: { message, isTerminal: true } });
+
+    await rejected;
+    const run = latestNotifiedRun(notifier);
+    expect(run.status).toBe('failed');
+    expect(run.errorMsg).toBe(message);
   });
 
   it('projects tool-loop terminal errors to a safe scheduler notification', async () => {

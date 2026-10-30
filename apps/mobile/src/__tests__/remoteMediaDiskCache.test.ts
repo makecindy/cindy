@@ -36,6 +36,153 @@ const URL_B = 'xdt-image://cache/b.png';
 const URL_C = 'xdt-image://cache/c.png';
 
 describe('remoteMediaDiskCache', () => {
+  // Unit regression: new video copies need pressure cleanup without changing
+  // manual image retention or removing a file still held by a native player.
+  it('reclaims only idle videos under pressure and protects mounted players across cache handles', async () => {
+    const h = memoryIO();
+    let capacity = 10_000;
+    const options = { reserveBytes: 500,
+      availableBytes: () => capacity - [...h.files.values()].reduce((sum, n) => sum + n, 0),
+      canEvict: (mime: string) => mime.startsWith('video/') };
+    const cache = createRemoteMediaDiskCache(h.io, options);
+    await cache.store(URL_A, 'https://image', 'image/png', 1000);
+    await cache.store(URL_B, 'https://playing', 'video/mp4', 1000);
+    await cache.store(URL_C, 'https://idle', 'video/mp4', 1000);
+    const release = cache.protect(URL_B);
+    const releaseSecondPlayer = cache.protect(URL_B);
+    const reopened = createRemoteMediaDiskCache(h.io, options);
+    capacity = 3500;
+    expect(await reopened.prune(1000)).toBe(true);
+    expect(await reopened.lookup(URL_A)).not.toBeNull();
+    expect(await reopened.lookup(URL_B)).not.toBeNull();
+    expect(await reopened.lookup(URL_C)).toBeNull();
+    expect(await reopened.prune(2000)).toBe(false);
+    release(); release(); // one consumer cannot release the other consumer's lease
+    expect(await reopened.prune(2000)).toBe(false);
+    releaseSecondPlayer();
+    expect(await reopened.prune(2000)).toBe(true);
+    expect(await reopened.lookup(URL_B)).toBeNull();
+    expect(await reopened.lookup(URL_A)).not.toBeNull();
+  });
+  // Unit regression: a downloaded MP4 retained as .img is rejected by AVPlayer.
+  // Exercise the real cache write/lookup, not the MIME table in isolation.
+  it.each([['video/mp4', 'mp4'], ['video/quicktime', 'mov'], ['video/webm', 'webm']])(
+    'retains playable filenames for %s through history reopen', async (mimeType, ext) => {
+      const { io } = memoryIO();
+      const cache = createRemoteMediaDiskCache(io);
+      await cache.store('video-history', 'file:///staging/video', mimeType, 1000);
+      const reopened = createRemoteMediaDiskCache(io);
+      const hit = await reopened.lookup('video-history');
+      expect(hit?.uri.endsWith(`.${ext}`)).toBe(true);
+      expect(hit).toMatchObject({ mimeType, size: 1000 });
+    },
+  );
+  it('preserves the previous version when replacement storage is unavailable', async () => {
+    const h = memoryIO();
+    let available = 10_000;
+    const cache = createRemoteMediaDiskCache(h.io, { availableBytes: () => available, reserveBytes: 500 });
+    await cache.store(URL_A, 'https://old', 'text/html', 1000, 'a'.repeat(64));
+    available = 1499;
+    expect(await cache.store(URL_A, 'https://new', 'text/html', 1000, 'b'.repeat(64))).toBe(false);
+    expect(h.io.download).toHaveBeenCalledTimes(1);
+    expect(h.io.deleteFile).not.toHaveBeenCalled();
+    expect(await cache.lookup(URL_A)).toMatchObject({ version: 'a'.repeat(64), size: 1000 });
+  });
+  it('keeps the previous version available until a changed download successfully commits', async () => {
+    const { io } = memoryIO();
+    const cache = createRemoteMediaDiskCache(io);
+    await cache.store(URL_A, 'https://old', 'application/pdf', 1000, 'a'.repeat(64));
+    expect(await cache.lookup(URL_A, 'b'.repeat(64))).toBeNull();
+    vi.mocked(io.download).mockResolvedValueOnce(null);
+    expect(await cache.store(URL_A, 'https://new', 'application/pdf', 1000, 'b'.repeat(64))).toBe(false);
+    expect(await cache.lookup(URL_A)).toMatchObject({ version: 'a'.repeat(64), size: 1000 });
+    await cache.store(URL_A, 'https://new', 'application/pdf', 1000, 'b'.repeat(64));
+    expect(await cache.lookup(URL_A)).toMatchObject({ version: 'b'.repeat(64), size: 1000 });
+  });
+  it('protects the source of a pending copy while reclaiming other entries', async () => {
+    const h = memoryIO();
+    let capacity = 10_000;
+    const cache = createRemoteMediaDiskCache(h.io, {
+      now: () => 1, reserveBytes: 500,
+      availableBytes: () => capacity - [...h.files.values()].reduce((sum, n) => sum + n, 0),
+    });
+    await cache.store(URL_A, 'file:///a', 'text/html', 1000);
+    await cache.store(URL_B, 'file:///b', 'text/html', 1000);
+    capacity = 2500;
+    expect(await cache.prune(1000, URL_A)).toBe(true);
+    expect(await cache.lookup(URL_A)).not.toBeNull();
+    expect(await cache.lookup(URL_B)).toBeNull();
+    expect(await cache.prune(2000, URL_A)).toBe(false);
+    expect(await cache.lookup(URL_A)).not.toBeNull();
+  });
+  it('recreates a removed cache directory on a later write and rejects invalid version paths', async () => {
+    const h = memoryIO();
+    let directoryExists = false;
+    h.io.ensureDir = () => { directoryExists = true; };
+    h.io.download = async (_url, name) => {
+      if (!directoryExists) return null;
+      h.files.set(name, 1000);
+      return 1000;
+    };
+    const cache = createRemoteMediaDiskCache(h.io);
+    expect(await cache.store(URL_A, 'file:///a', 'text/html', 1000, '../escape')).toBe(false);
+    await cache.store(URL_A, 'file:///a', 'text/html', 1000);
+    directoryExists = false; h.files.clear();
+    expect(await cache.lookup(URL_A)).toBeNull();
+    expect(await cache.store(URL_A, 'file:///a', 'text/html', 1000)).toBe(true);
+    expect(await cache.lookup(URL_A)).not.toBeNull();
+  });
+  it('retains versioned files across restarts and invalidates only a changed source', async () => {
+    const h = memoryIO();
+    const a = 'a'.repeat(64), b = 'b'.repeat(64);
+    const cache = createRemoteMediaDiskCache(h.io);
+    await cache.store(URL_A, 'file:///received/a', 'text/html', 1000, a);
+    await cache.store(URL_B, 'file:///received/b', 'image/png', 1000, a);
+    const restarted = createRemoteMediaDiskCache(h.io, { now: () => Date.now() + 365 * 86400_000 });
+    expect(await restarted.lookup(URL_A, a)).toMatchObject({ size: 1000 });
+    expect(await restarted.lookup(URL_A, b)).toBeNull();
+    expect(await restarted.lookup(URL_B, a)).toMatchObject({ size: 1000 });
+    expect(h.io.download).toHaveBeenCalledTimes(2);
+  });
+  it('cleans the least recently used files only under real disk pressure and persists access order', async () => {
+    const h = memoryIO();
+    let time = 1, capacity = 10_000;
+    const options = { now: () => time++, persistAccess: true, reserveBytes: 500,
+      availableBytes: () => capacity - [...h.files.values()].reduce((sum, n) => sum + n, 0) };
+    const cache = createRemoteMediaDiskCache(h.io, options);
+    await cache.store(URL_A, 'file:///a', 'text/html', 1000);
+    await cache.store(URL_B, 'file:///b', 'text/html', 1000);
+    await cache.lookup(URL_A);
+    const restarted = createRemoteMediaDiskCache(h.io, options);
+    expect(await restarted.prune()).toBe(true);
+    expect(h.io.deleteFile).not.toHaveBeenCalled();
+    capacity = 2500;
+    expect(await restarted.prune(1000)).toBe(true);
+    expect(await restarted.lookup(URL_B)).toBeNull();
+    expect(await restarted.lookup(URL_A)).not.toBeNull();
+  });
+  it('treats truncated bytes as a miss and cannot claim space freed when deletion fails', async () => {
+    const h = memoryIO();
+    const cache = createRemoteMediaDiskCache(h.io);
+    await cache.store(URL_A, 'file:///a', 'text/html', 1000);
+    h.io.fileSize = () => 1;
+    expect(await cache.lookup(URL_A)).toBeNull();
+    const pressured = createRemoteMediaDiskCache(h.io, { availableBytes: () => 0, reserveBytes: 500 });
+    h.io.deleteFile = vi.fn(() => { throw new Error('busy'); });
+    expect(await pressured.prune(1000)).toBe(false);
+  });
+  it('retains files above the old 150 MiB quota by default across restarts', async () => {
+    const h = memoryIO();
+    const size = 200 * 1024 * 1024;
+    h.io.download = vi.fn(async (_url, name) => { h.files.set(name, size); return size; });
+    const cache = createRemoteMediaDiskCache(h.io);
+    expect(await cache.store(URL_A, 'https://example.com/a', 'image/png', size)).toBe(true);
+    expect(await cache.store(URL_B, 'https://example.com/b', 'image/png', size)).toBe(true);
+    const restarted = createRemoteMediaDiskCache(h.io);
+    expect(await restarted.lookup(URL_A)).toMatchObject({ size });
+    expect(await restarted.lookup(URL_B)).toMatchObject({ size });
+    expect(h.io.deleteFile).not.toHaveBeenCalled();
+  });
   it('misses before store, hits with file uri after store, and persists the index', async () => {
     const { io, getIndexText } = memoryIO();
     const cache = createRemoteMediaDiskCache(io);

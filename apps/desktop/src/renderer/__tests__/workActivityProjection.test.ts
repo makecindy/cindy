@@ -25,6 +25,23 @@ function segment(key: string, toolCalls: ChatMessage[]) {
 }
 
 describe('projectWorkActivities', () => {
+  it('reuses rebuilt history groups but observes result, status and message changes', () => {
+    const message = tool('cache-tool', 'Read', { file_path: '/repo/a.ts' });
+    const first = projectWorkActivities([segment('cache', [message])], true);
+    expect(projectWorkActivities([segment('cache', [message])], true)).toBe(first);
+    const completed = segment('cache', [message]);
+    completed.settledIds.add(message.clientId);
+    const settled = projectWorkActivities([completed], true);
+    expect(settled).not.toBe(first);
+    expect(settled.activities[0]).toMatchObject({ status: 'done' });
+    completed.resultMap.set(message.clientId, 'file contents');
+    const withResult = projectWorkActivities([completed], true);
+    expect(withResult.activities[0]).toMatchObject({ toolResult: 'file contents' });
+    expect(projectWorkActivities([segment('cache', [{ ...message, toolInput: { file_path: '/repo/b.ts' } }])], true))
+      .not.toBe(withResult);
+    expect(projectWorkActivities([completed], false)).not.toBe(withResult);
+  });
+
   it('splits a complete Codex commandActions list into ordered display rows', () => {
     const command = tool('exec-1', 'exec', {
       command: 'cat src/a.ts && rg TODO src',

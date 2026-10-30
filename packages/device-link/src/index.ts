@@ -7,10 +7,75 @@
  *  - allowlist: 远程 IPC 隧道的 channel 白名单(默认拒绝制)
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
-export * from './protocol.js';
-export * from './allowlist.js';
-export * from './client.js';
-export * from './transport.js';
-export * from './topics.js';
-export * from './attachmentOssRef.js';
-export * from './contactsSyncProtocol.js';
+export * from "./protocol.js";
+export * from "./allowlist.js";
+export * from "./client.js";
+export * from "./directPath.js";
+export * from "./directNegotiation.js";
+export * from "./directRuntimeBridge.js";
+export * from "./directRtcRuntime.js";
+export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
+export * from "./transport.js";
+export * from "./invokeTransfer.js";
+export * from "./topics.js";
+export * from "./attachmentOssRef.js";
+export * from "./contactsSyncProtocol.js";
+export * from "./pluginSyncProtocol.js";
+export * from "./discordSchedulerProtocol.js";
+export * from "./remoteResources.js";
+export * from "./remoteDesktop.js";
+export * from "./remoteDesktopViewerSession.js";
+export * from "./remoteDesktopViewerMedia.js";
+export * from "./deviceIdentity.js";
+export * from "./remoteCredentials.js";
+export * from "./remoteDesktopIce.js";
+export * from "./remoteDesktopIceConfig.js";
+export * from "./remoteClipboard.js";
+export * from "./remoteCursor.js";
+export * from "./peerRecoveryScheduler.js";
+export * from "./invokePolicy.js";
+export * from "./filePeer.js";
+export * from "./peerTransferCooldown.js";
+export * from "./peerInvoke.js";
+export * from "./peerAttachment.js";
+export * from "./fileAccess.js";
+export * from "./fileTransferPolicy.js";
+export * from "./filePeerRuntime.js";
+
+export { FILE_PEER_RUNTIME_SOURCE } from "./filePeerRuntimeSource.js";
+export * from "./sharedTask.js";
+export * from "./sharedTaskApi.js";
+export * from "./sharedTaskListPoller.js";
+export * from "./sharedTaskInvitation.js";
+export * from "./sharedTaskProbe.js";
+export * from "./providerShareApi.js";
+export * from "./providerShareInvitation.js";
+export * from "./chatInvitation.js";
+export * from "./providerShareCatalog.js";
+export * from "./providerShareEnvelope.js";
+export * from "./providerGroup.js";
+export * from "./modelFavorites.js";
+export * from "./sessionListTransport.js";
+export * from "./sessionMessageReuse.js";
+
+export * from "./clipboardSync.js";
+export * from "./clipboardSyncFailure.js";
+export * from "./clipboardTransfer.js";
+
+export * from "./selfHostedRelay.js";
+export * from "./selfHostedRelayAuth.js";
+
+export * from "./pluginOauth.js";
+export * from "./pluginSettings.js";
+export * from "./pluginAuthorization.js";
+export * from "./pluginSecretSubmission.js";
+export * from "./pluginConnectionSubmission.js";
+export * from "./pluginDeviceAuthorization.js";
+export * from "./pluginOauthAuthentication.js";
+export * from "./inputHandoff.js";
+export * from "./inputDelivery.js";
+export * from "./taskMigration.js";
+export * from "./remoteAgent.js";
+export * from "./orcaRemoteWorker.js";
+export * from "./companionCloud.js";
+export * from "./pluginPages.js";

@@ -34,6 +34,7 @@ import {
 } from '../../shared/learnTypes';
 import type { FileChange } from '../skillhub/snapshot';
 import { getSkillInstallLockOwner, tryAcquireSkillInstallLock } from '../skillhub/installLock';
+import { acquireSharedSkillMutationLease, type SkillMutationRelease } from '../skillhub/sharedMutationLease';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
 import type { EvidenceSearchFn } from './evidence';
 import { collectEvidence } from './evidence';
@@ -90,7 +91,7 @@ export interface LearnSessionLike {
   id: string;
   send(
     message: { type: 'user'; content: string },
-    opts?: { onAccepted?: () => Promise<void> | void },
+    opts?: { onAccepted?: (signal?: AbortSignal) => Promise<void> | void },
   ): Promise<LearnSessionSendResult>;
   onEvent(listener: (ev: { type: string; data?: unknown; turnContinuationId?: number }) => void): () => void;
   abort(): Promise<void>;
@@ -144,7 +145,7 @@ export interface LearnControllerDeps {
   persistUserMessage(sessionId: string, content: string): Promise<void>;
   /** 修正 sessions 行(source='learn' + acceptEdits + 继承的 providerId),失败仅 warn。 */
   backfillSessionMeta(sessionId: string): Promise<void>;
-  beforeDispatchUserTurn?: (sessionId: string) => void | Promise<void>;
+  beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
   peekPendingHandoff?: (sessionId: string) => Promise<string | null>;
   consumePendingHandoff?: (sessionId: string) => void;
@@ -163,7 +164,7 @@ export interface LearnControllerDeps {
   /** 已装 skill 清单块("改 vs 加"决策依据;无 skill 返空串)。 */
   getInstalledSkillsIndex(): Promise<string>;
   /** hub 源:拉市场 skill 详情 + 全部已发布文件(PR3 注入;未注入时 hub 源报 INVALID_PARAMS)。 */
-  fetchHubSkill?: (slug: string) => Promise<{
+  fetchHubSkill?: (slug: string, catalogScope?: 'market' | 'team') => Promise<{
     name: string;
     description: string;
     content: string;
@@ -328,14 +329,27 @@ export class LearnController {
     if (req.sourceKind === 'session' && !req.originSessionId) {
       throw new LearnError('INVALID_PARAMS', 'session source requires the origin session');
     }
+    if (
+      req.sourceKind === 'session'
+      && req.originSessionId
+      && !(await this.deps.getConversationBlock(req.originSessionId))
+    ) {
+      throw new LearnError(
+        'INVALID_PARAMS',
+        'the origin conversation has no distillable content',
+      );
+    }
     if (req.sourceKind === 'hub' && !req.hubSlug) {
       throw new LearnError('INVALID_PARAMS', 'hubSlug is required for hub source');
     }
     // hubSlug 会作为路径段进入 resolveInstalledSkillDir / writeReferenceFiles:
-    // builtins 的 /learn hub: 正则已限,但 IPC learn:start 可直调 —— 边界处再校
+    // 内置 Skill 与 IPC learn:start 都可能传入 hubSlug —— 在状态机边界再校
     // 一次,拒绝分隔符 / '..' 等任意串(自查;与市场 slug 规则一致)。
     if (req.sourceKind === 'hub' && req.hubSlug && !/^[a-z0-9][a-z0-9-]*$/.test(req.hubSlug)) {
       throw new LearnError('INVALID_PARAMS', `invalid hubSlug: ${req.hubSlug}`);
+    }
+    if (req.sourceKind === 'hub' && req.hubCatalogScope && req.hubCatalogScope !== 'market' && req.hubCatalogScope !== 'team') {
+      throw new LearnError('INVALID_PARAMS', `invalid hubCatalogScope: ${String(req.hubCatalogScope)}`);
     }
     if (req.sourceKind === 'hub' && !this.deps.fetchHubSkill) {
       throw new LearnError('INVALID_PARAMS', 'hub source is not available');
@@ -361,6 +375,7 @@ export class LearnController {
       ...(dataOwnerId ? { dataOwnerId } : {}),
       input,
       ...(req.hubSlug ? { hubSlug: req.hubSlug } : {}),
+      ...(req.sourceKind === 'hub' ? { hubCatalogScope: req.hubCatalogScope ?? 'market' } : {}),
       ...(req.originSessionId ? { originSessionId: req.originSessionId } : {}),
       usedSessionEvidence: false,
       createdAt: this.now(),
@@ -393,7 +408,7 @@ export class LearnController {
     let referenceFilesOmissions: Array<{ path: string; reason: string }> | undefined;
     let evidenceQuery = run.input;
     if (run.sourceKind === 'hub' && run.hubSlug && this.deps.fetchHubSkill) {
-      const hub = await this.deps.fetchHubSkill(run.hubSlug);
+      const hub = await this.deps.fetchHubSkill(run.hubSlug, run.hubCatalogScope ?? 'market');
       if (!hub) throw new LearnError('NOT_FOUND', `hub skill ${run.hubSlug} not found`);
       // fetch 的网络 await 期间可能被 cancel(cleanup 已删 staging):此处不设门
       // 的话 writeReferenceFiles 会把 _reference/ 整个重建成孤儿目录(自查)。
@@ -516,7 +531,7 @@ export class LearnController {
 
     const cleanMessage =
       run.sourceKind === 'hub'
-        ? `/learn hub:${run.hubSlug}`
+        ? `/learn hub:${run.hubCatalogScope ?? 'market'}:${run.hubSlug}`
         : run.sourceKind === 'session'
           ? '/learn (distill current conversation)'
           : `/learn ${run.input}`;
@@ -578,12 +593,12 @@ export class LearnController {
       const sendResult = await session.send(
         outgoingMessage,
         {
-          onAccepted: async () => {
+          onAccepted: async (signal) => {
             await this.deps.persistUserMessage(session.id, cleanMessage).catch((err) => {
               this.deps.logger.warn('[learn] persist user message failed (non-fatal)', err);
             });
             if (this.deps.beforeDispatchUserTurn) {
-              await this.deps.beforeDispatchUserTurn(session.id);
+              await this.deps.beforeDispatchUserTurn(session.id, signal);
               baselineStarted = true;
             }
           },
@@ -892,6 +907,7 @@ export class LearnController {
     const pausedWatcher = await this.pauseRevisionWatcherForApply(runId);
     let frozenDir: string | null = null;
     let releaseSkillLock: (() => void) | null = null;
+    let releaseShared: SkillMutationRelease | null = null;
     let applied = false;
     try {
       this.assertNotDisposedForReview(runId);
@@ -938,6 +954,8 @@ export class LearnController {
         run = await this.update(run, { skillName: verdict.skillName });
       }
       releaseSkillLock = this.acquireSkillApplyLock(verdict.skillName);
+      releaseShared = await acquireSharedSkillMutationLease([verdict.skillName]);
+      if (!releaseShared) throw new LearnError('LEARN_BUSY', 'another client is changing this skill');
       // 必须先经 getProposalDiff 审查(reviewed 指纹已登记)且与当前提案一致。
       // 只查"已定义且不等"会留一个窗:重扫刚把 reviewed 清空、面板还没刷新完,
       // 这时点 apply 装的是没人看过的新内容(收严 Codex 的初版)。
@@ -960,26 +978,28 @@ export class LearnController {
       const provenance: LearnProvenance = {
         method: 'learn',
         sourceKind: run.sourceKind,
-        ...(run.hubSlug ? { sourceRef: run.hubSlug } : {}),
+        ...(run.hubSlug ? { sourceRef: `${run.hubCatalogScope ?? 'market'}:${run.hubSlug}` } : {}),
         usedSessionEvidence: run.usedSessionEvidence,
         personal: run.usedSessionEvidence, // 硬规则:含 session 证据 ⇒ personal,不可配置
         learnedAt: Math.floor(this.now() / 1000),
         runId: run.runId,
       };
       this.assertNotDisposedForReview(runId);
-      const result = await this.deps.applyProposal({
-        proposalDir: frozenDir,
+      const proposalDir = frozenDir;
+      const result = await releaseShared.run(() => this.deps.applyProposal({
+        proposalDir,
         // 用重校验后的 verdict 名(string 且为冻结副本的真实值;run.skillName 经
         // update 重赋值后类型收窄丢失,语义上两者已一致)
         skillName: verdict.skillName,
         provenance,
-      });
+      }));
       applied = true;
       this.detachWatcher(runId);
       await this.deps.staging.cleanup(runId);
       await this.update(run, { status: 'applied' });
       return result;
     } finally {
+      await releaseShared?.();
       releaseSkillLock?.();
       // 失败路径(校验拒绝 / applyProposal 抛错回滚到冻结位)把提案放回 staging。
       if (!applied) {

@@ -30,6 +30,10 @@ describe('passive shared-userData instance auth isolation', () => {
     resolve(process.cwd(), 'src/main/bootstrap-electron.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+  const authAdapterSource = readFileSync(
+    resolve(process.cwd(), 'src/main/maker-host/auth-adapters.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   const sliceBody = (startAnchor: string, endAnchor: string): string => {
     const start = authSource.indexOf(startAnchor);
@@ -63,10 +67,8 @@ describe('passive shared-userData instance auth isolation', () => {
     const preserveIdx = authSource.indexOf('preservePersistedRefreshToken: true', runtimeIdx);
     expect(preserveIdx).toBeGreaterThan(runtimeIdx);
     expect(authSource).toContain('let foreignDeviceLocalSignOut = false');
-    expect(authSource).toContain("foreignDeviceLocalSignOut = true");
-    expect(authSource).toContain(
-      "if (foreignDeviceLocalSignOut) {",
-    );
+    expect(authSource).toContain('foreignDeviceLocalSignOut = true');
+    expect(authSource).toContain('if (foreignDeviceLocalSignOut) {');
   });
 
   it('clearAuth:passive 共享实例不删磁盘 refresh token', () => {
@@ -88,14 +90,19 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(passiveIdx);
   });
 
-  it('logout:passive 共享实例不调服务端登出(会连坐作废 primary 的 device token)', () => {
+  it('logout:passive 共享实例不切号或调服务端登出(会连坐作废 primary 的 device token)', () => {
     const body = sliceBody('export async function logout(): Promise<void> {', '\n}\n');
 
     // refresh token 服务端按 (user, device) 一对一存,passive 与 primary 共用 deviceId:
-    // 只留本地文件不够,这一发也必须拦,否则 primary 下次续期拿确定性失败被踢。
-    expect(body).toContain('!isPassiveSharedUserDataInstance()');
-    const guardIdx = body.indexOf('!isPassiveSharedUserDataInstance()');
-    expect(body.indexOf("apiFetch('/api/auth/logout'")).toBeGreaterThan(guardIdx);
+    // guard 必须在任何账号切换、凭证写入和服务端撤销之前直接拒绝。
+    const guardIdx = body.indexOf('if (isPassiveSharedUserDataInstance()) {');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(body.indexOf('await switchSavedAccount(')).toBeGreaterThan(guardIdx);
+    expect(body.indexOf('await mutateAuthAccountVault(')).toBeGreaterThan(guardIdx);
+    expect(body.indexOf('revokeLoggedOutAccountBestEffort({')).toBeGreaterThan(guardIdx);
+
+    const revokeBody = sliceBody('function revokeLoggedOutAccountBestEffort(', '\n}\n');
+    expect(revokeBody).toContain("apiFetch('/api/auth/logout'");
   });
 
   it('续期节奏不设闸门:passive 照常排 timer,否则 access token 过期后无自愈路径', () => {
@@ -110,7 +117,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(scheduleBody).toContain('refreshTimer = setTimeout(');
 
     const retryBody = sliceBody(
-      'function scheduleRefreshRetryAfterTransientFailure(): void {',
+      'function scheduleRefreshRetryAfterTransientFailure(',
       '\n}\n',
     );
     expect(retryBody).not.toContain('isPassiveSharedUserDataInstance');
@@ -119,7 +126,7 @@ describe('passive shared-userData instance auth isolation', () => {
 
   it('refresh 本身不被 passive 拦:冷启动仍能换 access token,凭证缺席仍走过期出口', () => {
     const body = sliceBody(
-      'export async function refresh(): Promise<boolean> {',
+      'export async function refresh(',
       'const diskTokenChangedBeforeRefresh',
     );
 
@@ -176,8 +183,13 @@ describe('passive shared-userData instance auth isolation', () => {
     );
     expect(migrationHelper).toContain('if (isPassiveSharedUserDataInstance()) return;');
 
-    const beforeEnsureReadyStart = bootstrapSource.indexOf('beforeEnsureReady: async (userId) => {');
-    const beforeEnsureReadyEnd = bootstrapSource.indexOf('\n    },\n    onReady:', beforeEnsureReadyStart);
+    const beforeEnsureReadyStart = bootstrapSource.indexOf(
+      'beforeEnsureReady: async (userId) => {',
+    );
+    const beforeEnsureReadyEnd = bootstrapSource.indexOf(
+      '\n    },\n    onReady:',
+      beforeEnsureReadyStart,
+    );
     const beforeEnsureReady = bootstrapSource.slice(beforeEnsureReadyStart, beforeEnsureReadyEnd);
     const dbPassiveGuard = beforeEnsureReady.indexOf(
       'if (authManager.isPassiveSharedUserDataInstance()) {',
@@ -204,9 +216,7 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(beforeEnsureReady.indexOf('runLegacyUserDataMigrationForUser(user.id)')).toBeGreaterThan(
       dbPassiveGuard,
     );
-    expect(beforeEnsureReady.indexOf('adoptLocalProfileDatabase(')).toBeGreaterThan(
-      dbPassiveGuard,
-    );
+    expect(beforeEnsureReady.indexOf('adoptLocalProfileDatabase(')).toBeGreaterThan(dbPassiveGuard);
     expect(exclusiveAdoptionGate).toBeGreaterThan(
       beforeEnsureReady.indexOf('adoptLocalProfileDatabase('),
     );
@@ -218,6 +228,26 @@ describe('passive shared-userData instance auth isolation', () => {
       adoptionFailure,
     );
     expect(beforeEnsureReady).not.toContain('continuing with cloud database');
+  });
+
+  it('启动期共享 Skill 投影通过 owner 边界保护入口执行', () => {
+    expect(bootstrapSource).toContain(
+      'await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();',
+    );
+    expect(bootstrapSource).not.toContain('prepareBuiltInSkills({');
+    expect(bootstrapSource).not.toContain('await prepareSharedGlobalSkillLinks();');
+    expect(bootstrapSource).not.toContain('refreshBuiltInSharedSkillLinks');
+
+    const start = authAdapterSource.indexOf('private async runEnsureSharedGlobalSkills(ownerId:');
+    const end = authAdapterSource.indexOf('\n  async getState(', start);
+    const body = authAdapterSource.slice(start, end);
+    const ownerBoundary = body.indexOf('withSharedGlobalSkillProjectionMutation(ownerId');
+    expect(ownerBoundary).toBeGreaterThan(-1);
+    expect(body.indexOf('prepareBuiltInSkills({')).toBeGreaterThan(ownerBoundary);
+    expect(body.indexOf('prepareSharedGlobalSkillLinks({')).toBeGreaterThan(ownerBoundary);
+    expect(body).not.toContain('refreshBuiltInSharedSkillLinks({');
+    expect(body.indexOf('migrateBuiltInGlobalSkillLinks({')).toBeGreaterThan(ownerBoundary);
+    expect(body.indexOf('migrateBuiltInGlobalSkillLinks({')).toBeLessThan(body.indexOf('prepareSharedGlobalSkillLinks({'));
   });
 
   it('relogin marker:passive 不消费整机一份的 marker,也不删 primary 的 token', () => {
@@ -305,7 +335,10 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(acceptBody).not.toContain('commitWithClearedAccountDeletionReceipt(');
 
     const completeStart = authSource.indexOf('async function completeLogin(');
-    const completeEnd = authSource.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
+    const completeEnd = authSource.indexOf(
+      '\n}\n\nasync function acceptLoginOutcome',
+      completeStart,
+    );
     const completeBody = authSource.slice(completeStart, completeEnd);
     const completeGuard = completeBody.indexOf('if (!isPassiveSharedUserDataInstance()) {');
     expect(completeGuard).toBeGreaterThan(-1);
@@ -319,9 +352,7 @@ describe('passive shared-userData instance auth isolation', () => {
       'function commitWithClearedAccountDeletionReceipt(commit: () => void): void {',
       '\n}\n',
     );
-    expect(receiptCommit).toContain(
-      'if (isPassiveSharedUserDataInstance()) return commit();',
-    );
+    expect(receiptCommit).toContain('if (isPassiveSharedUserDataInstance()) return commit();');
   });
 
   it('冷启动确定性失效:passive 不删盘,非 passive 也只做 compare-and-delete', () => {
@@ -390,5 +421,18 @@ describe('passive shared-userData instance auth isolation', () => {
     // 但这条分支里不得出现任何删除或 marker 消费。
     expect(passiveBranch).not.toContain('removeSafe(');
     expect(passiveBranch).not.toContain('clearReloginFlag();');
+  });
+
+  it('keeps a renderer fail-closed when it initializes during an owner boundary', () => {
+    const initializeStart = authSource.indexOf(
+      'export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {',
+    );
+    const localModeStart = authSource.indexOf(
+      "if (getActiveAppSession().mode === 'local') {",
+      initializeStart,
+    );
+    const initializePrefix = authSource.slice(initializeStart, localModeStart);
+    expect(initializePrefix).toContain('if (isOwnerChangeShellPending())');
+    expect(initializePrefix).toContain('return snapshotLoggedOutAuthState(true);');
   });
 });

@@ -1,4 +1,4 @@
-﻿import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,15 +19,18 @@ import {
   createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
+  createAnthropicContextManagementRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
+import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
 import type { ProxyHandle, RequestTransform } from './types.js';
@@ -43,17 +46,20 @@ const TEST_PI_BINARY = path.join(
 
 function startFakeUpstream(
   handler: (reqIndex: number, body: string, res: ServerResponse) => void,
-): Promise<{ url: string; bodies: string[]; headers: Array<Record<string, string>>; paths: string[]; close: () => Promise<void> }> {
+): Promise<{ url: string; bodies: string[]; rawBodies: Buffer[]; headers: Array<Record<string, string>>; paths: string[]; close: () => Promise<void> }> {
   const bodies: string[] = [];
+  const rawBodies: Buffer[] = [];
   const headers: Array<Record<string, string>> = [];
   const paths: string[] = [];
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
-      const body = Buffer.concat(chunks).toString('utf8');
+      const rawBody = Buffer.concat(chunks);
+      const body = rawBody.toString('utf8');
       const idx = bodies.length;
       bodies.push(body);
+      rawBodies.push(rawBody);
       const flat: Record<string, string> = {};
       for (const [k, v] of Object.entries(req.headers)) flat[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v ?? '');
       headers.push(flat);
@@ -64,6 +70,7 @@ function startFakeUpstream(
   return listenOnAvailableLoopbackPort(server).then((port) => ({
     url: `http://127.0.0.1:${port}`,
     bodies,
+    rawBodies,
     headers,
     paths,
     close: () => new Promise<void>((r) => server.close(() => r())),
@@ -143,6 +150,30 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
   });
 
+  it('reports a refused loopback upstream as "nothing is listening" with a stable code (#4100)', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    const port = Number(new URL(upstream.url).port);
+    // 上游先关掉:自定义供应商指向的本地代理 / SSH 隧道没起来,端口无监听。
+    await upstream.close();
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const result = await post(proxy.url, { model: 'test-model' });
+    expect(result.status).toBe(502);
+    const json = JSON.parse(result.text) as { error: { type: string; code?: string; message: string } };
+    expect(json.error.type).toBe('proxy_error');
+    expect(json.error.code).toBe('upstream_loopback_refused');
+    expect(json.error.message).toMatch(new RegExp(`connect ECONNREFUSED 127\\.0\\.0\\.1:${port}`));
+    expect(json.error.message).toMatch(/nothing is listening on that local port/);
+    expect(json.error.message).toMatch(/local proxy or an SSH tunnel/);
+  });
+
   it('pipes successful response bodies through a request-scoped transform', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       const payload = '{"source":"upstream"}';
@@ -173,6 +204,500 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     expect(await response.json()).toEqual({ source: 'adapted-provider' });
     expect(response.headers.get('content-length')).toBeNull();
     expect(JSON.parse(requestBody)).toEqual({ model: 'test-model', routed: true });
+  });
+
+  it.each([false, true])('creates the stream adapter with verified MIME (upstream header: %s)', async (withMime) => {
+    const sse = 'data: {"type":"response.created"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, {
+        ...(withMime ? { 'content-type': 'text/event-stream' } : {}),
+        'content-length': Buffer.byteLength(sse),
+      });
+      res.write(sse.slice(0, 3));
+      setImmediate(() => res.end(sse.slice(3)));
+    });
+    upstreamClose = upstream.close;
+    const transformResponse = vi.fn((ctx) => {
+      if (ctx.responseHeaders['content-type'] !== 'text/event-stream') {
+        throw new Error(`unsupported content type '${ctx.responseHeaders['content-type'] ?? ''}'`);
+      }
+      return new Transform({
+        transform(chunk, _encoding, callback) {
+          callback(null, chunk);
+        },
+        flush(callback) {
+          callback(null, ': adapted\n\n');
+        },
+      });
+    });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(response.headers.get('content-length')).toBeNull();
+    expect(await response.text()).toBe(`${sse}: adapted\n\n`);
+    expect(transformResponse).toHaveBeenCalledOnce();
+  });
+
+  it('returns 502 before committing inferred SSE if adapter construction fails', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200).end('data: {"type":"response.created"}\n\n');
+    });
+    upstreamClose = upstream.close;
+    const transformResponse = vi.fn(() => { throw new Error('adapter unavailable'); });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('response_transform_unavailable');
+    expect(transformResponse).toHaveBeenCalledOnce();
+  });
+
+  it.each(['reject', 'oversize', 'stale'])('does not forward a route body rewrite that is %s', async (mode) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => res.end('{}'));
+    upstreamClose = upstream.close;
+    let current = true;
+    const rewrite = vi.fn(async () => {
+      if (mode === 'reject') throw new Error('Invalid request');
+      if (mode === 'stale') current = false;
+      return { body: Buffer.from('x'.repeat(mode === 'oversize' ? 200 : 2)) };
+    });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      maxRequestBodyBytes: 100,
+      bypassRequestTransforms: () => true,
+      routingTransform: () => ({ transformRequestBody: rewrite, dispatchGenerationValid: () => current }),
+    });
+    const result = await post(proxy.url, { model: 'test' });
+    expect(result.status).toBe(mode === 'reject' ? 502 : mode === 'oversize' ? 413 : 503);
+    expect(rewrite).toHaveBeenCalledOnce();
+    expect(upstream.bodies).toEqual([]);
+  });
+
+  it('can preserve an image request body without changing normal response transforms', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [(body) => ({ ...(body as object), transformed: true })],
+      bypassRequestTransforms: (_body, ctx) => ctx.url.endsWith('/images/generations'),
+    });
+
+    await fetch(`${proxy.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"gpt-image-2","prompt":"draw"}',
+    });
+    await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"model":"chat-model"}',
+    });
+
+    expect(upstream.bodies).toEqual([
+      '{"model":"gpt-image-2","prompt":"draw"}',
+      '{"model":"chat-model","transformed":true}',
+    ]);
+  });
+
+  it('routes selected multipart requests while preserving their original bytes and headers', async () => {
+    const defaultUpstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(500).end();
+    });
+    const routedUpstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = async () => {
+      await Promise.all([defaultUpstream.close(), routedUpstream.close()]);
+    };
+    const boundary = 'cindy-image-boundary';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\ndraw\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="raw.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      Buffer.from([0, 255, 13, 10, 128, 42]),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: defaultUpstream.url,
+      transformRequest: [() => ({ should: 'never run' })],
+      routeOpaqueRequestBody: (ctx) => ctx.url === '/_cindy/custom-provider/route/images/edits',
+      bypassRequestTransforms: (_body, ctx) =>
+        ctx.url === '/_cindy/custom-provider/route/images/edits',
+      routingTransform: (parsed, ctx) => {
+        expect(parsed).toBeUndefined();
+        expect(ctx.headers['content-type']).toBe(`multipart/form-data; boundary=${boundary}`);
+        return {
+          upstreamOverride: routedUpstream.url,
+          pathOverride: '/images/edits',
+          headerOverride: { authorization: 'Bearer routed-key' },
+        };
+      },
+    });
+
+    const response = await fetch(`${proxy.url}/_cindy/custom-provider/route/images/edits`, {
+      method: 'POST',
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': String(body.length),
+        authorization: 'Bearer loopback-placeholder',
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(defaultUpstream.rawBodies).toHaveLength(0);
+    expect(routedUpstream.paths).toEqual(['/images/edits']);
+    expect(routedUpstream.rawBodies[0]).toEqual(body);
+    expect(routedUpstream.headers[0]?.['content-type']).toBe(
+      `multipart/form-data; boundary=${boundary}`,
+    );
+    expect(routedUpstream.headers[0]?.['content-length']).toBe(String(body.length));
+    expect(routedUpstream.headers[0]?.authorization).toBe('Bearer routed-key');
+  });
+
+  it('reports content-free lifecycle events at real JSON, multipart, and transport terminal points', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(201, { 'content-type': 'application/json' }).end('{"private":"response"}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    const prefix = '/_cindy/custom-provider/0123456789abcdefabcd';
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routeOpaqueRequestBody: (ctx) => ctx.url === `${prefix}/images/edits`,
+      routingTransform: (_body, ctx) => ({
+        pathOverride: ctx.url.endsWith('/images/edits')
+          ? '/images/edits'
+          : ctx.url.endsWith('/images/generations')
+            ? '/images/generations'
+            : ctx.url,
+        ...(ctx.url.startsWith(`${prefix}/images/`)
+          ? { forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure, status) => events.push({
+            type: 'transport-error',
+            failure,
+            ...(status === undefined ? {} : { status }),
+          }),
+            } }
+          : {}),
+      }),
+    });
+
+    const generation = await fetch(`${proxy.url}${prefix}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"prompt":"private prompt"}',
+    });
+    expect(generation.status).toBe(201);
+
+    const multipart = Buffer.from('private multipart bytes');
+    const edit = await fetch(`${proxy.url}${prefix}/images/edits`, {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=private-boundary' },
+      body: multipart,
+    });
+    expect(edit.status).toBe(201);
+
+    await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    await fetch(`${proxy.url}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'complete', status: 201 },
+      { type: 'start' },
+      { type: 'complete', status: 201 },
+    ]);
+
+    await upstream.close();
+    upstreamClose = async () => undefined;
+    const unavailable = await fetch(`${proxy.url}${prefix}/images/generations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"prompt":"must not reach lifecycle callbacks"}',
+    });
+    expect(unavailable.status).toBe(502);
+    expect(events.slice(4)).toEqual([
+      { type: 'start' },
+      { type: 'transport-error', failure: 'request-error' },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(
+      /private prompt|multipart|boundary|response|127\.0\.0\.1|ECONNREFUSED/,
+    );
+  });
+
+  it('emits one terminal lifecycle event for HTTP errors, aborted responses, and successful retry', async () => {
+    const retryAttempts = new Map<string, number>();
+    const upstream = await startFakeUpstream((_idx, body, res) => {
+      const request = JSON.parse(body) as { mode?: string };
+      if (request.mode === 'http-error') {
+        res.writeHead(503, { 'content-type': 'application/json' }).end('{"private":"failure"}');
+        return;
+      }
+      if (request.mode === 'aborted-response') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write('{"private":"partial"');
+        setImmediate(() => res.destroy());
+        return;
+      }
+      const attempts = (retryAttempts.get(request.mode ?? '') ?? 0) + 1;
+      retryAttempts.set(request.mode ?? '', attempts);
+      if (request.mode === 'retry-success' && attempts === 1) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    let requestId = 0;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => {
+        const id = ++requestId;
+        return {
+          forwardLifecycle: {
+            onStart: () => events.push({ id, type: 'start' }),
+            onComplete: (status) => events.push({ id, type: 'complete', status }),
+            onFailure: (failure, status) => events.push({
+              id,
+              type: 'failure',
+              failure,
+              ...(status === undefined ? {} : { status }),
+            }),
+          },
+        };
+      },
+    });
+
+    expect((await post(proxy.url, { mode: 'http-error' })).status).toBe(503);
+    await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'aborted-response' }),
+    }).then((response) => response.text()).catch(() => undefined);
+    expect((await post(proxy.url, {
+      mode: 'retry-success',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(200);
+
+    expect(upstream.bodies).toHaveLength(4);
+    expect(events.filter((event) => event.id === 1)).toEqual([
+      { id: 1, type: 'start' },
+      { id: 1, type: 'complete', status: 503 },
+    ]);
+    expect(events.filter((event) => event.id === 2)).toEqual([
+      { id: 2, type: 'start' },
+      {
+        id: 2,
+        type: 'failure',
+        failure: expect.stringMatching(/^response-(error|aborted|closed)$/),
+        status: 200,
+      },
+    ]);
+    expect(events.filter((event) => event.id === 3)).toEqual([
+      { id: 3, type: 'start' },
+      { id: 3, type: 'complete', status: 200 },
+    ]);
+  });
+
+  it('settles retry rejection and retry hook failure without a second upstream attempt', async () => {
+    let mode: 'idle' | 'reject' | 'throw' = 'idle';
+    const upstream = await startFakeUpstream((_idx, body, res) => {
+      mode = (JSON.parse(body) as { mode: 'reject' | 'throw' }).mode;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+    let requestId = 0;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => {
+        const id = ++requestId;
+        return {
+          forwardLifecycle: {
+            onStart: () => events.push({ id, type: 'start' }),
+            onComplete: (status) => events.push({ id, type: 'complete', status }),
+            onFailure: (failure) => events.push({ id, type: 'failure', failure }),
+          },
+        };
+      },
+      revalidateBeforeDispatch: () => {
+        if (mode === 'throw') throw new Error('private retry hook error');
+        if (mode === 'reject') {
+          return {
+            localHandler: async ({ res }) => {
+              res.writeHead(503, { 'content-type': 'application/json' }).end('{}');
+            },
+          };
+        }
+        return null;
+      },
+    });
+
+    expect((await post(proxy.url, {
+      mode: 'reject',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+    mode = 'idle';
+    expect((await post(proxy.url, {
+      mode: 'throw',
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+
+    expect(upstream.bodies).toHaveLength(2);
+    expect(events).toEqual([
+      { id: 1, type: 'start' },
+      { id: 1, type: 'failure', failure: 'retry-rejected' },
+      { id: 2, type: 'start' },
+      { id: 2, type: 'failure', failure: 'retry-error' },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('private retry hook error');
+  });
+
+  it('rejects a transparent retry when its routed credential generation changes', async () => {
+    let generationValid = true;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      generationValid = false;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => ({
+        headerOverride: { authorization: 'Bearer old-generation-fixture' },
+        dispatchGenerationValid: () => generationValid,
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+    });
+
+    expect((await post(proxy.url, {
+      input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+    })).status).toBe(503);
+    expect(upstream.bodies).toHaveLength(1);
+    expect(upstream.headers).toHaveLength(1);
+    expect(upstream.headers[0]?.authorization).toBe('Bearer old-generation-fixture');
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'retry-rejected' },
+    ]);
+  });
+
+  it('rejects an already-stale routed decision before its first upstream dispatch', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      routingTransform: () => ({
+        dispatchGenerationValid: () => false,
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+    });
+
+    expect((await post(proxy.url, { input: [] })).status).toBe(503);
+    expect(upstream.bodies).toHaveLength(0);
+    expect(upstream.headers).toHaveLength(0);
+    expect(events).toEqual([]);
+  });
+
+  it('settles a client cancellation while waiting for retry revalidation', async () => {
+    let releaseGate!: () => void;
+    let markGateEntered!: () => void;
+    const gateEntered = new Promise<void>((resolve) => { markGateEntered = resolve; });
+    const gateReleased = new Promise<void>((resolve) => { releaseGate = resolve; });
+    let retryPending = false;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      retryPending = true;
+      res.writeHead(400, { 'content-type': 'application/json' }).end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const events: Array<Record<string, unknown>> = [];
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      routingTransform: () => ({
+        forwardLifecycle: {
+          onStart: () => events.push({ type: 'start' }),
+          onComplete: (status) => events.push({ type: 'complete', status }),
+          onFailure: (failure) => events.push({ type: 'failure', failure }),
+        },
+      }),
+      revalidateBeforeDispatch: () => retryPending
+        ? {
+            localHandler: async () => {
+              markGateEntered();
+              await gateReleased;
+            },
+          }
+        : null,
+    });
+
+    const controller = new AbortController();
+    const request = fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        input: [{ type: 'reasoning', encrypted_content: 'gAAA-private' }],
+      }),
+      signal: controller.signal,
+    }).catch(() => null);
+    await gateEntered;
+    controller.abort();
+    await request;
+    await vi.waitFor(() => expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'client-aborted' },
+    ]));
+    releaseGate();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(upstream.bodies).toHaveLength(1);
+    expect(events).toEqual([
+      { type: 'start' },
+      { type: 'failure', failure: 'client-aborted' },
+    ]);
   });
 
   it('settles request-scoped transform state after a non-2xx response', async () => {
@@ -270,6 +795,7 @@ describe('anthropic-compat-proxy loopback port guard', () => {
     }).catch(() => 'rejected' as const);
     const result = await Promise.race([
       resultPromise,
+      // real-wait: bound the proxy request while the upstream cancellation path is under test.
       new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 1_000)),
     ]);
     controller.abort();
@@ -451,7 +977,167 @@ describe('anthropic-compat-proxy tool_use provider field compatibility', () => {
   });
 });
 
+describe('Anthropic context management rejection (#7041)', () => {
+  const request = {
+    model: 'claude-opus-test', max_tokens: 128,
+    context_management: { edits: [{ type: 'clear_tool_uses_20250919' }] },
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  it.each([
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 200, 2],
+    [400, 'ValidationException: context_management: Extra inputs are not permitted', 400, 2],
+    [200, '{}', 200, 1],
+    [400, 'ValidationException: unrelated_field: Extra inputs are not permitted', 400, 1],
+  ] as const)('only retries an explicit context_management rejection (%s, %s)', async (status, error, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _body, res) => {
+      res.writeHead(index === 0 ? status : expectedStatus, { 'content-type': 'application/json' });
+      res.end(index === 0 ? JSON.stringify({ error: { message: error } }) : '{}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createAnthropicContextManagementRecoveryRule()],
+    });
+    const response = await post(proxy.url, request);
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      expect(JSON.parse(upstream.bodies[1]!)).toEqual({
+        model: request.model, max_tokens: request.max_tokens, messages: request.messages,
+      });
+    }
+  });
+});
+
 describe('anthropic-compat-proxy encrypted content retry', () => {
+  it('normalizes and retries the vLLM Qwen Responses incompatibility once', async () => {
+    const upstream = await startFakeUpstream((idx, body, res) => {
+      if (idx === 0) {
+        expect(JSON.parse(body)).toMatchObject({
+          instructions: 'base instructions',
+          reasoning: { effort: 'high' },
+          input: [
+            { type: 'message', role: 'developer', content: 'permissions' },
+            { type: 'message', role: 'user', content: 'hello' },
+          ],
+        });
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.',
+            type: 'BadRequestError',
+          },
+        }));
+        return;
+      }
+      expect(JSON.parse(body)).toEqual({
+        model: 'qwen3.8-27b-fp8',
+        reasoning: { effort: 'xhigh' },
+        input: [
+          { type: 'message', role: 'system', content: 'base instructions' },
+          { type: 'message', role: 'system', content: 'permissions' },
+          { type: 'message', role: 'user', content: 'hello' },
+        ],
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createVllmResponsesCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'qwen3.8-27b-fp8',
+      instructions: 'base instructions',
+      reasoning: { effort: 'high' },
+      input: [
+        { type: 'message', role: 'developer', content: 'permissions' },
+        { type: 'message', role: 'user', content: 'hello' },
+      ],
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('omits output_config.effort and retries once when a custom Anthropic gateway rejects the effort (#5032)', async () => {
+    const upstream = await startFakeUpstream((idx, rawBody, res) => {
+      const body = JSON.parse(rawBody) as { output_config?: { effort?: string } };
+      if (idx === 0) {
+        expect(body.output_config?.effort).toBe('high');
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          type: 'error',
+          error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' },
+        }));
+        return;
+      }
+      expect(body).not.toHaveProperty('output_config');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      max_tokens: 1024,
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('surfaces the gateway effort rejection as-is when the rule is not registered (#5032 baseline)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [], recoveryRules: [] });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('does not retry an unrelated 400 through the effort rule (#5032)', async () => {
+    const upstream = await startFakeUpstream((_idx, _rawBody, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages: at least one message is required' } }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createAnthropicEffortCompatibilityRule()],
+    });
+
+    const result = await post(proxy.url, {
+      model: 'Qwen3.8-Flash-Next',
+      output_config: { effort: 'high' },
+      messages: [],
+    });
+
+    expect(result.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
   it('preserves readable agent progress when foreign reasoning ciphertext triggers recovery', async () => {
     const upstream = await startFakeUpstream((_idx, rawBody, res) => {
       const body = JSON.parse(rawBody) as {
@@ -556,6 +1242,62 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     expect((await post(proxy.url, request)).status).toBe(200);
     expect(upstream.bodies).toHaveLength(3);
     expect(upstream.bodies[2]).toBe(upstream.bodies[1]);
+  });
+
+  it.each([false, true])('classifies rejected compaction after safe reasoning retry (reasoning=%s)', async (reasoning) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(gzipSync(ENC_ERROR_BODY));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+    });
+    const compaction = { type: 'compaction', encrypted_content: 'opaque-prior-state' };
+    const message = { role: 'user', content: 'keep the original fact' };
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input: [
+      message, compaction,
+      ...(reasoning ? [{ type: 'reasoning', encrypted_content: 'old-credentials' }] : []),
+    ] });
+    expect(result.status).toBe(400);
+    expect(JSON.parse(result.text).error.code).toBe('CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE');
+    expect(upstream.bodies).toHaveLength(reasoning ? 2 : 1);
+    const final = JSON.parse(upstream.bodies.at(-1)!);
+    expect(final.input).toContainEqual(compaction);
+    expect(final.input).toContainEqual(message);
+    expect(final.input.some((item: { type?: string }) => item.type === 'reasoning')).toBe(false);
+  });
+
+  it('preserves a compatible compaction without retry or classification', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })] });
+    const input = [{ type: 'compaction', encrypted_content: 'still-compatible' }];
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input });
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(1);
+    expect(JSON.parse(upstream.bodies[0]).input).toEqual(input);
+  });
+
+  it('leaves compaction errors unchanged when encrypted recovery is disabled', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => false })] });
+    const result = await post(proxy.url, { model: 'gpt-6-astra', input: [
+      { type: 'compaction', encrypted_content: 'opaque-prior-state' },
+    ] });
+    expect(result.text).toBe(ENC_ERROR_BODY);
+    expect(upstream.bodies).toHaveLength(1);
   });
 
   it('retries invalid_encrypted_content once when enabled and marks the thread active', async () => {
@@ -2469,6 +3211,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
           await Promise.race([
             seenPromise,
             new Promise<never>((_resolve, reject) => {
+              // real-wait: bound the real PI process handshake if the proxy is never reached.
               reachTimeout = setTimeout(
                 () => reject(new Error(`real PI did not reach proxy: ${stderr}`)),
                 10_000,
@@ -2494,6 +3237,7 @@ describe('anthropic-compat-proxy localHandler(路由决策交本地 handler,不�
       } finally {
         if (child && child.exitCode === null && child.signalCode === null) {
           await new Promise<void>((resolve) => {
+            // real-wait: bound child shutdown after sending SIGTERM to the real PI process.
             const timer = setTimeout(() => {
               if (child?.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
               resolve();
@@ -2968,6 +3712,84 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
   });
 
+  // 回归:Codex CLI 收到 response.completed 即断开,上游 body 往往尚未 end —— 日志里 ~97%
+  // 的 /responses 被误记成 client-aborted。终态事件后断开须按正常完成收口(仍释放上游),
+  // 只有终态前断开才是失败。
+  it.each([
+    {
+      name: 'terminal event forwarded → complete',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\ndata: {"type":"response.completed","response":{}}\n\n',
+      waitFor: 'response.completed',
+      expected: { type: 'complete', status: 200 },
+      observerEnds: 1,
+      disconnectLogs: 0,
+    },
+    {
+      name: 'terminal event only half sent (no blank line yet) → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n'
+        + 'event: response.completed\n',
+      waitFor: 'response.completed',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+    {
+      name: 'no terminal event yet → client-aborted',
+      events: 'event: response.created\ndata: {"type":"response.created"}\n\n',
+      waitFor: 'response.created',
+      expected: { type: 'failure', failure: 'client-aborted' },
+      observerEnds: 0,
+      disconnectLogs: 1,
+    },
+  ])('client close after SSE: $name', async ({ events: sse, waitFor, expected, observerEnds, disconnectLogs }) => {
+    let sawUpstreamClose!: () => void;
+    const upstreamClosed = new Promise<void>((r) => { sawUpstreamClose = r; });
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sse);
+      // 永不 end:上游在终态事件后仍保持 body 打开。
+      res.on('close', () => sawUpstreamClose());
+    });
+    upstreamClose = upstream.close;
+    const lifecycle: Array<Record<string, unknown>> = [];
+    const infoLogs: string[] = [];
+    let ends = 0;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { info: (msg) => { infoLogs.push(msg); } },
+      routingTransform: () => ({
+        forwardLifecycle: {
+          onComplete: (status) => lifecycle.push({ type: 'complete', status }),
+          onFailure: (failure) => lifecycle.push({ type: 'failure', failure }),
+        },
+      }),
+      responseObserver: () => ({ onEnd: () => { ends += 1; } }),
+    });
+
+    const controller = new AbortController();
+    const res = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+      signal: controller.signal,
+    });
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let received = '';
+    while (!received.includes(waitFor)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      received += decoder.decode(value, { stream: true });
+    }
+    controller.abort();
+    await upstreamClosed;
+    await vi.waitFor(() => expect(lifecycle).toEqual([expected]));
+    expect(ends).toBe(observerEnds);
+    expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(disconnectLogs);
+  });
+
   it('透明重试后的上游 2xx SSE 中断时,立即收口且旧 listener 不误报客户端断开', async () => {
     const errorLogs: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
     const infoLogs: string[] = [];
@@ -3023,6 +3845,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     const outcome = await Promise.race([
       operation.then(() => 'settled' as const),
       new Promise<'timeout'>((resolve) => {
+        // real-wait: watchdog the upstream abort path so a hung response cannot stall the test.
         timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
       }),
     ]);
@@ -3359,10 +4182,12 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
 
   // per-thread 缓存需要**同一 proxy 实例**跨请求累积(每个请求独立建 proxy 会丢缓存),
   // 因此 postAs 复用同一个 upstream + proxy。
-  async function setupSingleProxy(): Promise<void> {
+  async function setupSingleProxy(compatibilityProfiles?: string[]): Promise<void> {
     const upstream = await mintingUpstream();
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [],
+      ...(compatibilityProfiles ? { routingTransform: () => ({ upstreamOverride: upstream.url, compatibilityProfiles }) } : {}),
+    });
   }
 
   async function postAs(sessionId: string, body: unknown): Promise<string> {
@@ -3395,19 +4220,18 @@ describe('per-thread 已见 id 缓存(codex-connector P1:请求体缺席历史 i
     expect(r2).toMatch(/Bash_210_dup\d+/);
   });
 
-  it('Kimi Code 的 k3 模型 id 同样判定为 kimi 会话(codex-connector P1)', async () => {
-    await setupSingleProxy();
-    // catalog 里 moonshot-kimi-code provider 的 claude-code runtime model id 是裸 `k3`
-    // (Kimi K3), 不带 kimi 前缀 —— 修复前 isKimiRequest 对 k3 返回 false → 不接管
+  it.each(['k3', 'k3-256k', 'k3.1-pro', 'k3.1-pro-highspeed', 'future-catalog-model'])('Kimi Code 的 %s 首次工具流在 rewind 后仍去重 (#7005)', async (model) => {
+    await setupSingleProxy(model === 'future-catalog-model' ? ['kimi-tool-ids-v1'] : undefined);
+    // Coding ID 不带 kimi 前缀；小数版本也必须记录首个 streamed id。
     const r1 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '你好' }],
     });
     expect(r1).toContain('"id":"Bash_210"'); // fresh id 透传(无撞车)
 
     // 第二次请求(同 session, 模拟 rewind): 缓存里已有 Bash_210 → 拦截改名
     const r2 = await postAs('sess-k3', {
-      model: 'k3',
+      model,
       messages: [{ role: 'user', content: '继续' }],
     });
     expect(r2).not.toContain('"id":"Bash_210"');
@@ -3513,6 +4337,166 @@ describe('streaming response validity gate (#2242)', () => {
       .toBe('non_sse_stream_response');
   });
 
+  it('Codex HTTP fallback accepts SSE without Content-Type after encrypted reasoning recovery', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200);
+      res.write(': keepalive\r\n\r\nev');
+      setImmediate(() => res.end(SSE_BODY.slice(2)));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+    });
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-6-astra', stream: true, input: [
+        { type: 'reasoning', encrypted_content: 'foreign-reasoning', summary: [] },
+        { role: 'user', content: 'Remember the test code' },
+      ] }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(await response.text()).toBe(`: keepalive\r\n\r\n${SSE_BODY}`);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[1]).not.toContain('foreign-reasoning');
+    expect(upstream.bodies[1]).toContain('Remember the test code');
+  });
+
+  it('accepts a large complete first SSE event without Content-Type', async () => {
+    const created = JSON.stringify({
+      type: 'response.created',
+      response: { instructions: 'large-context-fixture '.repeat(12_000), output: [] },
+    });
+    const body = `event: response.created\ndata: ${created}\n\ndata: {"type":"response.completed"}\n\n`;
+    expect(Buffer.byteLength(body)).toBeGreaterThan(64 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type for the Codex HTTP fallback.
+      res.write(body.slice(0, 80 * 1024));
+      setImmediate(() => res.end(body.slice(80 * 1024)));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const response = await fetch(`${proxy.url}/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test-model', stream: true }),
+    });
+    const responseText = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(responseText).toBe(body);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('bounds an unfinished inferred SSE event with its dedicated error code', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(8 * 1024 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('sse_inference_limit_exceeded');
+  });
+
+  it('commits a complete inferred event before rejecting bytes after its cap', async () => {
+    const prefix = 'event: response.created\ndata: ';
+    const firstEvent = `${prefix}${'x'.repeat(8 * 1024 * 1024 - Buffer.byteLength(prefix) - 18)}\n\n`;
+    const remainder = 'data: {"type":"response.completed"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(`${firstEvent}${remainder}`);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: `${firstEvent}${remainder}` });
+  });
+
+  it('infers a complete event with mixed LF and CRLF event delimiters', async () => {
+    const body = 'event: response.created\ndata: {}\n\r\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: body });
+  });
+
+  it('still rejects a large unfinished inferred SSE event below its cap', async () => {
+    const body = `event: response.created\ndata: ${'x'.repeat(128 * 1024)}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200); // Intentionally omit Content-Type.
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+  });
+
+  it.each([
+    { name: 'JSON without MIME', body: '{"ok":true}', headers: {} },
+    { name: 'HTML containing an SSE line', body: '<html>\ndata: fake\n</html>', headers: {} },
+    { name: 'explicit HTML MIME with SSE bytes', body: SSE_BODY, headers: { 'content-type': 'text/html' } },
+    { name: 'comment-only body without MIME', body: ': keepalive\n\n', headers: {} },
+    { name: 'truncated data field', body: 'data: upstream timeout', headers: {} },
+    { name: 'data line without event boundary', body: 'data: upstream timeout\n', headers: {} },
+    { name: 'event-only block', body: 'event: response.created\n\n', headers: {} },
+    { name: 'heartbeat followed by unfinished data', body: ': ping\n\ndata: {}\n', headers: {} },
+  ])('does not infer SSE from $name', async ({ body, headers }) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, headers);
+      res.end(body);
+    });
+    upstreamClose = upstream.close;
+    const transformResponse = vi.fn(() => { throw new Error('must not adapt invalid streams'); });
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformResponse });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result.status).toBe(502);
+    expect(JSON.parse(result.text).error.code).toBe('non_sse_stream_response');
+    expect(transformResponse).not.toHaveBeenCalled();
+  });
+
+  it.each(['\n', '\r\n'])('infers a complete data event across chunk boundaries (%j)', async (newline) => {
+    const body = `: keepalive${newline}${newline}event: response.created${newline}data: {}${newline}${newline}`;
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200);
+      const chunks = [...Buffer.from(body)];
+      const writeNext = () => {
+        const byte = chunks.shift();
+        if (byte === undefined) {
+          res.end();
+        } else {
+          res.write(Buffer.from([byte]));
+          setImmediate(writeNext);
+        }
+      };
+      writeNext();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+    expect(result).toEqual({ status: 200, text: body });
+  });
+
   it('零事件 SSE(只有注释/心跳)正常结束 → 502(sse_without_events)', async () => {
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, SSE_HEADERS);
@@ -3578,5 +4562,27 @@ describe('streaming response validity gate (#2242)', () => {
     proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
 
     await expect(post(proxy.url, { model: 'test-model', stream: true })).rejects.toThrow();
+  });
+});
+
+describe('anthropic-compat-proxy stream gate pending-buffer boundary', () => {
+  it('commits every gated byte when the pending buffer lands exactly on the gate cap', async () => {
+    // 回归:入队条件曾是 `pendingBytes < CAP` 而拒收条件是 `> CAP` —— 累计恰好
+    // 落在 64KiB(回环读常见块大小)时, 后续 chunk 只计数不入队; 事件标记在这些
+    // chunk 里到达并提交后, 它们被永久跳过, 客户端收到中间有缺口的 200 SSE。
+    const pad = 'x'.repeat(64 * 1024);
+    const marker = 'event: message_start\ndata: {"type":"message_start"}\n\n';
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(pad);
+      res.write(marker);
+      res.end();
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({ upstream: upstream.url });
+    const result = await post(proxy.url, { model: 'test-model', stream: true });
+
+    expect(result.status).toBe(200);
+    expect(result.text).toBe(pad + marker);
   });
 });

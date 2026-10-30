@@ -198,20 +198,34 @@ describe('resolveProviderModelEfforts', () => {
       'resolveModelEfforts(\n          newModelId,\n          providerId,\n          targetAgentKind,\n        )',
     );
     expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain('resolveRequestedEffort({');
-    expect(source.slice(agentSwitchStart, agentSwitchEnd)).toContain(
-      'overrides.fastMode && fastCapable',
-    );
+    // 速度 override 的目标能力门由 resolveFastSupported.test.ts 执行生产分支验证。
     expect(source.slice(modelChangeStart, modelChangeEnd)).toContain(
       'intent.effort ? { effort: intent.effort as Effort }',
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
       'resolveIntentReselectEffort(reconciledEffort, intent.effort)',
     );
+    // Pending engine-switch reselect must preserve an explicit false as well as true.
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
+      '...(reconciledFast !== undefined ? { fastMode: reconciledFast } : {}),',
+    );
+    // Returning to the running engine must carry the complete favorite configuration
+    // into SET_MODEL instead of restoring that model's unrelated saved Fast preset.
+    expect(source.slice(agentSwitchStart, agentSwitchEnd)).toMatch(
+      /sameEngineReselectRef\.current\.byProvider\(\s*providerId,\s*newModelId,\s*result\.sameEngineRevision,\s*newEffort,\s*targetFast,/,
+    );
+    expect(source).toContain(
+      'performProviderChange(providerId, modelId, effort, expectedRevision, fastMode)',
+    );
     expect(source.slice(modelChangeStart, modelChangeEnd)).toMatch(
       /resolveModelEfforts\(\s*newModelId,\s*effectiveSourceId,?\s*\)/,
     );
     expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
-      '{ effort: eff, fastMode: restoredFast }',
+      'setModelWithFinalWindowConfirmation(',
+    );
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain('effort: eff,');
+    expect(source.slice(providerChangeStart, providerChangeEnd)).toContain(
+      'fastMode: restoredFast,',
     );
   });
 });

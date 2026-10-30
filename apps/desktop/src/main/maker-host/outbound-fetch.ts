@@ -496,6 +496,7 @@ export function createPinnedProxyDispatcher(
   upstream: URL,
   addresses: readonly string[],
   beforeRetry: () => void | Promise<void>,
+  signal?: AbortSignal,
 ): Dispatcher {
   if (addresses.length === 0) throw new Error(`Unable to resolve hostname: ${upstream.hostname}`);
   const base = createProxyDispatcher(
@@ -533,12 +534,12 @@ export function createPinnedProxyDispatcher(
             // HTTPS CONNECT / SOCKS5 握手失败发生在 onRequestStart 之前；一旦请求开始，
             // 就不能为了换 IP 而重放可能产生副作用的 POST。切换到下一个已审核 IP
             // 也是一次新的真实派发，必须重新确认 callId 仍处于授权窗口。
-            if (!requestStarted && !controller.aborted && index + 1 < addresses.length) {
+            if (!requestStarted && !controller?.aborted && !signal?.aborted && index + 1 < addresses.length) {
               void Promise.resolve()
                 .then(beforeRetry)
                 .then(
                   () => {
-                    if (controller.aborted) {
+                    if (controller?.aborted || signal?.aborted) {
                       handler.onResponseError?.(controller, error);
                       return;
                     }
@@ -602,19 +603,27 @@ export async function guardedOutboundFetch(
   url: string,
   init: RequestInit,
   beforeDispatch: () => void | Promise<void>,
+  approval?: { targetUrl: string; allowHttp?: boolean; allowPrivateNetwork?: boolean },
 ): Promise<{ response: Response; release: () => Promise<void> }> {
   const upstream = new URL(url);
+  // Host-owned, single-target exception. Never inherit it across a redirect.
+  if (approval && approval.targetUrl !== upstream.href) {
+    throw new Error('Download approval target mismatch');
+  }
   const signal = init.signal ?? undefined;
   const proxy = await resolveProxyTarget(upstream, signal);
   return fetchSingleHopWithSsrFGuard({
     url,
     init,
     signal,
-    requireHttps: true,
+    requireHttps: !approval?.allowHttp,
+    ...(approval?.allowPrivateNetwork
+      ? { policy: { dangerouslyAllowPrivateNetwork: true, hostnameAllowlist: [upstream.hostname] } }
+      : {}),
     ...(proxy
       ? {
           dispatcherFactory: ({ url: guardedUrl, pinned }) =>
-            createPinnedProxyDispatcher(proxy, guardedUrl, pinned.addresses, beforeDispatch),
+            createPinnedProxyDispatcher(proxy, guardedUrl, pinned.addresses, beforeDispatch, signal),
         }
       : {}),
     beforeDispatch,

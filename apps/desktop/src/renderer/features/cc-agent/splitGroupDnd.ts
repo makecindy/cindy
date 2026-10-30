@@ -44,7 +44,8 @@ interface SessionDragEndEventLike {
 let activeSessionDragCancelled = false;
 let activeSessionDragCleanup: (() => void) | null = null;
 
-function resolveSessionDragPreviewPalette(): SessionDragPreviewPalette | undefined {
+/** 窗外预览卡的配色:按当前主题 token 实测(主进程那扇预览窗口拿不到 CSS 变量)。 */
+export function resolveSessionDragPreviewPalette(): SessionDragPreviewPalette | undefined {
   if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
   const parent = document.body ?? document.documentElement;
   if (!parent) return undefined;

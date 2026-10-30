@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  MOBILE_IMAGE_PREPROCESS_MAX_BYTES,
   MOBILE_IMAGE_UPLOAD_JPEG_QUALITY,
   MOBILE_IMAGE_UPLOAD_MAX_LONG_EDGE,
   MOBILE_IMAGE_UPLOAD_SKIP_BYTES,
@@ -17,6 +18,17 @@ describe('planMobileImageUploadPreprocess', () => {
     expect(planMobileImageUploadPreprocess({
       mimeType: 'image/gif', size: 10_000_000, width: 4000, height: 3000,
     })).toBeNull();
+  });
+
+  it('超大文件不在手机上解码,原样上传(避免整图解码占满内存)', () => {
+    for (const mimeType of ['image/jpeg', 'image/png']) {
+      expect(planMobileImageUploadPreprocess({
+        mimeType, size: MOBILE_IMAGE_PREPROCESS_MAX_BYTES + 1, width: 12000, height: 9000,
+      })).toBeNull();
+    }
+    expect(planMobileImageUploadPreprocess({
+      mimeType: 'image/jpeg', size: MOBILE_IMAGE_PREPROCESS_MAX_BYTES, width: 12000, height: 9000,
+    })).not.toBeNull();
   });
 
   it('小尺寸小体积 jpeg 原样上传', () => {

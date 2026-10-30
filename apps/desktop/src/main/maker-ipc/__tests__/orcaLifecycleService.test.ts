@@ -1,5 +1,13 @@
+import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorization.js';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
+import { PluginTaskError } from '../pluginTaskService.js';
 import type { AgentKind } from '@cindy/maker-core';
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 import { describe, expect, it, vi } from 'vitest';
+
+// The lifecycle unit owns no credential/runtime I/O.
+vi.mock('../../maker-host/codex-credential-switch.js', () => ({isCredentialModeSwitchBusyError: () => false}));
 
 import {
   createOrcaLifecycleService,
@@ -22,6 +30,7 @@ function createdWorker(overrides: Partial<Extract<OrcaWorkerCreationResult, { ok
     teamId: 'team-1',
     workerId: 'worker-1',
     workerSessionId: 'worker-session-1',
+    workingDir: '/repo',
     softLimitExceeded: false,
     resolved: {
       agent: 'codex',
@@ -117,6 +126,95 @@ function createDeps(overrides: Partial<OrcaLifecycleDeps> = {}) {
 }
 
 describe('OrcaLifecycleService', () => {
+  it.each(['create-task', 'create-placeholder', 'enable-task', 'enable-placeholder', 'enable-deferred'].flatMap(action => [true, false].flatMap(revoked => ['source', 'directory'].map(scope => ({ action, revoked, scope }))))) (
+    'guards $action $scope at acceptance, revoked=$revoked, and cleans up outside dispatch', async ({ action, revoked, scope }) => {
+      let allowed = true, insideSend = false, nativeCalls = 0;
+      const { deps, service } = createDeps({
+        getActiveTeamByLead: async () => action.startsWith('create') ? activeTeam() : null,
+        getWorkerPermissionModeOverride: async () => ({ permissionMode: 'auto', assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); } }),
+      });
+      const create = deps.createWorkerInTeam;
+      deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
+        const result = await create(params, assertCurrent);
+        onCreated?.(async () => { await assertCurrent?.(); if (scope === 'directory' && !allowed) throw Error('Revoked'); });
+        return result;
+      };
+      deps.dispatchWorkerTask = vi.fn(async (params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
+        insideSend = true; allowed = !revoked;
+        try {
+          try { await assertCurrent?.(); } catch { return { dispatched: false, dispatchOutcome: { kind: 'host-send', code: 'SEND_FAILED', accepted: false, message: 'Revoked', source: 'test', context: 'initial' } }; }
+          nativeCalls++;
+          return { dispatched: true, dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true }, agentKind: 'codex', wakeKind: 'resumed', targetTitle: 'Worker', targetLastUserSendAt: null };
+        } finally { insideSend = false; }
+      });
+      const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+      const lifecycleFrom = source.indexOf('  const orcaLifecycleService = createOrcaLifecycleService(');
+      expect(lifecycleFrom).toBeGreaterThan(-1);
+      const dispatchFrom = source.indexOf('    dispatchWorkerTask: (', lifecycleFrom);
+      const dispatchAdapter = source.slice(dispatchFrom, source.indexOf('    markTeamEnded,', dispatchFrom));
+      const dispatchJs = ts.transpileModule(`return ({${dispatchAdapter}}).dispatchWorkerTask;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      deps.dispatchWorkerTask = new Function('orcaTeamService', dispatchJs)({ dispatchWorkerTask: deps.dispatchWorkerTask });
+      const from = source.indexOf('    sendWorkerReadyPlaceholder: async (');
+      const callback = source.slice(from, source.indexOf('    rollbackCreatedWorker:', from));
+      const bindings = { maker: { getSession: () => ({ id: 'worker-session-1', send: async (_message: unknown, opts: { onAccepted?: () => Promise<void> }) => {
+        insideSend = true; allowed = !revoked;
+        try { await runAcceptedCallback(opts.onAccepted, 'worker-session-1', 'placeholder'); nativeCalls++; return { dispatched: true }; }
+        finally { insideSend = false; }
+      } }) }, ORCA_WORKER_READY_MESSAGE, AcceptedCallbackDispatchCancelled, assertDesktopSendDispatched: vi.fn(), log: { info: vi.fn() }, orcaRemoteWorkers: { runtime: { isRemote: () => false } } };
+      const js = ts.transpileModule(`return ({${callback}}).sendWorkerReadyPlaceholder;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+      deps.sendWorkerReadyPlaceholder = new Function(...Object.keys(bindings), js)(...Object.values(bindings));
+      deps.rollbackCreatedWorker = vi.fn(async () => { expect(insideSend).toBe(false); });
+      const result = action.startsWith('create')
+        ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', ...(action.endsWith('task') ? { initialTask: 'Evaluate' } : {}) })
+        : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', ...(action === 'enable-task' || action === 'enable-deferred' ? { delegateTask: 'Evaluate' } : {}), deferDelegateTask: action === 'enable-deferred' });
+      expect(result.ok).toBe(!revoked);
+      expect(nativeCalls).toBe(revoked ? 0 : 1);
+      expect(deps.rollbackCreatedWorker).toHaveBeenCalledTimes(revoked ? 1 : 0);
+      expect(deps.markTeamEnded).toHaveBeenCalledTimes(revoked && action.startsWith('enable') ? 1 : 0);
+    },
+  );
+
+  it.each((['createWorker', 'enableTeam'] as const).flatMap(action => ['source', 'directory'].map(scope => ({ action, scope }))))(
+    'keeps the Worker when queued $scope acceptance rejects before $action returns', async ({ action, scope }) => {
+      let allowed = true;
+      const { deps, service } = createDeps({
+        getActiveTeamByLead: async () => action === 'createWorker' ? activeTeam() : null,
+        getWorkerPermissionModeOverride: async () => ({
+          permissionMode: 'auto',
+          assertCurrent: async () => { if (scope === 'source' && !allowed) throw new Error('Revoked'); },
+        }),
+        dispatchWorkerTask: vi.fn(async (_params, assertCurrent): Promise<DispatchWorkerTaskResult> => {
+          // A coordinator drain can reject independently before the queued
+          // result reaches lifecycle; it still owns this queued input only.
+          allowed = false;
+          await expect(assertCurrent!()).rejects.toThrow('Revoked');
+          return {
+            dispatched: false,
+            queued: true,
+            dispatchOutcome: { kind: 'session-dispatch', dispatched: true, source: 'test', wakeKind: 'queued' },
+            agentKind: 'codex',
+            wakeKind: 'queued',
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+            queuedMessageId: 'queued-1',
+          };
+        }),
+      });
+      const create = deps.createWorkerInTeam;
+      deps.createWorkerInTeam = async (params, assertCurrent, onCreated) => {
+        const result = await create(params, assertCurrent);
+        onCreated?.(async () => { await assertCurrent?.(); if (scope === 'directory' && !allowed) throw Error('Revoked'); });
+        return result;
+      };
+      const result = action === 'createWorker'
+        ? await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'reviewer', label: 'reviewer', initialTask: 'Evaluate' })
+        : await service.enableTeam({ leadSessionId: 'lead-1', workerAgent: 'codex', delegateTask: 'Evaluate' });
+      expect(result).toMatchObject({ ok: true, dispatched: false, dispatchOutcome: { wakeKind: 'queued' } });
+      expect(deps.rollbackCreatedWorker).not.toHaveBeenCalled();
+      expect(deps.markTeamEnded).not.toHaveBeenCalled();
+    },
+  );
+
   it('starts a team without creating a worker and refreshes lead state', async () => {
     const { calls, service } = createDeps();
 
@@ -226,6 +324,7 @@ describe('OrcaLifecycleService', () => {
       'setSessionOrcaRole:lead-1:lead',
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
+      'clearLeadVendorOptions:lead-1',
     ]);
   });
 
@@ -250,6 +349,7 @@ describe('OrcaLifecycleService', () => {
       'setLeadVendorOptions:lead-1:undefined',
       'markTeamEnded:team-1:failed',
       'setSessionOrcaRole:lead-1:null',
+      'clearLeadVendorOptions:lead-1',
     ]);
   });
 
@@ -284,6 +384,7 @@ describe('OrcaLifecycleService', () => {
         agent: 'codex' as AgentKind,
         label: 'reviewer',
         initialTask: 'review PR',
+        workingDir: '/remote/explicit-project',
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -293,12 +394,24 @@ describe('OrcaLifecycleService', () => {
     });
 
     expect(deps.createActiveTeam).not.toHaveBeenCalled();
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }), undefined, expect.any(Function));
     expect(calls).toEqual([
       'createWorkerInTeam:team-existing:reviewer',
       'dispatchWorkerTask:create_worker/worker-session-1/initial_task',
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+  });
+
+  it.each(['missing', 'failed'])('does not change the ordinary preference when team lookup is %s', async outcome => {
+    const { deps, service } = createDeps({
+      getWorkerPermissionModeOverride: async () => ({ assertCurrent: async () => undefined }),
+      getActiveTeamByLead: async () => { if (outcome === 'failed') throw new Error('storage'); return null; },
+    });
+    const result = await service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'eval', label: 'sample', workerPermissionMode: 'bypassPermissions' }).catch(() => ({ ok: false }));
+    expect(result.ok).toBe(false);
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
   });
 
   it('uses the saved Worker creation preference for later create_worker calls', async () => {
@@ -318,7 +431,7 @@ describe('OrcaLifecycleService', () => {
 
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
-    );
+      undefined, expect.any(Function));
   });
 
   it('keeps a created worker when initial task dispatch throws before vendor dispatch', async () => {
@@ -384,7 +497,7 @@ describe('OrcaLifecycleService', () => {
       agentKind: 'codex',
       entrypoint: 'create_worker',
       context: 'create_worker/worker-session-1/worker-ready-placeholder',
-    });
+    }, undefined);
     expect(ORCA_WORKER_READY_MESSAGE).toBe(
       '[系统] Orca Worker 已就绪，当前没有待执行任务。不要调用任何工具来等待、观察或轮询 Lead。只回复一句简短确认并立即结束本轮；Lead 后续会主动发送任务。',
     );
@@ -420,7 +533,7 @@ describe('OrcaLifecycleService', () => {
       agentKind: 'codex',
       entrypoint: 'create_worker',
       context: 'create_worker/worker-session-1/worker-ready-placeholder',
-    });
+    }, undefined);
   });
 
   it('rolls back create_worker when the ready placeholder is not accepted', async () => {
@@ -505,7 +618,7 @@ describe('OrcaLifecycleService', () => {
       dispatchMeta: expect.objectContaining({
         context: 'create_worker/worker-session-1/initial_task',
       }),
-    }));
+    }), undefined);
   });
 
   it('enables a team through the same worker creation boundary and sends the ready placeholder when no delegate task exists', async () => {
@@ -557,7 +670,7 @@ describe('OrcaLifecycleService', () => {
     expect(deps.setWorkerPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
       expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }),
-    );
+      undefined, expect.any(Function));
   });
 
   it('uses the worker role slug as the default label when enabling a team', async () => {
@@ -586,6 +699,35 @@ describe('OrcaLifecycleService', () => {
       'broadcastSessionCreated:worker-session-1',
       'broadcastOrcaWorkerChanged:lead-1',
     ]);
+  });
+
+  it('places the first worker on another computer and sends its task as plain text', async () => {
+    const { deps, service } = createDeps();
+    const create = vi.mocked(deps.createWorkerInTeam);
+    const base = create.getMockImplementation()!;
+    create.mockImplementation(async (params, ...rest) => {
+      const created = await base(params, ...rest);
+      return created.ok ? { ...created, executionDeviceId: params.executionDeviceId } : created;
+    });
+
+    await expect(
+      service.enableTeam({
+        leadSessionId: 'lead-1',
+        workerAgent: 'codex',
+        role: 'reader',
+        delegateTask: '读取 notes.txt 第二行',
+        executionDeviceId: 'mac-mini',
+        workingDir: '/Users/demo/Interviews',
+      }),
+    ).resolves.toMatchObject({ ok: true, dispatched: true });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ executionDeviceId: 'mac-mini', workingDir: '/Users/demo/Interviews' }),
+      undefined,
+      expect.any(Function),
+    );
+    // 运行设备上没有读取 Lead 历史的 Worker 桥：不包 UI Assignment。
+    expect(vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message).toBe('读取 notes.txt 第二行');
   });
 
   it('keeps the worker role slug as the default label when a delegate task exists', async () => {
@@ -621,6 +763,7 @@ describe('OrcaLifecycleService', () => {
           context: 'enable_collab_mode/worker-session-1/delegate_task',
         }),
       }),
+      undefined,
     );
     const dispatchedMessage = vi.mocked(deps.dispatchWorkerTask).mock.calls[0]?.[0].message;
     expect(dispatchedMessage).toContain('Task:\nReview PR #42 now');
@@ -973,5 +1116,87 @@ describe('enableTeam — 孤儿空团队自动回收 (#3555)', () => {
 
     releaseCreate();
     await expect(first).resolves.toMatchObject({ teamId: 'team-a' });
+  });
+});
+
+
+describe('host-scoped Worker permissions', () => {
+  it.each([undefined, 'bypassPermissions'] as const)('keeps plugin Workers Auto despite global or explicit Full access: %s', async (workerPermissionMode) => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionMode: vi.fn(() => 'bypassPermissions' as const),
+      getWorkerPermissionModeOverride: vi.fn(async () => ({ permissionMode: 'auto' as const, assertCurrent: async () => undefined })),
+    });
+    expect(await service.startTeam({leadSessionId: 'lead-1', workerPermissionMode})).toMatchObject({ok: true, workerPermissionMode: 'auto'});
+    await service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex', workerPermissionMode});
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({workerPermissionMode: 'auto'}), expect.any(Function), expect.any(Function));
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
+  });
+  it('does not create a Worker after host authorization is revoked', async () => {
+    const { deps, service } = createDeps({
+      getActiveTeamByLead: vi.fn(async () => activeTeam()),
+      getWorkerPermissionModeOverride: vi.fn(async () => { throw new Error('permission revoked'); }),
+    });
+    await expect(service.createWorker({leadSessionId: 'lead-1', role: 'worker', label: 'sample', agent: 'codex'})).rejects.toThrow('permission revoked');
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
+    expect(deps.setWorkerPermissionMode).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Orca task authority is independent of task creator', () => {
+  const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8');
+  const helper = source.slice(source.indexOf('  const captureOrcaTaskAuthority ='), source.indexOf('  const captureOrcaDeliveryAuthority ='));
+  const js = ts.transpileModule(`${helper}\nreturn captureOrcaTaskAuthority;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+
+  function capture(currentEpoch: () => object) {
+    return new Function('captureTaskActionGuard', 'getCurrentDbClientSnapshot', 'PluginTaskError', js)(
+      captureTaskActionGuard, currentEpoch, PluginTaskError,
+    ) as (sessionId: string) => Promise<{ assertCurrent: () => Promise<void> }>;
+  }
+
+  it.each(['startTeam', 'createWorker'] as const)('rechecks ordinary task action authority during %s', async action => {
+    let current = true;
+    const epoch = { client: {} };
+    const { deps, service } = createDeps({
+      getWorkerPermissionModeOverride: id => capture(() => epoch)(id),
+      getActiveTeamByLead: vi.fn(async () => { current = false; return action === 'createWorker' ? activeTeam() : null; }),
+    });
+    const decision = await admitTaskAction({
+      sessionId: 'lead-1', server: 'cindy_orca', tool: action === 'startTeam' ? 'start_team' : 'create_worker', args: {},
+    }, { key: 'owner', ownerInput: true, delegated: false,
+      assertCurrent: async () => { if (!current) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); } });
+    if (!decision.ok || !decision.run) throw new Error('missing admission');
+    if (action === 'startTeam') {
+      await expect(decision.run(() => service.startTeam({ leadSessionId: 'lead-1' })))
+        .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    } else {
+      await expect(decision.run(() => service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' })))
+        .rejects.toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    }
+    expect(deps.createWorkerInTeam).not.toHaveBeenCalled();
+    expect(deps.createActiveTeam).not.toHaveBeenCalled();
+  });
+
+  it('uses task preferences for Worker creation', async () => {
+    const epoch = { client: {} };
+    const { deps, service } = createDeps({
+      getWorkerPermissionModeOverride: id => capture(() => epoch)(id),
+      getWorkerPermissionMode: () => 'bypassPermissions',
+      getActiveTeamByLead: async () => activeTeam(),
+    });
+    await expect(service.createWorker({ leadSessionId: 'lead-1', agent: 'codex', role: 'worker', label: 'sample' }))
+      .resolves.toMatchObject({ ok: true });
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(
+      expect.objectContaining({ workerPermissionMode: 'bypassPermissions' }), expect.any(Function), expect.any(Function),
+    );
+  });
+
+  it('expires on account change', async () => {
+    const epoch = { client: {} };
+    let current: object = epoch;
+    const authority = await capture(() => current)('lead-1');
+    current = { client: {} };
+    await expect(authority.assertCurrent()).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 });

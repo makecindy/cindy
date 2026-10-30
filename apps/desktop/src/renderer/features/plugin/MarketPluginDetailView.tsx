@@ -1,11 +1,14 @@
+import { PluginShareButton } from './PluginShareButton';
+import { Button } from '@/components/ui/button';
+import { PluginVersionUpdates } from './PluginVersionUpdates';
+import { ToolsSection } from './GhostPluginDetailView';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
+import { PluginSharedUsage } from './PluginSharedUsage';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
 import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
@@ -49,13 +52,18 @@ export function MarketPluginDetailView({
 
   return (
     <main
-      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
       onScroll={onScroll}
     >
       <PluginDetailTopBar
         label={t('settings.ghosts.detail.backToList')}
         onBack={onBack}
         scrolled={scrolled}
+        actions={
+          detail.sourceType === 'server' && detail.scope === 'public' ? (
+            <PluginShareButton pluginId={detail.pluginId} />
+          ) : undefined
+        }
       />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <header>
@@ -69,14 +77,15 @@ export function MarketPluginDetailView({
               onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
               size="detail"
             />
-            <div className="min-w-0">
+            <div className="plugin-detail-heading min-w-0">
               <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
                 {detail.name}
               </h1>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
+              <div className="plugin-detail-metadata mt-1.5 flex min-w-0 flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
                 <span>{t(`settings.ghosts.market.scope.${presentationOrigin}`)}</span>
                 <span aria-hidden="true">·</span>
                 <span>v{detail.version}</span>
+                <PluginSharedUsage detail={detail} />
                 {detail.author ? (
                   <>
                     <span aria-hidden="true">·</span>
@@ -86,42 +95,35 @@ export function MarketPluginDetailView({
               </div>
             </div>
             {onInstall ? (
-              <button
+              <Button
+                variant="cta"
+                size="lg"
+                compact
+                loading={busy}
                 type="button"
                 onClick={onInstall}
                 disabled={actionDisabled}
                 aria-label={t(actionKey)}
                 aria-busy={busy || undefined}
-                aria-describedby={
-                  replacementDescription ? replacementDescriptionId : undefined
-                }
-                className={cn(
-                  'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
-                  'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                  'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-                )}
+                aria-describedby={replacementDescription ? replacementDescriptionId : undefined}
+                className="plugin-detail-actions plugin-detail-primary-action min-w-[104px] whitespace-nowrap"
               >
-                {busy ? (
-                  <Spinner size={14} />
-                ) : (
-                  <>
-                    <Download size={15} aria-hidden="true" />
-                    {t(actionKey)}
-                  </>
-                )}
-              </button>
+                <Download size={15} aria-hidden="true" />
+                {t(actionKey)}
+              </Button>
             ) : null}
           </div>
-          <p
-            id={replacementDescription ? replacementDescriptionId : undefined}
-            className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]"
-          >
-            {replacementDescription ?? (detail.description || detail.ghostId)}
+          <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
+            {detail.description || detail.ghostId}
           </p>
+          {replacementDescription ? (
+            <p id={replacementDescriptionId} className="mt-3 text-13 leading-5 text-[var(--text-secondary)]">
+              {replacementDescription}
+            </p>
+          ) : null}
         </header>
 
+        {detail.manifest.tools?.length ? <ToolsSection tools={detail.manifest.tools} /> : null}
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2
             id="market-security-title"
@@ -174,6 +176,18 @@ export function MarketPluginDetailView({
             )}
           </div>
         </section>
+        {detail.manifest.releaseNotes?.trim() ? (
+          <PluginVersionUpdates key={detail.pluginId}>
+            <section className="space-y-3" aria-label={t('settings.ghosts.contribution.releaseNotes')}>
+              <h2 className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]">
+                {t('settings.ghosts.contribution.releaseNotes')} · {detail.version}
+              </h2>
+              <p className="whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">
+                {detail.manifest.releaseNotes}
+              </p>
+            </section>
+          </PluginVersionUpdates>
+        ) : null}
       </article>
     </main>
   );

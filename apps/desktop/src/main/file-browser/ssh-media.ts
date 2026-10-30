@@ -20,6 +20,7 @@
  * electron;生产默认走 RemoteFileBrowserManager 单例(getRemoteFileBrowser)。
  */
 
+import { createHash } from 'node:crypto';
 import { createReadStream, promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -50,6 +51,7 @@ export type MaterializedSshRemoteMedia =
   | {
       ok: true;
       cachePath: string;
+      sourceVersion: string;
       size: number;
       mime: string;
       relPath: string;
@@ -82,11 +84,12 @@ export function makeSshChunkExecutor(
   workdir: string,
   relPath: string,
 ): FetchExecutor {
-  return async (destPath, progress) => {
+  return async (destPath, progress, signal) => {
     const handle = await fsPromises.open(destPath, 'w');
     try {
       let offset = 0;
       for (;;) {
+        if (signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
         const chunk = await request<{ dataBase64: string; eof: boolean; size: number; mtimeMs: number }>(
           hostId,
           'readFileChunk',
@@ -140,10 +143,10 @@ const MIME_BY_EXT: Record<string, string> = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
   '.flac': 'audio/flac',
-  // HTML 预览的同目录资源(review P1):手机端 htmlLocalResources 接受这些扩展名并把它们
-  // 内联成 data: URI,本表若不同步,SSH 会话下最常见的 `<link href="assets/style.css">`
-  // 会直接 415 —— 本地会话有样式、SSH 会话必然缺样式。
-  // 只放宽「类型」,不放宽「范围」:路径仍由上面的 toWorkdirRelPosix 约束在 SSH 工作目录内。
+  // HTML 预览:入口文档与同目录资源都走这条 SSH 媒体管线。只放宽类型,不放宽范围。
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.xhtml': 'application/xhtml+xml',
   '.css': 'text/css',
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',
@@ -284,7 +287,14 @@ export async function materializeSshRemoteMedia(
       makeSshChunkExecutor(deps.request, origin.remoteHostId, origin.workdir, relPath),
       noopProgress,
     );
-    return { ok: true, cachePath, size: stat.size, mime, relPath };
+    // Source identity belongs to the remote file, not the generation-scoped local copy.
+    // Consumers already isolate their persistent cache by stable account and device.
+    const sourceVersion = createHash('sha256')
+      .update(
+        JSON.stringify(['ssh', origin.remoteHostId, origin.workdir, relPath, stat.size, stat.mtimeMs]),
+      )
+      .digest('hex');
+    return { ok: true, cachePath, sourceVersion, size: stat.size, mime, relPath };
   } catch (err) {
     log.warn('ssh remote media fetch failed', { relPath, error: String(err) });
     return { ok: false, status: 502, message: 'SSH 远程媒体取回失败' };

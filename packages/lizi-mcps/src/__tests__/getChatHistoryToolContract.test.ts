@@ -22,8 +22,17 @@ describe('get_chat_history published contract', () => {
 
     const capability = CAPABILITIES.find((entry) => entry.key === 'chat-history-query');
     expect(capability).toBeDefined();
-    expect(capability!.detail).toContain('开放了五个只读查询入口');
-    expect(capability!.detail).not.toContain('开放了四个只读查询入口');
+    expect(capability!.detail).toContain('【六个工具】');
+    for (const name of [
+      'list_workdirs',
+      'list_sessions',
+      'list_session_queue',
+      'get_chat_history',
+      'search_chat_history',
+      'list_history_devices',
+    ]) {
+      expect(capability!.detail).toContain(name);
+    }
     expect(capability!.detail).toContain('get_chat_history({session_ids: [...]})');
     expect(capability!.detail).not.toContain('get_chat_history({sessionIds: [...]})');
   });

@@ -149,18 +149,19 @@ function uniqueTruthy(values: Array<string | undefined>): string[] {
 }
 
 /**
- * Claude CLI 配置目录候选(优先级序):显式 CLAUDE_CONFIG_DIR → dev 多实例的
- * XDT_USER_DATA_DIR/claude-home(auth-adapters 给 CLI 子进程注入的同款重定向)
- * → 默认 ~/.claude。desktop 侧读写 CLI 转录的模块应经此解析,不要各自硬编码
- * ~/.claude(多实例下会找错根目录)。
+ * Claude CLI 配置目录候选(优先级序):显式 CLAUDE_CONFIG_DIR → 默认 ~/.claude(CLI
+ * 实际使用的目录)→ 旧版 dev 多实例的 XDT_USER_DATA_DIR/claude-home(只读兜底:
+ * dev 曾把 CLI 配置目录隔离到这里,现已与正式版一样用默认目录,旧转录由
+ * claude-legacy-config-migration 补拷过去)。首项即 CLI 当前的写入根;desktop 侧读写
+ * CLI 转录的模块应经此解析,不要各自硬编码 ~/.claude。
  */
 export function defaultClaudeConfigDirCandidates(): string[] {
   return uniqueTruthy([
     process.env.CLAUDE_CONFIG_DIR,
+    path.join(os.homedir(), '.claude'),
     process.env.XDT_USER_DATA_DIR
       ? path.join(process.env.XDT_USER_DATA_DIR, 'claude-home')
       : undefined,
-    path.join(os.homedir(), '.claude'),
   ]);
 }
 

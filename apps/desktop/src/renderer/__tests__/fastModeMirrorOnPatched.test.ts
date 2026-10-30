@@ -76,6 +76,33 @@ describe('makerChatStore.mirrorSessionFields', () => {
     );
   });
 
+  it('keeps a newer model choice for the same agent until the host explicitly consumes it', () => {
+    const s = sid();
+    makerChatStore.setSessionRuntime(s, { agentKind: 'claude-code' });
+    makerChatStore.noteAgentSwitchIntent(s, 'pi', { model: 'newer-model', providerId: 'newer-source' });
+    const revision = makerChatStore.getAgentSwitchIntentRev(s);
+    makerChatStore.mirrorSessionFields(s, {
+      agentKind: 'pi', providerId: 'xai',
+      runtimeEffective: { agentKind: 'pi', model: 'grok-4.6', providerId: 'xai', effort: 'low', fastMode: false },
+    });
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('pi');
+    expect(makerChatStore.getSnapshot(s).sessionProviderId).toBe('xai');
+    expect(makerChatStore.getAgentSwitchIntent(s)).toMatchObject({ model: 'newer-model', providerId: 'newer-source' });
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBe(revision);
+    makerChatStore.mirrorSessionFields(s, { agentSwitchIntent: null });
+    expect(makerChatStore.getAgentSwitchIntent(s)).toBeNull();
+  });
+
+  it('does not infer consumption when a patch explicitly retains an intent for the same agent', () => {
+    const s = sid();
+    makerChatStore.mirrorSessionFields(s, {
+      agentKind: 'pi',
+      agentSwitchIntent: { targetAgentKind: 'pi', model: 'next-pi-model', providerId: null },
+    });
+    expect(makerChatStore.getSnapshot(s).agentKind).toBe('pi');
+    expect(makerChatStore.getAgentSwitchIntent(s)?.model).toBe('next-pi-model');
+  });
+
   it('mirrors an explicit same-agent provider patch into later createOpts', () => {
     const s = sid();
     makerChatStore.mirrorSessionFields(s, { providerId: 'xd' });

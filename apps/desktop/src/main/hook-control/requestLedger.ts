@@ -91,7 +91,19 @@ export function terminalDeliveryExpired(
   return nowMs - completedAt > ttlMs;
 }
 
+export interface HookMediaReference {
+  url: string;
+  refId: string;
+  name: string | null;
+  mimeType: string;
+  bytes: number;
+}
+
 export interface HookTerminalRecord {
+  /** Managed pins only; Base64 remains a wire/in-memory representation. */
+  media?: HookMediaReference[];
+  /** Delivered/deleted media is a dedupe tombstone, never a text-only replay. */
+  mediaReleased?: true;
   connectionId: string;
   requestId: string;
   ack: TaskAckPayload;
@@ -110,6 +122,7 @@ export interface HookRequestLedger {
   /** Returns false when persistence failed; callers must fall back to in-memory delivery. */
   set(record: HookTerminalRecord): boolean;
   markSent(connectionId: string, requestId: string): boolean;
+  prune?(): void;
 }
 
 interface LedgerFile {
@@ -158,6 +171,13 @@ function isTerminalRecord(value: unknown): value is HookTerminalRecord {
   ) {
     return false;
   }
+  if (value.mediaReleased !== undefined && value.mediaReleased !== true) return false;
+  if (value.media !== undefined && (!Array.isArray(value.media) || value.media.length > 8
+    || value.media.some((ref) => !isRecord(ref)
+      || typeof ref.url !== 'string' || !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-z0-9]+$/.test(ref.url)
+      || typeof ref.refId !== 'string' || (ref.name !== null && typeof ref.name !== 'string') || typeof ref.mimeType !== 'string'
+      || typeof ref.bytes !== 'number' || !Number.isInteger(ref.bytes) || ref.bytes <= 0 || ref.bytes > 15 * 1024 * 1024)
+    || value.media.reduce((sum, ref) => sum + ref.bytes, 0) > 30 * 1024 * 1024)) return false;
   if (value.ack.requestId !== value.requestId) return false;
   if (value.ack.result === 'rejected') {
     return value.turnEnd === undefined && value.delivery === 'sent';
@@ -194,6 +214,7 @@ export function createHookRequestLedger(deps: {
   maxFileBytes?: number;
   pendingTtlMs?: number;
   now?: () => number;
+  releaseMedia?: (media: HookMediaReference[]) => Promise<void>;
 }): HookRequestLedger {
   const maxEntries = Math.max(1, Math.floor(deps.maxEntries ?? DEFAULT_MAX_ENTRIES));
   const maxFileBytes = Math.max(1_024, Math.floor(deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES));
@@ -256,7 +277,36 @@ export function createHookRequestLedger(deps: {
     return cachedEntries;
   }
 
+  function release(media: HookMediaReference[] | undefined): void {
+    if (media?.length) void deps.releaseMedia?.(media).catch(() => {
+      deps.log.warn('hook media pin cleanup deferred to expiry');
+    });
+  }
+
+  function withoutMedia(record: HookTerminalRecord): HookTerminalRecord {
+    const { media: _media, ...rest } = record;
+    if (!rest.turnEnd) return rest;
+    const { attachments: _bytes, ...turnEnd } = rest.turnEnd;
+    return { ...rest, turnEnd, ...((record.media?.length || _bytes?.length) ? { mediaReleased: true as const } : {}) };
+  }
+
+  function prune(): void {
+    const entries = readEntries();
+    if (!entries) return;
+    for (const record of entries) {
+      if ((record.media?.length || record.turnEnd?.attachments?.length) && reclaimable(record, now()))
+        writeRecord(withoutMedia(record));
+    }
+  }
+
   function writeRecord(record: HookTerminalRecord): boolean {
+    if (reclaimable(record, now())) record = withoutMedia(record);
+    // Refuse a text-only durable success when media staging failed. The
+    // dispatcher still keeps/sends the complete frame in memory.
+    if (record.turnEnd?.attachments?.length) {
+      deps.log.warn('write hook request ledger skipped (unmanaged-media)');
+      return false;
+    }
     if (!isTerminalRecord(record)) {
       deps.log.warn('write hook request ledger skipped (invalid-record)');
       return false;
@@ -276,7 +326,11 @@ export function createHookRequestLedger(deps: {
     next.push(record);
     let data: LedgerFile = { version: FILE_VERSION, entries: next };
     let serialized = JSON.stringify(data);
-    while (next.length > maxEntries || utf8ByteLength(serialized) > maxFileBytes) {
+    // Keep the existing aggregate outbox budget even though JSON now contains
+    // references: otherwise 2,000 pending records could pin gigabytes of media.
+    const mediaBudget = () => next.reduce((sum, entry) => sum +
+      (entry.media ?? []).reduce((bytes, ref) => bytes + Math.ceil(ref.bytes / 3) * 4, 0), 0);
+    while (next.length > maxEntries || utf8ByteLength(serialized) + mediaBudget() > maxFileBytes) {
       // Never evict a *live* undelivered outbox entry to make room. Reclaim the
       // oldest entry that is only holding a tombstone — already sent, or pending
       // past the delivery horizon. Only a burst of live undelivered answers can
@@ -310,6 +364,8 @@ export function createHookRequestLedger(deps: {
     try {
       atomicWriteFileSync(deps.filePath, `${serialized}\n`);
       cachedEntries = next;
+      const retained = new Set(next.flatMap((entry) => entry.media?.map((ref) => ref.refId) ?? []));
+      release(entries.flatMap((entry) => entry.media ?? []).filter((ref) => !retained.has(ref.refId)));
       return true;
     } catch (error) {
       deps.log.warn(`write hook request ledger failed (${safeErrorCode(error)})`);
@@ -318,7 +374,9 @@ export function createHookRequestLedger(deps: {
   }
 
   return {
+    prune,
     get(connectionId, requestId) {
+      prune();
       const entries = readEntries();
       if (entries === null) return null;
       for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -329,6 +387,7 @@ export function createHookRequestLedger(deps: {
     },
 
     listPending(connectionId) {
+      prune();
       const entries = readEntries();
       if (entries === null) return [];
       const nowMs = now();

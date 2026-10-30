@@ -5,10 +5,13 @@
  * 一条条件 UPDATE 同时校验 archived 状态和项目身份，不能用 get + update 两步校验。
  */
 import Database from 'better-sqlite3';
+import os from 'node:os';
+import path from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import * as trustedRenderer from '../../../security/trustedAppRenderer.js';
 import type { SessionRouteLock } from '../../sessionRouteLock';
 
 type SessionRouteLockMock = SessionRouteLock &
@@ -19,12 +22,15 @@ const h = vi.hoisted(() => ({
   sqlite: null as InstanceType<typeof import('better-sqlite3')> | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   tapWindowBroadcast: vi.fn(),
+  resourceLock: vi.fn(async (_resources: readonly string[], task: () => Promise<unknown>) => task()),
   routeLock: vi.fn(async <T>(_sessionId: string, task: () => Promise<T>): Promise<T> =>
     task(),
   ) as SessionRouteLockMock,
 }));
 
 vi.mock('electron', () => ({
+  // 导入链会静态引到 WorktreeManager → workdir-probe-host,后者在模块顶层读 app.once。
+  app: { getPath: () => os.tmpdir(), once: vi.fn() },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       h.handlers.set(channel, handler);
@@ -52,9 +58,18 @@ vi.mock('../../../device-link/broadcast-tap.js', () => ({
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
 vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../worktree/resourceLock', () => ({
+  physicalWorktreeKey: async (value: string) => value,
+  withWorktreeResourceLocks: h.resourceLock,
+}));
+vi.mock('../../../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: vi.fn() }));
 
 import { registerSessionIpc } from '../sessions';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
+import { getDbClient } from '../../client/current';
+import { selectSessionsByIds, selectSessionWithCount, selectSessionListRows, flattenSessionReadRow } from '../../sessionQueries';
+import { createDrizzleProxy } from '../../client/drizzleProxy';
+import type { DbTransport } from '../../client/DbTransport';
 
 type ExpectedIdentity = {
   workingDir: string | null;
@@ -72,11 +87,16 @@ function createDb(): void {
   h.sqlite?.close();
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE bot_session_links(session_id TEXT, bot_id TEXT, role TEXT, route_key TEXT);
+    CREATE TABLE bot_profiles(id TEXT, status TEXT, hidden_at INTEGER);
+    CREATE TABLE task_tags(id TEXT PRIMARY KEY,name TEXT,color TEXT,favorite_order INTEGER,sort_order INTEGER,revision INTEGER,name_customized INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE session_task_tags(session_id TEXT,tag_id TEXT);
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New CCS',
       working_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
@@ -88,13 +108,17 @@ function createDb(): void {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,
@@ -103,14 +127,18 @@ function createDb(): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
       remote_host_id TEXT,
+      agent_device_id TEXT,
+      orca_remote_lead TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       summary TEXT,
       provider_id TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
@@ -160,6 +188,7 @@ function readStatus(): string {
 beforeEach(() => {
   vi.clearAllMocks();
   h.routeLock.mockImplementation(async (_sessionId, task) => task());
+  h.resourceLock.mockImplementation(async (_resources, task) => task());
   h.handlers.clear();
   createDb();
   setSessionRouteLockImplementation(h.routeLock);
@@ -171,6 +200,61 @@ afterEach(() => {
 });
 
 describe('local-db:sessions:restore-if-archived', () => {
+  function managedIdentity(): ExpectedIdentity {
+    const root = path.join(os.tmpdir(), 'cindy-restore-lock-fixture', '.cindy-worktrees', 'work');
+    const workingDir = path.join(root, 'src');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run(workingDir, root, 'target');
+    return { ...ORIGINAL_IDENTITY, workingDir };
+  }
+
+  it('waits for a recycler holding the physical worktree lock before making the task active', async () => {
+    const identity = managedIdentity();
+    let acquired!: () => void;
+    const waiting = new Promise<void>((resolve) => { acquired = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.resourceLock.mockImplementationOnce(async (_resources, task) => {
+      acquired();
+      await gate;
+      return task();
+    });
+
+    const restoring = restore('target', identity);
+    await waiting;
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.resourceLock).toHaveBeenCalledWith(
+      expect.arrayContaining([path.dirname(identity.workingDir!)]), expect.any(Function),
+    );
+    release();
+    await expect(restoring).resolves.toMatchObject({ status: 'active' });
+  });
+
+  it('publishes active status before a later recycler can enter the resource lock', async () => {
+    const identity = managedIdentity();
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let tail = Promise.resolve<unknown>(undefined);
+    h.resourceLock.mockImplementation((_resources, task) => {
+      const next = tail.then(task);
+      tail = next;
+      return next;
+    });
+    // Hold the first lock holder long enough to enqueue both the restore and a later recycler.
+    const blocker = h.resourceLock([], async () => { entered(); await gate; });
+    await waiting;
+    const restoring = restore('target', identity);
+    await vi.waitFor(() => expect(h.resourceLock).toHaveBeenCalledTimes(2));
+    const canRecycle = h.resourceLock([], async () => readStatus() === 'archived');
+    release();
+    await blocker;
+    await expect(restoring).resolves.toMatchObject({ status: 'active' });
+    await expect(canRecycle).resolves.toBe(false);
+  });
+
   it('restores when archived status and the full project identity still match', async () => {
     const updated = (await restore()) as { id: string; status: string };
 
@@ -228,5 +312,123 @@ describe('local-db:sessions:restore-if-archived', () => {
 
   it('throws NOT_FOUND when the session no longer exists', async () => {
     await expect(restore('missing')).rejects.toThrow('[NOT_FOUND]');
+  });
+
+  it('does not restore Bot history through the ordinary task lifecycle', async () => {
+    h.sqlite!.prepare("UPDATE sessions SET source = 'bot' WHERE id = 'target'").run();
+
+    await expect(restore()).rejects.toThrow(/Bot task lifecycle/);
+    expect(readStatus()).toBe('archived');
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe('bounded reconciliation read', () => {
+  it.each(['native', 'worker-proxy'])('correlates uncached projections to the outer session through %s', async (mode) => {
+    h.sqlite!.exec(`
+      CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
+      INSERT INTO sessions (id, created_at, updated_at) VALUES ('other', 1, 1), ('empty', 1, 1);
+      UPDATE sessions SET cleared_at = 2 WHERE id = 'target';
+      INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES
+        ('old', 'old', 'target', 'user', '{"text":"cleared"}', NULL, 1, NULL),
+        ('user', 'user', 'target', 'user', '{"text":"question"}', NULL, 3, NULL),
+        ('answer', 'answer', 'target', 'assistant', '"answer"', NULL, 4, NULL),
+        ('resume', 'resume', 'target', 'user', '{"text":"continue"}', '{"autoResume":true}', 5, NULL),
+        ('rewound', 'rewound', 'target', 'assistant', '"rewound"', NULL, 6, 7),
+        ('other', 'other', 'other', 'assistant', '"another session"', NULL, 8, NULL);
+    `);
+    const plans: string[] = [];
+    const transport = {
+      async send(_op: string, args: { sql: string; params: unknown[] }) {
+        plans.push(...(h.sqlite!.prepare(`EXPLAIN QUERY PLAN ${args.sql}`).all(...args.params) as { detail: string }[])
+          .map((row) => row.detail));
+        return h.sqlite!.prepare(args.sql).raw().all(...args.params);
+      },
+    } as unknown as DbTransport;
+    const db = mode === 'native' ? getDbClient().drizzle : createDrizzleProxy(transport);
+    const single = await selectSessionWithCount(db, 'target');
+    expect(single).toMatchObject({ messageCount: 5, latestMessageExtract: 'answer', latestMessageRole: 'assistant' });
+    const batch = await selectSessionsByIds(db, ['target', 'empty']);
+    expect(batch[0]).toEqual(single);
+    expect(batch[1]).toMatchObject({ messageCount: 0, latestMessageExtract: null, latestMessageRole: null });
+    const list = (await selectSessionListRows(db, undefined, 20)).map(flattenSessionReadRow);
+    expect(list.find((row) => row.id === 'target')).toEqual(single);
+    if (mode === 'worker-proxy') {
+      expect(plans.some((plan) => /SEARCH m USING (?:COVERING )?INDEX idx_messages_session_created/.test(plan))).toBe(true);
+      expect(plans.some((plan) => /SCAN m\b/.test(plan))).toBe(false);
+    }
+    h.sqlite!.prepare("UPDATE sessions SET cleared_at = 10 WHERE id = 'target'").run();
+    expect(await selectSessionWithCount(db, 'target')).toMatchObject({ messageCount: 5, latestMessageExtract: null, latestMessageRole: null });
+  });
+
+  it('shares exact database projection across single, batch and list reads without retaining stale results', async () => {
+    const db = getDbClient().drizzle;
+    const select = vi.spyOn(db, 'select');
+    const batch = await selectSessionsByIds(db, ['target', 'missing', 'target']);
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(batch).toHaveLength(1);
+    expect(await selectSessionWithCount(db, 'target')).toEqual(batch[0]);
+    expect((await selectSessionListRows(db, undefined, 20)).map(flattenSessionReadRow)).toEqual(batch);
+    h.sqlite!.prepare("UPDATE sessions SET title = 'fresh title' WHERE id = 'target'").run();
+    expect((await selectSessionsByIds(db, ['target']))[0].title).toBe('fresh title');
+    select.mockRestore();
+  });
+
+  it('does not query for empty input and bounds larger internal reads', async () => {
+    const db = getDbClient().drizzle;
+    const select = vi.spyOn(db, 'select');
+    expect(await selectSessionsByIds(db, [])).toEqual([]);
+    expect(select).not.toHaveBeenCalled();
+    expect(await selectSessionsByIds(db, Array.from({ length: 600 }, (_, i) => `missing-${i}`))).toEqual([]);
+    expect(select).toHaveBeenCalledTimes(3);
+    select.mockRestore();
+  });
+
+  it('returns the same projection as GET, deduplicates ids and omits missing rows', async () => {
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    const get = h.handlers.get('local-db:sessions:get')!;
+    const batch = h.handlers.get('local-db:sessions:get-many')!;
+    const expected = await get({}, 'target');
+    const result = await runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
+      () => batch({}, ['target', 'missing', 'target']));
+    expect(result).toEqual([expected]);
+  });
+  it('rejects untrusted local callers and oversized remote batches before querying', async () => {
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    const batch = h.handlers.get('local-db:sessions:get-many')!;
+    await expect(batch({}, ['target'])).rejects.toThrow();
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:get-many' },
+      () => batch({}, Array.from({ length: 33 }, () => 'target')))).rejects.toThrow('INVALID_PARAMS');
+  });
+});
+
+describe('exact-subset task pagination', () => {
+  it('selects newest responsible rows before limiting and preserves stable tied-time continuation', async () => {
+    const trust = vi.spyOn(trustedRenderer, 'assertTrustedAppRendererEvent').mockImplementation(() => {});
+    try {
+      const insert = h.sqlite!.prepare("INSERT INTO sessions (id,status,source,created_at,updated_at,list_preview,list_message_count) VALUES (?,'archived','desktop',1,?,'cached',0)");
+      const ids = Array.from({ length: 205 }, (_, n) => `owned-${String(n).padStart(3, '0')}`);
+      for (let n = 0; n < ids.length; n++) insert.run(ids[n], Math.floor(n / 3));
+      insert.run('unrelated', 1000);
+      h.sqlite!.prepare("INSERT INTO sessions (id,status,source,created_at,updated_at) VALUES ('hidden','archived','bot',1,2000),('active','active','desktop',1,3000)").run();
+      const list = h.handlers.get('local-db:sessions:list')!;
+      const wanted = [...ids, 'hidden', 'active'];
+      const first = await list({}, 200, 'archived', { ids: wanted, fresh: true }) as Array<{id: string; updatedAt: string}>;
+      expect(first.map(row => row.id)).toEqual(ids.slice(5).reverse());
+      const tail = first.at(-1)!;
+      const second = await list({}, 200, 'archived', { ids: wanted, fresh: true, before: { id: tail.id, updatedAt: Date.parse(tail.updatedAt) } }) as Array<{id: string}>;
+      expect(second.map(row => row.id)).toEqual(ids.slice(0, 5).reverse());
+      expect(await list({}, 200, 'archived', { ids: [] })).toEqual([]);
+      for (const options of [{ ids: ['target'], includePinned: true }, { ids: [123] }, { ids: ['x'.repeat(257)] }, { ids: Array(10001).fill('target') }]) {
+        await expect(list({}, 200, 'archived', options)).rejects.toThrow('INVALID_PARAMS');
+      }
+    } finally { trust.mockRestore(); }
+  });
+  it('rejects remote and untrusted exact-subset calls rather than broadening discovery', async () => {
+    const list = h.handlers.get('local-db:sessions:list')!;
+    await expect(list({}, 200, 'archived', { ids: ['target'] })).rejects.toThrow();
+    const { runDeviceLinkInvokeContext } = await import('../../../device-link/invoke-context.js');
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'phone', channel: 'local-db:sessions:list' },
+      () => list({}, 200, 'archived', { ids: ['target'] }))).rejects.toThrow();
   });
 });

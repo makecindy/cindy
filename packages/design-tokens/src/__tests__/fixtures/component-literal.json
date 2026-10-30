@@ -1,0 +1,18 @@
+{
+  "$description": "error fixture: component writes a literal instead of aliasing semantic/reference",
+  "button": {
+    "button-primary-hover": {
+      "light": {
+        "$type": "color",
+        "$value": {
+          "colorSpace": "srgb",
+          "components": [0.84, 0.84, 0.83]
+        }
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{surface.surface-hover.dark}"
+      }
+    }
+  }
+}

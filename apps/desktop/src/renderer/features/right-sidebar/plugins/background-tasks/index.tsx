@@ -40,6 +40,7 @@ const plugin: TabKindPlugin<BackgroundTasksState> = {
   menu: {
     kind: 'background-tasks',
     labelKey: 'rightSidebar.tabs.kinds.backgroundTasks',
+    descriptionKey: 'rightSidebar.tabs.descriptions.backgroundTasks',
     icon: ListTodo,
     order: 17, // review=15 与 web-browser=20 之间
     enabled: true,

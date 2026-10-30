@@ -351,14 +351,8 @@ export function buildAttachmentPayload(
 
 export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayloadToolMediaLike[] {
   if (!toolResult || typeof toolResult !== 'string') return [];
-  if (
-    !toolResult.includes('xdt_image_url')
-    && !toolResult.includes('xdt_video_url')
-    && !toolResult.includes('xdt_audio_url')
-  ) {
-    return [];
-  }
-  const parsed = parsePayloadJsonObject(toolResult);
+  if (!toolResult.includes("xdt_")) return [];
+  const parsed = parseToolResultPayload(toolResult);
   if (!parsed || parsed._xdt_render_image === false) return [];
 
   const items: ExtractedPayloadToolMediaLike[] = [];
@@ -424,12 +418,261 @@ export function extractPayloadToolResultMedia(toolResult: string): ExtractedPayl
     }
   }
 
+  // A host-recorded fallback is also a delivery channel on Mobile. Never guess
+  // a local path or classify unknown blob extensions as pictures.
+  if (Array.isArray(parsed.xdt_media_produced)) {
+    for (const url of parsed.xdt_media_produced) {
+      const kind = managedToolMediaKind(url);
+      if (kind) push(kind, url as string);
+    }
+  }
+
   const seen = new Set<string>();
   return items.filter((item) => {
     if (seen.has(item.url)) return false;
     seen.add(item.url);
     return true;
   });
+}
+
+/** Only unwrap the documented ghost_call envelope, never arbitrary nested tool data. */
+export function parseToolResultPayload(text: string): Record<string, unknown> | null {
+  const outer = parsePayloadJsonObject(text);
+  if (!outer) return null;
+  const inner = outer.ok === true ? readPayloadRecord(outer.result) : null;
+  return inner ? { ...inner, ...outer, ...(inner._xdt_render_image === false ? { _xdt_render_image: false } : {}) } : outer;
+}
+
+export function managedToolMediaKind(url: unknown): 'image' | 'video' | 'audio' | null {
+  if (typeof url !== 'string') return null;
+  if (url.startsWith('xdt-image://')) return 'image';
+  if (url.startsWith('xdt-video://')) return 'video';
+  if (url.startsWith('xdt-audio://')) return 'audio';
+  const match = /^cindy-media:\/\/blobs\/[0-9a-f]{64}\.([a-z0-9]+)$/.exec(url);
+  if (!match) return null;
+  if (/^(png|jpe?g|gif|webp|avif|bmp|svg)$/.test(match[1])) return 'image';
+  if (/^(mp4|webm|mov|m4v)$/.test(match[1])) return 'video';
+  if (/^(mp3|wav|m4a|ogg|flac|aac|opus)$/.test(match[1])) return 'audio';
+  return null;
+}
+
+/** Portable read-only card references; the Host resolves their content in the owning task. */
+export function extractPayloadToolCardIds(text: string): string[] {
+  const parsed = parseToolResultPayload(text);
+  if (!parsed) return [];
+  return [...new Set([parsed.xdt_card_id, parsed.xdt_anchor_card_id]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128))];
+}
+
+export interface PayloadToolFile { url: string; title: string }
+
+// Preserve the legacy URL alphabet. Source delimiters are contextual; adding
+// filename punctuation here silently turns a valid reference into another path.
+const TOOL_FILE_URL_RE = /xdt-file:\/\/[^\s"<>\\)]+/g;
+
+function absoluteToolFilePath(url: string): string | null {
+  try {
+    // Keep both legacy direct-path links and the query-based local/open URLs.
+    let path: string;
+    if (url.startsWith('xdt-file:///')) {
+      path = url.slice('xdt-file://'.length);
+      // Legacy direct paths may contain a literal percent sign. Decode valid
+      // escapes once, but retain the original path if it is not URI-encoded.
+      try { path = decodeURIComponent(path); } catch { /* Keep the literal path. */ }
+    } else {
+      path = new URL(url).searchParams.get('path') ?? '';
+    }
+    return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+function* sourceContextTokens(text: string): Generator<{
+  start: number; end: number; comment: boolean; closed: boolean;
+}> {
+  // Always advance past a token, including unterminated strings/comments.
+  // An unanchored regex can retry every escaped quote or /* in a long result.
+  let index = 0;
+  const filePattern = new RegExp(TOOL_FILE_URL_RE.source, 'y');
+  while (index < text.length) {
+    // Unquoted legacy paths may themselves contain // or /*. Consume the
+    // existing URL alphabet atomically so later deliveries are not commented out.
+    if (text.startsWith('xdt-file://', index)) {
+      filePattern.lastIndex = index;
+      if (filePattern.exec(text)) {
+        index = filePattern.lastIndex;
+        continue;
+      }
+    }
+    const start = index;
+    const quote = text[index];
+    if (quote === '"' || quote === "'" || quote === '`') {
+      // Python triple quotes delimit one literal, including internal single or
+      // double quotes and newlines. Backticks retain their existing semantics.
+      const delimiter = quote !== '`' && text.startsWith(quote.repeat(3), index) ? quote.repeat(3) : quote;
+      index += delimiter.length;
+      let closed = false;
+      while (index < text.length) {
+        if (text[index] === '\\') {
+          index = Math.min(index + 2, text.length);
+        } else if (text.startsWith(delimiter, index)) {
+          index += delimiter.length;
+          closed = true;
+          break;
+        } else {
+          index++;
+        }
+      }
+      yield { start, end: index, comment: false, closed };
+    } else if (text.startsWith('/*', index)) {
+      const closing = text.indexOf('*/', index + 2);
+      index = closing < 0 ? text.length : closing + 2;
+      yield { start, end: index, comment: true, closed: closing >= 0 };
+    } else if (text.startsWith('//', index) && text[index - 1] !== ':' && text[index - 1] !== '/') {
+      index += 2;
+      while (index < text.length && text[index] !== '\r' && text[index] !== '\n') index++;
+      yield { start, end: index, comment: true, closed: true };
+    } else {
+      index++;
+    }
+  }
+}
+
+function withoutSourceComments(text: string): string {
+  // Skip string literals before recognizing comments, so URL schemes
+  // and comment-like file names inside strings remain part of the context.
+  const parts: string[] = [];
+  let end = 0;
+  for (const token of sourceContextTokens(text)) {
+    if (!token.comment) continue;
+    parts.push(text.slice(end, token.start), text.slice(token.start, token.end).replace(/[^\r\n]/g, ' '));
+    end = token.end;
+  }
+  parts.push(text.slice(end));
+  return parts.join('');
+}
+
+function sourceLiteralPrefix(text: string, quoteIndex: number): string {
+  const rawPrefix = text.slice(0, quoteIndex);
+  // Python/C# literal markers sit between the source operator and quote.
+  // Only unwrap a recognized, adjacent marker; still require source syntax
+  // before it, and never strip a suffix from an identifier such as "offer".
+  const marker = text[quoteIndex] === '`' ? null : /(?:\b(?:br|rb|fr|rf|[rubf])|\$@|@\$|[$@])$/i.exec(rawPrefix);
+  return (marker ? rawPrefix.slice(0, marker.index) : rawPrefix).trimEnd();
+}
+
+function looksLikeQuotedSourceLiteral(text: string, index: number, end: number): boolean {
+  const before = text[index - 1];
+  const after = text[end];
+  if (before !== '`' && before !== '\'' && before !== '"') return false;
+  // Quotes alone also occur in prose and inline Markdown. Require source syntax
+  // around the literal (assignment, collection entry, argument or conditional).
+  const prefix = sourceLiteralPrefix(text, index - 1);
+  return /(?:[=\[(,?]|=>|&&|\|\||\breturn)$/.test(prefix)
+    // A colon alone is also a prose label ("File:"). Require a preceding
+    // conditional, allowing indented continuation lines but not new prose.
+    || (prefix.endsWith(':') && /\?(?:[^;\r\n]|\r?\n[ \t])*:$/.test(prefix))
+    || /[{,]\s*(?:[\w$]+|["'][^"']+["'])\s*:$/.test(prefix)
+    || (after === before && /^\s*;/.test(text.slice(end + 1)));
+}
+
+function* quotedSourceRanges(text: string): Generator<{ start: number; end: number }> {
+  // Classify the whole literal, not only URLs touching its opening quote.
+  // Comments and escaped quotes use the same token boundaries as source context.
+  let previous: { end: number; source: boolean } | undefined;
+  for (const token of sourceContextTokens(text)) {
+    if (token.comment) continue;
+    const start = token.start;
+    // Tool output may end mid-literal after the Host applies its byte budget.
+    const end = token.end - (token.closed ? 1 : 0);
+    // Comments are already masked. Carry the established context across a list
+    // or concatenation, including prefixed literals, without treating prose +
+    // as source syntax by itself.
+    const separator = previous ? sourceLiteralPrefix(text, start).slice(previous.end + 1).trim() : '';
+    const continuesExpression = separator === ',' || separator === '+';
+    const source: boolean = previous && continuesExpression
+      ? previous.source
+      : looksLikeQuotedSourceLiteral(text, start + 1, end);
+    if (source) yield { start, end };
+    previous = { end, source };
+  }
+}
+
+/** Existing 3D attachments and managed file references retain a usable file entry on Mobile. */
+export function extractPayloadToolResultFiles(text: string): PayloadToolFile[] {
+  const parsed = parseToolResultPayload(text);
+  if (parsed?._xdt_render_image === false) return [];
+  const files: PayloadToolFile[] = [];
+  const add = (url: unknown, title?: unknown) => {
+    if (typeof url !== 'string' || !/^(?:xdt-file:\/\/[^\s]+|cindy-media:\/\/blobs\/[0-9a-f]{64}\.glb)$/.test(url)) return;
+    let name = url.split('/').pop()!;
+    if (url.startsWith('xdt-file://')) {
+      const path = absoluteToolFilePath(url);
+      if (path === null) return;
+      name = path.split(/[\\/]/).pop() || name;
+    }
+    if (!files.some((file) => file.url === url)) files.push({ url, title: typeof title === 'string' && title.trim() ? title : name });
+  };
+  if (Array.isArray(parsed?._xdt_model_files)) {
+    for (const raw of parsed._xdt_model_files) { const file = readPayloadRecord(raw); add(file?.url, file?.name); }
+  }
+  if (Array.isArray(parsed?.xdt_media_produced)) for (const url of parsed.xdt_media_produced) add(url);
+  // Decode arrays and scalar strings as well as the object/envelope above.
+  // JSON delimiters must not be mistaken for source literals. Keep declaration
+  // handling tied to the documented object envelope, as before.
+  let content: unknown = parsed ?? text;
+  if (!parsed) {
+    try { content = JSON.parse(text); } catch { /* Plain-text tool output. */ }
+  }
+  // Use a stack so deeply nested tool output cannot overflow the call stack.
+  const pending: unknown[] = [content];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === 'string') {
+      if (!value.includes('xdt-file://')) continue;
+      const urlPattern = new RegExp(TOOL_FILE_URL_RE);
+      // Strip comments once; repeatedly lexing the prefix of every literal is
+      // quadratic for large source-file output. Offsets stay in the original text.
+      const sourceContext = withoutSourceComments(value);
+      const sourceRanges = quotedSourceRanges(sourceContext);
+      let range = sourceRanges.next();
+      let previous: { end: number; source: boolean } | undefined;
+      for (let match; (match = urlPattern.exec(value));) {
+        const start = match.index;
+        // Comment masking preserves offsets; extract URLs only outside it.
+        if (sourceContext[start] !== value[start]) continue;
+        while (!range.done && range.value.end < start) range = sourceRanges.next();
+        if (!range.done && range.value.start < start && start < range.value.end) continue;
+        // Quotes/backticks may be filename characters. Treat one as a delimiter
+        // only when it matches the opening wrapper around this reference.
+        const quote = value[start - 1];
+        const closingQuote = quote === "'" || quote === '`'
+          ? new RegExp(quote + '(?=[,.;:!?\\]}]*(?:["\'`]xdt-file://|$))').exec(match[0])
+          : null;
+        const url = closingQuote ? match[0].slice(0, closingQuote.index) : match[0];
+        urlPattern.lastIndex = start + url.length;
+        const continuesList = previous && /^["'`]$/.test(value[previous.end])
+          && /^["'`]$/.test(quote)
+          && withoutSourceComments(value.slice(previous.end + 1, start - 1)).trim() === ',';
+        const source = previous && continuesList
+          ? previous.source
+          : looksLikeQuotedSourceLiteral(sourceContext, start, start + url.length);
+        if (!source) add(url);
+        previous = { end: start + url.length, source };
+      }
+    } else if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i--) pending.push(value[i]);
+    } else if (value !== null && typeof value === 'object') {
+      const entries = Object.entries(value);
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [key, child] = entries[i];
+        // Explicit declarations above already retain full URLs and display names.
+        if (key !== '_xdt_model_files' && key !== 'xdt_media_produced') pending.push(child);
+      }
+    }
+  }
+  return files;
 }
 
 export function buildMermaidPayload(
@@ -999,5 +1242,8 @@ function createPayloadToolDiff(
 
 function countPayloadChangedLines(value: string): number {
   if (!value) return 0;
-  return value.split('\n').filter((line) => line.length > 0).length || 1;
+  // 中间空行也是改动行；只去掉结尾换行切出的哨兵空段。
+  const lines = value.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
 }

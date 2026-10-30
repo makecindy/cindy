@@ -1,3 +1,19 @@
+import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
+import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
+import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
+import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
+import {
+  claimOwnedProvisionalSession,
+  configureProvisionalSessions,
+  deleteUnsentSessionRow,
+  forgetProvisionalSession,
+  isProvisionalSession,
+  markProvisionalSession,
+  provisionalManagedDir,
+  removeEmptyDialogueDir,
+  sweepLeftoverProvisionalSessions,
+} from '../provisionalSessions.js';
+import { emitSessionCreated, emitSessionListChangedLocally } from './sessionCreatedBroadcast.js';
 /**
  * chat-data-localization F5：Sessions IPC handlers（C6）。
  *
@@ -5,6 +21,10 @@
  * 失败时 throw `Error("[CODE] message")`，service 层包装回 `ApiError`。
  */
 
+import { physicalWorktreeKey, withWorktreeResourceLocks } from '../../worktree/resourceLock';
+import { managedWorktreeRoot } from '../../worktree/runtimeLeases';
+import { queueSessionWorktreeRecycle } from '../../worktree/recycleQueue';
+import { notifyWorktreeRecycleOpportunity } from '../../worktree/recycleEvents';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -22,10 +42,20 @@ import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-sh
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
-import { sessions, messages } from '../schema';
+import type { SessionsSetTerminalStatusResult } from '../client/tx/types';
+import { sessions, messages, botSessionLinks } from '../schema';
+import { clearSessionAttention } from '../../appBadgeService';
 import {
-  LIST_PREVIEW_EXTRACT_SQL,
-  LATEST_VISIBLE_PREVIEW_FILTER_SQL,
+  selectSessionListRows,
+  ordinaryTaskListFilter,
+  selectSessionWithCount,
+  selectSessionsByIds,
+  flattenSessionReadRow,
+  projectSessionReadResult,
+  type SessionListRow,
+} from '../sessionQueries';
+import { commitBotProfileDeletion } from '../botProfileDeletionStore.js';
+import {
   persistSessionListProjectionBatch,
   type SessionListProjectionBackfillItem,
 } from '../sessionListProjection';
@@ -35,27 +65,55 @@ import { bindDeletedPiSubagentCleanupCancel } from './piSubagentDeletion';
 import { resolveBusinessSessionId } from '../../sessionIds';
 import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
+  projectSessionContextWindow,
+  type ContextWindowSession,
+} from '../../../shared/sessionContextWindow';
+import {
   sessionToCamel,
+  sessionUsageToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
+  persistableSessionEffort,
+  projectSessionRuntimeFields,
   normalizeRemoteHostId,
   finalizePlainPreview,
-  type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
-import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
-import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../../cindy-media/ledger';
-import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
+import { imAttachmentsRoot, removeImSessionAttachmentDirs } from '../../im/shared/inboundFileStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import {
+  DESKTOP_VISIBLE_SESSION_SOURCES,
+  isRetainableProjectSession,
+} from '../../../shared/sessionSource.js';
+import {
+  normalizeWorkingDirForProjectSettings,
+  normalizeWorkingDirForStorage,
+  workingDirEquals,
+} from '../../../shared/workingDir.js';
+import {
+  MAX_CONTEXT_WINDOW_BUDGET,
+  MIN_CONTEXT_WINDOW_BUDGET,
+  normalizeContextWindowBudget,
+} from '../../../shared/sessionContextWindowBudget.js';
+import {
+  WORKTREE_MOVE_BLOCKED_CODE,
+  WORKTREE_MOVE_BLOCKED_MESSAGE,
+} from '../../../shared/worktreeMoveGuardError.js';
+import {
+  pruneSessionContextWindowBudget,
+  readSessionContextWindowBudget,
+  writeSessionContextWindowBudget,
+} from '../../maker-host/session-context-budget-store.js';
+import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
+import { ensureSessionFlagRegistryLoaded, noteSessionNotificationsMuted } from '../sessionFlagRegistry.js';
+import { recoverGeneratedImagesForHistory } from '../../cindy-media/generatedImageRecovery';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
   ackSessionTurnEndedDurable,
@@ -66,15 +124,28 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
+import { listInterruptedResumeCandidateRows } from '../interruptedResumeCandidates';
+import { formatIslandToolDetail } from '../../agent-island/toolDetail';
+import { createLocalizedToolRowWording } from '../../agent-island/toolWording';
 import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
-import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { SESSION_READ_BATCH_LIMIT } from '../../../shared/sessionRead';
+import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
+import {
+  assertTrustedAppRendererEvent,
+  isTrustedAppRendererWindow,
+} from '../../security/trustedAppRenderer.js';
 import { removeTurnChangeSetsForSession } from '../../turn-change-set/store.js';
 import { quiesceSessionBeforeWorktreeRecycle } from './sessionRemovalOperations.js';
 import { withSessionRouteLock, withSessionRouteLocks } from '../sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from '../sessionRuntimeCleanup.js';
+import { requestSessionArchiveSync } from '../sessionArchiveSync.js';
+import { cindyMakeManager } from '../../cindy-make/manager.js';
+import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
+import { botSessionInputBlockReason, isShadowedCompanionSession } from '../../maker-ipc/botSessionInputGuard.js';
+import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
@@ -115,33 +186,49 @@ function compactTerminalSessionToolResults(
   });
 }
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
-type SessionRemovalCancelOperations = (sessionId: string) => Promise<void>;
-type SessionRemovalCleanup = (sessionId: string) => Promise<void>;
+type SessionWorktreeRecycle = (sessionId: string, resources?: readonly string[]) => Promise<void>;
 export interface SessionRecycleScope {
   ownerScope: OwnerScope;
   mediaDb: DbClient['drizzle'];
 }
 
 export interface RegisterSessionIpcOpts {
+  /** Use the same live catalog as runtime usage, without writing during reads. */
+  resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /**
+   * 任务级上下文窗口预算（tokens）变化后，把新值应用到**活着的**运行实例上
+   * （空闲关 handle 冷重建；回合中登记 pending，回合结束后生效）。
+   *
+   * 调用时机：本函数已把新值写进 DB（本函数是唯一写入链路）。回调失败只记录、
+   * 不阻断设置保存 —— 新值仍会在下一次启动/恢复时通过 start options 生效。
+   * 入参 previous/next 是用户显式值（null = 跟随模型默认），由 host 换算有效窗口。
+   */
+  applyContextWindowBudget?: (
+    sessionId: string,
+    change: { previous: number | null; next: number | null },
+  ) => Promise<void>;
 }
+let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
 
-let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
-let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
+/**
+ * 会话当前 worktree 绑定的查询口。source of truth 是 worktreeStore（electron-store）：
+ * `sessions.worktree_path` 只是反范式快照，且回收后刻意保留历史值（徽标看 store
+ * 是否存在），所以不能用它当「是否仍持有 worktree」的判据。
+ */
+type SessionWorktreeBindingLookup = (sessionId: string) => string | null;
+let sessionWorktreeBindingLookup: SessionWorktreeBindingLookup | null = null;
 
-/** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
-export function setSessionRemovalCancelOperations(
-  cancelOperations: SessionRemovalCancelOperations | null,
+/** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
+export function setSessionWorktreeBindingLookup(
+  lookup: SessionWorktreeBindingLookup | null,
 ): void {
-  sessionRemovalCancelOperations = cancelOperations;
+  sessionWorktreeBindingLookup = lookup;
 }
-
-/** Composition-root injection for destructive cleanup after removal is revalidated. */
-export function setSessionRemovalCleanup(
-  cleanupRemovedSession: SessionRemovalCleanup | null,
-): void {
-  sessionRemovalCleanup = cleanupRemovedSession;
+/** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
+export function setSessionWorktreeRecycle(recycle: SessionWorktreeRecycle | null): void {
+  sessionWorktreeRecycle = recycle;
 }
 
 function captureOwnerScope(): OwnerScope {
@@ -165,13 +252,117 @@ function isOwnerScopeCurrent(scope: OwnerScope): boolean {
 }
 
 async function withStatusWriteLock<T>(
+  db: DbClient['drizzle'],
   sessionId: string,
   status: unknown,
   task: () => Promise<T>,
   alreadyLocked = false,
+  beforeWrite?: () => void,
 ): Promise<T> {
-  if (status === undefined || alreadyLocked) return task();
-  return withSessionRouteLock(sessionId, task);
+  const write = async () => {
+    const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
+    const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
+    const mutate = async () => {
+      beforeWrite?.();
+      if (status === 'archived' || status === 'deleted')
+        await requestWorktreeRecycle(sessionId, resources);
+      beforeWrite?.();
+      const result = await task();
+      for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
+      return result;
+    };
+    return withWorktreeMutation(resources, mutate);
+  };
+  if (status === undefined || alreadyLocked) return write();
+  return withSessionRouteLock(sessionId, write);
+}
+
+type SharedTaskClosurePreparation = {
+  sessionId: string;
+  marker: number;
+  rowIds: number[];
+};
+
+async function prepareSharedTaskClosure(
+  sessionId: string,
+  dbClient: DbClient,
+): Promise<SharedTaskClosurePreparation | null> {
+  const { prepareSharedTaskClosureForTask } = await import('../../device-link/sharedTaskRuntime.js');
+  return prepareSharedTaskClosureForTask(sessionId, dbClient);
+}
+
+async function rollbackSharedTaskClosure(
+  dbClient: DbClient,
+  prepared: SharedTaskClosurePreparation | null,
+): Promise<void> {
+  if (!prepared) return;
+  const { rollbackPreparedSharedTaskClosure } = await import('../../device-link/sharedTaskRuntime.js');
+  await rollbackPreparedSharedTaskClosure(dbClient, prepared);
+}
+
+async function finalizeSharedTaskClosure(
+  dbClient: DbClient,
+  prepared: SharedTaskClosurePreparation | null,
+): Promise<void> {
+  if (!prepared) return;
+  const { finalizePreparedSharedTaskClosure } = await import('../../device-link/sharedTaskRuntime.js');
+  await finalizePreparedSharedTaskClosure(dbClient, prepared);
+}
+
+async function requestWorktreeRecycle(
+  sessionId: string,
+  resources: readonly string[] = [],
+): Promise<void> {
+  const recycle = sessionWorktreeRecycle;
+  if (!recycle) throw new Error('worktree recycle implementation is not wired');
+  await recycle(sessionId, resources);
+}
+
+/** Persist a terminal cleanup intent using references from the same DB snapshot. */
+export async function requestSessionWorktreeRecycle(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<void> {
+  await requestWorktreeRecycle(sessionId, await readSessionWorktreeResources(db, sessionId));
+}
+
+/** Read from the same captured database that will receive the status/path update. */
+async function readSessionWorktreeResources(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<string[]> {
+  try {
+    const [row] = await db
+      .select({
+        workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
+        remoteHostId: sessions.remoteHostId,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!row || row.remoteHostId) return [];
+    return [row.workingDir, row.worktreePath].flatMap((value) => {
+      const root = value ? managedWorktreeRoot(value) : null;
+      return root ? [root] : [];
+    });
+  } catch {
+    throwIpcError('PRECONDITION_FAILED', 'Worktree references are temporarily unavailable');
+  }
+}
+
+async function withWorktreeMutation<T>(resources: string[], task: () => Promise<T>): Promise<T> {
+  try {
+    return await withWorktreeResourceLocks(resources, task);
+  } catch (error) {
+    const code = (error as { code?: string })?.code;
+    if (code && error instanceof Error && error.message.startsWith(`[${code}]`)) throw error;
+    log.warn('worktree mutation postponed', { code: code ?? 'unavailable' });
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Worktree is busy or its recovery record could not be saved',
+    );
+  }
 }
 
 async function writeSessionPatch(
@@ -180,6 +371,7 @@ async function writeSessionPatch(
   setObj: ReturnType<typeof sessionPatchToRow>,
   status: unknown,
 ): Promise<void> {
+  if (Object.keys(setObj).length === 0) return;
   const deletedIsTerminal = status === 'active' || status === 'archived';
   const result = await db
     .update(sessions)
@@ -198,6 +390,65 @@ async function writeSessionPatch(
     .where(eq(sessions.id, sessionId));
   if (!existing) throwIpcError('NOT_FOUND', 'Session 不存在');
   throwIpcError('PRECONDITION_FAILED', '已删除的任务不能恢复或归档');
+}
+
+async function setTerminalSessionStatus(
+  dbClient: DbClient,
+  sessionId: string,
+  status: 'archived' | 'deleted',
+): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
+  try {
+    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status });
+    return result.deletedSideChats;
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
+      throwIpcError(code, message);
+    }
+    throw error;
+  }
+}
+
+/** Side chats belong to the parent view; deleting it must not strand invisible running tasks. */
+async function deleteDependentSideChats(
+  parentId: string,
+  dbClient: DbClient,
+  ownerScope: OwnerScope,
+  committed?: SessionsSetTerminalStatusResult['deletedSideChats'],
+): Promise<void> {
+  if (committed) {
+    for (const child of committed) {
+      if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+      // The transaction already committed every status. Cleanup can be fenced
+      // by owner/route without stranding active children when it is interrupted.
+      await withStatusWriteLock(dbClient.drizzle, child.sessionId, 'deleted', async () => {
+        if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+        cleanupSessionRuntimeForTerminalStatus(child.sessionId, 'deleted');
+        const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+        await closeSharedTaskForTask(child.sessionId, dbClient);
+      });
+      if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+      clearSessionAttention(child.sessionId, 'explicit');
+      broadcastSessionPatched(child.sessionId, { status: 'deleted' }, ownerScope);
+      notifyAgentIslandSessionPatch(child.sessionId, { ...child, status: 'deleted' });
+      void imageCacheStore.removeSession(child.sessionId).catch((err) => {
+        log.warn('side chat image cleanup failed', { sessionId: child.sessionId, err: String(err) });
+      });
+      scheduleWorktreeRecycleForStatusChange(child.sessionId, 'deleted', { ownerScope, mediaDb: dbClient.drizzle });
+      notifyGhostSessionStatusChange(child.sessionId, 'deleted', child.workingDir);
+      cleanupSessionTerminalArtifacts(child.sessionId, 'deleted');
+      compactTerminalSessionToolResults(dbClient, child.sessionId, 'deleted');
+    }
+    return;
+  }
+  // Compatibility for callers without the transaction API (legacy adapters).
+  const children = await dbClient.drizzle.select({ id: sessions.id }).from(sessions)
+    .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.source, 'side-chat'), ne(sessions.status, 'deleted')));
+  for (const child of children) {
+    if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+    await patchSessionMetaInDb(child.id, { status: 'deleted' });
+  }
 }
 
 export function captureSessionRecycleScope(
@@ -221,6 +472,13 @@ function getSafeOwnerPushStamp(): ReturnType<typeof broadcastTap.getSafeDataOwne
  * 广播 sessions:patched 到本机所有窗口 + device-link tap。tap 让该 patch 经 topic 路由
  * 转发给订阅了 `sessions` 的控制端(push 驱动:控制端 applyPatch 即时镜像,无需重拉)。
  */
+let sessionStatusPatchedListener: ((sessionId: string) => void) | null = null;
+
+/** Archive / restore observer, set at registration so this module does not load teammate dependencies. */
+export function setSessionStatusPatchedListener(next: ((sessionId: string) => void) | null): void {
+  sessionStatusPatchedListener = next;
+}
+
 export function broadcastSessionPatched(
   sessionId: string,
   patch: Record<string, unknown>,
@@ -229,15 +487,51 @@ export function broadcastSessionPatched(
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
-  if (hasCapturedScope) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
-  } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
-  } else {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+  try {
+    // 未发送任务只在本机可见，转正前不推给控制端。
+    if (isProvisionalSession(sessionId)) {
+      // local windows only
+    } else if (hasCapturedScope) {
+      broadcastTap.tapWindowBroadcast(
+        'local-db:sessions:patched',
+        { sessionId, patch },
+        ownerStamp,
+      );
+    } else if (ownerStamp === undefined) {
+      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+    } else {
+      broadcastTap.tapWindowBroadcast(
+        'local-db:sessions:patched',
+        { sessionId, patch },
+        ownerStamp,
+      );
+    }
+  } catch (error) {
+    log.warn('session patch device-link broadcast failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
-  for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) {
+  // Archive / restore changes which open tasks a teammate's roster row links as followed.
+  if (patch.status !== undefined && !isProvisionalSession(sessionId)) {
+    try {
+      sessionStatusPatchedListener?.(sessionId);
+    } catch {
+      // Teammate roster refresh never blocks the task patch itself.
+    }
+  }
+  let windows: ReturnType<typeof BrowserWindow.getAllWindows> = [];
+  try {
+    windows = BrowserWindow.getAllWindows();
+  } catch (error) {
+    log.warn('session patch window enumeration failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  for (const w of windows) {
+    try {
+      if (!isTrustedAppRendererWindow(w)) continue;
       if (hasCapturedScope) {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       } else if (ownerStamp === undefined) {
@@ -245,6 +539,25 @@ export function broadcastSessionPatched(
       } else {
         w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
       }
+    } catch (error) {
+      log.warn('session patch window broadcast failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
+function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  const hasCapturedScope = ownerScope !== null;
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isTrustedAppRendererWindow(window)) continue;
+    if (hasCapturedScope || ownerStamp !== undefined) {
+      window.webContents.send('local-db:recent-workdirs:changed', { path }, ownerStamp);
+    } else {
+      window.webContents.send('local-db:recent-workdirs:changed', { path });
     }
   }
 }
@@ -273,8 +586,7 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * fire-and-forget:回收失败不影响状态写库(启动期 reconcile 兜底 deleted 场景)。
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 既有动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
- * 反向 import 本文件的 setWorktreePathInDb)。Simulator 清理由启动组合层静态注入，
- * 避免在回收临界路径上延迟加载带原生副作用的 Host 模块。
+ * 反向 import 本文件的 setWorktreePathInDb)。
  *
  * 只为真正进入低层 worktree 回收的 session 广播。普通通知任务没有 worktree，仍会
  * 完成 runtime / media / owner 扫描，但不会让 renderer 扫描全部 worktree。共享路径
@@ -287,33 +599,42 @@ export async function recycleSessionWorktreeForStatusChange(
   capturedScope?: SessionRecycleScope,
 ): Promise<void> {
   if (status !== 'deleted' && status !== 'archived') return;
+  // Capture before queueing: an account switch while waiting cannot redirect cleanup.
+  try {
+    const scope = capturedScope ?? captureSessionRecycleScope();
+    await queueSessionWorktreeRecycle(() => recycleSessionWorktreeInQueue(sessionId, scope));
+  } catch (error) {
+    log.warn('worktree recycle scheduling postponed', {
+      sessionId,
+      code: (error as NodeJS.ErrnoException).code ?? 'unavailable',
+    });
+  }
+}
+
+async function recycleSessionWorktreeInQueue(
+  sessionId: string,
+  capturedScope: SessionRecycleScope,
+): Promise<void> {
   const affectedWorktreeSessionIds = new Set<string>();
   try {
-    // Callers that already crossed an async status write pass the owner/DB
-    // captured at operation entry. The fallback is only for direct callers.
-    const ownerScope = capturedScope?.ownerScope ?? captureOwnerScope();
-    const mediaDb = capturedScope?.mediaDb ?? getDbClient().drizzle;
-    if (!isOwnerScopeCurrent(ownerScope)) return;
-    const cancelOperations = sessionRemovalCancelOperations;
-    const cleanupRemovedSession = sessionRemovalCleanup;
-    if (!cancelOperations || !cleanupRemovedSession) {
-      throw new Error('iOS Simulator session cleanup is not configured');
-    }
+    const { ownerScope, mediaDb } = capturedScope;
+    const ownerIsCurrent = (): boolean =>
+      isOwnerScopeCurrent(ownerScope) && getDbClient().drizzle === mediaDb;
+    if (!ownerIsCurrent()) return;
     const [mh, recycle] = await Promise.all([
       import('../../maker-host/index.js'),
       import('../../worktree/sessionRemovalRecycle.js'),
     ]);
-    const ownerIsCurrent = (): boolean => isOwnerScopeCurrent(ownerScope);
     const isStillRemovable = async (id: string): Promise<boolean> =>
       ownerIsCurrent() && recycle.isSessionStillRemovable(id, mediaDb);
     const closeAndRecycle = async (targetSessionId: string, scanOwners: boolean): Promise<void> => {
       if (!(await isStillRemovable(targetSessionId))) return;
+      // Settle preparation before taking the send route lock it may be waiting for.
+      await cindyMakeManager.settleTasksForSession(targetSessionId);
       await withSessionRouteLock(targetSessionId, async () => {
         const shouldRecycle = await quiesceSessionBeforeWorktreeRecycle(targetSessionId, {
           isOwnerCurrent: ownerIsCurrent,
           isSessionStillRemovable: isStillRemovable,
-          cancelSessionOperations: cancelOperations,
-          cleanupRemovedSession,
           closeSession: async (id) => {
             await mh
               .getMakerIfReady()
@@ -322,6 +643,7 @@ export async function recycleSessionWorktreeForStatusChange(
           },
         });
         if (!shouldRecycle || !ownerIsCurrent()) return;
+        await recycleCindyMakeTask(targetSessionId, mediaDb, ownerIsCurrent);
 
         // Keep irreversible cleanup under the same task route lock as the final
         // status check. A concurrent restore/start/send must not slip between
@@ -364,7 +686,7 @@ export async function recycleSessionWorktreeForStatusChange(
   }
 }
 
-function scheduleWorktreeRecycleForStatusChange(
+export function scheduleWorktreeRecycleForStatusChange(
   sessionId: string,
   status: unknown,
   capturedScope?: SessionRecycleScope,
@@ -390,6 +712,7 @@ function notifyGhostSessionStatusChange(
   status: unknown,
   workingDir?: string | null,
 ): void {
+  if (status === 'active' || status === 'archived') requestSessionArchiveSync();
   if (status !== 'archived') return;
   void import('../../cindy-brain/index.js')
     .then((m) =>
@@ -414,6 +737,9 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'planModeEnabled',
   'extraDirs',
   'writableDirs',
+  // 任务级窗口预算：device-link 控制端改档位后，被控端需落库并广播，否则控制端
+  // 会拿旧值回滚自己的乐观 UI。
+  'contextWindowBudget',
 ]);
 
 /**
@@ -448,8 +774,10 @@ export async function applyAgentSwitchToSessionRow(
     sdkSessionId?: string | null;
     /** 目标引擎下的 effort / fastMode(意图登记时 renderer 按目标目录解析,apply 一并落库)。 */
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     contextWindow?: number | null;
+    /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
+    agentDeviceId?: string | null;
   },
 ): Promise<void> {
   const ownerScope = captureOwnerScope();
@@ -462,17 +790,27 @@ export async function applyAgentSwitchToSessionRow(
     updatedAt: Date.now(),
   };
   if (patch.providerId !== undefined) setObj.providerId = patch.providerId;
+  if (patch.agentDeviceId !== undefined) setObj.agentDeviceId = patch.agentDeviceId;
   // effort 值域由 renderer 按目标引擎 capabilities 解析(schema 列是字面量联合,
   // 跨层传输后此处以 string 到达;非法值与直改 DB 同级,运行时由引擎侧收敛)。
-  if (patch.effort !== undefined) {
-    setObj.effort = patch.effort as (typeof sessions.$inferInsert)['effort'];
+  // 固定 effort 模型运行时为 null；sessions.effort NOT NULL，省略该字段。
+  const persistableEffort = persistableSessionEffort(patch.effort);
+  if (persistableEffort !== undefined) {
+    setObj.effort = persistableEffort;
   }
   if (patch.fastMode !== undefined) setObj.fastMode = patch.fastMode;
   if (typeof patch.contextWindow === 'number' && patch.contextWindow > 0) {
     setObj.contextWindow = Math.floor(patch.contextWindow);
   }
-  await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  if (!isOwnerScopeCurrent(ownerScope)) return;
+  // RETURNING keeps the projection tied to this committed write, including axes
+  // omitted by the caller. A later SELECT could observe a newer selection.
+  const [committed] = await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId))
+    .returning({
+      id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+      scheduledModelBaseline: sessions.scheduledModelBaseline,
+    });
+  if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
     sessionId,
     {
@@ -480,11 +818,15 @@ export async function applyAgentSwitchToSessionRow(
       model: patch.model,
       sdkSessionId: nextSdkSessionId,
       ...(patch.providerId !== undefined ? { providerId: patch.providerId } : {}),
-      ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+      ...(patch.agentDeviceId !== undefined ? { agentDeviceId: patch.agentDeviceId } : {}),
+      ...(persistableEffort !== undefined ? { effort: persistableEffort } : {}),
       ...(patch.fastMode !== undefined ? { fastMode: patch.fastMode } : {}),
       ...(typeof patch.contextWindow === 'number' && patch.contextWindow > 0
         ? { contextWindow: Math.floor(patch.contextWindow) }
         : {}),
+      // Publish before the consumed intent is cleared. Otherwise the composer
+      // falls back to runtimeEffective from its last full read.
+      ...projectSessionRuntimeFields({ ...committed, agentKind: normalizeDbAgentKind(committed.agentKind) }),
     },
     ownerScope,
   );
@@ -555,74 +897,101 @@ export async function persistSessionFields(
   for (const k of Object.keys(patch)) {
     if (REMOTE_PERSIST_FIELDS.has(k)) clean[k] = patch[k];
   }
+  if (Object.prototype.hasOwnProperty.call(clean, 'effort')) {
+    const persistableEffort = persistableSessionEffort(clean.effort);
+    if (persistableEffort === undefined) delete clean.effort;
+    else clean.effort = persistableEffort;
+  }
+  if (Object.prototype.hasOwnProperty.call(clean, 'contextWindowBudget')) {
+    // 镜像回流（被控端 → 本机）的值可能是旧版 peer / 手改偏好文件留下的越界值：
+    // store 的 clamp 会把越界值静默收敛（等于把本机预算改掉且没人知道），
+    // 这里显式归一化并留痕；非法值**跳过该字段**，不写偏好也不触发应用钩子。
+    const normalized = normalizeContextWindowBudget(clean.contextWindowBudget);
+    if (normalized === null && clean.contextWindowBudget !== null) {
+      console.warn('[sessions] dropping invalid mirrored context window budget', {
+        sessionId,
+        value: clean.contextWindowBudget,
+      });
+      delete clean.contextWindowBudget;
+    } else {
+      clean.contextWindowBudget = normalized;
+    }
+  }
   if (Object.keys(clean).length === 0) return;
   const db = getDbClient().drizzle;
-  const setObj = sessionPatchToRow(clean as Parameters<typeof sessionPatchToRow>[0], {
+  // 任务窗口预算不是会话列（见 session-context-budget-store 头注），单独走偏好文件；
+  // 其余字段照旧走行更新。
+  const hasBudgetChange = clean.contextWindowBudget !== undefined;
+  const previousContextWindowBudget: number | null = hasBudgetChange
+    ? readSessionContextWindowBudget(sessionId)
+    : null;
+  const rowPatch = { ...clean };
+  delete rowPatch.contextWindowBudget;
+  const setObj = sessionPatchToRow(rowPatch as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
   });
-  await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
+  if (Object.keys(setObj).length > 0) {
+    await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
+  } else if (!hasBudgetChange) {
+    return;
+  }
+  // 预算写偏好文件放在行更新**之后**：偏好文件不可读时 store 会拒绝写（保留坏文件给
+  // 人工修），若先写就会让同一个 patch 里的其它字段（改名、归档…）整包失败。
+  // 纯预算请求不能降级：那是用户唯一的意图，吞掉错误等于「看着成功、实际还是旧窗口」。
+  const budgetOnlyPatch = Object.keys(rowPatch).length === 0;
+  // 账号边界：偏好文件按「当下」账号的 userData 解析，而上面 db.update /
+  // 下面 apply 都是 await 出来的 —— 期间切账号时这条远程镜像更新必须整条作废
+  // （与 updateSessionInDb 同口径）。Greptile P1，2026-10-24。
+  const budgetScopeCurrent = isOwnerScopeCurrent(ownerScope);
+  let budgetWritten = false;
+  let nextContextWindowBudget: number | null = null;
+  if (hasBudgetChange && budgetScopeCurrent) {
+    try {
+      nextContextWindowBudget = writeSessionContextWindowBudget(
+        sessionId, (clean.contextWindowBudget as number | null) ?? null,
+      );
+      budgetWritten = true;
+    } catch (error) {
+      if (budgetOnlyPatch) throw error;
+      // 混合更新：其它字段已落库，只降级为「预算未保存」，并从广播里剔除这个键 ——
+      // 否则 UI 会显示一个没存下去的值（Greptile P1，2026-10-24）。
+      console.warn('[sessions] write context window budget failed; other fields already saved', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      delete clean.contextWindowBudget;
+    }
+  }
+  let runtimeProjection = {};
+  if (['model', 'providerId', 'effort', 'fastMode'].some((key) => key in clean)) {
+    const [row] = await db.select({
+      id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+      scheduledModelBaseline: sessions.scheduledModelBaseline,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (row?.scheduledModelBaseline) {
+      runtimeProjection = projectSessionRuntimeFields({ ...row, agentKind: normalizeDbAgentKind(row.agentKind) });
+    }
+  }
+  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, { ...clean, ...runtimeProjection }, ownerScope);
+  // 远程 set-* 落库后同样要把新预算应用到被控端活实例（语义与 updateSessionInDb 一致）。
+  if (budgetWritten && budgetScopeCurrent && isOwnerScopeCurrent(ownerScope)
+    && registeredSessionIpcOpts.applyContextWindowBudget) {
+    try {
+      await registeredSessionIpcOpts.applyContextWindowBudget(sessionId, {
+        previous: previousContextWindowBudget,
+        next: nextContextWindowBudget,
+      });
+    } catch (error) {
+      console.warn('[sessions] remote context window budget apply failed; takes effect on next start', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 const MAX_LIMIT = 1000;
-
-/**
- * list / get / update 共用的 messageCount：标量子查询。口径是该会话的全部 messages 行数，
- * 不过滤 role / rewind_at / cleared_at（口径要动就得连手机端卡片上的「N 条消息」一起想，
- * 见 maker-shared/sessionList 的 messageCountLabel）。
- *
- * 标量子查询没有 LEFT JOIN 补的那一行空行，无匹配时聚合返回 0，所以这里用 `count(*)` 是
- * 安全的。仍然只扫 idx_messages_session_created（session_id 是首列），不回表。
- *
- * 旧的一段式 LEFT JOIN + GROUP BY 不能图快改用 `count(*)`：LEFT JOIN 会给空会话补一行，
- * 数出 1 而非 0，打歪 sidebar 的「单空 New Maker 草稿」判定。list 已改成两段式；get/update
- * 也走同一条标量子查询，避免切任务时把几万行 join 进单行快照。
- *
- * 由 sessionListMessageCount 回归测试守护。
- *
- * list_message_count 已回填时走缓存列，跳过 messages 扫描。未回填时 count(*) 精确总数
- * （侧栏文案仍用 messageCountLabel 把 ≥1001 显示成 1000+；wire `_count.messages` 保持精确）。
- * 非 NULL 即信任：绕过 createMessage 的 messages 增删必须同步投影。
- * import / treeRehydrate 置空三列；turn/review 租约、context.rebuild、createMessage 只置空计数。
- */
-const SESSION_MESSAGE_COUNT_SQL = sql<number>`(
-  CASE
-    WHEN ${sessions.listMessageCount} IS NOT NULL THEN ${sessions.listMessageCount}
-    ELSE (
-      SELECT count(*) FROM messages m WHERE m.session_id = ${sessions.id}
-    )
-  END
-)`.as('message_count');
-
-/**
- * sidebar-card-mode：最近一条可见 user/assistant 的预览抽出 / role。
- * list_preview 已回填时 CASE 短路，不碰 messages。否则 SQL 侧 json_extract 纯文本，
- * 不把整段 content 跨 worker RPC。autoResume 只检查 user 行的 agent_meta。
- */
-const LATEST_MSG_EXTRACT_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreview} IS NOT NULL THEN NULL
-    ELSE (
-      SELECT ${sql.raw(LIST_PREVIEW_EXTRACT_SQL)} FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_extract');
-const LATEST_MSG_ROLE_SQL = sql<string | null>`(
-  CASE
-    WHEN ${sessions.listPreviewRole} IS NOT NULL THEN ${sessions.listPreviewRole}
-    ELSE (
-      SELECT m.role FROM messages m
-      WHERE m.session_id = ${sessions.id}
-        AND ${sql.raw(LATEST_VISIBLE_PREVIEW_FILTER_SQL)}
-        AND (${sessions.clearedAt} IS NULL OR m.created_at > ${sessions.clearedAt})
-      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1
-    )
-  END
-)`.as('latest_message_role');
 
 /**
  * 按 session id 查 desktop 端 sessions 表的产品快照。
@@ -662,6 +1031,9 @@ export function createSessionRemoteHostIdReader(): (sessionId: string) => Promis
 
 export interface SessionRowSnapshot {
   status: string;
+  /** Bound schedule cold resumes preserve the owner's permission choice. */
+  permissionMode?: string | null;
+  planModeEnabled?: boolean | null;
   title: string | null;
   userSendAt: number | null;
   workingDir: string | null;
@@ -669,10 +1041,18 @@ export interface SessionRowSnapshot {
   providerId: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
   remoteHostId?: string | null;
+  /** 远程 Agent 所在电脑(null = 本机);限额自动继续据此不拿本机账号快照推算。 */
+  agentDeviceId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** 协同远端 Worker 标记(raw JSON);非空时不能再开启协同。 */
+  orcaRemoteLead?: string | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
+  /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
+  source?: string | null;
+  /** 会话当前模型;限额判定据此只看该模型的额度窗口。 */
+  model?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
 }
@@ -682,6 +1062,8 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
   const [row] = await db
     .select({
       status: sessions.status,
+      permissionMode: sessions.permissionMode,
+      planModeEnabled: sessions.planModeEnabled,
       title: sessions.title,
       userSendAt: sessions.userSendAt,
       workingDir: sessions.workingDir,
@@ -691,8 +1073,12 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       providerId: sessions.providerId,
       clearedAt: sessions.clearedAt,
       remoteHostId: sessions.remoteHostId,
+      agentDeviceId: sessions.agentDeviceId,
       orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
       agentKind: sessions.agentKind,
+      source: sessions.source,
+      model: sessions.model,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
@@ -757,8 +1143,41 @@ export async function getSessionFsSnapshot(id: string): Promise<{
   }
 }
 
+export async function touchSessionActivityInDb(
+  id: string,
+  atMs = Date.now(),
+  skipActiveGoal = false,
+): Promise<void> {
+  if (isEndedWriteSuppressed()) return;
+  const ownerScope = captureOwnerScope();
+  try {
+    const db = getDbClient().drizzle;
+    const updated = await db.update(sessions)
+      .set({
+        lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${atMs})`,
+        updatedAt: sql`MAX(COALESCE(${sessions.updatedAt}, 0), ${atMs})`,
+      })
+      .where(and(
+        eq(sessions.id, id),
+        sql`COALESCE(${sessions.lastActivityAt}, 0) < ${atMs}`,
+        skipActiveGoal
+          ? sql`NOT EXISTS (SELECT 1 FROM session_goals WHERE session_id = ${id} AND status = 'active')`
+          : undefined,
+      ))
+      .returning({ lastActivityAt: sessions.lastActivityAt, updatedAt: sessions.updatedAt });
+    if (updated[0]?.lastActivityAt != null && isOwnerScopeCurrent(ownerScope)) {
+      broadcastSessionPatched(id, {
+        lastActivityAt: new Date(updated[0].lastActivityAt).toISOString(),
+        updatedAt: new Date(updated[0].updatedAt).toISOString(),
+      }, ownerScope);
+    }
+  } catch (error) {
+    log.warn('Failed to persist session list activity', { sessionId: id, error: String(error) });
+  }
+}
+
 /**
- * 内部 API：标记用户显式发送时间。
+ * 内部 API：标记用户显式发送时间，同时推进列表最近活动时间。
  *
  * 过去这一步由 renderer 在 sendMessage 里直接调 IPC。队列 / 插话迁到 main 事务
  * 协调器后，renderer 只发 intent，真正“这条输入已进入事务”的时间必须跟 main
@@ -768,34 +1187,37 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
   const ownerScope = captureOwnerScope();
   const ts =
     typeof atMs === 'number' && Number.isFinite(atMs) && atMs > 0 ? Math.floor(atMs) : Date.now();
-  const db = getDbClient().drizzle;
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
   // 原子 guard：单条 UPDATE + WHERE 代替 SELECT→条件判断→UPDATE 三步走。
   // 旧实现存在 TOCTOU 竞态：两个并发调用（如 scheduler fire + 手动发送）都可能
   // 通过旧值检查后都执行 UPDATE，后写入的更早时间戳会覆盖已写入的更新值。
   // WHERE 条件由 SQLite 行锁原子执行，消除竞态窗口。
   // updatedAt 用 MAX 防止 run 完成路径写入 finishedAt 后被更早的 firedAt 回退。
-  // 同步 bump updatedAt:侧栏时间轴统一读 sessions.updatedAt("最近有动静的会话"),
-  // 用户按下发送就是最典型的"有动静"—— userSendAt 保持"用户发送时刻"专用语义,
-  // updatedAt 表示"任意路径下这个 session 最近一次被推进",两者语义正交但需同刷。
-  await db
+  // 保留 updatedAt 的既有写入；列表活动时间与真人发送时间在同一条 UPDATE 中推进。
+  const updated = await db
     .update(sessions)
-    .set({ userSendAt: ts, updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})` })
+    .set({
+      userSendAt: ts,
+      lastActivityAt: sql`MAX(COALESCE(${sessions.lastActivityAt}, 0), ${ts})`,
+      updatedAt: sql`MAX(${sessions.updatedAt}, ${ts})`,
+    })
     .where(
       and(
         eq(sessions.id, id),
         sql`(${sessions.userSendAt} IS NULL OR ${sessions.userSendAt} < ${ts})`,
       ),
-    );
-  // 验证 UPDATE 是否落地，避免向 renderer 广播过时值。
-  // WHERE 条件为假时（并发写入已领先，或 userSendAt 已 >= ts）UPDATE 为 no-op；
-  // 此时 DB 里的 userSendAt ≠ ts，SELECT 返回空，正确跳过广播。
-  // 通过 SELECT 拿回实际落库的 updatedAt（已经是 MAX'd 结果）用于广播，
-  // 避免把旧 ts 当作 updatedAt 广播给 renderer。
-  const updated = await db
-    .select({ userSendAt: sessions.userSendAt, updatedAt: sessions.updatedAt })
-    .from(sessions)
-    .where(and(eq(sessions.id, id), eq(sessions.userSendAt, ts)))
-    .limit(1);
+    )
+    .returning({
+      userSendAt: sessions.userSendAt,
+      lastActivityAt: sessions.lastActivityAt,
+      updatedAt: sessions.updatedAt,
+      workingDir: sessions.workingDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+      source: sessions.source,
+      orcaRole: sessions.orcaRole,
+    });
   if (updated.length === 0) return;
   // 广播 sessions:patched,让 renderer 把刚发过消息的会话从「草稿(未分类)」即时重归到
   // 项目分组下(projectGrouping 的草稿兜底:userSendAt==null && messages==0 → unclassified)。
@@ -809,11 +1231,87 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       id,
       {
         userSendAt: new Date(updated[0].userSendAt!).toISOString(),
+        lastActivityAt: new Date(updated[0].lastActivityAt!).toISOString(),
         updatedAt: new Date(updated[0].updatedAt).toISOString(),
       },
       ownerScope,
     );
   }
+  // 项目独立保留真实使用时间；不能等归档/删除时再取清理时间，也不能从剩余任务重算。
+  // 复用入口处的 client，避免 await 期间切换账号后把旧项目写入新账号数据库。
+  const row = updated[0];
+  if (
+    row.workspaceKind === 'project' &&
+    row.workingDir &&
+    !row.remoteHostId &&
+    isRetainableProjectSession(row)
+  ) {
+    const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
+    const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
+    if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
+  }
+}
+
+/**
+ * 未发送任务转为普通任务（第一次发送）：补做建任务时延后的副作用，并让控制端看到它。
+ * 不是未发送任务时什么都不做。最近项目由随后的 touchUserSend 照常记录。
+ */
+export async function commitProvisionalSession(sessionId: string): Promise<boolean> {
+  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
+  const db = getDbClient().drizzle;
+  const [row] = await db
+    .select({
+      workingDir: sessions.workingDir,
+      workspaceKind: sessions.workspaceKind,
+      remoteHostId: sessions.remoteHostId,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (!row) return false;
+  await ensureOpenedProjectGit({ id: sessionId, ...row }).catch((error) => {
+    log.warn('provisional session git bootstrap failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+  // The account may have changed during the awaits: then it stays an unsent leftover of the
+  // old account (claim parks it) instead of becoming an ordinary task there.
+  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
+  forgetProvisionalSession(sessionId);
+  emitSessionCreated(sessionId);
+  void import('../../cindy-brain/index.js')
+    .then((m) =>
+      m.notifyGhostSessionEvent('created', {
+        sessionId,
+        ...(row.workingDir ? { workdir: row.workingDir } : {}),
+      }),
+    )
+    .catch(() => {});
+  log.info('provisional session committed', { sessionId });
+  return true;
+}
+
+/**
+ * 删掉一个未发送任务（用户清空了新建页的输入）：仍未发送、没有消息时才真正删除行，
+ * 顺带删掉为它新建、仍为空的对话目录，并通知本机窗口移除。调用方负责先关掉它的 Agent。
+ */
+export async function discardProvisionalSessionRow(sessionId: string): Promise<boolean> {
+  if (claimOwnedProvisionalSession(sessionId) !== 'owned') return false;
+  const managedDir = provisionalManagedDir(sessionId);
+  const deleted = await deleteUnsentSessionRow(sessionId);
+  if (!deleted) {
+    // Already sent (or gone): it is an ordinary task now.
+    forgetProvisionalSession(sessionId);
+    return false;
+  }
+  removeEmptyDialogueDir(sessionId, managedDir);
+  forgetProvisionalSession(sessionId);
+  // Other local windows re-read their lists; the row is gone, so it drops out. No status
+  // patch: the same id may be opened again when the user types again.
+  emitSessionListChangedLocally(sessionId);
+  log.info('provisional session discarded', { sessionId });
+  return true;
 }
 
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
@@ -989,6 +1487,7 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
     .where(eq(sessions.id, sessionId))
     .limit(1);
   const effectiveClearedAt = updated?.clearedAt ?? ts;
+  if (isOwnerScopeCurrent(ownerScope)) void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
   const effectiveUpdatedAt = updated?.updatedAt ?? effectiveClearedAt;
   // Concurrent clears can make SQLite return a newer monotonic boundary than
   // this request supplied. Mirror the effective value into the in-memory gate.
@@ -1017,10 +1516,21 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
   }
 }
 
+/**
+ * registerSessionIpc 收到的运行时依赖(closeIdleSessionForMove 等)。MCP 会话操作工具
+ * 不经 IPC 直接调 updateSessionInDb 时沿用同一份,保证与 renderer 路径行为一致。
+ */
+let registeredSessionIpcOpts: RegisterSessionIpcOpts = {};
+
 export function registerSessionIpc(
   readSessionListLogScope: () => string | null = () => null,
   opts: RegisterSessionIpcOpts = {},
 ): void {
+  registeredSessionIpcOpts = opts;
+  configureProvisionalSessions(() => app.getPath('userData'), {
+    // Windows that listed before the sweep finished drop the deleted leftover.
+    onSwept: (sessionId) => emitSessionListChangedLocally(sessionId),
+  });
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
   // 是在 turn 飞行中或「done → ended 落库」空窗里取的(startedAt > endedAt),此前
@@ -1038,8 +1548,14 @@ export function registerSessionIpc(
   );
   ipcMain.handle(
     'local-db:sessions:list',
-    async (_e, limit: unknown, status: unknown, options: unknown) => {
+    async (event, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
+      const usageHistory = shouldUseUsageHistoryQuery(options);
+      // The usage-history branch is an unbounded privileged read. Keep the
+      // legacy capped list available to device-link's synthetic event, but do
+      // not let an untrusted renderer turn the new branch into a full-table
+      // session disclosure.
+      if (usageHistory) assertTrustedAppRendererEvent(event);
       const snapshot = readCurrentDbClientSnapshot();
       const db = snapshot?.client.drizzle ?? getDbClient().drizzle;
       const userId = snapshot?.userId ?? readCurrentDbClientUserId();
@@ -1047,9 +1563,43 @@ export function registerSessionIpc(
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
       void import('../../sessionTaskSummary.js').then((m) => m.backfillPinnedSessionSummaries());
+      // 首次 list 即账号库就绪:预热 session 标记索引(插件后台隐藏 + 消息免打扰),
+      // 灵动岛/通知的同步判定从此可用。
+      void ensureSessionFlagRegistryLoaded();
+      // 同一时机清掉上次运行没来得及删的未发送任务；先等它清完再读列表，残留不会被列出来。
+      // 每个账号库只真正清理一次，之后直接返回同一个结果。
+      await sweepLeftoverProvisionalSessions().catch(() => undefined);
       const cap = clampLimit(limit, 20);
       const includePinned = shouldIncludePinnedSessions(options);
       const fresh = shouldBypassSessionListSingleFlight(options);
+      const rawBefore = options && typeof options === 'object' ? (options as { before?: unknown }).before : undefined;
+      let before: { updatedAt: number; id: string } | undefined;
+      if (rawBefore !== undefined) {
+        // Pagination is local renderer-only until remote capability negotiation exists.
+        assertTrustedAppRendererEvent(event);
+        const value = requireObject(rawBefore, 'before');
+        if (typeof value.updatedAt !== 'number' || !Number.isSafeInteger(value.updatedAt) || value.updatedAt < 0
+          || typeof value.id !== 'string' || !value.id || value.id.length > 200 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list cursor');
+        }
+        before = { updatedAt: value.updatedAt, id: value.id };
+      }
+
+      const rawIds = options && typeof options === 'object' ? (options as { ids?: unknown }).ids : undefined;
+      let ids: string[] | undefined;
+      if (rawIds !== undefined) {
+        // Exact-subset pagination remains local-only, like the continuation cursor.
+        assertTrustedAppRendererEvent(event);
+        if (!Array.isArray(rawIds) || rawIds.length > 10_000 || usageHistory || includePinned) {
+          throwIpcError('INVALID_PARAMS', 'Invalid session list IDs');
+        }
+        ids = [...new Set(rawIds.map((id, index) => {
+          const value = requireString(id, `ids[${index}]`);
+          if (value.length > 256) throwIpcError('INVALID_PARAMS', 'Session list ID too long');
+          return value;
+        }))];
+      }
+
       // 支持 Sidebar Filter 的 Active/Archived/All status 过滤。
       //   - 'active' / 'archived' → WHERE status = ?
       //   - 'all' / undefined / 其它非法值 → WHERE status != 'deleted'
@@ -1058,13 +1608,17 @@ export function registerSessionIpc(
       const statusFilter: 'active' | 'archived' | null =
         status === 'active' || status === 'archived' ? status : null;
       const loadRows = async () => {
+        if (ids?.length === 0) return [];
         // 按 DESKTOP_VISIBLE_SESSION_SOURCES 白名单过滤 — 包含 IM 渠道
         // (feishu/slack/discord)与本机自动化(scheduler/learn/shared);
-        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。
-        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        // feishu 会话以「对话」分组展示(workspaceKind='dialogue')。/review 审查任务
+        // 只从来源任务的审查卡片打开,不进普通任务列表(用量历史仍包含)。
+        // 插件后台隐藏任务(hidden_at 非空)同样不进任务列表,只在插件详情页「后台任务」
+        // 查看与接手;手机/远控经 device-link 调同一 handler,口径一致。
+        const sourceFilter = ordinaryTaskListFilter();
         const statusWhere = () =>
           statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
-        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere()), cap);
+        const rows = await selectSessionListRows(db, and(sourceFilter, statusWhere(), ids ? inArray(sessions.id, ids) : undefined), cap, before);
 
         let mergedRows = rows;
         if (includePinned) {
@@ -1077,19 +1631,27 @@ export function registerSessionIpc(
         }
 
         scheduleSessionListProjectionBackfill(mergedRows);
-        return mergedRows.map((r) =>
-          sessionToCamel({
-            ...r.session,
-            messageCount: r.messageCount,
-            latestMessageExtract: r.latestMessageExtract,
-            latestMessageRole: r.latestMessageRole,
-          }),
+        return mergedRows.map((row) =>
+          projectSessionReadResult(flattenSessionReadRow(row), opts.resolveContextWindow),
+        );
+      };
+      const loadUsageHistoryRows = async () => {
+        // 用量历史的“最耗任务”必须覆盖整个会话表，再由 renderer 按所选日历范围
+        // 精确筛选；不能复用侧栏按 updatedAt 截断的 1000 行列表。这里刻意不算
+        // messageCount / preview，避免为统计页引入整库 messages 扫描。
+        const sourceFilter = inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES);
+        const statusWhere = () =>
+          statusFilter ? eq(sessions.status, statusFilter) : ne(sessions.status, 'deleted');
+        const rows = await selectSessionUsageRows(db, and(sourceFilter, statusWhere()));
+        return rows.map((row) =>
+          sessionUsageToCamel(projectSessionContextWindow(row, opts.resolveContextWindow)),
         );
       };
       // key 用同一快照上的 userId + clientEpoch + 归一化参数。
       // forceRefresh / status 重拉带 fresh，不并入写前那次查询。
-      const result =
-        userId && !fresh
+      const loaded = usageHistory
+        ? await loadUsageHistoryRows()
+        : userId && !fresh && !before && !ids
           ? await runSessionListSingleFlight(
               buildSessionListFlightKey({
                 userId,
@@ -1101,13 +1663,19 @@ export function registerSessionIpc(
               loadRows,
             )
           : await loadRows();
+      // 未发送任务只出现在本机任务列表里，手机 / 其它电脑在它第一次发送后才看到。
+      // 在 single-flight 之外过滤：同一次查询可能同时供本机与控制端使用。
+      const result = isDeviceLinkInvoke()
+        ? ((loaded as Array<{ id: string }>).filter((row) => !isProvisionalSession(row.id)) as typeof loaded)
+        : loaded;
       const finishedAt = performance.now();
       const filter = statusFilter ?? 'all';
       const elapsedMs = Math.round(finishedAt - startedAt);
       const fields = JSON.stringify({
         event: 'localDb.sessions.list.done',
         filter,
-        cap,
+        cap: usageHistory ? 'all' : cap,
+        usageHistory,
         includePinned,
         rows: result.length,
         queryElapsedMs: elapsedMs,
@@ -1132,11 +1700,27 @@ export function registerSessionIpc(
     const now = Date.now();
     const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
     const id = resolveBusinessSessionId(bodyObj.id);
-    const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
+    // 未发送任务（新建页开始输入时先建出来，见 provisionalSessions.ts）：只给本机普通任务，
+    // 延后的创建副作用在第一次发送转正时补做。
+    const { provisional: provisionalFlag, ...bodyWithoutProvisional } = bodyObj;
+    const provisional = provisionalFlag === true;
+    if (provisional && (
+      bodyObj.remoteHostId || bodyObj.agentDeviceId || bodyObj.orcaRole || bodyObj.source !== undefined
+      || (Array.isArray(bodyObj.writableDirs) && bodyObj.writableDirs.length > 0)
+    )) {
+      throwIpcError('INVALID_PARAMS', 'only ordinary local tasks can be opened before the first send');
+    }
+    const createBody = bodyWithoutProvisional as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
     const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
+    }
+    if (
+      bodyObj.title !== undefined &&
+      (typeof bodyObj.title !== 'string' || bodyObj.title.length > 200)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'title must be a string no longer than 200 characters');
     }
     const ALLOWED_WORKSPACE_KINDS = new Set<string>(['project', 'dialogue']);
     if (
@@ -1153,12 +1737,26 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
     }
+    // Agent 在同账号另一台电脑运行：只接受设备 id 形态的值(与 maker:create-session 同一规则)。
+    if (
+      bodyObj.agentDeviceId !== undefined &&
+      bodyObj.agentDeviceId !== null &&
+      (typeof bodyObj.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(bodyObj.agentDeviceId))
+    ) {
+      throwIpcError('INVALID_PARAMS', 'agentDeviceId must be a device id');
+    }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
       normalizeWorkingDirForStorage(
         typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
       ) ?? undefined;
+    assertRendererSessionSourceAllowed({
+      source: bodyObj.source,
+      workingDir: explicitWorkingDir,
+      remoteHostId: createBody?.remoteHostId,
+      userData: app.getPath('userData'),
+    });
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)
@@ -1167,8 +1765,10 @@ export function registerSessionIpc(
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
     }
     const requestedWritableDirs = createBody?.writableDirs ?? [];
-    if (!Array.isArray(requestedWritableDirs)
-      || !requestedWritableDirs.every((dir) => typeof dir === 'string')) {
+    if (
+      !Array.isArray(requestedWritableDirs) ||
+      !requestedWritableDirs.every((dir) => typeof dir === 'string')
+    ) {
       throwIpcError('INVALID_PARAMS', 'writableDirs must be string[]');
     }
     const requestedRemoteHostId = normalizeRemoteHostId(createBody?.remoteHostId);
@@ -1193,19 +1793,36 @@ export function registerSessionIpc(
         );
       }
     }
-    // body 透传 agentKind / orcaRole 给 mapper；非法值已由上方校验拦截，默认值由 mapper 兜底。
-    const insertRow = sessionCreateToRow(id, { ...createBody, workspaceKind, workingDir }, now);
-    await ensureProjectGitInitialized({
-      workingDir: insertRow.workingDir,
-      workspaceKind: insertRow.workspaceKind,
-      remoteHostId: insertRow.remoteHostId,
-      sessionId: id,
-      autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
-      source: 'local-db:sessions:create',
-    });
-    await db.insert(sessions).values(insertRow);
-    const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
+    // 未发送任务在写入之前就登记：行一出现，任务列表 / 控制端 / IM / hook 的过滤就已生效。
+    const markedProvisional = provisional && !isProvisionalSession(id);
+    if (markedProvisional) {
+      // Only a dialogue folder allocated here is ours to tidy up if the task is discarded.
+      const managedDir = workspaceKind === 'dialogue' && !explicitWorkingDir ? workingDir : undefined;
+      markProvisionalSession(id, now, managedDir);
+    }
+    let insertRow: Awaited<ReturnType<typeof openSession>>['row'];
+    let row: typeof sessions.$inferSelect | undefined;
+    try {
+      ({ row: insertRow } = await openSession({ id, now,
+        body: { ...createBody, workspaceKind, workingDir },
+        ...(provisional ? { deferGitInit: true } : {}),
+      }, async (prepared, assertCurrent) => {
+        const resource = !prepared.remoteHostId && prepared.workingDir
+          ? managedWorktreeRoot(prepared.workingDir) : null;
+        const insert = async () => { assertCurrent(); await db.insert(sessions).values(prepared); };
+        if (resource) await withWorktreeMutation([resource], insert);
+        else await insert();
+      }));
+      [row] = await db.select().from(sessions).where(eq(sessions.id, id));
+    } catch (error) {
+      if (markedProvisional) forgetProvisionalSession(id);
+      throw error;
+    }
     if (!row) throwIpcError('NOT_FOUND', 'Session 创建后查询失败');
+    if (provisional) {
+      log.info('provisional session opened', { sessionId: id, workspaceKind: insertRow.workspaceKind });
+      return sessionToCamel({ ...row, messageCount: 0 });
+    }
     // recent-workdirs: 项目目录走 sidebar 分组,要进"最近"列表;dialogue 目录是
     // app-managed 临时 cwd,跟用户选过的项目目录语义不同,不污染最近列表。
     // 失败仅日志,不阻断创建流程。
@@ -1214,7 +1831,12 @@ export function registerSessionIpc(
     // 路径写进去,后续 New Maker 项目下拉选中它时会丢失 host、按本机路径创建出一个
     // 错误的本地会话(指向本机不存在的同名目录)。在 host-aware 最近项目(给该表加
     // remote_host_id 列 + picker 区分 local/remote)落地前,remote 项目一律不进最近列表。
-    if (insertRow.workspaceKind === 'project' && insertRow.workingDir && !insertRow.remoteHostId) {
+    if (
+      insertRow.workspaceKind === 'project' &&
+      insertRow.workingDir &&
+      !insertRow.remoteHostId &&
+      isRetainableProjectSession(insertRow)
+    ) {
       void upsertRecentWorkdir(insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
@@ -1236,6 +1858,27 @@ export function registerSessionIpc(
   // 断定飞行中的 turn 来自上一个进程。周期性重跑会把运行中的会话误判为中断。
   ipcMain.handle('local-db:sessions:interrupted-pending', async () => {
     return listInterruptedPendingSessionIds();
+  });
+
+  // 启动「继续上次中断的任务」弹窗:同一批中断会话,附中断时间与中断那一轮最后一次
+  // 工具调用的文案(与灵动岛同源)。查询带 bootAt 守卫,任何时刻调用都不会把本进程
+  // 正在跑的 turn 算进来。只服务本机顶层 renderer,不进 device-link allowlist。
+  ipcMain.handle('local-db:sessions:interrupted-resume-candidates', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const rows = await listInterruptedResumeCandidateRows(
+      ({ botId, role, profileStatus }) =>
+        botSessionInputBlockReason({ source: 'bot', role, profileStatus }) === null
+        && !isShadowedCompanionSession({ role, botId }, isCompanionShadowed),
+    );
+    const wording = createLocalizedToolRowWording();
+    return rows.map(({ sessionId, interruptedAt, lastToolUse }) => ({
+      sessionId,
+      interruptedAt,
+      activity: lastToolUse
+        ? (formatIslandToolDetail(lastToolUse.toolName, lastToolUse.input, { wording })
+          ?? lastToolUse.toolName)
+        : null,
+    }));
   });
 
   // 「尾部停在未 dismissed 错误行」的 active 会话 id —— 红点派生的周期性重算源。
@@ -1333,12 +1976,28 @@ export function registerSessionIpc(
     return { ok: true };
   });
 
+  // Bounded reconciliation read: same metadata/count/preview as GET, one DB RPC.
+  // Omitted rows mean missing or remotely hidden; the tunnel filters visibility.
+  ipcMain.handle('local-db:sessions:get-many', async (event, value: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(value) || value.length > SESSION_READ_BATCH_LIMIT) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `sessionIds must be an array of at most ${SESSION_READ_BATCH_LIMIT} ids`,
+      );
+    }
+    const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
+    if (!ids.length) return [];
+    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
+    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+  });
+
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return sessionToCamel(row);
+    return projectSessionReadResult(row, opts.resolveContextWindow);
   });
 
   /**
@@ -1361,6 +2020,8 @@ export function registerSessionIpc(
         status: sessions.status,
         title: sessions.title,
         agentKind: sessions.agentKind,
+        agentDeviceId: sessions.agentDeviceId,
+        remoteHostId: sessions.remoteHostId,
       })
       .from(sessions)
       .where(inArray(sessions.id, sessionIds));
@@ -1375,6 +2036,7 @@ export function registerSessionIpc(
         status: row.status,
         title: row.title,
         agentKind: normalizeDbAgentKind(row.agentKind),
+        agentDeviceId: row.agentDeviceId && !row.remoteHostId ? row.agentDeviceId : null,
       };
     });
   });
@@ -1405,8 +2067,9 @@ export function registerSessionIpc(
       }
 
       const db = getDbClient().drizzle;
-      const updated = await withSessionRouteLock(sid, async () => {
+      const updated = await withStatusWriteLock(db, sid, 'active', async () => {
         if (!isOwnerScopeCurrent(ownerScope)) return null;
+        await assertGenericSessionLifecycleAllowed(db, sid);
         // 显式 .run() 才能从生产 DbClient.drizzle proxy 拿到 changes；隐式 await
         // 会丢弃写结果。CAS 是否命中必须以该原子 UPDATE 的 changes 判定。
         const writeResult = await db
@@ -1458,19 +2121,117 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
-    const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
-    if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        'directory grants must be changed through maker:set-*-dirs',
-      );
+    // renderer payload 不可信:静音是 boolean 语义,字符串 "false" 进 mapper 会被 `!!`
+    // 存成 true(开关反转)。出现就必须是真 boolean,与 set-pinned-card-summaries 同口径。
+    if (p.notificationsMuted !== undefined && typeof p.notificationsMuted !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'notificationsMuted must be a boolean');
     }
-    const dbClient = getDbClient();
-    const db = dbClient.drizzle;
-    // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
-    // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
-    const update = async () => {
+    return updateSessionInDb(sid, p, opts);
+  });
+
+  // 窄口径会话元数据编辑(status / title / pinnedAt)。专为 device-link 控制端**远程**
+  // 删除/归档/重命名/置顶设计:通用 sessions:update 能写任意字段(workingDir/model/
+  // sdkSessionId/orcaRole/clearedAt…),故意不进 allowlist;这个 handler 只放行白名单内的
+  // 用户可编辑元数据,是「写库必须经业务 handler、不开裸写」原则下的窄能力(规则 9/13)。
+  // 仅被隧道(远程操作)调到 —— 本机操作走 sessions:update + renderer 乐观更新。
+  ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
+    const sid = requireString(id, 'id');
+    const p = requireObject(patch, 'patch');
+    const updated = await patchSessionMetaInDb(
+      sid,
+      p as Parameters<typeof patchSessionMetaInDb>[1],
+    );
+    return updated;
+  });
+
+  // fork-session: 已迁到 maker-ipc/fork.ts (Stage 2 C2), IPC channel 改名 maker:fork。
+  // 业务函数 forkSessionAtMessage 仍在 apps/desktop/src/main/maker-orchestration/fork.ts, 内部 SDK 调用
+  // 走 maker-core 的 Maker.forkSdkSession (Codex 自动抛 NotSupportedError)。
+
+  // 用户发送同时推进 user_send_at、last_activity_at 和既有 updated_at，不返回 row。
+  ipcMain.handle(
+    'local-db:sessions:touchUserSend',
+    async (_e, id: unknown, atMs: unknown): Promise<void> => {
+      const sid = requireString(id, 'id');
+      await touchUserSendInDb(sid, typeof atMs === 'number' ? atMs : undefined);
+    },
+  );
+
+  // 本机 UI 偏好:置顶段是不是卡片模式。故意不进 device-link allowlist —— 摘要
+  // oneShot 只服务本机卡片展示,控制端卡片回退 preview,不把付费生成推到被控端。
+  // 新增 handler 一律校验顶层 app renderer(electron-security §5)。
+  ipcMain.handle(
+    'local-db:sessions:set-pinned-card-summaries',
+    async (event, enabled: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
+      }
+      const m = await import('../../sessionTaskSummary.js');
+      m.setPinnedSectionCardMode(enabled);
+    },
+  );
+}
+
+/**
+ * `local-db:sessions:update` 的业务体。renderer 的 sessionService.update 与 MCP
+ * 会话操作工具(move / pin / delete 等)共用这一条路径:路由锁 + worktree 锁、
+ * review 会话拒改、Pi/Codex 空闲 runtime 关闭、cc 转录目录搬迁、recent-workdir
+ * 维护、sessions:patched 广播与 agent-island 通知都在这里,不得另起平行写入链路。
+ *
+ * 「绑定托管 worktree 的会话不得改到该 worktree 之外」是这里的不变量,所有入口
+ * (GUI 侧栏、MCP 工具、device-link)一并生效;GUI 侧的预检只为及时反馈,规则
+ * 以本函数为准,不得在入口层另立一份。
+ */
+
+/** Pre-lock cancellation is limited to validated terminal intent; commit/cleanup stay locked. */
+async function cancelValidatedCreation(
+  dbClient: DbClient, sessionId: string, status: unknown,
+  assertCurrent: () => void,
+): Promise<void> {
+  if (status !== 'archived' && status !== 'deleted') return;
+  const cancel = captureSessionCreationCancellation(dbClient, sessionId);
+  const [target] = await dbClient.drizzle.select({ source: sessions.source })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
+  await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId);
+  assertCurrent();
+  if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+  cancel();
+}
+
+export async function updateSessionInDb(
+  sid: string,
+  p: Record<string, unknown>,
+  opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+  moveGuard?: {
+    /** Identity only: also used after commit and inside transcript relocation. */
+    assertCurrent: () => void;
+    /** Runs inside the existing route/worktree locks, including dialogue moves. */
+    beforeUpdate: () => Promise<void>;
+    /** Mutable running/IM preconditions must not reject an already committed move. */
+    beforeWrite?: () => void | Promise<void>;
+  },
+): Promise<ReturnType<typeof sessionToCamel>> {
+  moveGuard?.assertCurrent();
+  const ownerScope = captureOwnerScope();
+  if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
+    throwIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      'directory grants must be changed through maker:set-*-dirs',
+    );
+  }
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
+  // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
+  const update = async () => {
+    if (moveGuard) {
+      moveGuard.assertCurrent();
+      await moveGuard.beforeUpdate();
+      moveGuard.assertCurrent();
+    }
     if (p.workspaceKind !== undefined) {
       const value = p.workspaceKind;
       if (value !== 'project' && value !== 'dialogue') {
@@ -1485,6 +2246,21 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
     }
+    // 任务窗口预算：非法值不能静默 converge（normalize 会把 <1000 变成 null = 静默清预算、
+    // 把超大值静默夹到上限），而调用方收到的是成功回包。隧道入口与本地入口必须同口径拒绝。
+    if (
+      p.contextWindowBudget !== undefined &&
+      p.contextWindowBudget !== null &&
+      (typeof p.contextWindowBudget !== 'number' ||
+        !Number.isInteger(p.contextWindowBudget) ||
+        p.contextWindowBudget < MIN_CONTEXT_WINDOW_BUDGET ||
+        p.contextWindowBudget > MAX_CONTEXT_WINDOW_BUDGET)
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `contextWindowBudget must be null or an integer within [${MIN_CONTEXT_WINDOW_BUDGET}, ${MAX_CONTEXT_WINDOW_BUDGET}]`,
+      );
+    }
     if (typeof p.workingDir === 'string') {
       p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
     }
@@ -1493,6 +2269,7 @@ export function registerSessionIpc(
       'workspaceKind',
       'model',
       'providerId',
+      'contextWindowBudget',
       'effort',
       'permissionMode',
       'fastMode',
@@ -1514,7 +2291,7 @@ export function registerSessionIpc(
         );
       }
     }
-    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
+    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,提交前对比实际变化。
     // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
     // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
     const beforeMove =
@@ -1530,6 +2307,46 @@ export function registerSessionIpc(
               .where(eq(sessions.id, sid))
           )[0]
         : undefined;
+    // worktree-handoff:worktree 会话的工作区边界就是它绑定的 worktree。只改 workingDir
+    // 会留下「半移动」—— 侧栏按新项目归组,而聊天框底部路径、Git 上下文、worktree
+    // store 归属与回收义务仍留在旧 worktree。完整的 worktree → Local Handoff 是独立
+    // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
+    // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
+    // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
+    //
+    // 归属以 worktreeStore(组合层注入)为真源:旧版允许过的「半移动」会给会话留下
+    // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
+    // 反过来,DB 的 worktree_path 快照在回收后仍保留历史值,也不能当活绑定用。
+    const requestedWorkingDir = typeof p.workingDir === 'string' ? p.workingDir : null;
+    // 显式清空(`workingDir: null`,或空串/空白串经上面的归一化变成 null)也是改归属:
+    // 字符串判据放它过去的话,worktree 会话会被摘掉工作目录,留下同一类归属分裂。
+    // 只当键真的出现且归一化后为 null 时才算清空(未传该键的 update 不落库,不能算)。
+    const clearsWorkingDir = Object.prototype.hasOwnProperty.call(p, 'workingDir') && p.workingDir === null;
+    if (
+      beforeMove &&
+      !beforeMove.remoteHostId &&
+      (requestedWorkingDir !== null || clearsWorkingDir) &&
+      (clearsWorkingDir || !workingDirEquals(requestedWorkingDir, beforeMove.workingDir))
+    ) {
+      // 归属真源:装了绑定查询(生产路径)就以 store 的答案为唯一依据 —— 返回 null 就是
+      // **没有活绑定**(worktree 已被回收的会话仍会留着历史 worktree 路径),此时不能再
+      // 从 cwd 反推,否则这些会话会被永久拦死;未装查询的场景(单测/裁剪引导)才退回 cwd。
+      let ownedWorktreeRoot: string | null = null;
+      if (sessionWorktreeBindingLookup) {
+        const liveWorktreePath = sessionWorktreeBindingLookup(sid);
+        ownedWorktreeRoot = liveWorktreePath ? managedWorktreeRoot(liveWorktreePath) : null;
+      } else if (beforeMove.workingDir) {
+        ownedWorktreeRoot = managedWorktreeRoot(beforeMove.workingDir);
+      }
+      const targetWorktreeRoot = requestedWorkingDir
+        ? managedWorktreeRoot(requestedWorkingDir)
+        : null;
+      if (ownedWorktreeRoot && !workingDirEquals(ownedWorktreeRoot, targetWorktreeRoot)) {
+        // 错误码与文案是跨进程契约:renderer 按它把这次拒绝映射成同一条 toast
+        // (shared/worktreeMoveGuardError.ts),两侧共用常量避免文案漂移。
+        throwIpcError(WORKTREE_MOVE_BLOCKED_CODE, WORKTREE_MOVE_BLOCKED_MESSAGE);
+      }
+    }
     const movingLocalNonClaudeSession =
       beforeMove &&
       beforeMove.agentKind !== 'cc' &&
@@ -1542,6 +2359,8 @@ export function registerSessionIpc(
     // before persisting the new directory so the next send lazily recreates the
     // runtime with the moved session's cwd instead of continuing in the old one.
     if (movingLocalNonClaudeSession) {
+      await moveGuard?.beforeWrite?.();
+      moveGuard?.assertCurrent();
       if (!opts.closeIdleSessionForMove) {
         throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
       }
@@ -1560,22 +2379,56 @@ export function registerSessionIpc(
       'fastMode',
       'planModeEnabled',
       'providerId',
+      'contextWindowBudget',
       'orcaRole',
       'extraDirs',
       'writableDirs',
       'pinnedAt',
+      'notificationsMuted',
       'workingDir',
       'workspaceKind',
       'title',
     ]);
     const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
-    const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
+    // 任务窗口预算不进入行更新（偏好文件才是它的真源）——从行 patch 里剔除，
+    // 否则 mapper 会把未知字段当成非法写入。
+    const rowPatch = { ...p };
+    delete rowPatch.contextWindowBudget;
+    const setObj = sessionPatchToRow(rowPatch as Parameters<typeof sessionPatchToRow>[0], {
       bumpUpdatedAt: !isSettingsOnly,
     });
     if (p.clearedAt !== undefined) {
       setObj.summary = null;
       setObj.listPreview = null;
       setObj.listPreviewRole = null;
+    }
+    // 在提交新 cwd 前完成现有 CC 迁移,与 Pi/Codex 的 runtime 关闭同处提交前。
+    // 迁移只复制、不删除旧转录:切账号或写库失败时旧 cwd 仍可恢复；提交后
+    // 围栏即使拒绝返回,也不会留下新 cwd 配旧转录。复用原锁与 best-effort 策略。
+    // 动态 import 避免 localDb → maker-host 静态模块环。
+    if (
+      beforeMove &&
+      beforeMove.agentKind === 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
+    ) {
+      const m = await import('../../maker-host/claude-transcript-relocation.js');
+      moveGuard?.assertCurrent();
+      await moveGuard?.beforeWrite?.();
+      moveGuard?.assertCurrent();
+      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
+        sid,
+        beforeMove.workingDir,
+        p.workingDir,
+        ...(moveGuard ? [{ client: dbClient, assertCurrent: moveGuard.assertCurrent }] : []),
+      );
+      if (reloc.persistedSdkSessionId) {
+        p.sdkSessionId = reloc.persistedSdkSessionId;
+        setObj.sdkSessionId = reloc.persistedSdkSessionId;
+      }
     }
     // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
     // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
@@ -1584,15 +2437,55 @@ export function registerSessionIpc(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    // 窗口预算不是会话列（见 session-context-budget-store 头注）：旧值从偏好文件读，
+    // 下面的应用回调靠它判断「有效窗口是否真的变了」（已重新展开为同一值时不必关掉活实例）。
+    // 写入放在 UPDATE 之后（与广播同一顺序），保证 UI 先看到新选择。
+    const hasContextWindowBudgetChange = p.contextWindowBudget !== undefined;
+    const previousContextWindowBudget: number | null = hasContextWindowBudgetChange
+      ? readSessionContextWindowBudget(sid)
+      : null;
+    await cancelValidatedCreation(dbClient, sid, p.status, () => {
+      moveGuard?.assertCurrent();
+      if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    });
+    let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
     await withStatusWriteLock(
+      db,
       sid,
       p.status,
       async () => {
-        await writeSessionPatch(db, sid, setObj, p.status);
+        moveGuard?.assertCurrent();
+        if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        await moveGuard?.beforeWrite?.();
+        moveGuard?.assertCurrent();
+        const terminal = p.status === 'archived' || p.status === 'deleted';
+        if (terminal) {
+          if (typeof dbClient.tx === 'function') {
+            const { status: _status, ...nonTerminalPatch } = setObj;
+            await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
+            deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted');
+          } else {
+            const prepared = await prepareSharedTaskClosure(sid, dbClient);
+            try {
+              await writeSessionPatch(db, sid, setObj, p.status);
+            } catch (error) {
+              await rollbackSharedTaskClosure(dbClient, prepared);
+              throw error;
+            }
+            await finalizeSharedTaskClosure(dbClient, prepared);
+          }
+        } else {
+          await writeSessionPatch(db, sid, setObj, p.status);
+        }
         cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+        if (terminal) {
+          const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+          await closeSharedTaskForTask(sid, dbClient);
+        }
       },
       p.workingDir !== undefined,
     );
+    moveGuard?.assertCurrent();
     // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
     // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
     if (p.clearedAt !== undefined) {
@@ -1605,31 +2498,8 @@ export function registerSessionIpc(
       }
       void recomputePrRefsForSession(sid).catch(() => undefined);
     }
-    // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
-    // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
-    // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
-    // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
-    // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
-    if (
-      beforeMove &&
-      beforeMove.agentKind === 'cc' &&
-      !beforeMove.remoteHostId &&
-      beforeMove.workingDir &&
-      typeof p.workingDir === 'string' &&
-      p.workingDir &&
-      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
-    ) {
-      const m = await import('../../maker-host/claude-transcript-relocation.js');
-      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
-        sid,
-        beforeMove.workingDir,
-        p.workingDir,
-      );
-      if (reloc.persistedSdkSessionId) {
-        (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
-      }
-    }
     const row = await selectSessionWithCount(db, sid);
+    moveGuard?.assertCurrent();
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
     if (p.pinnedAt !== undefined && row.pinnedAt == null) {
@@ -1637,6 +2507,16 @@ export function registerSessionIpc(
       row.summary = null;
     }
     const updated = sessionToCamel(row);
+    // 「消息免打扰」是通知面专用标记:同步给进程内索引,免得通知/灵动岛路径逐事件查库。
+    if (p.notificationsMuted !== undefined) {
+      noteSessionNotificationsMuted(sid, updated.notificationsMuted === true, dbClient);
+      // 岛面收敛:静音后要把已经上岛的任务从展示面收走,取消静音要放回来。只影响
+      // 展示面 —— 事件仍照常进状态机(侧栏实时活动就长在那份状态上)。
+      notifyAgentIslandSessionPatch(sid, { notificationsMuted: updated.notificationsMuted });
+    }
+    if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+      clearSessionAttention(sid, 'explicit');
+    }
     const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
     const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
     const titleChanged = p.title !== undefined;
@@ -1647,9 +2527,16 @@ export function registerSessionIpc(
       projectTargetChanged &&
       row.workspaceKind === 'project' &&
       row.workingDir &&
-      !row.remoteHostId
+      !row.remoteHostId &&
+      isRetainableProjectSession(row)
     ) {
-      await upsertRecentWorkdir(row.workingDir, Date.now());
+      const touched = await upsertRecentWorkdir(
+        row.workingDir,
+        Date.now(),
+        process.platform,
+        dbClient,
+      );
+      if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
     }
     // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
     // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
@@ -1682,12 +2569,14 @@ export function registerSessionIpc(
               ? { status: broadcastStatus }
               : {}),
           };
+    moveGuard?.assertCurrent();
     if (
       projectTargetChanged ||
       settingsChanged ||
       titleChanged ||
       statusChanged ||
-      p.pinnedAt !== undefined
+      p.pinnedAt !== undefined ||
+      p.notificationsMuted !== undefined
     ) {
       if (isOwnerScopeCurrent(ownerScope)) {
         broadcastSessionPatched(sid, broadcastPatch, ownerScope);
@@ -1709,57 +2598,92 @@ export function registerSessionIpc(
     });
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
+    // 广播之后再把新预算应用到活实例：UI 先看到新选择，重建/延迟登记失败也不回滚设置。
+    // 只有本函数会写这份偏好，不存在平行写入链路；回调缺失（宿主未注入）时静默跳过，
+    // 新值在下次启动/恢复时按 start options 生效。
+    //
+    // 账号边界必须在这里**重新**核对：偏好文件按「当前」账号的 userData 解析
+    // （ownerScopedUserDataPath），而 DB 更新是 await 出来的 —— 期间切账号的话，
+    // 这条过期请求会把原任务的预算写进新账号的文件，原账号反而没保存
+    // （Greptile P1，2026-10-24；相邻广播本来就是同一口径）。
+    if (hasContextWindowBudgetChange && isOwnerScopeCurrent(ownerScope)) {
+      // 偏好文件不可读时 store 会拒绝写：行更新与广播都已提交，这里只能降级为
+      // 「预算未保存」（不回滚其它字段、也不让 IPC 报错盖掉已生效的改名等）——
+      // 用户在档位卡上会看到旧值，重设一次即可（GLM-5.3 独立审查，2026-10-24）。
+      let nextContextWindowBudget: number | null = null;
+      let budgetWritten = false;
+      try {
+        nextContextWindowBudget = writeSessionContextWindowBudget(sid, p.contextWindowBudget ?? null);
+        budgetWritten = true;
+      } catch (error) {
+        // 纯预算请求（`maker:set-context-window-budget` 就是这种）：这是用户唯一的
+        // 意图，必须让它失败，否则「看着成功、实际还是旧窗口」（Greptile P1，2026-10-24）。
+        if (Object.keys(p).every((key) => key === 'contextWindowBudget')) throw error;
+        console.warn('[sessions] write context window budget failed; row update already applied', {
+          sessionId: sid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (budgetWritten && opts.applyContextWindowBudget) {
+        try {
+          await opts.applyContextWindowBudget(sid, {
+            previous: previousContextWindowBudget,
+            next: nextContextWindowBudget,
+          });
+        } catch (error) {
+          console.warn('[sessions] apply context window budget failed; takes effect on next start', {
+            sessionId: sid,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
     cleanupSessionTerminalArtifacts(sid, p.status);
     compactTerminalSessionToolResults(dbClient, sid, p.status);
+    if (p.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sid, dbClient, ownerScope, deletedSideChats);
     return updated;
-    };
-    return p.workingDir === undefined ? update() : withSessionRouteLock(sid, update);
+  };
+  if (p.workingDir === undefined && !moveGuard) return update();
+  return withSessionRouteLock(sid, async () => {
+    const [binding] = await db
+      .select({ remoteHostId: sessions.remoteHostId })
+      .from(sessions)
+      .where(eq(sessions.id, sid))
+      .limit(1);
+    const resource =
+      !binding?.remoteHostId && typeof p.workingDir === 'string'
+        ? managedWorktreeRoot(p.workingDir)
+        : null;
+    const resources = await readSessionWorktreeResources(db, sid);
+    if (resource) resources.push(resource);
+    return withWorktreeMutation(resources, update);
   });
+}
 
-  // 窄口径会话元数据编辑(status / title / pinnedAt)。专为 device-link 控制端**远程**
-  // 删除/归档/重命名/置顶设计:通用 sessions:update 能写任意字段(workingDir/model/
-  // sdkSessionId/orcaRole/clearedAt…),故意不进 allowlist;这个 handler 只放行白名单内的
-  // 用户可编辑元数据,是「写库必须经业务 handler、不开裸写」原则下的窄能力(规则 9/13)。
-  // 仅被隧道(远程操作)调到 —— 本机操作走 sessions:update + renderer 乐观更新。
-  ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
-    const sid = requireString(id, 'id');
-    const p = requireObject(patch, 'patch');
-    const updated = await patchSessionMetaInDb(
-      sid,
-      p as Parameters<typeof patchSessionMetaInDb>[1],
-    );
-    return updated;
-  });
-
-  // fork-session: 已迁到 maker-ipc/fork.ts (Stage 2 C2), IPC channel 改名 maker:fork。
-  // 业务函数 forkSessionAtMessage 仍在 apps/desktop/src/main/maker-orchestration/fork.ts, 内部 SDK 调用
-  // 走 maker-core 的 Maker.forkSdkSession (Codex 自动抛 NotSupportedError)。
-
-  // 单字段 bump：把 user_send_at 设为 now。fire-and-forget，不返回 row。
-  // 故意与 sessions:update 解耦——update 会同步刷 updated_at（mapper.ts:165），
-  // 那是给"字段类改动"用的；touchUserSend 只标记"对话活跃"，绝不污染 updated_at。
-  ipcMain.handle(
-    'local-db:sessions:touchUserSend',
-    async (_e, id: unknown, atMs: unknown): Promise<void> => {
-      const sid = requireString(id, 'id');
-      await touchUserSendInDb(sid, typeof atMs === 'number' ? atMs : undefined);
-    },
-  );
-
-  // 本机 UI 偏好:置顶段是不是卡片模式。故意不进 device-link allowlist —— 摘要
-  // oneShot 只服务本机卡片展示,控制端卡片回退 preview,不把付费生成推到被控端。
-  // 新增 handler 一律校验顶层 app renderer(electron-security §5)。
-  ipcMain.handle(
-    'local-db:sessions:set-pinned-card-summaries',
-    async (event, enabled: unknown): Promise<void> => {
-      assertTrustedAppRendererEvent(event);
-      if (typeof enabled !== 'boolean') {
-        throwIpcError('INVALID_PARAMS', 'enabled must be a boolean');
-      }
-      const m = await import('../../sessionTaskSummary.js');
-      m.setPinnedSectionCardMode(enabled);
-    },
-  );
+/** Sending continues an ordinary archived task. Serialize with archive/delete and
+ * use the normal status writer so native projection and all clients see active. */
+export async function restoreArchivedSessionForSend(
+  sessionId: string,
+  options: { routeLockHeld?: boolean; signal?: AbortSignal } = {},
+): Promise<void> {
+  const ownerScope = captureOwnerScope();
+  const db = getDbClient().drizzle;
+  const restore = async () => {
+    const [row] = await db.select({
+      status: sessions.status, source: sessions.source, orcaRole: sessions.orcaRole,
+      orcaRemoteLead: sessions.orcaRemoteLead,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Task owner changed');
+    if (row?.status === 'deleted') throwIpcError('NOT_FOUND', 'Session does not exist');
+    if (row?.status !== 'archived') return;
+    if ((row.source === 'bot' && !(await isTaskListBotLane(db, sessionId)))
+      || row.orcaRole === 'worker' || row.orcaRemoteLead) {
+      throwIpcError('PRECONDITION_FAILED', 'Restore the managed task before continuing');
+    }
+    await patchSessionMetaInDb(sessionId, { status: 'active' }, { ...options, routeLockHeld: true });
+  };
+  if (options.routeLockHeld) await restore();
+  else await withSessionRouteLock(sessionId, restore);
 }
 
 export async function patchSessionMetaInDb(
@@ -1769,6 +2693,7 @@ export async function patchSessionMetaInDb(
     title?: string;
     pinnedAt?: string | null;
   },
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   for (const k of Object.keys(patch)) {
@@ -1793,8 +2718,40 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
-  const updated = await withStatusWriteLock(sessionId, patch.status, async () => {
-    await writeSessionPatch(db, sessionId, setObj, patch.status);
+  let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
+  await cancelValidatedCreation(dbClient, sessionId, patch.status, () => {
+    if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) {
+      throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+    }
+    options.beforeWrite?.();
+  });
+  const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
+    if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
+    options.beforeWrite?.();
+    const terminal = patch.status === 'archived' || patch.status === 'deleted';
+    if (terminal) {
+      if (typeof dbClient.tx === 'function') {
+        const { status: _status, ...nonTerminalPatch } = setObj;
+        await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
+        options.beforeWrite?.();
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
+      } else {
+        const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
+        try {
+          options.beforeWrite?.();
+          await writeSessionPatch(db, sessionId, setObj, patch.status);
+        } catch (error) {
+          await rollbackSharedTaskClosure(dbClient, prepared);
+          throw error;
+        }
+        await finalizeSharedTaskClosure(dbClient, prepared);
+      }
+    } else {
+      // All asynchronous preparation has finished. Once this write is issued,
+      // cancellation does not roll back a committed lifecycle transition.
+      if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+      await writeSessionPatch(db, sessionId, setObj, patch.status);
+    }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     if (patch.pinnedAt !== undefined && row.pinnedAt == null) {
@@ -1802,8 +2759,15 @@ export async function patchSessionMetaInDb(
       row.summary = null;
     }
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
+    if (terminal) {
+      const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+      await closeSharedTaskForTask(sessionId, dbClient);
+    }
     return sessionToCamel(row);
-  });
+  }, options.routeLockHeld, options.beforeWrite);
+  if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+    clearSessionAttention(sessionId, 'explicit');
+  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -1813,12 +2777,6 @@ export async function patchSessionMetaInDb(
   if (patch.status === 'deleted') {
     void imageCacheStore.removeSession(sessionId).catch((err) => {
       log.warn('remote session image cleanup failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-    void removeWechatSessionAttachmentDir(sessionId).catch((err) => {
-      log.warn('WeChat session attachment cleanup failed', {
         sessionId,
         err: err instanceof Error ? err.message : String(err),
       });
@@ -1842,7 +2800,47 @@ export async function patchSessionMetaInDb(
     );
   }
   compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
+  if (patch.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sessionId, dbClient, ownerScope, deletedSideChats);
   return updated;
+}
+
+/**
+ * Routine and channel lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
+ * and hold no Profile pointer, so they archive, restore and delete like ordinary tasks.
+ * Their next trigger resumes an archived lane (`ensureBotOwnedLaneSession`).
+ */
+async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
+  const [link] = await db
+    .select({ role: botSessionLinks.role })
+    .from(botSessionLinks)
+    .where(and(
+      eq(botSessionLinks.sessionId, sessionId),
+      inArray(botSessionLinks.role, ['routine', 'channel']),
+    ))
+    .limit(1);
+  return !!link;
+}
+
+/**
+ * Other Bot tasks are absent from the ordinary task pool, so their active/history/
+ * route transitions must go through the Bot lifecycle service. That service
+ * updates the Profile pointer and Session projection atomically.
+ */
+async function assertGenericSessionLifecycleAllowed(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<void> {
+  const [target] = await db
+    .select({ source: sessions.source })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  if (target?.source === 'bot' && !(await isTaskListBotLane(db, sessionId))) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Bot task lifecycle is managed by teammate recovery and history controls',
+    );
+  }
 }
 
 export interface RenameSessionMetaChange {
@@ -1863,6 +2861,7 @@ export interface RenameSessionMetaItem {
 export async function renameSessionTitlesInDb(
   changes: RenameSessionMetaChange[],
   dryRun: boolean,
+  beforeMutation?: () => Promise<void>,
 ): Promise<RenameSessionMetaItem[]> {
   if (changes.length === 0) return [];
   const ownerScope = captureOwnerScope();
@@ -1906,6 +2905,7 @@ export async function renameSessionTitlesInDb(
 
   if (dryRun) return preview;
 
+  await beforeMutation?.();
   // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
   // 一样先记号后写库,不给并发的智能标题留窗口。
   for (const change of changes) noteUserTitleWritten(change.sessionId);
@@ -1951,23 +2951,48 @@ export interface SessionStatusChangeRow {
 export async function setSessionsStatusInDb(
   sessionIds: string[],
   status: 'active' | 'archived',
+  beforeMutation?: () => Promise<void>,
 ): Promise<SessionStatusChangeRow[]> {
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
   const dbClient = getDbClient();
   const applied = await withSessionRouteLocks(sessionIds, async () => {
-    const rows = await dbClient.tx('sessions.setStatus', { sessionIds, status }).catch((err) => {
-      const code = (err as { code?: string }).code;
-      const message = err instanceof Error ? err.message : String(err);
-      if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
-        throwIpcError(code, message);
-      }
-      throw err;
-    });
-    for (const item of rows) {
-      cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+    const resources: string[] = [];
+    const perSession = new Map<string, string[]>();
+    for (const id of sessionIds) {
+      const paths = await readSessionWorktreeResources(dbClient.drizzle, id);
+      perSession.set(id, paths);
+      resources.push(...paths);
     }
-    return rows;
+    const physicalResources = await Promise.all([...new Set(resources)].map(physicalWorktreeKey));
+    return withWorktreeMutation(resources, async () => {
+      if (status === 'archived') {
+        for (const id of sessionIds) {
+          await beforeMutation?.();
+          await requestWorktreeRecycle(id, perSession.get(id));
+        }
+      }
+      await beforeMutation?.();
+      const rows = await dbClient.tx('sessions.setStatus', status === 'archived'
+        ? { sessionIds, status, closeSharedTasks: true }
+        : { sessionIds, status }).catch((err) => {
+          const code = (err as { code?: string }).code;
+          const message = err instanceof Error ? err.message : String(err);
+          if (code === 'NOT_FOUND' || code === 'INVALID_PARAMS' || code === 'PRECONDITION_FAILED') {
+            throwIpcError(code, message);
+          }
+          throw err;
+      });
+      for (const item of rows) {
+          cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+          if (item.status === 'archived') {
+            const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+            await closeSharedTaskForTask(item.sessionId, dbClient);
+          }
+      }
+      for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
+      return rows;
+    });
   });
   for (const item of applied) {
     compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
@@ -2020,6 +3045,106 @@ function cancelDeletedPiSubagentCleanupImpl(sessionId: string): void {
 }
 
 bindDeletedPiSubagentCleanupCancel(cancelDeletedPiSubagentCleanupImpl);
+
+/**
+ * Detach Bot-owned tasks before the owning Profile is permanently removed.
+ * Kept transcripts become ordinary archived tasks; discarded transcripts
+ * become ordinary deleted tombstones so no inaccessible source=bot orphan is
+ * left after the Bot FK graph is cascaded away.
+ */
+export async function deleteBotProfileAndDetachSessionsInDb(
+  botId: string,
+  sessionIds: string[],
+  keepTaskHistory: boolean,
+): Promise<void> {
+  const ids = [...new Set(sessionIds)];
+  const ownerScope = captureOwnerScope();
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  const commitDeletion = () =>
+    commitBotProfileDeletion({
+      botId,
+      sessionIds: ids,
+      keepTaskHistory,
+    });
+  const prepared: SharedTaskClosurePreparation[] = [];
+  let committedStatus = false;
+  let committedResult: Awaited<ReturnType<typeof commitBotProfileDeletion>>;
+  try {
+    for (const id of ids) {
+      const closure = await prepareSharedTaskClosure(id, dbClient);
+      if (closure) prepared.push(closure);
+    }
+    committedResult = ids.length > 0 ? await withSessionRouteLocks(ids, commitDeletion) : await commitDeletion();
+    committedStatus = true;
+  } catch (error) {
+    if (!committedStatus) {
+      for (const closure of prepared) await rollbackSharedTaskClosure(dbClient, closure);
+    }
+    throw error;
+  }
+  const committed = committedResult;
+  const status = committed.status;
+  const committedSessionIds = [...new Set(committed.sessionIds)];
+
+  for (const closure of prepared) await finalizeSharedTaskClosure(dbClient, closure);
+
+  // Bot profile deletion commits terminal task status through a dedicated
+  // transaction, so it bypasses the ordinary session patch/status writers.
+  // Close the corresponding shared task only after that durable transition;
+  // closeSharedTaskForTask journals network failures and never revives the task.
+  if (committedSessionIds.length > 0) {
+    const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+    for (const id of committedSessionIds) await closeSharedTaskForTask(id, dbClient);
+  }
+
+  for (const id of committedSessionIds) {
+    if (status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
+      clearSessionAttention(id, 'explicit');
+    }
+    notifyAgentIslandSessionPatch(id, { status });
+    broadcastSessionPatched(id, { status, source: 'desktop' }, ownerScope);
+    notifyGhostSessionStatusChange(id, status, null);
+    removeHookAttachmentDir(id, status);
+    if (status === 'deleted') {
+      void imageCacheStore.removeSession(id).catch((error) => {
+        log.warn('Bot task image cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeImAttachmentsIfStillDeleted(id).catch((error) => {
+        log.warn('Bot task attachment cleanup failed', { sessionId: id, error: String(error) });
+      });
+      void removeDeletedSessionMediaRefs(id, db).catch((error) => {
+        log.warn('Bot task media cleanup failed', { sessionId: id, error: String(error) });
+      });
+    }
+  }
+}
+
+/**
+ * hook 入站附件目录回收(fire-and-forget): deleted/archived 都是终态,
+ * 文件在 turn 送出后即无用。所有把 session 置为终态的路径都应调用。
+ */
+function removeHookAttachmentDir(sessionId: string, status: unknown): void {
+  if (status === 'deleted') void recoverGeneratedImagesForHistory(sessionId).catch(() => undefined);
+  if (status !== 'deleted' && status !== 'archived') return;
+  if (status === 'deleted') {
+    void removeTurnChangeSetsForSession(sessionId).catch((err) => {
+      log.warn('turn change-set cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+  const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
+  const attachDir = path.join(attachRoot, sessionId);
+  if (!attachDir.startsWith(attachRoot + path.sep)) return;
+  void fs.rm(attachDir, { recursive: true, force: true }).catch((err) => {
+    log.warn('hook attachment dir cleanup failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 
 /**
  * Can this parent task still start a durable Subagent?
@@ -2087,7 +3212,9 @@ async function piSubagentLauncherProvenStopped(sessionId: string): Promise<boole
       deadline = setTimeout(() => resolve(false), PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS);
       deadline.unref?.();
     }),
-  ]).finally(() => { if (deadline) clearTimeout(deadline); });
+  ]).finally(() => {
+    if (deadline) clearTimeout(deadline);
+  });
   if (!closed) {
     log.warn('PI Subagent cleanup timed out closing the deleted parent task', { sessionId });
     return false;
@@ -2152,7 +3279,7 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
       });
     }
     if (superseded()) return;
-    const delayMs = Math.min(60_000, 1_000 * (2 ** Math.min(attempt, 6)));
+    const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
       piSubagentCleanupTimers.delete(sessionId);
       scheduleDeletedPiSubagentCleanup(sessionId, attempt + 1);
@@ -2163,7 +3290,12 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
 }
 
 export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
-  const parentRoot = path.join(app.getPath('userData'), 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+  const parentRoot = path.join(
+    app.getPath('userData'),
+    'pi-agent-home',
+    'runtime',
+    'pi-subagent-runs',
+  );
   let idsFromDisk: string[] = [];
   try {
     const entries = await fs.readdir(parentRoot, { withFileTypes: true });
@@ -2183,12 +3315,13 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
     .from(sessions)
     .where(and(eq(sessions.status, 'deleted'), eq(sessions.agentKind, 'pi')));
 
-  const diskDeleted = idsFromDisk.length === 0
-    ? []
-    : await db
-      .select({ id: sessions.id })
-      .from(sessions)
-      .where(and(inArray(sessions.id, idsFromDisk), eq(sessions.status, 'deleted')));
+  const diskDeleted =
+    idsFromDisk.length === 0
+      ? []
+      : await db
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(and(inArray(sessions.id, idsFromDisk), eq(sessions.status, 'deleted')));
 
   const ids = new Set<string>();
   for (const row of deletedPi) ids.add(row.id);
@@ -2201,9 +3334,39 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
  * delete additionally stops and removes detached PI Subagents owned by the
  * parent task. All status writers must pass through this helper.
  */
+/**
+ * 个人 IM 附件目录的删除清理是异步的, 两类后到事件都不能让它删错:
+ *   - 同账号内, 确定性 IM 任务删除后再来消息会把同一 session id 原地复活并往同一目录
+ *     领养新附件 —— 在路由锁内复查任务仍是 deleted(行不存在也算)再删, 复活就保留;
+ *     读库失败按保留处理(宁可多留不可误删);
+ *   - 删除后切换账号, 另一账号可能有同 id 的任务 —— 目录根与账号作用域都在发起删除时
+ *     同步捕获: 只删发起账号自己的目录; 账号已切走时发起账号的任务不可能再被复活,
+ *     不再读(新账号的)库, 直接按捕获的根目录清理。
+ * 本函数须在发起删除的同步上下文里调用(捕获发生在第一个 await 之前)。
+ */
+function removeImAttachmentsIfStillDeleted(sessionId: string): Promise<void> {
+  const ownerScope = captureOwnerScope();
+  const root = imAttachmentsRoot();
+  return withSessionRouteLock(sessionId, async () => {
+    if (isOwnerScopeCurrent(ownerScope)) {
+      let row: SessionRowSnapshot | null;
+      try {
+        row = await getSessionRowSnapshotStrict(sessionId);
+      } catch {
+        return;
+      }
+      if (row && row.status !== 'deleted') return;
+    }
+    await removeImSessionAttachmentDirs(sessionId, root);
+  });
+}
+
 function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
   if (status === 'deleted') {
+    try { removeSessionModelInterface(sessionId); } catch (error) {
+      log.warn('session interface snapshot cleanup failed', { sessionId, error: String(error) });
+    }
     void removeTurnChangeSetsForSession(sessionId).catch((err) => {
       log.warn('turn change-set cleanup failed', {
         sessionId,
@@ -2211,6 +3374,13 @@ function cleanupSessionTerminalArtifacts(sessionId: string, status: unknown): vo
       });
     });
     scheduleDeletedPiSubagentCleanup(sessionId);
+    // 个人 IM 渠道(含微信)入站文件随任务删除清理 —— 归档保留, 与微信既有口径一致。
+    void removeImAttachmentsIfStillDeleted(sessionId).catch((err) => {
+      log.warn('IM session attachment cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
   const attachRoot = path.join(app.getPath('userData'), 'hook-attachments');
   const attachDir = path.join(attachRoot, sessionId);
@@ -2277,85 +3447,46 @@ async function drainSessionListProjectionBackfill(): Promise<void> {
   }
 }
 
-/** {@link selectSessionListRows} 的行形状——与 sessionToCamel 的入参对齐。 */
-interface SessionListRow {
-  session: typeof sessions.$inferSelect;
-  messageCount: number;
-  latestMessageExtract: string | null;
-  latestMessageRole: string | null;
-}
-
-/**
- * sessions:list 的行查询——**两段式**：CTE 先按排序取够 `cap` 个 id，主查询只对这批行算
- * messageCount 与 preview。
- *
- * 为什么不能沿用一段式的 `LEFT JOIN messages + GROUP BY`：那个形状下 `LIMIT` 在 GROUP BY
- * **之后**才生效，于是每个候选会话的全部消息都要参与聚合，成本与"最终只要 1000 行"无关。
- * 4.7GB / 111 万条消息的真实库上，把聚合面从 1743 个会话收窄到 1000 个，热缓存 104ms →
- * 54ms。会话越多、limit 占比越小，收益越大。
- *
- * 用单条 CTE 而不是"先查 id 再 IN (...)"两次往返，有两个理由：
- *   1. 一致性——两次查询之间会话可能被删/改状态，第二段就会比第一段少行，列表凭空少一条。
- *      CTE 是单条语句、单一致性快照。
- *   2. 参数——`IN (...)` 要绑 cap 个参数（当前 MAX_LIMIT=1000），CTE 只绑一个 limit。
- *
- * messageCount 在这里是**标量子查询**里的 `count(*)`：无匹配行时聚合返回 0，不存在 LEFT JOIN
- * 那个"空会话数出 1"的坑。它同样只扫 idx_messages_session_created，不回表。
- *
- * @param where 行过滤条件，同时作用于 CTE 与主查询（CTE 决定取哪些、主查询决定算哪些）。
- * @param cap   取前 N 行；`null` = 不限（置顶补齐分支用，pinned 行数天然很少）。
- */
-function selectSessionListRows(
+/** 用量历史专用行查询：全量读取 sessions，但跳过 sidebar 的消息预览子查询。 */
+function selectSessionUsageRows(
   db: DbClient['drizzle'],
   where: SQL | undefined,
-  cap: number | null,
-): Promise<SessionListRow[]> {
-  const pickedBase = db.select({ id: sessions.id }).from(sessions).where(where);
-  const picked = db
-    .$with('picked')
-    .as(
-      cap === null
-        ? pickedBase.orderBy(desc(sessions.updatedAt))
-        : pickedBase.orderBy(desc(sessions.updatedAt)).limit(cap),
-    );
+): Promise<
+  Array<
+    Pick<
+      typeof sessions.$inferSelect,
+      | 'id'
+      | 'title'
+      | 'model'
+      | 'providerId'
+      | 'totalTokenUsage'
+      | 'contextTokens'
+      | 'contextWindow'
+      | 'contextWindowRuntime'
+      | 'agentKind'
+      | 'userSendAt'
+      | 'updatedAt'
+    >
+  >
+> {
   return db
-    .with(picked)
     .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
+      id: sessions.id,
+      title: sessions.title,
+      model: sessions.model,
+      providerId: sessions.providerId,
+      totalTokenUsage: sessions.totalTokenUsage,
+      contextTokens: sessions.contextTokens,
+      contextWindow: sessions.contextWindow,
+      contextWindowRuntime: sessions.contextWindowRuntime,
+      agentKind: sessions.agentKind,
+      userSendAt: sessions.userSendAt,
+      updatedAt: sessions.updatedAt,
     })
     .from(sessions)
-    .innerJoin(picked, eq(picked.id, sessions.id))
     .where(where)
-    .orderBy(desc(sessions.updatedAt));
-}
-
-/** 单行 SELECT + 标量 count / preview：与 list 同口径，不 JOIN 该会话全部消息。
- *  preview 子查询同步带出——get/update 路径返回的 Session 会整体替换 store 里的行，
- *  缺字段会把列表查询带回的 preview 冲掉。 */
-async function selectSessionWithCount(
-  db: DbClient['drizzle'],
-  id: string,
-): Promise<SessionRowWithCount | undefined> {
-  const [r] = await db
-    .select({
-      session: sessions,
-      messageCount: SESSION_MESSAGE_COUNT_SQL,
-      latestMessageExtract: LATEST_MSG_EXTRACT_SQL,
-      latestMessageRole: LATEST_MSG_ROLE_SQL,
-    })
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
-  if (!r) return undefined;
-  return {
-    ...r.session,
-    messageCount: r.messageCount,
-    latestMessageExtract: r.latestMessageExtract,
-    latestMessageRole: r.latestMessageRole,
-  };
+    .orderBy(desc(sessions.updatedAt))
+    .then((rows) => rows);
 }
 
 function clampLimit(raw: unknown, fallback: number): number {
@@ -2377,6 +3508,14 @@ function shouldBypassSessionListSingleFlight(options: unknown): boolean {
     options &&
     typeof options === 'object' &&
     (options as { fresh?: unknown }).fresh === true
+  );
+}
+
+function shouldUseUsageHistoryQuery(options: unknown): boolean {
+  return !!(
+    options &&
+    typeof options === 'object' &&
+    (options as { usageHistory?: unknown }).usageHistory === true
   );
 }
 

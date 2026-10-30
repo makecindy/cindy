@@ -1,7 +1,7 @@
 /**
  * @cindy/maker-remote-ssh — SSH remote host management for xdt-maker.
  *
- * Phase A: connection lifecycle + ~/.ssh/config IO + credential resolution.
+ * Phase A: connection lifecycle + OpenSSH discovery/managed writes + credential resolution.
  * Phase B (next): bootstrap agent CLI on remote + RemoteAgent that spawns
  * claude/codex over an exec channel + session ingest.
  */
@@ -101,22 +101,50 @@ export {
 export type { HostKeyStore, HostKeyDecision } from './hostKeys.js';
 
 export {
+  addManagedHost,
+  addManagedHostWithInclude,
+  defaultManagedSshConfigPath,
   defaultSshConfigPath,
+  ensureManagedConfigInclude,
   readSshConfig,
+  readSshConfigDetailed,
+  removeManagedHost,
+  updateManagedHostFields,
   upsertHost,
   updateHostFields,
   removeHost,
   expandHome,
+  MANAGED_CONFIG_MARKER,
+  MANAGED_CONFIG_CONCURRENT_MODIFICATION_CODE,
+  MANAGED_CONFIG_OWNERSHIP_REQUIRED_CODE,
+  MANAGED_CONFIG_WRITE_TOKEN_REQUIRED_CODE,
+} from './sshConfig.js';
+export type {
+  ManagedHostAddReceipt,
+  ManagedConfigWriteToken,
+  ReadSshConfigOptions,
+  ReadSshConfigResult,
+  SshConfigDiagnostic,
 } from './sshConfig.js';
 
 export {
-  defaultAgentEndpoint,
   resolveAuth,
   KEY_FILE_NOT_FOUND_CODE,
   KEY_FILE_UNREADABLE_CODE,
   PINNED_AGENT_FAILED_CODE,
+  SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
 } from './credentials.js';
 export type { ResolvedAuth } from './credentials.js';
+
+export {
+  CINDY_DEFAULT_IDENTITY_NAMES,
+  defaultAgentEndpoint,
+  effectiveAuthenticationFingerprint,
+  previewAgentEndpoint,
+  resolveAgentEndpoint,
+  resolveIdentityFingerprints,
+  SSH_AGENT_UNAVAILABLE_CODE,
+} from './sshAuthentication.js';
 
 export type {
   AddHostInput,
@@ -125,4 +153,7 @@ export type {
   HostSnapshot,
   HostSource,
   RemoteStatus,
+  SshAuthenticationMetadata,
 } from './types.js';
+
+export { redactSshSensitiveText } from './sshRedaction.js';

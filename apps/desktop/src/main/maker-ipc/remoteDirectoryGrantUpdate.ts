@@ -18,6 +18,7 @@ export interface RemoteDirectoryGrantUpdateDeps {
 export interface RemoteDirectoryGrantUpdateResult {
   dirs: string[];
   rejectedCount: number;
+  changed: boolean;
 }
 
 /** Remote executors have no native picker on the controller; only retain/revoke exact grants. */
@@ -49,6 +50,8 @@ export async function applyRemoteDirectoryGrantUpdate(
   const previousDirs = axis === 'extraDirs' ? previousExtraDirs : previousWritableDirs;
   const blockedDirs = axis === 'extraDirs' ? previousWritableDirs : previousExtraDirs;
   const nextDirs = await deps.excludeConflicts(validation.valid, blockedDirs);
+  const changed = previousDirs.length !== nextDirs.length
+    || previousDirs.some((dir, index) => dir !== nextDirs[index]);
   const applyRuntime = axis === 'extraDirs'
     ? (dirs: string[]) => session.setExtraDirs(dirs)
     : (dirs: string[]) => session.setWritableDirs(dirs);
@@ -77,7 +80,9 @@ export async function applyRemoteDirectoryGrantUpdate(
   }
 
   try {
-    await deps.persist(patch(nextDirs));
+    // A rebuilt runtime still needs the grants even when SQLite already has them.
+    // Only persistence/mirror broadcasts are redundant in that case.
+    if (changed) await deps.persist(patch(nextDirs));
   } catch (persistenceError) {
     const rollbackErrors: unknown[] = [];
     try {
@@ -107,5 +112,6 @@ export async function applyRemoteDirectoryGrantUpdate(
   return {
     dirs: nextDirs,
     rejectedCount: validation.rejected.length + validation.valid.length - nextDirs.length,
+    changed,
   };
 }

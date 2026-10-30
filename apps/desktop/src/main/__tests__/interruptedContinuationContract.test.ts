@@ -7,6 +7,18 @@ const registerSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'register.ts'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+// Retain local characterization guards at the production stages they describe.
+// Cross-stage delivery and recovery timing run in sessionEventPipeline.test.ts.
+const eventSource = [
+  'sessionEventPreparation',
+  'sessionEventStream',
+  'sessionEventDelivery',
+  'sessionEventTerminal',
+]
+  .map((name) => readFileSync(resolve(__dirname, '..', 'maker-ipc', name + '.ts'), 'utf8'))
+  .join('\n')
+  .replace(/\r\n?/g, '\n')
+  .replaceAll('deps.', '');
 const coordinatorSource = readFileSync(
   resolve(__dirname, '..', 'maker-ipc', 'agent-input-coordinator.ts'),
   'utf8',
@@ -74,10 +86,14 @@ describe('interrupted continuation enqueue contract', () => {
       'await this.deps.onDispatchedUserTurn?.(sessionId, head, preVendorDispatchAt)',
     );
     expect(dispatchedCall).toBeGreaterThan(-1);
-    const windowStart = Math.max(0, dispatchedCall - 500);
-    const window = coordinatorSource.slice(windowStart, dispatchedCall);
-    const dispatchedCheck = window.lastIndexOf('if (!isSendDispatched(result))');
-    expect(dispatchedCheck).toBeGreaterThan(-1);
+    const sendCall = coordinatorSource.lastIndexOf('const result = await this.deps.sendToAgent(', dispatchedCall);
+    const dispatchedCheck = coordinatorSource.indexOf('if (!isSendDispatched(result))', sendCall);
+    const dispatchedMark = coordinatorSource.indexOf('this.markActiveTurnDispatched(sessionId, active)', dispatchedCheck);
+    expect(sendCall).toBeGreaterThan(-1);
+    expect(dispatchedCheck).toBeGreaterThan(sendCall);
+    expect(dispatchedMark).toBeGreaterThan(dispatchedCheck);
+    expect(dispatchedCall).toBeGreaterThan(dispatchedMark);
+    expect(coordinatorSource.slice(dispatchedCheck, dispatchedMark)).toMatch(/return;/);
   });
 
   it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
@@ -90,7 +106,7 @@ describe('interrupted continuation enqueue contract', () => {
     expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
     expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
 
-    expect(registerSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
+    expect(eventSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
     const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
     const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
     expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
@@ -184,40 +200,25 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('retires an interrupted attempt owner after both done and terminal error settlement', () => {
-    const doneStart = registerSource.indexOf('const doneAttemptToken = event.turnAttemptToken;');
-    const doneEnd = registerSource.indexOf('const isSilentStopDone', doneStart);
+    const doneStart = eventSource.indexOf('const doneAttemptToken = event.turnAttemptToken;');
+    const doneEnd = eventSource.indexOf('const isSilentStopDone', doneStart);
     expect(doneStart).toBeGreaterThan(-1);
     expect(doneEnd).toBeGreaterThan(doneStart);
-    expect(registerSource.slice(doneStart, doneEnd)).toMatch(
+    expect(eventSource.slice(doneStart, doneEnd)).toMatch(
       /autoResumeBookkeeping\.settleOutcome\(session\.id, doneAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, doneAttemptToken\);/,
     );
 
-    const errorStart = registerSource.indexOf('const failedAttemptToken = event.turnAttemptToken;');
-    const errorEnd = registerSource.indexOf('// 终止型 error 可能没有后续 status/done', errorStart);
+    const errorStart = eventSource.indexOf('const failedAttemptToken = event.turnAttemptToken;');
+    const errorEnd = eventSource.indexOf('// 终止型 error 可能没有后续 status/done', errorStart);
     expect(errorStart).toBeGreaterThan(-1);
     expect(errorEnd).toBeGreaterThan(errorStart);
-    expect(registerSource.slice(errorStart, errorEnd)).toMatch(
+    expect(eventSource.slice(errorStart, errorEnd)).toMatch(
       /autoResumeBookkeeping\.settleOutcome\(session\.id, failedAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, failedAttemptToken\);/,
     );
   });
 
-  it('keeps background substantive events out of interrupted-turn progress bookkeeping', () => {
-    const progressStart = registerSource.indexOf(
-      "if (event.turnScope !== 'background' && isSubstantiveProgressEvent(event))",
-    );
-    expect(progressStart).toBeGreaterThan(-1);
-    const progressEnd = registerSource.indexOf(
-      "\n      }\n      if (event.type === 'text')",
-      progressStart,
-    );
-    expect(progressEnd).toBeGreaterThan(progressStart);
-    const progressBlock = registerSource.slice(progressStart, progressEnd);
-    expect(progressBlock).toContain('interruptedTurnAutoResumeGuard.noteProgress(');
-    expect(registerSource.indexOf('onToolUseEvent(', progressEnd)).toBeGreaterThan(progressEnd);
-    expect(
-      registerSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT', progressEnd),
-    ).toBeGreaterThan(progressEnd);
-  });
+  // Foreground/background progress ordering runs through the production pipeline
+  // in sessionEventPipeline.test.ts.
 
   it('advertises interval null-clear support for mobile wire compatibility', () => {
     expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
@@ -226,7 +227,9 @@ describe('interrupted continuation enqueue contract', () => {
   it('previews user enqueues to Agent Island before drain/sendToAgent', () => {
     expect(registerSource).toContain('previewQueuedUserTurn: (sessionId, item) => {');
     expect(registerSource).toContain("source: 'enqueue'");
-    expect(registerSource).toContain('item.text || item.persistedContent');
+    // 预览给人看的落库可见正文,不是可能带来源 / 回执前缀的 agent text。
+    expect(registerSource).toContain('item.persistedContent || item.text');
+    expect(registerSource).toContain('item.origin.displayText ?? item.text');
     expect(registerSource).toContain('extractAgentIslandPromptText(content)');
     const drainableHead = coordinatorSource.indexOf(
       'if (this.getDrainableHead(sessionId, state) === item)',
@@ -298,36 +301,35 @@ describe('interrupted continuation enqueue contract', () => {
   });
 
   it('defers Orca worker terminal while auto-resume owns the failure, and finalizes on surface', () => {
-    const persistStart = registerSource.indexOf('const autoResumeSuppressesPersist =');
-    const persistEnd = registerSource.indexOf('const overflowClaim =', persistStart);
+    const persistStart = eventSource.indexOf('const autoResumeSuppressesPersist =');
+    const persistEnd = eventSource.indexOf('const overflowClaim =', persistStart);
     expect(persistStart).toBeGreaterThan(-1);
     expect(persistEnd).toBeGreaterThan(persistStart);
-    const persistBlock = registerSource.slice(persistStart, persistEnd);
-    expect(persistBlock).toMatch(/isAutoResumePending\(session\.id\) === true/);
-    expect(persistBlock).toMatch(/isAutoResumeDeferred\(session\.id\) === true/);
-    expect(registerSource).toMatch(/let deferredOrcaWorkerTerminal = false/);
+    const persistBlock = eventSource.slice(persistStart, persistEnd);
+    expect(persistBlock).toContain('isSessionErrorSuppressed(');
+    expect(eventSource).toMatch(/let deferredOrcaWorkerTerminal = false/);
 
-    const stashStart = registerSource.indexOf('if (autoResumeSuppressesPersist) {');
-    const stashEnd = registerSource.indexOf(
+    const stashStart = eventSource.indexOf('if (autoResumeSuppressesPersist) {');
+    const stashEnd = eventSource.indexOf(
       "} else if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {",
       stashStart,
     );
     expect(stashStart).toBeGreaterThan(-1);
     expect(stashEnd).toBeGreaterThan(stashStart);
-    const stashBlock = registerSource.slice(stashStart, stashEnd);
+    const stashBlock = eventSource.slice(stashStart, stashEnd);
     expect(stashBlock).toMatch(/autoResumeBookkeeping\.stashSuppressedError\(/);
     expect(stashBlock).toMatch(
       /deferredOrcaWorkerTerminal = autoResumeBookkeeping\.stashOrcaSuppressedTerminal\(/,
     );
     expect(stashBlock).toMatch(/capture:\s*workerTerminalCapture/);
 
-    const terminalStart = registerSource.indexOf(
+    const terminalStart = eventSource.indexOf(
       '// Worker turn 结束后交给 OrcaTeamService 处理 DB status、广播与 auto-bridge。',
     );
-    const terminalEnd = registerSource.indexOf('if (pendingContextSnapshot)', terminalStart);
+    const terminalEnd = eventSource.indexOf('return { turnAssistantPersistId }', terminalStart);
     expect(terminalStart).toBeGreaterThan(-1);
     expect(terminalEnd).toBeGreaterThan(terminalStart);
-    const terminalBlock = registerSource.slice(terminalStart, terminalEnd);
+    const terminalBlock = eventSource.slice(terminalStart, terminalEnd);
     expect(terminalBlock).toMatch(/shouldSkipOrcaWorkerTerminal\(\{/);
     expect(terminalBlock).toMatch(/stashedThisErrorEvent:\s*deferredOrcaWorkerTerminal/);
     expect(terminalBlock).toMatch(/isPairedFailedTurnDone/);
@@ -342,18 +344,18 @@ describe('interrupted continuation enqueue contract', () => {
     expect(terminalBlock).toMatch(/isAutoResumeDeferred:/);
     expect(terminalBlock).toMatch(/handleWorkerTerminalTurn\(/);
 
-    expect(registerSource).toMatch(
+    expect(eventSource).toMatch(
       /noteFailedTurnCompletionTail\(\s*session\.id,\s*event\.sessionTurnGeneration/,
     );
-    const noteTailStart = registerSource.indexOf(
+    const noteTailStart = eventSource.indexOf(
       'autoResumeBookkeeping.noteFailedTurnCompletionTail(',
     );
     expect(noteTailStart).toBeGreaterThan(-1);
-    const persistIdIf = registerSource.lastIndexOf('if (turnAssistantPersistId)', noteTailStart);
-    const persistIdIfEnd = registerSource.indexOf('}', persistIdIf);
+    const persistIdIf = eventSource.lastIndexOf('if (turnAssistantPersistId)', noteTailStart);
+    const persistIdIfEnd = eventSource.indexOf('}', persistIdIf);
     expect(persistIdIf).toBeGreaterThan(-1);
     expect(noteTailStart).toBeGreaterThan(persistIdIfEnd);
-    expect(registerSource.slice(persistIdIf, persistIdIfEnd)).not.toMatch(
+    expect(eventSource.slice(persistIdIf, persistIdIfEnd)).not.toMatch(
       /noteFailedTurnCompletionTail/,
     );
 
@@ -378,11 +380,13 @@ describe('interrupted continuation enqueue contract', () => {
     expect(automaticEnqueueHook).not.toMatch(/clearFailedTurnCompletionTail/);
     expect(automaticEnqueueHook).not.toMatch(/consumeFailedTurnCompletionTail/);
 
-    expect(registerSource).toMatch(
+    expect(eventSource).toMatch(
       /if \(typeof event\.turnAttemptToken === 'number'\) \{\s*autoResumeBookkeeping\.clearFailedTurnCompletionTail\(session\.id\);/,
     );
 
-    expect(registerSource).toMatch(/finalizeOrcaSuppressedTerminal:\s*\(sessionId, payload\)\s*=>/);
+    expect(registerSource).toMatch(
+      /finalizeOrcaSuppressedTerminal:\s*settleDeferredOrcaWorkerTerminal,/,
+    );
     expect(registerSource).toMatch(/status: payload\.status,\s*finalText: payload\.finalText/);
   });
 });

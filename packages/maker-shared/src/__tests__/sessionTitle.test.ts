@@ -23,6 +23,12 @@ describe('normalizeAutoTitle', () => {
     expect(normalizeAutoTitle(once)).toBe(once);
   });
 
+  it('按 Unicode 字符截断，保留 40 个 emoji 且不切断代理对', () => {
+    expect(normalizeAutoTitle('😀'.repeat(40))).toBe('😀'.repeat(40));
+    expect(normalizeAutoTitle('😀'.repeat(41))).toBe('😀'.repeat(40));
+    expect(normalizeAutoTitle('字'.repeat(39) + '😀尾')).toBe('字'.repeat(39) + '😀');
+  });
+
   it('先 trim 的串与原串算出同一个结果', () => {
     // 权威路径会先经 projectLiteralUserText / stripMentionTokens(两者都只 trim),
     // 乐观预览直接拿原文;两条输入必须收敛到同一个标题。

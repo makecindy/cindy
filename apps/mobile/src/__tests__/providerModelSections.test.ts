@@ -123,7 +123,7 @@ describe('buildMobileModelSections', () => {
     expect(rows.map((r) => r.model.id)).toEqual(['gpt-5.4']);
   });
 
-  it('activeSourceId:显式选中 ∈ connected 用它,否则 nativeDefaultSourceId(codex→openai)', () => {
+  it('activeSourceId:显式来源失效时不替换账号；未指定时选择原生默认', () => {
     const providers = [
       provider('xd', { codex: [model('gpt-5.5')] }),
       provider('openai', { codex: [model('gpt-5.5')] }),
@@ -132,10 +132,10 @@ describe('buildMobileModelSections', () => {
     expect(
       buildMobileModelSections({ providers, agentKind: 'codex', selectedProviderId: 'xd' }).activeSourceId,
     ).toBe('xd');
-    // 选了未连接/不存在的来源 → 回退 nativeDefault。
+    // 选了未连接/不存在的来源，不回退另一个账号。
     expect(
       buildMobileModelSections({ providers, agentKind: 'codex', selectedProviderId: 'ghost' }).activeSourceId,
-    ).toBe('openai');
+    ).toBeNull();
   });
 
   it('cc agent 的 nativeDefault 优先 xd', () => {
@@ -146,9 +146,9 @@ describe('buildMobileModelSections', () => {
     expect(buildMobileModelSections({ providers, agentKind: 'claude-code' }).activeSourceId).toBe('xd');
   });
 
-  it('activeSourceId 按当前模型收窄:显式来源不提供该模型 → 回落真正提供它的来源', () => {
+  it('activeSourceId:显式来源不提供该模型时不改用另一账号', () => {
     // 会话粘着 providerId=anthropic(仍连接),但当前模型只有 xd 提供
-    // —— 修复前会显示 anthropic 图标(与实际路由分叉),修复后收窄到 xd。
+    // 不能将显式账号改为 xd。
     const providers = [
       provider('anthropic', { agents: ['claude-code'], cc: [model('claude-opus-4-8')] }),
       provider('xd', { agents: ['claude-code'], cc: [model('claude-opus-4-8'), model('claude-fable-5')] }),
@@ -160,7 +160,7 @@ describe('buildMobileModelSections', () => {
         selectedModelId: 'claude-fable-5',
         selectedProviderId: 'anthropic',
       }).activeSourceId,
-    ).toBe('xd');
+    ).toBeNull();
     // 显式来源确实提供该模型 → 尊重显式选择。
     expect(
       buildMobileModelSections({
@@ -187,9 +187,8 @@ describe('buildMobileModelSections', () => {
     ).toBeNull();
   });
 
-  it('activeSourceId 收窄后,选中行的可见性豁免跟着落在真正打 ✓ 的 (来源, 模型) 行上', () => {
-    // claude-fable-5 在 xd 下被用户隐藏;显式来源 anthropic 不提供它 → 生效来源收窄到 xd,
-    // 豁免必须保住 xd 行(否则勾选行从列表消失,出现空选态)。
+  it('失效的显式来源不会给另一个账号的同名模型可见性豁免', () => {
+    // anthropic 不提供这个模型，不能把 xd 的隐藏模型当作当前选择。
     const providers = [
       provider('anthropic', { agents: ['claude-code'], cc: [model('claude-opus-4-8')] }),
       provider('xd', { agents: ['claude-code'], cc: [model('claude-fable-5')] }),
@@ -202,7 +201,7 @@ describe('buildMobileModelSections', () => {
       visibilityOverrides: { 'claude-code:xd:claude-fable-5': false },
     });
     const rows = flattenProviderSections(sections);
-    expect(rows.map((r) => `${r.provider.id}:${r.model.id}`)).toContain('xd:claude-fable-5');
+    expect(rows.map((r) => `${r.provider.id}:${r.model.id}`)).not.toContain('xd:claude-fable-5');
   });
 });
 
@@ -267,7 +266,7 @@ describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共�
       },
     };
   };
-  const memoryWith = (effort?: string, fast?: boolean): MobileModelMemoryAccessors => ({
+  const memoryWith = (effort?: string, fast?: boolean | 'ultrafast'): MobileModelMemoryAccessors => ({
     getEffort: () => effort,
     setEffort: () => undefined,
     getFast: () => fast,
@@ -342,6 +341,32 @@ describe('resolveRowSelection —— 选行落点(effort 优先级与桌面共�
     expect(resolveRowSelection({ ...base, hasFastModeCap: false, memory: memoryWith(undefined, true) }).fastMode).toBe(false);
   });
 
+  // PR #6559 P1, unit: selection output used by new/switch draft requests.
+  // Existing cases only restored booleans. Minimal failure: ultrafast memory
+  // after the target account withdraws that capability (Fast remains enabled).
+  it('restores Ultrafast only while the target account and engine support it', () => {
+    const p = provider('openai', { codex: [{ ...model('gpt-5.5'), supportsFastMode: true }] });
+    const row: ProviderModelRow = {
+      provider: p,
+      model: { ...rowOf('openai').model, supportsFastMode: true, supportsUltrafastMode: true },
+    };
+    const memory = memoryWith(undefined, 'ultrafast');
+    const base = { row, agentKind: 'codex' as const, currentModelId: 'gpt-5.4',
+      currentProviderId: 'openai', currentEffort: 'medium', hasFastModeCap: true, memory };
+    expect(resolveRowSelection(base).fastMode).toBe('ultrafast');
+    row.model.supportsUltrafastMode = false;
+    expect(resolveRowSelection(base).fastMode).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [row], true, 'ultrafast')).toBe(false);
+    row.model.supportsUltrafastMode = true;
+    expect(resolveRowSelection(base).fastMode).toBe('ultrafast');
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [row], true, 'ultrafast')).toBe(true);
+    expect(resolveRowSelection({ ...base, hasFastModeCap: false }).fastMode).toBe(false);
+    p.agents = ['claude-code'];
+    p.models['claude-code'] = p.models.codex;
+    p.routing = { 'claude-code': { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } };
+    expect(resolveRowSelection({ ...base, agentKind: 'claude-code' }).fastMode).toBe(false);
+  });
+
   it('模型无 effort 档 → 空串(手机语义:创建/切换时省略该字段)', () => {
     const p = provider('openai', { codex: [model('gpt-mini')] });
     const row: ProviderModelRow = {
@@ -371,20 +396,20 @@ describe('isFastRestorable —— 记忆 fast 恢复前的重验门控(codex P2)
   };
 
   it('行在目录中且支持 Fast 且 agent 有能力 → 可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], true)).toBe(true);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], true, true)).toBe(true);
   });
 
   it('目录不再标记 Fast-capable → 不可恢复(防 UI 关 / 实发 true 矛盾态)', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(false)], true)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(false)], true, true)).toBe(false);
   });
 
   it('agent 无 Fast 能力(hasFastModeCap=false)→ 不可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], false)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [fastRow(true)], false, true)).toBe(false);
   });
 
   it('(provider, model) 不在目录中 → 不可恢复', () => {
-    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [], true)).toBe(false);
-    expect(isFastRestorable('codex', 'other', 'gpt-5.5', [fastRow(true)], true)).toBe(false);
+    expect(isFastRestorable('codex', 'openai', 'gpt-5.5', [], true, true)).toBe(false);
+    expect(isFastRestorable('codex', 'other', 'gpt-5.5', [fastRow(true)], true, true)).toBe(false);
   });
 });
 

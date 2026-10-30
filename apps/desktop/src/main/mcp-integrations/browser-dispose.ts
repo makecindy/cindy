@@ -185,6 +185,7 @@ export function trackBrowserRuntimeUsage(
 export async function stopRuntimeForQuitIfUsed(
   runtime: UsageTrackedBrowserRuntime,
   logger: QuitInfoLogger,
+  profile?: string,
 ): Promise<void> {
   // Quit can race the very first call (e.g. openBrowserForLogin still awaiting
   // `start`): close the gate to NEW calls first, then wait for in-flight ones
@@ -199,7 +200,7 @@ export async function stopRuntimeForQuitIfUsed(
     logger.info('browser runtime never used this session — skipping quit-time stop');
     return;
   }
-  await stopRuntimeForQuit(runtime, logger);
+  await stopRuntimeForQuit(runtime, logger, profile);
 }
 
 /**
@@ -212,18 +213,17 @@ export async function stopRuntimeForQuitIfUsed(
  * service if it isn't up yet, so quit-time callers should prefer
  * `stopRuntimeForQuitIfUsed` to avoid starting services during shutdown.
  *
- * An unprofiled `stop` resolves the DEFAULT profile, which is sufficient because
- * the runtime is configured with exactly one managed profile (the sync.mjs patch
- * skips upstream's auto openclaw/user profiles, and an unknown profile name can't
- * launch). If multiple managed profiles are ever introduced, switch this to an
- * enumerate-and-stop so no launched Chrome leaks on quit.
+ * Callers that hot-swap the managed profile must pass its explicit name because
+ * the runtime caches its default before config reloads. Other callers may omit
+ * it when their wrapper already pins the active profile.
  */
 export async function stopRuntimeForQuit(
   runtime: Pick<BrowserControlRuntime, 'call'>,
   logger: QuitLogger,
+  profile?: string,
 ): Promise<void> {
   try {
-    const res = await runtime.call({ action: 'stop' });
+    const res = await runtime.call({ action: 'stop', ...(profile ? { profile } : {}) });
     if (!res.ok) {
       logger.warn('browser runtime stop returned not-ok', {
         errorCode: res.errorCode,

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ToolPayloadLightbox
  * ---------------------------------------------------------------------------
@@ -20,20 +21,28 @@
  *     about.
  */
 
+import {
+  CHAT_LIGHTBOX_ICON_BUTTON_CLASS,
+  CHAT_FOCUS_CLASS,
+  CHAT_COMPACT_CODE_CLASS,
+  CHAT_CODE_SURFACE_CLASS,
+} from './chatChrome';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, FileText, Folder, X } from 'lucide-react';
+import { Copy, Download, FileText, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, basename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@/components/ui/tooltip';
+import { FileTypeIcon } from '@/components/ui/file-type-icon';
 
 import { DiffView } from './DiffView';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
+import type { DiffDetails } from '@/lib/agent-actions/diffStats';
 import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { resolveToolFilePath } from '@/lib/localPathResolver';
-import { revealRemoteChatFile } from '@/lib/remoteFileOpen';
+import { downloadRemoteChatEntry } from '@/lib/remoteFileOpen';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
 export type ToolDiffSegment =
@@ -42,6 +51,8 @@ export type ToolDiffSegment =
       oldString: string;
       newString: string;
       label?: string;
+      /** Pair-level analysis shared with the compact row when available. */
+      analysis?: DiffDetails;
     }
   | {
       key: string;
@@ -53,6 +64,9 @@ export interface ToolDiffFile {
   key: string;
   filePath: string;
   diffs: ToolDiffSegment[];
+  /** Full source segments used by Copy; rendering may be bounded separately. */
+  copyDiffs?: ToolDiffSegment[];
+  omittedDiffCount?: number;
 }
 
 export type ToolPayloadMode =
@@ -215,11 +229,12 @@ export function ToolPayloadLightbox({
         text = payload.files
           .map((file) => {
             const fileHead = payload.files.length > 1 ? `--- ${file.filePath} ---\n` : '';
-            const body = file.diffs
+            const copiedDiffs = file.copyDiffs ?? file.diffs;
+            const body = copiedDiffs
               .map((diff, index) => {
                 const diffHead =
-                  file.diffs.length > 1
-                    ? `--- ${diff.label ?? `Edit ${index + 1}/${file.diffs.length}`} ---\n`
+                  copiedDiffs.length > 1
+                    ? `--- ${diff.label ?? `Edit ${index + 1}/${copiedDiffs.length}`} ---\n`
                     : '';
                 if ('rawDiff' in diff) return `${diffHead}${diff.rawDiff}`;
                 return `${diffHead}--- old\n${diff.oldString}\n+++ new\n${diff.newString}`;
@@ -241,15 +256,20 @@ export function ToolPayloadLightbox({
     }
   }
 
+  const remoteFile = isRemoteFileOrigin(fileCtx.origin);
+  const revealLabel = remoteFile
+    ? t('chat.remoteFile.downloadToLocal')
+    : t('chat.lightbox.openInExplorer');
+
   async function showInFolder() {
     if (payload.kind !== 'diff' || payload.files.length !== 1) return;
     // 模型可能给相对路径(Claude file_path / Codex change path)—— 先按会话
     // workingDir 补成绝对路径,show-item-in-folder 只接受绝对路径。
     const filePath = resolveToolFilePath(payload.files[0].filePath, fileCtx.workingDir);
     // remote 会话:远端路径本机不存在(或更糟,存在同路径本机文件)——
-    // 下载缓存副本后定位副本。
+    // 下载到本地后定位下载的文件。
     if (isRemoteFileOrigin(fileCtx.origin)) {
-      await revealRemoteChatFile(fileCtx.origin, fileCtx.workingDir, filePath);
+      await downloadRemoteChatEntry(fileCtx.origin, fileCtx.workingDir, filePath);
       return;
     }
     const res = await window.electronAPI.showItemInFolder({ filePath });
@@ -291,7 +311,7 @@ export function ToolPayloadLightbox({
       <div
         data-tool-payload-lightbox-card
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-[12px]',
+          'cursor-auto flex flex-col overflow-hidden rounded-xl',
           'border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
@@ -319,12 +339,17 @@ export function ToolPayloadLightbox({
                 onClick={copyTitle}
                 className={cn(
                   'flex items-center gap-2 min-w-0',
-                  'rounded-[6px] px-1 -mx-1 py-0.5',
+                  'rounded-full px-1 -mx-1 py-0.5',
+                  CHAT_FOCUS_CLASS,
                   'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
                   'text-left cursor-pointer',
                 )}
               >
-                <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                {singleDiffFile ? (
+                  <FileTypeIcon name={singleDiffFile.filePath} size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                ) : (
+                  <FileText size={16} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                )}
                 <span
                   className={cn(
                     'font-semibold text-14',
@@ -350,16 +375,17 @@ export function ToolPayloadLightbox({
                   <button
                     type="button"
                     onClick={showInFolder}
-                    className={cn(
-                      'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                      'hover:bg-[var(--msg-code-inline-bg)] transition-colors cursor-pointer',
-                    )}
-                    aria-label={t('chat.lightbox.openInExplorer')}
+                    className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
+                    aria-label={revealLabel}
                   >
-                    <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    {remoteFile ? (
+                      <Download size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    ) : (
+                      <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
+                    )}
                   </button>
                 </Tooltip.Trigger>
-                <Tooltip.Content>{t('chat.lightbox.openInExplorer')}</Tooltip.Content>
+                <Tooltip.Content>{revealLabel}</Tooltip.Content>
               </Tooltip.Root>
             )}
             <Tooltip.Root>
@@ -367,10 +393,7 @@ export function ToolPayloadLightbox({
                 <button
                   type="button"
                   onClick={copyContent}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'hover:bg-[var(--msg-code-inline-bg)] transition-colors cursor-pointer',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                   aria-label={t('chat.lightbox.copyContent')}
                 >
                   <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
@@ -383,10 +406,7 @@ export function ToolPayloadLightbox({
                 <button
                   type="button"
                   onClick={handleClose}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'hover:bg-[var(--msg-code-inline-bg)] transition-colors cursor-pointer',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                   aria-label={t('chat.lightbox.close')}
                 >
                   <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
@@ -440,11 +460,28 @@ export function ToolPayloadLightbox({
                         {'rawDiff' in diff ? (
                           <MarkdownDiffBlock raw={diff.rawDiff} />
                         ) : (
-                          <DiffView oldString={diff.oldString} newString={diff.newString} />
+                          <DiffView
+                            oldString={diff.oldString}
+                            newString={diff.newString}
+                            analysis={diff.analysis}
+                          />
                         )}
                       </div>
                     ))
                   )}
+                  {file.omittedDiffCount ? (
+                    <span
+                      data-diff-omitted-count={file.omittedDiffCount}
+                      className="text-12 text-[var(--msg-tool-card-chevron)]"
+                      aria-label={t('chat.lightbox.omittedDiffSegments', {
+                        count: file.omittedDiffCount,
+                      })}
+                    >
+                      {t('chat.lightbox.omittedDiffSegments', {
+                        count: file.omittedDiffCount,
+                      })}
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -462,7 +499,8 @@ export function ToolPayloadLightbox({
               className={cn(
                 'h-full min-h-0 w-full resize-none rounded-lg border',
                 'border-[var(--msg-code-block-border)] bg-[var(--msg-code-block-bg)]',
-                'p-3 font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
+                'p-3',
+                CHAT_COMPACT_CODE_CLASS,
                 'text-[var(--msg-tool-card-text)] outline-none',
               )}
             />
@@ -476,8 +514,9 @@ export function ToolPayloadLightbox({
                 </div>
                 <pre
                   className={cn(
-                    'overflow-x-auto rounded-[12px] border border-[var(--msg-code-block-border)]',
-                    'bg-[var(--msg-code-block-bg)] p-3 font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
+                    CHAT_CODE_SURFACE_CLASS,
+                    CHAT_COMPACT_CODE_CLASS,
+                    'overflow-x-auto p-3',
                     'text-[var(--msg-tool-card-text)] select-text whitespace-pre-wrap break-words',
                   )}
                 >
@@ -491,8 +530,9 @@ export function ToolPayloadLightbox({
                   </div>
                   <pre
                     className={cn(
-                      'overflow-x-auto rounded-[12px] border border-[var(--msg-code-block-border)]',
-                      'bg-[var(--msg-code-block-bg)] p-3 font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
+                      CHAT_CODE_SURFACE_CLASS,
+                      CHAT_COMPACT_CODE_CLASS,
+                      'overflow-x-auto p-3',
                       'text-[var(--msg-tool-card-text)] select-text whitespace-pre-wrap break-words',
                     )}
                   >
@@ -511,30 +551,12 @@ export function ToolPayloadLightbox({
               'border-t border-[var(--msg-tool-card-border)]',
             )}
           >
-            <button
-              type="button"
-              onClick={handleClose}
-              className={cn(
-                'h-8 rounded-full border px-4 text-12 font-medium',
-                'border-[var(--border-default)] bg-[var(--surface-elevated)]',
-                'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            <Button variant="secondary" size="md" compact type="button" onClick={handleClose}>
               {textEdit.cancelLabel}
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveText}
-              className={cn(
-                'h-8 rounded-full px-4 text-12 font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'hover:opacity-90 transition-opacity',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
+            </Button>
+            <Button variant="cta" size="md" compact type="button" onClick={handleSaveText}>
               {textEdit.saveLabel}
-            </button>
+            </Button>
           </div>
         )}
       </div>

@@ -1,0 +1,12 @@
+/* Keep overflow discoverable even when the app hides idle scrollbars. */
+.task-tag-list-scroll {
+  scrollbar-gutter: stable;
+}
+
+.task-tag-list-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--msg-scrollbar);
+}
+
+.task-tag-list-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--msg-scrollbar-hover);
+}

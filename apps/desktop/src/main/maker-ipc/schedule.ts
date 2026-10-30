@@ -43,6 +43,7 @@ import { ipcMain, BrowserWindow, app } from 'electron';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import type {
   Scheduler,
+  Schedule,
   CreateScheduleInput,
   UpdateScheduleInput,
   ListFilter,
@@ -58,7 +59,10 @@ import {
 
 import { createLogger } from '../logger.js';
 import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
-import { executePreRunHook } from '../scheduler-host/pre-run-hook.js';
+import {
+  assertPreRunHookCommandSyntax,
+  executePreRunHook,
+} from '../scheduler-host/pre-run-hook.js';
 import {
   HookScriptUtilityModelError,
   installHookScript,
@@ -258,6 +262,35 @@ export function normalizeLegacyDeviceLinkIntervalClear<
   return { ...patch, intervalMs: undefined };
 }
 
+/** Old Mobile submits a full form without the explicit Harness field. Normalize only
+ * that trusted remote shape; prompt-only patches and local partial updates keep their semantics.
+ * Compare with the saved form Harness (not its override) so an untouched old form cannot
+ * accidentally undo an existing cross-Harness choice. Run inside updateFromCurrent's lock.
+ */
+export function normalizeLegacyDeviceLinkModelSelection(
+  existing: Schedule,
+  patch: UpdateScheduleInput,
+  isRemoteInvoke: boolean,
+): UpdateScheduleInput {
+  if (!isRemoteInvoke || Object.prototype.hasOwnProperty.call(patch, 'modelAgentKind')
+    || typeof patch.cronExpr !== 'string' || typeof patch.agentKind !== 'string'
+    || (patch.model !== undefined && typeof patch.model !== 'string')
+    || !Object.prototype.hasOwnProperty.call(patch, 'manual')
+    || !Object.prototype.hasOwnProperty.call(patch, 'notify')
+    || !(patch.targetSessionId ?? existing.targetSessionId)) return patch;
+  const model = patch.model?.trim() || undefined;
+  // A full form with no model follows its task. Its JSON-safe empty location
+  // clears the old selection; location-only partial patches still select local.
+  const clearsLocation = !model && patch.modelAgentDeviceId === '';
+  if (!clearsLocation && patch.agentKind === existing.agentKind && model === (existing.model?.trim() || undefined)) return patch;
+  return { ...patch, modelAgentKind: model ? patch.agentKind : undefined,
+    ...(clearsLocation ? { modelAgentDeviceId: undefined } : {}),
+    // The old bound form omits empty model/provider/effort and has no Fast control.
+    // Clear the previous route when the visible selection changes instead of retaining
+    // a provider or Fast preference belonging to the old Harness/model.
+    model, providerId: patch.providerId, effort: patch.effort, fastMode: patch.fastMode ?? false };
+}
+
 function listAllTemplates(): ScheduleTemplate[] {
   const projectTemplates: ScheduleTemplate[] = [];
   return [...BUILTIN_TEMPLATES, ...projectTemplates];
@@ -282,9 +315,13 @@ function buildCreateScheduleInput(
     manual: overrides.manual,
     intervalMs: overrides.intervalMs,
     agentKind: overrides.agentKind ?? template.agentKind ?? 'claude-code',
+    agentDeviceId: overrides.agentDeviceId,
+    modelAgentKind: overrides.modelAgentKind,
+    modelAgentDeviceId: overrides.modelAgentDeviceId,
     model: overrides.model ?? template.model,
     providerId: overrides.providerId ?? template.providerId,
     effort: overrides.effort ?? template.effort,
+    fastMode: overrides.fastMode ?? template.fastMode,
     workingDir: overrides.workingDir,
     useWorktree: overrides.useWorktree ?? template.useWorktree ?? false,
     targetSessionId: overrides.targetSessionId,
@@ -318,8 +355,10 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   };
   const hookPathDeps = {
     resolveSessionWorkDir,
-    stabilizeCommand: async (input: { command: string; workingDir?: string }) =>
-      stabilizeHookCommand(input.command, input.workingDir),
+    stabilizeCommand: async (input: { command: string; workingDir?: string }) => {
+      await assertPreRunHookCommandSyntax(input.command);
+      return stabilizeHookCommand(input.command, input.workingDir);
+    },
   };
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST, async (_e, filter: unknown) =>
@@ -344,21 +383,34 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_UPDATE, async (_e, id: unknown, patch: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
     requireObject(patch, 'patch');
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
+    // JSON must keep null until this receiving boundary; undefined keys disappear
+    // in transit. Only model-selection axes gain explicit clearing semantics.
+    const normalizedPatch = { ...patch as Record<string, unknown> };
+    for (const key of ['modelAgentDeviceId', 'modelAgentKind', 'model', 'providerId', 'effort']) {
+      if (normalizedPatch[key] === null) normalizedPatch[key] = undefined;
+    }
     return withScheduler(({ scheduler }) =>
-      scheduler.updateFromCurrent(scheduleId, (existing) =>
-        stabilizePreRunHookForUpdate(
+      scheduler.updateFromCurrent(
+        scheduleId,
+        (existing) => stabilizePreRunHookForUpdate(
           existing,
-          normalizeLegacyDeviceLinkIntervalClear(
-            normalizeNullableIntervalMs(
-              patch as UpdateScheduleInput & { intervalMs?: number | null },
+          normalizeLegacyDeviceLinkModelSelection(
+            existing,
+            normalizeLegacyDeviceLinkIntervalClear(
+              normalizeNullableIntervalMs(
+                normalizedPatch as UpdateScheduleInput & { intervalMs?: number | null },
+              ),
+              isDeviceLinkInvoke(),
             ),
             isDeviceLinkInvoke(),
           ),
           hookPathDeps,
         ),
+        expected,
       ),
     );
   });
@@ -366,6 +418,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_DELETE, async (_e, id: unknown) => {
     const scheduleId = requireString(id, 'id');
     return withScheduler(async ({ scheduler, storage }) => {
+      // Authorize before touching history; internal routine schedules are not public CRUD.
+      if (!await scheduler.get(scheduleId)) throw new Error(`Schedule not found: ${scheduleId}`);
       // 删 automation 前先把它名下所有未读历史标记为已读 —— 用户都决定删了,
       // 残留 unread badge 没意义。失败仅记日志,不阻断 delete 主流程。
       try {
@@ -398,14 +452,18 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId));
+    const expected = expectedRaw === undefined ? undefined : requireObject(expectedRaw, 'expected') as unknown as Schedule;
+    return withScheduler(({ scheduler }) => scheduler.resume(scheduleId, expected));
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_RUN_NOW, async (_e, id: unknown, optionsRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');
-    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId));
+    const options = optionsRaw && typeof optionsRaw === 'object' && !Array.isArray(optionsRaw)
+      ? optionsRaw as { expectedSchedule?: Schedule } : undefined;
+    return withScheduler(({ scheduler }) => scheduler.runNow(scheduleId,
+      options?.expectedSchedule ? { expectedSchedule: options.expectedSchedule } : undefined));
   });
 
   // 表单「AI 生成」:按用户自然语言描述生成前置检查脚本(utility model 单次生成,
@@ -436,6 +494,16 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_GENERATE_PRE_RUN_HOOK, async (event, payload: unknown) => {
     const body = requireObject(payload, 'payload');
     const description = requireString(body.description, 'description');
+    // The script helper uses direct utility HTTP calls. Never interpret a remote
+    // provider id as a local credential (including a coincidentally identical id).
+    const unsupportedRemoteGeneration = (providerId: unknown, model: unknown, agentKind: unknown) => ({
+      ok: false as const, reason: 'no_candidate' as const,
+      attempts: [{ providerId: typeof providerId === 'string' ? providerId : '',
+        model: typeof model === 'string' ? model : '',
+        transport: agentKind === 'codex' ? 'codex-responses' as const : 'litellm-chat-completions' as const,
+        status: 'skipped' as const, reason: 'unsupported_transport' as const }],
+    });
+    if (body.modelAgentDeviceId) return unsupportedRemoteGeneration(body.providerId, body.model, body.agentKind);
     const maker = getMaker?.();
     if (!maker) throwIpcError('INTERNAL', 'maker not ready for hook script generation');
     const workingDir = await resolveHookWorkingDir(body);
@@ -454,7 +522,13 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       targetSessionId,
       resolveBoundSessionRoute: body.resolveBoundSessionRoute === true,
     })) {
-      const session = await maker.getSessionMeta(targetSessionId).catch(() => null);
+      // Explicit local choices resolve only against the host catalog. The bound
+      // task still supplies cwd, but its remote model/provider must not leak in.
+      const explicitLocal = body.modelAgentDeviceId === '';
+      const session = explicitLocal
+        ? requestedAgentKind ? { agentKind: requestedAgentKind, model: model ?? '', agentDeviceId: null } : null
+        : await maker.getSessionMeta(targetSessionId).catch(() => null);
+      if (session?.agentDeviceId) return unsupportedRemoteGeneration(providerId, model ?? session.model, session.agentKind);
       // Bound-session fallback must use the same live connection snapshot as
       // the provider picker. Never turn an unconnected built-in provider into
       // a routable candidate just because it exists in the catalog.
@@ -467,7 +541,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       });
       const route = resolveBoundSessionGenerationRoute({
         session,
-        sessionProviderId: getSessionProvider(targetSessionId),
+        sessionProviderId: explicitLocal ? undefined : getSessionProvider(targetSessionId),
         requestedProviderId: providerId,
         requestedModel: model,
         providers,
@@ -477,7 +551,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
           ok: false as const,
           reason: 'no_candidate' as const,
           attempts: [{
-            providerId: getSessionProvider(targetSessionId) ?? targetSessionId,
+            providerId: explicitLocal ? providerId ?? '' : getSessionProvider(targetSessionId) ?? targetSessionId,
             model: session?.model?.trim() ?? '',
             transport: session?.agentKind === 'codex' ? 'codex-responses' as const : 'litellm-chat-completions' as const,
             status: 'skipped' as const,
@@ -642,7 +716,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
             body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
           )
         : {};
-    return withScheduler(({ scheduler }) => {
+    return withScheduler(async ({ scheduler }) => {
       const template = findTemplate(templateId);
       if (!template) throwIpcError('NOT_FOUND', `template ${templateId} not found`);
       const prompt = applyTemplateParams(
@@ -650,7 +724,12 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         paramValues,
         template.parameters,
       );
-      return scheduler.create(buildCreateScheduleInput(template, prompt, overrides));
+      // overrides 可带 preRunHook:与普通创建走同一套路径稳定化与语法校验。
+      const normalized = await stabilizePreRunHookForCreate(
+        buildCreateScheduleInput(template, prompt, overrides),
+        hookPathDeps,
+      );
+      return scheduler.create(normalized);
     });
   });
 

@@ -2,7 +2,7 @@
  * quotaResetRollup — TodaySpendChip 限额窗口的「重置滚动」动画与倒计时节奏。
  *
  * 两个职责(都只服务 chip 上的剩余百分比段):
- *   1. 窗口重置检测 + 数字滚动:同一窗口的剩余百分比在快照刷新中大幅回升
+ *   1. 窗口重置检测 + 数字滚动:同一窗口到期后,新周期快照确认剩余百分比回升
  *      (典型:5h 窗口到点重置, 剩余 0% → 100%)时, 让显示值从 0% 快速滚动到
  *      新值, 给用户一个「额度回来了」的可感知反馈。一次性 JS 文本更新动画,
  *      非常驻(engineering-conventions §7), 且尊重 prefers-reduced-motion
@@ -51,27 +51,26 @@ const FAST_TICK_GRACE_MS = 5_000;
 export const RESET_PENDING_MAX_MS = 10 * 60_000;
 
 /**
- * 是否触发「重置滚动」:同一窗口、剩余百分比明显回升才算。
- *   - resetsAt 双方都有且后移(窗口翻到下一周期)→ 回升 ≥1 个点即触发
- *     (语义上确认了 reset, 小回升也是真重置);
- *   - 拿不到 resetsAt 语义时退化为大幅回升(≥30 点且新值接近满额)——
- *     快照修正 / 双源 merge 的小幅上调不会误触。
+ * 只有同一额度窗口已经到期、新快照进入未来周期且余量回升才庆祝。
+ * 缺少周期信息、同周期修正或未来截止时间微调都不能证明发生了重置。
+ * 不猜测服务端时钟偏差;本机尚未到期时直接显示新余量,不补播庆祝。
  */
 export function shouldCelebrateQuotaReset(
   prev: ChipWindowSlot | null,
   next: ChipWindowSlot | null,
+  nowMs: number = Date.now(),
 ): boolean {
   if (!prev || !next || prev.key !== next.key) return false;
-  const delta = next.remainingPercent - prev.remainingPercent;
-  if (delta < 1) return false;
-  if (
-    typeof prev.resetsAtMs === 'number'
+  return Number.isFinite(prev.remainingPercent)
+    && Number.isFinite(next.remainingPercent)
+    && next.remainingPercent - prev.remainingPercent >= 1
+    && typeof prev.resetsAtMs === 'number'
     && typeof next.resetsAtMs === 'number'
-    && next.resetsAtMs > prev.resetsAtMs
-  ) {
-    return true;
-  }
-  return delta >= 30 && next.remainingPercent >= 95;
+    && Number.isFinite(prev.resetsAtMs)
+    && Number.isFinite(next.resetsAtMs)
+    && prev.resetsAtMs > 0
+    && prev.resetsAtMs <= nowMs
+    && next.resetsAtMs > nowMs;
 }
 
 /**
@@ -132,6 +131,7 @@ function prefersReducedMotion(): boolean {
 /** 进行中的滚动动画描述符;对象身份在整个动画期间稳定(effect 只启动一次)。 */
 interface RollupAnimation {
   key: string;
+  resetsAtMs: number | null;
   targetPercent: number;
   startedAtMs: number;
 }
@@ -154,18 +154,37 @@ export interface QuotaResetRollupState {
  * 依赖:动画帧重渲染会让它翻回 false, cleanup 会当场取消刚起步的动画。
  */
 export function useQuotaResetRollup(slot: ChipWindowSlot | null): QuotaResetRollupState | null {
-  const prevRef = React.useRef<ChipWindowSlot | null>(null);
+  const [prev, setPrev] = React.useState<ChipWindowSlot | null>(slot);
   const [anim, setAnim] = React.useState<RollupAnimation | null>(null);
   // 动画当前帧时间戳;anim 存续期间由 rAF 循环驱动重渲染。
   const [frameNowMs, setFrameNowMs] = React.useState(0);
 
-  const prev = prevRef.current;
-  prevRef.current = slot;
-  if (slot && shouldCelebrateQuotaReset(prev, slot) && !prefersReducedMotion()) {
-    // render-phase setState(React 支持的受控模式):prevRef 已更新, 下一轮
-    // 渲染 prev === slot 值 → 不会重复触发。reduced-motion 降级为直接显示终值。
-    setAnim({ key: slot.key, targetPercent: slot.remainingPercent, startedAtMs: performance.now() });
-    setFrameNowMs(0);
+  // 基线随 React render 一起提交/回滚,不能在未提交的 render 中写 ref。
+  // 同一身份不退回已观察过的旧周期,避免迟到旧快照 → 当前快照重复揭晓。
+  const staleCycle = prev && slot && prev.key === slot.key
+    && typeof prev.resetsAtMs === 'number'
+    && (slot.resetsAtMs === null || slot.resetsAtMs < prev.resetsAtMs);
+  // 周期只前进,但百分比必须跟随已经展示的值。稀疏快照先显示98%后补齐截止
+  // 时间时,应比较98%→98%,不能继续拿更早的60%当基线。
+  const nextBaseline = staleCycle ? { ...slot, resetsAtMs: prev.resetsAtMs } : slot;
+  const slotChanged = prev?.key !== nextBaseline?.key
+    || !Object.is(prev?.remainingPercent, nextBaseline?.remainingPercent)
+    || !Object.is(prev?.resetsAtMs, nextBaseline?.resetsAtMs);
+  // 切走/缺失/周期失配必须清掉描述符和计时器,不能仅隐藏输出后再复活旧动画。
+  if (anim && (!slot || anim.key !== slot.key || anim.resetsAtMs !== slot.resetsAtMs)) {
+    setAnim(null);
+  }
+  if (slotChanged) {
+    setPrev(nextBaseline);
+    if (slot && shouldCelebrateQuotaReset(prev, slot) && !prefersReducedMotion()) {
+      setAnim({
+        key: slot.key,
+        resetsAtMs: slot.resetsAtMs,
+        targetPercent: slot.remainingPercent,
+        startedAtMs: performance.now(),
+      });
+      setFrameNowMs(0);
+    }
   }
 
   React.useEffect(() => {

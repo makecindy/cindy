@@ -40,6 +40,22 @@ function systemOrderError(status = 400, message = 'System message must be at the
   return new Response(JSON.stringify({ error: { message, type: 'BadRequestError' } }), { status });
 }
 
+/**
+ * Google 的 OpenAI 兼容层经由 AI SDK 抛出的形状:外层套一层 Responses/Anthropic 风格的
+ * error,真正的 AI SDK 错误被二次编码进 message 字符串里的一层 JSON。
+ */
+function googleSystemOrderError(): Response {
+  const functionality = "'system messages are only supported at the beginning of the conversation' functionality not supported.";
+  return new Response(JSON.stringify({
+    error: {
+      message: JSON.stringify({
+        error: { message: functionality, type: 'AI_UnsupportedFunctionalityError' },
+      }),
+      type: 'invalid_request_error',
+    },
+  }), { status: 400 });
+}
+
 // Reduced shape of the real Codex capture: instructions + developer, user, user.
 // Exact captured text is replayed separately against the official Qwen template.
 function leadingSystemRequest(): ResponsesRequest {
@@ -92,6 +108,44 @@ describe('createResponsesChatHandler', () => {
       expect(onUpstreamError).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'high', expected: { thinking: { type: 'adaptive' } } },
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'none', expected: { thinking: { type: 'disabled' } } },
+    { upstreamBase: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seed-2-1-pro-260628', effort: 'high', expected: { thinking: { type: 'enabled' } } },
+    { upstreamBase: 'https://api.neuralwatt.com/v1', model: 'qwen3.5-397b', effort: 'high', expected: { thinking_budget: 24576 } },
+  ])('retains $model reasoning until final provider normalization ($effort)', async ({ upstreamBase, model, effort, expected }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject(expected);
+      expect(body).not.toHaveProperty('reasoning_effort');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities: { developerRole: 'system' } }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', capabilities: { reasoningField: 'none' } as ChatBridgeCapabilities },
+    { upstreamBase: 'https://unrelated.example/v1', model: 'MiniMax-M3', capabilities: {} },
+    { upstreamBase: 'https://api.kimi.com/coding/v1', model: 'k3', capabilities: {} },
+  ])('respects explicit disable, unknown endpoints and declared noReasoning: $upstreamBase', async ({ upstreamBase, model, capabilities }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('thinking');
+      expect(body).not.toHaveProperty('thinking_budget');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort: 'high' } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
 
   it('leaves a consecutive system prefix intact when the upstream accepts it', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -201,6 +255,99 @@ describe('createResponsesChatHandler', () => {
     expect(res.status).toBe(status);
     expect(onUpstreamError).toHaveBeenCalledOnce();
     expect(res.listenerCount('close')).toBe(0);
+  });
+
+  // Claude Code 的 mid-conversation-system(#3583 的 Google 版本):顶层 instructions 与
+  // agent 列表先进 system,随后 user 轮次之后还会再来一条 system。Google 的 OpenAI 兼容层
+  // 是会话级限制,只并前缀救不了它——必须把中段 system 一并提到开头,否则整轮 400 且下一轮
+  // 复现,会话卡死。
+  it('hoists a mid-conversation system message when the upstream only accepts a leading one', async () => {
+    const bodies: ChatCompletionsRequest[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      if (bodies.length === 1) return googleSystemOrderError();
+      return streamResponse([{ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] }]);
+    });
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      buildHeaders: async () => ({}),
+      capabilities: { reasoningField: 'reasoning_effort' },
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'google/gemini-3.8-flash',
+        instructions: 'You are an interactive agent.',
+        input: [
+          { role: 'user', content: 'system-reminder: context' },
+          { role: 'system', content: 'Available agent types for the Agent tool' },
+          { role: 'user', content: 'hello' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    // 中段 system 与开头 instructions 合成唯一首条 system,user 顺序保持。
+    expect(bodies[1].messages).toEqual([
+      {
+        role: 'system',
+        content: 'You are an interactive agent.\n\nAvailable agent types for the Agent tool',
+      },
+      { role: 'user', content: 'system-reminder: context' },
+      { role: 'user', content: 'hello' },
+    ]);
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('event: response.completed');
+  });
+
+  it('does not widen the Qwen prefix retry into a mid-conversation hoist', async () => {
+    // `System message must be at the beginning.` 来自模板运行器,只约束开头连续段;
+    // 中段 system 不该被这条措辞牵着走(既有保守策略)。
+    const fetchImpl = vi.fn(async () => systemOrderError());
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://vllm.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'qwen3.8-27b-fp8',
+        instructions: 'base instructions',
+        input: [
+          { role: 'user', content: 'hello' },
+          { role: 'system', content: 'later instructions' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(400);
+  });
+
+  it('retries a Google leading-system rejection twice at most', async () => {
+    const fetchImpl = vi.fn(async () => googleSystemOrderError());
+    const onUpstreamError = vi.fn();
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      buildHeaders: async () => ({}),
+      onUpstreamError,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'google/gemini-3.8-flash',
+        instructions: 'base',
+        input: [
+          { role: 'user', content: 'hello' },
+          { role: 'system', content: 'later' },
+        ],
+      },
+      res: res as never,
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(400);
+    expect(onUpstreamError).toHaveBeenCalledOnce();
   });
 
   it.each([400, 401, 503])('reports only the final error when the compatibility retry fails with %s', async (status) => {
@@ -383,6 +530,38 @@ describe('createResponsesChatHandler', () => {
     expect(wire).toContain('"sequence_number":0');
     expect(wire).toContain('"sequence_number":1');
     expect(res.ended).toBe(true);
+  });
+
+  it('resumes completed web search history with one upstream request', async () => {
+    const action = { type: 'search', queries: ['image editor', 'canvas export'] };
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).messages).toEqual([
+        { role: 'assistant', content: '[completed web search]\n' + JSON.stringify(action) },
+        { role: 'assistant', content: 'Findings: https://example.com/docs' },
+        { role: 'user', content: 'Continue' },
+      ]);
+      return streamResponse([{ choices: [{ delta: { content: 'Continuing' }, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({
+      upstreamBase: 'https://provider.example/v1', buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'test-model',
+        input: [
+          { type: 'web_search_call', id: 'ws_history', status: 'completed', action },
+          { type: 'message', role: 'assistant', content: 'Findings: https://example.com/docs' },
+          { type: 'message', role: 'user', content: 'Continue' },
+        ],
+      },
+      res: res as never,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    expect(res.chunks.join('')).toContain('event: response.completed');
+    expect(res.chunks.join('')).toContain('Continuing');
   });
 
   it('drops an unsupported built-in web_search tool and continues upstream', async () => {
@@ -1080,4 +1259,78 @@ describe('createResponsesChatHandler', () => {
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain('system message must be at the beginning');
   });
+  describe('outbound headers carry only the stable conversation id (#4073)', () => {
+    function captureHeaders(requestHeaders?: Record<string, string>, providerHeaders: Record<string, string> = { authorization: 'Bearer secret' }) {
+      const fetchImpl = vi.fn(async () => streamResponse([
+        { id: 'chat_1', choices: [{ delta: { content: 'hi' } }] },
+        { id: 'chat_1', choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ]));
+      const handler = createResponsesChatHandler({
+        upstreamBase: 'https://opencode.example/zen/go/v1',
+        buildHeaders: async () => providerHeaders,
+      }, { fetchImpl });
+      const res = new FakeResponse();
+      return handler.handle({
+        parsedBody: { model: 'kimi-k2', input: [{ role: 'user', content: 'hi' }] },
+        res: res as never,
+        ...(requestHeaders ? { requestHeaders } : {}),
+      }).then(() => {
+        expect(res.status).toBe(200);
+        return (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+      });
+    }
+
+    it('derives x-opencode-session from the Codex thread-id and drops every other inbound header', async () => {
+      const headers = await captureHeaders({
+        'thread-id': 'thr_abc',
+        'x-codex-parent-thread-id': 'thr_parent',
+        authorization: 'Bearer client-token-must-not-leak',
+        'chatgpt-account-id': 'acct-must-not-leak',
+        'x-client-request-id': 'req-1',
+      });
+      expect(headers['x-opencode-session']).toBe('thr_abc');
+      expect(headers.authorization).toBe('Bearer secret');
+      expect(headers).not.toHaveProperty('chatgpt-account-id');
+      expect(headers).not.toHaveProperty('x-codex-parent-thread-id');
+      expect(headers).not.toHaveProperty('x-client-request-id');
+      expect(headers['user-agent']).toBe('Cindy-CodexChatBridge/1');
+    });
+
+    it('lets an explicit inbound x-opencode-session win over thread-id and provider static headers', async () => {
+      const headers = await captureHeaders(
+        { 'x-opencode-session': 'conv-explicit', 'thread-id': 'thr_abc' },
+        { authorization: 'Bearer secret', 'x-opencode-session': 'machine-wide-fixed', 'user-agent': 'custom/1' },
+      );
+      expect(headers['x-opencode-session']).toBe('conv-explicit');
+      expect(headers['user-agent']).toBe('custom/1');
+    });
+
+    it('replaces a provider static header written in a different casing instead of sending both (Greptile P1)', async () => {
+      const headers = await captureHeaders(
+        { 'thread-id': 'thr_abc' },
+        { authorization: 'Bearer secret', 'X-OpenCode-Session': 'machine-wide-fixed' },
+      );
+      const sessionKeys = Object.keys(headers).filter((key) => key.toLowerCase() === 'x-opencode-session');
+      expect(sessionKeys).toEqual(['x-opencode-session']);
+      expect(headers['x-opencode-session']).toBe('thr_abc');
+      expect(new Headers(headers).get('x-opencode-session')).toBe('thr_abc');
+    });
+
+    it('keeps a provider static session header as-is when no stable conversation id is available', async () => {
+      const headers = await captureHeaders(
+        { 'x-client-request-id': 'req-only' },
+        { authorization: 'Bearer secret', 'X-OpenCode-Session': 'machine-wide-fixed' },
+      );
+      expect(headers['X-OpenCode-Session']).toBe('machine-wide-fixed');
+      expect(headers).not.toHaveProperty('x-opencode-session');
+    });
+
+    it('sends no session header when the request carries no stable conversation id', async () => {
+      const headers = await captureHeaders({ 'x-client-request-id': 'req-only' });
+      expect(headers).not.toHaveProperty('x-opencode-session');
+      const legacy = await captureHeaders(undefined);
+      expect(legacy).not.toHaveProperty('x-opencode-session');
+    });
+  });
+
 });

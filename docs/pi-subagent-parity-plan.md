@@ -78,6 +78,10 @@ exit writes the same atomic stop controls synchronously before process exit.
 10. Device-link and SSH controls must execute on the data-owning device. A local
     renderer must not present a stop action that targets an unreachable remote
     session.
+11. Concurrent child approval requests are queued per child, oldest first, and
+    answered by request id. A newer request never displaces an earlier
+    unanswered one; the published status exposes only the oldest pending
+    request while the runner holds the rest of the queue.
 
 ## Final acceptance checklist
 

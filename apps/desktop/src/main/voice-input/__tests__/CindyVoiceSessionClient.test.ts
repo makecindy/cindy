@@ -119,4 +119,26 @@ describe('CindyVoiceRunContext', () => {
     const thirdBody = (serverApiFetch.mock.calls[2][1] as { body: { refinerProvider?: string } }).body;
     expect(thirdBody.refinerProvider).toBe('auto');
   });
+
+  it('does not let a late session allocation overwrite a newer fallback attempt', async () => {
+    serverApiFetch.mockReset();
+    let resolveFirst!: (session: typeof SESSION) => void;
+    const firstResponse = new Promise<typeof SESSION>((resolve) => {
+      resolveFirst = resolve;
+    });
+    serverApiFetch
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce(SESSION);
+    const context = new CindyVoiceRunContext('zh-CN', 'auto');
+
+    const first = context.createAsrConnection('qwen-asr-flash-realtime');
+    await Promise.resolve();
+    const second = context.createAsrConnection('qwen-asr-flash-realtime');
+    await expect(second).resolves.toEqual({
+      websocketUrl: SESSION.asr.websocketUrl,
+      authorizationToken: SESSION.ticket,
+    });
+    resolveFirst(SESSION);
+    await expect(first).rejects.toThrow('superseded by a newer provider attempt');
+  });
 });

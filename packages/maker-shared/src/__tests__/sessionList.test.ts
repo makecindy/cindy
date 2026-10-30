@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import {
+  compareSessionListStrings,
   buildRemoteSessionListContext,
   buildRemoteSessionCardPreview,
   buildRemoteSessionSections,
@@ -18,6 +19,14 @@ import {
   toRemoteSessionListItem,
   formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+
+it('preserves default locale ordering for dates, paths, IDs and multilingual titles', () => {
+  const values = ['', '2026-01-01T00:00:00Z', '2026-09-30T10:00:00.000Z',
+    '/test/History-1', '/test/History-10', 'a', 'A', 'é', 'e', '任务', 'タスク'];
+  for (const left of values) for (const right of values) {
+    expect(Math.sign(compareSessionListStrings(left, right))).toBe(Math.sign(left.localeCompare(right)));
+  }
+});
 import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
@@ -208,6 +217,19 @@ describe('sessionList', () => {
       detail: '活跃 · 5 minutes ago · 12 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
+  it('uses handoff activity for remote ordering and row time without changing legacy fallbacks', () => {
+    const now = Date.parse('2026-01-01T00:10:00.000Z');
+    const sessions = [
+      session('legacy', { userSendAt: '2026-01-01T00:04:00.000Z', updatedAt: '2026-01-01T00:09:00.000Z' }),
+      session('handoff', { lastActivityAt: '2026-01-01T00:08:00.000Z', userSendAt: '2026-01-01T00:01:00.000Z' }),
+    ];
+    const sections = buildRemoteSessionSections(sessions, now);
+    expect(sections.flatMap(section => section.data).map(item => item.session.id)).toEqual(['handoff', 'legacy']);
+    expect(toRemoteSessionListItem(sessions[1], now)).toMatchObject({
+      lastActivityAt: '2026-01-01T00:08:00.000Z', detail: expect.stringContaining('2 minutes ago'),
     });
   });
 
@@ -435,6 +457,23 @@ describe('sessionList', () => {
       unreadCount: 1,
       running: true,
     });
+  });
+
+  it('carries the latest schedule next run time and omits it when the host has none', () => {
+    const nextFireAt = Date.parse('2026-01-01T00:15:00.000Z');
+    const index = buildSessionScheduleIndex([
+      schedule('sched-1', { nextFireAt }),
+      schedule('sched-2', { status: 'paused', nextFireAt: undefined }),
+      schedule('sched-3', { targetSessionId: 's3', nextFireAt: new Date(nextFireAt).toISOString() }),
+    ], new Map([
+      ['sched-1', [run('run-1', 'sched-1', { sessionId: 's1' })]],
+      ['sched-2', [run('run-2', 'sched-2', { sessionId: 's2' })]],
+    ]));
+
+    expect(index.get('s1')?.nextFireAt).toBe(nextFireAt);
+    expect(index.get('s2')).not.toHaveProperty('nextFireAt');
+    // 持久绑定会话没有 run 也要带上下次运行时间(ISO 时间戳归一为毫秒)。
+    expect(index.get('s3')?.nextFireAt).toBe(nextFireAt);
   });
 
   it('groups multiple automation-generated sessions from the same schedule', () => {
@@ -832,6 +871,16 @@ describe('sessionList', () => {
     ]);
     expect(sections[0].data[0].messagePreview).toBe('Mock image fixture · 图片 mock-image-fixture.png');
     expect(sections[0].data[0].messagePreview).not.toContain('{');
+  });
+
+  it('shows only the basename for Windows attachment paths in session previews', () => {
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(['windows-file'], () => [
+      message('windows-file', 'm1', 'user', {
+        files: [{ path: 'C:\\work\\report.pdf' }],
+      }, '2026-01-01T00:01:00.000Z'),
+    ]);
+
+    expect(messagePreviewIndex.get('windows-file')).toBe('附件 report.pdf');
   });
 
   it('never leaks hidden synthetic trigger prompts into session previews', () => {

@@ -13,7 +13,6 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import {
   resolveLoginStage,
-  resolveLoginSurface,
   type LoginStageBox,
   type LoginStageLayout,
   type LoginSurfaceLayout,
@@ -28,6 +27,8 @@ import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import { ThemeOverrideProvider, useTheme } from '@/theme';
+import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { resolveLoginWindowSurface } from '@/auth/loginGroupPlacement';
 
 /**
  * MobileLoginHandoffStage —— 白底体系登录/闸门**唯一 full-viewport 品牌宿主**
@@ -64,8 +65,8 @@ const heroPadLandscapeAsset = require('../../assets/login/login-hero-pad-landsca
 
 /** hook:物理 viewport → §3.6 三构图 surface 布局(useWindowDimensions → resolveLoginSurface)。 */
 export function useLoginSurface(): LoginSurfaceLayout {
-  const { width, height } = useWindowDimensions();
-  return useMemo(() => resolveLoginSurface(width, height), [width, height]);
+  const window = useAdaptiveWindow();
+  return useMemo(() => resolveLoginWindowSurface(window), [window]);
 }
 
 /** 兼容出口(PR4a 消费面):物理 viewport → 750 手机 stage 两档插值布局。 */
@@ -259,7 +260,7 @@ function MobileLoginHandoffStageInner({
   const heroSource =
     stage.mode === 'pad-portrait'
       ? heroPadPortraitAsset
-      : stage.mode === 'pad-landscape'
+      : (stage.mode === 'pad-landscape' || stage.mode === 'compact-wide')
         ? heroPadLandscapeAsset
         : heroAsset;
   // 暗色画布用白字版字标/slogan;立绘两模式同资产(figma 532:585)
@@ -342,7 +343,7 @@ function MobileLoginHandoffStageInner({
           ) : null}
         </View>
       ) : null}
-      {children != null ? <View style={StyleSheet.absoluteFill}>{children}</View> : null}
+      {children != null ? <View collapsable={false} style={[StyleSheet.absoluteFill, { zIndex: 1 }]}>{children}</View> : null}
     </View>
   );
 }

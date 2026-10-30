@@ -11,7 +11,10 @@ import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OperationBudget } from '../utils/operationBudget';
+import { SnapshotAttemptStore } from '../git-snapshot/snapshotAttemptStore';
+import { buildCodexFileRewindPlan } from '../git-snapshot/codexFileRewindPlanner';
 
 import { TestDirectoryTemplate } from '../../test/vitest/testDirectoryTemplate';
 import {
@@ -31,9 +34,62 @@ import {
 } from '../git-snapshot/savepointRefs';
 import { parseSnapshotCommit } from '../git-snapshot/snapshotTrailers';
 import { gitExec } from '../worktree/gitExec';
+import * as gitExecModule from '../worktree/gitExec';
 
 const REAL_GIT_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 const SESSION = 'shadow-sess-1';
+
+// #7259, git-integration: public file store + Git trailer round trip + planner.
+// Old tests only had missing Git baselines, not a retry with no Git evidence at all.
+describe('durable attempt history', () => {
+  it('remembers a failed same-message retry across store reconstruction', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'snapshot-attempts-'));
+    try {
+      await commitSeed();
+      const store = new SnapshotAttemptStore(root);
+      const first = await store.record(SESSION, 'message-1');
+      const baseline = await createShadowSavepoint(repoPath, {
+        sessionId: SESSION, label: 'baseline', meta: { kind: 'turn-start', anchor: first.anchor, attemptId: first.id },
+      });
+      await createShadowSavepoint(repoPath, {
+        sessionId: SESSION, label: 'complete',
+        meta: { kind: 'after-edit', anchor: first.anchor, attemptId: first.id, baselineCommit: baseline.commit! },
+      });
+      const { entries } = await listShadowSavepoints(repoPath, SESSION);
+      expect(entries[0].attemptId).toBe(first.id);
+      const input = {
+        sessionId: SESSION, targetMessageClientId: 'message-1', userMessages: [{ clientId: 'message-1', createdAt: 1 }],
+        repo: { kind: 'local-git' as const, repoRoot: repoPath, currentHead: await head(), currentBranch: 'main',
+          savepointsNewestFirst: entries.map((entry) => ({ ...entry, source: 'shadow' as const, branch: entry.branch ?? '' })) },
+      };
+      expect(buildCodexFileRewindPlan({ ...input, snapshotAttempts: await store.read(SESSION) }).mode).toBe('file-restore');
+      // This retry times out before baseline/marker publication; simulate restart
+      // by reading with a fresh store that knows nothing about the running attempt.
+      await store.record(SESSION, 'message-1');
+      expect(buildCodexFileRewindPlan({ ...input, snapshotAttempts: await new SnapshotAttemptStore(root).read(SESSION) }))
+        .toMatchObject({ mode: 'conversation-only', fallbackReason: 'savepoint-gap' });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps concurrent intents separate and treats partial records as unknown history', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'snapshot-attempts-'));
+    try {
+      const store = new SnapshotAttemptStore(root);
+      const records = await Promise.all([store.record('s', 'm'), store.record('s', 'm')]);
+      expect(new Set(records.map((record) => record.id)).size).toBe(2);
+      expect(await new SnapshotAttemptStore(root).read('s')).toEqual(expect.arrayContaining(records));
+      expect(await store.read('another-session')).toEqual([]);
+      expect(await new SnapshotAttemptStore(path.join(root, 'other-owner')).read('s')).toEqual([]);
+      const [dir] = await fs.readdir(path.join(root, 'git-snapshot-attempts'));
+      await fs.writeFile(path.join(root, 'git-snapshot-attempts', dir, `${records[0].id}.json`), '{');
+      expect(await store.read('s')).toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 const canLinkFile = (() => {
   const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'shadow-file-link-probe-'));
@@ -127,6 +183,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(repoPath, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   if (originalGitLocaleEnv.LC_ALL === undefined) delete process.env.LC_ALL;
   else process.env.LC_ALL = originalGitLocaleEnv.LC_ALL;
@@ -141,6 +198,158 @@ afterAll(async () => {
 });
 
 describe('createShadowSavepoint', () => {
+  it('terminates a real Git child on cancellation instead of abandoning the promise', async () => {
+    const budget = new OperationBudget(10_000);
+    let spawned!: (pid: number) => void;
+    const started = new Promise<number>((resolve) => { spawned = resolve; });
+    // hash-object waits for its pipe input; no hooks, sleep scripts or user config.
+    const running = budget.run(() => gitExec(['hash-object', '--stdin'], repoPath, { onSpawn: spawned }));
+    const pid = await started;
+    budget.cancel(new Error('stop real Git'));
+    await expect(running).rejects.toThrow('stop real Git');
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  // #7259: git-integration tier. An unchanged automatic turn still needs
+  // durable completion evidence; omitted filtered changes must never publish it.
+  it('records unchanged completion and refuses a filtered change before updating the ref', async () => {
+    await commitSeed();
+    const baseline = await createShadowSavepoint(repoPath, { sessionId: SESSION, label: 'start', meta: { kind: 'turn-start', anchor: 'm1' } });
+    const label = vi.fn(async () => 'unused');
+    const completed = await createShadowSavepoint(repoPath, {
+      sessionId: SESSION, label, meta: { kind: 'after-edit', anchor: 'm1', baselineCommit: baseline.commit! },
+      skipIfTreeEquals: baseline.commit!, recordUnchanged: true,
+      baselineSkippedFingerprints: baseline.skippedFingerprints,
+    });
+    expect(completed.commit).toBeTruthy();
+    expect(completed.tree).toBe(baseline.tree);
+    expect(label).not.toHaveBeenCalled();
+    await writeRepoFile('.env', 'INVALID_TEST_KEY=changed\n');
+    await expect(createShadowSavepoint(repoPath, {
+      sessionId: SESSION, label: 'must not publish', meta: { kind: 'after-edit', anchor: 'm1', baselineCommit: baseline.commit! },
+      recordUnchanged: true, baselineSkippedFingerprints: baseline.skippedFingerprints,
+    })).rejects.toThrow('partially filtered');
+    expect(await readSavepointTip(repoPath, SESSION)).toBe(completed.commit);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('cancels after staging and never publishes a late label result', async () => {
+    await commitSeed();
+    const before = await captureUserVisibleState();
+    const budget = new OperationBudget(10_000);
+    const snapshot = budget.run(() => createShadowSavepoint(repoPath, {
+      sessionId: SESSION,
+      label: async () => { budget.cancel(new Error('stopped during label')); return 'late'; },
+      meta: { kind: 'turn-start' },
+    }));
+    await expect(snapshot).rejects.toThrow('stopped during label');
+    expect(await readSavepointTip(repoPath, SESSION)).toBeNull();
+    expect(await captureUserVisibleState()).toEqual(before);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+  // #6908 P2: 81 paths require a second label-diff chunk. Expiry after the
+  // first real diff must stop that chunk and must not publish a savepoint or
+  // call the model-backed labeler with a partial diff (git-integration tier).
+  it('shares the capture deadline with label diffs and waits for both readers before cleanup', async () => {
+    await commitSeed();
+    await Promise.all(Array.from({ length: 81 }, (_, i) => writeRepoFile(
+      'changed-' + i + '.txt', 'changed\n',
+    )));
+    const before = await captureUserVisibleState();
+    const actualGitExec = gitExecModule.gitExec;
+    const actualNow = performance.now.bind(performance);
+    const clock = vi.spyOn(performance, 'now');
+    let diffCalls = 0;
+    let activeDiffReaders = 0;
+    const deadlines: Array<number | undefined> = [];
+    const execSpy = vi.spyOn(gitExecModule, 'gitExec').mockImplementation(async (args, cwd, opts) => {
+      if (!args.includes('diff')) return actualGitExec(args, cwd, opts);
+      diffCalls += 1;
+      deadlines.push(opts?.deadlineAtMs);
+      activeDiffReaders += 1;
+      try {
+        return await actualGitExec(args, cwd, opts);
+      } finally {
+        activeDiffReaders -= 1;
+        clock.mockReturnValue(actualNow() + 60_000);
+      }
+    });
+    const label = vi.fn(() => 'must not label an expired capture');
+    try {
+      await expect(createShadowSavepoint(repoPath, {
+        sessionId: SESSION, label, meta: { kind: 'after-edit' },
+        captureBudget: { maxFiles: 100, maxTotalBytes: 1024, timeoutMs: 5_000 },
+      })).rejects.toMatchObject({ name: 'SnapshotCaptureBudgetExceededError', reason: 'deadline' });
+      expect(activeDiffReaders).toBe(0);
+      expect(diffCalls).toBeGreaterThan(0);
+      expect(diffCalls).toBeLessThanOrEqual(2);
+      expect(deadlines.every((deadline) => typeof deadline === 'number')).toBe(true);
+      expect(new Set(deadlines).size).toBe(1);
+      expect(label).not.toHaveBeenCalled();
+    } finally {
+      execSpy.mockRestore();
+      clock.mockRestore();
+    }
+    expect(await readSavepointTip(repoPath, SESSION)).toBeNull();
+    expect(await captureUserVisibleState()).toEqual(before);
+  });
+
+  // #6901: advance the monotonic clock after allocating the temporary index.
+  // The real Git executor must reject the expired deadline and the kernel
+  // must remove that index, rather than granting staging a fresh timeout.
+  it('cleans up its temporary index when the shared budget expires before staging', async () => {
+    await commitSeed();
+    await writeRepoFile('a.txt', 'aa');
+    const before = await captureUserVisibleState();
+    const mkdtemp = fs.mkdtemp.bind(fs);
+    const now = performance.now.bind(performance);
+    const clock = vi.spyOn(performance, 'now');
+    let indexDir: string | undefined;
+    vi.spyOn(fs, 'mkdtemp').mockImplementation(async (...args) => {
+      const dir = await mkdtemp(...args);
+      if (String(args[0]).includes('xdt-snapshot-index-')) {
+        indexDir = String(dir);
+        clock.mockReturnValue(now() + 60_000);
+      }
+      return dir;
+    });
+    await expect(createShadowSavepoint(repoPath, {
+      sessionId: SESSION, label: 'baseline', meta: { kind: 'turn-start' },
+      captureBudget: { maxFiles: 10, maxTotalBytes: 100, timeoutMs: 5_000 },
+    })).rejects.toMatchObject({ timedOut: true });
+    vi.restoreAllMocks();
+    expect(indexDir).toBeDefined();
+    await expect(fs.access(indexDir!)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readSavepointTip(repoPath, SESSION)).toBeNull();
+    expect(await captureUserVisibleState()).toEqual(before);
+  });
+
+  // #6901: real Git integration; existing tests cover individual exclusions,
+  // not an aggregate capture budget. Two small files must fail as a whole,
+  // leaving the user's index and the shadow ref untouched, then recover.
+  it.each([
+    { maxFiles: 1, maxTotalBytes: 100, timeoutMs: 5_000, reason: 'file-count' },
+    { maxFiles: 10, maxTotalBytes: 3, timeoutMs: 5_000, reason: 'total-bytes' },
+    { maxFiles: 10, maxTotalBytes: 100, timeoutMs: 0, reason: 'deadline' },
+  ])('rejects an over-budget capture without publishing a partial baseline: %j', async ({ reason, ...captureBudget }) => {
+    await gitExec(['commit', '--allow-empty', '-m', 'empty project'], repoPath);
+    await writeRepoFile('a.txt', 'aa');
+    await writeRepoFile('b.txt', 'bb');
+    await gitExec(['add', 'a.txt'], repoPath);
+    const before = await captureUserVisibleState();
+    const input = { sessionId: SESSION, label: 'baseline', meta: { kind: 'turn-start' as const } };
+
+    await expect(createShadowSavepoint(repoPath, { ...input, captureBudget })).rejects.toMatchObject({
+      name: 'SnapshotCaptureBudgetExceededError', reason,
+    });
+    expect(await readSavepointTip(repoPath, SESSION)).toBeNull();
+    expect(await captureUserVisibleState()).toEqual(before);
+    expect(await fs.readFile(path.join(repoPath, 'b.txt'), 'utf8')).toBe('bb');
+
+    const result = await createShadowSavepoint(repoPath, input);
+    expect(await gitStdout(['show', `${result.commit}:a.txt`])).toBe('aa');
+    expect(await gitStdout(['show', `${result.commit}:b.txt`])).toBe('bb');
+    expect(await captureUserVisibleState()).toEqual(before);
+  });
+
   it('never changes HEAD, branch, status or the cached diff', async () => {
     await commitSeed();
     await writeRepoFile('staged.txt', 'staged change\n');

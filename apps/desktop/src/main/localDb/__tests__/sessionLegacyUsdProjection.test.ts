@@ -8,14 +8,62 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { sessionToCamel, setSessionRuntimeProjector, type SessionRowWithCount } from '../mapper';
+import { setSessionInterruptionBootAtForTests } from '../sessionInterruptionBoot';
+import { projectSessionActivity } from '@cindy/maker-shared/session-activity';
 
 afterEach(() => {
   setSessionRuntimeProjector(null);
+  setSessionInterruptionBootAtForTests(Date.now());
 });
 
-function sessionRow(
-  overrides: Partial<SessionRowWithCount>,
-): SessionRowWithCount {
+describe('host interruption evidence on serialized session rows', () => {
+  it('restores a pre-boot alert without activity history and clears with existing ended patches', () => {
+    setSessionInterruptionBootAtForTests(2000);
+    const session = sessionToCamel(
+      sessionRow({ source: 'desktop', activeTurnStartedAt: 1000, lastTurnEndedAt: 900 }),
+    );
+    expect(session.interruptedTurnStartedAt).toBe(1000);
+    const project = (interruption: typeof session) =>
+      projectSessionActivity({ sessionId: session.id, interruption, attention: false });
+    expect(project(session)).toMatchObject({ phase: 'error', attention: true });
+    // Viewing sends a read receipt, not a turn-ended patch.
+    expect(project({ ...session })).toMatchObject({ phase: 'error', attention: true });
+    expect(project({ ...session, lastTurnEndedAt: 1000 })).toMatchObject({
+      phase: 'idle',
+      attention: false,
+    });
+    expect(project({ ...session, clearedAt: new Date(1000).toISOString() })).toMatchObject({
+      phase: 'idle',
+      attention: false,
+    });
+    expect(project({ ...session, activeTurnStartedAt: 2500 })).toMatchObject({
+      phase: 'idle',
+      attention: false,
+    });
+  });
+
+  it.each([
+    { activeTurnStartedAt: 2000 },
+    { activeTurnStartedAt: 2500 },
+    { lastTurnEndedAt: 1000 },
+    { clearedAt: 1000 },
+    { status: 'archived' },
+    { status: 'deleted' },
+    { source: 'unknown' },
+  ])('does not mark a live, handled or hidden task: %j', (patch) => {
+    setSessionInterruptionBootAtForTests(2000);
+    const session = sessionToCamel(
+      sessionRow({
+        source: 'desktop',
+        activeTurnStartedAt: 1000,
+        ...patch,
+      } as Partial<SessionRowWithCount>),
+    );
+    expect(session.interruptedTurnStartedAt).toBeNull();
+  });
+});
+
+function sessionRow(overrides: Partial<SessionRowWithCount>): SessionRowWithCount {
   const base = {
     id: 's-1',
     title: 'New Maker',

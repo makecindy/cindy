@@ -31,6 +31,7 @@ afterEach(() => {
 
 function renderAskUser(pending: PendingAskUser, onAnswer: (requestId: string, answers: Record<string, string>) => void) {
   return render(createElement(AskUserQuestionPrompt, {
+    sessionId: 'ask-ime',
     pending,
     onAnswer,
     viewerState: 'expanded',

@@ -107,5 +107,7 @@ describe('resolvePiModelWireProtocol', () => {
     expect(resolvePiModelWireProtocol(undefined, 'openai-chat')).toBe('openai-chat');
     expect(resolvePiModelWireProtocol({ piApi: 'google-generative-ai' }, 'openai-chat')).toBeNull();
     expect(resolvePiModelWireProtocol(undefined, undefined)).toBeNull();
+    expect(resolvePiModelWireProtocol(undefined, 'google-generative-ai')).toBeNull();
+    expect(resolvePiModelWireProtocol({ route: { wireProtocol: 'google-generative-ai' } }, 'openai-chat')).toBeNull();
   });
 });

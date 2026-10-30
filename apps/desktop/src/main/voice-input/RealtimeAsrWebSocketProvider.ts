@@ -29,6 +29,11 @@ export type RealtimeAsrWebSocketProviderOptions = {
   errorFallbackMessage?: string;
   /** Replace upstream application error text with errorFallbackMessage. */
   redactUpstreamErrors?: boolean;
+  /**
+   * Called with the token from accessTokenProvider when the WebSocket handshake is
+   * rejected with HTTP 401. Only the Cindy AI key (gateway proxy) path passes it.
+   */
+  onAuthorizationRejected?: (accessToken: string) => void;
 };
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL = 'wss://api.openai.com/v1/realtime?intent=transcription';
@@ -627,6 +632,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly missingCredentialMessage: string;
   private readonly errorFallbackMessage: string;
   private readonly redactUpstreamErrors: boolean;
+  private readonly onAuthorizationRejected?: (accessToken: string) => void;
   private socket?: WebSocket;
   private callback: (event: AsrEvent) => void = () => {};
   private connected = false;
@@ -685,6 +691,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   constructor(options: RealtimeAsrWebSocketProviderOptions) {
     this.accessTokenProvider = options.accessTokenProvider;
     this.connectionProvider = options.connectionProvider;
+    this.onAuthorizationRejected = options.onAuthorizationRejected;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
     this.model = options.model ?? OPENAI_REALTIME_WHISPER_MODEL;
     this.pcmSampleRate = options.pcmSampleRate ?? DEFAULT_REALTIME_PCM_SAMPLE_RATE;
@@ -716,6 +723,25 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         sessionId: this.recorder.sessionId,
       });
     }
+  }
+
+  get endpointing(): 'manual' | 'acoustic' {
+    return this.protocolProfile === 'qwen-asr-server-vad' ? 'acoustic' : 'manual';
+  }
+
+  private readonly itemEndpoints = new Map<string, {
+    turnEnd: 'acoustic' | 'manual'; audioEndMs?: number;
+  }>();
+  private audioClockAligned = true;
+
+  private segmentCallback?: (segment: import('@cindy/voice-input-core').AsrSegment) => void;
+
+  onSegment(callback: (segment: import('@cindy/voice-input-core').AsrSegment) => void): void {
+    this.segmentCallback = callback;
+  }
+
+  commitUtterance(): void {
+    if (this.protocolProfile === 'openai-transcription-manual') this.commitBufferedAudio('utterance');
   }
 
   onEvent(callback: (event: AsrEvent) => void): void {
@@ -772,6 +798,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.socket = socket;
     this.attachSocketHandlers(socket);
 
+    const onAuthorizationRejected = this.onAuthorizationRejected;
     await this.waitForSessionReady(socket, () => {
       socket.once('open', () => {
         this.connected = true;
@@ -779,7 +806,9 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         this.startHealthLog();
         this.sendSessionUpdate();
       });
-    });
+    }, dynamicConnection || !onAuthorizationRejected
+      ? undefined
+      : () => onAuthorizationRejected(accessToken));
   }
 
   private attachSocketHandlers(socket: WebSocket): void {
@@ -839,7 +868,11 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     });
   }
 
-  private async waitForSessionReady(socket: WebSocket, begin: () => void): Promise<void> {
+  private async waitForSessionReady(
+    socket: WebSocket,
+    begin: () => void,
+    onUnauthorized?: () => void,
+  ): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const cleanup = (): void => {
@@ -882,6 +915,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
       const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
         response.resume();
         const statusCode = response.statusCode ?? 'unknown';
+        if (statusCode === 401) onUnauthorized?.();
         if (this.redactUpstreamErrors) {
           const statusSuffix = typeof statusCode === 'number' ? ` (HTTP ${statusCode})` : '';
           fail(new Error(`${this.errorFallbackMessage}${statusSuffix}`), true);
@@ -1092,6 +1126,10 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   // pending refines). Ensures the recorder flushes its WAV/meta before the
   // provider is GC'd.
   async dispose(): Promise<void> {
+    // Fallback candidates can be disposed directly when their start attempt
+    // times out or loses a hedge. Make dispose self-contained so a provider
+    // cannot leave a connecting websocket alive when the wrapper skips it.
+    if (!this.stopRequested) await this.stop();
     this.stopHealthLog();
     if (this.recorder) {
       await this.recorder.finalize({
@@ -1179,7 +1217,20 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
         this.callback({ type: 'connected', at: Date.now() });
         this.startResolve?.();
         break;
+      case 'input_audio_buffer.speech_stopped':
+        if (this.protocolProfile === 'qwen-asr-server-vad' && typeof event.item_id === 'string') {
+          const audioEndMs = this.audioClockAligned
+            && typeof event.audio_end_ms === 'number' && Number.isFinite(event.audio_end_ms)
+            && event.audio_end_ms >= 0 && event.audio_end_ms <= this.sentAudioMs
+            ? event.audio_end_ms : undefined;
+          this.itemEndpoints.set(event.item_id, {
+            turnEnd: 'acoustic', ...(audioEndMs !== undefined ? { audioEndMs } : {}),
+          });
+        }
+        break;
       case 'input_audio_buffer.committed':
+        if (this.protocolProfile === 'openai-transcription-manual' && typeof event.item_id === 'string')
+          this.itemEndpoints.set(event.item_id, { turnEnd: 'manual' });
         if (typeof event.item_id === 'string') this.registerItem(event.item_id);
         if (this.protocolProfile === 'qwen-asr-server-vad') this.bufferedMs = 0;
         break;
@@ -1236,6 +1287,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.registerItem(event.item_id);
     const next = `${this.partialsByItem.get(event.item_id) ?? ''}${event.delta}`;
     this.partialsByItem.set(event.item_id, next);
+    this.segmentCallback?.({ id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: next, final: false });
     // Trim — not clear — the replay buffer. The partial event reflects audio
     // that the server's transcription pipeline has already consumed, but we
     // don't know exactly which frames; the safe assumption is "anything older
@@ -1259,6 +1311,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     // final source of truth.
     const preview = `${event.text}${typeof event.stash === 'string' ? event.stash : ''}`;
     this.partialsByItem.set(event.item_id, preview);
+    this.segmentCallback?.({ id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: preview, final: false });
     this.trimUnconfirmedAudioOlderThan(Date.now() - PARTIAL_CONFIRMATION_LATENCY_MS);
     this.callback({ type: 'partial', text: this.aggregateTranscript(), at: Date.now() });
   }
@@ -1287,6 +1340,11 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     const aggregateBefore = this.aggregateTranscript();
     this.registerItem(event.item_id);
     this.finalsByItem.set(event.item_id, itemTranscript);
+    this.segmentCallback?.({
+      id: event.item_id, order: this.itemOrder.indexOf(event.item_id), text: itemTranscript, final: true,
+      ...this.itemEndpoints.get(event.item_id),
+    });
+    this.itemEndpoints.delete(event.item_id);
     this.partialsByItem.delete(event.item_id);
     if (this.pendingCommitCount > 0) this.pendingCommitCount -= 1;
     // A completed item means the server consumed that utterance, not
@@ -1311,6 +1369,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private registerItem(itemId: string): void {
     if (this.itemOrder.includes(itemId)) return;
     this.itemOrder.push(itemId);
+    this.segmentCallback?.({ id: itemId, order: this.itemOrder.length - 1, text: '', final: false });
   }
 
   private aggregateTranscript(): string {
@@ -1335,6 +1394,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.lastQueueLogAt = 0;
     this.sentChunkCount = 0;
     this.sentAudioMs = 0;
+    this.itemEndpoints.clear();
+    this.audioClockAligned = !this.inRecovery;
     this.inboundMsgCount = 0;
     this.lastInboundType = undefined;
     this.lastInboundAt = 0;

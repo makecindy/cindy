@@ -29,7 +29,8 @@ import {
   normalizeProjectKey,
   projectKeyComparisonKey,
 } from '../../shared/projectKeys';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir';
+import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir';
+import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 
 export interface ConversationSearchDevice {
   deviceId: string;
@@ -257,6 +258,7 @@ export function remoteResultsFromFanoutPages(
   const byKey = new Map<string, ConversationSearchResultItem>();
   for (const page of pages) {
     for (const item of page.results) {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) continue;
       if (!item.session.deviceLinkDeviceId) continue;
       const key = conversationSearchResultKey(item);
       const existing = byKey.get(key);
@@ -276,6 +278,7 @@ export function mergeConversationSearchFanout(
   const byKey = new Map<string, ConversationSearchResultItem>();
   for (const page of pages) {
     for (const item of page.results) {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) continue;
       const key = conversationSearchResultKey(item);
       const existing = byKey.get(key);
       if (!existing || item.rankScore > existing.rankScore) {
@@ -320,7 +323,8 @@ export function searchCachedSessionsByTitle(
   }> = [];
 
   sessions.forEach((session, index) => {
-    if (isOrcaWorkerSession(session)) return;
+    // The mirror includes companion chat metadata; ordinary search must not expose it.
+    if (session.source === 'bot' || (!CINDY_MAKE_ENABLED && isCindyMakeSource(session.source)) || isOrcaWorkerSession(session)) return;
     if (allowed && !allowed.has(session.id)) return;
     if (!matchesWorkingDirSet(session.workingDir, workingDirs)) return;
     if (!matchesStatus(session.status, filters.status ?? 'all')) return;
@@ -417,6 +421,7 @@ export function filterResultsByRequestFilters(
   return {
     ...response,
     results: response.results.filter((item) => {
+      if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
       if (!matchesWorkingDirSet(item.session.workingDir, allowedDirs)) return false;
       if (isOrcaWorkerSession(item.session)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
@@ -505,7 +510,7 @@ function normalizeWorkingDirSet(value: string[] | null | undefined): Set<string>
   if (value == null || !Array.isArray(value)) return null;
   const out = new Set<string>();
   for (const item of value) {
-    const normalized = normalizeWorkingDirForGrouping(item);
+    const normalized = normalizeWorkingDirForComparison(item);
     if (normalized) out.add(normalized);
   }
   return out.size > 0 ? out : null;
@@ -516,7 +521,7 @@ function matchesWorkingDirSet(
   allowed: Set<string> | null,
 ): boolean {
   if (allowed == null) return true;
-  const key = normalizeWorkingDirForGrouping(workingDir);
+  const key = normalizeWorkingDirForComparison(workingDir);
   return key != null && allowed.has(key);
 }
 

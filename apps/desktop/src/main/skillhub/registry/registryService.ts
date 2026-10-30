@@ -9,6 +9,7 @@ import { RegistryError, type StoredInstall, type StoredManifest } from './types.
 import * as manifestIO from './manifestIO.js';
 import { sanitizeSkillName } from './derivations.js';
 import { withLock } from './lock.js';
+import { migrateStoredManifest } from './migrations.js';
 
 import { createLogger } from '../../logger';
 
@@ -51,14 +52,7 @@ async function readBackupManifest(skillName: string): Promise<StoredManifest | n
       log.warn(`backup manifest skillName mismatch for ${skillName}`);
       return null;
     }
-    if (parsed.installs && typeof parsed.installs === 'object') {
-      for (const key of Object.keys(parsed.installs)) {
-        const e = parsed.installs[key] as StoredInstall & { isMine?: unknown };
-        if (typeof e.authorId !== 'string') e.authorId = '';
-        if ('isMine' in e) delete (e as { isMine?: unknown }).isMine;
-      }
-    }
-    return parsed;
+    return migrateStoredManifest(parsed).manifest;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT') log.warn(`read registry backup failed for ${skillName}:`, err);
@@ -102,7 +96,11 @@ async function listBackupSkillNames(): Promise<string[]> {
 
 async function readManifestWithBackup(skillName: string): Promise<StoredManifest | null> {
   const manifest = await manifestIO.readFile(skillName);
-  if (manifest) return manifest;
+  if (manifest) {
+    const migrated = migrateStoredManifest(manifest);
+    if (migrated.changed) await writeManifestWithBackup(skillName, migrated.manifest);
+    return migrated.manifest;
+  }
 
   // 短期兼容：用户可能降级到旧版后再升回新版。旧版 orphan cleanup 在
   // ~/.agents 实体目录 + ~/.claude symlink 场景下可能误删主 registry 文件。
@@ -110,7 +108,7 @@ async function readManifestWithBackup(skillName: string): Promise<StoredManifest
   const backup = await readBackupManifest(skillName);
   if (!backup) return null;
   if (!(await hasLiveInstallPath(backup))) return null;
-  await manifestIO.writeFileAtomic(skillName, backup);
+  await writeManifestWithBackup(skillName, backup);
   return backup;
 }
 
@@ -134,14 +132,14 @@ export async function addInstall(
       manifest = {
         schemaVersion: 1,
         skillName,
-        installs: { [normalizedPath]: entry },
+        installs: { [normalizedPath]: { ...entry, catalogScopeMigrated: true } },
       };
     } else {
       manifest = {
         ...existing,
         installs: {
           ...existing.installs,
-          [normalizedPath]: entry,
+          [normalizedPath]: { ...entry, catalogScopeMigrated: true },
         },
       };
     }
@@ -156,7 +154,7 @@ export async function addInstall(
 export async function updateInstall(
   skillName: string,
   installPath: string,
-  partial: Partial<Pick<StoredInstall, 'version' | 'folderHash' | 'updatedAt' | 'authorId' | 'origin' | 'autoSynced'>>,
+  partial: Partial<Pick<StoredInstall, 'version' | 'folderHash' | 'updatedAt' | 'authorId' | 'origin' | 'autoSynced' | 'catalogScope'>>,
 ): Promise<void> {
   const normalizedPath = path.normalize(installPath);
 
@@ -184,11 +182,19 @@ export async function updateInstall(
  * 如果是该 skill 最后一条 install → 整个文件 unlink
  * 不存在的 (name, path) → no-op，不抛错
  */
-export async function removeInstall(skillName: string, installPath: string): Promise<void> {
+export async function removeInstall(
+  skillName: string,
+  installPath: string,
+  condition?: { expected: StoredInstall; canMutate: () => boolean; shouldRemove: () => boolean },
+): Promise<void> {
   const normalizedPath = path.normalize(installPath);
 
   await withLock(skillName, async () => {
     const existing = await readManifestWithBackup(skillName);
+    if (condition) {
+      if (!condition.canMutate()) throw new Error('Skill mutation context changed');
+      if (JSON.stringify(existing?.installs[normalizedPath]) !== JSON.stringify(condition.expected) || !condition.shouldRemove()) return;
+    }
     if (!existing || !existing.installs[normalizedPath]) {
       return; // no-op
     }
@@ -237,17 +243,26 @@ export async function getInstall(
 /**
  * 一次性扫描 manifests/ 目录，展平所有 install 记录。
  * 单文件 JSON 损坏 → 跳过 + 记日志，不影响其他文件读取
+ * readOnly 仅消费 profile 内主/备份元数据，不探测 installPath 或执行恢复写入。
  */
-export async function listAllInstalls(): Promise<
+export async function listAllInstalls(options: { readOnly?: boolean } = {}): Promise<
   Array<{ skillName: string; installPath: string; entry: StoredInstall }>
 > {
   const filesByName = new Map<string, StoredManifest>();
-  for (const { skillName, manifest } of await manifestIO.listAllFiles()) {
-    filesByName.set(skillName, manifest);
+  for (const { skillName } of await manifestIO.listAllFiles()) {
+    const manifest = await (options.readOnly
+      ? manifestIO.readFile(skillName).then((value) => value ? migrateStoredManifest(value).manifest : null)
+      : withLock(skillName, () => readManifestWithBackup(skillName))).catch((err) => {
+      log.warn(`read registry manifest failed for ${skillName}:`, err);
+      return null;
+    });
+    if (manifest) filesByName.set(skillName, manifest);
   }
   for (const skillName of await listBackupSkillNames()) {
     if (filesByName.has(skillName)) continue;
-    const restored = await withLock(skillName, () => readManifestWithBackup(skillName)).catch((err) => {
+    const restored = await (options.readOnly
+      ? readBackupManifest(skillName)
+      : withLock(skillName, () => readManifestWithBackup(skillName))).catch((err) => {
       log.warn(`restore registry from backup failed for ${skillName}:`, err);
       return null;
     });
@@ -260,4 +275,24 @@ export async function listAllInstalls(): Promise<
     }
   }
   return result;
+}
+
+/** Re-point installs from one catalog after the server moves that record. */
+export async function updateCatalogScopeForSkill(
+  skillName: string,
+  catalogScope: StoredInstall['catalogScope'],
+  previousCatalogScope: StoredInstall['catalogScope'],
+): Promise<void> {
+  await withLock(skillName, async () => {
+    const existing = await readManifestWithBackup(skillName);
+    if (!existing) return;
+    const updatedAt = Math.floor(Date.now() / 1000);
+    let changed = false;
+    const installs = Object.fromEntries(Object.entries(existing.installs).map(([installPath, entry]) => {
+      if (entry.catalogScope !== previousCatalogScope) return [installPath, entry];
+      changed = true;
+      return [installPath, { ...entry, catalogScope, updatedAt }];
+    }));
+    if (changed) await writeManifestWithBackup(skillName, { ...existing, installs });
+  });
 }

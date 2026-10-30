@@ -264,4 +264,26 @@ describe('selectRecentTitleMessages', () => {
       '第二轮完成',
     ]);
   });
+  it('skips teammate collaboration cards but keeps what the guest actually said', () => {
+    const rows = [
+      row('user', 1, '帮我把这活派给策划'),
+      // 协作卡锚点(空正文)与插话留痕是对话的注解,不是主题证据。
+      row('assistant', 2, '', {
+        botCollaboration: { v: 1, role: 'delegation-request', delegationId: 'd1' },
+      }),
+      row('assistant', 3, '先别铺开，我只要三条。', {
+        botCollaboration: { v: 1, role: 'interjection', delegationId: 'd1' },
+      }),
+      // 客座结果是伙伴真说的话,照旧算数 —— 否则刚收到结果的任务预览会凭空变空。
+      row('assistant', 4, '方案定三条。', {
+        botCollaboration: { v: 1, role: 'result-mirror', delegationId: 'd1' },
+        turnCompleted: true,
+      }),
+    ];
+
+    expect(selectRecentTitleMessages(rows, 4).map((message) => message.text)).toEqual([
+      '帮我把这活派给策划',
+      '方案定三条。',
+    ]);
+  });
 });

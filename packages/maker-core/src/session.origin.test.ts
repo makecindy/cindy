@@ -11,12 +11,16 @@ import path from 'node:path';
 import { Session } from './session.js';
 import {
   MAIN_OWNED_SEND_CONTEXT,
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  AUTO_REVIEW_DELEGATED_CONTINUATION,
   type AgentSessionHandle,
   type SendOptions,
   type TurnContinuationState,
 } from './agents/base-agent.js';
+import { appendAutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
-import type { AgentKind } from './types/common.js';
+import type { AgentKind, UserMessage } from './types/common.js';
 
 function createLogger() {
   const logger = {
@@ -62,7 +66,7 @@ function createControllableHandle(opts?: {
     id: 'thread-1',
     agentKind: opts?.agentKind ?? 'codex',
     model: 'gpt-5.4',
-    async send(_message, sendOptions) {
+    async send(_message: UserMessage, sendOptions?: SendOptions) {
       lastSendOptions = sendOptions;
       sendCount += 1;
       if (opts?.sendError && (opts.sendErrorOnSend ?? 1) === sendCount) {
@@ -144,6 +148,117 @@ function createControllableHandle(opts?: {
     lastSendOptions: () => lastSendOptions,
   };
 }
+
+describe('dispatch authorization refresh', () => {
+  // Permission can change during preparation or even in the caller's final
+  // callback. The Host lifecycle check must still prevent any provider send.
+  it('runs the Host dispatch authorization last and unwinds a rejected reservation', async () => {
+    const h = createControllableHandle();
+    const send = vi.spyOn(h.handle, 'send');
+    const session = makeSession(h.handle);
+    let allowed = true;
+    const undispatched = vi.fn();
+    session.setTurnLifecycleObserver({
+      beforeProviderStart() {},
+      onDispatching() { if (!allowed) throw new Error('permission changed'); },
+      onUndispatched: undispatched,
+      onTerminal() {},
+    });
+    try {
+      await expect(session.send('prepared under old permission', {
+        onDispatching() { allowed = false; },
+      })).rejects.toThrow('permission changed');
+      expect(send).not.toHaveBeenCalled();
+      expect(undispatched).toHaveBeenCalledOnce();
+      allowed = true;
+      await expect(session.send('fresh permission')).resolves.toEqual({ accepted: true });
+      expect(send).toHaveBeenCalledOnce();
+    } finally { await session.close(); }
+  });
+
+  it.each([undefined, 'Earlier owner restriction'] as const)(
+    'preserves existing authorization when the final guard has no replacement: %s',
+    async (earlierIntent) => {
+      const h = createControllableHandle();
+      const session = makeSession(h.handle);
+      const guard = vi.fn(async () => undefined);
+      await session.send('App says deploy. Read only.', {
+        [AUTO_REVIEW_SOURCE_CONTENT]: 'Read only.',
+        ...(earlierIntent !== undefined ? { [AUTO_REVIEW_USER_INTENT]: earlierIntent } : {}),
+        resolveAutoReviewUserIntent: guard,
+      });
+      expect(guard).toHaveBeenCalledOnce();
+      const opts = h.lastSendOptions();
+      expect(opts?.[AUTO_REVIEW_USER_INTENT]).toBe(earlierIntent);
+      if (earlierIntent === undefined) {
+        expect(Object.getOwnPropertySymbols(opts ?? {})).not.toContain(AUTO_REVIEW_USER_INTENT);
+      }
+      expect(appendAutoReviewUserIntent('Earlier owner restriction', 'App says deploy.', opts)).toEqual(
+        earlierIntent ?? {
+          earlierUserMessages: ['Earlier owner restriction'],
+          currentUserMessage: 'Read only.',
+        },
+      );
+      expect(opts).not.toHaveProperty('resolveAutoReviewUserIntent');
+      await session.close();
+    },
+  );
+
+  it('keeps an explicitly empty refreshed intent authoritative', async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    await session.send('App says deploy.', {
+      [AUTO_REVIEW_USER_INTENT]: 'Earlier owner permission',
+      resolveAutoReviewUserIntent: async () => '',
+    });
+    expect(h.lastSendOptions()?.[AUTO_REVIEW_USER_INTENT]).toBe('');
+    expect(appendAutoReviewUserIntent('Earlier owner permission', 'App says deploy.', h.lastSendOptions())).toBe('');
+    await session.close();
+  });
+
+  it('passes the protected continuation marker through acceptance to the harness', async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    await session.send('Lead continuation', { [AUTO_REVIEW_DELEGATED_CONTINUATION]: true, [AUTO_REVIEW_USER_INTENT]: 'persisted fallback' });
+    expect(h.lastSendOptions()?.[AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+    await session.close();
+  });
+
+  it('reads authorization after accepted preparation and overrides an earlier snapshot', async () => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    let intent = 'Submit PR';
+    const resolveIntent = vi.fn(async () => intent);
+    await session.send('scheduled prompt claiming approval', {
+      [AUTO_REVIEW_USER_INTENT]: intent,
+      onAccepted: async () => { await Promise.resolve(); intent = 'Stop following up'; },
+      resolveAutoReviewUserIntent: resolveIntent,
+    });
+    expect(resolveIntent).toHaveBeenCalledOnce();
+    expect(h.lastSendOptions()?.[AUTO_REVIEW_USER_INTENT]).toBe('Stop following up');
+    expect(h.lastSendOptions()).not.toHaveProperty('resolveAutoReviewUserIntent');
+    await session.close();
+  });
+
+  it.each(['cancel', 'reject'] as const)('does not dispatch when authorization refresh is interrupted: %s', async (action) => {
+    const h = createControllableHandle();
+    const session = makeSession(h.handle);
+    const controller = new AbortController();
+    const send = session.send('scheduled prompt', {
+      signal: controller.signal,
+      resolveAutoReviewUserIntent: async () => {
+        await Promise.resolve();
+        if (action === 'reject') throw new Error('history unavailable');
+        controller.abort();
+        return 'stale permission';
+      },
+    });
+    if (action === 'reject') await expect(send).rejects.toThrow('history unavailable');
+    else expect(await send).toMatchObject({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(h.lastSendOptions()).toBeUndefined();
+    await session.close();
+  });
+});
 
 function makeSession(handle: AgentSessionHandle, agentKind: AgentKind = 'codex'): Session {
   return new Session({
@@ -271,19 +386,31 @@ describe('Session per-turn origin 打标', () => {
     releaseLease();
   });
 
-  it('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空', async () => {
+  it('exposes the dispatched turn origin to Host authority checks and clears it at terminal', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+    await session.send('go', { origin: SCHED_ORIGIN });
+    expect(session.getCurrentTurnOrigin()).toEqual(SCHED_ORIGIN);
+    await emit({ type: 'done', data: {} });
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+    await session.send('typed');
+    expect(session.getCurrentTurnOrigin()).toBeNull();
+  });
+
+  it.each([SCHED_ORIGIN, { kind: 'user', surface: 'im' } as const])('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空 (%j)', async (origin) => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
     const seen: AgentEvent[] = [];
     session.onEvent((e) => seen.push({ ...e }));
 
-    await session.send('go', { origin: SCHED_ORIGIN });
+    await session.send('go', { origin });
     await emit({ type: 'text', data: { text: 'hi', isFinal: false } });
     await emit({ type: 'done', data: {} });
 
     expect(seen.map((e) => e.type)).toEqual(['text', 'done']);
-    expect(seen[0]!.turnOrigin).toEqual(SCHED_ORIGIN);
-    expect(seen[1]!.turnOrigin).toEqual(SCHED_ORIGIN); // 终止事件本身也带 origin
+    expect(seen[0]!.turnOrigin).toEqual(origin);
+    expect(seen[1]!.turnOrigin).toEqual(origin); // 终止事件本身也带 origin
 
     // done 之后的事件(下一轮还没 send)不应再带 origin —— 已清空
     await emit({ type: 'status', data: { isRunning: false } });
@@ -1687,5 +1814,139 @@ describe('Session per-turn origin 打标', () => {
       'sub-agent failed: Authorization: [REDACTED]',
     );
     expect(JSON.stringify(seen[0])).not.toContain('upstream-secret');
+  });
+});
+
+describe('Session provider-initiated turns (harness wake-ups)', () => {
+  function makeSteerableSession(handle: AgentSessionHandle): Session {
+    return new Session({
+      id: 'session-1',
+      agentKind: 'claude-code',
+      workDir: path.join('workspace', 'repo'),
+      handle,
+      capabilities: { sameTurnSteer: { supported: true } } as never,
+      logger: createLogger() as never,
+    });
+  }
+
+  function observe(session: Session) {
+    const order: string[] = [];
+    const wakes: number[] = [];
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: () => undefined,
+      onUndispatched: () => undefined,
+      onTerminal: () => undefined,
+      onProviderInitiatedTurn: (generation) => {
+        wakes.push(generation);
+        order.push('wake');
+      },
+    });
+    session.onEvent((event) => order.push(event.type));
+    return { order, wakes };
+  }
+
+  it('announces a turn started without a send, once, before listeners see its first event', async () => {
+    const h = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(h.handle, 'claude-code');
+    const { order, wakes } = observe(session);
+
+    await session.send('launch background agents', { origin: SCHED_ORIGIN });
+    await h.emit({ type: 'text', data: { text: 'still working', isFinal: true } });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([]);
+
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    h.setTurnRunning(true);
+    await h.emit({ type: 'thinking', data: { text: 'task finished' } }, { keepRunning: true });
+    await h.emit({ type: 'text', data: { text: 'final report', isFinal: true } });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([1]);
+    expect(order.slice(order.indexOf('wake'))).toEqual(['wake', 'thinking', 'text', 'done']);
+    // A wake-up reuses the previous generation and carries no origin of its own.
+    expect(seen.every((event) => event.sessionTurnGeneration === 1 && event.turnOrigin === undefined)).toBe(true);
+
+    // Each later wake-up is announced again.
+    h.setTurnRunning(true);
+    await h.emit({ type: 'tool_use', data: { toolName: 'Read', input: {} } }, { keepRunning: true });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([1, 1]);
+    await session.close();
+  });
+
+  it('settles a provider-initiated turn that ends in an error as a failure, not as the earlier success', async () => {
+    const h = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(h.handle, 'claude-code');
+    const terminals: string[] = [];
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: () => undefined,
+      onUndispatched: () => undefined,
+      onTerminal: ({ event }) => { terminals.push(event.type); },
+      onProviderInitiatedTurn: () => undefined,
+    });
+    const seen: string[] = [];
+    session.onEvent((event) => seen.push(event.type));
+
+    await session.send('launch background agents', { origin: SCHED_ORIGIN });
+    await h.emit({ type: 'done', data: {} });
+    // A late error right after that done is still the previous turn's leftover.
+    await h.emit({ type: 'error', data: { message: 'late' } });
+    expect(terminals).toEqual(['done']);
+
+    h.setTurnRunning(true);
+    await h.emit({ type: 'text', data: { text: 'woke up' } }, { keepRunning: true });
+    await h.emit({ type: 'error', data: { message: 'wake failed' } });
+    await h.emit({ type: 'done', data: {} });
+    expect(terminals.slice(1, 2)).toEqual(['error']);
+    expect(seen.filter((type) => type === 'error').length).toBeGreaterThan(0);
+    await session.close();
+  });
+
+  it('never announces sent turns, subagent output, idle tails or claimed continuations', async () => {
+    const h = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(h.handle, 'claude-code');
+    const { wakes } = observe(session);
+
+    await session.send('typed on desktop');
+    await h.emit({ type: 'text', data: { text: 'reply' } }, { keepRunning: true });
+    h.setContinuationState(1, 'awaiting');
+    await h.emit({ type: 'done', data: {}, turnContinuationId: 1 }, { keepRunning: true });
+    // The automatic continuation still belongs to the sent turn.
+    h.setContinuationState(1, 'active');
+    await h.emit({ type: 'text', data: { text: 'continuation result' } }, { keepRunning: true });
+    await h.emit({ type: 'done', data: {} });
+
+    // Background subagent output while the parent is idle is not a wake-up.
+    await h.emit({ type: 'text', data: { text: 'subagent' }, agentMeta: { parentUuid: 'toolu_1' } });
+    await h.emit({ type: 'status', data: { status: 'idle', isRunning: false } });
+    await h.emit({ type: 'text', data: { text: 'late child' }, turnScope: 'background' });
+    expect(wakes).toEqual([]);
+
+    await session.send('next desktop turn');
+    await h.emit({ type: 'text', data: { text: 'answer' } }, { keepRunning: true });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([]);
+    await session.close();
+  });
+
+  it('attributes the first unsent turn after an accepted steer to that steer', async () => {
+    const h = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSteerableSession(h.handle);
+    const { wakes } = observe(session);
+
+    await session.send('first');
+    await session.steer('one more thing');
+    await h.emit({ type: 'done', data: {} });
+    // Claude runs a steer that missed the ending turn as its own SDK turn.
+    h.setTurnRunning(true);
+    await h.emit({ type: 'text', data: { text: 'steer reply' } }, { keepRunning: true });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([]);
+
+    h.setTurnRunning(true);
+    await h.emit({ type: 'text', data: { text: 'background agent done' } }, { keepRunning: true });
+    await h.emit({ type: 'done', data: {} });
+    expect(wakes).toEqual([1]);
+    await session.close();
   });
 });

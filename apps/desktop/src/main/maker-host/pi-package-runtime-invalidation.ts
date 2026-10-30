@@ -1,4 +1,4 @@
-import type { Maker, Session } from '@cindy/maker-core';
+import type { AgentEvent, Maker, Session, PiManagedPackageRuntimeConvergence } from '@cindy/maker-core';
 
 import type { PiPackagesChangeOrigin } from './pi-package-store.js';
 
@@ -14,6 +14,7 @@ import type { PiPackagesChangeOrigin } from './pi-package-store.js';
 export interface PiPackageRuntimeInvalidationResult {
   requestedSessionIds: string[];
   failedSessionIds: string[];
+  deferredSessionIds?: string[];
 }
 
 type InvalidationMaker = Pick<
@@ -29,7 +30,18 @@ export async function invalidateLocalPiPackageRuntimesForObservedChange(
   origin: PiPackagesChangeOrigin,
 ): Promise<PiPackageRuntimeInvalidationResult | null> {
   if (origin !== 'external-runtime') return null;
-  return invalidateLocalPiPackageRuntimes(maker);
+  // Cross-process token edges do not name install vs disable. Positive
+  // Settings mutations defer until the product terminal; default the same
+  // here so a busy Pi is not torn down mid-turn. Idle runtimes still close
+  // immediately inside closeAfterCurrentTurn.
+  return invalidateLocalPiPackageRuntimes(maker, {
+    afterCurrentTurn: true,
+    failureEvent: () => ({
+      type: 'text',
+      source: 'pi',
+      data: { isFinal: true, text: 'restart-cindy-to-refresh-packages' },
+    }),
+  });
 }
 
 interface PiPackageRuntimeSnapshotEntry {
@@ -68,14 +80,22 @@ export async function captureLocalPiPackageRuntimeInvalidationSnapshot(
 export async function invalidateLocalPiPackageRuntimeSnapshot(
   maker: InvalidationMaker,
   snapshot: PiPackageRuntimeInvalidationSnapshot,
+  opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
 ): Promise<PiPackageRuntimeInvalidationResult> {
   const eligible = snapshot.entries.filter((entry) => entry.eligible);
   const requestedSessionIds = eligible.map(({ session }) => session.id);
   const outcomes = await Promise.allSettled(
-    eligible.map(({ session }) => maker.closeSessionIfCurrent(session, 'requested')),
+    eligible.map(({ session }) => opts?.afterCurrentTurn
+      ? maker.closeSessionIfCurrent(session, 'runtime-refresh', opts)
+      : maker.closeSessionIfCurrent(session, 'requested')),
   );
   return {
     requestedSessionIds,
+    ...(opts?.afterCurrentTurn ? {
+      deferredSessionIds: outcomes.flatMap((outcome, index) =>
+        outcome.status === 'fulfilled' && outcome.value === 'deferred'
+          ? [requestedSessionIds[index]!] : []),
+    } : {}),
     failedSessionIds: [
       ...snapshot.entries.flatMap(({ session, metadataFailed }) => (
         metadataFailed ? [session.id] : []
@@ -87,9 +107,64 @@ export async function invalidateLocalPiPackageRuntimeSnapshot(
   };
 }
 
+/** A tool receipt is not a consumed result: retain every in-flight caller/sibling. */
+export async function settleLocalPiPackageRuntimeSnapshot(
+  maker: InvalidationMaker,
+  snapshot: PiPackageRuntimeInvalidationSnapshot,
+  callerSessionId?: string,
+  publishOutcome?: (outcome: PiManagedPackageRuntimeConvergence) => AgentEvent,
+  createRetirementFailureEvent?: () => AgentEvent,
+): Promise<PiManagedPackageRuntimeConvergence> {
+  const caller = snapshot.entries.find(({ session }) => session.id === callerSessionId)?.session;
+  const release = publishOutcome ? caller?.acquireTurnLease() : undefined;
+  try {
+    const result = await invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot, {
+      afterCurrentTurn: true, failureEvent: createRetirementFailureEvent,
+    });
+    const outcome: PiManagedPackageRuntimeConvergence = result.failedSessionIds.length > 0
+      || (callerSessionId && !snapshot.entries.some(({ session, eligible }) => eligible && session.id === callerSessionId))
+      ? { runtimeConvergence: 'partial', recoveryAction: 'restart-cindy-to-refresh-packages' }
+      : { runtimeConvergence: result.deferredSessionIds?.length ? 'deferred' : 'complete' };
+    if (publishOutcome && caller && caller.getStatus() !== 'closed') {
+      // Queue insertion is not delivery. Keep the exact caller's existing lease
+      // until Session fans out this receipt, even if its done arrived first.
+      await new Promise<void>((resolve, reject) => {
+        let receipt: AgentEvent | undefined;
+        const seen = new Set<AgentEvent>();
+        const unsubscribeEvent = caller.onEvent((event) => {
+          if (event === receipt) finish();
+          else if (!receipt) seen.add(event);
+        });
+        const unsubscribeStatus = caller.onStatusChange((status) => {
+          if (status === 'closed') finish(); // Explicit close must still win.
+        });
+        const timer = setTimeout(() => finish(new Error('Pi package convergence receipt delivery timed out')), 10_000);
+        function finish(error?: Error) {
+          clearTimeout(timer);
+          unsubscribeEvent();
+          unsubscribeStatus();
+          if (error) reject(error); else resolve();
+        }
+        try {
+          receipt = publishOutcome(outcome);
+          if (seen.has(receipt) || caller.getStatus() === 'closed') finish();
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    } else {
+      publishOutcome?.(outcome);
+    }
+    return outcome;
+  } finally {
+    release?.();
+  }
+}
+
 export async function invalidateLocalPiPackageRuntimes(
   maker: InvalidationMaker,
+  opts?: { afterCurrentTurn?: boolean; failureEvent?: () => AgentEvent },
 ): Promise<PiPackageRuntimeInvalidationResult> {
   const snapshot = await captureLocalPiPackageRuntimeInvalidationSnapshot(maker);
-  return invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot);
+  return invalidateLocalPiPackageRuntimeSnapshot(maker, snapshot, opts);
 }

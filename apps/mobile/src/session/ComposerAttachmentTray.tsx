@@ -1,3 +1,4 @@
+import { FileTypeIcon } from '@/components/FileTypeIcon';
 /**
  * Composer 附件托盘(会话页 / 新建会话页共用)。
  *
@@ -17,8 +18,7 @@ import { Text } from '@/components/AppText';
 import type { RemoteSerializedAttachment } from '@/session/types';
 import type { PendingLocalAttachmentUpload } from '@/session/mobileLocalAttachmentUpload';
 import { attachmentDisplayLabel, pendingUploadDisplayLabel } from '@/session/attachments';
-import { ANNOTATION_OUTLINE_COLOR, ANNOTATION_STROKE_COLOR } from '@/session/imageAnnotationModel';
-import { fontWeight, iconSize, iconStroke, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 
 /** 输入卡内的缩略图为正方形(产品决策,不用横长方)。 */
 const THUMB_SIZE = 72;
@@ -32,6 +32,8 @@ export interface ComposerAttachmentTrayProps {
   onPreview: (attachmentId: string) => void;
   /** 乐观上传中的本机附件(图片=缩略卡,文件=chip,均带转圈;失败态带重试)。 */
   pendingUploads?: readonly PendingLocalAttachmentUpload[];
+  /** Screen owns the viewer so keyboard blur cannot unmount it with this tray. */
+  onPreviewPending: (localId: string) => void;
   /** X 一个上传中的附件(取消上传)。 */
   onRemovePending?: (localId: string) => void;
   /** 重试一个失败态的上传卡。 */
@@ -53,6 +55,7 @@ export function ComposerAttachmentTray({
   onRemove,
   onPreview,
   pendingUploads = [],
+  onPreviewPending,
   onRemovePending,
   onRetryPending,
   pastePlaceholderCount = 0,
@@ -81,10 +84,11 @@ export function ComposerAttachmentTray({
                 <Image contentFit="cover" source={{ uri: preview }} style={styles.thumbImage} transition={0} />
                 {attachment.annotated ? (
                   // 圈点标注角标:提示这张是带手绘标注的烧录图,点开可继续编辑/撤销。
-                  // 微徽标几何(designTokenDiscipline 登记);icon 用标注体系描边白,
-                  // 恒红底上跨主题恒定,与桌面标注视觉同族。
+                  // 微徽标几何(designTokenDiscipline 登记)。输入框 chrome 不在 Lightbox 标注
+                  // 豁免内:底色走徽标红 statusError,画笔走恒白前景 swipeActionText
+                  // (ctaText 在深色模式反相为近黑,不适合恒红底)。
                   <View style={styles.thumbAnnotatedBadge} testID={`${testIDPrefix}.attachmentAnnotatedBadge`}>
-                    <Pen color={ANNOTATION_OUTLINE_COLOR} size={10} strokeWidth={2.5} />
+                    <Pen color={colors.swipeActionText} size={10} strokeWidth={2.5} />
                   </View>
                 ) : null}
               </Pressable>
@@ -105,6 +109,7 @@ export function ComposerAttachmentTray({
         }
         return (
           <View key={attachment.id} style={styles.chip} testID={`${testIDPrefix}.attachmentChip`}>
+            <FileTypeIcon name={attachment.name} mimeType={attachment.mimeType} />
             <Text numberOfLines={1} style={styles.chipText}>
               {attachmentDisplayLabel(attachment)}
             </Text>
@@ -126,7 +131,9 @@ export function ComposerAttachmentTray({
       {pendingUploads.map((pending) => (pending.kind === 'image' ? (
         <View key={pending.localId} style={styles.thumbCard} testID={`${testIDPrefix}.attachmentPendingThumb`}>
           <View style={styles.thumbPressable}>
-            <Image contentFit="cover" source={{ uri: pending.previewUri }} style={styles.thumbImage} transition={0} />
+            {pending.previewUri ? (
+              <Image contentFit="cover" source={{ uri: pending.previewUri }} style={styles.thumbImage} transition={0} />
+            ) : null}
             {pending.failed ? (
               // 失败态:遮罩变为可点的「重试」——弱网下让用户原地重试,不用重新找图。
               <Pressable
@@ -136,13 +143,20 @@ export function ComposerAttachmentTray({
                 style={({ pressed }) => [styles.thumbBusyOverlay, pressed && styles.pressed]}
                 testID={`${testIDPrefix}.attachmentPendingRetryButton`}
               >
-                <RefreshCw color={colors.ctaText} size={iconSize.md} strokeWidth={iconStroke.bold} />
+                <RefreshCw color={colors.swipeActionText} size={iconSize.md} strokeWidth={iconStroke.bold} />
                 <Text style={styles.thumbFailedText}>{t('composer.attachments.retry')}</Text>
               </Pressable>
             ) : (
-              <View style={styles.thumbBusyOverlay}>
-                <ActivityIndicator color={colors.ctaText} size="small" />
-              </View>
+              <Pressable
+                accessibilityLabel={t('composer.attachments.viewImage', { name: pending.name })}
+                accessibilityRole="button"
+                disabled={!pending.previewUri}
+                onPress={() => onPreviewPending(pending.localId)}
+                style={({ pressed }) => [styles.thumbBusyOverlay, pressed && styles.pressed]}
+                testID={`${testIDPrefix}.attachmentPendingPreviewButton`}
+              >
+                <ActivityIndicator color={colors.swipeActionText} size="small" />
+              </Pressable>
             )}
           </View>
           <Pressable
@@ -174,6 +188,7 @@ export function ComposerAttachmentTray({
           ) : (
             <ActivityIndicator color={colors.textSecondary} size="small" />
           )}
+          <FileTypeIcon name={pending.name} />
           <Text numberOfLines={1} style={styles.chipText}>
             {pending.failed ? t('composer.attachments.uploadFailed', { name: pending.name }) : pendingUploadDisplayLabel(pending)}
           </Text>
@@ -305,7 +320,8 @@ function makeTrayStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceChip,
       justifyContent: 'center' as const,
     },
-    // 上传中遮罩:深色 scrim 让缩略图「在但未就绪」,转圈用 ctaText(浅色主题为白)。
+    // 上传中遮罩:深色 scrim 让缩略图「在但未就绪」。scrim 两种模式都是深色,转圈用恒白
+    // swipeActionText;ctaText 在深色模式反相为近黑,压在深 scrim 上看不见。
     thumbBusyOverlay: {
       alignItems: 'center' as const,
       backgroundColor: colors.overlay,
@@ -317,16 +333,17 @@ function makeTrayStyles(colors: ThemeColors) {
       right: 0,
       top: 0,
     },
-    // 失败态遮罩上的「重试」文字(与转圈同用 ctaText,深 scrim 上跨主题可读)。
+    // 失败态遮罩上的「重试」文字(与转圈同用恒白 swipeActionText)。
     thumbFailedText: {
-      color: colors.ctaText,
+      color: colors.swipeActionText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
-    // 标注角标:左下角红底画笔(标注红为语义豁免色,跨主题恒定,引语义常量)。
+    // 标注角标:左下角红底画笔(状态指示徽标红,跨主题恒定)。
     thumbAnnotatedBadge: {
       alignItems: 'center' as const,
-      backgroundColor: ANNOTATION_STROKE_COLOR,
+      backgroundColor: colors.statusError,
       borderRadius: radius.pill,
       bottom: 4,
       height: 18,
@@ -361,6 +378,7 @@ function makeTrayStyles(colors: ThemeColors) {
     chipText: {
       color: colors.textPrimary,
       fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
       maxWidth: 220,
     },
     chipRemove: {
@@ -393,6 +411,7 @@ function makeTrayStyles(colors: ThemeColors) {
     collapsedBadgeFallbackText: {
       color: colors.textPrimary,
       fontSize: typeScale.caption,
+      lineHeight: lineHeight.caption,
       fontWeight: fontWeight.semibold,
     },
     collapsedBadgeOverlay: {
@@ -405,10 +424,11 @@ function makeTrayStyles(colors: ThemeColors) {
       right: 0,
       top: 0,
     },
-    // 与 thumbBusyOverlay 同精神:深色 scrim 上用 ctaText(浅色主题为白)。
+    // 与 thumbBusyOverlay 同精神:深色 scrim 上用恒白 swipeActionText。
     collapsedBadgeOverlayText: {
-      color: colors.ctaText,
+      color: colors.swipeActionText,
       fontSize: typeScale.micro,
+      lineHeight: lineHeight.micro,
       fontWeight: fontWeight.semibold,
     },
   };

@@ -9,16 +9,81 @@
 // Expo version skip only for self-host commands (they set this env explicitly),
 // leaving EAS/TestFlight fingerprint semantics unchanged.
 const sourceSkips = [
-  'PackageJsonAndroidAndIosScriptsIfNotContainRun',
-  ...(process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST === '1'
-    ? ['ExpoConfigVersions']
+  "PackageJsonAndroidAndIosScriptsIfNotContainRun",
+  ...(process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST === "1"
+    ? ["ExpoConfigVersions"]
     : []),
 ];
 
 module.exports = {
   sourceSkips,
+  // These entry points are outside the iOS podspec's source glob, and these
+  // six core files are wholly guarded by #if os(macOS). Keep this an explicit
+  // list: new/shared Swift files and Resources must still change the runtime.
+  // fingerprintConfig.test.ts checks the platform guards and real hash effects.
+  // Adopting this boundary changes legacy hashes once; ship with a planned
+  // native release, never label old installations compatible by overriding it.
+  ignorePaths: [
+    "../../packages/remote-credentials-native/Sources/CredentialHost/**/*",
+    "../../packages/remote-credentials-native/Sources/UnlockInspect/**/*",
+    "../../packages/remote-credentials-native/Sources/DesktopNativeCaller/**/*",
+    ...[
+      "CredentialPipeInput",
+      "HostCredentialServer",
+      "MacCredentialPasswordForm",
+      "MacCredentialSecret",
+      "MacScreenUnlock",
+      "MacSystemAccount",
+    ].map(
+      (name) =>
+        `../../packages/remote-credentials-native/Sources/CindyRemoteCredentials/${name}.swift`,
+    ),
+  ],
+  // These images are compiled into the native catalog, not delivered by Metro.
+  extraSources: [
+    "cindy-message-square-plus",
+    "cindy-link-2",
+    "cindy-undo-2",
+    "cindy-trash-2",
+  ]
+    .map((name) => ({
+      type: "dir",
+      filePath: `assets/message-menu/${name}.imageset`,
+      reasons: ["native message menu assets"],
+    }))
+    .concat([
+      // These files are read by config plugins, then compiled/bundled into
+      // the share extension. Metro cannot update them on an installed binary.
+      ...[
+        "plugins/incoming-share-formats.swift",
+        "plugins/incoming-share-feedback.swift",
+        "plugins/incoming-share-strings.json",
+        "plugins/incoming-share-webpage.js",
+      ].map((filePath) => ({ type: "file", filePath, reasons: ["incoming share extension native resources"] })),
+      {
+        type: "dir",
+        filePath: "plugins/communication-notifications",
+        reasons: ["notification service extension native source"],
+      },
+      ...[
+        "../desktop/src/renderer/assets/bot-presets/cindy.png",
+        "../desktop/resources/legacy-teammate-avatars/dash.png",
+        "../desktop/resources/legacy-teammate-avatars/lizi.png",
+      ].map((filePath) => ({ type: "file", filePath, reasons: ["notification sender portraits"] })),
+      {
+        type: "dir",
+        filePath: "../../packages/remote-credentials-native/Sources",
+        reasons: ["remote credentials native core"],
+      },
+      {
+        type: "file",
+        filePath:
+          "../../packages/remote-credentials-native/CindyRemoteCredentials.podspec",
+        reasons: ["remote credentials native dependencies"],
+      },
+    ]),
   fileHookTransform(source, chunk, isEndOfFile) {
-    if (source.type !== 'file' || source.filePath !== 'eas.json') {
+    if (source.type !== "file" || source.filePath !== "eas.json") {
       return chunk;
     }
     return transformEasJson(chunk, isEndOfFile);
@@ -28,12 +93,12 @@ module.exports = {
 const easChunks = [];
 
 function transformEasJson(chunk, isEndOfFile) {
-  if (chunk != null) easChunks.push(Buffer.from(chunk).toString('utf8'));
+  if (chunk != null) easChunks.push(Buffer.from(chunk).toString("utf8"));
   if (!isEndOfFile) {
     return null;
   }
 
-  const eas = stripBetaProfiles(JSON.parse(easChunks.join('')));
+  const eas = stripBetaProfiles(JSON.parse(easChunks.join("")));
   easChunks.length = 0;
   return `${JSON.stringify(eas, null, 2)}\n`;
 }
@@ -41,7 +106,7 @@ function transformEasJson(chunk, isEndOfFile) {
 function stripBetaProfiles(eas) {
   if (!eas.build) return eas;
   for (const profileName of Object.keys(eas.build)) {
-    if (profileName === 'beta-base' || profileName.startsWith('beta-')) {
+    if (profileName === "beta-base" || profileName.startsWith("beta-")) {
       delete eas.build[profileName];
     }
   }

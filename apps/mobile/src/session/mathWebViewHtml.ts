@@ -84,6 +84,8 @@ function safeCssColor(value: string | undefined, fallback: string): string {
 export function buildMathWebViewHtml(
   latex: string,
   theme: MathWebViewColors = {},
+  cachedMarkup?: string,
+  captureMarkup = false,
 ): string {
   const background = safeCssColor(theme.background, lightColors.surface);
   const textPrimary = safeCssColor(theme.textPrimary, lightColors.textPrimary);
@@ -159,6 +161,9 @@ export function buildMathWebViewHtml(
         strict: 'ignore',
         errorColor: '${errorColor}',
       });
+      if (${captureMarkup} && window.ReactNativeWebView && root.innerHTML.length <= 200000) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ kind: 'math-rendered', markup: root.innerHTML }));
+      }
       reportHeight('katex');
       // 字体异步就绪后度量可能微调,fonts.ready 后补报一次(幂等)。
       if (document.fonts && document.fonts.ready) {
@@ -169,7 +174,17 @@ export function buildMathWebViewHtml(
     // 首屏源码已绘制,先按它上报过渡态高度,WebView 立即获得正确尺寸的可见内容。
     reportHeight('source');
     if (source.trim()) {
-      ${buildKatexLoaderJs('renderKatex();')}
+      ${cachedMarkup ? `
+      // Reuse KaTeX output, retaining its MathML and scrollable HTML (no bitmap clipping).
+      var style = document.createElement('style');
+      style.textContent = ${serializeForScript(MOBILE_KATEX_CSS)};
+      document.head.appendChild(style);
+      root.innerHTML = ${serializeForScript(cachedMarkup)};
+      reportHeight('katex');
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () { reportHeight('katex'); });
+      }
+      ` : buildKatexLoaderJs('renderKatex();')}
     }
   </script>
 </body>

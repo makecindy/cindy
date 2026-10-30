@@ -16,10 +16,13 @@
  * 里 running 归一为 idle(导入端没有正在跑的 turn)。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { createReadStream, promises as fsp } from 'node:fs';
 import path from 'node:path';
+import type { Readable } from 'node:stream';
 
 import JSZip from 'jszip';
+import { migrationNativeContext } from './migrationNativeContext';
+import { writeMigratedTranscript } from './migrationTranscriptWriter';
 import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
 import { app } from 'electron';
 
@@ -31,6 +34,7 @@ import type {
 } from '../localDb/client/tx/types.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace.js';
 import { createLogger } from '../logger.js';
+import { resolveNewTaskDefaultModelRoute } from '../maker-host/model-route-guard-live.js';
 import {
   importSharedCodexThread,
   removeSharedCodexThread,
@@ -139,10 +143,23 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
 
 async function loadZipAndManifest(
   zipBytes: Buffer,
+  resourceBudgetBytes?: number,
 ): Promise<{ zip: JSZip; manifest: XdtshareManifest }> {
   const zip = await JSZip.loadAsync(zipBytes).catch(() => {
     throw new XdtshareError('SHARE_FILE_INVALID', 'payload is not a readable zip');
   });
+  if (resourceBudgetBytes !== undefined) {
+    let inflated = 0;
+    for (const entry of Object.values(zip.files)) {
+      if (entry.dir) continue;
+      // JSZip's loaded central-directory sizes are available before inflating any entry.
+      const size = (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+      if (!Number.isSafeInteger(size) || size! < 0) throw codedError('SHARE_FILE_INVALID', 'invalid zip size');
+      inflated += size!;
+      if (!Number.isSafeInteger(inflated) || inflated > resourceBudgetBytes)
+        throw codedError('SHARE_FILE_INVALID', 'MIGRATION_NO_MEMORY');
+    }
+  }
   const manifestFile = zip.file('manifest.json');
   if (!manifestFile) throw new XdtshareError('SHARE_FILE_INVALID', 'manifest.json missing');
   let parsed: unknown;
@@ -155,12 +172,13 @@ async function loadZipAndManifest(
 }
 
 /** 第一段:读文件、解头。明文直接出预览;加密只报 encrypted,等 unlock。 */
-export async function inspectShareFile(filePath: string): Promise<InspectResult> {
+export async function inspectShareFile(filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
   sweepExpiredDrafts();
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat?.isFile()) throw codedError('SHARE_FILE_INVALID', 'file not found');
-  if (stat.size > SHARE_FILE_READ_LIMIT_BYTES) {
-    throw codedError('SHARE_FILE_INVALID', 'file too large');
+  const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
+  if (!Number.isSafeInteger(readLimit) || readLimit < 0 || stat.size > readLimit) {
+    throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   }
   const fileBytes = await fsp.readFile(filePath);
   const draftId = randomUUID();
@@ -184,7 +202,7 @@ export async function inspectShareFile(filePath: string): Promise<InspectResult>
     throw err;
   }
 
-  const { zip, manifest } = await loadZipAndManifest(opened.zipBytes);
+  const { zip, manifest } = await loadZipAndManifest(opened.zipBytes, hostResources?.resourceBudgetBytes);
   drafts.set(draftId, {
     filePath,
     lockedBytes: null,
@@ -229,7 +247,7 @@ export interface ShareImportDraftPrefs {
   effort?: string;
   permissionMode?: string;
   planMode?: boolean;
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
 }
 
@@ -259,8 +277,19 @@ export interface CommitShareImportOptions {
 /** Stable owner-bound resources captured synchronously by the production IPC entry. */
 export interface CommitShareImportRuntimeScope {
   dbClient: DbClient;
+  /** Host-only handoff identity. Never accepted from the ordinary share-import IPC. */
+  migration?: {
+    sessionId: string;
+    workingDir: string;
+    workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
+    agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>>;
+    /** Transcript ref path → delivered file, for transcripts the exporter kept out of the zip. */
+    externalTranscripts?: ReadonlyMap<string, string>;
+  };
   assertStillValid(): void;
   refCompensationScope: MediaRefCompensationScope;
+  /** Persist cleanup intent before an overwrite transaction marks old sessions deleted. */
+  requestWorktreeRecycle?: (sessionId: string) => Promise<void>;
 }
 
 export interface CommitShareImportResult {
@@ -303,6 +332,7 @@ interface WorkerImportPlan {
   bundledTranscripts?: BundledTranscript[];
   /** pi 便携 id 已映射为本机绝对路径;codex/cc 为包内 id 原样。 */
   activeSdkSessionId: string | null;
+  workingDir?: string;
 }
 
 /**
@@ -377,12 +407,33 @@ export async function commitShareImport(
     }
   }
 
+  if (runtimeScope.migration) {
+    const workers = runtimeScope.migration.workers ?? [];
+    if (workers.length !== workerPlans.length || (runtimeScope.migration.workers !== undefined) !== !!manifest.orca)
+      throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
+    const matched = new Set<string>();
+    for (const plan of workerPlans) {
+      if (!runtimeScope.migration.agentPrefs?.[plan.manifest.agentKind])
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      const member = workers.find(
+        (worker) => worker.sourceSessionId === plan.snapshot.migrationSourceId,
+      );
+      if (!member || matched.has(member.sessionId))
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
+      matched.add(member.sessionId);
+      plan.newId = member.sessionId;
+      plan.workingDir = member.workingDir;
+      if (!(await guarded(() => fsp.stat(member.workingDir))).isDirectory())
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_WORKSPACE_CHANGED');
+    }
+  }
+
   // ── 前置校验 ──
   const now = Date.now();
-  const newId = randomUUID();
+  const newId = runtimeScope.migration?.sessionId ?? randomUUID();
   let workingDir: string;
-  if (manifest.workspaceKind === 'project') {
-    const dir = typeof opts.workingDir === 'string' ? opts.workingDir.trim() : '';
+  if (manifest.workspaceKind === 'project' || runtimeScope.migration) {
+    const dir = runtimeScope.migration?.workingDir ?? (typeof opts.workingDir === 'string' ? opts.workingDir.trim() : '');
     if (!dir) throw codedError('INVALID_PARAMS', 'workingDir is required for project sessions');
     const stat = await guarded(() => fsp.stat(dir).catch(() => null));
     if (!stat?.isDirectory()) {
@@ -424,7 +475,20 @@ export async function commitShareImport(
     }
     return bundled;
   };
-  const bundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
+  const originalBundledTranscripts = filterBundled(manifest.transcripts, 'transcripts');
+  const migratedContext = runtimeScope.migration
+    ? migrationNativeContext(
+        runtimeScope.migration.sessionId,
+        [manifest, ...workerPlans.map((plan) => plan.manifest)]
+          .filter((member) => member.agentKind !== 'pi')
+          .flatMap((member) => member.transcripts.map((t) => t.sdkSessionId)),
+      )
+    : null;
+  const bundledTranscripts = originalBundledTranscripts.map((transcript) =>
+    migratedContext && manifest.agentKind !== 'pi'
+      ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
+      : transcript,
+  );
   for (const plan of workerPlans) {
     if (plan.manifest.activeSdkSessionId && !isSafePathSegment(plan.manifest.activeSdkSessionId)) {
       throw new XdtshareError(
@@ -435,8 +499,31 @@ export async function commitShareImport(
     plan.bundledTranscripts = filterBundled(
       plan.manifest.transcripts,
       `orca.workers[${plan.manifest.index}].transcripts`,
+    ).map((transcript) =>
+      migratedContext && plan.manifest.agentKind !== 'pi'
+        ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
+        : transcript,
     );
   }
+  const externalTranscripts: ReadonlyMap<string, string> =
+    runtimeScope.migration?.externalTranscripts ?? new Map();
+  // A delivered file must stand for a transcript this package references.
+  const referencedTranscriptPaths = new Set(
+    [bundledTranscripts, ...workerPlans.map((plan) => plan.bundledTranscripts ?? [])]
+      .flat()
+      .map((transcript) => transcript.path),
+  );
+  for (const transcriptPath of externalTranscripts.keys()) {
+    if (!referencedTranscriptPaths.has(transcriptPath))
+      throw new XdtshareError('SHARE_FILE_INVALID', 'MIGRATION_INVALID_MANIFEST');
+  }
+  /** A transcript's bytes: the file delivered beside the package, else its zip entry. */
+  const transcriptSource = (zipPath: string): (() => Readable) | null => {
+    const file = externalTranscripts.get(zipPath);
+    if (file) return () => createReadStream(file);
+    const entry = zip.file(zipPath);
+    return entry ? () => entry.nodeStream('nodebuffer') as unknown as Readable : null;
+  };
   const piSessionsRoot = path.resolve(
     opts.piSessionsRootOverride ??
       path.join(app.getPath('userData'), 'pi-agent-home', 'sessions', 'shared'),
@@ -447,10 +534,10 @@ export async function commitShareImport(
   const registerPiTargets = (bundled: BundledTranscript[]): void => {
     for (const transcript of bundled) {
       // 只有包内实际存在的转录才映射成可 resume 的本机绝对路径。
-      if (zip.file(transcript.path)) {
+      if (transcriptSource(transcript.path)) {
         piTranscriptTargets.set(
           transcript.sdkSessionId,
-          path.join(piSessionsRoot, transcript.sdkSessionId),
+          path.join(piSessionsRoot, ...(runtimeScope.migration ? [runtimeScope.migration.sessionId] : []), transcript.sdkSessionId),
         );
       }
     }
@@ -467,7 +554,7 @@ export async function commitShareImport(
       ? portableId
         ? (piTranscriptTargets.get(portableId) ?? null)
         : null
-      : portableId;
+      : portableId ? migratedContext?.id(portableId) ?? portableId : null;
   const activeSdkSessionId = resolveActiveSdkSessionId(
     manifest.agentKind,
     portableActiveSdkSessionId,
@@ -556,6 +643,15 @@ export async function commitShareImport(
     }
   }
 
+  // The overwrite transaction below marks these sessions deleted. Persist the
+  // worktree cleanup intent first so a process exit between the two operations
+  // cannot strand their directories without a durable recycle request.
+  if (runtimeScope.requestWorktreeRecycle) {
+    for (const existing of conflictExisting) {
+      await guarded(() => runtimeScope.requestWorktreeRecycle!(existing.id));
+    }
+  }
+
   const projectsRoot =
     opts.projectsRootOverride ?? path.join(defaultClaudeConfigDirCandidates()[0], 'projects');
   // codex:desktop state DB / rollout 里的残留 thread 不再单独当冲突拦截,
@@ -625,22 +721,8 @@ export async function commitShareImport(
     // worktree 步之后计算。盘上已有同名转录不算冲突(典型是删除 Maker 会话后
     // 重导——软删不清理转录):写入步用 wx 独占写,已存在则复用盘上副本,绝不
     // 覆盖(sdk id 是 UUID,同名即同一会话,且盘上副本可能含删除前 resume 产生
-    // 的更新内容)。协同包的 cc Worker 与 lead 落同一转码目录(同 workingDir)。
-    const hasCcTranscripts =
-      (manifest.agentKind === 'cc' && bundledTranscripts.length > 0) ||
-      workerPlans.some(
-        (plan) => plan.manifest.agentKind === 'cc' && (plan.bundledTranscripts?.length ?? 0) > 0,
-      );
-    let claudeTargetDir: string | null = null;
+    // 的更新内容)。普通分享共用目录；迁移按成员恢复各自目录。
     let transcriptsPlaceable = true;
-    if (hasCcTranscripts) {
-      if (!isClaudeProjectKeyExact(workingDir)) {
-        // 超长路径无法精确复算转码目录:降档为仅历史,不阻断导入。
-        transcriptsPlaceable = false;
-      } else {
-        claudeTargetDir = path.join(projectsRoot, sanitizeClaudeProjectKey(workingDir));
-      }
-    }
 
     // 1. 媒体还原 + URL 重写规则收集。session 图片按「原 URL → 新 URL」逐条进
     //    urlMap(而非单一 host 替换):fork 链会话可能同时带多个旧 session host
@@ -701,6 +783,7 @@ export async function commitShareImport(
       title: string;
       bundled: BundledTranscript[];
       activeSdkSessionId: string | null;
+      workingDir: string;
     }> = [
       {
         agentKind: manifest.agentKind,
@@ -708,6 +791,7 @@ export async function commitShareImport(
         title: manifest.title,
         bundled: bundledTranscripts,
         activeSdkSessionId,
+        workingDir,
       },
       ...workerPlans.map((plan) => ({
         agentKind: plan.manifest.agentKind,
@@ -715,6 +799,7 @@ export async function commitShareImport(
         title: plan.manifest.title,
         bundled: plan.bundledTranscripts ?? [],
         activeSdkSessionId: plan.activeSdkSessionId,
+        workingDir: plan.workingDir ?? workingDir,
       })),
     ];
 
@@ -723,14 +808,40 @@ export async function commitShareImport(
     //     只删本次真实写入的文件。复用同样计入 transcriptsWritten(resume 可用,
     //     保真度不降档)。
     let transcriptsWritten = 0;
-    if (claudeTargetDir && transcriptsPlaceable) {
-      await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
+    {
       for (const restore of restorePlans) {
-        if (restore.agentKind !== 'cc') continue;
+        if (restore.agentKind !== 'cc' || !restore.bundled.length) continue;
+        if (!isClaudeProjectKeyExact(restore.workingDir)) {
+          transcriptsPlaceable = false;
+          continue;
+        }
+        const claudeTargetDir = path.join(
+          projectsRoot,
+          sanitizeClaudeProjectKey(restore.workingDir),
+        );
+        await guarded(() => fsp.mkdir(claudeTargetDir, { recursive: true }).then(() => undefined));
         for (const t of restore.bundled) {
-          const file = zip.file(t.path);
-          if (!file) continue;
+          const source = transcriptSource(t.path);
+          if (!source) continue;
           const target = path.join(claudeTargetDir, `${t.sdkSessionId}.jsonl`);
+          if (migratedContext) {
+            // This handoff owns its new native ID; retries replace incomplete copies atomically.
+            // Streamed: a native transcript can exceed memory and V8's string limit.
+            await guarded(() =>
+              writeMigratedTranscript(
+                source(),
+                target,
+                { context: migratedContext, agent: 'cc' },
+                assertStillValid,
+              ),
+            );
+            journal.push(async () => {
+              await fsp.rm(target, { force: true });
+            });
+            transcriptsWritten += 1;
+            continue;
+          }
+          const file = zip.file(t.path)!;
           try {
             const transcriptBytes = Buffer.from(await guarded(() => file.async('nodebuffer')));
             assertStillValid();
@@ -757,15 +868,24 @@ export async function commitShareImport(
       if (restore.agentKind !== 'pi') continue;
       for (const transcript of restore.bundled) {
         const target = piTranscriptTargets.get(transcript.sdkSessionId);
-        const file = zip.file(transcript.path);
-        if (!target || !file || piTargetsWritten.has(target)) continue;
+        const source = transcriptSource(transcript.path);
+        if (!target || !source || piTargetsWritten.has(target)) continue;
         piTargetsWritten.add(target);
-        await writeIfMissing(
-          target,
-          Buffer.from(await guarded(() => file.async('nodebuffer'))),
-          journal,
-          assertStillValid,
-        );
+        if (migratedContext) {
+          // Pi IDs are content hashes, so the bytes are copied unchanged; retries replace them.
+          await guarded(() => writeMigratedTranscript(source(), target, null, assertStillValid));
+          journal.push(async () => {
+            await fsp.rm(target, { force: true });
+          });
+        } else {
+          const file = zip.file(transcript.path)!;
+          await writeIfMissing(
+            target,
+            Buffer.from(await guarded(() => file.async('nodebuffer'))),
+            journal,
+            assertStillValid,
+          );
+        }
         transcriptsWritten += 1;
       }
     }
@@ -783,17 +903,36 @@ export async function commitShareImport(
           })
         : { threads: [], threadDynamicTools: [], threadSpawnEdges: [] };
       const rolloutRef = restore.bundled[0] ?? null;
-      const rolloutFile = rolloutRef ? zip.file(rolloutRef.path) : null;
+      const rolloutSource = rolloutRef ? transcriptSource(rolloutRef.path) : null;
+      // A migration streams the rollout (it can exceed memory and V8's string limit).
+      const writeRollout =
+        migratedContext && rolloutSource
+          ? (target: string) =>
+              writeMigratedTranscript(
+                rolloutSource(),
+                target,
+                { context: migratedContext, agent: 'codex' },
+                assertStillValid,
+              )
+          : undefined;
+      const rolloutFile = !migratedContext && rolloutRef ? zip.file(rolloutRef.path) : null;
       const rolloutBuffer = rolloutFile
         ? Buffer.from(await guarded(() => rolloutFile.async('nodebuffer')))
         : null;
       assertStillValid();
       const written = await importSharedCodexThread({
         threadId,
-        stateRows,
+        migration: Boolean(migratedContext),
+        stateRows: migratedContext ? migratedContext.stateRows(stateRows) : stateRows,
         rolloutBuffer,
-        rolloutFilename: rolloutRef ? path.posix.basename(rolloutRef.path) : null,
-        newCwd: workingDir,
+        ...(writeRollout ? { writeRollout } : {}),
+        rolloutFilename: rolloutRef
+          ? path.posix.basename(rolloutRef.path).replace(
+              /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?=\.jsonl$)/i,
+              (nativeId) => migratedContext?.id(nativeId) ?? nativeId,
+            )
+          : null,
+        newCwd: restore.workingDir,
         title: restore.title,
         updatedAt: now,
       });
@@ -824,18 +963,31 @@ export async function commitShareImport(
         id: randomUUID(),
         clientId: m.clientId,
         role: m.role,
-        content: rewriteMediaUrls(m.content, rewriteRules),
+        content: rewriteMediaUrls(migratedContext && m.role === 'agent_switch'
+          ? migratedContext.metadata(m.content) ?? m.content : m.content, rewriteRules),
         toolUseId: m.toolUseId,
         agentMeta:
           agentKind === 'pi'
             ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
-            : m.agentMeta,
+            : migratedContext ? migratedContext.metadata(m.agentMeta) : m.agentMeta,
         agentKind: m.agentKind,
         createdAt: m.createdAt,
         rewindAt: m.rewindAt,
       }));
     const dbMessages = toDbMessages(messages, manifest.agentKind);
     const draftPrefs = opts.draftPrefs ?? null;
+    // 只为真正拿不到草稿模型的会话解析默认(解析要读实时供应商目录)。
+    const hasDraftModel = (prefs: ShareImportDraftPrefs | null | undefined, apply: boolean) =>
+      apply && typeof prefs?.model === 'string' && prefs.model.length > 0;
+    const fallbackRoutes = await resolveImportFallbackRoutes([
+      ...(hasDraftModel(draftPrefs, true) ? [] : [manifest.agentKind]),
+      ...workerPlans
+        .filter((plan) => !hasDraftModel(
+          runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
+          !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+        ))
+        .map((plan) => plan.manifest.agentKind),
+    ]);
     const teamId = randomUUID();
     // 恶意/损坏包可能带多个 focused=true(源库有 partial unique 保证唯一);
     // 归一为只保留第一个,避免整包因索引冲突白白失败。
@@ -874,15 +1026,29 @@ export async function commitShareImport(
                   (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
                   plan.manifest.title ||
                   'Worker',
-                workspaceKind: manifest.workspaceKind,
+                workspaceKind:
+                  runtimeScope.migration && typeof plan.snapshot.workspaceKind === 'string'
+                    ? plan.snapshot.workspaceKind
+                    : manifest.workspaceKind,
                 orcaRole: 'worker' as const,
                 snapshot: plan.snapshot,
-                draftPrefs,
-                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用内置兜底模型。
-                applyDraftPrefs: plan.manifest.agentKind === manifest.agentKind,
-                // 与 OrcaWorkerCreationService 同口径:Worker 固定 auto,不继承。
-                permissionModeOverride: 'auto',
-                workingDir,
+                draftPrefs:
+                  runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
+                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用新建任务默认模型。
+                applyDraftPrefs:
+                  !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+                fallbackRoute: fallbackRoutes.get(plan.manifest.agentKind) ?? null,
+                // 普通分享沿用 auto；迁移不继承源机器的权限授权。
+                permissionModeOverride: runtimeScope.migration
+                  ? plan.manifest.agentKind === 'cc'
+                    ? 'default'
+                    : 'ask'
+                  : 'auto',
+                status:
+                  runtimeScope.migration && plan.snapshot.status === 'archived'
+                    ? 'archived'
+                    : 'active',
+                workingDir: plan.workingDir ?? workingDir,
                 worktreePath,
                 activeSdkSessionId: plan.activeSdkSessionId,
                 now,
@@ -896,6 +1062,11 @@ export async function commitShareImport(
       conflictExisting.map((session) => session.id),
       async () => {
         assertStillValid();
+        if (runtimeScope.migration && (manifest.exportFidelity !== 'full' || !transcriptsPlaceable || notes.includes('codexStateSkipped') ||
+          transcriptsWritten < new Set(restorePlans.flatMap((restore) =>
+            restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`))).size)) {
+          throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_INCOMPLETE_CONTEXT');
+        }
         finalTxState.outcome = 'in-flight';
         await dbClient.tx('session.importShare', {
           session: buildSessionRow({
@@ -907,6 +1078,7 @@ export async function commitShareImport(
             snapshot: sessionSnapshot,
             draftPrefs,
             applyDraftPrefs: true,
+            fallbackRoute: fallbackRoutes.get(manifest.agentKind) ?? null,
             workingDir,
             worktreePath,
             activeSdkSessionId,
@@ -921,6 +1093,15 @@ export async function commitShareImport(
         // revalidating the owner so a stale completion cannot be retried into
         // another profile and duplicate the already committed import.
         drafts.delete(opts.draftId);
+        // The transaction already persisted closure intent for the old graph.
+        // Revoke this process's live Host too; another owner consumes the journal.
+        if (conflictExisting.length > 0) {
+          const { closeSharedTaskForTask } = await import('../device-link/sharedTaskRuntime.js');
+          for (const replaced of conflictExisting) {
+            try { await closeSharedTaskForTask(replaced.id, dbClient); }
+            catch { log.warn('shared task runtime cleanup pending after committed import'); }
+          }
+        }
         assertStillValid();
       },
     );
@@ -936,7 +1117,7 @@ export async function commitShareImport(
       bundledCount: bundledKeys.size,
       transcriptsWritten,
     });
-    if (hasCcTranscripts && !transcriptsPlaceable) notes.push('workdirKeyInexact');
+    if (!transcriptsPlaceable) notes.push('workdirKeyInexact');
     log.info('session share imported', {
       newId,
       agentKind: manifest.agentKind,
@@ -1024,13 +1205,26 @@ async function readMessagesJsonl(zip: JSZip, entryPath: string): Promise<BundleM
       role: m.role,
       content: m.content,
       toolUseId: typeof m.toolUseId === 'string' ? m.toolUseId : null,
-      agentMeta: typeof m.agentMeta === 'string' ? m.agentMeta : null,
+      agentMeta: stripImportedAuthorization(m.agentMeta),
       agentKind: typeof m.agentKind === 'string' ? m.agentKind : null,
       createdAt: m.createdAt,
       rewindAt: typeof m.rewindAt === 'number' ? m.rewindAt : null,
     });
   }
   return rows;
+}
+
+/** Imported history is display/context data, never locally accepted authorization. */
+function stripImportedAuthorization(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const meta = JSON.parse(value) as unknown;
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return value;
+    delete (meta as Record<string, unknown>).autoReviewUserText;
+    return JSON.stringify(meta);
+  } catch {
+    return value;
+  }
 }
 
 async function readMediaMap(zip: JSZip): Promise<MediaMapEntry[]> {
@@ -1265,22 +1459,34 @@ const PERMISSION_MODES = new Set([
   'bypassPermissions',
 ]);
 
-/** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
-const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
-  cc: 'claude-sonnet-4-6',
-  codex: 'gpt-5.4',
-  pi: 'gpt-5.4',
-};
+type ImportFallbackRoute = { model: string; providerId: string } | null;
+
+/**
+ * 没有可用草稿偏好(旧调用方、跨 vendor 的 Worker)时的模型:按新建任务口径实时解析,
+ * 不写死型号;解析不到则留空,由用户在任务里选。
+ */
+async function resolveImportFallbackRoutes(
+  agentKinds: Iterable<'cc' | 'codex' | 'pi'>,
+): Promise<Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>> {
+  const routes = new Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>();
+  for (const kind of new Set(agentKinds)) {
+    routes.set(
+      kind,
+      await resolveNewTaskDefaultModelRoute(kind === 'cc' ? 'claude-code' : kind).catch(() => null),
+    );
+  }
+  return routes;
+}
 
 /**
  * 组装 tx session.importShare 的 session 行(lead 与协同 Worker 共用)。
  *
  * 字段来源分两类(导入语义 = 用本地草稿默认值新建会话,只有 agent 跟随分享包):
  * - 会话配置(model/effort/permissionMode/planMode/fastMode/providerId)→ 导入端
- *   draftPrefs(白名单校验,非法/缺省落内置兜底),**不读** snapshot——导出方的
+ *   draftPrefs(白名单校验,非法/缺省落兜底;模型兜底按新建任务口径解析),**不读** snapshot——导出方的
  *   模型/供应商在导入端不一定存在,照搬会产出本机不可用的脏 model(选择器显示
  *   不出、发消息才暴露)。draftPrefs 按包顶层 vendor 采集,跨 vendor 的 Worker
- *   经 applyDraftPrefs=false 落内置兜底;Worker 的 permissionMode 固定 auto
+ *   经 applyDraftPrefs=false 落兜底;Worker 的 permissionMode 固定 auto
  *   (与 OrcaWorkerCreationService 同口径)。
  * - 历史事实(token 统计 / contextTokens / clearedAt / 时间戳等)→ snapshot 照搬。
  *   contextWindow 也照搬:仅是展示缓存,renderer 按 session.model 重新计算。
@@ -1294,7 +1500,9 @@ function buildSessionRow(params: {
   snapshot: Record<string, unknown>;
   draftPrefs: ShareImportDraftPrefs | null;
   applyDraftPrefs: boolean;
+  fallbackRoute: ImportFallbackRoute;
   permissionModeOverride?: string;
+  status?: 'active' | 'archived';
   workingDir: string;
   worktreePath: string | null;
   activeSdkSessionId: string | null;
@@ -1324,20 +1532,22 @@ function buildSessionRow(params: {
     workingDir,
     workspaceKind,
     worktreePath,
-    model: str(draftPrefs?.model, FALLBACK_MODEL_BY_AGENT[agentKind]),
+    model: str(draftPrefs?.model, params.fallbackRoute?.model ?? ''),
     effort: EFFORTS.has(effort) ? effort : 'high',
     permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : 'auto',
     providerId:
       typeof draftPrefs?.providerId === 'string' && draftPrefs.providerId.length > 0
         ? draftPrefs.providerId
-        : null,
-    status: 'active',
+        : typeof draftPrefs?.model === 'string' && draftPrefs.model
+          ? null
+          : (params.fallbackRoute?.providerId ?? null),
+    status: params.status ?? 'active',
     sdkSessionId: activeSdkSessionId,
     totalTokenUsage: num(snapshot.totalTokenUsage, 0),
     totalCostUsd: num(snapshot.totalCostUsd, 0),
     contextTokens: num(snapshot.contextTokens, 0),
     contextWindow: num(snapshot.contextWindow, 0),
-    fastMode: draftPrefs?.fastMode === true,
+    fastMode: (draftPrefs?.fastMode === 'ultrafast' ? 'ultrafast' : draftPrefs?.fastMode === true),
     planModeEnabled: draftPrefs?.planMode === true,
     agentKind,
     orcaRole,

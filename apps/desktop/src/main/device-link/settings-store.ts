@@ -30,6 +30,8 @@ import { createLogger } from '../logger';
 const log = createLogger('device-link-settings');
 
 export interface DeviceLinkSettings {
+  /** Full desktop viewing/input is a separate, local opt-in. */
+  remoteDesktopEnabled: boolean;
   remoteControlEnabled: boolean;
   /**
    * 「保持电脑唤醒」:开启后 main 用 powerSaveBlocker('prevent-app-suspension')
@@ -46,6 +48,7 @@ export interface DeviceLinkSettings {
 }
 
 const DEFAULTS: DeviceLinkSettings = {
+  remoteDesktopEnabled: false,
   remoteControlEnabled: false,
   keepAwake: false,
   revokedControllers: [],
@@ -61,6 +64,7 @@ function normalize(raw: unknown): DeviceLinkSettings {
   if (!raw || typeof raw !== 'object') return { ...DEFAULTS };
   const r = raw as Record<string, unknown>;
   return {
+    remoteDesktopEnabled: r.remoteDesktopEnabled === true,
     remoteControlEnabled: r.remoteControlEnabled === true,
     keepAwake: r.keepAwake === true,
     revokedControllers: Array.isArray(r.revokedControllers)
@@ -201,6 +205,11 @@ async function acquireWriteLock(file: string): Promise<(() => void) | null> {
 
 /** 进程内写序列化:异步 acquire 之间可能交错,同进程写者先排队再抢跨进程锁 */
 let writeChain: Promise<unknown> = Promise.resolve();
+const settingsChangeListeners = new Set<(key: keyof DeviceLinkSettings) => void>();
+export function onDeviceLinkSettingChanged(listener: (key: keyof DeviceLinkSettings) => void): () => void {
+  settingsChangeListeners.add(listener);
+  return () => { settingsChangeListeners.delete(listener); };
+}
 
 /**
  * 锁内单次写:取盘上最新基线 → 在最新值上跑 updater → 整文件写回。
@@ -259,6 +268,10 @@ export function updateDeviceLinkSetting<K extends keyof DeviceLinkSettings>(
       unlock();
     }
     log.info('device-link setting written', { key, value: written });
+    for (const listener of settingsChangeListeners) {
+      try { listener(key); }
+      catch (error) { log.warn('device-link setting listener failed', { error: String(error) }); }
+    }
     return written;
   });
   writeChain = task.catch(() => undefined); // 队列不因单次失败断链

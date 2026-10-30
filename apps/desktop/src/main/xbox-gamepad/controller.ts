@@ -131,7 +131,9 @@ export class XboxGamepadController {
       const slot = this.slots[family];
       slot.devicePresent = message.present;
       slot.deviceName = message.present ? (message.name ?? slot.deviceName) : null;
-      slot.device = message.present ? deviceFromPresence(message, family) : emptyGamepadDevice(family);
+      slot.device = message.present
+        ? deviceFromPresence(message, family)
+        : emptyGamepadDevice(family);
       this.syncConnectionStatus(slot);
       if (!message.present) {
         this.releaseHolds(slot);
@@ -154,6 +156,20 @@ export class XboxGamepadController {
     const actions = reduceXboxGamepadFrame(slot.previousFrame, frame, slot.settings.layout);
     slot.previousFrame = frame;
     this.emitActions(slot, actions);
+  }
+
+  resetHostState(): void {
+    this.hostError = null;
+    for (const family of GAMEPAD_FAMILIES) {
+      const slot = this.slots[family];
+      slot.devicePresent = null;
+      slot.deviceName = null;
+      slot.device = emptyGamepadDevice(family);
+      this.syncConnectionStatus(slot);
+      this.releaseHolds(slot);
+      this.emitPreview(emptyGamepadPreview(family));
+    }
+    this.emit();
   }
 
   markUnavailable(): void {
