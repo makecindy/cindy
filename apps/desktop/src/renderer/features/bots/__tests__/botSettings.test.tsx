@@ -962,6 +962,23 @@ describe('Bot settings unified autosave', () => {
     });
     expect(mocks.updateBotProfile.mock.calls[0]?.[1]).toEqual({ userContextSource: 'Prefers tea' });
   });
+
+  it('does not retry a rejected profile draft when the memory about-me field loses focus', async () => {
+    Object.assign(window.electronAPI, {
+      localDb: { ...window.electronAPI.localDb, bots: { memory: { list: vi.fn(async () => []) } } },
+    });
+    mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.memory.title' }));
+    const aboutMe = screen.getByRole('textbox', { name: 'bots.memory.aboutMe' });
+    fireEvent.change(aboutMe, { target: { value: 'Synthetic draft' } });
+    fireEvent.blur(aboutMe);
+    await screen.findByRole('button', { name: 'bots.autosave.retry' });
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+    fireEvent.blur(aboutMe);
+    await act(async () => {});
+    expect(mocks.updateBotProfile).toHaveBeenCalledTimes(1);
+  });
 });
 
 

@@ -785,7 +785,7 @@ export function BotSettings({
                 setUserContextSource(next);
                 autosave.onEdit('text');
               },
-              onBlur: () => void autosave.flush(),
+              onBlur: () => { if (!autosave.failed()) void autosave.flush(); },
               composition: autosave.composition,
             }}
             backRef={memoryBackRef}
