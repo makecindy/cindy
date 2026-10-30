@@ -485,6 +485,25 @@ describe('Chat Server result delivery and refresh', () => {
   });
   // Group avatar regression: exercise the production manage entry, real image
   // validation and HTTP payload, with only the network/image decoder faked.
+  it.each([true, false])('saves a personal notification mode as the human member with capability=%s', async supported => {
+    const reads = [{ thread_key: 'main', read_seq: '7', muted: false, notification_scope: null as string | null }];
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupNotificationSettings: 1 } : {} } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, state: 'joined', role: 'member' },
+      ], messages: [], reads, cursor: '7' } };
+      if (route.endsWith('/read') && method === 'POST') { reads[0].notification_scope = body.notificationMode; return { body: { readSeq: '7', muted: false, notificationScope: body.notificationMode } }; }
+      return response(route);
+    });
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'notifications', mode: 'mentions' } });
+    expect(result.ok).toBe(supported);
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/read') && method === 'POST');
+    expect(writes).toEqual(supported ? [[`/conversations/${roomId}/read`, 'POST', { operationId: expect.any(String), readSeq: '0', notificationMode: 'mentions' }]] : []);
+    expect(fixture.requests.filter(r => r.url.endsWith('/read')).every(r => !r.actor)).toBe(true);
+    const detail = await service.getGroup(roomId);
+    expect(detail.ok && detail.group.supportsNotificationSettings).toBe(supported);
+    if (supported) expect(detail.ok && detail.group.notificationMode).toBe('mentions');
+  });
   it.each(['set', 'reset', 'keep', 'invalid', 'unsupported', 'upload-failure', 'account-change'] as const)(
     'keeps group avatar %s scoped to the current room and account', async mode => {
       let currentAccount = true;
@@ -2492,14 +2511,19 @@ describe('Chat Server result delivery and refresh', () => {
       }
     });
 
-  it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {
+  it.each(['all', 'mentions', 'none'] as const)('keeps server plan steps in a grant-specific chat-only lane and applies %s to work reminders', async notificationMode => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     const planId = '70000000-0000-4000-8000-000000000001';
     const plan = { id: planId, revision: 1, source_message_id: execution.source_message_id, request_text: 'Discuss the draft',
       organizer_id: botId, creator_id: selfId, status: 'running', current_step: 0,
       steps: [{ position: 0, botId, botName: 'Bot', task: 'Discuss', status: 'running' }], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     deps.workDir = { prepare: vi.fn(), snapshot: vi.fn(), changedFiles: vi.fn(), trashGroupFolder: vi.fn() };
-    fixture.handle.mockImplementation(route => {
+    deps.onStepSettled = vi.fn();
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (body?.action === 'complete') plan.status = 'waiting';
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [], cursor: '1', reads: [
+        { thread_key: 'main', read_seq: '0', muted: notificationMode === 'none', notification_scope: notificationMode === 'mentions' ? 'mentions' : null },
+      ] } };
       if (route === '/executions/claim') { const next = claimed ? null : { ...execution, plan_id: planId, plan_step: 0 }; claimed = true; return { body: { execution: next } }; }
       if (route.includes('/plans')) return { body: [plan] };
       if (route.endsWith(`/messages/${execution.source_message_id}`)) return { body: { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' }, content: [{ type: 'text', text: 'Discuss the draft' }], deleted: false, threadRootId: null } };
@@ -2509,6 +2533,8 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'chat', revision: 1 }, plan: { planId, workDir: '', sessionId: undefined } }));
     expect(deps.workDir.prepare).not.toHaveBeenCalled();
     expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: true, message: expect.stringContaining('Discuss the draft') }));
+    await service.settleLaneTurn(terminal);
+    expect(deps.onStepSettled).toHaveBeenCalledTimes(notificationMode === 'none' ? 0 : 1);
   });
   it('projects which computer runs my companion, so a phone reaching the group through here reads its tasks there', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];

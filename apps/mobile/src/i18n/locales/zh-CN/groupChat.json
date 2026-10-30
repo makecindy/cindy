@@ -205,6 +205,17 @@
     "untitled": "附件"
   },
   "settings": {
+    "notifications": {
+      "title": "消息通知",
+      "all": "所有消息",
+      "mentions": "仅 @我",
+      "none": "关闭通知",
+      "allHint": "群聊消息和已关注话题的新回复都会提醒",
+      "mentionsHint": "有人 @你或 @所有人时提醒，分工待处理仍会提醒",
+      "noneHint": "关闭本群所有系统提醒，未读消息仍会保留",
+      "saving": "正在保存…",
+      "saveFailed": "未能保存通知设置，请重试"
+    },
     "open": "群设置",
     "title": "群设置",
     "members": "成员",

@@ -28,6 +28,7 @@ import { botGroupActionErrorText } from './botGroupCopy';
 import { CompanionSheet } from './CompanionSheet';
 import { useHostTeammates } from './useHostTeammates';
 import { BotGroupMenu } from './BotGroupMenu';
+import { GroupNotificationSettings } from './GroupNotificationSettings';
 import { useBotGroupSettingsManagement, useCloudGroupCandidates, type GroupSettingsActionId } from './useBotGroupSettingsManagement';
 import { chatMemberAvatar } from '@/chat/chatServerClient';
 import { botGroupMemberAvatar, canManageBotGroup } from './botGroupRemote';
@@ -230,6 +231,9 @@ function BotGroupSettingsContent({ visible, onMask, group, host, identityFor, on
     </View> : undefined}>
     <View style={styles.content}>
       {onMask ? <MainWindowActionButton action={{ label: t('groupChat.mask.title'), onPress: onMask, testID: 'botGroup.settings.mask' }} /> : null}
+      {group.supportsNotificationSettings && group.notificationMode && <GroupNotificationSettings key={group.id}
+        mode={group.notificationMode} disabled={!visible || !!group.dissolvedAt || !membership.self || (management ? management.loading : !online)}
+        save={mode => act('notifications', { mode })} />}
       {management && (management.loading || management.reason) ? <View style={styles.managementRow} testID="botGroup.settings.management">
         {management.loading ? <ActivityIndicator size="small" color={colors.textSecondary} testID="botGroup.settings.connecting" /> : null}
         <Text style={[styles.managementText, styles.flex]} testID="botGroup.settings.managementStatus">

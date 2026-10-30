@@ -1,4 +1,4 @@
-import type { ChatMaskAction, ChatMaskState, ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
+import type { ChatMaskAction, ChatMaskState, ChatMaskMention, ChatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
 import { teammateChatActivity, type TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { inferBotTemplatePresetId } from '@cindy/maker-shared/bot-template-preset';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
@@ -30,7 +30,7 @@ export interface ChatMessage {
   content: Array<{ type: string; text?: string; fallback?: string; mediaId?: string; caption?: string;
     namespace?: string; schemaRevision?: number; data?: Record<string, unknown> }>;
 }
-export interface ChatSnapshot { cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean }> }
+export interface ChatSnapshot { cacheGeneration?: string; room: ChatRoom; members: ChatMember[]; messages: ChatMessage[]; cursor: string; reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }> }
 export interface ChatExecutionFailure {
   id: string; conversation_id?: string; source_message_id: string; bot_id: string; epoch: number; status?: string;
   failure_code?: unknown; updated_at?: string; plan_id?: string | null;
@@ -46,6 +46,7 @@ export interface ChatCapabilities { companionHome: boolean }
 export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false; homeDeviceId: string | null };
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
+  | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; expectedRevision: number; name?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' };
 
@@ -207,6 +208,7 @@ function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) 
  */
 export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = []): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
+  const mainRead = page.snapshot.reads?.find(read => read.thread_key === 'main');
   const ownerMembers = room.kind === 'direct' ? [] : members;
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
@@ -257,6 +259,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     name: room.kind === 'direct' ? active.filter(member => member.id !== selfId).map(member => memberName(member, [])).join(', ') || room.name : room.name,
     serverBacked: true, supportsGroupLeave: room.kind !== 'direct', dissolvedAt: room.dissolved_at ?? null, archived: room.archived, selfActorId: selfId,
     topic: room.topic, description: room.description,
+    notificationMode: mainRead?.muted ? 'none' : mainRead?.notification_scope ?? 'all',
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
     revision: room.revision, members: memberViews, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
@@ -309,6 +312,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     }
     return { messages, before: next, ...(projection ? { historyRevision: projection.generation, messageUpdates: projection.messages } : {}) };
   }
+  let supportsNotificationSettings = false;
   let supportsDissolve = false;
   let supportsListRemoval = false;
   let singleSpeaker = false;
@@ -318,8 +322,9 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   async function identity() {
     if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
     return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number } }>('/me');
+      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; groupNotificationSettings?: number; personalMask?: number } }>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
+      supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
@@ -351,7 +356,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsNotificationSettings }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -362,6 +367,14 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     /** The server rechecks the selected owned actor's live role for every write. */
     async manageGroup(roomId: string, managerId: string, action: ChatGroupSettingsAction, operationId: string) {
       const path = `/conversations/${chatId(roomId)}`;
+      if (action.type === 'notifications') {
+        await identity();
+        if (!supportsNotificationSettings) throw new Error('CHAT_UNAVAILABLE');
+        if (!['all', 'mentions', 'none'].includes(action.mode)) throw new Error('INVALID_PARAMS');
+        const saved = await request(`${path}/read`, 'POST', { operationId, readSeq: '0', notificationMode: action.mode });
+        const stored = await cache(); stored?.invalidate(roomId, true);
+        return saved;
+      }
       const { type, ...body } = action;
       return request(type === 'member' ? `${path}/members` : path, type === 'member' ? 'POST' : 'PATCH',
         { operationId, ...body }, chatId(managerId));

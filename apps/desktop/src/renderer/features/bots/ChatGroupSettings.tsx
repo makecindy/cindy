@@ -13,6 +13,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts
 import type { BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { GroupMaskSettingsEntry } from './GroupMaskControls';
 import { ChatBotAccessField } from './ChatBotAccessField';
+import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { chatErrorKey } from './ChatServerControls';
@@ -187,6 +188,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           <Button className="mb-6" type="submit" size="sm" variant="secondary" disabled={busy || !me || !!group.dissolvedAt}>{t(key('save'))}</Button>
         </form>
         <GroupMaskSettingsEntry groupId={group.id} />
+        {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={`${group.id}:${group.selfActorId}`}
+          groupId={group.id} mode={group.notificationMode} disabled={!me || !!group.dissolvedAt} />}
       </section>
       {companions.length > 0 && <section className="space-y-4 border-t border-[var(--border-default)] pt-5">
         <h3 className="text-14 font-medium text-[var(--text-primary)]">{t(key('companionPermissions'))}</h3>

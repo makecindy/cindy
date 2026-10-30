@@ -37,15 +37,21 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     }
   }, [api, binding, groupId, valid]);
   // The parent already subscribes to server changes. Recheck only settings/membership changes.
-  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt,
+  const sourceVersion = JSON.stringify([source.revision, source.archived, source.dissolvedAt, source.notificationMode,
     source.members.map(member => [member.actorId, member.role, member.status])]);
   useEffect(() => { void refresh(); }, [refresh, sourceVersion]);
 
   const act = useCallback(async (actionId: GroupSettingsActionId, input: Record<string, unknown> = {}) => {
     const current = verified.current?.binding === binding ? verified.current.settings : undefined;
-    if (!valid() || !current?.managerId || !canManageBotGroup(current.group) || current.group.dissolvedAt || writing.current) throw new Error('PERMISSION_DENIED');
+    const personal = actionId === 'notifications';
+    const actorId = personal ? current?.group.selfActorId : current?.managerId;
+    if (!valid() || !current || !actorId || current.group.dissolvedAt || writing.current
+      || (personal ? !current.group.supportsNotificationSettings : !canManageBotGroup(current.group))) throw new Error('PERMISSION_DENIED');
     let action: ChatGroupSettingsAction;
-    if (actionId === 'update' || actionId === 'delete') {
+    if (actionId === 'notifications') {
+      if (input.mode !== 'all' && input.mode !== 'mentions' && input.mode !== 'none') throw new Error('INVALID_PARAMS');
+      action = { type: 'notifications', mode: input.mode };
+    } else if (actionId === 'update' || actionId === 'delete') {
       const expectedRevision = input.expectedRevision ?? current.group.revision;
       if (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1) throw new Error('REVISION_CONFLICT');
       action = { type: 'update', expectedRevision: Number(expectedRevision) };
@@ -70,7 +76,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     const key = JSON.stringify(action.type === 'update' ? { ...action, expectedRevision: undefined } : action);
     const prior = pending.current;
     const operation = prior?.binding === binding && prior.key === key ? prior
-      : { binding, key, operationId: randomUUID(), managerId: current.managerId, action };
+      : { binding, key, operationId: randomUUID(), managerId: actorId, action };
     pending.current = operation;
     const write = Symbol(); writing.current = write;
     // Fence reads started before this mutation, including the parent subscription refresh.

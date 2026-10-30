@@ -10776,6 +10776,17 @@
         "copyFailed": "複製失敗，請選取連結手動複製。",
         "createDescription": "可以選擇夥伴，也可以先建立群組，再邀請朋友加入。",
         "settings": {
+          "notifications": {
+            "title": "訊息通知",
+            "all": "所有訊息",
+            "mentions": "僅 @我",
+            "none": "關閉通知",
+            "allHint": "群聊訊息和已關注話題的新回覆都會提醒",
+            "mentionsHint": "有人 @你或 @所有人時提醒，分工待處理仍會提醒",
+            "noneHint": "關閉本群所有系統提醒，未讀訊息仍會保留",
+            "saving": "正在儲存…",
+            "saveFailed": "未能儲存通知設定，請重試"
+          },
           "name": "群組名稱",
           "topic": "群組主題",
           "description": "群組簡介",

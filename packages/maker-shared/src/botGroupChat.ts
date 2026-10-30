@@ -453,6 +453,8 @@ export interface BotGroupRoundView {
   othersActive?: boolean;
 }
 
+export type ChatGroupNotificationMode = 'all' | 'mentions' | 'none';
+
 export interface BotGroupSummary {
   /** Public roster state, optional for older hosts. */
   teammateActivity?: { phase: string };
@@ -467,6 +469,9 @@ export interface BotGroupSummary {
   supportsGroupLeave?: boolean;
   supportsListRemoval?: boolean;
   supportsMemberAvatar?: boolean;
+  supportsNotificationSettings?: boolean;
+  /** This human member’s group preference; does not change unread state. */
+  notificationMode?: ChatGroupNotificationMode;
   dissolvedAt?: string | null;
   archived?: boolean;
   migrationPending?: boolean;
@@ -702,6 +707,7 @@ export type BotGroupRemoteActionId =
   | 'read'
   | 'mask'
   | 'mask-mentions'
+  | 'notifications'
   | 'send'
   | 'continue'
   | 'stop'
@@ -845,6 +851,7 @@ export interface ChatInvitePreview {
 }
 export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
+  | { type: 'notifications'; mode: ChatGroupNotificationMode }
   | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
