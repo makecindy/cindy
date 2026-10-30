@@ -1,3 +1,4 @@
+import { createPiPackageCommandError } from '../../maker-host/pi-package-diagnostic.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createIpcError } from '../../../shared/ipc-errors.js';
@@ -44,6 +45,19 @@ describe('Pi package mutation IPC boundary', () => {
       message: '[PI_PACKAGE_MUTATION_FAILED] The Pi extension operation failed.',
     });
     expect(log).toHaveBeenCalledOnce();
+  });
+
+  it('preserves process evidence in the existing serialized Settings error', async () => {
+    const failure = createPiPackageCommandError('EACCES token=fake-private-value', {
+      phase: 'native-command', outcome: 'failed', exitCode: 13,
+    });
+    const result = await runPiPackageMutationIpcBoundary(
+      async () => { throw failure; }, 'Operation failed.', vi.fn(),
+    ).catch((error: Error) => error);
+    expect(result).toMatchObject({ code: 'PI_PACKAGE_MUTATION_FAILED' });
+    expect(String(result)).toContain('"exitCode":13');
+    expect(String(result)).toContain('check-permissions');
+    expect(String(result)).not.toContain('fake-private-value');
   });
 
   it('selects an actionable safe message from the stable failure category', async () => {

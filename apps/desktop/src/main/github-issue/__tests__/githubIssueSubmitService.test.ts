@@ -47,7 +47,7 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
     getSubmitterName: () => 'Carol',
     ...over,
   };
-  return { deps, confirm, postIssue };
+  return { deps, confirm: deps.confirm as typeof confirm, postIssue };
 }
 
 describe('submitGithubIssueWithConfirm', () => {
@@ -65,6 +65,63 @@ describe('submitGithubIssueWithConfirm', () => {
       expect(res).toMatchObject({ ok: false, errorCode });
       expect(postIssue).not.toHaveBeenCalled();
     }
+  });
+
+  it('用户同意后把安全相关日志作为独立模块放进确认稿和最终正文', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({
+      recordCount: 1,
+      section: '\n---\n## 相关日志\n\n- 2026-09-15T12:00:00+08:00 [main/network] token=<redacted>',
+    }));
+    const { deps, confirm, postIssue } = makeDeps({
+      collectRelatedLogs,
+      confirm: vi.fn(async (_sessionId, draft) => ({
+        confirmed: true as const,
+        ...draft,
+        publicName: 'Carol',
+        uiLanguage: 'zh-CN',
+      })),
+    });
+
+    await expect(
+      submitGithubIssueWithConfirm(deps, { ...REQ, includeRelatedLogs: true }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(collectRelatedLogs).toHaveBeenCalledTimes(1);
+    expect(confirm.mock.calls[0]![1].body).toContain('## 相关日志');
+    expect(postIssue.mock.calls[0]![1]().description).toContain('## 相关日志');
+  });
+
+  it('未明确同意时不读取本地相关日志', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({ section: '\n## 相关日志\nsecret', recordCount: 1 }));
+    const { deps } = makeDeps({ collectRelatedLogs });
+
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+
+    expect(collectRelatedLogs).not.toHaveBeenCalled();
+  });
+
+  it('正文超长时仍保留相关日志模块', async () => {
+    const collectRelatedLogs = vi.fn(async () => ({
+      recordCount: 1,
+      section: '\n---\n## 相关日志\n\n- safe diagnostic record',
+    }));
+    const { deps, postIssue } = makeDeps({
+      collectRelatedLogs,
+      confirm: vi.fn(async (_sessionId, draft) => ({
+        confirmed: true as const,
+        ...draft,
+        publicName: 'Carol',
+        uiLanguage: 'zh-CN',
+      })),
+    });
+
+    await submitGithubIssueWithConfirm(deps, {
+      ...REQ,
+      body: '正文'.repeat(3000),
+      includeRelatedLogs: true,
+    });
+
+    expect(postIssue.mock.calls[0]![1]().description).toContain('## 相关日志');
   });
 
   it('confirm 收到 agent 草稿 + env;confirmed 后 postIssue 收到用户编辑版', async () => {

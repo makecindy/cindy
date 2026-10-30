@@ -21,6 +21,7 @@ import { z } from 'zod';
 
 import type { DocsToolRegistry } from '../cindy_docsToolRegistry.js';
 import {
+  docsReadOptions,
   DocsPathError,
   prepareInputPath,
   readInputFileWithinLimit,
@@ -70,7 +71,8 @@ const DESCRIPTION = [
   '',
   '【怎么判读】',
   '- blankPages 非空 → 那几页是结构上确定为空的,大概率 CSS 把内容藏了或外部资源没加载上,重做;',
-  '- visibilityUnverified=true → 某页算子解析未完成,未做位图级可见性确认,结构检查证据不完整;请重试或人工打开确认,不要把 verdict 当作视觉验收;',
+  '- visibilityUnverified=true → 某页算子或文字解析未完成,未做位图级可见性确认,结构检查证据不完整;请重试或人工打开确认,不要把 verdict 当作视觉验收;',
+  '- textError 非空 → 解析器读不出该页文字,textChars=0 不代表没有文字;常见于引用了原文件的页,用其他阅读器打开该页确认,不要仅凭此判定生成失败;',
   '- numPages 远超预期 → 分页样式没生效(检查 page-break / break-inside);',
   '- paper 不是你要的尺寸 → render_pdf 的 pageSize 传错了;',
   '- textPreview 和你写的内容对不上 → 装错了内容或页序错乱。',
@@ -148,7 +150,8 @@ export function registerInspectPdfTool(
         }
         const carriedVerdict = previousVerdict ?? 'incomplete';
         const root = resolveSessionRoot(sessionCtx);
-        const abs = await prepareInputPath(root, inputPath);
+        const prepared = await prepareInputPath(root, inputPath, sessionCtx, 'inspect_pdf');
+        const abs = prepared.abs;
         if (path.extname(abs).toLowerCase() !== '.pdf') {
           return errorPayload(
             'UNSUPPORTED_FORMAT',
@@ -167,6 +170,7 @@ export function registerInspectPdfTool(
               `PDF 过大: ${bytes} 字节`,
               `PDF 有 ${(bytes / 1024 / 1024).toFixed(1)} MB,超出检查上限(64 MB)。请先压缩或拆分 PDF。`,
             ),
+          docsReadOptions(prepared),
         );
         if (data.byteLength === 0) {
           return errorPayload(
@@ -217,6 +221,9 @@ export function registerInspectPdfTool(
         const visibilityUnverifiedPages = decorated
           .filter((p) => p.visibilityUnverified)
           .map((p) => p.page);
+        const textErrorPages = decorated
+          .filter((p) => p.textError !== undefined)
+          .map((p) => p.page);
         const inspectedPageNumbers = new Set(decorated.map((page) => page.page));
         let accumulatedThrough = Math.min(inspectedThrough, inspection.numPages);
         while (inspectedPageNumbers.has(accumulatedThrough + 1)) accumulatedThrough += 1;
@@ -260,7 +267,7 @@ export function registerInspectPdfTool(
             : accumulatedVisibilityUnverified
               ? {
                   verdict: 'warning',
-                  warning: `${visibilityUnverifiedPages.length > 0 ? `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成` : '此前批次存在结构算子解析未完成的页面'},未做位图级可见性确认,检查证据不完整。请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
+                  warning: `${visibilityUnverifiedPages.length > 0 ? `第 ${visibilityUnverifiedPages.join('、')} 页的结构算子解析未完成` : '此前批次存在结构算子解析未完成的页面'},未做位图级可见性确认,检查证据不完整。${textErrorPages.length > 0 ? `其中第 ${textErrorPages.join('、')} 页是解析器读不出文字(见 textError),可能是解析器兼容性问题而非文件损坏。` : ''}请重试并在必要时打开 PDF 确认。${coverageWarning ? ` ${coverageWarning}` : ''}`,
                 }
               : partial
                 ? { verdict: 'incomplete', warning: coverageWarning! }
@@ -289,7 +296,7 @@ export function registerInspectPdfTool(
           timedOut ? 'INSPECT_TIMEOUT' : 'INSPECT_FAILED',
           timedOut
             ? `解析超过 ${INSPECT_PDF_TIMEOUT_MS / 1000} 秒被中止,文件可能损坏或过于复杂。`
-            : `读取 PDF 失败:${message}。如果这是刚生成的文件,说明生成环节就出了问题,请重做而不是交付。`,
+            : `读取 PDF 失败:${message}。可能是文件损坏,也可能是解析器兼容性问题;先用其他阅读器打开确认。打不开或内容缺失就重做,不要交付。`,
           { message },
         );
       }

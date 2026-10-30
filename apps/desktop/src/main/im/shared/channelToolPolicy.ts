@@ -28,6 +28,17 @@ function record(value: unknown): Record<string, unknown> | null {
  */
 const DESTRUCTIVE_INNER_NAME_RE = /(?:^|_)(?:merge|system_write|overwrite)(?:_|$)/i;
 
+// These scheduler actions can install a command, resume it, or trigger it now.
+// A restored trusted MCP must still pass the channel's per-turn approval.
+const SCHEDULER_EXECUTION_TOOL_NAMES = new Set([
+  'schedule_create', 'schedule_update', 'schedule_set_pre_run_hook',
+  'schedule_resume', 'schedule_run_now',
+]);
+
+function schedulerExecutionNeedsConfirmation(toolName: string): boolean {
+  return SCHEDULER_EXECUTION_TOOL_NAMES.has(toolLeafName(toolName));
+}
+
 function isOpaqueWriteToolName(toolName: string): boolean {
   const normalized = toolName.toLowerCase();
   return normalized === 'file_change' || normalized === 'permissions';
@@ -106,6 +117,23 @@ export function checkChannelDestructiveToolCall(
   return { destructive: false };
 }
 
+/** Pi management is confirmable, not a hard-denied destructive operation. */
+function piManagementNeedsConfirmation(toolName: string, input: unknown): boolean {
+  const name = toolLeafName(toolName);
+  if (name !== 'cindy_pi_command' && name !== 'cindy_pi_extension') return false;
+  const payload = record(input);
+  // Legacy action/source calls are mutations. Unknown inputs remain confirmable;
+  // the Host parser still owns command validity and rejects unsupported syntax.
+  if (!Array.isArray(payload?.args) || payload.action !== undefined || payload.source !== undefined) return true;
+  const args = payload.args;
+  if (args.some(arg => typeof arg !== 'string')) return true;
+  if (args.length === 1 && ['--version', '-v', '--help', '-h', 'list'].includes(args[0])) return false;
+  if (args.length === 2 && args[0] === 'list' && ['--no-approve', '-na'].includes(args[1])) return false;
+  if (args.length === 2 && ['install', 'update', 'remove', 'uninstall', 'list', 'config'].includes(args[0])
+      && ['--help', '-h'].includes(args[1])) return false;
+  return true;
+}
+
 /**
  * 渠道策略的强制确认判定:命中即要求用户逐次确认(无卡片渠道走文本确认)。
  * true = 必须确认;false = 交回该渠道 agent 的常规审批链。
@@ -113,10 +141,14 @@ export function checkChannelDestructiveToolCall(
 export function channelForceConfirmToolCall(toolName: string, input: unknown): boolean {
   // 1. 顶层工具名 / shell 命令(Bash/bash/PowerShell)直接命中破坏性规则。
   if (checkChannelDestructiveToolCall(toolName, input).destructive) return true;
+  if (piManagementNeedsConfirmation(toolName, input)) return true;
+  if (schedulerExecutionNeedsConfirmation(toolName)) return true;
 
   // 2. 包装 / 二级分派的内层动作。
   for (const inner of unwrapInnerCalls(toolName, input)) {
-    if (isOpaqueWriteToolName(inner.name) || DESTRUCTIVE_INNER_NAME_RE.test(inner.name)) {
+    if (piManagementNeedsConfirmation(inner.name, inner.args)
+        || schedulerExecutionNeedsConfirmation(inner.name)
+        || isOpaqueWriteToolName(inner.name) || DESTRUCTIVE_INNER_NAME_RE.test(inner.name)) {
       return true;
     }
   }

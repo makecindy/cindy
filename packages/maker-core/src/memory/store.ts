@@ -14,7 +14,7 @@
  *
  * 跨 session 一致性:
  *  本类是 per-workdir 单例 (manager 实例池保证), 同一 workdir 内多 session 共享同一个 store,
- *  内存里没有缓存的脏状态; 文件系统级别多 session 写撞到 OS 锁是小概率, rebuild 兜底。
+ *  storage 按目录串行变更，界面条件更新/删除与伙伴工具写入共享同一互斥。
  */
 
 import type Database from 'better-sqlite3';
@@ -174,7 +174,23 @@ export class MakerMemoryStore {
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.assertScopeOk();
     await this.init();
-    const result = await this.storage.write(opts);
+    return this.syncWrite(await this.storage.write(opts));
+  }
+
+  /** Conditional in-place edit; retains legacy filenames and uses the shared storage queue. */
+  async update(
+    filename: string,
+    expectedUpdatedAt: string,
+    changes: Pick<WriteOptions, 'title' | 'description' | 'body'>,
+  ): Promise<MemoryRecord> {
+    this.assertScopeOk();
+    await this.init();
+    const saved = await this.storage.update(filename, expectedUpdatedAt, changes);
+    await this.syncWrite({ ok: true, filename });
+    return saved;
+  }
+
+  private async syncWrite(result: WriteResult): Promise<WriteResult> {
     // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1): 边界不得
     // 让 manager.write 直接路径 (Pi compaction) 改旧 owner 的 fts.db。
     this.assertScopeOk();
@@ -195,10 +211,10 @@ export class MakerMemoryStore {
     return result;
   }
 
-  async delete(filename: string): Promise<void> {
+  async delete(filename: string, expectedUpdatedAt?: string): Promise<void> {
     this.assertScopeOk();
     await this.init();
-    await this.storage.delete(filename);
+    await this.storage.delete(filename, expectedUpdatedAt);
     // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1)
     this.assertScopeOk();
     try {

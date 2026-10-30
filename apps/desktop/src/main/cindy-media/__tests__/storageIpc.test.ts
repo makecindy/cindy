@@ -12,8 +12,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { LedgerDb } from '../ledger';
+import type { StorageIpcDeps } from '../storageIpc';
 
 let tmpUserData = '';
+vi.mock('../../device-link/broadcast-tap', () => ({
+  captureDataOwnerBroadcastScope: () => ({}), isDataOwnerBroadcastScopeCurrent: () => true,
+}));
 
 vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
@@ -22,6 +26,7 @@ vi.mock('electron', () => ({
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
 const blobStore = await import('../blobStore');
+const { scanCache, evictCacheBlobs } = await import('../recycler');
 const { createStorageIpcHandlers } = await import('../storageIpc');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
@@ -64,13 +69,57 @@ afterEach(() => {
 
 const OLD_MS = 100 * 60 * 60 * 1000;
 
+// PR #7442: shared remote-media refs were excluded from both cleanup paths (unit).
+// One blob with remote + other cache refs must lose only its remote index, free no
+// shared bytes, and remain reclaimable later. Existing assertions checked blobs only.
+it('clears remote cache indexes while preserving attachments, shared bytes and other integrations', async () => {
+  const remote = await seedBlob('remote', { isCache: true });
+  const other = await seedBlob('other', { isCache: true });
+  const shared = await seedBlob('shared', { isCache: true });
+  const pinned = await seedBlob('pinned', { isCache: false });
+  const live = await seedBlob('draft', { isCache: true });
+  for (const row of [remote, shared, pinned, live]) await ledger.addRef({
+    hash: row.hash, refKind: 'integration-cache', refId: `remote-media:${row.hash}`,
+    originId: 'remote-media', originKind: 'integration',
+  }, db);
+  for (const row of [other, shared]) await ledger.addRef({
+    hash: row.hash, refKind: 'integration-cache', refId: `other:${row.hash}`,
+    originId: 'other', originKind: 'integration',
+  }, db);
+  const clearRemoteMediaMemory = vi.fn();
+  const handlers = makeHandlers({ clearRemoteMediaMemory });
+  const scan = await handlers.scan({ scope: 'remote-media', draftUrls: [live.url] });
+  expect(scan.cache.evictable.map((entry) => entry.hash)).toEqual([remote.hash, shared.hash]);
+  expect(scan.cache.evictable.find(entry => entry.hash === shared.hash)?.bytes).toBe(0);
+  expect(scan.zeroRef.hashes).toEqual([]);
+  const result = await handlers.cleanup({
+    scope: 'remote-media', draftUrls: [live.url],
+    evictCacheHashes: [remote, other, shared, pinned, live].map((entry) => entry.hash),
+    zeroRefHashes: [pinned.hash], deadDirNames: ['images'], cleanTmpFiles: true,
+  });
+  expect(result.cacheEvicted.deleted).toBe(1);
+  expect(result.freedBytes).toBe(remote.bytes);
+  expect(await ledger.getBlobInfo(remote.hash, db)).toBeNull();
+  for (const row of [other, shared, pinned, live]) expect(await ledger.getBlobInfo(row.hash, db)).not.toBeNull();
+  expect(await ledger.getIntegrationCacheHash(`remote-media:${shared.hash}`, db)).toBeNull();
+  expect(await ledger.getIntegrationCacheHash(`other:${shared.hash}`, db)).toBe(shared.hash);
+  expect(fs.readFileSync(blobStore.resolveHashRef(shared.hash, shared.ext).absPath).toString()).toBe('shared');
+  for (const row of [pinned, live])
+    expect(await ledger.getIntegrationCacheHash(`remote-media:${row.hash}`, db)).toBe(row.hash);
+  expect(clearRemoteMediaMemory).toHaveBeenCalledTimes(2);
+  expect((await handlers.scan({ scope: 'remote-media', draftUrls: [live.url] })).cache.evictable).toEqual([]);
+  expect((await scanCache({ live: new Set([live.hash]), limitBytes: 0 }, db)).evictable.map(row => row.hash))
+    .toContain(shared.hash);
+  expect((await evictCacheBlobs({ hashes: [shared.hash], live: new Set() }, db)).deleted).toBe(1);
+});
+
 async function seedBlob(
   content: string,
-  opts?: { isCache?: boolean; aged?: boolean },
+  opts?: { isCache?: boolean; aged?: boolean; mimeType?: string },
 ): Promise<{ hash: string; ext: string; bytes: number; url: string }> {
   const written = await blobStore.writeBlob({
     buffer: Buffer.from(content),
-    mimeType: 'image/png',
+    mimeType: opts?.mimeType ?? 'image/png',
   });
   await ledger.recordBlob(
     {
@@ -102,6 +151,9 @@ function makeHandlers(overrides?: {
   clearLegacyImagesDir?: () => Promise<void>;
   openChatAttachmentsDir?: () => Promise<boolean>;
   clearChatAttachmentsDir?: () => Promise<void>;
+  getLegacyImagesDirStats?: StorageIpcDeps['getLegacyImagesDirStats'];
+  getChatAttachmentsDirStats?: StorageIpcDeps['getChatAttachmentsDirStats'];
+  clearRemoteMediaMemory?: () => void;
 }) {
   return createStorageIpcHandlers({
     getQueueScanTexts: () => overrides?.queueTexts ?? [],
@@ -113,10 +165,37 @@ function makeHandlers(overrides?: {
     clearLegacyImagesDir: overrides?.clearLegacyImagesDir ?? (async () => undefined),
     openChatAttachmentsDir: overrides?.openChatAttachmentsDir ?? (async () => false),
     clearChatAttachmentsDir: overrides?.clearChatAttachmentsDir ?? (async () => undefined),
+    getLegacyImagesDirStats: overrides?.getLegacyImagesDirStats,
+    getChatAttachmentsDirStats: overrides?.getChatAttachmentsDirStats,
+    clearRemoteMediaMemory: overrides?.clearRemoteMediaMemory,
   });
 }
 
 describe('stats(占用总览)', () => {
+  it.each(['getLegacyImagesDirStats', 'getChatAttachmentsDirStats'] as const)(
+    'sanitizes %s failures without changing the query fallback',
+    async (source) => {
+      const privatePath = path.join(legacyRoot, 'private-cache');
+      const getStats = vi.fn()
+        .mockRejectedValueOnce(new Error(`EACCES: permission denied, scandir '${privatePath}'`))
+        .mockResolvedValue({ bytes: 12, fileCount: 1 });
+      const handlers = makeHandlers({ [source]: getStats });
+
+      const failed = await handlers.stats();
+      expect(failed).toMatchObject({
+        success: false,
+        error: 'storage statistics unavailable',
+        blobs: { totalBytes: 0 },
+        fixedCaches: {
+          legacyImages: { bytes: 0, fileCount: 0 },
+          chatAttachments: { bytes: 0, fileCount: 0 },
+        },
+      });
+      expect(JSON.stringify(failed)).not.toContain(privatePath);
+      expect((await handlers.stats()).success).toBe(true);
+    },
+  );
+
   it('账面统计 + 历史兼容层占用 + 死目录状态', async () => {
     const a = await seedBlob('stats-a');
     const c = await seedBlob('stats-cache', { isCache: true });

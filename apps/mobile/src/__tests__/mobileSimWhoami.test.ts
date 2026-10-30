@@ -1,4 +1,5 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数。
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   bootedSimulatorLinesForTarget,
@@ -10,6 +11,10 @@ import {
   getSimulatorAppContainer,
   resolveMobileSimulatorBundleId,
   resolveSimMetroHandoff,
+  resolveSimulatorDeviceSets,
+  selectBootedSimulator,
+  findSimulatorDeviceSet,
+  simctlArgs,
 } from '../../scripts/lib/sim-whoami.mjs';
 
 const SIMULATOR_UDID = 'A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6';
@@ -77,6 +82,59 @@ describe('mobile:sim takeover and JSON arguments', () => {
       source: 'branch@commit',
       targetWorktree: '/repo/',
     })).toEqual({ confirmed: true, worktree: '/repo', isTarget: true });
+  });
+
+  it('compares Windows worktree paths case-insensitively', () => {
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: true });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\RepoOther\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'c:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/RepoOther', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: 'C:\\Repo\\apps\\mobile',
+      source: 'branch@commit',
+      targetWorktree: 'D:\\repo',
+      platform: 'win32',
+    })).toEqual({ confirmed: true, worktree: 'C:/Repo', isTarget: false });
+    expect(classifySimMetroListener({
+      cwd: '/Repo/apps/mobile',
+      source: 'branch@commit',
+      targetWorktree: '/repo',
+      platform: 'linux',
+    })).toEqual({ confirmed: true, worktree: '/Repo', isTarget: false });
+  });
+
+  it('restarts a target Metro when its persisted region differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-region-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentRegion: 'global', runningRegion: 'cn',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-region' });
+  });
+
+  it('restarts a target Metro when its persisted environment fingerprint differs', () => {
+    expect(resolveSimMetroHandoff({
+      currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'refuse', code: 'target-env-stale' });
+    expect(resolveSimMetroHandoff({
+      takeover: true, currentSource: 'branch@commit', runningSource: 'branch@commit',
+      currentEnvFingerprint: 'env-new', runningEnvFingerprint: 'env-old',
+      listener: { confirmed: true, isTarget: true }, listenerWorktreeExists: true,
+    })).toMatchObject({ action: 'restart', code: 'target-env' });
   });
 });
 
@@ -222,7 +280,87 @@ describe('mobile:sim:whoami exact Simulator target', () => {
   });
 });
 
+describe('mobile:sim simulator choice', () => {
+  const root = '/home/test/Library/Application Support/BaguetteCindy';
+  const cindy = { name: 'cindy', path: join(root, 'devices') };
+  const system = { name: 'system', path: null };
+  const settings = (value?: string) => () => {
+    if (value === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return value;
+  };
+  const resolve = (choice: string, readFile = settings(), exists = () => true) =>
+    resolveSimulatorDeviceSets({ choice, root, exists, readFile });
+
+  it('prefers Cindy only while it is installed and allowed to run', () => {
+    expect(resolve('auto')).toEqual([cindy, system]);
+    expect(resolve('auto', settings('{"enabled":true,"idleMinutes":15}'))).toEqual([cindy, system]);
+    expect(resolve('auto', settings('{"enabled":false,"idleMinutes":15}'))).toEqual([system]);
+    expect(resolve('auto', settings('{broken'))).toEqual([system]);
+    expect(resolve('auto', settings(), () => false)).toEqual([system]);
+  });
+
+  it('pins one simulator when chosen outside the repository', () => {
+    expect(resolve('system')).toEqual([system]);
+    expect(resolve('cindy')).toEqual([cindy]);
+    expect(resolve('/tmp/devices')).toEqual([{ name: '/tmp/devices', path: '/tmp/devices' }]);
+    expect(() => resolve('cindy', settings('{"enabled":false,"idleMinutes":15}'))).toThrow(/关闭了运行/);
+    expect(() => resolve('cindy', settings(), () => false)).toThrow(/没有找到 Cindy 模拟器/);
+    expect(() => resolve('relative/devices')).toThrow(/绝对路径/);
+  });
+
+  it('scopes simctl to the selected device set', () => {
+    expect(simctlArgs(cindy, ['launch', 'booted', 'com.xd.cindy'])).toEqual([
+      'simctl', '--set', cindy.path, 'launch', 'booted', 'com.xd.cindy',
+    ]);
+    expect(simctlArgs(system, ['list'])).toEqual(['simctl', 'list']);
+    const run = vi.fn(() => '/cindy/Cindy.app');
+    getSimulatorAppContainer(run, null, 'com.xd.cindy', cindy);
+    expect(run).toHaveBeenCalledWith('xcrun', ['simctl', '--set', cindy.path, 'get_app_container', 'booted', 'com.xd.cindy', 'app']);
+  });
+
+  it('uses Cindy first, falls back to the system set, and follows an exact UDID', () => {
+    const otherUdid = '11111111-2222-4333-8444-555555555555';
+    const listing = { cindy: `iPhone A (${SIMULATOR_UDID}) (Booted)`, system: `iPhone B (${otherUdid}) (Booted)` };
+    const listBooted = (set: { name: 'cindy' | 'system' }) => listing[set.name];
+
+    expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: cindy, targetBooted: [listing.cindy] });
+    expect(selectBootedSimulator([cindy, system], listBooted, otherUdid)).toMatchObject({ deviceSet: system, targetBooted: [listing.system] });
+    expect(selectBootedSimulator([cindy, system], (set: { name: 'cindy' | 'system' }) => (set.name === 'cindy' ? '' : listing.system), null))
+      .toMatchObject({ deviceSet: system });
+    expect(selectBootedSimulator([cindy, system], () => '', null)).toEqual({ deviceSet: cindy, booted: [], targetBooted: [] });
+  });
+
+  it('skips an unreadable Cindy set in auto mode but still reports a pinned set', () => {
+    const line = `iPhone B (${SIMULATOR_UDID}) (Booted)`;
+    const listBooted = (set: { name: string }) => {
+      if (set.name === 'cindy') throw new Error('cannot read device set');
+      return line;
+    };
+    expect(selectBootedSimulator([cindy, system], listBooted, null)).toMatchObject({ deviceSet: system, targetBooted: [line] });
+    expect(() => selectBootedSimulator([cindy], listBooted, null)).toThrow(/cannot read/);
+  });
+
+  it('finds the owning device set for a UDID in any state', () => {
+    const listing = { cindy: `iPhone A (${SIMULATOR_UDID.toLowerCase()}) (Shutdown)`, system: '' };
+    const list = (set: { name: 'cindy' | 'system' }) => listing[set.name];
+    expect(findSimulatorDeviceSet([cindy, system], list, SIMULATOR_UDID)).toBe(cindy);
+    expect(findSimulatorDeviceSet([cindy, system], list, '11111111-2222-4333-8444-555555555555')).toBeNull();
+    expect(findSimulatorDeviceSet([cindy, system], (set: { name: string }) => {
+      if (set.name === 'cindy') throw new Error('unreadable');
+      return `iPhone B (${SIMULATOR_UDID}) (Shutdown)`;
+    }, SIMULATOR_UDID)).toBe(system);
+  });
+});
+
 describe('mobile:sim:whoami bundle identity', () => {
+  // 2026-10-29: identity checks stalled for minutes with no actionable phase.
+  // Unit: a timed-out Expo config must remain an explicit error, never a guessed bundle ID.
+  it('reports the bounded Expo config timeout without leaking child output', () => {
+    const execFile = vi.fn(() => { throw Object.assign(new Error('private output'), { code: 'ETIMEDOUT', stderr: 'private output' }); });
+    expect(() => resolveMobileSimulatorBundleId('global', { execFile })).toThrow(/Expo config.*超时/);
+    expect(execFile).toHaveBeenCalledWith('pnpm', expect.any(Array), expect.objectContaining({ timeout: 30_000, killSignal: 'SIGKILL' }));
+  });
+
   it.each([
     ['cn', 'com.local.cindycn'],
     ['global', 'com.local.cindy'],

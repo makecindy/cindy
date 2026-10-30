@@ -13,6 +13,11 @@ import {
 import type { ScanStagingResult } from '../staging';
 import { computeProposalFingerprint } from '../stagingValidation.pure';
 import { tryAcquireSkillInstallLock } from '../../skillhub/installLock';
+vi.mock('../../skillhub/sharedMutationLease', () => ({
+  acquireSharedSkillMutationLease: vi.fn(async () => Object.assign(async () => {}, {
+    run: <T>(operation: () => Promise<T>) => operation(),
+  })),
+}));
 
 vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -287,7 +292,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('cancelled-before-dispatch');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).toHaveBeenCalledWith('fake-session-1');
     expect(h.session.sent).toHaveLength(1);
     expect(order).toEqual(['persist', 'baseline', 'abort']);
@@ -307,7 +312,7 @@ describe('LearnController 状态机', () => {
 
     const run = await h.waitForStatus(runId, 'failed');
     expect(run.error).toContain('model failed');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1');
+    expect(beforeDispatchUserTurn).toHaveBeenCalledWith('fake-session-1', undefined);
     expect(onUndispatchedUserTurn).not.toHaveBeenCalled();
   });
 
@@ -1111,6 +1116,12 @@ describe('LearnController 状态机', () => {
       releaseMarket();
     }
 
+    const { acquireSharedSkillMutationLease } = await import('../../skillhub/sharedMutationLease');
+    vi.mocked(acquireSharedSkillMutationLease).mockResolvedValueOnce(null);
+    await expect(h.controller.apply('r1')).rejects.toMatchObject({ code: 'LEARN_BUSY' });
+    expect(h.applyCalls).toHaveLength(0);
+    expect(h.store.get('r1')!.status).toBe('awaiting-review');
+
     // 不同名的市场安装不阻塞;同名锁释放后重试成功
     const releaseUnrelated = tryAcquireSkillInstallLock('unrelated-skill', 'market-install')!;
     try {
@@ -1350,12 +1361,13 @@ describe('LearnController 状态机', () => {
   it('Claude-only 本地 skill 也算已装:注入原文、diff 有基线、标记 personal', async () => {
     const claudeDir = path.join('/', 'claude', 'skills', 'my-skill');
     let diffOldDir: string | null | undefined;
+    const fetchHubSkill = vi.fn(async () => ({
+      name: 'my-skill',
+      description: 'upstream',
+      content: '# upstream skill',
+    }));
     const h = makeHarness({
-      fetchHubSkill: async () => ({
-        name: 'my-skill',
-        description: 'upstream',
-        content: '# upstream skill',
-      }),
+      fetchHubSkill,
       search: async () => ({ hits: [], sessions: {}, nextCursor: null, vectorUsed: false }) as never,
       collectProfile: async () => ({ block: '', used: false }),
       resolveInstalledSkillDirs: (name) => [path.join('/', 'installed', name), path.join('/', 'claude', 'skills', name)],
@@ -1369,6 +1381,8 @@ describe('LearnController 状态机', () => {
     h.setScan(goodScan());
     const { runId } = await h.controller.startLearn({ input: '', sourceKind: 'hub', hubSlug: 'my-skill' });
     await h.waitForStatus(runId, 'distilling');
+    expect(fetchHubSkill).toHaveBeenCalledWith('my-skill', 'market');
+    expect(h.store.get(runId)?.hubCatalogScope).toBe('market');
     expect(h.session.sent[0]).toContain('# local Claude skill');
     expect(h.store.get(runId)!.usedSessionEvidence).toBe(true);
 
@@ -1495,6 +1509,20 @@ describe('LearnController 状态机', () => {
     await expect(h.controller.startLearn({ input: '', sourceKind: 'session' })).rejects.toMatchObject({
       code: 'INVALID_PARAMS',
     });
+  });
+
+  it('session 源在创建 run 前拒绝没有可蒸馏消息的空任务', async () => {
+    const h = makeHarness({ getConversationBlock: async () => '' });
+
+    await expect(h.controller.startLearn({
+      input: '',
+      sourceKind: 'session',
+      originSessionId: 'empty-origin',
+    })).rejects.toMatchObject({
+      code: 'INVALID_PARAMS',
+      message: 'the origin conversation has no distillable content',
+    });
+    expect(h.store.list()).toEqual([]);
   });
 
   it('证据检索抛错 → 无证据继续(不整轮失败)', async () => {

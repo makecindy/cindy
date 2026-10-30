@@ -1,0 +1,576 @@
+// @vitest-environment jsdom
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { beforeEach, afterEach, it, expect, vi } from "vitest";
+const h = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  compact: null as any,
+  input: null as any,
+  onCatalog: null as any,
+  context: {
+    status: "online",
+    connectionEpoch: 1,
+    recoveringDeviceIds: new Set<string>(),
+    getPresenceAvailability: () => true,
+  },
+}));
+vi.mock("react-native", () => ({
+  View: ({ children }: any) => <div>{children}</div>,
+  ScrollView: ({ children }: any) => <div>{children}</div>,
+  Pressable: ({ children, onPress, disabled, accessibilityLabel }: any) => (
+    <button
+      aria-label={accessibilityLabel}
+      disabled={disabled}
+      onClick={onPress}
+    >
+      {children}
+    </button>
+  ),
+  useWindowDimensions: () => ({ height: 800, width: 400 }),
+}));
+vi.mock("@/components/MobilePrimitives", () => ({
+  ScreenBackButton: ({ onPress, testID }: any) => (
+    <button aria-label="shared.back" data-testid={testID} disabled={!onPress} onClick={onPress} />
+  ),
+}));
+vi.mock("@/components/mobileInteractionStyles", () => ({
+  mobileInteractionStyles: { pressed: { opacity: 0.72 } },
+}));
+vi.mock("@/components/AppText", () => ({
+  Text: ({ children }: any) => <span>{children}</span>,
+  TextInput: (props: any) => {
+    h.input = props;
+    return <input readOnly value={props.value} />;
+  },
+}));
+vi.mock("react-native-reanimated", () => ({
+  default: { View: ({ children }: any) => <div>{children}</div> },
+  useSharedValue: (value: any) => ({ value }),
+  useAnimatedStyle: () => ({}),
+  runOnJS: (fn: any) => fn,
+  withTiming: (v: any) => v,
+  cancelAnimation: vi.fn(),
+  ReduceMotion: { System: "system" },
+}));
+vi.mock("@/platform/gestureHandler", () => {
+  const builder: any = new Proxy({}, { get: () => () => builder });
+  return {
+    Gesture: { Pan: () => builder },
+    GestureDetector: ({ children }: any) => children,
+  };
+});
+vi.mock("lucide-react-native", () => ({
+  GripVertical: () => null,
+  Pencil: () => null,
+  MoreHorizontal: () => null,
+  ArrowLeft: () => null,
+}));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: (s: string) => s }),
+}));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+}));
+vi.mock("@/auth/AuthContext", () => ({
+  useAuth: () => ({ user: { id: "owner" } }),
+}));
+vi.mock("@/theme", () => ({ useTheme: () => ({ colors: {} }), iconSize: {} }));
+vi.mock("@expo/ui/swift-ui", () => {
+  const Container = ({ children }: any) => <div>{children}</div>;
+  return {
+    Group: Container,
+    HStack: Container,
+    ZStack: Container,
+    Rectangle: () => null,
+    RNHostView: Container,
+    Text: Container,
+    Image: () => null,
+    Button: ({ children, onPress, modifiers }: any) => (
+      <button
+        aria-label={
+          modifiers.find((m: any) => m.accessibilityLabel)?.accessibilityLabel
+        }
+        disabled={modifiers.some((m: any) => m.disabled)}
+        onClick={onPress}
+      >
+        {children}
+      </button>
+    ),
+  };
+});
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  ...Object.fromEntries(
+    [
+      "accessibilityAddTraits",
+      "accessibilityLabel",
+      "buttonStyle",
+      "contentShape",
+      "disabled",
+      "foregroundStyle",
+      "onGeometryChange",
+      "frame",
+      "listRowInsets",
+    ].map((k) => [k, (v: any) => ({ [k]: v })]),
+  ),
+  shapes: { rectangle: () => ({}) },
+}));
+vi.mock("@/session/SessionDetailsNative", () => ({
+  SessionDetailsNativeHeading: () => null,
+}));
+vi.mock("@/session/ComposerSheet", () => ({ ComposerSheet: () => null }));
+vi.mock("@/session/ComposerNativeSection", () => ({
+  ComposerNativeSection: ({ children }: any) => <div>{children}</div>,
+}));
+vi.mock("@/session/ComposerNativeRow", () => ({
+  ComposerNativeRow: () => null,
+}));
+vi.mock("@/session/SessionActionSheet", () => ({
+  SessionActionSheet: () => null,
+}));
+vi.mock("@/session/swipeRowRegistry", () => ({
+  buildSessionActionMenu: () => [],
+}));
+vi.mock("@/device-link/DeviceLinkContext", () => ({
+  useDeviceLink: () => ({ ...h.context, invoke: h.invoke }),
+  subscribeRemoteTaskTagsChanged: (callback: any) => {
+    h.onCatalog = callback;
+    return () => {
+      h.onCatalog = null;
+    };
+  },
+}));
+vi.mock("@/session/remoteSessionStore", () => ({
+  remoteSessionStore: {
+    getSessions: () => [],
+    getSessionDeviceId: () => "host",
+    subscribe: () => () => {},
+  },
+  useRemoteSessions: () => [],
+}));
+import { TaskTagsPanel, TaskTagDots } from "@/session/TaskTags";
+import { NativeTagShortcuts } from "@/session/SessionOptionsExpoSheet";
+import {
+  evictTaskTagCatalog,
+  readTaskTagCatalog,
+  resetTaskTagCatalogCache,
+} from "@/session/taskTagCatalogCache";
+const tag = {
+  id: "tag",
+  name: "Work",
+  color: "red" as const,
+  revision: 1,
+  favoriteOrder: null,
+};
+let root: ReturnType<typeof createRoot>;
+let node: HTMLDivElement;
+const session = { id: "task", tags: [], canonicalDeviceId: "host" } as any;
+const onExpandedChange = vi.fn();
+const render = async () =>
+  act(async () =>
+    root.render(
+      <TaskTagsPanel
+        session={session}
+        expanded={false}
+        onExpandedChange={onExpandedChange}
+        renderCompact={(state) => {
+          h.compact = state;
+          return <NativeTagShortcuts state={state} />;
+        }}
+      />,
+    ),
+  );
+beforeEach(() => {
+  (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+  resetTaskTagCatalogCache();
+  onExpandedChange.mockClear();
+  h.context.status = "online";
+  h.context.connectionEpoch = 1;
+  h.context.recoveringDeviceIds.clear();
+  h.invoke.mockReset().mockResolvedValue({ tags: [tag], sessions: [] });
+  node = document.createElement("div");
+  root = createRoot(node);
+});
+afterEach(() => act(() => root.unmount()));
+it("shows busy without marking the host offline and retries only when requested", async () => {
+  h.invoke.mockRejectedValueOnce(Object.assign(new Error('queue full'), { code: 'BACKPRESSURE' }));
+  await render();
+  expect(h.compact.message).toBe('taskTags.remoteBusy');
+  expect(h.compact.disabled).toBe(false);
+  expect(h.compact.canRetry).toBe(true);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  await act(async () => h.compact.onRetry());
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+  expect(h.compact.message).toBeUndefined();
+});
+it.each(["other", "host", "account"])(
+  "scopes in-flight catalog invalidation to %s",
+  async (scope) => {
+    let finish!: (value: any) => void;
+    h.invoke.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await render();
+    if (scope === "account") resetTaskTagCatalogCache();
+    else evictTaskTagCatalog(scope);
+    await act(async () => finish({ tags: [tag], sessions: [] }));
+    expect(h.compact.tags.map((item: any) => item.id)).toEqual(
+      scope === "other" ? [tag.id] : [],
+    );
+    expect(readTaskTagCatalog("owner", "host")?.tags).toEqual(
+      scope === "other" ? [tag] : undefined,
+    );
+    h.context.connectionEpoch++;
+    await render();
+    expect(h.compact.tags.map((item: any) => item.id)).toEqual([tag.id]);
+  },
+);
+it.each(["other", "host", "account"])(
+  "scopes late catalog errors to %s",
+  async (scope) => {
+    let fail!: (error: Error) => void;
+    h.invoke.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+    );
+    await render();
+    if (scope === "account") resetTaskTagCatalogCache();
+    else evictTaskTagCatalog(scope);
+    await act(async () => fail(new Error("OFFLINE")));
+    expect(h.compact.message).toBe(
+      scope === "other" ? "taskTags.offline" : undefined,
+    );
+  },
+);
+it.each([false, true])(
+  "preserves drafts across catalog pushes (external recolor: %s)",
+  async (recolored) => {
+    await act(async () =>
+      root.render(
+        <TaskTagsPanel
+          session={session}
+          expanded
+          onExpandedChange={() => {}}
+        />,
+      ),
+    );
+    await act(async () =>
+      node
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="taskTags.editLabel"]',
+        )!
+        .click(),
+    );
+    await act(async () => h.input.onChangeText("My draft"));
+    await act(async () =>
+      h.onCatalog("host", [
+        { ...tag, revision: 2, color: recolored ? "blue" : "red" },
+      ]),
+    );
+    expect(h.input.value).toBe("My draft");
+    const save = Array.from(node.querySelectorAll("button")).find(
+      (b) => b.textContent === "taskTags.save",
+    )!;
+    await act(async () => save.click());
+    expect(h.invoke.mock.calls.at(-1)![2][0]).toEqual({
+      action: "update",
+      tagId: tag.id,
+      revision: recolored ? 1 : 2,
+      name: "My draft",
+      nameCustomized: true,
+      color: "red",
+    });
+  },
+);
+it("refreshes only after the target peer recovers and retains cached offline navigation", async () => {
+  await render();
+  h.context.recoveringDeviceIds.add("other");
+  await render();
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  h.context.recoveringDeviceIds.add("host");
+  await render();
+  expect(h.compact.disabled).toBe(true);
+  expect(h.compact.canManage).toBe(true);
+  expect(h.compact.tags).toHaveLength(1);
+  const manage = () =>
+    node.querySelector<HTMLButtonElement>(
+      'button[aria-label="taskTags.more"]',
+    )!;
+  expect(manage().disabled).toBe(false);
+  expect(
+    node.querySelector<HTMLButtonElement>('button[aria-label="Work"]')!
+      .disabled,
+  ).toBe(true);
+  await act(async () => manage().click());
+  expect(onExpandedChange).toHaveBeenCalledWith(true);
+  expect(h.invoke).toHaveBeenCalledTimes(1);
+  h.context.recoveringDeviceIds.delete("host");
+  await render();
+  expect(h.invoke).toHaveBeenCalledTimes(2);
+  h.context.connectionEpoch++;
+  await render();
+  expect(h.invoke).toHaveBeenCalledTimes(3);
+  h.context.status = "offline";
+  await render();
+  expect(h.compact.canManage).toBe(true);
+  expect(manage().disabled).toBe(false);
+});
+it("does not expose native management when offline without a catalog", async () => {
+  h.context.status = "offline";
+  await render();
+  expect(node.querySelector('button[aria-label="taskTags.more"]')).toBeNull();
+});
+it("discards the request from before peer recovery", async () => {
+  let finish!: (value: any) => void;
+  h.invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await render();
+  h.context.recoveringDeviceIds.add("host");
+  await render();
+  h.context.recoveringDeviceIds.delete("host");
+  await render();
+  await act(async () =>
+    finish({ tags: [{ ...tag, name: "Stale" }], sessions: [] }),
+  );
+  expect(h.compact.tags[0].name).toBe("Work");
+});
+it("renders every dot when the optional visible limit is omitted", async () => {
+  await act(async () =>
+    root.render(
+      <TaskTagDots tags={[tag, { ...tag, id: "two", name: "Life" }]} />,
+    ),
+  );
+  expect(node.querySelectorAll("div")).toHaveLength(4);
+});
+
+it("retries a committed attachment whose response was lost without updating a stale revision", async () => {
+  let fail = true;
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "update") throw new Error("CONFLICT");
+    if (request.action === "attach" && fail) {
+      fail = false;
+      throw new Error("timeout");
+    }
+    return { tags: request.action === "get" ? [] : [tag], sessions: [] };
+  });
+  await act(async () =>
+    root.render(
+      <TaskTagsPanel session={session} expanded onExpandedChange={() => {}} />,
+    ),
+  );
+  const click = async (label: string) => {
+    const button = Array.from(node.querySelectorAll("button")).find(
+      (b) => b.textContent === label,
+    )!;
+    expect(button).toBeTruthy();
+    await act(async () => button.click());
+  };
+  await click("taskTags.add");
+  await act(async () => h.input.onChangeText("Work"));
+  await click("taskTags.create");
+  expect(h.input.editable).toBe(false);
+  await click("taskTags.save");
+  const actions = h.invoke.mock.calls.map((call) => call[2][0].action);
+  expect(actions).toEqual(["get", "create", "attach", "attach"]);
+  expect(node.querySelector("input")).toBeNull();
+});
+
+it("drives native tag pages from the shared expanded state", async () => {
+  const second = { ...tag, id: "second", name: "Home", revision: 1 };
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => ({
+    tags: request.action === "reorder" ? [second, tag] : [tag, second],
+    sessions: [],
+  }));
+  let state: any;
+  const pages: (string | null)[] = [];
+  let back = () => {};
+  await act(async () =>
+    root.render(
+      <TaskTagsPanel
+        session={session}
+        expanded
+        onExpandedChange={onExpandedChange}
+        renderExpanded={(value) => {
+          state = value;
+          return null;
+        }}
+        onPageChange={(page, goBack) => {
+          pages.push(page);
+          back = goBack;
+        }}
+      />,
+    ),
+  );
+  expect(state.page).toBe("list");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["tag", "second"]);
+  await act(async () => state.onMove(0, 1));
+  expect(h.invoke.mock.calls.at(-1)![2][0]).toEqual({
+    action: "reorder",
+    tagIds: ["second", "tag"],
+    expectedOrder: ["tag", "second"],
+  });
+  await act(async () => state.onEdit("tag"));
+  expect(state.page).toBe("edit");
+  expect(state.form.canDelete).toBe(true);
+  await act(async () => back());
+  expect(state.page).toBe("list");
+  await act(async () => state.onAdd());
+  expect(state.page).toBe("add");
+  expect(state.form.canSubmit).toBe(false);
+  await act(async () => state.form.onNameChange("Ideas"));
+  expect(state.form.canSubmit).toBe(true);
+  await act(async () => back());
+  await act(async () => back());
+  expect(onExpandedChange).toHaveBeenCalledWith(false);
+  expect(pages).toEqual(["list", "edit", "list", "add", "list"]);
+});
+
+it("reports the native back arrow as disabled while a form save is in flight", async () => {
+  let finish!: (value: any) => void;
+  const pages: [string | null, boolean][] = [];
+  let back = () => {};
+  let state: any;
+  await act(async () =>
+    root.render(
+      <TaskTagsPanel
+        session={session}
+        expanded
+        onExpandedChange={onExpandedChange}
+        renderExpanded={(value) => {
+          state = value;
+          return null;
+        }}
+        onPageChange={(page, goBack, backDisabled) => {
+          pages.push([page, backDisabled]);
+          back = goBack;
+        }}
+      />,
+    ),
+  );
+  await act(async () => state.onAdd());
+  await act(async () => state.form.onNameChange("Ideas"));
+  h.invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await act(async () => state.form.onSubmit());
+  // The save is pending: the header must say so, and tapping back must not slip through.
+  expect(pages.at(-1)).toEqual(["add", true]);
+  await act(async () => back());
+  expect(state.page).toBe("add");
+  await act(async () => finish({ tags: [], sessions: [] }));
+  expect(pages.at(-1)![1]).toBe(false);
+});
+
+it("offers retry only for failed reads, not for failed writes", async () => {
+  let state: any;
+  const mount = async () =>
+    act(async () =>
+      root.render(
+        <TaskTagsPanel
+          session={session}
+          expanded
+          onExpandedChange={onExpandedChange}
+          renderExpanded={(value) => {
+            state = value;
+            return null;
+          }}
+        />,
+      ),
+    );
+  // A catalog that never loaded can only be repaired by reading it again.
+  h.invoke.mockRejectedValueOnce(new Error("boom"));
+  await mount();
+  expect(state.message).toBe("taskTags.loadFailed");
+  expect(state.canRetry).toBe(true);
+  await act(async () => root.unmount());
+
+  // With a loaded catalog, a failed write is not something "refresh" can retry.
+  root = createRoot(node);
+  resetTaskTagCatalogCache();
+  h.invoke.mockReset().mockResolvedValue({ tags: [tag], sessions: [] });
+  await mount();
+  expect(state.canRetry).toBe(false);
+  await act(async () => state.onAdd());
+  await act(async () => state.form.onNameChange("Ideas"));
+  h.invoke.mockRejectedValueOnce(new Error("boom"));
+  await act(async () => state.form.onSubmit());
+  expect(state.message).toBe("taskTags.failed");
+  expect(state.canRetry).toBe(false);
+});
+
+it("persists native reorder and confirmed deletion when the panel is reopened", async () => {
+  const second = { ...tag, id: "second", name: "Home" };
+  let catalog = [tag, second];
+  h.invoke.mockImplementation(async (_device, _channel, [request]) => {
+    if (request.action === "reorder") {
+      catalog = request.tagIds.map((id: string) =>
+        catalog.find((item) => item.id === id)!,
+      );
+    }
+    if (request.action === "delete") {
+      catalog = catalog.filter((item) => item.id !== request.tagId);
+    }
+    return {
+      tags: catalog,
+      sessions: [],
+      ...(request.action === "previewDelete"
+        ? {
+            deletion: { tagId: tag.id, revision: tag.revision, count: 2 },
+          }
+        : {}),
+    };
+  });
+  let state: any;
+  const open = async (key: string) =>
+    act(async () =>
+      root.render(
+        <TaskTagsPanel
+          key={key}
+          session={session}
+          expanded
+          onExpandedChange={onExpandedChange}
+          renderExpanded={(value) => {
+            state = value;
+            return null;
+          }}
+        />,
+      ),
+    );
+  await open("initial");
+  await act(async () => state.onMove(0, 1));
+  await open("reordered");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second", "tag"]);
+  await act(async () => state.onEdit("tag"));
+  await act(async () => state.form.onDelete());
+  expect(state.page).toBe("delete");
+  expect(catalog).toHaveLength(2);
+  expect(
+    h.invoke.mock.calls.some((call) => call[2][0].action === "delete"),
+  ).toBe(false);
+  await act(async () => state.deletion.onConfirm());
+  expect(h.invoke.mock.calls.at(-1)!.slice(0, 3)).toEqual([
+    "host",
+    "local-db:task-tags:execute",
+    [
+      {
+        action: "delete",
+        tagId: "tag",
+        revision: tag.revision,
+        expectedCount: 2,
+      },
+    ],
+  ]);
+  await open("deleted");
+  expect(state.tags.map((item: any) => item.id)).toEqual(["second"]);
+});

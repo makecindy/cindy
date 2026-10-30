@@ -1,12 +1,15 @@
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
 export const MESSAGE_PAGE_SIZE = 80;
-export const MESSAGE_PAGE_RETRY_LIMITS = [80, 40, 20, 10, 5, 1] as const;
+// Keep the cache window independent of the wire page. On a slow mobile link an
+// 80-row page can occupy the reliable stream past the request deadline.
+export const MESSAGE_FETCH_PAGE_SIZE = 20;
+export const MESSAGE_PAGE_RETRY_LIMITS = [MESSAGE_FETCH_PAGE_SIZE, 10, 5, 1] as const;
 
 export function latestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let latest: RemoteMessage | null = null;
   for (const message of messages) {
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    if (!isHostMessageRow(message)) continue;
     if (!latest || compareMessageOrder(message, latest) > 0) latest = message;
   }
   return latest?.id ?? null;
@@ -15,10 +18,9 @@ export function latestMessageCursor(messages: readonly RemoteMessage[]): string 
 export function oldestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let oldest: RemoteMessage | null = null;
   for (const message of messages) {
-    // Skip locally-appended system cards (synthetic `mobile-system-…` id, see
-    // remoteSessionStore.appendLocalSystemCard): they aren't real host rows, so handing one to
-    // the host as a `before` cursor matches nothing and re-fetches the latest page (no progress).
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    // Local system cards and in-flight stream rows have no persisted host ID.
+    // Sending either as `before` can fetch the latest page again without progress.
+    if (!isHostMessageRow(message)) continue;
     if (!oldest || compareMessageOrder(message, oldest) < 0) {
       oldest = message;
     }
@@ -186,6 +188,8 @@ export interface MessagePageRetryResult {
   messages: RemoteMessage[];
   limit: number;
   reducedByPayloadTooLarge: boolean;
+  /** Set when several pages were joined; then the oldest page decides whether history continues. */
+  moreBeyondWindow?: boolean;
 }
 
 export async function listMessagesWithPayloadRetry(
@@ -213,7 +217,55 @@ export async function listMessagesWithPayloadRetry(
 
 export function shouldKeepOlderMessagesAffordance(page: MessagePageRetryResult): boolean {
   if (page.messages.length === 0) return false;
+  if (page.moreBeyondWindow !== undefined) return page.moreBeyondWindow;
   return page.reducedByPayloadTooLarge || hasMoreOlderMessages(page.messages, page.limit);
+}
+
+/**
+ * Older pages a reconnect may read so the latest page reaches the verified window. Bridge reads
+ * use the ordinary wire ladder (`MESSAGE_PAGE_RETRY_LIMITS`, 20 rows first): an 80-row page can
+ * outlive the request deadline on a slow link, and the ladder only shrinks oversized frames, not
+ * timeouts. 20 pages keep the budget at about 400 rows.
+ */
+export const LATEST_WINDOW_BRIDGE_MAX_PAGES = 20;
+
+/**
+ * 重连补同步时，最新一页可能接不上手机已验证连续的那段窗口（断线期间漏收超过一页）。
+ * 直接提交会让 store 丢掉旧历史、列表整段变短（见 setLatestMessageWindow 的 moreBeyondWindow）。
+ * 这里在提交前沿 before 继续往前读，直到 `needsBridge` 判定已接上、历史到头或达到页数上限，
+ * 再把这几页合成一页返回；预算用尽仍接不上时与原来一样按最新一页处置。没有补读时原样返回 `latest`。
+ * 补读请求失败时向上抛出，与最新页读取失败同等对待：本轮不提交，交给调用方既有的同步重试。
+ */
+export async function bridgeLatestMessagePage(
+  latest: MessagePageRetryResult,
+  options: {
+    needsBridge: (messages: readonly RemoteMessage[], moreBeyondWindow: boolean) => boolean;
+    readBefore: (before: string) => Promise<MessagePageRetryResult>;
+    isCurrent: () => boolean;
+    maxPages?: number;
+  },
+): Promise<MessagePageRetryResult> {
+  let messages = latest.messages;
+  let moreBeyondWindow = shouldKeepOlderMessagesAffordance(latest);
+  let pages = 0;
+  while (
+    pages < (options.maxPages ?? LATEST_WINDOW_BRIDGE_MAX_PAGES)
+    && moreBeyondWindow
+    && options.isCurrent()
+    && options.needsBridge(messages, moreBeyondWindow)
+  ) {
+    const before = oldestMessageCursor(messages);
+    if (!before) break;
+    // A failed bridge read fails this snapshot like a failed latest read: committing the
+    // unbridged page would drop the verified segment and hide the failure from recovery retries.
+    const older = await options.readBefore(before);
+    pages += 1;
+    const known = new Set(messages.map((message) => message.id));
+    messages = [...older.messages.filter((message) => !known.has(message.id)), ...messages];
+    moreBeyondWindow = shouldKeepOlderMessagesAffordance(older);
+    if (older.messages.length === 0) break;
+  }
+  return pages === 0 ? latest : { ...latest, messages, moreBeyondWindow };
 }
 
 type SessionMessageVersion = Pick<RemoteSession, '_count' | 'updatedAt'>;
@@ -237,7 +289,7 @@ export function shouldRefreshLatestMessageWindowOnReopen(input: {
  * `hasOlderMessages` state 重置为 false,不补设就会丢失「加载更早」入口 —— 这是回归)。
  * 优先用服务端总数 `_count.messages` 与 in-store 已加载真实消息数比较(总数 > 已加载 → 还有更早);
  * 服务端没给总数时退化为窗口启发式(已加载到整页边界 → 推断还有更早)。
- * 计数排除本地合成的 system 卡(`mobile-system-` 前缀,非真实 host 行)。
+ * 计数排除本地 system 卡与尚未落盘的流式行,与服务端持久消息总数保持同一口径。
  */
 export function hasOlderMessagesAfterReopen(
   totalCount: number | undefined,
@@ -268,7 +320,7 @@ export function hasOlderMessagesByServerCount(
 function countRealMessages(messages: readonly RemoteMessage[]): number {
   let count = 0;
   for (const message of messages) {
-    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    if (!isHostMessageRow(message)) continue;
     count += 1;
   }
   return count;

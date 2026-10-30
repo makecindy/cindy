@@ -5,11 +5,9 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { useOwnedCodexLogin, verifyCodexAuthRecovery } from './useCodexAuth';
 import type { CodexLoginResult } from './codexAuthLogin';
-import { isCodexOAuthReconnectRequired } from './codexAuthRecovery';
+import { isCodexOAuthReconnectRequired, type CodexCredentialScope } from './codexAuthRecovery';
 
 export const isCodexSessionExpiredError = isCodexOAuthReconnectRequired;
-
-type CodexCredentialScope = NonNullable<CodexLoginResult['credentialScope']>;
 
 function reconnectCopyForScope(scope: CodexCredentialScope): {
   description: string;
@@ -32,7 +30,10 @@ function reconnectCopyForScope(scope: CodexCredentialScope): {
 
 export function useCodexSessionExpiredPrompt(options?: {
   onAuthenticated?: (recoveredError: string) => void;
+  onPromptStarted?: (error: string) => void;
   onPromptClosed?: () => void;
+  /** 交给独立入口内联呈现恢复动作，避免在辅助窗口里丢失恢复状态。 */
+  onInlineRecoveryRequired?: (error: string, scope: CodexCredentialScope) => void;
   /** 已有内联说明和显式按钮时可跳过二次确认，直接进入浏览器连接流程。 */
   confirmBeforeLogin?: boolean;
 }): (error: string) => boolean {
@@ -43,9 +44,13 @@ export function useCodexSessionExpiredPrompt(options?: {
   const promptActiveRef = useRef(false);
   const mountedRef = useRef(true);
   const onAuthenticatedRef = useRef(options?.onAuthenticated);
+  const onPromptStartedRef = useRef(options?.onPromptStarted);
   const onPromptClosedRef = useRef(options?.onPromptClosed);
+  const onInlineRecoveryRequiredRef = useRef(options?.onInlineRecoveryRequired);
   onAuthenticatedRef.current = options?.onAuthenticated;
+  onPromptStartedRef.current = options?.onPromptStarted;
   onPromptClosedRef.current = options?.onPromptClosed;
+  onInlineRecoveryRequiredRef.current = options?.onInlineRecoveryRequired;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -62,6 +67,7 @@ export function useCodexSessionExpiredPrompt(options?: {
       if (promptedForErrorRef.current === error) return promptActiveRef.current;
       promptedForErrorRef.current = error;
       promptActiveRef.current = true;
+      onPromptStartedRef.current?.(error);
 
       const closePrompt = () => {
         promptedForErrorRef.current = null;
@@ -100,6 +106,11 @@ export function useCodexSessionExpiredPrompt(options?: {
           // 无法读取来源时按 unknown 引导，避免误称沿用了系统登录。
         }
         const copy = reconnectCopyForScope(credentialScope);
+        if (credentialScope === 'system-shared' && onInlineRecoveryRequiredRef.current) {
+          closePrompt();
+          onInlineRecoveryRequiredRef.current(error, credentialScope);
+          return;
+        }
         const openChatGptAppAndClose = async () => {
           try {
             const opened = await window.electronAPI.openChatGPTApp();
@@ -161,6 +172,10 @@ export function useCodexSessionExpiredPrompt(options?: {
         } else if (oauthWritesBlocked) {
           toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
           closePrompt();
+          return;
+        } else if (onInlineRecoveryRequiredRef.current) {
+          closePrompt();
+          onInlineRecoveryRequiredRef.current(error, credentialScope);
           return;
         } else if (options?.confirmBeforeLogin !== false) {
           const shouldReconnect = await confirm({

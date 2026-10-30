@@ -112,25 +112,42 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
     const runClient = (env: NodeJS.ProcessEnv): Record<string, unknown> => {
       const probe = spawnSync(
         PYTHON!,
-        ['-c', 'from protocol import DuplexClient\nDuplexClient().emit_complete("ok")'],
+        [
+          '-c',
+          // This probe checks protocol negotiation, not OS pipe delivery. Use
+          // in-memory streams so a Windows spawnSync stdin stall cannot mask
+          // its assertions. The runner tests below retain real duplex stdio.
+          [
+            'import io, sys',
+            'from protocol import DuplexClient',
+            'writer = io.StringIO()',
+            'DuplexClient(reader=io.StringIO(sys.argv[1]), writer=writer).emit_complete("ok")',
+            'sys.stdout.write(writer.getvalue())',
+          ].join('\n'),
+          startFrame,
+        ],
         {
           cwd: tmp,
           env: { ...baseEnv, ...env, PYTHONUTF8: '1' },
-          input: startFrame,
+          stdio: ['ignore', 'pipe', 'pipe'],
           encoding: 'utf8',
           windowsHide: true,
           timeout: 10_000,
         },
       );
-      expect(probe.status, probe.stderr).toBe(0);
+      expect(
+        probe.status,
+        `stderr=${probe.stderr} error=${String(probe.error ?? '')} signal=${String(probe.signal ?? '')}`,
+      ).toBe(0);
       return JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
     };
 
     expect(runClient({
       CINDY_SCRIPT_PROTOCOL: '1',
       XDT_MAKER_SCRIPT_PROTOCOL: '1',
-    }).protocol).toBe('cindy-script/1');
-    expect(runClient({ XDT_MAKER_SCRIPT_PROTOCOL: '1' }).protocol).toBe('xdt-maker-script/1');
+    })).toEqual({ protocol: 'cindy-script/1', type: 'complete', resultText: 'ok', primarySessionId: null });
+    expect(runClient({ XDT_MAKER_SCRIPT_PROTOCOL: '1' }))
+      .toEqual({ protocol: 'xdt-maker-script/1', type: 'complete', resultText: 'ok', primarySessionId: null });
   });
 
   it('demo.py completes a full run: granted capability succeeds, denied one degrades', async () => {

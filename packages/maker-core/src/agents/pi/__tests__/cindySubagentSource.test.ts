@@ -147,6 +147,7 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
       "copyFileSync(join(configHome, 'internal-extensions', 'cindy-bridge.ts'), bridgeExtension)",
     );
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('copyManagedRipgrep(configHome, childConfigHome)');
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('childConfigHome: childConfigHome');
   });
 
@@ -606,6 +607,15 @@ describe('cindy-subagent extension source', () => {
     const writeBack = src.indexOf(
       "childEnv.CINDY_PI_BASH_PACKAGE_HOME = path.posix.join(config.childConfigHome, 'bash-package-home')",
     );
+    const spawnCall = src.indexOf('spawn(config.binary, childArgs');
+    expect(writeBack).toBeGreaterThan(-1);
+    expect(spawnCall).toBeGreaterThan(writeBack);
+  });
+
+  it('points durable children at a private staged ripgrep, not the parent configHome', () => {
+    const src = CINDY_SUBAGENT_RUNNER_SOURCE;
+    expect(src).toContain("childEnv.CINDY_PI_MANAGED_RG_PATH = childRg");
+    const writeBack = src.indexOf('childEnv.CINDY_PI_MANAGED_RG_PATH = childRg');
     const spawnCall = src.indexOf('spawn(config.binary, childArgs');
     expect(writeBack).toBeGreaterThan(-1);
     expect(spawnCall).toBeGreaterThan(writeBack);

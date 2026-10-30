@@ -4,9 +4,76 @@ import { i18n } from '@/i18n';
 import {
   adaptTextFilePreviewResult,
   fetchRemoteAbsFileToUrl,
+  fetchRemoteAbsFileOnce,
+  readRemoteTextFilePreview,
   type RemoteAbsFileFetchDeps,
 } from '@/session/remoteAbsFileFetch';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
+import { clearPeerMedia, recordPeerMedia } from '@/device-link/peerFileRegistry';
+const textIO = vi.hoisted(() => ({ size: 5, text: 'hello', read: vi.fn() }));
+vi.mock('@/session/remoteMediaDiskCacheExpo', () => ({
+  withDownloadedRemoteMediaFile: async (_url: string, _mime: string, _max: number, read: (file: unknown) => unknown) => {
+    textIO.read();
+    return read({ size: textIO.size, text: async () => textIO.text });
+  },
+}));
+
+// Unit: exercise the actual RPC → file fallback, rather than only adapting the
+// RPC shape. A legal large reply used to fail before reaching the text reader.
+describe('large text preview', () => {
+  const setup = () => {
+    const { deps, fetchRemoteMedia, presignGet } = makeDeps();
+    const readPreview = vi.fn<() => Promise<RemoteTextFilePreviewResult>>(async () => ({ success: true, transferRequired: true, size: 5 }));
+    const deleteOssObject = vi.fn();
+    textIO.size = 5; textIO.text = 'hello'; textIO.read.mockClear();
+    fetchRemoteMedia.mockResolvedValue({ ossKey: 'oss/text', size: 5, mimeType: 'text/plain' });
+    return { deps: { ...deps, readPreview, deleteOssObject, isCurrent: () => true }, fetchRemoteMedia, presignGet, readPreview, deleteOssObject };
+  };
+  it.each([false, true])('reads and cleans transferred text, legacy error=%s', async legacy => {
+    const h = setup();
+    if (legacy) h.readPreview.mockRejectedValue(Object.assign(new Error('too large'), { code: 'PAYLOAD_TOO_LARGE' }));
+    expect(await readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).toEqual({ success: true, data: 'hello', size: 5, limitMb: 10 });
+    expect(h.fetchRemoteMedia.mock.calls[0][0]).toContain('maxBytes=10485760');
+    expect(h.deleteOssObject).toHaveBeenCalledExactlyOnceWith('oss/text');
+  });
+  it.each(['forbidden', 'not_found', 'oversize'] as const)('does not transfer after host returns %s', async reason => {
+    const h = setup();
+    const result = { success: false, reason, size: 12 };
+    h.readPreview.mockResolvedValue(result);
+    expect(await readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).toBe(result);
+    expect(h.fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+  it('keeps small text inline and does not retry connection failures as file reads', async () => {
+    const h = setup();
+    h.readPreview.mockResolvedValue({ success: true, data: '', size: 0 });
+    expect(await readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).toMatchObject({ data: '' });
+    h.readPreview.mockRejectedValue(new Error('offline'));
+    await expect(readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).rejects.toThrow('offline');
+    expect(h.fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+  it('stops before transferring when cancelled during the RPC', async () => {
+    const h = setup();
+    const abort = new AbortController();
+    h.readPreview.mockImplementation(async () => { abort.abort(); return { success: true, transferRequired: true, size: 5 }; });
+    await expect(readRemoteTextFilePreview(h.deps, '/tmp/text.txt', abort.signal)).rejects.toThrow('PREVIEW_CANCELLED');
+    expect(h.fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+  it('cleans an uploaded object even when presigning fails', async () => {
+    const h = setup();
+    h.presignGet.mockRejectedValue(new Error('offline'));
+    await expect(readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).rejects.toThrow('offline');
+    expect(h.deleteOssObject).toHaveBeenCalledExactlyOnceWith('oss/text');
+  });
+  it('rejects truncated data and releases the direct transfer staging file', async () => {
+    const h = setup();
+    const media = { ossKey: '', size: 6, mimeType: 'text/plain' };
+    const dispose = vi.fn();
+    recordPeerMedia(media, 'file:///text-staged', dispose);
+    h.fetchRemoteMedia.mockResolvedValue(media);
+    await expect(readRemoteTextFilePreview(h.deps, '/tmp/text.txt')).rejects.toThrow('PREVIEW_CHANGED');
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+});
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -18,7 +85,7 @@ function makeDeps(overrides: Partial<{
   getUrl: string;
   expiresAt: string;
 }> = {}) {
-  const fetchRemoteMedia = vi.fn(async () => ({
+  const fetchRemoteMedia = vi.fn<RemoteAbsFileFetchDeps['maker']['fetchRemoteMedia']>(async () => ({
     ossKey: overrides.ossKey ?? 'oss/abc',
     mimeType: 'image/png',
     size: 1234,
@@ -38,13 +105,81 @@ function makeDeps(overrides: Partial<{
 }
 
 describe('fetchRemoteAbsFileToUrl', () => {
+  it.each([true, false])('reclaims the cloud object only after a local copy is available: %s', async (downloaded) => {
+    const { deps } = makeDeps();
+    const local = { ossKey: '', size: 3, mimeType: 'image/png' };
+    const uri = 'file:///cached-absolute.png';
+    const dispose = vi.fn();
+    recordPeerMedia(local, uri, dispose);
+    const deleteOssObject = vi.fn();
+    const cacheDownload = vi.fn(async () => {
+      expect(deleteOssObject).not.toHaveBeenCalled();
+      return downloaded ? local : null;
+    });
+    deps.maker.fetchRemoteMedia = vi.fn(async () => ({
+      ...local, ossKey: 'absolute/cloud-key', cacheDownload,
+    }));
+    try {
+      const url = await fetchRemoteAbsFileToUrl({ ...deps, stream: false, deleteOssObject }, '/tmp/shot.png');
+      expect(url).toBe(downloaded ? uri : 'https://oss.example/get/abc');
+      expect(cacheDownload).toHaveBeenCalledWith('https://oss.example/get/abc');
+      expect(deleteOssObject.mock.calls).toEqual(downloaded ? [['absolute/cloud-key']] : []);
+      expect(dispose).not.toHaveBeenCalled();
+    } finally { clearPeerMedia(); }
+  });
+
+  // Unit regression: cancelling HTML preparation while opening a link must not
+  // enqueue the file read once that link eventually opens.
+  it('does not start a preview file read after cancellation during link setup', async () => {
+    const { deps, openLink, fetchRemoteMedia } = makeDeps();
+    const controller = new AbortController();
+    openLink.mockImplementation(async () => { controller.abort(); });
+    await expect(fetchRemoteAbsFileOnce(deps, '/page.html', undefined, undefined, undefined, controller.signal))
+      .rejects.toThrow('PREVIEW_CANCELLED');
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    expect(openLink).toHaveBeenCalledOnce();
+  });
+  it('revalidates complete files while retaining streaming URLs', async () => {
+    for (const first of [true, false]) {
+      const { deps, fetchRemoteMedia } = makeDeps();
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: first }, '/media.mp4');
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: !first }, '/media.mp4');
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: first }, '/media.mp4');
+      expect(fetchRemoteMedia).toHaveBeenCalledTimes(first ? 2 : 3);
+      expect(fetchRemoteMedia.mock.calls.map((call) => ((call as unknown[])[1] as { stream?: boolean }).stream)).toEqual(
+        first ? [undefined, false] : [false, undefined, false],
+      );
+    }
+  });
+  it('aborts an in-flight fetch once the caller cancels and does not retry', async () => {
+    const { deps, fetchRemoteMedia, presignGet } = makeDeps();
+    let cancelled = false;
+    let seenSignal: AbortSignal | undefined;
+    fetchRemoteMedia.mockImplementation(
+      (...args: unknown[]) =>
+        new Promise((_resolve, reject) => {
+          seenSignal = (args[1] as { signal?: AbortSignal } | undefined)?.signal;
+          seenSignal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    const pending = fetchRemoteAbsFileToUrl(
+      { ...deps, stream: false, isCancelled: () => cancelled },
+      '/tmp/big.zip',
+    );
+    await vi.waitFor(() => expect(seenSignal).toBeDefined());
+    cancelled = true;
+    await expect(pending).rejects.toThrow();
+    expect(seenSignal?.aborted).toBe(true);
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(presignGet).not.toHaveBeenCalled();
+  });
   it('走 media:fetch 绝对路径通道并 presign 出下载地址', async () => {
     const { deps, fetchRemoteMedia, presignGet } = makeDeps();
     const url = await fetchRemoteAbsFileToUrl(deps, '/tmp/shot.png');
     expect(url).toBe('https://oss.example/get/abc');
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       `xdt-file://open?path=${encodeURIComponent('/tmp/shot.png')}`,
-      undefined,
+      expect.objectContaining({ beforeFetch: expect.any(Function) }),
     );
     expect(presignGet).toHaveBeenCalledWith('oss/abc');
   });
@@ -100,7 +235,7 @@ describe('fetchRemoteAbsFileToUrl', () => {
     await fetchRemoteAbsFileToUrl(deps, 'C:\\tmp\\shot.png');
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       `xdt-file://open?path=${encodeURIComponent('C:\\tmp\\shot.png')}`,
-      undefined,
+      expect.objectContaining({ beforeFetch: expect.any(Function) }),
     );
   });
 });

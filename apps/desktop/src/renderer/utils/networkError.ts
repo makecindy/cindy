@@ -40,9 +40,10 @@ export function parseReconnectAttemptMessage(message: string): ReconnectAttempt 
 }
 
 export function isNetworkishErrorMessage(message: string): boolean {
+  // Keep code-less Responses availability errors aligned with maker-core.
   return (
     parseReconnectAttemptMessage(message) !== null ||
-    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|^The operation timed out|stream ended before a terminal|Connection error|upstream stream error/i.test(
+    /\b50[234]\b|Bad Gateway|\bService(?:\s+is)?(?:\s+temporarily)?\s+Unavailable\b|\bmodel(?:'s)?\s+availability\s+is\s+(?:currently\s+)?degraded\b|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|^The operation timed out|stream ended before a terminal|Connection error|upstream stream error/i.test(
       message,
     )
   );

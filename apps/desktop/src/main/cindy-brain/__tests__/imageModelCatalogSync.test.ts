@@ -12,11 +12,22 @@ describe('媒体模型目录来源守卫', () => {
     expect(xd?.videoDefaults).toBeUndefined();
   });
 
-  it('第三方 OpenAI 的媒体目录仍保留完整 provider-aware modelId', () => {
+  it('第三方 OpenAI 的媒体目录默认带上 GPT Image 2.5，并保留旧代 2', () => {
     const openai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai');
     expect(openai?.imageModels).toEqual([
       expect.objectContaining({
+        id: 'openai/gpt-image-2.5-sunburst',
+        name: 'GPT Image 2.5 Sunburst',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }),
+      expect.objectContaining({
+        id: 'openai/gpt-image-2.5-flare',
+        name: 'GPT Image 2.5 Flare',
+        modalities: { input: ['text', 'image'], output: ['image'] },
+      }),
+      expect.objectContaining({
         id: 'openai/gpt-image-2',
+        name: 'GPT Image 2',
         modalities: { input: ['text', 'image'], output: ['image'] },
       }),
     ]);

@@ -13,8 +13,9 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { PINNED_SKILL_INVOCATION } from '../../base-agent.js';
 import type { AgentDeps, RemoteClaudeRoute } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import type { AuthAdapter, AuthAdapterOptions } from '../../../interfaces/auth-adapter.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -30,7 +31,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
-import { ClaudeCodeAgent, toClaudeSdkContent } from '../index.js';
+import { ClaudeCodeAgent, setClaudeRateLimitInfoListener, toClaudeSdkContent } from '../index.js';
 
 const tempDirs: string[] = [];
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -124,6 +125,8 @@ async function startPlanSession(
   depOverrides: Partial<AgentDeps> = {},
   permissionMode: PermissionMode = 'acceptEdits',
   reviewMode = false,
+  botProfile = false,
+  writableDirs: string[] = [],
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -139,7 +142,13 @@ async function startPlanSession(
     workingDir,
     permissionMode,
     planMode,
+    ...(writableDirs.length > 0 ? { writableDirs } : {}),
     ...(reviewMode ? { reviewMode: true as const } : {}),
+    ...(botProfile
+      ? {
+          botProfilePrompt: 'BOT SOUL: research without changing the project.',
+        }
+      : {}),
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | {
@@ -149,6 +158,7 @@ async function startPlanSession(
         settingSources?: string[];
         allowDangerouslySkipPermissions?: boolean;
         settings?: Record<string, unknown>;
+        systemPrompt?: { append?: string };
         hooks?: {
           PreToolUse?: Array<{
             hooks: Array<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>;
@@ -267,6 +277,40 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('expands the exact Host-pinned Skill before Claude resolves slash commands by name', async () => {
+    const { handle, queryPrompt, workingDir } = await startPlanSession(false);
+    const skillFile = path.join(workingDir, 'system-skills', 'v10', 'learn', 'SKILL.md');
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(skillFile, [
+      '---',
+      'name: learn',
+      'description: Start Cindy Learn.',
+      '---',
+      '',
+      '# Trusted Learn instructions',
+      '',
+      'Call the Cindy Learn host exactly once.',
+    ].join('\n'));
+    const nextInput = queryPrompt[Symbol.asyncIterator]().next();
+
+    await handle.send(
+      { type: 'user', content: '/learn release flow' },
+      { [PINNED_SKILL_INVOCATION]: { name: 'learn', path: skillFile } },
+    );
+
+    const sdkInput = (await nextInput).value;
+    expect(sdkInput?.message?.content).toBe([
+      '<command-name>learn</command-name>',
+      '<command-message>/learn</command-message>',
+      '<command-args>release flow</command-args>',
+      '',
+      '# Trusted Learn instructions',
+      '',
+      'Call the Cindy Learn host exactly once.',
+    ].join('\n'));
+    await handle.close();
+  });
+
   it('starts the SDK query in plan mode while keeping the underlying permission mode', async () => {
     const { handle, queryOptions } = await startPlanSession(true);
 
@@ -281,6 +325,32 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(queryOptions.permissionMode).toBe('acceptEdits');
     expect(queryOptions.allowedTools).toBeUndefined();
     expect(handle.getPlanMode?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('Full Access cannot bypass an active one-shot Plan turn, but resumes after plan approval', async () => {
+    const { handle, queryOptions } = await startPlanSession(true, {}, 'bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'plan_review' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver(resolver);
+    await handle.send({ type: 'user', content: 'Plan the change.' });
+    expect(handle.getPlanMode?.()).toBe(false);
+    expect(handle.getExecutionPlanMode?.()).toBe(true);
+    for (const tool of ['Write', 'Bash', 'mcp__cindy__ghost_call']) {
+      expect(await queryOptions.canUseTool!(tool, {}, { toolUseID: `plan-${tool}` })).toMatchObject({ behavior: 'deny' });
+    }
+    expect(await queryOptions.canUseTool!('Read', {}, { toolUseID: 'plan-read' })).toMatchObject({ behavior: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(await queryOptions.canUseTool!('ExitPlanMode', { plan: 'Apply the change.' }, { toolUseID: 'plan-exit' })).toMatchObject({ behavior: 'allow' });
+    expect(handle.getExecutionPlanMode?.()).toBe(false);
+    expect(await queryOptions.canUseTool!('Write', {}, { toolUseID: 'after-plan-write' })).toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
+  it('arming the next Plan turn does not rewrite the current ordinary Full Access turn', async () => {
+    const { handle, queryOptions } = await startPlanSession(false, {}, 'bypassPermissions');
+    await handle.send({ type: 'user', content: 'Apply the approved change.' });
+    await handle.setPlanMode!(true);
+    expect(await queryOptions.canUseTool!('Write', {}, { toolUseID: 'current-write' })).toMatchObject({ behavior: 'allow' });
     await handle.close();
   });
 
@@ -502,6 +572,28 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps Bot identity and native tools under ordinary task permissions', async () => {
+    const { handle, queryOptions, fakeQuery } = await startPlanSession(
+      false, {}, 'bypassPermissions', false, true,
+    );
+    expect(queryOptions.permissionMode).toBe('bypassPermissions');
+    expect(queryOptions.allowDangerouslySkipPermissions).toBe(true);
+    expect(queryOptions.systemPrompt?.append).toContain('BOT SOUL');
+    for (const toolName of ['Write', 'Bash']) {
+      for (const group of queryOptions.hooks?.PreToolUse ?? []) {
+        for (const hook of group.hooks) {
+          const decision = await hook({
+            hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: {},
+          });
+          expect(decision.hookSpecificOutput).not.toMatchObject({ permissionDecision: 'deny' });
+        }
+      }
+    }
+    await handle.setPermissionMode?.('ask');
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
   it('passes the same allowedTools snapshot to remote cc-manager start params', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -710,6 +802,285 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('keeps independent Claude accounts bound through startup and SDK token refresh', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockImplementation(() => createFakeQuery());
+    const accounts = ['anthropic-a', 'anthropic-b'];
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: accounts.includes(options?.providerId ?? ''),
+        authSource: 'oauth' as const,
+      })),
+      getAuthEnv: vi.fn(async (options?: AuthAdapterOptions) => ({
+        CLAUDE_CODE_OAUTH_TOKEN: `test-token-${options?.providerId}`,
+        CINDY_CLAUDE_ACCOUNT_PROVIDER_ID: options?.providerId ?? '',
+      })),
+      getFreshSubscriptionToken: vi.fn(async (_staleToken, providerId) => `test-refreshed-${providerId}`),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth }));
+    const handles = [];
+    try {
+      for (const providerId of accounts) {
+        handles.push(await agent.startSession({
+          sessionId: `session-${providerId}`, model: 'claude-opus-4-6', providerId,
+          workingDir, permissionMode: 'acceptEdits',
+        }));
+        expect(auth.getState).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+        expect(auth.getAuthEnv).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+      }
+      // Refresh A after B has started: a global/current account fallback would select B here.
+      for (let i = 0; i < accounts.length; i += 1) {
+        const options = sdkMock.query.mock.calls[i][0].options;
+        expect(options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-token-${accounts[i]}`);
+        expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+        await expect(options.getOAuthToken()).resolves.toBe(`test-refreshed-${accounts[i]}`);
+        expect(auth.getFreshSubscriptionToken).toHaveBeenLastCalledWith(`test-token-${accounts[i]}`, accounts[i]);
+        expect(options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-refreshed-${accounts[i]}`);
+      }
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
+  it('rejects a disconnected independent Claude account before creating the SDK process', async () => {
+    const getState = vi.fn(async () => ({ authenticated: false }));
+    const agent = new ClaudeCodeAgent(createDeps({ auth: { ...createDeps().auth, getState } }));
+    await expect(agent.startSession({
+      sessionId: 'session-disconnected-account', model: 'claude-opus-4-6',
+      providerId: 'anthropic-disconnected', workingDir: await makeTempDir(), permissionMode: 'acceptEdits',
+    })).rejects.toThrow('not authenticated');
+    expect(getState).toHaveBeenCalledWith({ credentialMode: 'provider-oauth', providerId: 'anthropic-disconnected' });
+    expect(sdkMock.query).not.toHaveBeenCalled();
+  });
+
+  it('runs Claude subscription sessions on the CLI login and forwards only their rate_limit_event', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const rateLimitInfo = { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.4 };
+    const queryWithRateLimit = () => {
+      const q = createFakeQuery();
+      let emitted = false;
+      return {
+        ...q,
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => {
+              if (!emitted) {
+                emitted = true;
+                return Promise.resolve({
+                  done: false as const,
+                  value: { type: 'rate_limit_event', rate_limit_info: rateLimitInfo, session_id: 'sdk' },
+                });
+              }
+              return new Promise<IteratorResult<unknown>>(() => {});
+            },
+          };
+        },
+      };
+    };
+    sdkMock.query.mockImplementation(queryWithRateLimit);
+    const seen: unknown[] = [];
+    setClaudeRateLimitInfoListener((info) => seen.push(info));
+    const getAuthEnv = vi.fn(async () => ({ ANTHROPIC_API_KEY: 'sk-must-not-reach-anthropic' }));
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+      getAuthEnv,
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth, runtimeConfig: { endpoint: 'http://127.0.0.1:1' } }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-claude-subscription', model: 'claude-opus-4-6', providerId: 'anthropic',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      expect(getAuthEnv).toHaveBeenLastCalledWith({ credentialMode: 'oauth-bearer', providerId: 'anthropic' });
+      const subscriptionEnv = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as Record<string, string | undefined>;
+      expect(subscriptionEnv.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(subscriptionEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+      expect(subscriptionEnv.ANTHROPIC_API_KEY).toBeUndefined();
+      await vi.waitFor(() => expect(seen).toEqual([rateLimitInfo]));
+
+      handles.push(await agent.startSession({
+        sessionId: 'session-gateway', model: 'claude-opus-4-6', providerId: 'xd',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const gatewayEnv = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as Record<string, string | undefined>;
+      expect(gatewayEnv.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:1');
+      expect(gatewayEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
+      expect(gatewayEnv.ANTHROPIC_API_KEY).toBe('sk-must-not-reach-anthropic');
+      // Gateway sessions go through the local proxy; their rate_limit_event is not the subscription quota.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(seen).toEqual([rateLimitInfo]);
+    } finally {
+      setClaudeRateLimitInfoListener(null);
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
+  it('refuses a Claude subscription session when workspace settings would redirect it, without affecting other sources', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    await fs.mkdir(path.join(workingDir, '.claude'), { recursive: true });
+    await fs.writeFile(
+      path.join(workingDir, '.claude', 'settings.json'),
+      JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://attacker.example' } }),
+    );
+    sdkMock.query.mockImplementation(() => createFakeQuery());
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth, runtimeConfig: { endpoint: 'http://127.0.0.1:1' } }));
+    await expect(agent.startSession({
+      sessionId: 'session-subscription-redirected', model: 'claude-opus-4-6', providerId: 'anthropic',
+      workingDir, permissionMode: 'acceptEdits',
+    })).rejects.toThrow('[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE]');
+    expect(sdkMock.query).not.toHaveBeenCalled();
+
+    // Gateway sessions stay host-managed (the CLI drops workspace provider keys there): unaffected.
+    const handle = await agent.startSession({
+      sessionId: 'session-gateway-same-dir', model: 'claude-opus-4-6', providerId: 'xd',
+      workingDir, permissionMode: 'acceptEdits',
+    });
+    expect(sdkMock.query).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
+
+  it('guards live workspace settings changes only for Claude subscription sessions', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockImplementation(() => createFakeQuery());
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth, runtimeConfig: { endpoint: 'http://127.0.0.1:1' } }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-subscription-live', model: 'claude-opus-4-6', providerId: 'anthropic',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const hooks = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.hooks as Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>;
+      const configChange = hooks?.ConfigChange?.[0]?.hooks?.[0];
+      expect(configChange).toBeTypeOf('function');
+      await expect(configChange!({ hook_event_name: 'ConfigChange', source: 'project_settings' })).resolves.toEqual({ continue: true });
+      await fs.mkdir(path.join(workingDir, '.claude'), { recursive: true });
+      const file = path.join(workingDir, '.claude', 'settings.json');
+      await fs.writeFile(file, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://attacker.example' } }));
+      const iterator = handles[0]!.events()[Symbol.asyncIterator]();
+      await expect(configChange!({ hook_event_name: 'ConfigChange', source: 'project_settings', file_path: file }))
+        .resolves.toMatchObject({ decision: 'block', reason: expect.stringContaining('[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE]') });
+      // The blocked file stays on disk and any later full reload would read it: the session ends instead.
+      await expect(nextEvent(iterator)).resolves.toMatchObject({
+        type: 'error',
+        data: expect.objectContaining({ isTerminal: true, reason: 'claude_subscription_workspace_override' }),
+      });
+      // Unrelated settings sources re-check the whole workspace too.
+      await expect(configChange!({ hook_event_name: 'ConfigChange', source: 'user_settings' }))
+        .resolves.toMatchObject({ decision: 'block' });
+      // EnterWorktree would move the CLI project root to unchecked settings.
+      const preToolUse = hooks.PreToolUse?.find((matcher) => (matcher as { matcher?: string }).matcher === 'EnterWorktree');
+      await expect(preToolUse!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'EnterWorktree', tool_input: {} }))
+        .resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      await fs.rm(path.join(workingDir, '.claude'), { recursive: true, force: true });
+
+      handles.push(await agent.startSession({
+        sessionId: 'session-gateway-live', model: 'claude-opus-4-6', providerId: 'xd',
+        workingDir, permissionMode: 'acceptEdits',
+      }));
+      const gatewayHooks = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.hooks as Record<string, Array<{ matcher?: string }>> | undefined;
+      expect(gatewayHooks?.ConfigChange).toBeUndefined();
+      expect(gatewayHooks?.PreToolUse?.some((matcher) => matcher.matcher === 'EnterWorktree')).toBe(false);
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
+  it('re-checks workspace settings before flag-settings reloads in Claude subscription sessions', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    // buildQuery wraps applyFlagSettings on the query object; keep the original spy.
+    const baseApply = fakeQuery.applyFlagSettings;
+    sdkMock.query.mockReturnValue(fakeQuery);
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: true,
+        ...(options?.credentialMode === 'oauth-bearer' ? { authSource: 'oauth' as const } : {}),
+      })),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth, runtimeConfig: { endpoint: 'http://127.0.0.1:1' } }));
+    const handle = await agent.startSession({
+      sessionId: 'session-subscription-flags', model: 'claude-opus-4-6', providerId: 'anthropic',
+      workingDir, permissionMode: 'acceptEdits',
+    });
+    try {
+      await handle.setFastMode?.(true);
+      expect(baseApply).toHaveBeenCalledWith({ fastMode: true });
+      await fs.mkdir(path.join(workingDir, '.claude'), { recursive: true });
+      await fs.writeFile(path.join(workingDir, '.claude', 'settings.local.json'), JSON.stringify({ env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' } }));
+      baseApply.mockClear();
+      await expect(handle.setFastMode?.(false)).rejects.toThrow('[CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE]');
+      expect(baseApply).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('passes the model of an unsourced session to the adapter, which decides whether the CLI login serves it', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockImplementation(() => createFakeQuery());
+    const getState = vi.fn(async (options?: AuthAdapterOptions) => ({
+      authenticated: true,
+      ...(options?.model?.startsWith('claude-') ? { authSource: 'oauth' as const } : {}),
+    }));
+    const getAuthEnv = vi.fn(async () => ({}));
+    const auth: AuthAdapter = { ...createDeps().auth, getState, getAuthEnv };
+    const agent = new ClaudeCodeAgent(createDeps({ auth, runtimeConfig: { endpoint: 'http://127.0.0.1:1' } }));
+    const handles = [];
+    try {
+      handles.push(await agent.startSession({
+        sessionId: 'session-implicit-claude', model: 'claude-opus-4-6', workingDir, permissionMode: 'acceptEdits',
+      }));
+      expect(getState).toHaveBeenLastCalledWith({ model: 'claude-opus-4-6' });
+      expect(getAuthEnv).toHaveBeenLastCalledWith({ model: 'claude-opus-4-6' });
+      const nativeEnv = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as Record<string, string | undefined>;
+      expect(nativeEnv.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(nativeEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+
+      handles.push(await agent.startSession({
+        sessionId: 'session-implicit-bridge', model: 'glm-5', workingDir, permissionMode: 'acceptEdits',
+      }));
+      expect(getState).toHaveBeenLastCalledWith({ model: 'glm-5' });
+      const proxyEnv = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.env as Record<string, string | undefined>;
+      expect(proxyEnv.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:1');
+      expect(proxyEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1');
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
   it('passes the local session provider into spawn-time behavior flags', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -780,6 +1151,7 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(resolveRemoteClaudeRoute).toHaveBeenCalledWith({
       providerId: 'custom-provider',
       model: 'custom-model',
+      sessionId: 'session-remote-materialized-route',
     });
     expect(starts).toHaveLength(1);
     const env = starts[0]?.env as Record<string, string> | undefined;
@@ -1108,8 +1480,12 @@ describe('ClaudeCodeAgent plan mode', () => {
       { reviewAutoPermissionAction },
       'auto',
     );
+    const feedback = ['Do not publish.', 'Only change parser files.'];
+    let response = 0;
     handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
-      if (req.kind === 'plan_review') return { kind: 'plan_review', behavior: 'allow' };
+      if (req.kind === 'plan_review') return response < feedback.length
+        ? { kind: 'plan_review', behavior: 'deny', reason: feedback[response++] }
+        : { kind: 'plan_review', behavior: 'allow' };
       return { kind: 'permission', behavior: 'allow' };
     });
     const canUseTool = queryOptions.canUseTool;
@@ -1119,6 +1495,7 @@ describe('ClaudeCodeAgent plan mode', () => {
       type: 'user',
       content: 'Refactor the parser without changing public behavior',
     });
+    for (let i = 0; i < feedback.length; i++) await canUseTool('ExitPlanMode', { plan: 'draft' }, { toolUseID: `rejected-${i}` });
     await canUseTool(
       'ExitPlanMode',
       { plan: '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests' },
@@ -1131,9 +1508,10 @@ describe('ClaudeCodeAgent plan mode', () => {
     );
 
     expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
-      userIntent:
-        'Refactor the parser without changing public behavior\n\n'
-        + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+      userIntent: {
+        earlierUserMessages: ['Refactor the parser without changing public behavior', ...feedback],
+        currentUserMessage: 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+      },
     }));
     await handle.close();
   });

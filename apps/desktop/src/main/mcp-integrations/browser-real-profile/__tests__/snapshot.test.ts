@@ -236,12 +236,148 @@ describe('snapshotRealProfile', () => {
     fs.writeFileSync(path.join(destDefault, 'GPUCache', 'data'), 'gpu');
     await snapshotRealProfile({ source, destDir, platform: 'darwin' });
     expect(fs.existsSync(path.join(destDefault, 'Local Storage'))).toBe(false);
-    expect(fs.existsSync(path.join(destDefault, 'IndexedDB'))).toBe(false);
+    expect(fs.existsSync(path.join(destDefault, 'IndexedDB', 'site'))).toBe(false);
     expect(fs.existsSync(path.join(destDefault, 'Service Worker'))).toBe(false);
     expect(fs.readFileSync(path.join(destDefault, 'GPUCache', 'data'), 'utf8')).toBe('gpu');
     expect(fs.existsSync(path.join(destDefault, 'Cookies'))).toBe(true);
     expect(leftoverStagingNames(destDir)).toEqual([]);
   });
+
+  it('keeps extensions installed in the agent browser across re-snapshots', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    const destDefault = path.join(destDir, 'Default');
+    const extensionId = 'aeblfdkhhhdcdjpifhhbdiojplfjncoa';
+    const extensionIdb = `chrome-extension_${extensionId}_0.indexeddb.leveldb`;
+    fs.mkdirSync(path.join(destDefault, 'Extensions', extensionId, '8.0.0_0'), { recursive: true });
+    fs.writeFileSync(
+      path.join(destDefault, 'Extensions', extensionId, '8.0.0_0', 'manifest.json'),
+      '{}',
+    );
+    fs.writeFileSync(
+      path.join(destDefault, 'Secure Preferences'),
+      '{"extensions":{"settings":{}}}',
+    );
+    fs.mkdirSync(path.join(destDefault, 'Local Extension Settings', extensionId), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(destDefault, 'IndexedDB', extensionIdb), { recursive: true });
+    fs.mkdirSync(path.join(destDefault, 'IndexedDB', 'https_example.com_0.indexeddb.leveldb'), {
+      recursive: true,
+    });
+    const extensionCookieFiles = [
+      'Extension Cookies',
+      'Extension Cookies-wal',
+      'Extension Cookies-journal',
+    ];
+    for (const name of extensionCookieFiles) {
+      fs.writeFileSync(path.join(destDefault, name), name);
+    }
+    fs.mkdirSync(path.join(destDefault, 'DNR Extension Rules', extensionId), { recursive: true });
+
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+
+    for (const name of extensionCookieFiles) {
+      expect(fs.readFileSync(path.join(destDefault, name), 'utf8'), name).toBe(name);
+    }
+    expect(fs.existsSync(path.join(destDefault, 'DNR Extension Rules', extensionId))).toBe(true);
+
+    expect(
+      fs.existsSync(path.join(destDefault, 'Extensions', extensionId, '8.0.0_0', 'manifest.json')),
+    ).toBe(true);
+    expect(fs.readFileSync(path.join(destDefault, 'Secure Preferences'), 'utf8')).toBe(
+      '{"extensions":{"settings":{}}}',
+    );
+    expect(fs.existsSync(path.join(destDefault, 'Local Extension Settings', extensionId))).toBe(
+      true,
+    );
+    expect(fs.readdirSync(path.join(destDefault, 'IndexedDB'))).toEqual([extensionIdb]);
+  });
+
+  it('refreshes Preferences from the source but keeps the agent browser extensions subtree', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const sourcePrefs = path.join(source.userDataDir, 'Profile 6', 'Preferences');
+    fs.writeFileSync(
+      sourcePrefs,
+      JSON.stringify({ session: { restore_on_startup: 1 }, extensions: { commands: 'source' } }),
+    );
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    const destPrefs = path.join(destDir, 'Default', 'Preferences');
+
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(JSON.parse(fs.readFileSync(destPrefs, 'utf8'))).toEqual({
+      session: { restore_on_startup: 1 },
+    });
+
+    fs.writeFileSync(
+      destPrefs,
+      JSON.stringify({
+        session: { restore_on_startup: 5 },
+        extensions: { install_signature: 'agent' },
+      }),
+    );
+    fs.writeFileSync(
+      sourcePrefs,
+      JSON.stringify({ session: { restore_on_startup: 4 }, extensions: { commands: 'source' } }),
+    );
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(JSON.parse(fs.readFileSync(destPrefs, 'utf8'))).toEqual({
+      session: { restore_on_startup: 4 },
+      extensions: { install_signature: 'agent' },
+    });
+  });
+
+  it('copies a malformed source Preferences verbatim', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Preferences'), 'not-json');
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.readFileSync(path.join(destDir, 'Default', 'Preferences'), 'utf8')).toBe('not-json');
+  });
+
+  it('keeps a valid dest Preferences when the source one is malformed or missing', async () => {
+    const root = makeTempDir();
+    const source = seedSource(root);
+    const destDir = realProfileDestDir(path.join(root, 'runtime'));
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    const destPrefs = path.join(destDir, 'Default', 'Preferences');
+    const agentPrefs = JSON.stringify({ extensions: { install_signature: 'agent' } });
+    fs.writeFileSync(destPrefs, agentPrefs);
+    const sourcePrefs = path.join(source.userDataDir, 'Profile 6', 'Preferences');
+    fs.writeFileSync(sourcePrefs, '{"trunc');
+
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.readFileSync(destPrefs, 'utf8')).toBe(agentPrefs);
+
+    fs.rmSync(sourcePrefs);
+    await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(fs.readFileSync(destPrefs, 'utf8')).toBe(agentPrefs);
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'fails the snapshot when leftover site IndexedDB cannot be enumerated',
+    async () => {
+      const root = makeTempDir();
+      const source = seedSource(root);
+      const destDir = realProfileDestDir(path.join(root, 'runtime'));
+      const indexedDb = path.join(destDir, 'Default', 'IndexedDB');
+      fs.mkdirSync(path.join(indexedDb, 'https_example.com_0.indexeddb.leveldb'), {
+        recursive: true,
+      });
+      fs.chmodSync(indexedDb, 0o000);
+      try {
+        await expect(
+          snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+        ).rejects.toThrow();
+        expect(fs.existsSync(path.join(destDir, '.cindy-real-profile-complete'))).toBe(false);
+      } finally {
+        fs.chmodSync(indexedDb, 0o700);
+      }
+    },
+  );
 
   it('refuses to write anywhere except Cindy-real/user-data', async () => {
     const root = makeTempDir();
@@ -326,8 +462,12 @@ describe('snapshotRealProfile', () => {
     fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
     writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'stale-cookie');
     writeSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins', 'stale-login');
-    // Cookies copies first; a corrupt Login Data fails the later backup.
-    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
+    // The first cookie DB copies; failure of another required cookie DB must
+    // still leave the previous complete snapshot untouched.
+    fs.writeFileSync(
+      path.join(source.userDataDir, 'Profile 6', 'Network', 'Cookies'),
+      'not-a-sqlite-db',
+    );
 
     await expect(
       snapshotRealProfile({ source, destDir, platform: 'darwin' }),
@@ -339,6 +479,103 @@ describe('snapshotRealProfile', () => {
     expect(fs.existsSync(`${destDir}.staging`)).toBe(false);
     expect(leftoverStagingNames(destDir)).toEqual([]);
   });
+
+  it.each(['darwin', 'win32', 'linux'] as const)(
+    'copies cookies while optional stores have exclusive SQLite locks (%s)',
+    async (platform) => {
+      const source = seedSource(makeTempDir());
+      const profile = path.join(source.userDataDir, 'Profile 6');
+      const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+      const names = ['Login Data', 'Login Data For Account', 'Web Data'] as const;
+      writeSqlite(path.join(profile, names[1]), 'logins', 'account-password');
+      writeSqlite(path.join(profile, names[2]), 'autofill', 'saved-form');
+      await snapshotRealProfile({ source, destDir, platform });
+      const locks = names.map((name) => {
+        const db = new DatabaseSync(path.join(profile, name));
+        db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;');
+        return db;
+      });
+      try {
+        const result = await snapshotRealProfile({ source, destDir, platform });
+        expect(result.warnings).toEqual(names.map((database) => ({ database, reason: 'locked' })));
+        expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
+          'session-cookie',
+        );
+        for (const name of names) {
+          // Never leave an old password store from a previous snapshot behind.
+          expect(fs.existsSync(path.join(destDir, 'Default', name))).toBe(false);
+          expect(result.filesCopied).not.toContain(path.join('Default', name));
+        }
+        expect(leftoverStagingNames(destDir)).toEqual([]);
+      } finally {
+        for (const db of locks) db.close();
+      }
+      const retry = await snapshotRealProfile({ source, destDir, platform });
+      expect(retry.warnings).toBeUndefined();
+      expect(readSqlite(path.join(destDir, 'Default', 'Login Data'), 'logins')).toBe(
+        'saved-password',
+      );
+    },
+  );
+
+  it('skips a corrupt password database with a controlled warning', async () => {
+    const source = seedSource(makeTempDir());
+    const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+    fs.writeFileSync(path.join(source.userDataDir, 'Profile 6', 'Login Data'), 'not-a-sqlite-db');
+    const result = await snapshotRealProfile({ source, destDir, platform: 'darwin' });
+    expect(result.warnings).toEqual([{ database: 'Login Data', reason: 'copy-failed' }]);
+    expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(false);
+    expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe('session-cookie');
+  });
+
+  it.each(['darwin', 'win32'] as const)(
+    'skips optional read denial without exposing paths (%s)',
+    async (platform) => {
+      const source = seedSource(makeTempDir());
+      const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+      const realOpen = fs.openSync.bind(fs);
+      vi.spyOn(fs, 'openSync').mockImplementation(((file, flags, mode) => {
+        if (String(file) === path.join(source.userDataDir, 'Profile 6', 'Login Data')) {
+          throw Object.assign(new Error(`Access denied: ${file}`), { code: 'EACCES' });
+        }
+        return realOpen(file, flags, mode);
+      }) as typeof fs.openSync);
+      try {
+        const result = await snapshotRealProfile({ source, destDir, platform });
+        expect(result.warnings).toEqual([{ database: 'Login Data', reason: 'permission-denied' }]);
+        expect(fs.existsSync(path.join(destDir, 'Default', 'Login Data'))).toBe(false);
+        expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
+          'session-cookie',
+        );
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it('fails closed with a lock reason when the required cookie DB is locked', async () => {
+    const source = seedSource(makeTempDir());
+    const destDir = realProfileDestDir(path.join(makeTempDir(), 'runtime'));
+    const db = new DatabaseSync(path.join(source.userDataDir, 'Profile 6', 'Cookies'));
+    db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE;');
+    const realExec = DatabaseSync.prototype.exec;
+    // Keep the real exclusive-lock conflict, but do not spend the production
+    // busy timeout waiting for a lock this test only releases in finally.
+    const exec = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === 'BEGIN') realExec.call(this, 'PRAGMA busy_timeout = 0');
+      return realExec.call(this, sql);
+    });
+    try {
+      await expect(
+        snapshotRealProfile({ source, destDir, platform: 'darwin' }),
+      ).rejects.toMatchObject({ code: 'PROFILE_LOCKED' });
+      expect(fs.existsSync(destDir)).toBe(false);
+      expect(leftoverStagingNames(destDir)).toEqual([]);
+    } finally {
+      exec.mockRestore();
+      db.close();
+    }
+  }, 10_000);
 
   it('uses sqlite backup so dest has no WAL sidecar from the source', async () => {
     const root = makeTempDir();
@@ -378,11 +615,11 @@ describe('snapshotRealProfile', () => {
     fs.mkdirSync(path.join(destDir, 'Default'), { recursive: true });
     writeSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies', 'existing-snapshot');
 
-    await expect(
-      snapshotRealProfile({ source, destDir, platform: 'win32' }),
-    ).rejects.toMatchObject({
-      code: 'APP_BOUND_ENCRYPTION_UNSUPPORTED',
-    });
+    await expect(snapshotRealProfile({ source, destDir, platform: 'win32' })).rejects.toMatchObject(
+      {
+        code: 'APP_BOUND_ENCRYPTION_UNSUPPORTED',
+      },
+    );
 
     expect(readSqlite(path.join(destDir, 'Default', 'Cookies'), 'cookies')).toBe(
       'existing-snapshot',
@@ -432,6 +669,22 @@ describe('snapshotRealProfile', () => {
 });
 
 describe('probeSourceProfileReadAccess', () => {
+  it('does not require optional password read permission before launching', () => {
+    const source = seedSource(makeTempDir());
+    const realOpen = fs.openSync.bind(fs);
+    vi.spyOn(fs, 'openSync').mockImplementation(((file, flags, mode) => {
+      if (String(file).endsWith(`${path.sep}Login Data`)) {
+        throw Object.assign(new Error('private source path'), { code: 'EACCES' });
+      }
+      return realOpen(file, flags, mode);
+    }) as typeof fs.openSync);
+    try {
+      expect(probeSourceProfileReadAccess(source)).toEqual({ readable: true });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('reports readable for a fake last_used profile', () => {
     const root = makeTempDir();
     expect(probeSourceProfileReadAccess(seedSource(root))).toEqual({ readable: true });

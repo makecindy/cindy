@@ -71,6 +71,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 
 import { makerChatStore } from '@/lib/makerChatStore';
+import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { aroundMessagesByClientIdFor, listMessagesFor } from '@/lib/makerTransport';
 import {
   markSessionAutomaticHistoryLoadCompleted,
@@ -764,7 +765,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     await makerChatStore.loadAroundMessageClientId(SID, 'island', { radius: 60 });
     expect(makerChatStore.getSnapshot(SID).messages.map((m) => m.clientId)).toContain('island');
 
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(1);
 
     // 第 2 次跳转同一目标：目标已在窗口里，但那是孤岛 —— 必须重新尝试翻页补齐，
     // 而且「取回一页无关的行」不能算作已覆盖（review #676：判定必须看本页是否真的取到
@@ -777,23 +778,28 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     await makerChatStore.loadAroundMessageClientId(SID, 'island', { radius: 60 });
 
     expect(vi.mocked(listMessagesFor).mock.calls.length).toBeGreaterThan(callsBefore);
-    // 关键：没真的取到目标 → 孤岛标记必须还在，下次跳转仍会重试。
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    // 关键：没真的取到目标 → 孤岛区间必须还在，下次跳转仍会重试。
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(1);
 
     // 第 3 次跳转：这次翻页真的取到目标 → 本次算覆盖（不再退回 around fallback）。
-    // 但孤岛标记**不清**：到达本次目标只证明「尾部 → 本目标」连续，不证明更早的孤岛都被
-    // 跨过（review #676 的两孤岛序列）。只由窗口整体重建清零。
+    // 显式建模下，这座孤岛本身就是目标、又被翻页真的跨过 → 从模型移除；更早的孤岛
+    // （两孤岛序列里先落下的那座）不受波及，由「T2」用例覆盖。
     const callsBefore3 = vi.mocked(listMessagesFor).mock.calls.length;
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([target]);
     vi.mocked(listMessagesFor).mockResolvedValueOnce([target]);
     const found = await makerChatStore.loadAroundMessageClientId(SID, 'island', { radius: 60 });
     expect(found?.clientId).toBe('island');
     expect(vi.mocked(listMessagesFor).mock.calls.length).toBeGreaterThan(callsBefore3);
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
-
-    // 窗口整体重建（reloadMessages 语义）才把标记清零。
+    // 关键：被跨过的孤岛移出模型 → 窗口内搜索可以零成本 focus，不再每次白打一轮探测。
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
+    expect(makerChatStore.getSnapshot(SID).messages.map((m) => m.clientId)).toEqual([
+      'island',
+      'noise',
+      'tail',
+    ]);
+    // 窗口整体重建（reloadMessages 语义）保持空模型。
     makerChatStore.reloadMessages(SID);
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
   });
 
   it('U. 预算对照窗口总量,连续多次跳转不会各自重新起算', async () => {
@@ -959,7 +965,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
 
   it('Z. busy 让位时 around 一行没新增,不得凭空记上孤岛', async () => {
     // review #676(codex P1):busy 是在成员快速通道**之前**返回的(锁优先),所以"目标本来
-    // 就在连续窗口里"也会走到 busy 的 fallback。那里原先无条件置 historyWindowHasIsland,
+    // 就在连续窗口里"也会走到 busy 的 fallback。那里原先无条件记孤岛,
     // 于是一个本来连续的窗口被永久标成不连续:此后每次窗口内搜索都绕过直接 focus、从
     // oldestMessageId 往上补齐,而那个游标比已加载的目标更老、翻页永远碰不到它。
     const seeded = fullPageNewestFirst();
@@ -969,7 +975,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([inWindow]);
     vi.mocked(listMessagesFor).mockResolvedValueOnce(seeded);
     await makerChatStore.loadAroundMessageClientId(SID, inWindow.clientId, { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBe(0);
     const windowSize = makerChatStore.getSnapshot(SID).messages.length;
 
     // 让普通向上分页占住锁。
@@ -990,7 +996,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
 
     expect(makerChatStore.getSnapshot(SID).messages).toHaveLength(windowSize);
     // 关键:一行都没加进来 → 窗口连续性没有变化,标记不得被点亮。
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBe(0);
 
     releasePage([]);
     await flushMicrotasks();
@@ -1109,7 +1115,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([island]);
     vi.mocked(listMessagesFor).mockResolvedValueOnce([]);
     await makerChatStore.loadAroundMessageClientId(SID, 'island-row', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
 
     // 第 3 步:再跳目标。around 返回的是"取快照那一刻"的旧内容,补齐停在飞行中。
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([target]);
@@ -1161,7 +1167,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([island]);
     vi.mocked(listMessagesFor).mockResolvedValueOnce([]);
     await makerChatStore.loadAroundMessageClientId(SID, 'island-row', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
     // 目标此刻**不在**窗口里。
     expect(
       makerChatStore.getSnapshot(SID).messages.some((m) => m.clientId === 'arrived-target'),
@@ -1221,7 +1227,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(listMessagesFor).mockResolvedValueOnce(seeded);
     await makerChatStore.loadAroundMessageClientId(SID, inWindow.clientId, { radius: 60 });
     const before = makerChatStore.getSnapshot(SID);
-    expect(before.historyWindowHasIsland).toBe(false);
+    expect(before.historyWindowIslands.length).toBe(0);
     const cursorBefore = before.oldestMessageId;
     const hasMoreBefore = before.hasMoreMessages;
     const callsBefore = vi.mocked(listMessagesFor).mock.calls.length;
@@ -1298,7 +1304,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(aroundMessagesByClientIdFor).mockResolvedValue([target]);
     vi.mocked(listMessagesFor).mockResolvedValue([]);
     await makerChatStore.loadAroundMessageClientId(SID, 'only-row', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
     // 有新行加进来 → 边界前移,hasMore 置 true 是对的。
     expect(makerChatStore.getSnapshot(SID).hasMoreMessages).toBe(true);
 
@@ -1311,11 +1317,13 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     expect(makerChatStore.getSnapshot(SID).hasMoreMessages).toBe(false);
   });
 
-  it('Y. 超长裁剪不清孤岛标记(裁剪只保证"最新 200 行",不保证连续)', async () => {
-    // review #676(codex P1):slice(-TRIM_TARGET) 取的是最新 200 行,不等于"连续的最新
-    // 一段"。若先前几次深跳留下多个孤岛、真正连续的尾段不足 200 行,裁剪结果里还夹着孤岛。
-    // 清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛边界
-    // 往上翻又取不到那段更新的缺失区间 → 洞永久固化。
+  it('Y. 超长裁剪:整座被裁掉的孤岛随洞消失,保留的连续尾段恢复主段', async () => {
+    // review #676(codex P1)的原始口径是"裁剪不清孤岛标记",那只对粗粒度 boolean 成立
+    // (boolean 无法判断孤岛是否还在窗口里)。显式孤岛模型按"孤岛是否真的还留在窗口里"
+    // 精确收口(pruneIslandsForTrimmedWindow):整座落在 slice(-TRIM_TARGET) 裁掉一侧的
+    // 孤岛连行都没了,标记没有意义,随洞一起消失;仍夹在保留窗口里的孤岛必须保留
+    // (清掉会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,洞永久固化),
+    // 那条不变量由 Y3 覆盖 —— 260 行孤岛 + 50 行尾段,裁剪后仍夹着孤岛。
     const target = serverMessage({
       id: 'island-trim',
       clientId: 'island-trim',
@@ -1335,7 +1343,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
       );
     });
     await makerChatStore.loadAroundMessageClientId(SID, 'island-trim', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
     expect(makerChatStore.getSnapshot(SID).messages.length).toBeGreaterThan(300);
     markSessionAutomaticHistoryLoadCompleted(SID);
 
@@ -1344,8 +1352,13 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     leave();
 
     expect(makerChatStore.getSnapshot(SID).messages).toHaveLength(200);
-    // 关键:裁剪不清标记 —— 保留的 200 行未必连续。
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    // 孤岛整座落在被裁掉的最老一侧 → 精确收口出模型。
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
+    // 保留的 200 行全部来自同一条连续翻页链,没有洞 → 窗口内搜索恢复零成本 focus。
+    const retained = makerChatStore.getSnapshot(SID).messages;
+    expect(canFocusWithoutJumpLoad(makerChatStore.getSnapshot(SID), retained[0].clientId)).toBe(
+      true,
+    );
     // 普通裁剪正是原问题的重挂载场景:消息窗口仍属同一代,自动补载预算必须保持耗尽。
     expect(restoreSessionAutomaticHistoryLoadAttempts(SID, 5)).toBe(5);
   });
@@ -1406,7 +1419,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
 
     await makerChatStore.loadAroundMessageClientId(SID, 'island-000', { radius: 60 });
     expect(makerChatStore.getSnapshot(SID).messages.length).toBeGreaterThan(300);
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
     const contiguousCursor = makerChatStore.getSnapshot(SID).oldestMessageId;
     expect(contiguousCursor).toBe('tail-49');
     markSessionAutomaticHistoryLoadCompleted(SID);
@@ -1416,7 +1429,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
 
     const trimmed = makerChatStore.getSnapshot(SID);
     expect(trimmed.messages).toHaveLength(200);
-    expect(trimmed.historyWindowHasIsland).toBe(true);
+    expect(trimmed.historyWindowIslands.length).toBeGreaterThan(0);
     expect(trimmed.historyLoaded).toBe(true);
     expect(trimmed.messages[0]?.clientId.startsWith('island-')).toBe(true);
     expect(trimmed.messages.some((message) => message.clientId === 'tail-49')).toBe(true);
@@ -1438,9 +1451,9 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
       SID,
       expect.objectContaining({ beforeTs: expect.any(Number) }),
     );
-    expect(makerChatStore.getSnapshot(SID).messages.some((message) => message.clientId === 'gap-plan')).toBe(
-      true,
-    );
+    expect(
+      makerChatStore.getSnapshot(SID).messages.some((message) => message.clientId === 'gap-plan'),
+    ).toBe(true);
   });
 
   it('Y4. 孤岛与尾段间隔不足 HISTORY_GAP_SPLIT_MS 时,裁剪仍保留结构化游标', async () => {
@@ -1462,7 +1475,7 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     vi.mocked(listMessagesFor).mockResolvedValueOnce(newestTail);
 
     await makerChatStore.loadAroundMessageClientId(SID, 'near-island-000', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
     const contiguousCursor = makerChatStore.getSnapshot(SID).oldestMessageId;
     expect(contiguousCursor).toBe('near-tail-49');
     markSessionAutomaticHistoryLoadCompleted(SID);
@@ -1492,13 +1505,132 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
       serverMessage({ id: 'tail-c', clientId: 'tail-c', createdAt: '2026-07-25T12:00:00.000Z' }),
     ]);
     await makerChatStore.loadAroundMessageClientId(SID, 'island-clear', { radius: 60 });
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBeGreaterThan(0);
 
     makerChatStore.clearSession(SID);
     await flushMicrotasks();
 
     // 窗口空了 → 按构造没有孤岛。
     expect(makerChatStore.getSnapshot(SID).messages).toHaveLength(0);
-    expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(false);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands.length).toBe(0);
+  });
+
+  it('T2. 两孤岛序列:补齐只收口被跨过的那座,更早的孤岛保留;再跳它仍走补齐', async () => {
+    // feat B 显式模型:covered 只证明「尾部 → 本次目标」连续,不证明更早的孤岛被跨过
+    // (#676 review 给的两孤岛序列)。先造一座靠窗的孤岛 near,再造一座更老的 far;
+    // 成功跳到 near 时只有被翻页真的跨过的 near 收口出模型,far 保留;再跳 far 仍必须
+    // 重新翻页补齐,不被主段快速通道短路。
+    const seeded = fullPageNewestFirst();
+    const inWindow = seeded[50];
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([inWindow]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce(seeded);
+    await makerChatStore.loadAroundMessageClientId(SID, inWindow.clientId, { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
+
+    // 孤岛 near:靠窗一侧,07-20。
+    const near = serverMessage({
+      id: 'near-island-2',
+      clientId: 'near-island-2',
+      createdAt: '2026-07-20T00:00:00.000Z',
+    });
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([near]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([
+      serverMessage({
+        id: 'noise-near-2',
+        clientId: 'noise-near-2',
+        createdAt: '2026-07-24T00:00:00.000Z',
+      }),
+    ]);
+    await makerChatStore.loadAroundMessageClientId(SID, near.clientId, { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(1);
+
+    // 孤岛 far:更老一侧,07-01,与 near 不相连。
+    const far = serverMessage({
+      id: 'far-island-2',
+      clientId: 'far-island-2',
+      createdAt: '2026-07-01T00:00:00.000Z',
+    });
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([far]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([]);
+    await makerChatStore.loadAroundMessageClientId(SID, far.clientId, { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(2);
+    expect(
+      makerChatStore.getSnapshot(SID).historyWindowIslands.map((i) => i.oldestClientId),
+    ).toEqual(['far-island-2', 'near-island-2']);
+
+    // 成功跳到 near:翻页真的取到 near → 只有这座被跨过的孤岛收口,far 保留。
+    const callsBeforeNear = vi.mocked(listMessagesFor).mock.calls.length;
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([near]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([near]);
+    const foundNear = await makerChatStore.loadAroundMessageClientId(SID, near.clientId, {
+      radius: 60,
+    });
+    expect(foundNear?.clientId).toBe(near.clientId);
+    expect(vi.mocked(listMessagesFor).mock.calls.length).toBeGreaterThan(callsBeforeNear);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(1);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands[0].oldestClientId).toBe(
+      far.clientId,
+    );
+
+    // 再跳 far:它仍是孤岛、不在主段内 → 必须重新翻页补齐,不被快速通道短路。
+    const callsBeforeFar = vi.mocked(listMessagesFor).mock.calls.length;
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([far]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([far]);
+    const foundFar = await makerChatStore.loadAroundMessageClientId(SID, far.clientId, {
+      radius: 60,
+    });
+    expect(foundFar?.clientId).toBe(far.clientId);
+    expect(vi.mocked(listMessagesFor).mock.calls.length).toBeGreaterThan(callsBeforeFar);
+    // 补齐把 far 也真的跨过 → 模型清零,窗口内搜索恢复零成本 focus。
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
+  });
+
+  it('T3. 翻页把缺口填上、孤岛收口后,同一目标零成本直跳(不再白打探测)', async () => {
+    // feat B 目标:孤岛被向上翻页**真的跨过**(absorbIslandsCrossedByPaging)后从模型消失,
+    // canFocusWithoutJumpLoad 恢复 true —— 生产搜索 effect 直接 focus,不再每次白打一轮
+    // around + list;store 侧快速通道也零分页请求。
+    const seeded = fullPageNewestFirst();
+    const inWindow = seeded[50];
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([inWindow]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce(seeded);
+    await makerChatStore.loadAroundMessageClientId(SID, inWindow.clientId, { radius: 60 });
+
+    // 失败深跳留下孤岛(翻页取不到目标 → 退回 around 窗口)。
+    const target = serverMessage({
+      id: 'gap-fill-target',
+      clientId: 'gap-fill-target',
+      createdAt: '2026-07-01T00:00:00.000Z',
+    });
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([target]);
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([
+      serverMessage({
+        id: 'gap-noise',
+        clientId: 'gap-noise',
+        createdAt: '2026-07-24T00:00:00.000Z',
+      }),
+    ]);
+    await makerChatStore.loadAroundMessageClientId(SID, target.clientId, { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(1);
+    // 孤岛期间:生产入口拒绝零成本 focus,每次窗口内搜索都会走补齐。
+    expect(canFocusWithoutJumpLoad(makerChatStore.getSnapshot(SID), target.clientId)).toBe(false);
+
+    // 普通向上翻页把缺口填上:本页最老行就是目标 → 孤岛被真的跨过,收口出模型。
+    vi.mocked(listMessagesFor).mockResolvedValueOnce([target]);
+    const didAdvance = await makerChatStore.loadOlderMessages(SID);
+    expect(didAdvance).toBe(true);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
+
+    // 窗口内搜索:生产入口此刻判定可直接 focus(零网络)。
+    expect(canFocusWithoutJumpLoad(makerChatStore.getSnapshot(SID), target.clientId)).toBe(true);
+
+    // store 侧重跳同一条:快速通道 covered,不再发任何分页请求。
+    const listCallsAfterFill = vi.mocked(listMessagesFor).mock.calls.length;
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([target]);
+    const found = await makerChatStore.loadAroundMessageClientId(SID, target.clientId, {
+      radius: 60,
+    });
+    expect(found?.clientId).toBe(target.clientId);
+    expect(vi.mocked(listMessagesFor).mock.calls.length).toBe(listCallsAfterFill);
+    expect(makerChatStore.getSnapshot(SID).historyWindowIslands).toHaveLength(0);
   });
 });

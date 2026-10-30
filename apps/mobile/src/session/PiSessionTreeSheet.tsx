@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 
 import { Text } from '@/components/AppText';
+import { ErrorNotice } from '@/components/ErrorNotice';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -88,10 +90,18 @@ export function PiSessionTreeSheet({
     }
   }, [disabledReason, maker, onNavigated, sessionId, switchingId, t, tree?.leafId]);
 
-  const renderNode = (node: MobilePiSessionTreeNode, depth: number): ReactNode => {
+  const renderNode = (node: MobilePiSessionTreeNode, branchDepth: number, justBranched: boolean): ReactNode => {
     const active = tree?.activePathIds.includes(node.id) === true;
     const current = tree?.leafId === node.id;
     const busy = switchingId !== null;
+    const branching = node.children.length > 1;
+    // Pi groups the first continuation after a fork once; later single-child
+    // continuations stay aligned. A nested fork adds one level, not both.
+    const childBranchDepth = branching
+      ? branchDepth + 1
+      : justBranched && branchDepth > 0
+        ? branchDepth + 1
+        : branchDepth;
     return (
       <View key={node.id}>
         <Pressable
@@ -102,7 +112,7 @@ export function PiSessionTreeSheet({
           onPress={() => void navigate(node)}
           style={({ pressed }) => [
             styles.node,
-            { paddingLeft: spacing.md + depth * spacing.lg },
+            { paddingLeft: spacing.md + branchDepth * spacing.lg },
             active && styles.nodeActive,
             pressed && styles.nodePressed,
           ]}
@@ -113,7 +123,7 @@ export function PiSessionTreeSheet({
               <ActivityIndicator color={colors.textPrimary} size="small" />
             ) : current ? (
               <Check color={colors.textPrimary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-            ) : node.children.length > 1 ? (
+            ) : branching ? (
               <GitBranch color={active ? colors.textPrimary : colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             ) : (
               <MessageSquare color={active ? colors.textPrimary : colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
@@ -129,13 +139,13 @@ export function PiSessionTreeSheet({
             </Text>
           </View>
         </Pressable>
-        {node.children.map((child) => renderNode(child, depth + 1))}
+        {node.children.map((child) => renderNode(child, childBranchDepth, branching))}
       </View>
     );
   };
 
   return (
-    <SheetModal visible={visible} onBackdropPress={onClose} onRequestClose={onClose}>
+    <SheetModal nativePresentation visible={visible} onBackdropPress={onClose} onRequestClose={onClose}>
       <SheetSurface
         bottomInset={insets.bottom}
         heights={heights}
@@ -148,15 +158,12 @@ export function PiSessionTreeSheet({
       >
         {disabledReason ? <Text style={styles.notice}>{disabledReason}</Text> : null}
         {error ? (
-          <Pressable onPress={() => void load()} style={styles.noticeButton}>
-            <Text style={styles.error}>{error}</Text>
-            <Text style={styles.retry}>{t('session.screen.retry')}</Text>
-          </Pressable>
+          <ErrorNotice message={error} actions={<MainWindowActionButton action={{ label: t('session.screen.retry'), onPress: () => void load() }} />} />
         ) : null}
         {loading ? (
           <View style={styles.loading}><ActivityIndicator color={colors.textSecondary} /></View>
         ) : tree && tree.roots.length > 0 ? (
-          tree.roots.map((node) => renderNode(node, 0))
+          tree.roots.map((node) => renderNode(node, tree.roots.length > 1 ? 1 : 0, tree.roots.length > 1))
         ) : !error ? (
           <Text style={styles.empty}>{t('session.menu.branchEmpty')}</Text>
         ) : null}
@@ -167,19 +174,19 @@ export function PiSessionTreeSheet({
 
 function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    empty: { color: colors.textTertiary, fontSize: typeScale.listBody, padding: spacing.xl, textAlign: 'center' },
-    error: { color: colors.errorText, flex: 1, fontSize: typeScale.listBody },
+    empty: { color: colors.textTertiary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, padding: spacing.xl, textAlign: 'center' },
+    error: { color: colors.errorText, flex: 1, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     loading: { alignItems: 'center', minHeight: 120, justifyContent: 'center' },
     node: { alignItems: 'flex-start', borderRadius: radius.container, flexDirection: 'row', gap: spacing.sm, minHeight: 54, paddingRight: spacing.md, paddingVertical: spacing.sm },
     nodeActive: { backgroundColor: colors.surfaceElevated },
     nodeIcon: { alignItems: 'center', borderColor: colors.border, borderRadius: radius.container, borderWidth: StyleSheet.hairlineWidth, height: 24, justifyContent: 'center', marginTop: 2, width: 24 },
     nodeIconActive: { borderColor: colors.borderStrong },
-    nodeLabel: { color: colors.textTertiary, fontSize: typeScale.caption },
+    nodeLabel: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
     nodePressed: { opacity: 0.7 },
-    nodePreview: { color: colors.textPrimary, fontSize: typeScale.listBody, lineHeight: lineHeight.listBody },
+    nodePreview: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     nodeText: { flex: 1, gap: 2 },
-    notice: { color: colors.textSecondary, fontSize: typeScale.listBody, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
+    notice: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
     noticeButton: { alignItems: 'center', backgroundColor: colors.surfaceElevated, borderRadius: radius.container, flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm, marginHorizontal: spacing.md, padding: spacing.md },
-    retry: { color: colors.textPrimary, fontSize: typeScale.listBody, fontWeight: fontWeight.semibold },
+    retry: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
   });
 }

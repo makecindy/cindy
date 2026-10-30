@@ -1,11 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CINDY_LEARN_SOURCE_DESCRIPTION } from '../../../shared/cindyBuiltInSkills';
 
 import {
+  commandsForHelpCard,
   filterSlashCommands,
   firstAvailableSlashCommandIndex,
   hasAvailableSlashCommand,
   hasUnavailableProjectSkillPreview,
+  isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
+  loadAllCommands,
   mergeCommands,
   nextAvailableSlashCommandIndex,
   rebaseInlineRangesAfterSlashCommandRewrite,
@@ -14,6 +18,7 @@ import {
   rewriteAgentSkillInvocationForDispatch,
   rewritePiSkillAliasFromCommand,
   rewritePiSkillMessageForSend,
+  rewriteBuiltInSkillDraftForSend,
   slashCommandInvocationName,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -23,6 +28,109 @@ const skill = (overrides: Partial<Extract<UnifiedCommand, { kind: 'agent-skill' 
   name: 'demo',
   source: 'skill' as const,
   ...overrides,
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function stubCommandLists(skillResult: { success: boolean; skills?: UnifiedCommand[] }) {
+  vi.stubGlobal('window', {
+    electronAPI: {
+      maker: {
+        listDesktopCommands: vi.fn(async () => ({
+          success: true,
+          commands: [{ kind: 'desktop', name: 'learn', description: 'Learn' }],
+        })),
+        listAgentCommands: vi.fn(async () => ({ success: true, commands: [] })),
+        listAgentSkills: vi.fn(async () => skillResult),
+      },
+    },
+  });
+}
+
+describe('loadAllCommands Learn fallback', () => {
+  it.each([
+    ['the Skill query fails', { success: false }],
+    ['Learn is not discovered yet', { success: true, skills: [] }],
+  ])('keeps the Desktop Learn command when %s', async (_label, result) => {
+    stubCommandLists(result as { success: boolean; skills?: UnifiedCommand[] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([
+      { kind: 'desktop', name: 'learn', description: 'Learn' },
+    ]);
+  });
+
+  it('uses an available Agent Skill instead of the Desktop Learn fallback', async () => {
+    const learnSkill = skill({ name: 'learn', builtIn: true });
+    stubCommandLists({ success: true, skills: [learnSkill] });
+
+    await expect(loadAllCommands('claude-code', null)).resolves.toEqual([learnSkill]);
+  });
+});
+
+// Unit: the creator's click-time name is not its final invocation identity.
+// Resolve through the production IPC catalog after engine/task-computer changes.
+describe('routed built-in draft dispatch', () => {
+  const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+  it('resolves a Pi draft to the official Claude alias on the final task computer', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    const invoke = vi.fn(async (_device, channel) => channel === 'maker:list-agent-skills'
+      ? { success: true, skills: [
+          skill({ name: 'cindy-plugin-creator' }),
+          skill({ name: 'cindy:cindy-plugin-creator', runtimeCommandName: 'cindy:cindy-plugin-creator', builtIn: true }),
+        ] }
+      : { success: true, commands: [] });
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code',
+      deviceId: 'task-computer', workingDir: '/project',
+    })).resolves.toBe('/cindy:cindy-plugin-creator Make a plugin');
+    expect(invoke).toHaveBeenCalledWith('task-computer', 'maker:list-agent-skills', ['claude-code', { workingDir: '/project', forceReload: true }]);
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refuses a missing built-in and an SSH draft instead of sending a user Skill', async () => {
+    stubCommandLists({ success: true, skills: [skill({ name: 'cindy-plugin-creator' })] });
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'pi' as const };
+    await expect(rewriteBuiltInSkillDraftForSend(request)).resolves.toBeNull();
+    vi.mocked(window.electronAPI.maker.listAgentSkills).mockClear();
+    await expect(rewriteBuiltInSkillDraftForSend({ ...request, remoteHostId: 'ssh-host' })).resolves.toBeNull();
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+  it('refreshes a handed-off identity when project skills change after preflight', async () => {
+    const catalog = { success: true, skills: [skill({ name: intent.name, builtIn: true })] };
+    stubCommandLists(catalog);
+    const request = { message: '/cindy-plugin-creator Make a plugin', intent, agentKind: 'claude-code' as const, workingDir: '/project' };
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe(request.message);
+    catalog.skills = [skill({ name: intent.name }), skill({ name: `cindy:${intent.name}`, builtIn: true })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBe('/cindy:cindy-plugin-creator Make a plugin');
+    catalog.skills = [skill({ name: intent.name })];
+    expect(await rewriteBuiltInSkillDraftForSend(request)).toBeNull();
+  });
+  it('respects an explicitly edited command instead of restoring the routed Skill', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    await expect(rewriteBuiltInSkillDraftForSend({
+      message: '/custom My changed request', intent, agentKind: 'pi',
+    })).resolves.toBe('/custom My changed request');
+    expect(window.electronAPI.maker.listAgentSkills).not.toHaveBeenCalled();
+  });
+});
+
+describe('commandsForHelpCard', () => {
+  it('preserves only the Main-attested built-in marker needed for localized descriptions', () => {
+    expect(commandsForHelpCard([
+      skill({ name: 'learn', builtIn: true, description: CINDY_LEARN_SOURCE_DESCRIPTION }),
+      skill({ name: 'custom', description: 'Custom description' }),
+    ])).toEqual([
+      {
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        source: 'skill',
+        builtIn: true,
+      },
+      { name: 'custom', description: 'Custom description', source: 'skill' },
+    ]);
+  });
 });
 
 describe('rewriteAgentSkillInvocationForDispatch', () => {
@@ -116,6 +224,78 @@ describe('rewriteAgentSkillInvocationForDispatch', () => {
 });
 
 describe('filterSlashCommands', () => {
+  it('ranks a plugin command by its display label so hidden qualifiers keep exact matches on top', () => {
+    const prefixed = Array.from({ length: 30 }, (_, i) => ({
+      kind: 'desktop' as const, name: `draw-${i}`, description: '',
+    }));
+    const shared = [
+      { kind: 'desktop' as const, name: 'draw/@root', description: '', label: 'draw' },
+      { kind: 'desktop' as const, name: 'draw/acme', description: '', label: 'draw', meta: '团队共享' },
+    ];
+    const commands = [...prefixed, ...shared];
+
+    expect(filterSlashCommands(commands, 'draw').slice(0, 2).map((command) => command.name))
+      .toEqual(['draw/@root', 'draw/acme']);
+    // The full qualified token still matches what will be inserted.
+    expect(filterSlashCommands(commands, 'draw/acme').map((command) => command.name)).toEqual(['draw/acme']);
+  });
+
+  it('places Cindy official entries before ordinary commands in the initial palette', () => {
+    const commands = [
+      { kind: 'desktop' as const, name: 'help', description: 'Help' },
+      {
+        kind: 'agent-skill' as const,
+        name: 'cindy-skill-creator',
+        description: 'Create or update a Cindy Skill',
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      {
+        kind: 'agent-skill' as const,
+        name: 'learn',
+        description: CINDY_LEARN_SOURCE_DESCRIPTION,
+        builtIn: true,
+        source: 'skill' as const,
+      },
+      { kind: 'agent-skill' as const, name: 'release-notes', source: 'skill' as const },
+    ];
+
+    expect(filterSlashCommands(commands, '').map((command) => command.name)).toEqual([
+      'cindy-skill-creator',
+      'learn',
+      'help',
+      'release-notes',
+    ]);
+  });
+
+  it('recognizes the Cindy Learn Skill but not a same-name desktop command or user Skill', () => {
+    expect(isCindyOfficialSlashCommand({
+      kind: 'desktop',
+      name: 'learn',
+      description: 'Learn',
+    })).toBe(false);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: 'Distill a reusable Skill with Cindy',
+      builtIn: true,
+      source: 'skill',
+    })).toBe(true);
+    expect(isCindyOfficialSlashCommand({
+      kind: 'agent-skill',
+      name: 'learn',
+      description: CINDY_LEARN_SOURCE_DESCRIPTION,
+      source: 'skill',
+    })).toBe(false);
+  });
+
   it('matches command names by case-insensitive containment', () => {
     const commands = [
       { kind: 'desktop' as const, name: 'lark-drive', description: 'Drive' },
@@ -516,5 +696,13 @@ describe('Pi project skill availability', () => {
       },
     })).resolves.toEqual({ command: desktop, commands: [desktop] });
     expect(reloaded).toBe(false);
+  });
+});
+
+
+describe('Claude managed skill dispatch', () => {
+  it('rewrites the short Cindy command to its native plugin command, preserving arguments', () => {
+    const command = skill({ name: 'learn', runtimeCommandName: 'cindy:learn', builtIn: true });
+    expect(rewriteAgentSkillInvocationForDispatch('/learn keep this workflow', command)).toBe('/cindy:learn keep this workflow');
   });
 });

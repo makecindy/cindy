@@ -23,6 +23,9 @@ export const MOBILE_SCHEDULE_EFFORT_VALUES = [
   'ultra',
 ] as const;
 
+/** Minute steps that map to stable fixed slots across hour boundaries. */
+export const SUPPORTED_INTERVAL_MINUTES = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30] as const;
+
 export type MobileScheduleEffort = (typeof MOBILE_SCHEDULE_EFFORT_VALUES)[number];
 export type MobileScheduleRunMode = 'recurring' | 'manual';
 export type MobileScheduleSessionMode = 'fresh' | 'persistent' | 'bound';
@@ -41,7 +44,7 @@ export interface MobileScheduleDraft {
   timezone: string;
   intervalMinutes: string;
   /**
-   * 原任务的 intervalMs。表单只表达得了 1-59 分钟 / 整点小时,MCP 可以设出
+   * 原任务的 intervalMs。表单只表达得了能整除 60 的分钟间隔 / 整点小时,MCP 可以设出
    * 表单区间外的间隔(如 90 分钟),这时 intervalMinutes 折叠成 '' ——保存时
    * 必须能区分「表达不了」和「用户清空」,否则只改 prompt 也会静默清掉间隔
    * (copilot review 发现)。
@@ -53,10 +56,14 @@ export interface MobileScheduleDraft {
    */
   intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
+  modelAgentDeviceId?: string;
+  /** Form-only baseline; changing the selected model must not overwrite this binding. */
+  boundAgent?: { sessionId: string; agentKind: RemoteScheduleAgentKind };
   model: string;
   providerId: string;
   effort: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   workspaceKind: RemoteScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -66,6 +73,7 @@ export interface MobileScheduleDraft {
   targetSessionId: string;
   persistentSession: boolean;
   silentWhenIdle: boolean;
+  preRunHook?: { command: string; timeoutMs?: number } | null;
 }
 
 export interface ScheduleDraftValidation {
@@ -125,8 +133,6 @@ export function localizeTemplateParamValidation(
 
 const DEFAULT_CRON = '0 9 * * *';
 const DEFAULT_TIMEZONE = 'Asia/Shanghai';
-const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
-const DEFAULT_CODEX_MODEL = 'gpt-5.5';
 
 export function createMobileScheduleDraft(
   schedule?: RemoteSchedule | null,
@@ -143,7 +149,8 @@ export function createMobileScheduleDraft(
       timezone: DEFAULT_TIMEZONE,
       intervalMinutes: '',
       agentKind: 'claude-code',
-      model: DEFAULT_CLAUDE_MODEL,
+      // 留空 = 用运行电脑的新建任务默认模型(序列化时省略,由 host 实时解析),不写死型号。
+      model: '',
       providerId: '',
       effort: '',
       fastMode: false,
@@ -168,11 +175,15 @@ export function createMobileScheduleDraft(
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
-    agentKind: schedule.agentKind ?? 'claude-code',
-    model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',
+    modelAgentKind: schedule.modelAgentKind,
+    modelAgentDeviceId: schedule.modelAgentDeviceId,
+    boundAgent: schedule.targetSessionId
+      ? { sessionId: schedule.targetSessionId, agentKind: schedule.agentKind ?? 'claude-code' } : undefined,
+    model: schedule.model ?? '',
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
-    fastMode: !!schedule.fastMode,
+    fastMode: (schedule.fastMode ?? false),
     workspaceKind,
     workingDir: schedule.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
@@ -182,6 +193,7 @@ export function createMobileScheduleDraft(
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
     silentWhenIdle: !!schedule.silentWhenIdle,
+    ...(schedule.preRunHook === undefined ? {} : { preRunHook: schedule.preRunHook }),
   };
 }
 
@@ -201,6 +213,11 @@ export function applyTemplateToMobileScheduleDraft(
   paramValues: Record<string, string> = {},
 ): MobileScheduleDraft {
   const agentKind = template.agentKind ?? draft.agentKind;
+  const selectsLocalRoute = agentKind !== draft.agentKind || !!template.model?.trim() || template.providerId !== undefined;
+  // Keep location with an inherited route; local template overrides must not
+  // borrow the missing model/provider from a remote catalog.
+  const keepRoute = agentKind === draft.agentKind && !(draft.modelAgentDeviceId && selectsLocalRoute);
+  const model = template.model ?? (keepRoute ? draft.model : '');
   return {
     ...draft,
     name: template.name || draft.name,
@@ -212,12 +229,16 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     intervalMinutesTouched: true,
     agentKind,
-    model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    // A template producing a model is an explicit choice, including a legacy bound draft.
+    ...(model.trim() || draft.modelAgentKind ? { modelAgentKind: agentKind } : {}),
+    modelAgentDeviceId: selectsLocalRoute
+      ? (draft.modelAgentDeviceId === undefined ? undefined : '') : draft.modelAgentDeviceId,
+    model,
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
     // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
-    providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
+    providerId: template.providerId ?? (keepRoute ? draft.providerId : ''),
     effort: template.effort ?? '',
-    fastMode: template.fastMode === true,
+    fastMode: (template.fastMode === 'ultrafast' ? 'ultrafast' : template.fastMode === true),
     useWorktree: template.useWorktree ?? draft.useWorktree,
     // useWorktree 只在 project workspace 且无会话绑定时会被 buildMobileScheduleInput
     // 保留；模板要求 worktree 时把 draft 一并切到 project 模式并清掉绑定会话
@@ -357,6 +378,15 @@ export function validateMobileScheduleDraft(
       },
     );
   }
+  const checkTimeoutMs = draft.preRunHook?.timeoutMs;
+  if (checkTimeoutMs !== undefined && (!Number.isSafeInteger(checkTimeoutMs) || checkTimeoutMs <= 0)) {
+    return scheduleDraftValidation(
+      'preRunHook',
+      localizer,
+      'devices.automations.presentation.validation.preRunHookTimeout',
+      '检查超时必须是正整数毫秒',
+    );
+  }
   return null;
 }
 
@@ -391,12 +421,14 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
           && typeof draft.sourceIntervalMs === 'number'
         ? draft.sourceIntervalMs
         : null,
-    agentKind: draft.agentKind,
+    agentKind: draft.executionMode !== 'script' && targetSessionId && draft.boundAgent?.sessionId === targetSessionId
+      ? draft.boundAgent.agentKind : draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
     persistentSession: draft.persistentSession,
     targetSessionId: targetSessionId || undefined,
     silentWhenIdle: draft.silentWhenIdle,
+    ...(draft.preRunHook === undefined ? {} : { preRunHook: draft.preRunHook }),
     notify: {
       desktop: draft.notifyDesktop,
       feishu: draft.notifyFeishu,
@@ -404,27 +436,46 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     },
   };
   if (draft.executionMode === 'script') {
-    // 仅运行脚本任务:引擎合并态校验对 script 模式拒绝 worktree/绑定/持续会话/
-    // silentWhenIdle 与非 project 工作区——表单残留或误操作的这些 agent-only
-    // 字段一律钉回 script 合法值,否则一个可见控件就能让整个保存失败(codex
-    // review 发现)。model/effort/fastMode 不带(= 不修改),targetSessionId 为
-    // undefined 时 JSON 序列化自然丢 key(= 不修改)。
+    // Script schedules retain their lifecycle owner when edited from mobile.
+    // They still run in their own project cwd without starting an agent turn.
+    // Keep an unsupported remote route whole for host validation.
+    if (draft.modelAgentDeviceId !== undefined) {
+      input.modelAgentDeviceId = draft.modelAgentDeviceId;
+      input.modelAgentKind = draft.modelAgentKind;
+      input.model = draft.model.trim();
+      input.providerId = draft.providerId.trim();
+      input.effort = draft.effort.trim();
+      input.fastMode = draft.fastMode;
+    }
     return {
       ...input,
       workspaceKind: 'project',
       workingDir: draft.workingDir.trim(),
       useWorktree: false,
       persistentSession: false,
-      targetSessionId: undefined,
+      targetSessionId: targetSessionId || undefined,
       silentWhenIdle: false,
     };
   }
 
+  // An empty model follows the bound task. Omit the marker so the full-form
+  // device-link normalization can clear an existing explicit selection.
+  if (draft.modelAgentDeviceId !== undefined) {
+    input.modelAgentDeviceId = draft.model.trim() ? draft.modelAgentDeviceId : '';
+  }
+  if (draft.modelAgentKind && draft.model.trim()) {
+    input.modelAgentKind = draft.agentKind;
+    input.model = draft.model.trim();
+    input.providerId = draft.providerId.trim();
+    input.effort = draft.effort.trim();
+    input.fastMode = draft.fastMode;
+  }
+
   if (targetSessionId) {
     input.useWorktree = false;
-    input.model = draft.model.trim() || undefined;
+    input.model = draft.modelAgentKind ? draft.model.trim() : draft.model.trim() || undefined;
     const effort = draft.effort.trim();
-    input.effort = isMobileScheduleEffort(effort) ? effort : undefined;
+    input.effort = isMobileScheduleEffort(effort) ? effort : draft.modelAgentKind ? '' : undefined;
     return input;
   }
 
@@ -444,8 +495,11 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   return input;
 }
 
+export class ScheduleModelSelectionUnsupportedError extends Error {}
+export class SchedulePreRunHookUnsupportedError extends Error {}
+
 /**
- * 按被控端能力决定 intervalMs 清空的 wire 形态(device-link 两端版本会错位):
+ * 按被控端能力决定 intervalMs 清空、显式模型选择与前置检查的 wire 形态(device-link 两端版本会错位):
  *
  * - 新 desktop(capabilities.supportsScheduleIntervalNullClear)认识 null,
  *   IPC 入口把它归一化成引擎的「带 key 的 undefined」显式清空;
@@ -458,10 +512,28 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
  */
 export function applyScheduleWireCompat(
   input: RemoteScheduleWriteInput,
-  opts: { supportsIntervalNullClear: boolean },
+  opts: { supportsIntervalNullClear: boolean; supportsModelSelection?: boolean; supportsPreRunHook?: boolean; supportsAgentDeviceSelection?: boolean },
 ): RemoteScheduleWriteInput {
-  if (opts.supportsIntervalNullClear || input.intervalMs !== null) return input;
-  const { intervalMs: _legacyDropped, ...legacy } = input;
+  if (input.modelAgentDeviceId !== undefined && !opts.supportsAgentDeviceSelection) {
+    throw new ScheduleModelSelectionUnsupportedError('Scheduled Agent location selection requires a newer desktop');
+  }
+  if (!opts.supportsPreRunHook && input.preRunHook !== undefined) {
+    // An old host can acknowledge the save while silently dropping this field.
+    // Reject both installation and removal instead of claiming either succeeded.
+    throw new SchedulePreRunHookUnsupportedError('Scheduled pre-run checks require a newer desktop');
+  }
+  let compatible = input;
+  if (!opts.supportsModelSelection && input.modelAgentKind) {
+    // Old hosts cannot apply an explicit bound selection. Do not report a successful
+    // save when Harness/Fast would be ignored. Fresh creation can use its legacy fields.
+    if (input.targetSessionId) {
+      throw new ScheduleModelSelectionUnsupportedError('Scheduled model selection requires a newer desktop');
+    }
+    const { modelAgentKind, ...legacy } = input;
+    compatible = { ...legacy, agentKind: modelAgentKind };
+  }
+  if (opts.supportsIntervalNullClear || compatible.intervalMs !== null) return compatible;
+  const { intervalMs: _legacyDropped, ...legacy } = compatible;
   return legacy;
 }
 
@@ -473,7 +545,10 @@ export function updateDraftAgentKind(
   return {
     ...draft,
     agentKind,
-    model: defaultModelFor(agentKind),
+    // Selecting another Harness must leave follow mode even on pre-upgrade bindings.
+    ...(draft.modelAgentKind || draft.targetSessionId.trim() ? { modelAgentKind: agentKind } : {}),
+    modelAgentDeviceId: draft.modelAgentDeviceId === undefined ? undefined : '',
+    model: '',
     providerId: '',
     effort: '',
     fastMode: false,
@@ -588,12 +663,21 @@ export function updateDraftSessionMode(
 export function updateDraftBoundSessionId(
   draft: MobileScheduleDraft,
   targetSessionId: string,
+  targetAgentKind?: RemoteScheduleAgentKind | 'cc',
 ): MobileScheduleDraft {
   const nextTargetSessionId = targetSessionId.trim() || MOBILE_SCHEDULE_PENDING_SESSION_ID;
+  const boundAgent = targetAgentKind && nextTargetSessionId !== MOBILE_SCHEDULE_PENDING_SESSION_ID
+    ? { sessionId: nextTargetSessionId, agentKind: targetAgentKind === 'cc' ? 'claude-code' as const : targetAgentKind }
+    : draft.boundAgent?.sessionId === nextTargetSessionId ? draft.boundAgent : undefined;
+  const agentKind = !draft.modelAgentKind && !draft.model.trim() && boundAgent
+    ? boundAgent.agentKind : draft.agentKind;
   if (
     !draft.persistentSession &&
     draft.targetSessionId === nextTargetSessionId &&
-    !draft.useWorktree
+    !draft.useWorktree &&
+    draft.boundAgent?.sessionId === boundAgent?.sessionId &&
+    draft.boundAgent?.agentKind === boundAgent?.agentKind &&
+    draft.agentKind === agentKind
   ) {
     return draft;
   }
@@ -601,7 +685,24 @@ export function updateDraftBoundSessionId(
     ...draft,
     persistentSession: false,
     targetSessionId: nextTargetSessionId,
+    boundAgent,
+    agentKind,
     useWorktree: false,
+  };
+}
+
+/** Resolve manually entered ids before saving; never infer a new target's Harness from its model override. */
+export async function resolveMobileScheduleBinding(
+  draft: MobileScheduleDraft,
+  getSession: (id: string) => Promise<{ id: string; agentKind: RemoteScheduleAgentKind | 'cc' }>,
+): Promise<MobileScheduleDraft> {
+  if (draft.executionMode === 'script' || !hasMobileScheduleRealBinding(draft)) return draft;
+  const targetSessionId = draft.targetSessionId.trim();
+  if (draft.boundAgent?.sessionId === targetSessionId) return draft;
+  const target = await getSession(targetSessionId);
+  return {
+    ...updateDraftBoundSessionId(draft, targetSessionId, target.agentKind),
+    persistentSession: draft.persistentSession,
   };
 }
 
@@ -611,14 +712,6 @@ function isMobileScheduleEffort(value: string): value is MobileScheduleEffort {
 
 function hasTemplateParam(params: Record<string, string>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== '';
-}
-
-function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
-  if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
-  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
-  // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
-  if (agentKind === 'pi') return '';
-  return DEFAULT_CLAUDE_MODEL;
 }
 
 function validateIntervalMinutes(
@@ -640,7 +733,7 @@ function validateIntervalMinutes(
       'intervalMinutes',
       localizer,
       'devices.automations.presentation.validation.intervalUnsupported',
-      '分钟间隔只支持 1-59 分钟，或 1-23 小时的整点间隔',
+      '分钟间隔必须能整除 60：请选择 ' + SUPPORTED_INTERVAL_MINUTES.join('、') + ' 分钟，或 1-23 小时的整点间隔',
     );
   }
   return null;
@@ -655,7 +748,7 @@ function parseSupportedIntervalMinutes(value: string): number | null {
 
 function intervalMinutesToCronExpr(minutes: number): string | null {
   if (minutes === 1) return '* * * * *';
-  if (minutes >= 2 && minutes <= 59) return `*/${minutes} * * * *`;
+  if ((SUPPORTED_INTERVAL_MINUTES as readonly number[]).includes(minutes)) return `*/${minutes} * * * *`;
   if (minutes === 60) return '0 * * * *';
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
@@ -665,7 +758,7 @@ function intervalMinutesToCronExpr(minutes: number): string | null {
 }
 
 function intervalMsToSupportedMinutes(intervalMs: number | undefined): string {
-  if (!Number.isFinite(intervalMs) || !intervalMs) return '';
-  const minutes = Math.round(intervalMs / 60_000);
+  if (typeof intervalMs !== 'number' || !Number.isFinite(intervalMs) || intervalMs % 60_000 !== 0) return '';
+  const minutes = intervalMs / 60_000;
   return intervalMinutesToCronExpr(minutes) ? String(minutes) : '';
 }

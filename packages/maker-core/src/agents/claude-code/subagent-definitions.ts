@@ -27,9 +27,9 @@
  * 的 `name`,与路径无关。
  *
  * **必须传子进程 env**:`CLAUDE_CONFIG_DIR` 在 host boot 期就被 stripSensitiveAnthropicEnv
- * 从 `process.env` 清掉了,dev 多实例隔离是由 auth adapter 只往**子进程 env** 注入的
- * (apps/desktop/src/main/maker-host/auth-adapters.ts)。所以调用方要把最终交给 SDK 的那份
- * env 传进来,否则这里扫的是 `~/.claude/agents`,而 cc 读的是 `<userData>/claude-home/agents`
+ * 从 `process.env` 清掉了,host 要重定向配置目录只能由 auth adapter 往**子进程 env** 注入
+ * (旧版 dev 多实例曾这样隔离到 `<userData>/claude-home`)。所以调用方要把最终交给 SDK 的
+ * 那份 env 传进来,否则这里扫的是 `~/.claude/agents`,而 cc 读的是重定向后的 `agents`
  * ——判定与实际不符,声明照旧被覆盖。目录解析要同时看递入 env 与 host env,原因见
  * {@link userAgentsDir}(SDK spawn 是两份 env 合并)。
  *

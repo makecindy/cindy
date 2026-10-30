@@ -5,6 +5,12 @@
     "podcast": "https://www.xiaoyuzhoufm.com/podcast/<podcastId>",
     "episode": "https://www.xiaoyuzhoufm.com/episode/<episodeId>"
   },
-  "recipes": ["xiaoyuzhou-podcast"],
-  "notes": "策略:页面内 __NEXT_DATA__ 读取(免登录)。小宇宙没有公开稳定的搜索接口,只能按已知 ID 读详情(ID 取自 xiaoyuzhoufm.com 的 URL 路径)。关键:不要直接 navigate 到任何 ajax/api 子域(会要鉴权头);正确姿势是 navigate 到 /podcast/<id> 或 /episode/<id> 页面,wait load 后用 evaluate 读 window.__NEXT_DATA__.props.pageProps。结构:podcast 页 pageProps.podcast = {title, author, brief(简介), subscriptionCount(订阅数), episodeCount(单集总数), latestEpisodePubDate, episodes:[{eid, title, duration(秒), playCount, pubDate}]}(SSR 内嵌最近约 15 集);episode 页 pageProps.episode = {title, podcast:{title}, duration(秒), playCount, commentCount, clapCount(点赞), pubDate}。注意:用 curl 裸抓时若 ID 失效页面会回退到 /404 且 pageProps 为空 —— 这是 ID 问题,不是接口失效;务必用有效 ID 并在真浏览器里执行。"
+  "recipes": [
+    "xiaoyuzhou-podcast"
+  ],
+  "notes": "策略:页面内 __NEXT_DATA__ 读取(免登录)。小宇宙没有公开稳定的搜索接口,只能按已知 ID 读详情(ID 取自 xiaoyuzhoufm.com 的 URL 路径)。关键:不要直接 navigate 到任何 ajax/api 子域(会要鉴权头);正确姿势是 navigate 到 /podcast/<id> 或 /episode/<id> 页面,wait load 后用 evaluate 读 window.__NEXT_DATA__.props.pageProps。结构:podcast 页 pageProps.podcast = {title, author, brief(简介), subscriptionCount(订阅数), episodeCount(单集总数), latestEpisodePubDate, episodes:[{eid, title, duration(秒), playCount, pubDate}]}(SSR 内嵌最近约 15 集);episode 页 pageProps.episode = {title, podcast:{title}, duration(秒), playCount, commentCount, clapCount(点赞), pubDate}。注意:用 curl 裸抓时若 ID 失效页面会回退到 /404 且 pageProps 为空 —— 这是 ID 问题,不是接口失效;务必用有效 ID 并在真浏览器里执行。\n完整目录更新时保留此 Cindy 独立配方：上游没有相同的接口或免登录/参数合同。本站可用能力以 siteguide 当前目录为准。",
+  "upstream": {
+    "repository": "https://github.com/jackwener/opencli",
+    "revision": "fe5f1d96aff01c32fd84f86b52af922bfe6ca93f"
+  }
 }

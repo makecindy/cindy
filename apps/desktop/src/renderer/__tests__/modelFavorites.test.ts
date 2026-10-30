@@ -139,6 +139,17 @@ describe('modelFavorites store', () => {
     expect(m2.getModelFavorite(uid)).toMatchObject({ agent: 'cc', effort: 'high', fast: true });
   });
 
+  it('keeps Fast and Ultrafast as different favorite configurations', async () => {
+    const m = await loadModule();
+    const model = { providerId: 'openai', modelId: 'gpt-6-astra', agent: 'codex' as const };
+    const fast = m.addModelFavorite({ ...model, fast: true });
+    const ultra = m.addModelFavorite({ ...model, fast: 'ultrafast' });
+    expect(ultra).not.toBe(fast);
+    expect(m.getModelFavorite(ultra)?.fast).toBe('ultrafast');
+    m.updateModelFavorite(fast, { fast: 'ultrafast' });
+    expect(m.getModelFavorite(fast)?.fast).toBe('ultrafast');
+  });
+
   it('add:effort / fast 缺省不写「等于默认」的快照', async () => {
     const m = await loadModule();
     const uid = m.addModelFavorite({ ...OPUS, fast: undefined as never });

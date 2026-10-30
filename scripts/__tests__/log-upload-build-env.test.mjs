@@ -15,6 +15,8 @@ import { afterEach, test } from 'node:test';
 import {
   LOG_UPLOAD_TARGET_ENV,
   desktopLogUploadBuildEnv,
+  mobileLogUploadBuildEnv,
+  mobileLogUploadConfigRequired,
   loadLogUploadTargets,
   slsEndpointHost,
 } from '../shared/log-upload-build-env.mjs';
@@ -25,6 +27,34 @@ const VALID = {
   global: { project: 'global-proj', logstore: 'global-log', slsRegion: 'ap-southeast-1' },
   dev: null,
 };
+
+test('mobile store profiles require upload config while local builds may omit it', () => {
+  const missing = path.join(makeTempDir('cindy-mobile-upload-'), 'missing.json');
+  for (const profile of ['production', 'testflight', 'production-global', 'testflight-global', 'store-cn-base', 'store-global-base']) {
+    const allowMissing = !mobileLogUploadConfigRequired({ EAS_BUILD_PROFILE: profile, CINDY_REQUIRE_LOG_UPLOAD_CONFIG: '0' });
+    assert.equal(allowMissing, false);
+    assert.throws(() => mobileLogUploadBuildEnv({ authRegion: 'global', configPath: missing, allowMissing }), /缺少日志上报配置/);
+  }
+  assert.equal(mobileLogUploadConfigRequired({ CINDY_REQUIRE_LOG_UPLOAD_CONFIG: '1' }), true);
+  for (const env of [{}, { NODE_ENV: 'production' }, { EXPO_PUBLIC_XDT_OTA_SELFHOST: '1' }, { EAS_BUILD_PROFILE: 'adhoc' }]) {
+    assert.equal(mobileLogUploadConfigRequired(env), false);
+    assert.equal(mobileLogUploadBuildEnv({ configPath: missing, allowMissing: !mobileLogUploadConfigRequired(env) }).EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET, '');
+  }
+});
+
+test('mobile build env shares desktop validation and injects only the selected region', () => {
+  const configPath = writeConfig(VALID);
+  for (const authRegion of ['cn', 'global', 'dev']) {
+    const mobile = mobileLogUploadBuildEnv({ authRegion, configPath });
+    assert.deepEqual(Object.keys(mobile), ['EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET']);
+    assert.equal(mobile.EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET,
+      desktopLogUploadBuildEnv({ authRegion, configPath })[LOG_UPLOAD_TARGET_ENV]);
+  }
+  const missing = path.join(makeTempDir('cindy-mobile-upload-'), 'missing.json');
+  assert.throws(() => mobileLogUploadBuildEnv({ authRegion: 'global', configPath: missing }), /缺少日志上报配置/);
+  assert.equal(mobileLogUploadBuildEnv({ authRegion: 'global', configPath: missing, allowMissing: true }).EXPO_PUBLIC_CINDY_LOG_UPLOAD_TARGET, '');
+  assert.throws(() => mobileLogUploadBuildEnv({ authRegion: 'global', configPath: writeConfig('{bad'), allowMissing: true }), /不是合法 JSON/);
+});
 
 /**
  * 本文件建过的临时目录。用 `afterEach` 统一回收，与 `client-endpoint-build-env.test.mjs`

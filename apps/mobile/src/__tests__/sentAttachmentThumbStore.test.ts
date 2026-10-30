@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { vi } from 'vitest';
+import { buildAttachmentOssRef, buildPeerAttachmentRef } from '@cindy/device-link';
+import { resolveMobileRemoteMedia } from '@/session/remoteMedia';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 const storage = vi.hoisted(() => new Map<string, string>());
+vi.mock('expo-file-system/legacy', () => ({
+  getInfoAsync: async () => ({ exists: true, size: 1000 }),
+}));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -22,6 +28,7 @@ import {
   getSentAttachmentThumbUri,
   getSentAttachmentThumbsVersion,
   registerSentAttachmentThumb,
+  resolveSentAttachmentThumb,
   subscribeSentAttachmentThumbs,
   type SentAttachmentThumbFsDeps,
 } from '@/session/sentAttachmentThumbStore';
@@ -58,12 +65,87 @@ function makeFsDeps(overrides: Partial<SentAttachmentThumbFsDeps> = {}) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await __testing.flushPersist();
   __testing.reset();
   storage.clear();
+  setMobileAuthOwner('alice');
 });
 
 describe('sentAttachmentThumbStore', () => {
+  // Unit: cache ownership must survive restart without exposing another account's pixels.
+  // Previously the global exact-ref and content-hash indices both ignored the owner.
+  it('isolates exact and content-address reads by account, realm and logout', async () => {
+    const finalRef = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const ref = buildAttachmentOssRef({ ossKey: 'uploads/alice', sha256: 'a'.repeat(64), size: 1000, mimeType: 'image/png' });
+    const { deps } = makeFsDeps();
+    await registerSentAttachmentThumb(ref, 'file:///alice.png', deps);
+    await __testing.flushPersist();
+    __testing.reset();
+    for (const [id, realm] of [['bob', 'global'], ['alice', 'cn'], ['', 'global']] as const) {
+      setMobileAuthOwner(id, realm);
+      expect(await resolveSentAttachmentThumb(ref, deps)).toBeNull();
+      expect(getSentAttachmentThumbUri(ref)).toBeNull();
+      expect(await resolveSentAttachmentThumb(finalRef, deps)).toBeNull();
+    }
+    setMobileAuthOwner('alice');
+    expect(await resolveSentAttachmentThumb(ref, deps)).not.toBeNull();
+    expect(await resolveSentAttachmentThumb(finalRef, deps)).not.toBeNull();
+    expect(await resolveSentAttachmentThumb(finalRef, { ...deps, statSize: async () => {
+      setMobileAuthOwner('bob');
+      return 1000;
+    } })).toBeNull();
+  });
+
+  it.each(['owner', 'cancelled'] as const)('removes a copy invalidated during file IO (%s)', async (reason) => {
+    let active = true;
+    const { deps, removed, copies } = makeFsDeps();
+    const copy = deps.copy;
+    deps.copy = async (from, to) => {
+      await copy(from, to);
+      if (reason === 'owner') { setMobileAuthOwner('bob'); setMobileAuthOwner('alice'); }
+      else active = false;
+    };
+    await registerSentAttachmentThumb(OSS_REF, 'file:///alice.png', deps, () => active);
+    await __testing.flushPersist();
+    expect(getSentAttachmentThumbUri(OSS_REF)).toBeNull();
+    expect(removed).toContain(copies[0].to);
+    expect(storage.has(__testing.storageKey)).toBe(false);
+  });
+
+  it('does not assign unowned legacy records to the next logged-in account', async () => {
+    storage.set(__testing.storageKey, JSON.stringify([{ ossRef: OSS_REF, file: 'old.png', at: 1 }]));
+    await ensureSentAttachmentThumbsHydrated(makeFsDeps().deps);
+    expect(getSentAttachmentThumbUri(OSS_REF)).toBeNull();
+  });
+  // Regression: sent photos became unavailable offline after history replaced the upload URL.
+  // Existing tests only queried the original ref. Unit tier exercises persistence + real lookup.
+  it.each(['oss', 'peer'] as const)('keeps a %s upload readable by its final content address after restart', async (transport) => {
+    const sha256 = 'a'.repeat(64);
+    const metadata = { sha256, size: 1000, mimeType: 'image/png', originalName: 'photo.png' };
+    const ref = transport === 'oss'
+      ? buildAttachmentOssRef({ ...metadata, ossKey: 'uploads/photo' })
+      : buildPeerAttachmentRef({ ...metadata, ticket: '11111111-1111-1111-1111-111111111111' });
+    const { deps, copies } = makeFsDeps();
+    await registerSentAttachmentThumb(ref, 'file:///cache/upload-snapshot', deps);
+    await __testing.flushPersist();
+    expect(copies).toHaveLength(1);
+    expect(copies[0].to.endsWith('.png')).toBe(true);
+    __testing.reset();
+    await expect(resolveSentAttachmentThumb(`cindy-media://blobs/${sha256}.png`, deps)).resolves.toEqual({
+      uri: copies[0].to, size: 1000, mimeType: 'image/png',
+    });
+    expect(getSentAttachmentThumbUri(`cindy-media://blobs/${sha256}.png`)).toBe(copies[0].to);
+    expect(getSentAttachmentThumbUri(`cindy-media://blobs/${'b'.repeat(64)}.png`)).toBeNull();
+    expect(applySentAttachmentThumbOverlay({ kind: 'image', uri: ref, previewable: false }).uri).toBe(copies[0].to);
+    const fetchRemoteMedia = vi.fn(async () => { throw new Error('NOT_CONNECTED'); });
+    await expect(resolveMobileRemoteMedia({ kind: 'image', url: `cindy-media://blobs/${sha256}.png` }, {
+      fetchRemoteMedia, presignGet: vi.fn(),
+    })).resolves.toMatchObject({ url: copies[0].to, mimeType: 'image/png', ossKey: '' });
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
+    await expect(resolveSentAttachmentThumb(ref, { ...deps, statSize: async () => 0 })).resolves.toBeNull();
+  });
+
   it('register 拷贝文件进自有目录并可同步查询;版本号通知订阅者', async () => {
     const { deps, copies } = makeFsDeps();
     const versions: number[] = [];
@@ -110,7 +192,7 @@ describe('sentAttachmentThumbStore', () => {
     expect(getSentAttachmentThumbUri(mediaRef)).toContain('sent-attachment-thumbs/');
   });
 
-  it('非兜底引用 / 空 sourceUri / 重复引用 / 超大文件不注册', async () => {
+  it('非兜底引用 / 空 sourceUri / 重复引用不注册', async () => {
     const { deps, copies } = makeFsDeps();
     await registerSentAttachmentThumb('https://example.com/a.jpg', 'file:///cache/a.jpg', deps);
     await registerSentAttachmentThumb(undefined, 'file:///cache/a.jpg', deps);
@@ -123,11 +205,11 @@ describe('sentAttachmentThumbStore', () => {
     await registerSentAttachmentThumb(OSS_REF, 'file:///cache/other.jpg', deps);
     expect(copies).toHaveLength(1);
 
-    // 超过单文件上限的不做兜底(gif / 原样直传的大文件)。
-    const big = makeFsDeps({ statSize: async () => __testing.maxSourceBytes + 1 });
+    // 大文件通过原生文件拷贝留底,不再按磁盘预算拒绝。
+    const big = makeFsDeps({ statSize: async () => 30 * 1024 * 1024 });
     await registerSentAttachmentThumb(OSS_REF_2, 'file:///cache/huge.gif', big.deps);
-    expect(big.copies).toHaveLength(0);
-    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBeNull();
+    expect(big.copies).toHaveLength(1);
+    expect(getSentAttachmentThumbUri(OSS_REF_2)).not.toBeNull();
   });
 
   it('拷贝失败静默:不写映射、不抛错', async () => {
@@ -140,22 +222,21 @@ describe('sentAttachmentThumbStore', () => {
     expect(getSentAttachmentThumbUri(OSS_REF)).toBeNull();
   });
 
-  it('超过条目上限时 LRU 淘汰最老条目并删除其文件', async () => {
+  it('超过旧 64 条上限仍保留最老文件', async () => {
     const { deps, removed } = makeFsDeps();
-    for (let index = 0; index < __testing.maxEntries + 1; index += 1) {
+    for (let index = 0; index < 65; index += 1) {
       await registerSentAttachmentThumb(`cindy-oss-attach://m/ref-${index}`, `file:///cache/${index}.jpg`, deps);
     }
-    expect(getSentAttachmentThumbUri('cindy-oss-attach://m/ref-0')).toBeNull();
-    expect(getSentAttachmentThumbUri(`cindy-oss-attach://m/ref-${__testing.maxEntries}`)).not.toBeNull();
-    expect(removed).toHaveLength(1);
-    expect(removed[0]?.startsWith(`${THUMB_DIR}/thumb-`)).toBe(true);
+    expect(getSentAttachmentThumbUri('cindy-oss-attach://m/ref-0')).not.toBeNull();
+    expect(getSentAttachmentThumbUri(`cindy-oss-attach://m/ref-64`)).not.toBeNull();
+    expect(removed).toHaveLength(0);
   });
 
-  it('hydrate 回填持久化映射,清过期条目与目录孤儿文件', async () => {
+  it('hydrate 保留旧映射,只清目录孤儿文件', async () => {
     const now = Date.now();
     storage.set(__testing.storageKey, JSON.stringify([
-      { ossRef: OSS_REF, file: 'thumb-fresh.jpg', at: now - 1000 },
-      { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - __testing.maxAgeMs - 1000 },
+      { ossRef: OSS_REF, file: 'thumb-fresh.jpg', at: now - 1000, accountKey: getMobileAuthOwner().accountKey },
+      { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - 30 * 24 * 60 * 60 * 1000, accountKey: getMobileAuthOwner().accountKey },
     ]));
     const { deps, removed, setDirFiles } = makeFsDeps();
     setDirFiles(['thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg']);
@@ -163,16 +244,15 @@ describe('sentAttachmentThumbStore', () => {
     await ensureSentAttachmentThumbsHydrated(deps);
 
     expect(getSentAttachmentThumbUri(OSS_REF)).toBe(`${THUMB_DIR}/thumb-fresh.jpg`);
-    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBeNull();
-    // 过期条目的文件与目录孤儿统一清理。
+    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBe(`${THUMB_DIR}/thumb-stale.jpg`);
+    // 仍被引用的旧文件保留。
     expect(removed.sort()).toEqual([
       `${THUMB_DIR}/thumb-orphan.jpg`,
-      `${THUMB_DIR}/thumb-stale.jpg`,
     ]);
-    // 过期裁剪后的映射写回持久层。
+    // 旧映射仍可供重启恢复。
     await __testing.flushPersist();
     const parsed = JSON.parse(storage.get(__testing.storageKey)!) as Array<{ ossRef: string }>;
-    expect(parsed.map((entry) => entry.ossRef)).toEqual([OSS_REF]);
+    expect(parsed.map((entry) => entry.ossRef)).toEqual([OSS_REF, OSS_REF_2]);
   });
 
   it('损坏的持久化内容按空映射处理', async () => {

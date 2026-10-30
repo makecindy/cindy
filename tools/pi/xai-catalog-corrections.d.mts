@@ -16,3 +16,12 @@ export function preferredDefaultEffort(
   efforts: string[],
   fallbackDefaultEffort: (efforts: string[]) => string,
 ): string;
+
+export function applyPinnedXaiAdditions(
+  providers: Record<string, import('./catalog-format.mjs').PiImportModel[]>,
+  version?: string,
+): void;
+
+export function applyGrok47CatalogAddition(
+  providers: Record<string, import('./catalog-format.mjs').PiImportModel[]>,
+): Record<string, import('./catalog-format.mjs').PiImportModel[]>;

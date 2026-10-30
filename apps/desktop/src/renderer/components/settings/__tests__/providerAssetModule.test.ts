@@ -45,10 +45,16 @@ describe('resolveXdAssetModuleState', () => {
     expect(resolveXdAssetModuleState({ ...OK, syncState: 'disabled' })).toEqual({ kind: 'hidden' });
   });
 
-  it('余额查询不支持 / 尚未返回 → 不渲染,不显示「—」占位', () => {
-    expect(resolveXdAssetModuleState({ ...OK, available: null })).toEqual({ kind: 'hidden' });
-    expect(resolveXdAssetModuleState({ ...OK, syncState: 'syncing', available: null })).toEqual({
-      kind: 'hidden',
+  it('余额查询无数据与加载中明确区分', () => {
+    expect(resolveXdAssetModuleState({ ...OK, available: null })).toEqual({
+      kind: 'unavailable',
+      scope: 'balance',
+    });
+    expect(
+      resolveXdAssetModuleState({ ...OK, syncState: 'syncing', available: null, loading: true }),
+    ).toEqual({
+      kind: 'loading',
+      scope: 'balance',
     });
   });
 

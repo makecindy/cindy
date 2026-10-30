@@ -45,6 +45,7 @@ export {
   makeProviderBehaviorGet,
   makeProviderBehaviorSet,
   makeProviderBehaviorState,
+  makeProviderCommandsSet,
   makeToolRequest,
   makeToolResponse,
   makeGroupMessage,

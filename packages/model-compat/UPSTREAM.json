@@ -1,0 +1,364 @@
+{
+  "repository": "https://github.com/lidge-jun/opencodex",
+  "commit": "c155cc7923dbc0102e27d79185505a85d4357b2c",
+  "files": [
+    {
+      "source": "src/adapters/google-tool-schema.ts",
+      "target": "src/upstream/adapters/google-tool-schema.ts",
+      "upstreamSha256": "d5bcf65418bfade8a3d98a26c7ffc1b657f943eca0e44528e8817a9ef4f5e4ac",
+      "portedSha256": "d5bcf65418bfade8a3d98a26c7ffc1b657f943eca0e44528e8817a9ef4f5e4ac"
+    },
+    {
+      "source": "src/adapters/opencode-go-additional-tools.ts",
+      "target": "src/upstream/adapters/opencode-go-additional-tools.ts",
+      "upstreamSha256": "42090cb27e20503d3d6ad0680b1a45b918b19d878c2e6db6ed031ca57f17c1ee",
+      "portedSha256": "42090cb27e20503d3d6ad0680b1a45b918b19d878c2e6db6ed031ca57f17c1ee"
+    },
+    {
+      "source": "src/adapters/responses-tool-schema.ts",
+      "target": "src/upstream/adapters/responses-tool-schema.ts",
+      "upstreamSha256": "11bd2246eb174cf197af6885c96565407f1ab53b7782b9cd27020a65ac9b192d",
+      "portedSha256": "11bd2246eb174cf197af6885c96565407f1ab53b7782b9cd27020a65ac9b192d"
+    },
+    {
+      "source": "src/adapters/xai-schema-analysis.ts",
+      "target": "src/upstream/adapters/xai-schema-analysis.ts",
+      "upstreamSha256": "7bb784364955564052ca8b237782101a9e0478432c2ce231a5cdd0cd216fd157",
+      "portedSha256": "7bb784364955564052ca8b237782101a9e0478432c2ce231a5cdd0cd216fd157"
+    },
+    {
+      "source": "src/adapters/xai-tool-schema.ts",
+      "target": "src/upstream/adapters/xai-tool-schema.ts",
+      "upstreamSha256": "f178d9f9aa7d33fd98c2dd034d6c180773fc2f05abd6b86371a678d9fb16bf63",
+      "portedSha256": "f178d9f9aa7d33fd98c2dd034d6c180773fc2f05abd6b86371a678d9fb16bf63"
+    },
+    {
+      "source": "src/adapters/xai-web-search.ts",
+      "target": "src/upstream/adapters/xai-web-search.ts",
+      "upstreamSha256": "6bbf215df9072dd4842eb0dbea27ad8de0aa51669f23027e0c064e6597f0c383",
+      "portedSha256": "433513174b8e82449cda71987f14684c3878cc01a23058288c7004e2e2b67a5e"
+    },
+    {
+      "source": "src/lib/tool-argument-integers.ts",
+      "target": "src/upstream/lib/tool-argument-integers.ts",
+      "upstreamSha256": "0ed323ea85d13016cb88e048d20238b7d87fe2beae39406229d9f970f1402b2c",
+      "portedSha256": "0ed323ea85d13016cb88e048d20238b7d87fe2beae39406229d9f970f1402b2c"
+    },
+    {
+      "source": "src/lib/translator-budget.ts",
+      "target": "src/upstream/lib/translator-budget.ts",
+      "upstreamSha256": "4d79fed2d10e23b87af2c67ea0a979ce580eb232ac35e1f6851b5f02ef5a07d7",
+      "portedSha256": "4d79fed2d10e23b87af2c67ea0a979ce580eb232ac35e1f6851b5f02ef5a07d7"
+    },
+    {
+      "source": "src/providers/xai-transport.ts",
+      "target": "src/upstream/providers/xai-transport.ts",
+      "upstreamSha256": "1ac6638465ad2b2a36603ee36aa53176474f9c6ca3253db0a43933ed7b20371d",
+      "portedSha256": "42bd85d56c44527b3b37611f8600fff1ff2d01258dca79b9af43a78229d0abdc"
+    },
+    {
+      "source": "src/responses/apply-patch-envelope.ts",
+      "target": "src/upstream/responses/apply-patch-envelope.ts",
+      "upstreamSha256": "2145bd3995c8811c6f21510b606e32eea84809ea3d4a602ab252d1adc40f4fb9",
+      "portedSha256": "2145bd3995c8811c6f21510b606e32eea84809ea3d4a602ab252d1adc40f4fb9"
+    },
+    {
+      "source": "src/responses/code-mode-helper-compat.ts",
+      "target": "src/upstream/responses/code-mode-helper-compat.ts",
+      "upstreamSha256": "efa332720f717230c9feb1ef5132f0f658af21604044649ceff4577299f59f8b",
+      "portedSha256": "efa332720f717230c9feb1ef5132f0f658af21604044649ceff4577299f59f8b"
+    },
+    {
+      "source": "src/responses/compaction.ts",
+      "target": "src/upstream/responses/compaction.ts",
+      "upstreamSha256": "8ca98f68e5e6957e32762b9f6d006d53083bece1b086988560a719b701e7a867",
+      "portedSha256": "c7885a830cf5bf7f92c541904cac839efb8903185814a79e4362fa9cbd142394"
+    },
+    {
+      "source": "src/responses/custom-tool-compat.ts",
+      "target": "src/upstream/responses/custom-tool-compat.ts",
+      "upstreamSha256": "1545dee0ee7f29d0c489dc4bf3975984fd9648dbca5de50effc97f7df9adc024",
+      "portedSha256": "d223fcb889bf3e529dcc4b7535edd0605f7068c37af5ae0a78482bfe65940500"
+    },
+    {
+      "source": "src/responses/function-call-compat.ts",
+      "target": "src/upstream/responses/function-call-compat.ts",
+      "upstreamSha256": "642c72c2d9aeaad9c6840059eaab33e3729733447ac746197ad122e3c18b779b",
+      "portedSha256": "642c72c2d9aeaad9c6840059eaab33e3729733447ac746197ad122e3c18b779b"
+    },
+    {
+      "source": "src/responses/namespace-tool-compat.ts",
+      "target": "src/upstream/responses/namespace-tool-compat.ts",
+      "upstreamSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0",
+      "portedSha256": "29ab7614e0757cde8bf81ad86da407afc8cb6d05027da22375fcca9a95de63b0"
+    },
+    {
+      "source": "src/responses/tool-groups.ts",
+      "target": "src/upstream/responses/tool-groups.ts",
+      "upstreamSha256": "b2750b33ec7bb5a7f76f27584bf99372fac4f253dd287849b2f3f9821db574cd",
+      "portedSha256": "b2750b33ec7bb5a7f76f27584bf99372fac4f253dd287849b2f3f9821db574cd"
+    },
+    {
+      "source": "src/responses/tool-name-aliases.ts",
+      "target": "src/upstream/responses/tool-name-aliases.ts",
+      "upstreamSha256": "19338602099c6ea9947200310bddd36b1f86ee93f5d5def2019182d0e71255bd",
+      "portedSha256": "19338602099c6ea9947200310bddd36b1f86ee93f5d5def2019182d0e71255bd"
+    },
+    {
+      "source": "src/responses/tool-search-compat.ts",
+      "target": "src/upstream/responses/tool-search-compat.ts",
+      "upstreamSha256": "25ddbc4dd8f04ce43804aab64fdf5dcc402703529b8252d2c64bbb5749ece4a6",
+      "portedSha256": "25ddbc4dd8f04ce43804aab64fdf5dcc402703529b8252d2c64bbb5749ece4a6"
+    },
+    {
+      "source": "src/server/relay.ts",
+      "target": "src/upstream/server/relay.ts",
+      "upstreamSha256": "0fd1843a6cfef03ac35ce43976b89a22a70bd9631bfb327d8605414d2f78c223",
+      "portedSha256": "d68f0a2a04f57ccbe744ee1d01865e11cb19d465c391c4290600f4789755b607"
+    },
+    {
+      "source": "src/server/responses-custom-tool-repair.ts",
+      "target": "src/upstream/server/responses-custom-tool-repair.ts",
+      "upstreamSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84",
+      "portedSha256": "9b29bc429d83cd5ab46b358eed46356514b88f9508716afa8080b93dca848f84"
+    },
+    {
+      "source": "src/server/responses-function-tool-repair.ts",
+      "target": "src/upstream/server/responses-function-tool-repair.ts",
+      "upstreamSha256": "e32fc0a7669cc6c085c3a6287f3382bfc12223dc78ff96cea90927fc3bbaa0a6",
+      "portedSha256": "e32fc0a7669cc6c085c3a6287f3382bfc12223dc78ff96cea90927fc3bbaa0a6"
+    },
+    {
+      "source": "src/server/responses-item-id-repair.ts",
+      "target": "src/upstream/server/responses-item-id-repair.ts",
+      "upstreamSha256": "02341fe16358093c2b57f816a5ae583d49f3b48c486cba8e9066175fe7678e39",
+      "portedSha256": "02341fe16358093c2b57f816a5ae583d49f3b48c486cba8e9066175fe7678e39"
+    },
+    {
+      "source": "src/server/responses-model-rewrite.ts",
+      "target": "src/upstream/server/responses-model-rewrite.ts",
+      "upstreamSha256": "78ccff83ff54f7687d1f5ed04e326a17a9a37187ec470947ee960f4266a34a4f",
+      "portedSha256": "78ccff83ff54f7687d1f5ed04e326a17a9a37187ec470947ee960f4266a34a4f"
+    },
+    {
+      "source": "src/server/responses-reasoning-summary-rewrite.ts",
+      "target": "src/upstream/server/responses-reasoning-summary-rewrite.ts",
+      "upstreamSha256": "9a49932cb6bac6402f8e57f3188bdb86e3671f6fe55d1711fb84b9ad81b1d487",
+      "portedSha256": "9a49932cb6bac6402f8e57f3188bdb86e3671f6fe55d1711fb84b9ad81b1d487"
+    },
+    {
+      "source": "src/server/responses-self-named-namespace-scrub.ts",
+      "target": "src/upstream/server/responses-self-named-namespace-scrub.ts",
+      "upstreamSha256": "fe4a833cbc6ba27664fb7f4892a9ac6982b1dc3c84d5a950f08955dbbdd7560a",
+      "portedSha256": "fe4a833cbc6ba27664fb7f4892a9ac6982b1dc3c84d5a950f08955dbbdd7560a"
+    },
+    {
+      "source": "src/server/responses-snapshot-codec.ts",
+      "target": "src/upstream/server/responses-snapshot-codec.ts",
+      "upstreamSha256": "37bd6288b65d0bfe1cba21d9608412ab64ab8c4e6a386e94e340497eba5ede8d",
+      "portedSha256": "37bd6288b65d0bfe1cba21d9608412ab64ab8c4e6a386e94e340497eba5ede8d"
+    },
+    {
+      "source": "src/server/responses-snapshot-repair.ts",
+      "target": "src/upstream/server/responses-snapshot-repair.ts",
+      "upstreamSha256": "082997b9c23a1238aee5ad341d7e083cf86ea3c8d62126c035e4c0c63bacc55b",
+      "portedSha256": "082997b9c23a1238aee5ad341d7e083cf86ea3c8d62126c035e4c0c63bacc55b"
+    },
+    {
+      "source": "src/server/responses-tool-search-repair.ts",
+      "target": "src/upstream/server/responses-tool-search-repair.ts",
+      "upstreamSha256": "7462d6b58dc03d2b520774b99fc2c8103a20e55ab758eef19831df906bdde86d",
+      "portedSha256": "7462d6b58dc03d2b520774b99fc2c8103a20e55ab758eef19831df906bdde86d"
+    },
+    {
+      "source": "src/server/responses-undeclared-tool-guard.ts",
+      "target": "src/upstream/server/responses-undeclared-tool-guard.ts",
+      "upstreamSha256": "8570d91b8a5a2a4b636de2af8b75855d59fd28905783fad24da6fb2d43303ace",
+      "portedSha256": "8570d91b8a5a2a4b636de2af8b75855d59fd28905783fad24da6fb2d43303ace"
+    },
+    {
+      "source": "src/server/responses/responses-field-backfill.ts",
+      "target": "src/upstream/server/responses/responses-field-backfill.ts",
+      "upstreamSha256": "4374724d6a107d3f1766efcd964459c4c749cf767370ab4b35c5130357d8f35f",
+      "portedSha256": "4374724d6a107d3f1766efcd964459c4c749cf767370ab4b35c5130357d8f35f"
+    },
+    {
+      "source": "src/server/sse-payload-rewrite.ts",
+      "target": "src/upstream/server/sse-payload-rewrite.ts",
+      "upstreamSha256": "c1f631a601557f630d27caa95a9676e95c2aec509b4a76c7022bef8d7e878600",
+      "portedSha256": "c1f631a601557f630d27caa95a9676e95c2aec509b4a76c7022bef8d7e878600"
+    },
+    {
+      "source": "src/types.ts",
+      "target": "src/upstream/types.ts",
+      "upstreamSha256": "4a8c13fbedde0ec6b3e0e1fab7980f561c7b710cfbd4e96c026b94cbe5530d6f",
+      "portedSha256": "b4fdb1a57cb928e0b7e9403d7cae357e4859826a347fb812129e0f0b69f436eb"
+    },
+    {
+      "source": "src/types/provider.ts",
+      "target": "src/upstream/types/provider.ts",
+      "upstreamSha256": "b97e8bd5f3f82dae9cb246cc71772f61a6c5eb9644f2204da16e25ce7b0c19fb",
+      "portedSha256": "b97e8bd5f3f82dae9cb246cc71772f61a6c5eb9644f2204da16e25ce7b0c19fb"
+    },
+    {
+      "source": "src/types/tools.ts",
+      "target": "src/upstream/types/tools.ts",
+      "upstreamSha256": "0e2cbb7bf64aad984d6a453dda2428cda2aa994935d20968bc39817b675effb6",
+      "portedSha256": "0e2cbb7bf64aad984d6a453dda2428cda2aa994935d20968bc39817b675effb6"
+    },
+    {
+      "source": "src/types/wire.ts",
+      "target": "src/upstream/types/wire.ts",
+      "upstreamSha256": "ce5d1a7fabef76c800b469bea4a08db0e45259e54e19b60b7b00fbfb85d28973",
+      "portedSha256": "ce5d1a7fabef76c800b469bea4a08db0e45259e54e19b60b7b00fbfb85d28973"
+    },
+    {
+      "source": "src/adapters/cursor/mcp-config.ts",
+      "target": "src/upstream/adapters/cursor/mcp-config.ts",
+      "upstreamSha256": "3ef083c37f6488881bf7da3ca8c0b6bb6a4ccb71d26231a07fd039c023df6468",
+      "portedSha256": "3ef083c37f6488881bf7da3ca8c0b6bb6a4ccb71d26231a07fd039c023df6468"
+    },
+    {
+      "source": "src/adapters/cursor/desktop-executor-contract.ts",
+      "target": "src/upstream/adapters/cursor/desktop-executor-contract.ts",
+      "upstreamSha256": "c12754b08175a21439047a2c39e2cb277da732e536b44b532d81e1d7445042d6",
+      "portedSha256": "c12754b08175a21439047a2c39e2cb277da732e536b44b532d81e1d7445042d6"
+    },
+    {
+      "source": "src/adapters/openai-chat.ts",
+      "target": "src/upstream/adapters/openai-chat.ts",
+      "upstreamSha256": "ff1f2275e2f45e769a5f4e2e6e79445fec56950c86006f2a98fd7bd8e6bfc016",
+      "portedSha256": "135a2b6febd8ec4993d897bd7e488a1b0ab55d12caf186f93ca17bf85e801f74",
+      "extractSymbols": [
+        "stripBracketedModelSuffix",
+        "reasoningDetailSegmentForWire",
+        "thinkingBudgetForEffort",
+        "MOONSHOT_SCHEMA_HOSTNAMES",
+        "isMoonshotSchemaTarget",
+        "ensureRootObjectType",
+        "isXaiObjectSchema",
+        "moonshotRefTargetKeys",
+        "MOONSHOT_MAX_REF_EXPANSIONS",
+        "MOONSHOT_MAX_SCHEMA_DEPTH",
+        "MOONSHOT_MAX_SCHEMA_NODES",
+        "unionRequired",
+        "MOONSHOT_DATA_VALUED_KEYWORDS",
+        "MOONSHOT_BOUND_KEYWORDS",
+        "intersectBound",
+        "composeProperties",
+        "MoonshotNormalizeState",
+        "normalizeMoonshotSchemaNode",
+        "normalizeMoonshotToolParameters"
+      ],
+      "extractionPrefix": "// Pure parameter/schema helpers extracted from the upstream Chat adapter.\nimport type { OcxProviderConfig } from \"../types\";\nimport { lookupLocalJsonPointer } from \"./xai-schema-analysis\";\ninterface OcxParsedRequest { options: { reasoning?: string } }\n"
+    },
+    {
+      "source": "src/adapters/openai-responses.ts",
+      "target": "src/upstream/adapters/openai-responses.ts",
+      "upstreamSha256": "5eef85b5c6a109bc14bc324dca15bc1f9292445614673d331850ffeac80187e7",
+      "portedSha256": "eb53ffd4657890f9bb660d88497b3db95d9a40203306abf4139307292039a37a",
+      "extractSymbols": [
+        "isPlainObject",
+        "CANONICAL_ONLY_TOOL_FIELDS",
+        "stripCanonicalOnlyToolFields",
+        "backfillWebSearchQueries",
+        "normalizeResponsesToolResultAdjacency",
+        "isToolOutputEmpty",
+        "annotateEmptyResponsesToolOutputs"
+      ],
+      "extractionPrefix": "// Pure protocol helpers extracted verbatim from the pinned upstream adapter.\nimport { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from \"./empty-tool-output-annotation\";\n"
+    },
+    {
+      "source": "src/adapters/empty-tool-output-annotation.ts",
+      "target": "src/upstream/adapters/empty-tool-output-annotation.ts",
+      "upstreamSha256": "cd00654218db3a30c451608f953256148fa288020e6afb6e4275280b1dcfec8d",
+      "portedSha256": "cd00654218db3a30c451608f953256148fa288020e6afb6e4275280b1dcfec8d"
+    },
+    {
+      "source": "src/reasoning-effort.ts",
+      "target": "src/upstream/reasoning-effort.ts",
+      "upstreamSha256": "9eb83f657f48c2582dd6846d3ba1e3f584197025c779bbece5953d552fac1322",
+      "portedSha256": "9eb83f657f48c2582dd6846d3ba1e3f584197025c779bbece5953d552fac1322"
+    }
+  ],
+  "tests": [
+    {
+      "source": "tests/responses/responses-field-backfill.test.ts",
+      "target": "src/__tests__/upstream/responses/responses-field-backfill.test.js",
+      "upstreamSha256": "6bff97867410eacf2a7d0dc5e568db1308a0e2b642e8dd092815c196008920a9",
+      "portedSha256": "d2c942eb202a890909ba08aceda5a15bb4e0eb7fcb5ec977c922d072bf5713d6",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/apply-patch-envelope.test.ts",
+      "target": "src/__tests__/upstream/responses/apply-patch-envelope.test.js",
+      "upstreamSha256": "4ab7f200595ad525bb3ce8e140f6fc5d5565f63d1b780f6b21d878edeea67adb",
+      "portedSha256": "f3f36ccd5b54772a55273d829b5988ffca25d4fa8009608c7db70161a47040ec",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/custom-tool-compat.test.ts",
+      "target": "src/__tests__/upstream/responses/custom-tool-compat.test.js",
+      "upstreamSha256": "7da2732da9dd886646bca288d065034903455842cbb8d06e63c3732520b55bad",
+      "portedSha256": "892b9c804f98bcf0683c6296d9d52731382315856a5ea315afbb0a57c7e621bb",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/legacy-shell-compat.test.ts",
+      "target": "src/__tests__/upstream/responses/legacy-shell-compat.test.js",
+      "upstreamSha256": "76c49010d3b1f7afc9bfe9411d3fdebcbc4af777b1de2ea0f24f06700c65ebf3",
+      "portedSha256": "e7e06a465f953bb6b252a764bde8013a7d75c997d8b31f189cba2d1fe2f52540",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/namespace-tool-compat.test.ts",
+      "target": "src/__tests__/upstream/responses/namespace-tool-compat.test.js",
+      "upstreamSha256": "3ab46d5c76aade93ea82758e68d732bcc4eb53ac4ff8307fb48cdaad4750573e",
+      "portedSha256": "6c92dfa1dbcfe24f2eddd4415e1dc718e45c6563ad7788dda6265874e12bb0a6",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/responses-tool-groups.test.ts",
+      "target": "src/__tests__/upstream/responses/responses-tool-groups.test.js",
+      "upstreamSha256": "8949508d064b9d5551a01cedcfd078e967fbb369f81dde882f52f87f50929886",
+      "portedSha256": "f996e06157774ed8baba4264ecfd2b589acf1297af21f624dab12995ccc20b4c",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/responses/responses-reasoning-summary-rewrite.test.ts",
+      "target": "src/__tests__/upstream/responses/responses-reasoning-summary-rewrite.test.js",
+      "upstreamSha256": "fb0d897a70fed41c868f7f51157b7c1a2499c5d9ebd610f65244f96a2b3be844",
+      "portedSha256": "851988f1aa51e8fbf06f071921ad3d2e8e080e0ec3fd3f057cd2ae5558dff1d8",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/adapters/tool-choice-performance.test.ts",
+      "target": "src/__tests__/upstream/adapters/tool-choice-performance.test.js",
+      "upstreamSha256": "c19976b506437710480bbeac937306e27dcabe1a6f46811861d6e110e92b172b",
+      "portedSha256": "f22b8de57b7b95007e004b1be31b38e7d61df745fdfa7338141287a218f6e5b9",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    },
+    {
+      "source": "tests/adapters/google/google-tool-schema.test.ts",
+      "target": "src/__tests__/upstream/adapters/google/google-tool-schema.test.js",
+      "upstreamSha256": "2e612eb8699927b78179bc03a90dc0849b538197b1ed2e7420e977df1cc9ad03",
+      "portedSha256": "ac4b92612101975f32c5eec81646396dffff69c0d7a19ee617c38f6ce9e15498",
+      "adaptation": "Bun test imports to Vitest; TypeScript transpile to ES2022 (assertions unchanged)"
+    }
+  ],
+  "registrySources": [
+    {
+      "source": "src/providers/registry.ts",
+      "sha256": "eaa03f044258d51d5d49c741ff73bde6bc582f20e6740b918ed64c958938a063"
+    },
+    {
+      "source": "src/providers/kiro-models.ts",
+      "sha256": "81a323255ab20e27b1040178b01b9cf567d0411b4171107bd47cc9a7ba46be4d"
+    },
+    {
+      "source": "src/providers/base-url-choices.ts",
+      "sha256": "f75c050dd851d38fd90335def782699aea43f89930dfff95060fa88d9724a9a6"
+    }
+  ],
+  "profilesSha256": "9b7aa8a6f83d8da85b178a871673649f37fccd11c04d78e514abd028b221c81d"
+}

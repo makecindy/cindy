@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -10,17 +11,16 @@ import {
   stableStringify,
   type ClassificationCategory,
 } from '../classify.ts';
-import { buildShadowLayerFiles } from '../generate.ts';
+import { buildProductionFiles } from '../generate.ts';
 import {
   assertClassificationCoversSnapshot,
   assertProtectedNotSemantic,
   assertSemanticExemptionsRegistered,
 } from '../guards.ts';
+import { RUNTIME_DERIVED_BUTTON_STATE_IDS } from '../component-roles.ts';
 import {
   classificationPath,
   findRepoRoot,
-  referencePath,
-  semanticPath,
 } from '../paths.ts';
 import { readSnapshot } from '../snapshot.ts';
 
@@ -45,19 +45,16 @@ describe('DS-3 · 分类登记', () => {
     expect(stableStringify(onDisk)).toBe(first);
   });
 
-  it('磁盘上的影子层与内存生成字节一致', () => {
-    const built = buildShadowLayerFiles(repoRoot);
-    expect(built.files).toEqual([
-      { path: classificationPath(repoRoot), body: stableStringify(generated) },
-      { path: referencePath(repoRoot), body: stableStringify(built.layers.reference) },
-      { path: semanticPath(repoRoot), body: stableStringify(built.layers.semantic) },
-    ]);
-    for (const file of built.files) {
-      expect(readFileSync(file.path, 'utf8')).toBe(file.body);
-    }
-  });
+  it('生产生成结果与磁盘字节一致；fixture 仅用于独立分类预期', async () => {
+    const files = await buildProductionFiles(repoRoot);
+    // Windows 上 buildProductionFiles 返回的分隔符是 `\`，期望路径必须用
+    // join 构造（跨平台路径宪法），不能写死 `/` 后缀。
+    const colorsPath = join(repoRoot, 'apps/desktop/src/renderer/themes/colors.ts');
+    expect(files.some(file => file.path === colorsPath)).toBe(true);
+    for (const file of files) expect(readFileSync(file.path, 'utf8')).toBe(file.body);
+  }, 30_000); // Real Terrazzo build; allow CPU contention with the workspace suite.
 
-  it('生成物 JSON 检出行尾固定 LF（.gitattributes 已钉 eol=lf，Windows autocrlf 不会转 CRLF）', () => {
+  it('源 JSON 与全部生产生成物检出行尾固定 LF，Windows autocrlf 不会转 CRLF', async () => {
     // CI 实锤（2026-09-02 Windows unit tests 红）：core.autocrlf=true 的检出把
     // 生成物 JSON 转成 CRLF 后，上一条「磁盘 = 内存生成」字节一致守卫假红。
     // 修复 = .gitattributes 给 packages/design-tokens/src/**/*.json 钉 eol=lf
@@ -67,6 +64,10 @@ describe('DS-3 · 分类登记', () => {
       'packages/design-tokens/src/classification.json',
       'packages/design-tokens/src/reference/color.json',
       'packages/design-tokens/src/semantic/color.json',
+      'packages/design-tokens/src/component/color.json',
+      ...(await buildProductionFiles(repoRoot)).map(file =>
+        relative(repoRoot, file.path).replaceAll('\\', '/'),
+      ),
     ]) {
       const attrs = execFileSync(
         'git',
@@ -76,6 +77,19 @@ describe('DS-3 · 分类登记', () => {
       expect(attrs, `${relPath} 应被 .gitattributes 钉 eol=lf，实际: ${attrs}`).toBe(
         `${relPath}: eol: lf`,
       );
+    }
+  }, 30_000);
+
+  it('DS-4 运行期派生的 Button 状态值只登记不建模（治理合同 §3.4）', () => {
+    // 这五个是 color-mix 派生值：暗色下 surface-hover 与 surface-chip 同值，
+    // alias 会让悬停不可见，所以只能派生。派生值不进 DTCG，但必须留登记，
+    // 防止日后被悄悄改成不跟主题的字面量。
+    for (const id of RUNTIME_DERIVED_BUTTON_STATE_IDS) {
+      const entry = generated.entries.find((item) => item.id === id);
+      expect(entry, `${id} 未出现在分类登记`).toBeTruthy();
+      expect(entry?.category, id).toBe('runtime-derived-or-protected');
+      expect(entry?.destination, id).toBe('register-only');
+      expect(entry?.modeledAsSemantic, id).toBe(false);
     }
   });
 

@@ -9,8 +9,9 @@
 //   TapDB / Google 公开配置;EAS 云构建看不到 gitignored 文件,继续使用 EAS environment。
 // - 自建分发变体(`EXPO_PUBLIC_XDT_OTA_SELFHOST=1`):
 //     · iOS 与 Android app identity 各自一个字段,可独立调整,互不影响。
-//     · updates.url 只放稳定占位值;真实 mobile-update-server 地址由启动端点清单的
-//       mobileUpdateBaseUrl 运行时覆写,不参与 build/fingerprint;
+//     · 旧 bridge 模式用占位 updates.url，由 mobileUpdateBaseUrl 运行时覆写；
+//       CINDY_MOBILE_OTA_NATIVE=1 则把构建注入的固定地址与共享 headers 写入原生，
+//       启用原生事务恢复，有意改变自建 runtime。两种模式不能互投原生不兼容的 OTA。
 //     · 保留 region scheme,但使用自建 bundle identity。此变体有意改变指纹,
 //       但只在该 env 开启时生效,EAS 路径仍逐字节不变。
 // - 不注入任何按 commit 变化的内容(如 git hash),避免 fingerprint 每次提交漂移。
@@ -184,7 +185,7 @@ function resolveAppStoreId(region) {
   return value;
 }
 
-function withNativeAuthPlugins(plugins, env) {
+function withNativeAuthPlugins(plugins, env, region) {
   const next = [...plugins];
   if (env.googleIosUrlScheme) {
     next.push([
@@ -192,10 +193,38 @@ function withNativeAuthPlugins(plugins, env) {
       { iosUrlScheme: env.googleIosUrlScheme },
     ]);
   }
-  if (env.wechatAppId && env.wechatUniversalLink) {
+  // 微信公开配置可能残留在同一打包机的 shell 中，不能进入 Global 原生配置。
+  // 两项全空表示未启用；只填一项必须在 prebuild 阶段报错，避免发出无回跳能力的包。
+  const wechatEnabled = region === 'cn' || region === 'dev';
+  const appId = wechatEnabled ? env.wechatAppId?.trim() || '' : '';
+  const universalLink = wechatEnabled ? env.wechatUniversalLink?.trim() || '' : '';
+  if (!!appId !== !!universalLink) {
+    throw new Error(
+      'EXPO_PUBLIC_CINDY_WECHAT_APP_ID and EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must both be set or both be empty',
+    );
+  }
+  if (appId && universalLink) {
+    let parsed;
+    try {
+      parsed = new URL(universalLink);
+    } catch {
+      throw new Error('EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must be an https URL');
+    }
+    if (
+      parsed.protocol !== 'https:' ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error(
+        'EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK must be an https URL without credentials, query, or fragment',
+      );
+    }
     next.push([
       'xdt-wechat-login/plugin',
-      { appId: env.wechatAppId, universalLink: env.wechatUniversalLink },
+      { appId, universalLink },
     ]);
   }
   return next;
@@ -281,6 +310,10 @@ module.exports = (context = {}) => {
     android: {
       ...baseConfig.android,
       package: regional.androidPackage,
+      // Public Firebase application configuration, supplied by the selected build profile.
+      // No file is bundled from another app identity or copied from a user's installation.
+      ...(process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE?.trim()
+        ? { googleServicesFile: process.env.CINDY_ANDROID_GOOGLE_SERVICES_FILE.trim() } : {}),
     },
     // 非自建线的 EAS Update 入口:由下发的 projectId 推导;自建分支下方会把它覆写成
     // selfhost 占位(真实地址运行时由 mobileUpdateBaseUrl 注入)。projectId 缺省则不配 OTA。
@@ -294,7 +327,7 @@ module.exports = (context = {}) => {
       wechatAppId: process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim(),
       wechatUniversalLink:
         process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim(),
-    }),
+    }, region),
     extra: {
       ...baseConfig.extra,
       ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
@@ -338,8 +371,12 @@ module.exports = (context = {}) => {
 
   // 自建门控用 EXPO_PUBLIC_XDT_OTA_SELFHOST:同一个 EXPO_PUBLIC 标志既在此决定
   // bundleId / 原生 OTA 策略,又被 inline 进 JS 供运行时 IS_OTA_SELFHOST 判定,
-  // 构建与运行时严格对齐。真实 OTA 地址不再作为构建 env 注入。
+  // 构建与运行时严格对齐。原生恢复模式另用非 EXPO_PUBLIC 构建开关显式启用。
   if (selfHosted) {
+    const nativeOta = process.env.CINDY_MOBILE_OTA_NATIVE?.trim();
+    if (nativeOta && nativeOta !== '0' && nativeOta !== '1') {
+      throw new Error('CINDY_MOBILE_OTA_NATIVE must be 0 or 1');
+    }
     // Android 自建线:versionCode 只在此自建分支注入(经 release-android-*.mjs 传入的
     // XDT_ANDROID_VERSION_CODE),APK 覆盖安装 + NPKG md5 去重要求它单调递增。app.json 里
     // **不声明** android.versionCode → 非自建 resolved config 逐字节不变(红线 1,EAS 指纹不受影响)。
@@ -351,6 +388,11 @@ module.exports = (context = {}) => {
       ...next,
       android: {
         ...next.android,
+        // Self-hosted APK and AAB share native config; Play installs skip APK updates at runtime.
+        permissions: [...new Set([
+          ...(next.android.permissions || []),
+          'android.permission.REQUEST_INSTALL_PACKAGES',
+        ])],
         ...(Number.isInteger(versionCode) && versionCode > 0 ? { versionCode } : {}),
       },
       updates: {
@@ -364,6 +406,24 @@ module.exports = (context = {}) => {
         disableAntiBrickingMeasures: true,
       },
     };
+
+    // Explicit build-time rollout switch. Keeping the legacy configuration
+    // available permits the already shipped bridge runtime to remain frozen.
+    // Never detect this native capability from mutable OTA manifest extras.
+    if (nativeOta === '1') {
+      const { resolveUpdatesUrl, requestHeaders, nativeSourceHash } = require('./plugins/selfhost-ota/contract');
+      next = {
+        ...next,
+        plugins: [...next.plugins, ['./plugins/with-selfhost-ota', { sourceHash: nativeSourceHash() }]],
+        updates: {
+          ...next.updates,
+          url: resolveUpdatesUrl(process.env.CINDY_MOBILE_UPDATES_URL),
+          requestHeaders: requestHeaders('release'),
+          checkAutomatically: 'NEVER',
+          disableAntiBrickingMeasures: false,
+        },
+      };
+    }
   }
 
   return next;

@@ -1,9 +1,10 @@
 /**
  * xdt-helper/list_session_queue.ts —— 查询任意本机 session 的只读输入队列。
  *
- * 与 cindy_orca/get_worker_queue_status 的边界不同：本工具不要求 Lead 身份，也不暴露
- * 修改、撤回或重排能力；它只把 host 注入的队列快照压成有界摘要，供 agent 确认
- * 一条消息是否已经排队、位于什么位置、是否正在投递。
+ * 与 cindy_orca/get_worker_queue_status 的边界不同：本工具不要求 Lead 身份，本身只读；
+ * 它只把 host 注入的队列快照压成有界摘要，供 agent 确认一条消息是否已经排队、
+ * 位于什么位置、是否正在投递。修改 / 撤回 / 转插话 / 重排由 session_control 的
+ * *_session_queued_message 工具承担。
  */
 
 import { z } from "zod";
@@ -37,7 +38,7 @@ export interface SessionQueueDeps {
 
 const DESCRIPTION =
   "只读列出本机任意 session 当前尚未消费的输入队列。每条返回队列位置、来源、入队时间、" +
-  "正文摘要与 consuming 状态；consuming=true 表示该条正在投递。此工具不提供修改、撤回或重排。" +
+  "正文摘要与 consuming 状态；consuming=true 表示该条正在投递。修改、撤回、转插话或调整顺序用 update / cancel / steer / move_session_queued_message。" +
   "session_id 建议来自 list_sessions。失败码: NOT_FOUND / HOST_NOT_READY / INTERNAL。";
 
 export function registerListSessionQueueTool(

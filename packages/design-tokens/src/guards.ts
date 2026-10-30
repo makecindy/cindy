@@ -23,9 +23,6 @@ import {
   type DtcgFile,
 } from './dtcg.ts';
 import {
-  CLASSIFICATION_RELATIVE_PATH,
-  REFERENCE_RELATIVE_PATH,
-  SEMANTIC_RELATIVE_PATH,
   SNAPSHOT_RELATIVE_PATH,
 } from './paths.ts';
 import { SEMANTIC_ROLE_IDS } from './semantic-roles.ts';
@@ -34,9 +31,9 @@ import type { ColorDefaultsSnapshot } from './snapshot.ts';
 export function snapshotMismatch(what: string): string {
   return [
     `${what} 与 DS-2b 冻结快照不一致。`,
-    '红灯不是禁令。有意改值的合法路径 = 同一 PR 更新本快照 + 同步影子层（packages/design-tokens 的 generate 脚本）+ 按治理合同 §6 交证据 + 设计师批准。',
-    `更新方式：把实时提取结果写回 ${SNAPSHOT_RELATIVE_PATH}，并重新生成 ${CLASSIFICATION_RELATIVE_PATH} / ${REFERENCE_RELATIVE_PATH} / ${SEMANTIC_RELATIVE_PATH}。`,
-    '保护值（CINDY 皮肤族 DESIGN.md §15、U2 二级信息色、annotation-accent）另有比「改快照 + 设计师批准」更严的门槛，不能只更新本文件。',
+    '红灯不是禁令。有意改值的合法路径 = 修改 DTCG 源并生成生产输出 + 同一 PR 显式更新独立快照 + 按治理合同 §6 交证据 + 设计师批准。',
+    `更新方式：把实时提取结果写回 ${SNAPSHOT_RELATIVE_PATH}，生产生成不可反向读取它；历史分类与导入 oracle 另行维护。`,
+    '保护值（CINDY 皮肤族 DESIGN.md §15、CINDY 文字墨水阶梯（原 U2 二级信息色）、annotation-accent）另有比「改快照 + 设计师批准」更严的门槛，不能只更新本文件。',
     '禁止为绿灯加豁免或绕加载路径。',
   ].join('\n');
 }
@@ -390,6 +387,7 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
   const files = {
     reference: layers.reference,
     semantic: layers.semantic,
+    component: layers.component,
   };
 
   for (const { path, leaf } of fileLeaves(layers.reference)) {
@@ -426,10 +424,10 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
       });
       continue;
     }
-    if (resolved.file === 'semantic') {
+    if (resolved.file !== 'reference') {
       issues.push({
         code: 'alias-direction',
-        message: `semantic.${path.join('.')} 解析回 semantic，违反单向依赖`,
+        message: `semantic.${path.join('.')} 必须落在 reference，实际 ${resolved.file}`,
       });
     }
     if (
@@ -442,6 +440,37 @@ export function validateAliasDirection(layers: BuiltLayers): StructureIssue[] {
       });
     }
   }
+
+  for (const { path, leaf } of fileLeaves(layers.component)) {
+    if (typeof leaf.$value !== 'string') {
+      issues.push({
+        code: 'alias-direction',
+        message: `component.${path.join('.')} 必须 alias 到 semantic 或 reference，不能写字面量`,
+      });
+      continue;
+    }
+    if (!parseAliasPath(leaf.$value)) {
+      issues.push({
+        code: 'alias-direction',
+        message: `component.${path.join('.')} 必须 alias 到 semantic 或 reference，不能写字面量`,
+      });
+      continue;
+    }
+    const resolved = resolveAlias(files, 'component', leaf.$value);
+    if (!resolved) {
+      issues.push({
+        code: 'alias-unresolved',
+        message: `component.${path.join('.')} 无法解析 ${leaf.$value}`,
+      });
+      continue;
+    }
+    if (resolved.file === 'component') {
+      issues.push({
+        code: 'alias-direction',
+        message: `component.${path.join('.')} 解析回 component，违反单向依赖`,
+      });
+    }
+  }
   return issues;
 }
 
@@ -449,7 +478,9 @@ export function validateStructure(layers: BuiltLayers): StructureIssue[] {
   return [
     ...validateDtcgSyntax(layers.reference, 'reference'),
     ...validateDtcgSyntax(layers.semantic, 'semantic'),
+    ...validateDtcgSyntax(layers.component, 'component'),
     ...validateDualModes(layers.semantic),
+    ...validateDualModes(layers.component),
     ...validateAliasDirection(layers),
   ];
 }

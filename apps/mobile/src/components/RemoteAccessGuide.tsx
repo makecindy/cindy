@@ -165,7 +165,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.md,
   },
   eyebrow: {
-    ...textStyles.caption,
+    ...textStyles.footnote,
     color: colors.textTertiary,
     fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
@@ -183,7 +183,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: spacing.sm,
   },
   sectionLabel: {
-    ...textStyles.caption,
+    ...textStyles.footnote,
     color: colors.textTertiary,
     fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',

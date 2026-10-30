@@ -55,6 +55,36 @@ function hardLimitFailure(hardLimit: number) {
 }
 
 describe('create_workers tool', () => {
+  // PR2 unit: batch results must retain each actual cwd and optional checkout independently.
+  it('keeps mixed worktree and existing-directory requests and spawn results distinct', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce({...created(1, 5), workingDir: '/tree/apps/web', worktree: {path: '/tree', branch: 'cindy/new'}})
+      .mockResolvedValueOnce({...created(2, 5), workingDir: '/existing'});
+    const result = parse(await setup(createWorker).call('create_workers', {workers: [
+      {...worker(1), working_dir: '/repo/apps/web', new_worktree: {source_branch: 'release'}},
+      {...worker(2), working_dir: '/existing'},
+    ]}));
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({workingDir: '/repo/apps/web', worktree: {sourceBranch: 'release'}}));
+    expect(createWorker.mock.calls[1]?.[0]).not.toHaveProperty('worktree');
+    expect(result.results).toMatchObject([
+      {working_dir: '/tree/apps/web', worktree: {path: '/tree', branch: 'cindy/new'}},
+      {working_dir: '/existing'},
+    ]);
+    expect(result.results[1]).not.toHaveProperty('worktree');
+  });
+
+  it('preserves each worker directory independently in a batch', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce(created(1, 5)).mockResolvedValueOnce(created(2, 5));
+    const registry = setup(createWorker);
+    await registry.call('create_workers', { workers: [
+      { ...worker(1), working_dir: '/tmp/first' },
+      { ...worker(2), working_dir: '/tmp/second with spaces ' },
+    ] });
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ workingDir: '/tmp/first' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ workingDir: '/tmp/second with spaces ' }));
+  });
+
   it('routes multi-worker requests to one deterministic batch tool', () => {
     const createWorker = vi.fn<CreateWorkerDeps['createWorker']>();
     const registry = setup(createWorker);

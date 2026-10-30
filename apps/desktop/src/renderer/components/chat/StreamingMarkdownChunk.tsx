@@ -13,6 +13,7 @@ import {
   type WordFadeState,
 } from './rehypeStreamWordFade';
 import { StreamFadeListItem, StreamFadeSpan } from './StreamFadeSpan';
+import { createStreamingMarkdownBlockCache, withStreamingMarkdownBlocks } from './streamingMarkdownBlocks';
 
 interface StreamingMarkdownChunkProps {
   sourceKey: string;
@@ -57,9 +58,15 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
       wholeDocument && wordFadeState
         ? createWholeDocumentWordFadeCandidate(wordFadeState, sourceWordFadeState)
         : createWordFadeCandidate(sourceWordFadeState);
+    const blocks = createStreamingMarkdownBlockCache();
     return {
       candidate,
-      plugins: [...rehypePlugins, [rehypeStreamWordFade, candidate]] as PluggableList,
+      plugins: [
+        ...rehypePlugins,
+        blocks.capture,
+        [rehypeStreamWordFade, candidate],
+        blocks.wrap,
+      ] as PluggableList,
     };
   }, [content, rehypePlugins, sourceWordFadeState, wholeDocument, wordFadeState]);
 
@@ -90,11 +97,16 @@ export const StreamingMarkdownChunk = memo(function StreamingMarkdownChunk({
     };
   }, [components, emitSourceLines, sourceWordFadeState]);
 
+  const cachedComponents = useMemo(
+    () => sourceWordFadeState ? withStreamingMarkdownBlocks(chunkComponents, urlTransform) : chunkComponents,
+    [chunkComponents, sourceWordFadeState, urlTransform],
+  );
+
   return (
     <ReactMarkdown
       remarkPlugins={remarkPlugins}
       rehypePlugins={wordFade?.plugins ?? rehypePlugins}
-      components={chunkComponents}
+      components={cachedComponents}
       urlTransform={urlTransform}
       skipHtml
     >

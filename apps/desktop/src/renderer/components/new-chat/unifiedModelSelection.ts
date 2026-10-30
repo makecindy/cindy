@@ -1,6 +1,6 @@
 /**
  * unifiedModelSelection —— 统一模型选择器(模型优先)面板的**纯逻辑层**:行生效配置合成、
- * 收藏/分组陈列、rail 派生、配置浮层定位。规格见
+ * 收藏 / 最近 / 分组陈列、rail 派生、配置浮层定位。规格见
  * `docs/product-rules/model-selector-unified.md` §1.2 / §1.3 / §1.5 / §2。
  *
  * 为什么单独一层:M3 的行三元组(引擎图标 + 推理强度 + Fast)与 M4 浮层里的每一个控件,
@@ -17,13 +17,16 @@
  *      (i18n `effortLevels.*`),绝不把翻译过的文案回灌进配置。
  */
 
-import type { UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
+import type { ProviderView, UnifiedAgentCapability, UnifiedModelEntry } from '@cindy/model-providers';
+import { remoteInvocationModels } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { SelectableVendor } from '@/lib/agentVendors';
 import type { Effort } from '@/lib/userPreferences.types';
 import { applyProviderOrderIds } from '../../../shared/providerOrder';
+import { modelConfigCopyIdentity, type ModelConfigCopy } from '@/state/modelConfigCopy';
 import type { ModelFavoriteItem } from '@/state/modelFavorites';
+import type { RecentModelItem } from '@/state/recentModels';
 
 /** 引擎在**选择器 / 草稿链路**里的口径(vendor);catalog / capabilities 侧是 AgentKind。 */
 export type UnifiedEngine = SelectableVendor;
@@ -41,16 +44,22 @@ export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
 /**
  * 行 / 浮层的锚点(规格 §1.5):模型行按 (来源, 模型) 定位,收藏条目按**独立 uid** 定位。
  * 同模型的多条收藏互不牵连,靠的就是这个 uid —— 选中 / hover / 浮层绑定 / 删除全走锚点。
+ *
+ * 最近条目按**副本身份**(`key`,与 store 的去重身份同一份)定位:同一模型的不同配置
+ * (引擎 / 深度 / Fast)各占一行,选中态只能对着其中一行。
  */
 export type UnifiedAnchor =
   | { kind: 'model'; providerId: string; modelId: string }
-  | { kind: 'fav'; uid: string; providerId: string; modelId: string };
+  | { kind: 'fav'; uid: string; providerId: string; modelId: string }
+  | { kind: 'recent'; key: string; providerId: string; modelId: string };
 
 /** 锚点的字符串键(React key / DOM data 属性 / 相等比较)。 */
 export function anchorKey(anchor: UnifiedAnchor): string {
   return anchor.kind === 'fav'
     ? `fav::${anchor.uid}`
-    : `model::${anchor.providerId}::${anchor.modelId}`;
+    : anchor.kind === 'recent'
+      ? `recent::${anchor.key}`
+      : `model::${anchor.providerId}::${anchor.modelId}`;
 }
 
 export function sameAnchor(a: UnifiedAnchor | null, b: UnifiedAnchor | null): boolean {
@@ -93,7 +102,7 @@ export interface UnifiedRowConfig {
   /** 生效档位;不可调时为 null。 */
   effort: Effort | null;
   /** 生效的 Fast 开关(不具备能力时恒 false —— 不做假按钮)。 */
-  fast: boolean;
+  fast: boolean | 'ultrafast';
   /** 该 (模型, 引擎) 是否真的支持 Fast(目录能力 × agent 运行时能力)。 */
   fastCapable: boolean;
   /** 用户是否在这一行上留下过与推荐不同的配置(行内三元组提亮 / 浮层底栏三态)。 */
@@ -122,7 +131,7 @@ export interface ResolveRowConfigArgs {
   /** 该 (agent, 来源, 模型) 的深度记忆(providerModelMemory 既有槽)。 */
   memoryEffort?: (agent: AgentKind) => Effort | undefined;
   /** 该 (agent, 来源, 模型) 的 Fast 记忆(providerModelMemory 既有槽)。 */
-  memoryFast?: (agent: AgentKind) => boolean | undefined;
+  memoryFast?: (agent: AgentKind) => boolean | 'ultrafast' | undefined;
   /** agent 运行时是否具备 Fast 能力(useAgentCapabilities.hasFastMode);缺省视为具备。 */
   agentFastModeCapable?: (agent: AgentKind) => boolean;
   /**
@@ -180,8 +189,7 @@ function pickEffort(
 export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowConfig {
   const { entry, engineOverride, memoryEffort, memoryFast, agentFastModeCapable } = args;
   const candidateEngines = entry.candidates.map(engineOfAgentKind);
-  const overrideUsable =
-    engineOverride !== undefined && candidateEngines.includes(engineOverride);
+  const overrideUsable = engineOverride !== undefined && candidateEngines.includes(engineOverride);
   const pinned =
     args.pinnedEngine !== undefined &&
     candidateEngines.includes(args.pinnedEngine) &&
@@ -201,7 +209,8 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
   const effort = pickEffort(capability, memoryEffort?.(agent));
   const fastCapable =
     capability?.supportsFastMode === true && (agentFastModeCapable?.(agent) ?? true);
-  const fast = fastCapable ? (memoryFast?.(agent) ?? false) : false;
+  const requestedFast = memoryFast?.(agent) ?? false;
+  const fast = fastCapable && (requestedFast !== 'ultrafast' || capability?.supportsUltrafastMode) ? requestedFast : false;
   const customized =
     // 「已自定义」是相对**该行此刻的缺省**说的:会话内 pinned 生效时,落在当前引擎上
     // 是缺省而不是自定义(否则会话里几乎每一行都被标成已自定义,提亮就失去信息量)。
@@ -209,7 +218,7 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
     // 用户留过的引擎选择仍应提亮。
     (overrideUsable && engineOverride !== baseline) ||
     (effort !== null && capability?.defaultEffort != null && effort !== capability.defaultEffort) ||
-    fast;
+    !!fast;
   return {
     engine,
     agent,
@@ -231,7 +240,8 @@ export function resolveUnifiedRowConfig(args: ResolveRowConfigArgs): UnifiedRowC
  */
 export function resolveFavoriteRowConfig(args: {
   entry: UnifiedModelEntry;
-  item: ModelFavoriteItem;
+  /** 配置副本(收藏条目或最近记录)—— *只* 读它自存的引擎 / 深度 / Fast。 */
+  item: ModelConfigCopy;
   agentFastModeCapable?: (agent: AgentKind) => boolean;
 }): UnifiedRowConfig {
   const { entry, item, agentFastModeCapable } = args;
@@ -244,7 +254,7 @@ export function resolveFavoriteRowConfig(args: {
   const effort = pickEffort(capability, item.effort);
   const fastCapable =
     capability?.supportsFastMode === true && (agentFastModeCapable?.(agent) ?? true);
-  const fast = fastCapable && item.fast === true;
+  const fast = fastCapable ? (item.fast === 'ultrafast' && capability?.supportsUltrafastMode ? 'ultrafast' : item.fast === true) : false;
   return {
     engine,
     agent,
@@ -260,9 +270,31 @@ export function resolveFavoriteRowConfig(args: {
 }
 
 /**
- * 收藏选中身份就是 uid(Chris 2026-08-20):面板只认「这条 uid 还在收藏列表里」,
- * 不拿正在跑的引擎/思维/加速去对副本 —— 对上才打勾会让下面同名模型行抢走焦点。
+ * uid 记录选择来源，完整配置决定它是否仍在使用。收藏在其它任务被编辑后，
+ * 旧任务保留自己的配置；不能用历史 uid 把不同的 Fast / 推理强度冒充为已应用。
+ * 这里只派生选中态，不回写任务、收藏或锚点存储。
  */
+export function favoriteMatchesSelection(args: {
+  entry: UnifiedModelEntry;
+  item: ModelConfigCopy;
+  selected: { providerId: string | null; modelId: string };
+  agent: AgentKind | null | undefined;
+  effort: Effort | undefined;
+  fast: boolean | 'ultrafast';
+  agentFastModeCapable?: (agent: AgentKind) => boolean;
+}): boolean {
+  const { entry, item, selected, agent } = args;
+  if (
+    !agent ||
+    item.providerId !== selected.providerId ||
+    !entryMatchesModelId(entry, selected.modelId) ||
+    agentKindOfEngine(item.agent) !== agent ||
+    !entry.candidates.includes(agent)
+  )
+    return false;
+  const config = resolveFavoriteRowConfig(args);
+  return config.effort === (args.effort || null) && config.fast === args.fast;
+}
 
 /**
  * 该收藏是否**就是**该模型的推荐配置 —— 决定收藏行右侧要不要挂 `引擎 · 深度 [⚡]` 后缀
@@ -286,28 +318,52 @@ export function isRecommendedFavoriteConfig(
  * `engine` 格只在**会话内**出现(规格 §1.6:图标 = 当前会话引擎,默认选中)。
  */
 export type UnifiedRailItem =
+  | { kind: 'recent' }
   | { kind: 'favorites' }
   | { kind: 'engine'; agent: AgentKind }
   | { kind: 'all' }
-  | { kind: 'provider'; providerId: string };
+  | { kind: 'provider'; providerId: string }
+  /**
+   * 另一台电脑上的供应商(远程 Agent)。选它 = 列那台电脑这个供应商的模型；选中模型后
+   * Agent 在那台电脑运行。只在新任务草稿出现；列表数据由面板调用方切到那台电脑的目录，
+   * 所以在列表筛选上它与 `provider` 格等价。
+   */
+  | { kind: 'remote-provider'; deviceId: string; providerId: string };
 
 export type UnifiedRailFilter = UnifiedRailItem;
 
+/**
+ * 远程 Agent 只能用那台电脑开了「允许被远程调用」的供应商。没有该标记(旧数据)按未开放处理；
+ * 远程控制那台电脑时照常列全部，不经过这里。
+ */
+export function remoteAgentProviders(providers: readonly ProviderView[]): ProviderView[] {
+  return providers.filter((provider) => provider.remoteInvocationEnabled === true).map(remoteInvocationModels);
+}
+
+/** 该格按哪个供应商筛选(本机或远程供应商格);其余格不按供应商筛。 */
+export function railProviderFilterId(item: UnifiedRailItem): string | null {
+  return item.kind === 'provider' || item.kind === 'remote-provider' ? item.providerId : null;
+}
+
 export function railItemKey(item: UnifiedRailItem): string {
   if (item.kind === 'provider') return `provider:${item.providerId}`;
+  if (item.kind === 'remote-provider') return `remote:${item.deviceId}:${item.providerId}`;
   if (item.kind === 'engine') return `engine:${item.agent}`;
   return item.kind;
 }
 
 /**
- * rail 项派生:★收藏(**常驻**) → 同引擎(仅会话内) → 全部 → 各来源供应商
+ * rail 项派生:最近 → ★收藏(**两者常驻**) → 同引擎(仅会话内) → 全部 → 各来源供应商
  * (按行首次出现序,即联合列表的引擎优先序 × catalog 序)。
+ *
+ * 「最近」在 ★ 之上(2026-09-16 裁决):它是面板里最常用的回顾入口,常驻与 ★ 同理 ——
+ * 空列表时点进去看引导空态,不按有无记录隐藏。
  *
  * 「同引擎」格刻意排在 ★ 之下、全部之上(规格 §1.6):它是会话内的**默认视图**,
  * 但收藏仍是用户自己钉的东西,优先级更高。
  *
- * 刻意**不收** favorites:★ 常驻是裁决(见函数体注释),格位与收藏条目多少无关 ——
- * 收着一个不看的参数只会让调用方以为「传了它就会影响 rail」。
+ * 刻意**不收** favorites / recent 数据:两格常驻是裁决(见函数体注释),格位与条目多少
+ * 无关 —— 收着不看的参数只会让调用方以为「传了它就会影响 rail」。
  */
 export function buildUnifiedRail(
   entries: readonly UnifiedModelEntry[],
@@ -315,8 +371,9 @@ export function buildUnifiedRail(
   providerOrder?: readonly string[],
 ): UnifiedRailItem[] {
   const items: UnifiedRailItem[] = [];
-  // ★ 常驻(设计稿 renderRail:collection 永远在第一格,空收藏点进去看空态引导)——
-  // 只在有收藏时出现会让功能不可发现(Chris 2026-08-13 实测:「分类栏直接砍了?」)。
+  // 最近 / ★ 常驻(设计稿 renderRail:collection 永远在第一格,空收藏点进去看空态引导)——
+  // 只在有数据时出现会让功能不可发现(Chris 2026-08-13 实测:「分类栏直接砍了?」)。
+  items.push({ kind: 'recent' });
   items.push({ kind: 'favorites' });
   if (sessionAgent) items.push({ kind: 'engine', agent: sessionAgent });
   items.push({ kind: 'all' });
@@ -338,13 +395,47 @@ export function buildUnifiedRail(
 export interface UnifiedListRow {
   anchor: UnifiedAnchor;
   entry: UnifiedModelEntry;
-  /** 收藏区行才有;模型行为 undefined。 */
+  /** 收藏区行才有;模型行 / 最近行没有。 */
   favorite?: ModelFavoriteItem;
+  /** 最近视图行才有(配置副本 + usedAt);其余行没有。 */
+  recent?: RecentModelItem;
+  /**
+   * 收藏区里「在另一台电脑上运行」的收藏(远程 Agent):entry 来自那台电脑的目录,favorite 的
+   * providerId 已还原成那台的真实 id。没有这个字段 = 本目录的行。
+   */
+  agentDeviceId?: string;
+  /** 那台电脑的目录此刻读不到:行照常列出但不可选(entry 只是按收藏拼出的占位)。 */
+  unavailable?: true;
+}
+
+/** 收藏区里本目录之外的那一条:由调用方按那台电脑的目录解析(见 buildUnifiedListSections)。 */
+export interface ForeignFavoriteRow {
+  entry: UnifiedModelEntry;
+  favorite: ModelFavoriteItem;
+  agentDeviceId: string;
+  unavailable?: true;
+}
+
+/**
+ * 另一台电脑的目录还没读到时,按收藏条目拼一个只用来展示的行(名字 = 模型 id,引擎 = 收藏存的那个,
+ * 没有任何能力):行不可选,目录到了自然换成真条目。
+ */
+export function unavailableFavoriteEntry(item: ModelFavoriteItem): UnifiedModelEntry {
+  const agent = agentKindOfEngine(item.agent);
+  return {
+    providerId: item.providerId,
+    modelId: item.modelId,
+    displayName: item.modelId,
+    candidates: [agent],
+    recommended: agent,
+    nativeAgent: null,
+    capabilities: {},
+  };
 }
 
 export interface UnifiedListSection {
   key: string;
-  kind: 'favorites' | 'group';
+  kind: 'favorites' | 'recent' | 'recommended' | 'group';
   /**
    * 分组小节的口径 —— **按供应商,不按模型家族**(Chris 2026-08-13 实测裁决:供应商决定
    * 价格,同名模型跨来源混排会让用户没法选)。每个供应商各自成组,标题用
@@ -373,9 +464,18 @@ function entryKeyOf(providerId: string, modelId: string): string {
   return `${providerId} ${modelId}`;
 }
 
+/**
+ * 面板「最近」区最多陈列几条(产品口径:最近使用的 5 个模型)。
+ *
+ * 刻意**不**从 recentModels store import:纯逻辑层只 import store 的**类型**
+ * (`import type` 会被编译期抹掉),拖进一个带 React 的模块会破坏「零 IO、可脱离 jsdom 单测」
+ * 的边界(见文件头三条边界)。
+ */
+export const UNIFIED_RECENT_MODELS_LIMIT = 5;
+
 type EnginePreferenceResolver = (
   entry: UnifiedModelEntry,
-  favorite?: ModelFavoriteItem,
+  favorite?: ModelConfigCopy,
 ) => UnifiedEngine;
 
 /**
@@ -438,7 +538,9 @@ function arrangeEngineRailClusters(
 }
 
 /**
- * 面板列表:**收藏区置顶** → **按供应商分组**。
+ * 面板列表(常规视图):**收藏区** → **推荐区(仅会话)** → **按供应商分组**。
+ * 最近**不**并入常规列表 —— 它是侧栏「最近」格单独的筛选视图(2026-09-16 实测裁决:
+ * 与收藏上下叠放会产生视觉歧义)。
  *
  * 没有「默认」小节(Chris 2026-08-16 裁决:去掉默认小节,简单一点)—— 服务端的默认
  * 推荐改以**种子收藏**交付(见 modelFavorites.seedDefaultFavorite):gateway 用户的
@@ -461,39 +563,92 @@ function arrangeEngineRailClusters(
 export function buildUnifiedListSections(args: {
   entries: readonly UnifiedModelEntry[];
   favorites: readonly ModelFavoriteItem[];
+  /**
+   * 最近使用的模型(store 的原样快照,已按 usedAt 倒序)。只服务 `rail.kind === 'recent'`
+   * 的独立视图;常规视图(全部 / 供应商 / 同引擎)不陈列最近区(2026-09-16 实测裁决),
+   * 因此与收藏、推荐之间的重叠在 UI 上不可见,无需去重。
+   */
+  recentModels?: readonly RecentModelItem[] | undefined;
   query: string;
+  matchesQuery?: (entry: UnifiedModelEntry, query: string) => boolean;
   rail: UnifiedRailFilter;
   /**
    * 该行(或该条收藏)**生效引擎**的解析器 —— 同引擎视图用它做**排序优先级**
    * (默认 / 用户选过的本引擎在前,仅兼容的在后)以及收藏区过滤。缺省时按原生底座回落。
    * override / pinned / forceEngine 的合成结果由调用方注入,这里不 import store。
    */
-  effectiveEngineOf?: (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem) => UnifiedEngine;
+  effectiveEngineOf?: (entry: UnifiedModelEntry, favorite?: ModelConfigCopy) => UnifiedEngine;
   /** 供应商组间显示顺序(设置页拖动序);缺省 = 入参首见序。 */
   providerOrder?: readonly string[];
+  recommendation?: { agent: AgentKind; providerId: string | null; modelId: string };
+  /**
+   * 远程 Agent 浏览任务所在电脑的目录时:收藏里在其他电脑上运行的那几条交给调用方按那台的目录解析。
+   * 返回 null = 本轮不显示(那台的目录里已经没有这个模型 / 不是这类收藏);**不删条目**。
+   * 这些行只出现在 ★ / 全部视图,按本机供应商筛选的视图不列。
+   */
+  resolveForeignFavorite?: (item: ModelFavoriteItem) => ForeignFavoriteRow | null;
 }): UnifiedListSection[] {
-  const { entries, favorites, rail, effectiveEngineOf } = args;
+  const { entries, favorites, effectiveEngineOf } = args;
   const q = args.query.trim().toLowerCase();
+  const rail: UnifiedRailFilter = q ? { kind: 'all' } : args.rail;
+  const matches = args.matchesQuery ?? matchesQuery;
   const byKey = new Map<string, UnifiedModelEntry>();
   for (const entry of entries) byKey.set(entryKeyOf(entry.providerId, entry.modelId), entry);
+
+  /**
+   * 把一份「存下来的模型身份」解析回本轮目录里的一行(收藏与最近共用)。
+   *
+   * 老数据可能存的是某个引擎的 wire id(合并行之前行身份就是 wire id):先按归一化 id
+   * 精确命中,失配再按「任一引擎的 wire id」扫一遍 —— 否则升级后老收藏会整条消失。
+   * 解析不到 = 该模型当前不可路由(来源断开 / 目录下架)→ 调用方跳过,**不删条目**:
+   * 连回来就该回来,静默删掉用户存过的东西是不可逆的。
+   */
+  const resolveStoredEntry = (providerId: string, modelId: string): UnifiedModelEntry | undefined =>
+    byKey.get(entryKeyOf(providerId, modelId)) ??
+    entries.find(
+      (candidate) =>
+        candidate.providerId === providerId && entryMatchesModelId(candidate, modelId),
+    );
 
   const sections: UnifiedListSection[] = [];
 
   // ── 收藏区 ── 恒置顶,在任何 rail 视图下都显示;按供应商筛选时只留该来源的收藏。
   const favRows: UnifiedListRow[] = [];
   for (const item of favorites) {
-    // 老收藏可能存的是某个引擎的 wire id(合并行之前的行身份就是 wire id):先按归一化 id
-    // 精确命中,失配再按「任一引擎的 wire id」扫一遍 —— 否则升级后老收藏会整条消失。
-    const entry =
-      byKey.get(entryKeyOf(item.providerId, item.modelId)) ??
-      entries.find(
-        (candidate) =>
-          candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
-      );
+    const foreign = args.resolveForeignFavorite?.(item);
+    if (foreign) {
+      if (railProviderFilterId(rail) !== null) continue;
+      if (
+        rail.kind === 'engine' &&
+        (effectiveEngineOf
+          ? effectiveEngineOf(foreign.entry, foreign.favorite)
+          : foreign.favorite.agent) !== engineOfAgentKind(rail.agent)
+      )
+        continue;
+      if (!matches(foreign.entry, q)) continue;
+      favRows.push({
+        anchor: {
+          kind: 'fav',
+          uid: item.uid,
+          providerId: foreign.favorite.providerId,
+          modelId: foreign.favorite.modelId,
+        },
+        entry: foreign.entry,
+        favorite: foreign.favorite,
+        agentDeviceId: foreign.agentDeviceId,
+        ...(foreign.unavailable ? { unavailable: true as const } : {}),
+      });
+      continue;
+    }
+    // 老收藏可能存的是某个引擎的 wire id(合并行之前的行身份就是 wire id):解析口径与最近视图
+    // 共用 resolveStoredEntry(先按归一化 id 精确命中,失配再按「任一引擎的 wire id」扫一遍)——
+    // 否则升级后老收藏会整条消失。
+    const entry = resolveStoredEntry(item.providerId, item.modelId);
     // 收藏指向的模型已不可路由(来源断开 / 目录下架)→ 本轮不显示;**不删条目**:
     // 连回来就该回来,静默删掉用户存过的配置是不可逆的。
     if (!entry) continue;
-    if (rail.kind === 'provider' && entry.providerId !== rail.providerId) continue;
+    const railProviderId = railProviderFilterId(rail);
+    if (railProviderId !== null && entry.providerId !== railProviderId) continue;
     // 同引擎视图:收藏按**解析后的生效引擎**过滤。收藏是配置快照,不是模型本体 ——
     // 只列点下去仍停在当前引擎的副本。判据只有这一个,不再先按条目自存的 item.agent
     // 硬排除(2026-08-19 review P2):两者在「条目引擎掉出候选」时会分叉 ——
@@ -507,7 +662,7 @@ export function buildUnifiedListSections(args: {
       const favoriteEngine = effectiveEngineOf ? effectiveEngineOf(entry, item) : item.agent;
       if (favoriteEngine !== engineOfAgentKind(rail.agent)) continue;
     }
-    if (!matchesQuery(entry, q)) continue;
+    if (!matches(entry, q)) continue;
     favRows.push({
       anchor: {
         kind: 'fav',
@@ -519,23 +674,79 @@ export function buildUnifiedListSections(args: {
       favorite: item,
     });
   }
+  // ★ 视图只陈列收藏:提前返回,不进最近 / 推荐 / 分组。
+  if (rail.kind === 'favorites') {
+    if (favRows.length > 0) {
+      sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
+    }
+    return sections;
+  }
+
+  // ── 最近视图 ── **只服务侧栏的「最近」格**(2026-09-16 实测裁决:各供应商 / 全部视图
+  // 不再陈列最近区 —— 它与收藏上下叠放会产生「这两区到底有什么不同」的视觉歧义)。
+  // 因此这里不把最近并入常规列表,而是单独成页:白名单是 store 里最近的 UNIFIED_RECENT_MODELS_LIMIT
+  // 条可路由模型;每行拿的是记录时的**配置副本**(模型 + 引擎 + 深度 + Fast),行身份就是
+  // 这份副本(同一模型不同配置各占一行,锚点 key 即副本身份,见 recentModels 文件头)。
+  if (rail.kind === 'recent') {
+    const recentRows: UnifiedListRow[] = [];
+    for (const item of args.recentModels ?? []) {
+      if (recentRows.length >= UNIFIED_RECENT_MODELS_LIMIT) break;
+      const entry = resolveStoredEntry(item.providerId, item.modelId);
+      if (!entry) continue;
+      if (!matches(entry, q)) continue;
+      recentRows.push({
+        anchor: {
+          kind: 'recent',
+          // 副本身份当锚点:同一模型的不同配置各占一行,选中态只能对着其中一行。
+          key: modelConfigCopyIdentity(item),
+          providerId: entry.providerId,
+          modelId: entry.modelId,
+        },
+        entry,
+        recent: item,
+      });
+    }
+    if (recentRows.length > 0) {
+      sections.push({ key: 'recent', kind: 'recent', rows: recentRows });
+    }
+    return sections;
+  }
+
+  // ── 收藏区 ── 常规视图(全部 / 供应商 / 同引擎)里恒置顶,按供应商筛选时只留该来源。
   if (favRows.length > 0) {
     sections.push({ key: 'favorites', kind: 'favorites', rows: favRows });
   }
-
-  if (rail.kind === 'favorites') return sections;
 
   // ── 分组区 ──
   // 同引擎视图的准入只有一条:候选里有当前引擎。生效引擎是排序优先级,不是隐藏条件
   // (Chris 2026-08-23 纠正 08-19「不显示」裁决):默认 / 用户选过本引擎的在前,其余兼容
   // 行在后。不把兼容行转换成当前引擎 —— 点下去仍按其落点走,落点在别处就走跨引擎确认。
+  const groupProviderId = railProviderFilterId(rail);
   const visible = entries.filter(
     (entry) =>
-      matchesQuery(entry, q) &&
-      (rail.kind !== 'provider' || entry.providerId === rail.providerId) &&
+      matches(entry, q) &&
+      (groupProviderId === null || entry.providerId === groupProviderId) &&
       (rail.kind !== 'engine' || entry.candidates.includes(rail.agent)),
   );
-  const clustered = clusterByProvider(visible, args.providerOrder);
+  const promoted = new Set<UnifiedModelEntry>();
+  if (rail.kind === 'all' && args.recommendation) {
+    const recommendation = args.recommendation;
+    const current = visible.find((entry) =>
+      entryMatchesModelId(entry, recommendation.modelId) &&
+      (recommendation.providerId === null || entry.providerId === recommendation.providerId));
+    const sameEngine = clusterByProvider(visible, args.providerOrder).flatMap((cluster) => cluster.items)
+      .filter((entry) => entry !== current && entry.availability !== 'requires_payment' &&
+        (effectiveEngineOf?.(entry) ?? resolveUnifiedRowConfig({ entry }).engine) === engineOfAgentKind(recommendation.agent));
+    const recommended = [...(current ? [current] : []), ...sameEngine];
+    if (recommended.length) {
+      sections.push({ key: 'recommended', kind: 'recommended', rows: recommended.map((entry) => ({
+        anchor: { kind: 'model', providerId: entry.providerId, modelId: entry.modelId }, entry,
+      })) });
+      recommended.forEach((entry) => promoted.add(entry));
+    }
+  }
+  // Cluster only the remaining models: emptied providers produce no header or spacing.
+  const clustered = clusterByProvider(visible.filter((entry) => !promoted.has(entry)), args.providerOrder);
   const arranged =
     rail.kind === 'engine'
       ? arrangeEngineRailClusters(clustered, rail.agent, effectiveEngineOf)
@@ -564,14 +775,8 @@ export interface SelectedRowAlignment {
 }
 
 /**
- * 打开面板 / 切视图时,把选中行滚到**可视区中部**(Chris 2026-08-19 实测反馈:
- * 「尽量保持在他上面的内容能展示,尽量在列表中部是当前选中的」)。
- *
- * 为什么不是「最小滚动进可视区」(改动前的做法):面板挂在 morph 弹层里,首开那一帧列表
- * 高度还是 pill 的裁切态 —— 极矮的可视区里做最小滚动,等价于把选中行顶到列表最上沿;等
- * morph 长开,那一行就死死钉在顶部,它上面的收藏第 1、2 条被顶出可视区。用户点了收藏第 3
- * 条再打开面板,看到的是「焦点永远在下面,收藏区不见了」。居中对齐天然给上方留出同等篇幅,
- * 生长过程中每次尺寸回调重算也始终指向同一个视觉位置。
+ * 打开面板 / 切视图时，把当前模型行中心定位到可视高度约 35% 处。
+ * 收藏可以滚出顶部；面板展开过程按实际高度重算，用户手动滚动后由调用方停止对齐。
  *
  * 纯函数:对齐是「ResizeObserver 里改 scrollTop」这类最容易写出振荡的地方,必须能脱离
  * 浏览器直接测。坐标一律用**滚动内容坐标系**(行的位置 = `rowRect.top - listRect.top + scrollTop`)。
@@ -587,8 +792,7 @@ export function computeSelectedRowScrollTop(args: {
   rowBottom: number;
 }): SelectedRowAlignment {
   const maxScrollTop = Math.max(0, args.scrollHeight - args.clientHeight);
-  const clamp = (value: number): number =>
-    Math.round(Math.min(Math.max(0, value), maxScrollTop));
+  const clamp = (value: number): number => Math.round(Math.min(Math.max(0, value), maxScrollTop));
   // 题头带盖住的那一条不算可视高度:按它算居中,行会偏上一半题头高。
   const visibleHeight = Math.max(0, args.clientHeight - args.headerInset);
   if (args.rowBottom - args.rowTop >= visibleHeight) {
@@ -596,7 +800,7 @@ export function computeSelectedRowScrollTop(args: {
   }
   const rowCenter = (args.rowTop + args.rowBottom) / 2;
   return {
-    scrollTop: clamp(rowCenter - args.headerInset - visibleHeight / 2),
+    scrollTop: clamp(rowCenter - args.headerInset - visibleHeight * 0.35),
     oversized: false,
   };
 }

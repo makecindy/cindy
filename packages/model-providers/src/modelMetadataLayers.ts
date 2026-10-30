@@ -1,0 +1,572 @@
+import { generationCapabilities, previousModelGenerations } from './modelGeneration.js';
+import { MODEL_NATIVE_APIS } from './modelAccessBean.js';
+import type { CatalogModel } from "./types.js";
+import type {
+  ModelRegistry,
+  ModelRegistryEntry,
+  ModelRegistryRoute,
+  ModelEffort,
+  ModelReferencePriceGroup,
+  ModelNativeApi,
+} from "./modelAccessBean.js";
+
+// Projection-only provenance; a symbol keeps it out of the public metadata schema
+// and JSON storage. CatalogModel carries the serializable verification flag.
+const inheritedContextWindow = Symbol('inheritedContextWindow');
+type ResolvedModelMetadata = ModelMetadata & { [inheritedContextWindow]?: true };
+
+/** Data only. Membership, credentials, routing and billed prices never inherit. */
+export interface ModelMetadata {
+  /** Manufacturer language, independent of the connection's execution protocol. */
+  nativeApi?: ModelNativeApi | null;
+  mode?: string;
+  modalities?: { input: string[]; output: string[] };
+  officialDocs?: string;
+  name?: string;
+  description?: string;
+  group?: string;
+  contextWindow?: number;
+  /** Upstream capacity, distinct from the recommended working window. */
+  contextWindowMax?: number;
+  maxOutputTokens?: number;
+  efforts?: ModelEffort[];
+  defaultEffort?: ModelEffort | null;
+  supportsFastMode?: boolean;
+  supportsImageInput?: boolean;
+  supportsToolCalls?: boolean;
+  reasoningRequired?: boolean;
+}
+export interface BaseModel {
+  id: string;
+  aliases: string[];
+  defaults: ModelMetadata;
+  /** V5 manufacturer reference tariffs; never actual account billing. */
+  referencePriceGroups?: ModelReferencePriceGroup[];
+}
+export const MODEL_METADATA_FIELDS = [
+  "nativeApi",
+  "mode",
+  "modalities",
+  "officialDocs",
+  "name",
+  "description",
+  "group",
+  "contextWindow",
+  "contextWindowMax",
+  "maxOutputTokens",
+  "efforts",
+  "defaultEffort",
+  "supportsFastMode",
+  "supportsImageInput",
+  "supportsToolCalls",
+  "reasoningRequired",
+] as const;
+const efforts = new Set([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+export function validModelMetadata(value: unknown): value is ModelMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.entries(value).every(([key, v]) => {
+    if (!(MODEL_METADATA_FIELDS as readonly string[]).includes(key))
+      return false;
+    if (key === 'nativeApi') return v === null ||
+      (MODEL_NATIVE_APIS as readonly unknown[]).includes(v);
+    if (key === "mode")
+      return typeof v === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(v);
+    if (key === "modalities") {
+      if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+      const m = v as Record<string, unknown>;
+      return (
+        Object.keys(m).every((k) => k === "input" || k === "output") &&
+        [m.input, m.output].every(
+          (list) =>
+            Array.isArray(list) &&
+            list.length <= 16 &&
+            list.every(
+              (item) =>
+                typeof item === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(item),
+            ) &&
+            new Set(list).size === list.length,
+        )
+      );
+    }
+    if (key === "officialDocs") {
+      if (typeof v !== "string" || v.length > 2048) return false;
+      try {
+        const url = new URL(v);
+        return url.protocol === "https:" && !url.username && !url.password;
+      } catch {
+        return false;
+      }
+    }
+    if (["name", "description", "group"].includes(key)) {
+      const maxLength = key === "name" ? 256 : key === "group" ? 128 : 2000;
+      return (
+        typeof v === "string" && v.trim().length > 0 && v.length <= maxLength
+      );
+    }
+    if (["contextWindow", "contextWindowMax", "maxOutputTokens"].includes(key))
+      return typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+    if (key === "efforts")
+      return (
+        Array.isArray(v) &&
+        v.every((e) => efforts.has(e)) &&
+        new Set(v).size === v.length
+      );
+    if (key === "defaultEffort") return v === null || efforts.has(v as string);
+    return typeof v === "boolean";
+  });
+}
+export function pickModelMetadata(value: object | undefined): ModelMetadata {
+  const result: Record<string, unknown> = {};
+  for (const key of MODEL_METADATA_FIELDS) {
+    const v = (value as Record<string, unknown> | undefined)?.[key];
+    if (v !== undefined && validModelMetadata({ [key]: v })) result[key] = v;
+  }
+  return result as ModelMetadata;
+}
+/** Undefined inherits; false, null and [] remain explicit values. Arrays replace. */
+export function mergeModelMetadata(
+  ...layers: (ModelMetadata | undefined)[]
+): ModelMetadata {
+  const result: ModelMetadata = {};
+  for (const layer of layers) {
+    const fields = pickModelMetadata(layer);
+    Object.assign(result, fields);
+    // An explicit image-input denial supersedes lower-priority input modalities.
+    // Do not mutate the source catalog or discard unrelated output capabilities.
+    if (fields.supportsImageInput === false && fields.modalities === undefined &&
+        result.modalities?.input.includes('image')) {
+      result.modalities = {
+        ...result.modalities,
+        input: result.modalities.input.filter((modality) => modality !== 'image'),
+      };
+    }
+  }
+  return result;
+}
+export function findBaseModel(
+  registry: ModelRegistry | undefined,
+  identity: string,
+): BaseModel | undefined {
+  const matches =
+    registry?.baseModels?.filter(
+      (m) => m.id === identity || m.aliases.includes(identity),
+    ) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+export function registryEntryDefaults(
+  registry: ModelRegistry,
+  entry: ModelRegistryEntry,
+  route?: ModelRegistryRoute,
+  agent?: string,
+  providerDefaults?: ModelMetadata,
+): ModelMetadata {
+  return mergeModelMetadata(
+    entry.modelRef
+      ? findBaseModel(registry, entry.modelRef)?.defaults
+      : undefined,
+    providerDefaults,
+    pickModelMetadata(entry),
+    route?.defaults,
+    agent
+      ? pickModelMetadata(
+          entry.perAgent?.[agent as keyof NonNullable<typeof entry.perAgent>],
+        )
+      : undefined,
+  );
+}
+export function resolveModelMetadata(
+  registry: ModelRegistry | undefined,
+  providerId: string,
+  modelId: string,
+  live?: ResolvedModelMetadata,
+  user?: ModelMetadata,
+  agent?: string,
+  providerDefaults?: ModelMetadata,
+  declaredDefaultEffort?: ModelMetadata["defaultEffort"],
+  generationDefaults?: ModelMetadata,
+  interfaceDefaults?: ModelMetadata,
+): ResolvedModelMetadata {
+  const ids = [modelId];
+  if (providerId === "openai" && modelId.startsWith("chatgpt/"))
+    ids.push(modelId.slice(8));
+  if (providerId === "xai" && !modelId.startsWith("xai/"))
+    ids.push(`xai/${modelId}`);
+  if (providerId === "anthropic") ids.push(modelId.replace(/-\d{8}$/, ""));
+  for (const id of [...ids]) if (id.endsWith("[1m]")) ids.push(id.slice(0, -4));
+  const matched = ids.flatMap(
+    (id) =>
+      registry?.models.flatMap((entry) =>
+        entry.routes
+          .filter(
+            (route) =>
+              route.providerId === providerId &&
+              route.modelId === id &&
+              (!agent ||
+                agent === "pi" ||
+                route.agents.includes(agent as never)),
+          )
+          .map((route) => ({ entry, route })),
+      ) ?? [],
+  )[0];
+  const defaults =
+    matched && registry
+      ? registryEntryDefaults(
+          registry,
+          matched.entry,
+          matched.route,
+          agent,
+          providerDefaults,
+        )
+      : mergeModelMetadata(
+          findBaseModel(registry, modelId)?.defaults,
+          providerDefaults,
+        );
+  // Public family capabilities also cover subscription discovery. Exact/live data and
+  // server corrections below still win; inheritance never adds account membership.
+  const familyDefaults = generationDefaults ?? mergeModelMetadata(
+    ...previousModelGenerations(ids.at(-1)!, registry?.baseModels?.flatMap(model =>
+      [model.id, ...model.aliases].map(id => ({ id, defaults: model.defaults }))) ?? [], model => model.id)
+      .map(model => generationCapabilities(model.defaults)),
+    ...previousModelGenerations(modelId,
+      registry?.models.flatMap(entry => entry.routes
+        .filter(route => route.providerId === providerId && (!agent || agent === 'pi' || route.agents.includes(agent as never)))
+        .map(route => ({ entry, route }))) ?? [], candidate => candidate.route.modelId)
+      .map(({ entry, route }) => generationCapabilities(registryEntryDefaults(registry!, entry, route, agent))),
+  );
+  const inheritedLiveWindow = live?.[inheritedContextWindow] === true;
+  const currentLive = inheritedLiveWindow ? { ...live, contextWindow: undefined } : live;
+  const result: ResolvedModelMetadata = mergeModelMetadata(
+    familyDefaults,
+    inheritedLiveWindow ? { contextWindow: live?.contextWindow } : undefined,
+    defaults,
+    interfaceDefaults,
+    agent && matched ? pickModelMetadata(matched.entry.perAgent?.[agent as keyof NonNullable<typeof matched.entry.perAgent>]) : undefined,
+    currentLive,
+    // A Harness's suggested default is not a model capability. Keep the shared
+    // model intent (including explicit route/Harness exceptions), then adapt it
+    // to the live effort membership below. Explicit force/user settings still win.
+    defaults.defaultEffort !== undefined
+      ? { defaultEffort: defaults.defaultEffort }
+      : undefined,
+    // Explicit Harness declarations are configuration, not discovery suggestions.
+    // Apply before force/user overrides and the shared capability clamp.
+    { defaultEffort: declaredDefaultEffort },
+    matched?.route.forceOverrides,
+    user,
+  );
+  // Resolve the pair only after all layers: a maximum-only report is a usable
+  // fallback, not a verified working-window report. Never replace a known window.
+  const hasOwnWorkingWindow = [defaults, interfaceDefaults, currentLive, matched?.route.forceOverrides, user]
+    .some(source => source?.contextWindow !== undefined);
+  if (!hasOwnWorkingWindow && currentLive?.contextWindowMax !== undefined) {
+    // This model's reported maximum takes precedence over a predecessor's
+    // working-window fallback, without claiming a verified working window.
+    result.contextWindow = result.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
+  if (result.contextWindow === undefined && result.contextWindowMax !== undefined) {
+    result.contextWindow = result.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
+  // A maximum-only report can be below a public/preset working default.
+  // Tighten that default to this connection's capacity instead of discarding
+  // the live maximum. Explicit user/force windows still own their semantics.
+  if (currentLive?.contextWindowMax !== undefined && currentLive.contextWindow === undefined &&
+      user?.contextWindow === undefined && matched?.route.forceOverrides?.contextWindow === undefined &&
+      result.contextWindow !== undefined && result.contextWindow > currentLive.contextWindowMax) {
+    result.contextWindow = currentLive.contextWindowMax;
+    result[inheritedContextWindow] = true;
+  }
+  if (result.contextWindow !== undefined && result.contextWindowMax !== undefined &&
+      result.contextWindowMax < result.contextWindow) {
+    delete result.contextWindowMax;
+  }
+  if (result.contextWindow !== undefined &&
+      !hasOwnWorkingWindow) {
+    result[inheritedContextWindow] = true;
+  }
+  if (result.efforts?.length === 0) result.defaultEffort = null;
+  else if (
+    result.defaultEffort != null &&
+    result.efforts &&
+    !result.efforts.includes(result.defaultEffort)
+  ) {
+    const order = [...efforts];
+    const supported = [...result.efforts].sort(
+      (a, b) => order.indexOf(a) - order.indexOf(b),
+    );
+    result.defaultEffort =
+      supported
+        .filter(
+          (value) =>
+            order.indexOf(value) <= order.indexOf(result.defaultEffort!),
+        )
+        .at(-1) ??
+      supported[0] ??
+      null;
+  }
+  return result;
+}
+
+/** Legacy consumers receive fully expanded entries without losing saved IDs or routes. */
+export function expandedRegistryEntries(
+  registry: ModelRegistry,
+): ModelRegistryEntry[] {
+  if (registry.schemaVersion < 4) return registry.models;
+  const usedIds = new Set(registry.models.map((entry) => entry.id));
+  return registry.models.flatMap((entry) => {
+    const groups = new Map<string, ModelRegistryEntry>();
+    for (const route of entry.routes) {
+      const metadata = mergeModelMetadata(
+        registryEntryDefaults(registry, entry, route),
+        route.forceOverrides,
+      );
+      // Legacy schemas cannot encode a runtime clear against a group default.
+      // Move that default to the other runtimes so omission remains an actual clear.
+      const runtimeClear =
+        metadata.defaultEffort != null &&
+        route.agents.some(
+          (agent) =>
+            mergeModelMetadata(
+              registryEntryDefaults(registry, entry, route, agent),
+              route.forceOverrides,
+            ).defaultEffort === null,
+        );
+      const overrides = runtimeClear
+        ? Object.fromEntries(
+            route.agents.map((agent) => [agent, entry.perAgent?.[agent] ?? {}]),
+          )
+        : entry.perAgent;
+      const perAgent = overrides
+        ? Object.fromEntries(
+            Object.entries(overrides).map(([agent, override]) => {
+              const effective = mergeModelMetadata(
+                registryEntryDefaults(registry, entry, route, agent),
+                route.forceOverrides,
+              );
+              // Older wire schemas cannot express a null default. Omission preserves their contract.
+              const { defaultEffort, ...fields } = effective;
+              const { defaultEffort: _oldDefault, ...remainingOverride } =
+                override ?? {};
+              return [
+                agent,
+                {
+                  ...remainingOverride,
+                  ...Object.fromEntries(
+                    Object.entries(fields).filter(([key]) =>
+                      ["contextWindow", "efforts", "supportsFastMode"].includes(
+                        key,
+                      ),
+                    ),
+                  ),
+                  ...(defaultEffort != null ? { defaultEffort } : {}),
+                },
+              ];
+            }),
+          )
+        : undefined;
+      const { defaultEffort, supportsImageInput, ...fields } = metadata;
+      const expanded = {
+        ...entry,
+        ...fields,
+        perAgent,
+        ...(defaultEffort != null ? { defaultEffort } : {}),
+      };
+      if (defaultEffort === null || runtimeClear) delete expanded.defaultEffort;
+      delete expanded.supportsImageInput;
+      const key = JSON.stringify(
+        { ...expanded, routes: undefined },
+        (_key, value) =>
+          value && typeof value === "object" && !Array.isArray(value)
+            ? Object.fromEntries(
+                Object.keys(value)
+                  .sort()
+                  .map((key) => [key, value[key]]),
+              )
+            : value,
+      );
+      const previous = groups.get(key);
+      if (previous) previous.routes.push(route);
+      else groups.set(key, { ...expanded, routes: [route] });
+    }
+    // Old schemas have entry-level metadata. Split only divergent routes; upstream IDs stay intact.
+    return [...groups.values()].map((value, index) => {
+      let id = entry.id;
+      if (index > 0) {
+        let collision = 0;
+        do {
+          const suffix = `::route-${index + 1}${collision ? `~${collision}` : ""}`;
+          id = `${entry.id.slice(0, 256 - suffix.length)}${suffix}`;
+          collision += 1;
+        } while (usedIds.has(id));
+        usedIds.add(id);
+      }
+      const agents = new Set(value.routes.flatMap((route) => route.agents));
+      const perAgent = Object.fromEntries(
+        Object.entries(value.perAgent ?? {}).filter(([agent]) =>
+          agents.has(agent as never),
+        ),
+      );
+      const next = {
+        ...value,
+        id,
+        ...(value.newSessionDefault
+          ? {
+              newSessionDefault: value.newSessionDefault.filter((agent) =>
+                agents.has(agent),
+              ),
+            }
+          : {}),
+      };
+      if (Object.keys(perAgent).length) next.perAgent = perAgent;
+      else delete next.perAgent;
+      if (!next.newSessionDefault?.length) delete next.newSessionDefault;
+      return next;
+    });
+  });
+}
+
+export function catalogModelMetadata(
+  model: Partial<CatalogModel>,
+): ResolvedModelMetadata {
+  return {
+    ...pickModelMetadata(model),
+    ...(model.contextWindowVerified === false && model.contextWindow !== undefined
+      ? { [inheritedContextWindow]: true as const } : {}),
+    ...(model.maxOutput !== undefined
+      ? { maxOutputTokens: model.maxOutput }
+      : {}),
+  };
+}
+export function applyModelMetadata(
+  model: CatalogModel,
+  metadata: ResolvedModelMetadata,
+): CatalogModel {
+  const { maxOutputTokens, [inheritedContextWindow]: inheritedWindow, ...fields } = metadata;
+  const result = {
+    ...model,
+    ...fields,
+    ...(metadata.contextWindow !== undefined
+      ? { contextWindowVerified: inheritedWindow !== true }
+      : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutput: maxOutputTokens } : {}),
+  };
+  if (result.contextWindowMax !== undefined && result.contextWindowMax < result.contextWindow) {
+    delete result.contextWindowMax;
+  }
+  if (
+    result.efforts.length === 0 ||
+    (result.defaultEffort != null &&
+      !result.efforts.includes(result.defaultEffort))
+  )
+    result.defaultEffort = null;
+  return result;
+}
+
+export interface DiscoveredModel {
+  id: string;
+  name: string;
+  /** Account entitlement, never inherited as public model metadata. */
+  supportsUltrafastMode?: boolean;
+  contextWindow?: number;
+  discoveredCost?: import("./types.js").ModelCost;
+  discoveredMetadata?: ModelMetadata;
+}
+export function mergeDiscoveredRuntimeModels(
+  existing: readonly import("./types.js").ProviderRuntimeModelConfig[],
+  discovered: readonly DiscoveredModel[],
+  hideNew = false,
+) {
+  const models = existing.map((model) => ({ ...model }));
+  // 新发现的型号排在已有型号之前(保持接口返回的相对顺序)，已有型号位置不动。
+  const added: import("./types.js").ProviderRuntimeModelConfig[] = [];
+  const seen = new Set<string>();
+  for (const model of discovered) {
+    if (!model.id || !model.name || seen.has(model.id)) continue;
+    seen.add(model.id);
+    const index = models.findIndex((m) => m.id === model.id);
+    // Unlike descriptive metadata, a refreshed account entitlement must not stick
+    // when the latest response no longer declares it.
+    const accountCapabilities = model.supportsUltrafastMode !== undefined ||
+      (index >= 0 && models[index].supportsUltrafastMode !== undefined)
+      ? { supportsUltrafastMode: model.supportsUltrafastMode === true } : {};
+    const discoveredMetadata = mergeModelMetadata(
+      index >= 0 ? models[index].discoveredMetadata : undefined,
+      pickModelMetadata(model.discoveredMetadata ?? model),
+    );
+    // Sparse refreshes can supply either half of this pair. Validate after merging
+    // with the last snapshot, without shrinking its working window to a bad maximum.
+    if (discoveredMetadata.contextWindow !== undefined &&
+        discoveredMetadata.contextWindowMax !== undefined &&
+        discoveredMetadata.contextWindowMax < discoveredMetadata.contextWindow) {
+      delete discoveredMetadata.contextWindowMax;
+    }
+    if (index < 0)
+      added.push({
+        id: model.id,
+        name: model.name,
+        ...accountCapabilities,
+        discoveredMetadata,
+        ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
+        ...(hideNew ? { defaultEnabled: false } : {}),
+      });
+    else
+      models[index] = {
+        ...models[index],
+        ...accountCapabilities,
+        ...(!models[index].discoveredMetadata ? { nameExplicit: true } : {}),
+        discoveredMetadata,
+        ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
+      };
+  }
+  return [...added, ...models];
+}
+
+/** Explicit runtime user fields, shared by initial construction and local public overlays. */
+export function runtimeUserModelMetadata(
+  m: import("./types.js").ProviderRuntimeModelConfig,
+): ModelMetadata {
+  const { name: _name, ...metadata } = pickModelMetadata(m);
+  return pickModelMetadata({
+    ...metadata,
+    ...(!m.discoveredMetadata || m.nameExplicit ? { name: m.name } : {}),
+    ...(m.contextWindow !== undefined
+      ? { contextWindow: m.contextWindow }
+      : {}),
+    ...(m.supportsImageInput !== undefined
+      ? { supportsImageInput: m.supportsImageInput }
+      : {}),
+    ...(m.reasoning === false ? { efforts: [] }
+      : m.reasoningEfforts !== undefined ? { efforts: m.reasoningEfforts } : {}),
+    ...(m.reasoningDefaultEffort !== undefined
+      ? { defaultEffort: m.reasoningDefaultEffort }
+      : {}),
+  });
+}
+
+/** Select a whole tariff; missing cache fields never borrow from another source. */
+export function referencePricesForRoute(
+  registry: ModelRegistry,
+  entry: ModelRegistryEntry,
+  route: ModelRegistryRoute,
+  officialOnly = false,
+) {
+  // Before V5 the official tariff lived on the route.
+  if (
+    registry.schemaVersion < 5 ||
+    (!officialOnly && route.referencePrices !== undefined)
+  )
+    return route.referencePrices;
+  if (!entry.modelRef || !route.referencePriceGroup) return undefined;
+  return findBaseModel(registry, entry.modelRef)?.referencePriceGroups?.find(
+    (group) => group.id === route.referencePriceGroup,
+  )?.prices;
+}

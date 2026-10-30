@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * ConnectProviderCard — 零可用模型时新会话首屏的「连接供应商」引导卡。
  *
@@ -36,11 +37,14 @@ function rowIcon(id: string, name: string, routing?: ProviderLogoRouting): React
   return <span className="text-13 font-semibold leading-none">{providerMonogram(name)}</span>;
 }
 
-export function ConnectProviderCard({ className }: { className?: string }) {
+export function ConnectProviderCard({ className, dismissible = true }: {
+  className?: string;
+  dismissible?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
-  const onboarding = useProviderOnboarding({ loadPresets: true });
+  const onboarding = useProviderOnboarding({ loadPresets: true, dismissible });
   const [othersOpen, setOthersOpen] = useState(false);
 
   if (!onboarding.visible) return null;
@@ -149,22 +153,30 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onboarding.dismiss}
-          className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-        >
-          {t('onboarding.connectProvider.dismiss')}
-        </button>
-        <button
+      <div className={cn('mt-4 flex items-center', dismissible ? 'justify-between' : 'justify-end')}>
+        {dismissible ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            tone="quiet"
+            compact
+            type="button"
+            onClick={onboarding.dismiss}
+          >
+            {t('onboarding.connectProvider.dismiss')}
+          </Button>
+        ) : null}
+        <Button
+          variant="secondary"
+          size="sm"
+          tone="quiet"
+          compact
           type="button"
           onClick={() => navigate('/settings?tab=providers&wizard=1')}
-          className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-13 font-medium text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <KeyRound size={13} />
           {t('onboarding.connectProvider.haveApiKey')}
-        </button>
+        </Button>
       </div>
     </section>
   );

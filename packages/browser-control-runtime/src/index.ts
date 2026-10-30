@@ -14,6 +14,17 @@ export type {
   BrowserSnapshotMode,
   BrowserSnapshotRefs,
 } from './types.js';
+export {
+  browserProxyRouteKey,
+  isBrowserProxyRequestUrlAllowed,
+  isBrowserProxyRequestUrlAllowedAsync,
+  resetBrowserProxyDnsVerdictCache,
+  parseBrowserProxyServer,
+  redactBrowserProxyRoute,
+  redactBrowserProxyText,
+  type BrowserProxyRoute,
+  type LookupFn,
+} from './proxy.js';
 export { createUnavailableBrowserRuntime } from './unavailable.js';
 export {
   createBrowserControlRuntime,
@@ -26,6 +37,14 @@ export {
 export { setBrowserRuntimeConfig as setBrowserControlRuntimeConfig } from './shim/runtime-config-snapshot.js';
 export { refreshBrowserRuntimeConfigDir } from './shim/_local/text-utils.js';
 export { isPublicHttpResourceUrl } from './resource-url-policy.js';
+export { assertRecipeCommand } from './recipe-command.js';
+export { RecipeBrowserSessions, type RecipeTransport } from './recipe-sessions.js';
+export { DEFAULT_UPLOAD_DIR as browserUploadDirectory } from './_generated/extension/src/browser/paths.js';
+export {
+  managedProfilePidOwnsCdpPort,
+  pidIsManagedChromeForProfile,
+  readManagedProfileOwnerPid,
+} from './_generated/extension/src/browser/chrome.js';
 // Re-export the effective-config type under a neutral name so host code stays
 // free of the vendored type's product-specific identifier.
 export type {

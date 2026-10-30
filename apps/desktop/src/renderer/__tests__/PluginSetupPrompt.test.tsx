@@ -7,6 +7,11 @@ import '@/i18n';
 import i18n from '@/i18n';
 import { PluginSetupPrompt } from '@/components/new-chat/PluginSetupPrompt';
 import { parsePendingPluginSetup, type PendingPluginSetup } from '@/lib/makerChatStore';
+import { sharedTaskHostPeer } from '@cindy/device-link';
+
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [{ deviceId: 'computer-a', name: 'Studio' }],
+}));
 
 const pending: PendingPluginSetup = {
   requestId: 'setup-1',
@@ -248,6 +253,87 @@ describe('PluginSetupPrompt', () => {
     expect((screen.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(
       false,
     );
+  });
+
+  it('opens the target computer’s remote desktop for steps only it can finish', async () => {
+    const openRemoteDesktop = vi.fn(async () => {});
+    Object.assign(window.electronAPI, { openRemoteDesktop });
+    const props = {
+      viewerState: 'expanded' as const,
+      commandInFlight: null,
+      remote: true,
+      onViewerStateChange: vi.fn(),
+      onCommand: vi.fn(),
+    };
+    const { rerender } = render(
+      <PluginSetupPrompt pending={pending} remoteDeviceId="computer-a" {...props} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open remote desktop' }));
+    expect(openRemoteDesktop).toHaveBeenCalledWith({ deviceId: 'computer-a', name: 'Studio' });
+    await vi.waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Open remote desktop' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    // A secret entered on this card is saved remotely; nothing to do on the computer.
+    rerender(
+      <PluginSetupPrompt
+        pending={{ ...inlinePending, remoteSecret: true }}
+        remoteDeviceId="computer-a"
+        {...props}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Open remote desktop' })).toBeNull();
+    // A shared task's host computer is not this account's to control.
+    rerender(
+      <PluginSetupPrompt
+        pending={pending}
+        remoteDeviceId={sharedTaskHostPeer('task-1', 'computer-b')}
+        {...props}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Open remote desktop' })).toBeNull();
+  });
+
+  it('enables only OAuth actions advertised by the cloud Host', () => {
+    const onCommand = vi.fn();
+    render(<PluginSetupPrompt pending={{ ...pending, remoteOauth: true }} viewerState="expanded"
+      commandInFlight={null} remote onViewerStateChange={vi.fn()} onCommand={onCommand} />);
+    const authorize = screen.getByRole('button', { name: pending.steps[0].title }) as HTMLButtonElement;
+    expect(authorize.disabled).toBe(false);
+    fireEvent.click(authorize);
+    expect(onCommand).toHaveBeenCalledWith(pending.requestId, 'run_action', pending.steps[0].action!.id);
+    expect(screen.getByText(/this computer’s browser/)).toBeTruthy();
+    expect(parsePendingPluginSetup({ ...pending, remoteOauth: true })?.remoteOauth).toBe(true);
+  });
+
+  it('keeps inline secrets blocked even when remote OAuth is supported', () => {
+    render(<PluginSetupPrompt pending={{ ...inlinePending, remoteOauth: true }} viewerState="expanded"
+      commandInFlight={null} remote onViewerStateChange={vi.fn()} onCommand={vi.fn()} />);
+    expect((screen.getByPlaceholderText('Enter API Key') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('uses the existing password card for an explicitly supported cloud input and clears the value on handoff', () => {
+    const onCommand = vi.fn();
+    const p = { ...inlinePending, remoteSecret: true as const };
+    const { rerender } = render(<PluginSetupPrompt pending={p} viewerState="expanded"
+      commandInFlight={null} remote onViewerStateChange={vi.fn()} onCommand={onCommand} />);
+    const input = screen.getByPlaceholderText('Enter API Key') as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    expect(input.type).toBe('password');
+    expect(screen.getByText(/current remote device/)).toBeTruthy();
+    fireEvent.change(input, {target: {value: 'synthetic-input'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Save Configuration'}));
+    expect(onCommand).toHaveBeenCalledWith('setup-1', 'submit_form', 'inline:api-key', {value: 'synthetic-input'});
+    expect(input.value).toBe('');
+    expect(parsePendingPluginSetup(p)?.remoteSecret).toBe(true);
+    rerender(<PluginSetupPrompt pending={p} viewerState="expanded"
+      commandInFlight={{requestId: p.requestId, action: 'submit_form', actionId: 'inline:api-key'}}
+      remote onViewerStateChange={vi.fn()} onCommand={onCommand} />);
+    const cancel = screen.getByRole('button', {name: 'Cancel'}) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(false);
+    fireEvent.click(cancel);
+    expect(onCommand).toHaveBeenLastCalledWith('setup-1', 'cancel');
   });
 
   it('disables duplicate commands while Main owns an in-flight action', () => {
@@ -587,5 +673,37 @@ describe('PluginSetupPrompt', () => {
     expect(onCommand).toHaveBeenCalledWith('setup-alternatives', 'submit_form', 'inline:tavily', {
       value: 'tvly-secret',
     });
+  });
+});
+
+describe('teammate authorization card presentation', () => {
+  it('allows cancellation while the local Host is awaiting a remote OAuth callback', () => {
+    const command = vi.fn();
+    render(<PluginSetupPrompt pending={{ ...pending, remoteOauth: true }} viewerState="expanded"
+      commandInFlight={{ requestId: pending.requestId, action: 'run_action', actionId: pending.steps[0].action!.id }}
+      remote onViewerStateChange={() => {}} onCommand={command} />);
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('newChat.pluginSetup.cancel') }));
+    expect(command).toHaveBeenCalledWith('setup-1', 'cancel');
+  });
+  it('omits a missing brand icon and uses the service name directly', () => {
+    const { container } = render(<PluginSetupPrompt compact pending={pending} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={() => {}} />);
+    expect(screen.getByText('Filo Google')).toBeTruthy();
+    expect(container.querySelector('img')).toBeNull();
+  });
+  it('keeps reopen distinct from a fresh authorization action', () => {
+    const command = vi.fn();
+    render(<PluginSetupPrompt compact pending={{ ...pending, reopenActionId: 'reopen-authorization', steps: pending.steps.map(step => ({ ...step, phase: 'waiting_external' })) }} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={command} />);
+    fireEvent.click(screen.getByText(i18n.t('newChat.pluginSetup.reopen')));
+    expect(command).toHaveBeenCalledWith('setup-1', 'run_action', 'reopen-authorization');
+    fireEvent.click(screen.getByText(i18n.t('newChat.pluginSetup.retry')));
+    expect(command).toHaveBeenCalledWith('setup-1', 'run_action', 'oauth-connect:google-account');
+  });
+  it('collapses completed controls but retains the account identity', () => {
+    render(<PluginSetupPrompt compact pending={{ ...pending, terminal: true, steps: pending.steps.map(step => ({ ...step, phase: 'satisfied', action: undefined })) }} viewerState="expanded"
+      commandInFlight={null} remote={false} onViewerStateChange={() => {}} onCommand={() => {}} />);
+    expect(screen.getByText('Filo Google')).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
   });
 });

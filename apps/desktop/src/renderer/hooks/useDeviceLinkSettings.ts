@@ -18,7 +18,7 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
-import { renameDeviceLinkDevice } from '@/features/device-link/useDeviceLinkDeviceList';
+import { renameDeviceLinkDevice, removeDeviceLinkDevice } from '@/features/device-link/useDeviceLinkDeviceList';
 
 const log = createLogger('useDeviceLinkSettings');
 
@@ -69,7 +69,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const { t } = useTranslation();
   const [enabled, setEnabledState] = useState(false);
   const [linkStatus, setLinkStatus] = useState<DeviceLinkLinkStatus>('stopped');
-  const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssuePayload | null>(null);
+  const [connectionIssue, setConnectionIssue] = useState<DeviceLinkConnectionIssuePayload | null>(
+    null,
+  );
   const [standby, setStandby] = useState(false);
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
@@ -78,6 +80,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
+  const refreshGeneration = useRef(0);
   const disabledControlDeviceIdsRef = useRef<string[]>([]);
   // getState() 与 ownership push 可能乱序返回;事件版本推进后,旧快照不得覆盖新事实。
   const ownershipEventVersion = useRef(0);
@@ -86,26 +89,28 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     disabledControlDeviceIdsRef.current = ids;
     setDisabledControlDeviceIds(ids);
     const disabled = new Set(ids);
-    setDevices((current) =>
-      current?.map((device) => ({
-        ...device,
-        controlEnabled: !disabled.has(device.deviceId),
-      })) ?? current,
+    setDevices(
+      (current) =>
+        current?.map((device) => ({
+          ...device,
+          controlEnabled: !disabled.has(device.deviceId),
+        })) ?? current,
     );
   }, []);
 
   const refresh = useCallback(
     async (showSpinner = false) => {
       if (!active) return;
+      const generation = ++refreshGeneration.current;
       if (showSpinner) setRefreshing(true);
       try {
         const { devices: list } = await window.electronAPI.deviceLink.listDevices();
-        if (!mounted.current) return;
+        if (!mounted.current || generation !== refreshGeneration.current) return;
         setDevices(list);
         setListError(null);
       } catch (err) {
         log.warn('listDevices failed', err);
-        if (!mounted.current) return;
+        if (!mounted.current || generation !== refreshGeneration.current) return;
         const ipcErr = extractIpcError(err);
         setListError(
           ipcErr?.code === 'DEVICE_LINK_UNAVAILABLE'
@@ -132,17 +137,23 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       setStandby(p.standby === true);
     });
     const ownershipVersionAtGetState = ownershipEventVersion.current;
+    let controllerRevision = 0;
+    let disposed = false;
+    const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
+      controllerRevision++;
+      setControlledBy(p.controllers ?? []);
+    });
     void window.electronAPI.deviceLink
       .getState()
       .then((s) => {
-        if (!mounted.current) return;
+        if (disposed || !mounted.current) return;
         setEnabledState(s.remoteControlEnabled);
         setLinkStatus(s.linkStatus);
         setConnectionIssue(s.connectionIssue ?? null);
         if (ownershipEventVersion.current === ownershipVersionAtGetState) {
           setStandby(s.standby === true);
         }
-        setControlledBy(s.controlledBy ?? []);
+        if (controllerRevision === 0) setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
       })
@@ -159,14 +170,12 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     const offIssue = window.electronAPI.deviceLink.onConnectionIssue((p) => {
       setConnectionIssue(p.issue);
     });
-    const offControlled = window.electronAPI.deviceLink.onControlledState((p) => {
-      setControlledBy(p.controllers ?? []);
-    });
     const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged((p) => {
       applyDisabledControlDeviceIds(p.disabledControlDeviceIds ?? []);
     });
     const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
     return () => {
+      disposed = true;
       mounted.current = false;
       offPresence();
       offStatus();
@@ -184,7 +193,9 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
       setEnabledState(next);
       try {
         await window.electronAPI.deviceLink.setEnabled(next);
-        toast.success(t(next ? 'settings.devices.toast.enabled' : 'settings.devices.toast.disabled'));
+        toast.success(
+          t(next ? 'settings.devices.toast.enabled' : 'settings.devices.toast.disabled'),
+        );
       } catch (err) {
         log.warn('setEnabled failed', err);
         setEnabledState(prev);
@@ -218,7 +229,15 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const remove = useCallback(
     async (deviceId: string): Promise<boolean> => {
       try {
-        await window.electronAPI.deviceLink.deleteDevice(deviceId);
+        const result = await window.electronAPI.deviceLink.deleteDevice(deviceId);
+        if (!result.deleted || result.deviceId !== deviceId) {
+          toast.error(t('settings.devices.toast.deleteFailed'));
+          return false;
+        }
+        refreshGeneration.current += 1;
+        setDevices((current) => current?.filter((device) => device.deviceId !== deviceId) ?? current);
+        remoteProjectsStore.removeDevice(deviceId);
+        removeDeviceLinkDevice(deviceId);
         void refresh();
         toast.success(t('settings.devices.toast.deleted'));
         return true;
@@ -292,7 +311,11 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         const result = await window.electronAPI.deviceLink.setDeviceControlEnabled(deviceId, next);
         applyDisabledControlDeviceIds(result.disabledControlDeviceIds);
         toast.success(
-          t(next ? 'settings.devices.toast.controlEnabled' : 'settings.devices.toast.controlDisabled'),
+          t(
+            next
+              ? 'settings.devices.toast.controlEnabled'
+              : 'settings.devices.toast.controlDisabled',
+          ),
         );
       } catch (err) {
         log.warn('setDeviceControlEnabled failed', err);

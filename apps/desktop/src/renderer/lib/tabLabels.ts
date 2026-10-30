@@ -9,6 +9,7 @@
 
 export type SettingsTab =
   | 'general'
+  | 'appearance'
   | 'billing'
   | 'usage'
   | 'personalization'
@@ -20,17 +21,23 @@ export type SettingsTab =
   | 'import'
   | 'connections'
   | 'remote-control'
+  | 'shared-tasks'
   | 'tina'
   | 'ghosts'
   | 'builtin-tools'
   | 'pi-extensions'
   | 'computer-use'
+  | 'cindy-make'
   | 'im-bot'
   | 'help'
-  | 'about';
+  | 'about'
+  | 'storage';
 
 export const TAB_IDS = [
   'general',
+  // 「外观」从通用页拆出的独立分区:主题、壁纸、字体、侧边栏样式与回复动效。
+  // 旧「通用」「个性化」里的外观深链由 SettingsView 重定向到这里。
+  'appearance',
   'personalization',
   'providers',
   'billing',
@@ -50,9 +57,11 @@ export const TAB_IDS = [
   // 意识化收尾(Google/Jira/GitHub/GitLab 此前已迁意识)。id 仍留在 SettingsTab
   // 类型与 TAB_LABEL_KEY 保留,供旧深链重定向到插件分区。
   'remote-control',
+  'shared-tasks',
   'ghosts',
   'builtin-tools',
   'computer-use',
+  'storage',
   'help',
   'about',
 ] as const satisfies ReadonlyArray<SettingsTab>;
@@ -61,6 +70,7 @@ export type VisibleSettingsTab = (typeof TAB_IDS)[number];
 
 export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   general: 'settings.tabs.general',
+  appearance: 'settings.tabs.appearance',
   billing: 'settings.tabs.billing',
   usage: 'settings.tabs.usage',
   personalization: 'settings.tabs.personalization',
@@ -72,14 +82,17 @@ export const TAB_LABEL_KEY: Record<SettingsTab, string> = {
   connections: 'settings.tabs.connections',
   providers: 'settings.tabs.providers',
   'remote-control': 'settings.tabs.remoteControl',
+  'shared-tasks': 'sharedTask.title',
   tina: 'settings.tabs.tina',
   ghosts: 'settings.tabs.ghosts',
   'builtin-tools': 'settings.tabs.builtinTools',
   'pi-extensions': 'settings.tabs.piExtensions',
   'computer-use': 'settings.tabs.computerUse',
+  'cindy-make': 'settings.tabs.cindyMake',
   'im-bot': 'settings.tabs.imBot',
   help: 'settings.tabs.help',
   about: 'settings.tabs.about',
+  storage: 'settings.tabs.storage',
 };
 
 // 只校验当前「可见/可路由」的 tab(即 TAB_IDS 里的项)。注意 `tina` 与

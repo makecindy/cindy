@@ -55,6 +55,10 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import {
+  resolvePnpmInvocation,
+  usablePnpmExecPath,
+} from '../../../scripts/shared/pnpm-invocation.mjs';
 import { ensureMobileEnv, formatMobileEnvStatus } from './ensure-mobile-env.mjs';
 import { computeFingerprintReport, parseFingerprintCliOutput } from './ci-fingerprint.mjs';
 import {
@@ -65,34 +69,27 @@ import {
   ensureMobileLocalRegionConfig,
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
-import { podInstallBounded } from './sim-pod-install.mjs';
+import { podInstallBounded, inspectIOSBuildTools, COCOAPODS_SETUP_HINT } from './sim-pod-install.mjs';
+import { computeSimulatorNativeFingerprint, inspectSimulatorNativeIdentity } from './lib/sim-native-identity.mjs';
+import { ensureWindowsAndroidEmulator, resolveAndroidSdkTools } from './lib/android-simulator.mjs';
+import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import {
-  cwdOfPid,
   gitSourceIdentity,
-  gitSourceOfPid,
-  isInside,
-  listenerPid,
+  probeMetroOwnership,
 } from './sim-metro.mjs';
+
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
+import { extractSimWhoamiUdidArgs, resolveMobileSimulatorBundleId, classifySimMetroListener, validateSimMetroIdentity, resolveSimulatorDeviceSets, selectBootedSimulator, findSimulatorDeviceSet, simctlArgs } from './lib/sim-whoami.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const iosDir = join(mobileDir, 'ios');
 const buildDir = join(iosDir, 'build');
-const { region, passthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const clean = passthrough.includes('--clean');
 const forceBuild = passthrough.includes('--force-build');
 const buildOnly = passthrough.includes('--build-only');
-const simulatorUdidIndex = passthrough.indexOf('--udid');
-const simulatorUdid = simulatorUdidIndex >= 0
-  ? passthrough[simulatorUdidIndex + 1]?.trim().toUpperCase()
-  : null;
-if (
-  simulatorUdidIndex >= 0
-  && !/^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(simulatorUdid ?? '')
-) {
-  console.error('✗ --udid 必须是精确的 Simulator UUID。');
-  process.exit(1);
-}
+const { simulatorUdid } = extractSimWhoamiUdidArgs(passthrough);
 const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
@@ -119,18 +116,161 @@ const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', cwd: mobileDir, env: devProcessEnv, ...opts });
 const capture = (cmd, args) =>
   execFileSync(cmd, args, { cwd: mobileDir, env: devProcessEnv, encoding: 'utf8' }).trim();
+function pnpmInvocation(args) {
+  return resolvePnpmInvocation(args, {
+    npmExecPath: usablePnpmExecPath(process.env.npm_execpath, existsSync),
+  });
+}
 
-// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。
+function runPnpm(args, opts = {}) {
+  const invocation = pnpmInvocation(args);
+  return run(invocation.command, invocation.args, {
+    ...opts,
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    env: { ...devProcessEnv, ...(invocation.env ?? {}), ...(opts.env ?? {}) },
+  });
+}
+
+function capturePnpm(args) {
+  const invocation = pnpmInvocation(args);
+  return execFileSync(invocation.command, invocation.args, {
+    cwd: mobileDir,
+    env: { ...devProcessEnv, ...(invocation.env ?? {}) },
+    encoding: 'utf8',
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }).trim();
+}
+
+// Windows 开发机没有 xcrun/Xcode。这里走 Android debug dev client，避免在任何
+// Windows 路径上触发 iOS 的 xcrun、pod 或 xcodebuild。
+if (process.platform === 'win32') {
+  await rebuildAndroidSimulator();
+  process.exit(process.exitCode ?? 0);
+}
+
+// 必须有一台 booted 模拟器(--build-only 不装机,无此要求)。默认先找 Cindy 模拟器,
+// 没有再找系统模拟器;CINDY_MOBILE_SIMULATOR 可固定其一。
+let deviceSet = null;
 if (!buildOnly) {
-  const booted = capture('xcrun', ['simctl', 'list', 'devices', 'booted']);
-  if (!/\(Booted\)/.test(booted)) {
-    console.error('✗ 没有 booted 的模拟器。先打开 Simulator.app 并启动一台 iPhone,再重试。');
+  let selected;
+  try {
+    selected = selectBootedSimulator(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices', 'booted'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
+    process.exit(1);
+  }
+  if (selected.targetBooted.length !== 1) {
+    console.error('✗ 需要唯一的已启动模拟器；多设备时传 --udid，指定设备必须已启动。');
+    process.exit(1);
+  }
+  deviceSet = selected.deviceSet;
+  console.log(`==> 目标模拟器(${deviceSet.name}):${selected.targetBooted[0].trim()}`);
+} else if (simulatorUdid) {
+  // 仅构建不要求设备已启动,但 xcodebuild 的精确目标只对系统目录有效:先确认 UDID 属于哪个目录。
+  try {
+    deviceSet = findSimulatorDeviceSet(resolveSimulatorDeviceSets(), (set) =>
+      capture('xcrun', simctlArgs(set, ['list', 'devices'])), simulatorUdid);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
     process.exit(1);
   }
 }
 
+async function ensureMetroOwnershipBeforeLaunch(packageName) {
+  const ownership = probeMetroOwnership(8081);
+  const { envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+  const verdict = validateSimMetroIdentity({
+    listener: classifySimMetroListener({ cwd: ownership?.cwd, source: ownership?.source, targetWorktree: worktreeRoot }),
+    currentSource: gitSourceIdentity(worktreeRoot), runningSource: ownership?.source,
+    currentRegion: region, runningRegion: ownership?.region,
+    currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership?.envFingerprint,
+    envChanged,
+  });
+  if (verdict.healthy) return true;
+  console.error(`Native package installed (${packageName}); launch blocked: ${verdict.code}.`);
+  const mock = readSimEnvironment(mobileDir, buildEnv).uiMock ? ' --mock' : '';
+  console.error(`Run pnpm mobile:sim:start -- --region=${region}${mock}, then mobile:sim:whoami with the same options.`);
+  process.exitCode = 1;
+  return false;
+}
+
+async function rebuildAndroidSimulator() {
+  const androidTools = process.platform === 'win32'
+    ? resolveAndroidSdkTools({
+      env: devProcessEnv,
+      platform: process.platform,
+      requireTools: !buildOnly,
+    })
+    : null;
+  const emulator = buildOnly
+    ? { serial: null, adb: null, sdkRoot: androidTools?.sdkRoot }
+    : await ensureWindowsAndroidEmulator({ port: 8081 });
+  const sdkRoot = emulator.sdkRoot ?? androidTools?.sdkRoot;
+  const androidDir = join(mobileDir, 'android');
+  const javaEnv = resolveJavaRuntimeEnv({
+    ...devProcessEnv,
+    ...(sdkRoot ? { ANDROID_SDK_ROOT: sdkRoot, ANDROID_HOME: sdkRoot } : {}),
+  });
+  console.log('› Android expo prebuild (debug development client)');
+  runPnpm(['exec', 'expo', 'prebuild', '--platform', 'android', '--no-install']);
+
+  const gradle = process.platform === 'win32' ? 'gradlew.bat' : './gradlew';
+  console.log('› Android gradle assembleDebug');
+  if (process.platform === 'win32') {
+    run('cmd.exe', ['/d', '/s', '/c', '.\\gradlew.bat assembleDebug'], {
+      cwd: androidDir,
+      env: javaEnv,
+      windowsVerbatimArguments: true,
+    });
+  } else {
+    run(gradle, ['assembleDebug'], { cwd: androidDir, env: javaEnv });
+  }
+
+  const apk = join(androidDir, 'app/build/outputs/apk/debug/app-debug.apk');
+  if (!existsSync(apk)) {
+    throw new Error(`prebuild/gradle 后未找到 Android debug APK: ${apk}`);
+  }
+  const config = JSON.parse(capturePnpm(['exec', 'expo', 'config', '--type', 'public', '--json']));
+  const packageName = config?.android?.package;
+  if (typeof packageName !== 'string' || !packageName.trim()) {
+    throw new Error(`Expo config 缺少 android.package(region=${region})`);
+  }
+  if (buildOnly) {
+    console.log(`✓ Android --build-only 完成: ${apk}`);
+    return;
+  }
+  const { adb, serial } = emulator;
+  const target = ['-s', serial];
+  if (clean) {
+    try {
+      run(adb, [...target, 'uninstall', packageName]);
+    } catch {
+      console.log('  (没有可卸载的旧 Android 包,跳过)');
+    }
+  }
+  console.log(`› 安装 Android debug 包到 ${serial}`);
+  run(adb, [...target, 'install', '-r', apk]);
+  run(adb, [...target, 'shell', 'am', 'force-stop', packageName]);
+  if (!await ensureMetroOwnershipBeforeLaunch(packageName)) return;
+  run(adb, [...target, 'shell', 'monkey', '-p', packageName, '1']);
+  console.log(`\n✓ 完成: ${packageName} 已安装并发送启动请求；尚未验证页面显示。JS 改动直接由 Metro Fast Refresh 提供。`);
+}
+
 // 宿主机架构只参与缓存隔离；真实构建架构由 Xcode 与各 Pod 的支持矩阵决定。
 const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
+console.log('› 解析目标 App 身份…');
+const expectedBundleId = resolveMobileSimulatorBundleId(region);
+console.log(`==> Worktree: ${worktreeRoot}; region=${region}; bundleId=${expectedBundleId}; arch=${simArch}`);
+console.log('› 计算原生兼容指纹（最长 120s）…');
+let expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
+
+function assertNativeIdentity(appPath) {
+  const verdict = inspectSimulatorNativeIdentity({ appPath, expectedFingerprint: expectedNativeFingerprint });
+  if (!verdict.healthy) throw new Error(`${verdict.code}: 原生产物与当前依赖不匹配，不能交付测试。请用 --force-build 重新构建。`);
+}
 
 // —— fingerprint 产物缓存查询 ——
 // 失败(工具异常等)只降级为完整构建,绝不让缓存机制本身挡住构建路径。
@@ -138,7 +278,7 @@ const simArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
 // 覆盖掉——否则逃生舱跑完一次,坏条目还在,下次普通 rebuild 又命中它。
 let fingerprintHash = null;
 try {
-  console.log('› 计算 native fingerprint(产物缓存键)…');
+  console.log('› 计算 native fingerprint(产物缓存键，最长 120s)…');
   fingerprintHash = computeFingerprintReport(mobileDir, {
     platforms: ['ios'],
     run: runFingerprintWithCurrentEnv,
@@ -149,17 +289,28 @@ try {
 const cacheDir = fingerprintHash ? join(appCacheRoot, `ios-${simArch}-${fingerprintHash}`) : null;
 
 let app = null;
+let cache = { code: forceBuild ? 'cache-bypassed' : 'cache-fingerprint-unavailable', app: null };
 if (cacheDir && !forceBuild) {
-  const cached = readAppCacheEntry(cacheDir, simArch);
-  if (cached) {
+  cache = readAppCacheEntry(cacheDir, simArch);
+  if (cache.app) {
     console.log(`✓ fingerprint 命中产物缓存(${fingerprintHash.slice(0, 12)}…),跳过 prebuild / pod / xcodebuild。`);
     console.log('  (改了原生层但怀疑缓存不对时,用 --force-build 强制重编。)');
     utimesSync(cacheDir, new Date(), new Date());
-    app = cached;
+    app = cache.app;
   }
 }
+console.log(`SIM_CACHE=${JSON.stringify({ ...cache, directory: cacheDir, root: appCacheRoot, fingerprint: fingerprintHash })}`);
 
 if (!app) {
+  console.log(`› 缓存不可复用（${cache.code}），检查 iOS 构建工具链…`);
+  const preflight = inspectIOSBuildTools({ env: devProcessEnv });
+  console.log(`SIM_BUILD_PREFLIGHT=${JSON.stringify(preflight)}`);
+  if (!preflight.healthy) {
+    console.error(`✗ IOS_BUILD_TOOLS_UNAVAILABLE: ${preflight.checks.filter((check) => !check.healthy).map((check) => `${check.tool}=${check.code}`).join(', ')}；尚未执行 prebuild / pod install / xcodebuild。`);
+    if (preflight.checks.some((check) => check.tool === 'pod' && !check.healthy)) console.error(COCOAPODS_SETUP_HINT);
+    console.error('先按 docs/dev-rules/environment-setup.md 修复上述工具，再用相同 region / UDID / --mock 参数重试；不要改用其他 App 身份。');
+    process.exit(1);
+  }
   // 总是先 prebuild,再 xcodebuild。本脚本是 native 变更的验证路径 —— 若只在 ios/ 缺失时
   // prebuild,那么"改了 app.json / Expo plugins / Pods 但 ios/ 已存在"时会构建到 stale 的
   // native 工程还报成功。prebuild 不带 --clean 是增量的,无 native 改动时很快。
@@ -187,10 +338,12 @@ if (!app) {
   }
   const scheme = workspace.replace(/\.xcworkspace$/, '');
 
-  const simulatorDestination = simulatorUdid
+  // xcodebuild 只认得系统设备目录;其它设备目录(如 Cindy 模拟器)用通用目标编译,再按目录安装。
+  const exactDestination = simulatorUdid && !deviceSet?.path;
+  const simulatorDestination = exactDestination
     ? `platform=iOS Simulator,id=${simulatorUdid}`
     : 'generic/platform=iOS Simulator';
-  console.log(`› 编译 ${scheme}(${simulatorUdid ? 'exact' : 'generic'} iOS Simulator destination)…`);
+  console.log(`› 编译 ${scheme}(${exactDestination ? 'exact' : 'generic'} iOS Simulator destination)…`);
   run('xcodebuild', [
     '-workspace', join(iosDir, workspace),
     '-scheme', scheme,
@@ -206,10 +359,17 @@ if (!app) {
     console.error(`✗ 没找到产物 ${app}`);
     process.exit(1);
   }
+  assertBundleIdentity(app);
+  // Prebuild can update generated inputs. Compare the actual build resource,
+  // never label an old artifact with a newly computed hash.
+  expectedNativeFingerprint = computeSimulatorNativeFingerprint(mobileDir, devProcessEnv);
+  assertNativeIdentity(app);
   if (cacheDir) storeAppCacheEntry(cacheDir, scheme, app, readAppBundleIdentifier(app));
 }
 
 assertAppSupportsArchitecture(app, simArch);
+assertBundleIdentity(app);
+assertNativeIdentity(app);
 
 // bundle identity 必须从实际产物读:global 的 app.config.js 会把 bundle id
 // 切成 com.xd.cindy，不能再用默认 cn 的 app.json 值启动错 app。
@@ -225,43 +385,19 @@ if (clean) {
   // uninstall 容错:app 未安装时 simctl 返回非零会让 execFileSync 抛错、后续 install 不执行
   // (首次干净安装就是这个场景)。卸载失败基本只意味着"本来就没装",忽略即可。
   try {
-    run('xcrun', ['simctl', 'uninstall', 'booted', bundleId]);
+    run('xcrun', simctlArgs(deviceSet, ['uninstall', simulatorUdid ?? 'booted', bundleId]));
   } catch {
     console.log('  (没有可卸载的旧包,跳过)');
   }
 }
 console.log('› 安装到 booted 模拟器…');
-run('xcrun', ['simctl', 'install', 'booted', app]);
+run('xcrun', simctlArgs(deviceSet, ['install', simulatorUdid ?? 'booted', app]));
+assertNativeIdentity(capture('xcrun', simctlArgs(deviceSet, ['get_app_container', simulatorUdid ?? 'booted', bundleId, 'app'])).trim());
 
-// 启动前校验 8081(app 默认连 8081)。两种情况都会让"装了本分支 native、却加载别处 JS"污染验证:
-//   (a) 8081 被别的 worktree 占;(b) 是本 worktree 的 Metro 但没注入当前分支 git env
-//       (手动 expo start 起的 / 起后切过分支)。命中则不自动启动,提示用 sim:start 起对的 Metro。
-const metroPid = listenerPid(8081);
-if (metroPid) {
-  const metroCwd = cwdOfPid(metroPid);
-  const foreign = !metroCwd || !isInside(worktreeRoot, metroCwd);
-  const currentSource = gitSourceIdentity(worktreeRoot);
-  const runningSource = gitSourceOfPid(metroPid);
-  if (foreign || runningSource !== currentSource) {
-    const why = foreign
-      ? `属于别的 worktree(${metroCwd || '未知'})`
-      : `源码指纹已过期(运行中=${runningSource || '无'} ≠ 当前=${currentSource})`;
-    console.log(`\n✓ native 包已安装(${bundleId})。`);
-    console.error(`⚠️ 未自动启动:8081 上的 Metro ${why}。`);
-    console.error('   直接启动会让 app 加载错分支的 JS(native 是本分支、JS 不是)。');
-    console.error('   先停掉它、再 `pnpm mobile:sim:start`(起本 worktree 当前分支的 8081 Metro),然后启动 app。');
-    process.exit(0);
-  }
-  if (envChanged) {
-    console.log(`\n✓ native 包已安装(${bundleId})。`);
-    console.error('⚠️ 未自动启动:已补/改 apps/mobile/.env,但 8081 上的 Metro 是用旧 env 启动的(env 在 bundle 时注入)。');
-    console.error('   先停掉它再 `pnpm mobile:sim:start`(用新 env 起 Metro),然后启动 app,新 env 才生效。');
-    process.exit(0);
-  }
-}
+if (!await ensureMetroOwnershipBeforeLaunch(bundleId)) process.exit(1);
 console.log('› 启动…');
-run('xcrun', ['simctl', 'launch', 'booted', bundleId]);
-console.log(`\n✓ 完成。${bundleId} 已重装并启动。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
+run('xcrun', simctlArgs(deviceSet, ['launch', simulatorUdid ?? 'booted', bundleId]));
+console.log(`\n✓ 完成。${bundleId} 已安装并发送启动请求；尚未验证页面显示。改 JS 直接靠 Metro Fast Refresh,不用再跑本脚本。`);
 
 /**
  * 用**当前环境**跑 @expo/fingerprint。不能用 ci-fingerprint 默认 runner:它是
@@ -276,30 +412,37 @@ function runFingerprintWithCurrentEnv({ binPath, projectDir, platform }) {
     encoding: 'utf8',
     // 输出含全部 sources(>1MB),必须调大 maxBuffer(与 ci-fingerprint 同款)。
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: 'SIGKILL',
   });
   if (result.status !== 0) {
-    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+    throw new Error(`fingerprint:generate --platform ${platform} failed: ${result.error?.code ?? `exit ${result.status}`}`);
   }
   return parseFingerprintCliOutput(result.stdout);
 }
 
 /** 读产物缓存条目;结构不完整(半份缓存)时视为未命中。 */
 function readAppCacheEntry(dir, expectedArch) {
+  const miss = (code) => ({ code, app: null });
+  if (!existsSync(join(dir, 'meta.json'))) return miss('cache-entry-missing');
   try {
     const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
-    if (typeof meta.scheme !== 'string' || !meta.scheme) return null;
+    if (typeof meta.scheme !== 'string' || !meta.scheme) return miss('cache-metadata-invalid');
     const cachedApp = join(dir, `${meta.scheme}.app`);
-    if (!existsSync(cachedApp)) return null;
+    if (!existsSync(cachedApp)) return miss('cache-app-missing');
+    if (readAppBundleIdentifier(cachedApp) !== expectedBundleId) return miss('cache-bundle-mismatch');
     const architectures = readAppArchitectures(cachedApp);
     if (!architectures.includes(expectedArch)) {
       console.warn(
         `  缓存产物架构不匹配(实际=${architectures.join(',') || '未知'},当前 Simulator 需要=${expectedArch}),忽略并重新构建。`,
       );
-      return null;
+      return miss('cache-architecture-mismatch');
     }
-    return cachedApp;
+    const native = inspectSimulatorNativeIdentity({ appPath: cachedApp, expectedFingerprint: expectedNativeFingerprint });
+    if (!native.healthy) return miss(`cache-${native.code}`);
+    return { code: 'cache-hit', app: cachedApp };
   } catch {
-    return null;
+    return miss('cache-read-failed');
   }
 }
 
@@ -323,6 +466,11 @@ function storeAppCacheEntry(dir, scheme, builtApp, builtBundleId) {
   } catch (error) {
     console.warn(`  产物缓存写入失败(${error.message}),忽略。`);
   }
+}
+
+function assertBundleIdentity(appPath) {
+  const actual = readAppBundleIdentifier(appPath);
+  if (actual !== expectedBundleId) throw new Error(`Native bundle identity mismatch: ${actual}; expected ${expectedBundleId} (${region}).`);
 }
 
 /** 从已构建 .app 的 Info.plist 读取真实 bundle identity。 */

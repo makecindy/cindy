@@ -1,9 +1,20 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import type { RemoteMoney } from '@/session/remoteMoney';
-import type { MobileToolLoopErrorDetails } from '@/session/toolLoopErrorI18n';
+import type { MobileToolLoopErrorDetails } from '@/session/agentErrorI18n';
+import type { MobileToolInputProjection } from '@/session/messageToolPayloadProjection';
+import type { AnnotationRegion } from '@cindy/maker-shared/image-annotation';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
+
+/**
+ * desktop main 公开的 pending intent(共享契约)+ 远程 Agent 的位置字段:只在这笔切换
+ * 同时换 Agent 所在电脑时出现,null = 改回被控电脑本机运行。共享契约类型尚未声明该
+ * 可选字段,手机端在这里补齐,旧被控端不发即缺省。
+ */
+export type RemoteSessionAgentSwitchIntent = MobileSessionAgentSwitchIntent & {
+  agentDeviceId?: string | null;
+};
 export type RemoteMessageRole =
   | 'user'
   | 'assistant'
@@ -22,6 +33,7 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
   title: string;
@@ -33,7 +45,7 @@ export interface RemoteSession {
   providerId?: string | null;
   effort: string;
   permissionMode: string;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
   /** Temporary host runtime route; optional for older controlled Desktop versions. */
   runtimeGeneration?: number;
   runtimeBaseline?: RemoteSessionRuntimeProfile;
@@ -58,17 +70,36 @@ export interface RemoteSession {
    *  原样透出,startedAt > endedAt 且未被 /clear 越过 = 上次 turn 因应用退出被中断,
    *  见桌面 sessionActiveTurn.ts)。老被控端缺省 → 判定恒不命中,banner 不出现。 */
   activeTurnStartedAt?: number | null;
+  /** Host-confirmed pre-boot interruption generation; absent on older hosts. */
+  interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
   agentKind: 'cc' | 'codex' | 'pi';
+  /**
+   * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
+   * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
+   */
+  agentDeviceId?: string | null;
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
-  agentSwitchIntent?: MobileSessionAgentSwitchIntent | null;
+  agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
+  companion?: import("./teammateTaskSource").TaskCompanion;
+  taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
+  /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   userSendAt: string | null;
+  lastActivityAt?: string | null;
   createdAt: string;
   updatedAt: string;
   deviceLinkDeviceId?: string;
@@ -94,7 +125,7 @@ export interface RemoteSessionRuntimeProfile {
   model: string;
   providerId: string | null;
   effort: string | null;
-  fastMode: boolean;
+  fastMode: boolean | 'ultrafast';
 }
 
 export interface RemoteSessionRuntimePending {
@@ -104,6 +135,8 @@ export interface RemoteSessionRuntimePending {
 }
 
 export interface RemoteMessage {
+  /** Local durable-push order, retained by the display cache. */
+  cacheReceipt?: import('@cindy/maker-shared/message-window').HistoryCacheReceipt;
   id: string;
   clientId: string;
   sessionId: string;
@@ -114,11 +147,17 @@ export interface RemoteMessage {
   toolUseId: string | null;
   agentMeta: Record<string, unknown> | null;
   createdAt: string;
+  /** Large settled tool input released from the transcript mirror and recoverable by message id. */
+  mobileToolInputProjection?: MobileToolInputProjection;
   systemCardData?: Record<string, unknown>;
-  systemCardType?: 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'auto-resume' | 'learn' | 'agent-switch';
+  systemCardType?:
+    | 'help' | 'context' | 'cost' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'context-rebuild' | 'auto-resume' | 'learn' | 'agent-switch'
+    /** 代输入结束留痕(由隐藏续接行派生,无输入值)。 */
+    | 'input-handoff'
+    | 'mcp-app';
 }
 
-export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office';
+export type RemoteAttachmentCategory = 'image' | 'pdf' | 'text' | 'office' | 'file';
 
 export interface RemoteFileRef {
   name: string;
@@ -168,14 +207,22 @@ export interface RemoteSerializedAttachment {
   truncated?: boolean;
   /**
    * 图片带用户手绘圈点标注(lightbox 标注模式的烧录产物)。字段随 wire 契约
-   * 原样透传到被控端(materializeQueuedOssAttachments 只改写 url/path),桌面
+   * 原样透传到被控端(materializeQueuedOssAttachmentsDeferred 只改写 url/path),桌面
    * 端 buildMakerUserMessage 据此给模型注入「红色笔迹是用户标注」的固定说明,
    * 与桌面 AgentInputSerializedFile.annotated 同一契约。
    */
   annotated?: boolean;
+  /**
+   * 可选(向后兼容):标注区域,由笔迹归纳的归一化外接框(0..1,原点左上),与桌面
+   * AgentInputSerializedFile.annotationRegions 同一契约、同一归纳算法
+   * (summarizeAnnotationRegions)。新被控端校验后在标注说明里补一句每张图圈在哪;
+   * 旧被控端忽略。
+   */
+  annotationRegions?: AnnotationRegion[];
 }
 
 export interface QueuedRemoteMessage {
+  durableDelivery?: true;
   clientId: string;
   text: string;
   persistedContent: string;
@@ -193,13 +240,15 @@ export interface QueuedRemoteMessage {
   /** 与桌面队列契约镜像；目标桌面据此禁止缺失快照时按自己的设备坐标重解引用。 */
   sessionReferencesRequireTrustedSnapshot?: boolean;
   userName?: string;
+  /** Interface language of this phone. The desktop stamps it only for a remote turn. */
+  uiLanguage?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;
     model: string;
     effort?: string;
     permissionMode?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     displayReasoning?: string;
     resumeSessionId?: string;
     makerMemoryEnabled?: boolean;
@@ -246,6 +295,8 @@ export interface InputProjection {
   toolLoop?: MobileToolLoopErrorDetails | null;
   recovery?: unknown;
   errorRetryText: string | null;
+  /** Explicit failed-turn continuation eligibility; absent on older hosts. */
+  errorCanContinue?: boolean;
   autoResumePending?: Record<string, unknown> | null;
   /** Current vendor-turn owner for an auto-resume continuation, when supported by the host. */
   continuationTurnClientId?: string | null;
@@ -258,9 +309,16 @@ export interface InputProjection {
    * 却无任何解释(2026-07 排查发现)。
    */
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
+  /**
+   * 账号限额等待(对齐桌面 AgentInputProjection.usageLimitWait):错误照常显示,到 `resumeAt`
+   * 无人处理时桌面端自动继续。老被控端缺省 = 无等待。
+   */
+  usageLimitWait?: { resumeAt: number } | null;
 }
 
 export interface PendingInteraction {
+  /** Controller-only draft retention; never sent to the Host. */
+  retainedDraft?: boolean;
   request: {
     kind?: string;
     requestId?: string;

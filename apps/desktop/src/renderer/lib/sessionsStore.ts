@@ -1,3 +1,6 @@
+import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
+import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
+import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
  * sessionsStore — CC Agent Session 列表的模块级单例 store
  * ---------------------------------------------------------------------------
@@ -65,8 +68,39 @@ const DEFAULT_LIMIT = 1000;
 const startupPerfLog = createLogger('perf/startup');
 const initialFetchLogged = new Set<ListStatusFilter>();
 
-const cache = new Map<ListStatusFilter, Session[]>();
+/** sessionId → 标题的跨桶索引;任何桶写入都会失效,首次读取时惰性重建。 */
+let titleIndex: Map<string, string> | null = null;
+
+/** 桶缓存:每次写入顺带失效标题索引(不依赖各写入点是否随后 notify)。 */
+class SessionBucketCache extends Map<ListStatusFilter, Session[]> {
+  override set(filter: ListStatusFilter, sessions: Session[]): this {
+    titleIndex = null;
+    return super.set(filter, sessions);
+  }
+  override delete(filter: ListStatusFilter): boolean {
+    titleIndex = null;
+    return super.delete(filter);
+  }
+  override clear(): void {
+    titleIndex = null;
+    super.clear();
+  }
+}
+
+const cache = new SessionBucketCache();
 const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
+/**
+ * 已收到「转入后台」推送(hiddenAt 非空)的任务。推送可能早于任务进缓存(首次列表请求
+ * 在途),所以不论当时是否移除了行都登记;列表响应与本地插入写缓存前据此过滤,直到
+ * 收到 hiddenAt:null(恢复显示)。
+ */
+const hiddenSessionIds = new Set<string>();
+
+function withoutHiddenSessions(list: Session[]): Session[] {
+  if (hiddenSessionIds.size === 0) return list;
+  const next = list.filter((session) => !hiddenSessionIds.has(session.id));
+  return next.length === list.length ? list : next;
+}
 /** 列表请求期间收到的 session 费用权威值及其本地事件版本。 */
 interface SessionSpendOverride {
   revision: number;
@@ -93,6 +127,8 @@ let sessionSpendRevision = 0;
 type StoreChange = 'updated' | 'reset';
 
 const subs = new Set<(change: StoreChange) => void>();
+type SessionPatchListener = (id: string, patch: Partial<Session>, row: Session | null) => void;
+const patchSubs = new Set<SessionPatchListener>();
 
 function notify(change: StoreChange = 'updated'): void {
   subs.forEach((fn) => fn(change));
@@ -186,6 +222,18 @@ interface SessionTitleOverride {
 const sessionTitleOverrides = new Map<string, SessionTitleOverride>();
 let sessionTitleRevision = 0;
 
+/**
+ * 置顶与卡片摘要各自记录版本和值，避免一个字段的事件延长另一个字段的保护期。
+ * 只有在列表请求起飞后到达的字段才会被重放；新请求仍以数据库返回值为准。
+ */
+interface SessionPinSummaryOverride {
+  pinnedAt?: { revision: number; value: Session['pinnedAt'] };
+  summary?: { revision: number; value: string | null };
+}
+
+const sessionPinSummaryOverrides = new Map<string, SessionPinSummaryOverride>();
+let sessionPinSummaryRevision = 0;
+
 interface SessionStatusOverride {
   /** status 事件版本；rollback 用它区分同向状态是否有更晚的权威写入。 */
   revision: number;
@@ -203,6 +251,39 @@ interface SessionStatusOverride {
 const sessionStatusOverrides = new Map<string, SessionStatusOverride>();
 let sessionStatusRevision = 0;
 let sessionStatusRowRevision = 0;
+
+/**
+ * status override 的完整行可能带着较早的 pin / summary 值；这些字段有自己的版本，
+ * 新列表请求应让数据库值胜出，不能因其它字段推进 rowRevision 又重放旧 metadata。
+ */
+function filterStatusOverridePatch(
+  sessionId: string,
+  patch: Partial<Session>,
+  afterPinSummaryRevision: number,
+): Partial<Session> {
+  const pinSummaryOverride = sessionPinSummaryOverrides.get(sessionId);
+  if (!pinSummaryOverride) return patch;
+  const next = { ...patch };
+  const pending = pendingStatusTransitions.get(sessionId);
+  // 归档写库在途时，连带的乐观 unpin 必须继续生效；仅保留该事务实际修改的字段。
+  const hasPendingPin = pending && !pending.hasSucceeded && 'pinnedAt' in pending.rollbackPatch;
+  if (
+    next.pinnedAt !== undefined &&
+    pinSummaryOverride.pinnedAt &&
+    pinSummaryOverride.pinnedAt.revision <= afterPinSummaryRevision &&
+    !hasPendingPin
+  ) {
+    delete next.pinnedAt;
+  }
+  if (
+    next.summary !== undefined &&
+    pinSummaryOverride.summary &&
+    pinSummaryOverride.summary.revision <= afterPinSummaryRevision
+  ) {
+    delete next.summary;
+  }
+  return next;
+}
 
 export interface SessionStatusTransitionToken {
   sessionId: string;
@@ -354,6 +435,7 @@ function applySessionStatusOverrides(
   filter: ListStatusFilter,
   afterRevision: number,
   afterRowRevision: number,
+  afterPinSummaryRevision: number,
 ): Session[] {
   if (sessionStatusOverrides.size === 0) return list;
   let next = list;
@@ -384,7 +466,12 @@ function applySessionStatusOverrides(
     }
     if (idx !== -1) {
       const before = next;
-      next = upsertSessionByUpdatedAt(before, mergeSession(before[idx], override.patch));
+      const replayPatch = filterStatusOverridePatch(
+        sessionId,
+        override.patch,
+        afterPinSummaryRevision,
+      );
+      next = upsertSessionByUpdatedAt(before, mergeSession(before[idx], replayPatch));
       recordPendingStatusEviction(sessionId, filter, before, next);
       changed = true;
       continue;
@@ -409,6 +496,35 @@ function applySessionTitleOverrides(list: Session[], afterRevision: number): Ses
     if (override.title === session.title) return session;
     changed = true;
     return mergeSession(session, { title: override.title });
+  });
+  return changed ? next : list;
+}
+
+/** 仅重放请求启动后到达的置顶 / 摘要事件，两个字段的版本彼此独立。 */
+function applySessionPinSummaryOverrides(list: Session[], afterRevision: number): Session[] {
+  if (sessionPinSummaryOverrides.size === 0) return list;
+  let changed = false;
+  const next = list.map((session) => {
+    const override = sessionPinSummaryOverrides.get(session.id);
+    if (!override) return session;
+    const patch: Partial<Session> = {};
+    if (
+      override.pinnedAt &&
+      override.pinnedAt.revision > afterRevision &&
+      override.pinnedAt.value !== session.pinnedAt
+    ) {
+      patch.pinnedAt = override.pinnedAt.value;
+    }
+    if (
+      override.summary &&
+      override.summary.revision > afterRevision &&
+      override.summary.value !== session.summary
+    ) {
+      patch.summary = override.summary.value;
+    }
+    if (Object.keys(patch).length === 0) return session;
+    changed = true;
+    return mergeSession(session, patch);
   });
   return changed ? next : list;
 }
@@ -472,6 +588,7 @@ async function fetchFilter(
 ): Promise<Session[]> {
   // chat-data-localization round-5：IPC 'all'/undefined 与 HTTP 旧默认行为
   // 不一致，必须把 filter 原样透传，由 IPC handler 决定过滤语义。
+  const pinSummaryRevisionAtStart = sessionPinSummaryRevision;
   const spendRevisionAtStart = sessionSpendRevision;
   const titleRevisionAtStart = sessionTitleRevision;
   const statusRevisionAtStart = sessionStatusRevision;
@@ -483,15 +600,19 @@ async function fetchFilter(
     opts?.fresh ? { fresh: true } : undefined,
   );
   // 顺序:status override 可能携带写库返回的完整旧行,必须先应用；再重放请求期间到达的
-  // 费用与权威标题,最后叠乐观标题预览。否则完整状态行会把这三类更新盖回旧值。
+  // 置顶/摘要、费用与权威标题,最后叠乐观标题预览。否则完整状态行会把这些更新盖回旧值。
   const result = applyAutoTitlePreviews(
     applySessionTitleOverrides(
       applySessionSpendOverrides(
-        applySessionStatusOverrides(
-          sessions,
-          filter,
-          statusRevisionAtStart,
-          statusRowRevisionAtStart,
+        applySessionPinSummaryOverrides(
+          applySessionStatusOverrides(
+            sessions,
+            filter,
+            statusRevisionAtStart,
+            statusRowRevisionAtStart,
+            pinSummaryRevisionAtStart,
+          ),
+          pinSummaryRevisionAtStart,
         ),
         spendRevisionAtStart,
       ),
@@ -534,6 +655,21 @@ function requestFilterBackfill(filter: ListStatusFilter): void {
 function runTrailingFilterBackfill(filter: ListStatusFilter): void {
   if (!trailingFilterRefreshes.delete(filter)) return;
   runFilterBackfill(filter);
+}
+
+function recordSessionPinSummaryOverrides(
+  sessionId: string,
+  patch: Pick<Partial<Session>, 'pinnedAt' | 'summary'>,
+): void {
+  const pinnedAt = patch.pinnedAt;
+  const summary = patch.summary;
+  if (pinnedAt === undefined && summary === undefined) return;
+  const revision = ++sessionPinSummaryRevision;
+  const previous = sessionPinSummaryOverrides.get(sessionId);
+  const next: SessionPinSummaryOverride = { ...previous };
+  if (pinnedAt !== undefined) next.pinnedAt = { revision, value: pinnedAt };
+  if (summary !== undefined) next.summary = { revision, value: summary };
+  sessionPinSummaryOverrides.set(sessionId, next);
 }
 
 function recordStatusOverride(
@@ -589,6 +725,11 @@ function applyAuthoritativeStatusSession(
     autoTitlePreviews.delete(session.id);
     sessionTitleOverrides.delete(session.id);
     sessionSpendOverrides.delete(session.id);
+    sessionPinSummaryOverrides.delete(session.id);
+  } else {
+    // 完整状态成功/回滚行是新的权威 metadata 基线，必须推进对应版本，
+    // 否则更早的列表请求可能在状态收敛后再次带回旧置顶或摘要。
+    recordSessionPinSummaryOverrides(session.id, session);
   }
   let touched = false;
   const toBackfill = new Set<ListStatusFilter>();
@@ -615,10 +756,16 @@ function applyAuthoritativeStatusSession(
     touched = true;
   }
   if (touched) notify();
+  patchSubs.forEach((fn) => fn(session.id, session, session));
   for (const filter of toBackfill) requestFilterBackfill(filter);
 }
 
 export const sessionsStore = {
+  /** Original list mutations, including rows outside a consumer's loaded window. */
+  subscribePatches(fn: SessionPatchListener): () => void {
+    patchSubs.add(fn);
+    return () => { patchSubs.delete(fn); };
+  },
   subscribe(fn: (change: StoreChange) => void): () => void {
     subs.add(fn);
     return () => {
@@ -638,6 +785,23 @@ export const sessionsStore = {
    * 要先确认标题仍是系统占位，别把用户手动改的名在 UI 上顶掉）。不触发拉取——
    * 拿不到就不做乐观更新，交给权威广播回填。
    */
+  /**
+   * 跨桶按 id 取当前标题(O(1),索引随每次桶写入失效后惰性重建)。
+   * 给消息来源标签这类「每条消息都订阅」的消费者用,避免每次变更都各自线性扫描。
+   */
+  getTitleById(id: string): string | null {
+    if (!id) return null;
+    if (!titleIndex) {
+      titleIndex = new Map();
+      for (const bucket of cache.values()) {
+        for (const session of bucket) {
+          if (session.title && !titleIndex.has(session.id)) titleIndex.set(session.id, session.title);
+        }
+      }
+    }
+    return titleIndex.get(id)?.trim() || null;
+  },
+
   findById(id: string): Session | null {
     if (!id) return null;
     for (const bucket of cache.values()) {
@@ -656,7 +820,9 @@ export const sessionsStore = {
     let promise = inflight.get(filter);
     if (!promise) {
       const request = fetchFilter(filter, opts)
-        .then((data) => {
+        .then((fetched) => {
+          // 转入后台推送可能早于这次列表响应到达:提交前按已知后台任务过滤。
+          const data = withoutHiddenSessions(fetched);
           // reset / forceRefresh 会把旧 request 从 inflight 移除。只有仍被
           // 当前桶认领的 request 才能提交，避免旧账号请求回填新账号缓存。
           if (inflight.get(filter) === request) {
@@ -912,6 +1078,26 @@ export const sessionsStore = {
    */
   patchLocal(id: string, patch: Partial<Session>): void {
     if (!id || !patch) return;
+    // 插件把任务转入后台(hiddenAt 非空):主进程列表已排除它,这里与删除一样从所有桶
+    // 就地移除;再整体重拉一次,补齐满桶空位并压过转入后台前发出的旧列表请求。
+    // 不论当时是否在缓存里都登记,挡住随后到达的旧列表响应。恢复显示的 hiddenAt:null
+    // 只解除登记,再由紧随的 sessions:created 推送触发重拉。
+    if (typeof patch.hiddenAt === 'string' && patch.hiddenAt.length > 0) {
+      hiddenSessionIds.add(id);
+      const row = this.findById(id);
+      let removed = false;
+      for (const [filter, list] of cache) {
+        const next = list.filter((session) => session.id !== id);
+        if (next.length === list.length) continue;
+        cache.set(filter, next);
+        removed = true;
+      }
+      if (removed) notify();
+      patchSubs.forEach((fn) => fn(id, patch, row ? mergeSession(row, patch) : null));
+      if (removed) void this.forceRefreshAll().catch(() => undefined);
+      return;
+    }
+    if (patch.hiddenAt === null) hiddenSessionIds.delete(id);
     const pendingBeforePatch =
       patch.status !== undefined ? pendingStatusTransitions.get(id) : undefined;
     const sourceSession = patch.status !== undefined ? this.findById(id) : null;
@@ -921,6 +1107,9 @@ export const sessionsStore = {
       recordStatusOverride(id, patch, migratedSession);
     } else {
       mergeAuthoritativePatchIntoStatusOverride(id, patch);
+    }
+    if (patch.pinnedAt !== undefined || patch.summary !== undefined) {
+      recordSessionPinSummaryOverrides(id, patch);
     }
     // 权威标题落地(main 写完占位 / 智能标题后经 sessions:patched 回流,或用户手动改名)
     // → 无条件回收预览条目。留着它会在下一次全量刷新时把真实标题又顶掉。
@@ -953,6 +1142,7 @@ export const sessionsStore = {
       autoTitlePreviews.delete(id);
       sessionTitleOverrides.delete(id);
       sessionSpendOverrides.delete(id);
+      sessionPinSummaryOverrides.delete(id);
     }
     if (patch.totalCostUsd !== undefined || patch.totalMoney !== undefined) {
       sessionSpendRevision += 1;
@@ -1021,6 +1211,8 @@ export const sessionsStore = {
       }
     }
     if (touched) notify();
+    const patchedRow = migratedSession ?? this.findById(id);
+    patchSubs.forEach((fn) => fn(id, patch, patchedRow));
     if (
       pendingBeforePatch &&
       patch.status !== undefined &&
@@ -1044,6 +1236,11 @@ export const sessionsStore = {
    */
   prependCreated(session: Session): void {
     if (!session?.id) return;
+    // Canonical/private companion chats keep their own entry; linked routine and
+    // channel tasks share the ordinary list, matching the host projection.
+    if (!isOrdinaryTaskListSession(session)) return;
+    // 已转入后台的任务不经本地插入回到列表。
+    if (hiddenSessionIds.has(session.id)) return;
     // 插入前叠乐观预览:createSession 往往先于 sessions:created 刷新返回,但预览
     // 必须在入库前就登记。若不在这里叠,第一帧仍是哨兵,用户会先看到「未命名任务」。
     const [withPreview] = applyAutoTitlePreviews([session]);
@@ -1057,6 +1254,26 @@ export const sessionsStore = {
     if (touched) notify();
   },
 
+  /**
+   * 新建页的未发送任务被真正删掉：直接移出缓存，不登记「已删除」状态——同一个 id 之后
+   * 还可能重新建出来(继续输入)，登记过的删除状态会把重建的任务挡在列表外。
+   */
+  removeLocal(id: string): void {
+    autoTitlePreviews.delete(id);
+    sessionTitleOverrides.delete(id);
+    sessionSpendOverrides.delete(id);
+    sessionPinSummaryOverrides.delete(id);
+    sessionStatusOverrides.delete(id);
+    let touched = false;
+    for (const [filter, list] of cache) {
+      const next = list.filter((item) => item.id !== id);
+      if (next.length === list.length) continue;
+      cache.set(filter, next);
+      touched = true;
+    }
+    if (touched) notify();
+  },
+
   /** 仅供测试 / 登出清理。 */
   reset(): void {
     cache.clear();
@@ -1064,7 +1281,9 @@ export const sessionsStore = {
     sessionSpendOverrides.clear();
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
+    sessionPinSummaryOverrides.clear();
     sessionStatusOverrides.clear();
+    hiddenSessionIds.clear();
     statusTransitionGeneration += 1;
     pendingStatusTransitions.clear();
     for (const waiters of pendingStatusTransitionWaiters.values()) {
@@ -1102,8 +1321,15 @@ if (typeof window !== 'undefined') {
   // 那个串与这里预览的是同一个(共用 normalizeAutoTitle),所以回流时不跳变。
   onAutoTitlePreview((sessionId, title) => {
     const current = sessionsStore.findById(sessionId);
-    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。
-    if (current && !isDefaultDraftSessionTitle(current.title)) return;
+    // 已有权威标题(非哨兵)→ 连叠加层都不登记,免得之后顶掉它。仍显示着上一次预览时
+    // 可以换成新的预览(新建页的未发送任务随输入实时更新标题)。
+    if (
+      current &&
+      !isDefaultDraftSessionTitle(current.title) &&
+      current.title !== autoTitlePreviews.get(sessionId)
+    ) {
+      return;
+    }
     // 乐观写入走专门的门:不登记权威 override、不回收叠加层,顺序无所谓。
     autoTitlePreviews.set(sessionId, title);
     if (current) applyOptimisticTitle(sessionId, title);
@@ -1132,6 +1358,21 @@ if (typeof window !== 'undefined') {
         ...(totalMoney ? { totalMoney } : {}),
         ...(typeof totalCostUsd === 'number' ? { totalCostUsd } : {}),
       });
+    },
+  );
+
+  window.electronAPI?.localDb?.taskTags?.onChanged?.(({ tags }, ownerStamp) => {
+    if (!isDataOwnerPushCurrent(ownerStamp)) return;
+    const catalog = normalizeTaskTags(tags, 256);
+    emitTaskTagCatalog(undefined, catalog);
+    for (const [filter, rows] of cache)
+      cache.set(
+        filter,
+        rows.map((row) => ({ ...row, tags: reconcileTaskTags(row.tags, catalog) })),
+      );
+    notify();
+    // Supersede list reads which started before this directory mutation.
+    void sessionsStore.forceRefreshAll();
     },
   );
 

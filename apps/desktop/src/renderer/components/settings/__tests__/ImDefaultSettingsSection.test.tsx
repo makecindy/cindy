@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IM_DEFAULT_SETTINGS, type ImDefaultSettingsState } from '../../../../shared/imDefaultSettings';
 import { ImDefaultSettingsSection } from '../ImDefaultSettingsSection';
 
 const capabilityMockState = vi.hoisted(() => ({
+  providers: [] as ProviderView[],
+  providersLoading: false,
   loadingAgent: null as string | null,
   errorAgent: null as string | null,
   piTurnPermissionPolicy: null as {
@@ -14,9 +17,10 @@ const capabilityMockState = vi.hoisted(() => ({
   } | null,
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
 
 vi.mock('@/hooks/useAgentCapabilities', () => {
   // Pi 未声明 turnPermissionPolicy(警告);Claude Code / Codex 声明且受支持(不警告)。
@@ -56,15 +60,21 @@ vi.mock('@/hooks/useAgentCapabilities', () => {
 });
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [] }),
+  useProviders: () => ({ providers: capabilityMockState.providers, loading: capabilityMockState.providersLoading }),
 }));
 
-vi.mock('@/components/new-chat/AgentSelect', () => ({
-  AgentSelect: () => null,
+vi.mock('@/hooks/useAvailableAgents', () => ({
+  useModelPickerAgents: () => ['claude-code', 'codex', 'pi'],
 }));
 
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: () => null,
+  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable }: {
+    onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
+  }) => <>
+    <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
+      onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>
+    <button data-testid="select-shared" onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'owner-model', providerId: 'owner-provider', effort: 'high', agentDevice: { deviceId: 'share:owner', name: 'Owner' } })}>Select shared</button>
+  </>,
 }));
 
 vi.mock('@/components/new-chat/PermissionSelector', () => ({
@@ -96,7 +106,82 @@ function defaults(agentKind: ImDefaultSettingsState['agentKind']): ImDefaultSett
 }
 
 describe('ImDefaultSettingsSection Pi channel warning', () => {
+  // PR #7291 unit: real settings component gets a catalog after its initial empty
+  // read, then a late refresh races a manual save. Previously the display never refreshed.
+  it('refreshes automatic models after catalog loading and protects a newer manual selection', async () => {
+    const summary = vi.fn();
+    const automatic = { ...defaults('codex'), automaticModel: true };
+    automatic.agents.codex.model = '';
+    capabilityMockState.providersLoading = true;
+    let displayed = automatic;
+    let pendingRead: Promise<ImDefaultSettingsState> | null = null;
+    const get = vi.fn(() => pendingRead ?? Promise.resolve(displayed));
+    window.electronAPI.maker.imDefaultSettingsGet = get;
+    const saved = { ...defaults('codex'), automaticModel: false };
+    saved.agents.codex.model = 'gpt-5.5';
+    window.electronAPI.maker.imDefaultSettingsSet = vi.fn(async () => saved);
+    const view = render(<ImDefaultSettingsSection channel="feishu" onSummaryChange={summary} />);
+    await screen.findByText('settings.imBot.defaults.automaticUnavailable');
+    displayed = { ...automatic, agents: { ...automatic.agents,
+      codex: { ...automatic.agents.codex, model: 'new-recommendation' },
+    } };
+    capabilityMockState.providersLoading = false;
+    capabilityMockState.providers = [];
+    view.rerender(<ImDefaultSettingsSection channel="feishu" onSummaryChange={summary} />);
+    await waitFor(() => expect(summary).toHaveBeenLastCalledWith({ agentKind: 'codex', model: 'new-recommendation' }));
+    let finishRead!: (state: ImDefaultSettingsState) => void;
+    pendingRead = new Promise((resolve) => { finishRead = resolve; });
+    const priorReads = get.mock.calls.length;
+    capabilityMockState.providers = [];
+    view.rerender(<ImDefaultSettingsSection channel="feishu" onSummaryChange={summary} />);
+    await waitFor(() => expect(get.mock.calls.length).toBeGreaterThan(priorReads));
+    fireEvent.click(screen.getByTestId('select-codex'));
+    await waitFor(() => expect(summary).toHaveBeenLastCalledWith({ agentKind: 'codex', model: 'gpt-5.5' }));
+    await act(async () => { finishRead(displayed); });
+    expect(summary).toHaveBeenLastCalledWith({ agentKind: 'codex', model: 'gpt-5.5' });
+    expect(screen.queryByText('settings.imBot.defaults.automatic')).toBeNull();
+  });
+  it('restores automatic selection without saving the displayed model or resetting permissions', async () => {
+    const automatic = { ...defaults('codex'), automaticModel: true };
+    const save = vi.fn(async (_patch: unknown) => {
+      window.electronAPI.maker.imDefaultSettingsGet = vi.fn(async () => automatic);
+      return automatic;
+    });
+    window.electronAPI.maker.imDefaultSettingsSet = save;
+    render(<ImDefaultSettingsSection channel="feishu" />);
+    fireEvent.click(await screen.findByText('settings.imBot.defaults.useAutomatic'));
+    await screen.findByText('settings.imBot.defaults.automatic');
+    expect(save).toHaveBeenCalledWith({ agentKind: IM_DEFAULT_SETTINGS.agentKind, agents: IM_DEFAULT_SETTINGS.agents }, 'feishu');
+    expect(screen.queryByText('settings.imBot.defaults.useAutomatic')).toBeNull();
+    fireEvent.click(screen.getByTestId('select-codex'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]?.[0]).toMatchObject({ agentKind: 'codex', agents: { codex: { model: 'gpt-5.5' } } });
+  });
+  it('saves a shared model and its location together without local catalog membership', async () => {
+    const save = vi.fn(async () => defaults('codex'));
+    window.electronAPI.maker.imDefaultSettingsSet = save;
+    render(<ImDefaultSettingsSection channel="feishu" />);
+    fireEvent.click(await screen.findByTestId('select-shared'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ agentKind: 'codex', agents: {
+      codex: { providerId: 'owner-provider', model: 'owner-model', effort: 'high', agentDeviceId: 'share:owner' },
+    } }, 'feishu'));
+  });
+  it('saves the complete selection in one update while preserving permissions', async () => {
+    const save = vi.fn(async (_patch: unknown) => defaults('codex'));
+    window.electronAPI.maker.imDefaultSettingsSet = save;
+    render(<ImDefaultSettingsSection />);
+    await screen.findByText('settings.imBot.defaults.modelLabel');
+    expect(screen.getByTestId('select-codex').getAttribute('data-fast-configurable')).toBe('false');
+    fireEvent.click(screen.getByTestId('select-codex'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save.mock.calls[0]?.[0]).toEqual({ agentKind: 'codex', agents: {
+      codex: { providerId: 'xd', model: 'gpt-5.5', effort: 'low', agentDeviceId: null },
+    } });
+  });
+
   beforeEach(() => {
+    capabilityMockState.providers = [];
+    capabilityMockState.providersLoading = false;
     capabilityMockState.loadingAgent = null;
     capabilityMockState.errorAgent = null;
     capabilityMockState.piTurnPermissionPolicy = null;
@@ -156,7 +241,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     };
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(screen.queryByRole('status')).toBeNull();
   });
 
@@ -192,7 +277,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     } as unknown as typeof window.electronAPI;
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -202,7 +287,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     capabilityMockState.loadingAgent = 'pi';
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -212,7 +297,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     capabilityMockState.errorAgent = 'pi';
     render(<ImDefaultSettingsSection channel="wechat" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -221,7 +306,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('does not warn for Pi on channels without turn policy (feishu)', async () => {
     render(<ImDefaultSettingsSection channel="feishu" />);
 
-    await screen.findByText('settings.imBot.defaults.agentLabel');
+    await screen.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -231,14 +316,14 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     // Telegram / 钉钉仅在群聊(event.speaker 存在)挂 turnPermissionPolicy,
     // 主人私聊 Pi 可用;设置 UI 不区分群聊/私聊,不能整体警告。
     const first = render(<ImDefaultSettingsSection channel="telegram" />);
-    await first.findByText('settings.imBot.defaults.agentLabel');
+    await first.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
     cleanup();
 
     const second = render(<ImDefaultSettingsSection channel="dingtalk" />);
-    await second.findByText('settings.imBot.defaults.agentLabel');
+    await second.findByText('settings.imBot.defaults.modelLabel');
     expect(
       screen.queryByText('settings.imBot.defaults.agentUnsupportedOnChannelHint'),
     ).toBeNull();
@@ -253,7 +338,7 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     cleanup();
 
     const wechat = render(<ImDefaultSettingsSection channel="wechat" />);
-    await wechat.findByText('settings.imBot.defaults.agentLabel');
+    await wechat.findByText('settings.imBot.defaults.modelLabel');
     expect(
       wechat.queryByText('settings.imBot.defaults.groupPermissionLabel'),
     ).toBeNull();

@@ -31,6 +31,7 @@ import {
   parseMobileAccountVault,
   reconcileMobileActiveAuthSession,
   removeMobilePassportSessionIfCurrent,
+  removeMobilePassport,
   removeMobileResourceSessionIfCurrent,
   replaceMobilePassportSessionIfCurrent,
   replaceMobileResourceSessionIfCurrent,
@@ -55,6 +56,27 @@ describe('mobile account vault', () => {
     secureStorage.value = null;
     secureStorage.readError = null;
     vi.clearAllMocks();
+  });
+
+  it('removes a deleted Passport and its accounts, preserving another active account and realm', async () => {
+    const deleted = JSON.stringify(['global', metadata.membershipId]);
+    const other = JSON.stringify(['global', 'other']);
+    const cn = JSON.stringify(['cn', metadata.membershipId]);
+    await mutateMobileAccountVault(vault => {
+      vault.resources[deleted] = { realm: 'global', refreshToken: 'fake-deleted', metadata, lastUsedAt: 1 };
+      vault.resources[cn] = { realm: 'cn', refreshToken: 'fake-cn', metadata, lastUsedAt: 1 };
+      vault.resources[other] = { realm: 'global', refreshToken: 'fake-other', metadata: { ...metadata, membershipId: 'other', passportId: 'other-passport' }, lastUsedAt: 1 };
+      vault.passports[JSON.stringify(['global', metadata.passportId])] = {
+        realm: 'global', passportId: metadata.passportId, accountRefreshToken: 'fake-passport',
+        memberships: [metadata, { ...metadata, membershipId: 'member-only' }],
+      };
+      vault.activeAccountKey = other;
+    });
+    await removeMobilePassport('global', metadata.passportId);
+    const vault = parseMobileAccountVault(secureStorage.value);
+    expect(vault.activeAccountKey).toBe(other);
+    expect(Object.keys(vault.resources).sort()).toEqual([cn, other].sort());
+    expect(vault.passports).toEqual({});
   });
 
   it('falls back to an empty read-only projection for malformed encrypted content', () => {

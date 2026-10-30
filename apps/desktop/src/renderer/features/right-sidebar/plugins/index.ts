@@ -11,10 +11,15 @@
 
 import './file-browser';
 import './web-browser';
-import './ios-simulator';
+import './mail-preview';
+import './retired-feature';
 import './terminal';
 import './review';
 import './orca-workers';
 import './subagents';
+import './side-chat';
 import './background-tasks';
 import './resource-usage';
+import './routines';
+import './plugin-view';
+import './plugin-task';

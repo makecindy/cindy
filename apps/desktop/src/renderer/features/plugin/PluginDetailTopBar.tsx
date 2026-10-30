@@ -1,16 +1,17 @@
 /**
  * Shared sticky top bar for both Plugin detail surfaces (installed + market).
  *
- * Inputs: the back affordance's label and handler, plus the owning scroll frame's scrolled flag.
- * Outputs: the back button and, on macOS, the page's own window-drag region.
+ * Inputs: back label/handler, scroll state, optional page actions and owning page's horizontal frame.
+ * Outputs: the back button, page actions and, on macOS, the window-drag region.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import { useCallback, useState, type UIEvent } from 'react';
+import { useCallback, useEffect, useState, type ReactNode, type UIEvent } from 'react';
 import { ArrowLeft } from 'lucide-react';
 
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 
 interface PluginDetailTopBarProps {
@@ -18,6 +19,9 @@ interface PluginDetailTopBarProps {
   onBack: () => void;
   /** 滚动帧是否已离开顶部；顶栏据此从透明切到实底 + hairline。 */
   scrolled: boolean;
+  /** 管理页传入与正文共用的宽度和留白；详情页保留默认阅读宽度。 */
+  frameClassName?: string;
+  actions?: ReactNode;
 }
 
 /**
@@ -64,8 +68,42 @@ export function usePluginDetailScrolled(): {
  * cindy-dark.ts:131,两端同值),两条线同时出现即为一片 --surface 上相隔 64px 的
  * 两条同色平行线;那两端由 ContentHeader 的下边框充当顶部分隔,本行只留实底。
  */
-export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopBarProps) {
+export function PluginDetailTopBar({
+  label,
+  onBack,
+  scrolled,
+  frameClassName,
+  actions,
+}: PluginDetailTopBarProps) {
   const { isMac } = useMacFullscreen();
+
+  // Both installed and market detail surfaces share this escape hatch. Let
+  // nested dialogs and editable controls consume Escape first. Listen on
+  // document so the detail page settles Escape before the enclosing Settings
+  // page's window listener, regardless of which mounted first. A held key's
+  // auto-repeat is not a new press: after the first keydown closes a nested
+  // layer, repeats must not also go back to the list.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.repeat ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      onBack();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onBack]);
 
   return (
     <div
@@ -82,7 +120,12 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
       )}
       style={isMac ? WINDOW_DRAG_STYLE : undefined}
     >
-      <div className="mx-auto flex h-16 w-full max-w-[824px] items-center px-8 max-[760px]:px-6">
+      <div
+        className={cn(
+          'flex h-16 items-center justify-between gap-3',
+          frameClassName ?? 'mx-auto w-full max-w-[824px] px-8 max-[760px]:px-6',
+        )}
+      >
         <button
           type="button"
           onClick={onBack}
@@ -92,6 +135,11 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
           <ArrowLeft size={16} aria-hidden="true" />
           {label}
         </button>
+        {actions ? (
+          <div className="flex shrink-0 items-center gap-2" style={WINDOW_NO_DRAG_STYLE}>
+            {actions}
+          </div>
+        ) : null}
       </div>
     </div>
   );

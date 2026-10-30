@@ -22,11 +22,13 @@
 //   pnpm mobile:sim:start:cn              # 中国大陆版；Windows 同时启动 cindy-api36
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
+//   pnpm mobile:sim:start -- --mock        # 免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)
 //   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { applySimMockArg, readSimEnvironment } from './lib/sim-environment.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
@@ -54,19 +56,19 @@ import {
   formatMobileLocalConfigStatus,
 } from './lib/mobile-local-config.mjs';
 import {
-  cwdOfPid,
+  clearMetroOwner,
   gitSourceIdentity,
-  gitSourceOfPid,
   isMetroPid,
-  listenerPid,
   portInUse,
+  probeMetroOwnership,
   terminateMetro,
+  writeMetroOwner,
 } from './sim-metro.mjs';
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const worktreeRoot = resolve(mobileDir, '../..');
 const DEFAULT_PORT = 8081;
-const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(process.argv.slice(2));
+const { region, passthrough: regionPassthrough } = extractMobileDevRegionArgs(applySimMockArg(process.argv.slice(2)));
 const { takeover, passthrough: takeoverPassthrough } = extractSimTakeoverArgs(regionPassthrough);
 const androidArgs = extractAndroidSimulatorArgs(takeoverPassthrough);
 const portArgs = extractSimMetroPortArgs(androidArgs.passthrough, DEFAULT_PORT);
@@ -84,6 +86,8 @@ const buildEnv = withLocalMobileRegionConfig(
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
+const { loginScenario, uiMock, envFingerprint } = readSimEnvironment(mobileDir, buildEnv);
+if (uiMock) console.log('› --mock:免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)');
 
 function git(args) {
   try {
@@ -106,9 +110,10 @@ async function ensureAndroidTarget() {
 const args = ['exec', 'expo', 'start', '--dev-client', ...portArgs.passthrough];
 if (portArgs.port === DEFAULT_PORT) {
   if (await portInUse(DEFAULT_PORT)) {
-    const pid = listenerPid(DEFAULT_PORT);
-    const cwd = pid ? cwdOfPid(pid) : null;
-    const runningSource = pid ? gitSourceOfPid(pid) : null;
+    const ownership = probeMetroOwnership(DEFAULT_PORT);
+    const pid = ownership?.pid ?? null;
+    const cwd = ownership?.cwd ?? null;
+    const runningSource = ownership?.source ?? null;
     const listener = classifySimMetroListener({
       cwd,
       source: runningSource,
@@ -122,6 +127,10 @@ if (portArgs.port === DEFAULT_PORT) {
       envChanged,
       currentSource: sourceIdentity,
       runningSource,
+      currentRegion: region,
+      runningRegion: ownership?.region,
+      currentEnvFingerprint: envFingerprint,
+      runningEnvFingerprint: ownership?.envFingerprint,
       listener,
       listenerWorktreeExists,
     });
@@ -135,11 +144,14 @@ if (portArgs.port === DEFAULT_PORT) {
       process.exit(1);
     }
 
-    if (!pid || !isMetroPid(pid)) {
+    const confirmedMetro = process.platform === 'win32'
+      ? Boolean(ownership?.cwd && ownership?.source)
+      : Boolean(pid && isMetroPid(pid));
+    if (!pid || !confirmedMetro) {
       console.error(`✗ ${DEFAULT_PORT} 上的进程不是可确认的 Metro,拒绝接管。`);
       process.exit(1);
     }
-    const stopped = await terminateMetro(pid, { worktreeRoot: listener.worktree });
+    const stopped = await terminateMetro(ownership?.launcherPid ?? pid, { worktreeRoot: listener.worktree });
     if (!stopped) {
       console.error(`✗ 无法在限定时间内停止旧 Metro(pid=${pid}),拒绝继续。`);
       process.exit(1);
@@ -152,6 +164,10 @@ if (portArgs.port === DEFAULT_PORT) {
       console.log(`✓ 已接管其他 Cindy worktree 的 Metro(pid=${pid}, cwd=${cwd})。`);
     }
   }
+} else if (await portInUse(portArgs.port)) {
+  // Do not let a failed second launcher overwrite (then clear) the live owner.
+  console.error(`✗ Metro port ${portArgs.port} is already in use; stop its owner or choose another --port.`);
+  process.exit(1);
 }
 await ensureAndroidTarget();
 // 统一规范化成 Expo 明确支持的 `--port <n>`，避免 `--port=<n>` 被本工具识别、
@@ -182,6 +198,19 @@ const child = spawn(invocation.command, invocation.args, {
   shell: invocation.shell,
   windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
+
+if (Number.isInteger(child.pid)) {
+  writeMetroOwner(portArgs.port, {
+    pid: child.pid,
+    launcherPid: child.pid,
+    source: sourceIdentity,
+    region,
+    loginScenario,
+    envFingerprint,
+    worktreeRoot,
+  });
+  child.once('exit', () => clearMetroOwner(portArgs.port, child.pid));
+}
 
 child.once('error', (error) => {
   console.error(`✗ 无法启动 Metro: ${error.message}`);

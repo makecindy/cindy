@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
 import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
@@ -9,15 +11,20 @@ import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { computeAgentIslandWindowBounds, type AgentIslandLayoutPreference } from '../geometry.js';
 import {
+  AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
+  AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL,
+  AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
   computeAgentIslandContentHeight,
   type AgentIslandDisplayState,
+  type AgentIslandSessionActivity,
   type AgentIslandSoundChoice,
   type AgentIslandSoundSettings,
 } from '../../../shared/agentIsland.js';
@@ -25,8 +32,15 @@ import { AGENT_ISLAND_DISPLAY_CONFIG } from '../displayConfig.js';
 import type { AgentIslandNativeFrame } from '../MacAgentIslandNativeHost.js';
 import { markAppContentWindow } from '../../windowFocusClassifier.js';
 import type { AgentIslandService } from '../service.js';
+import type { AgentIslandCompanionIdentity } from '../companionIdentity.js';
+import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
+
+vi.mock('../../appSessionState', () => ({
+  getActiveAppSession: () => ({ dataOwnerId: 'test-owner', generation: 1, mode: 'local' }),
+}));
 
 // 受保护目录检测按 path.join(homedir(), ...) 的字面量匹配;测试消息必须用同一
 // 拼法,否则在 Windows 开发机上分隔符对不上,darwin mock 下的用例会失真。
@@ -46,13 +60,22 @@ function handleInteractionRequestForTest(
 }
 
 const mocks = vi.hoisted(() => ({
+  attached: vi.fn(),
+  confirmIslandArchive: vi.fn(),
+  patchSessionMetaInDb: vi.fn(),
+  remoteInvoke: vi.fn(),
   getSessionRowSnapshot: vi.fn<() => Promise<{
     status: string;
     title: string | null;
     userSendAt: number | null;
     workingDir: string | null;
     workspaceKind: string | null;
+    source?: string | null;
   } | null>>(() => Promise.resolve(null)),
+  /** 「消息免打扰」同步索引:默认不静音,用例按需覆写。 */
+  isSessionNotificationsMutedSync: vi.fn((_sessionId: string) => false),
+  readAgentIslandCompanion: vi.fn<(sessionId: string) => Promise<AgentIslandCompanionIdentity | null>>(() => Promise.resolve(null)),
+  companionAvatarThumbnail: vi.fn<(avatar: string, deviceId?: string | null) => Promise<string | undefined>>(() => Promise.resolve(undefined)),
   primaryDisplay: {
     id: 1,
     label: 'Built-in Retina Display',
@@ -81,6 +104,12 @@ const mocks = vi.hoisted(() => ({
   showMessageBox: vi.fn(),
   openExternal: vi.fn(),
   readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
+  assertTrustedAppRendererEvent: vi.fn(),
+}));
+
+vi.mock('../../security/trustedAppRenderer.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../security/trustedAppRenderer.js')>()),
+  assertTrustedAppRendererEvent: mocks.assertTrustedAppRendererEvent,
 }));
 
 // 受保护目录引导会由 Main 亲自 readdir 核实一次;只替换这一个 API,其余 fs/promises
@@ -99,6 +128,7 @@ function tccDeniedError(): NodeJS.ErrnoException {
 vi.mock('electron', () => {
   return {
     app: {
+      focus: vi.fn(),
       getPreferredSystemLanguages: mocks.getPreferredSystemLanguages,
       getLocale: mocks.getLocale,
     },
@@ -119,6 +149,21 @@ vi.mock('electron', () => {
 
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
+  patchSessionMetaInDb: mocks.patchSessionMetaInDb,
+}));
+
+vi.mock('../../localDb/sessionFlagRegistry', () => ({
+  isSessionNotificationsMutedSync: mocks.isSessionNotificationsMutedSync,
+}));
+
+vi.mock('../../device-link/index.js', () => ({ remoteInvoke: mocks.remoteInvoke }));
+vi.mock('../archiveConfirmation.js', () => ({ confirmIslandArchive: mocks.confirmIslandArchive }));
+vi.mock('../../im/binding.js', () => ({ bindingStore: { findByTarget: mocks.attached } }));
+
+vi.mock('../companionIdentity.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../companionIdentity.js')>()),
+  readAgentIslandCompanion: mocks.readAgentIslandCompanion,
+  companionAvatarThumbnail: mocks.companionAvatarThumbnail,
 }));
 
 vi.mock('../layoutPreferenceStore.js', () => ({
@@ -129,6 +174,8 @@ vi.mock('../layoutPreferenceStore.js', () => ({
 }));
 
 vi.mock('../../device-link/broadcast-tap.js', () => ({
+  captureDataOwnerBroadcastScope: () => ({ ownerStamp: { dataOwnerId: 'test-owner', ownerGeneration: 1 } }),
+  isDataOwnerBroadcastScopeCurrent: () => true,
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   tapWindowBroadcast: mocks.tapWindowBroadcast,
 }));
@@ -136,8 +183,18 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 import { resetEpermGuidanceForTest } from '../../file-access/permissions.js';
 
 beforeEach(() => {
+  mocks.attached.mockReset().mockReturnValue(null);
+  mocks.confirmIslandArchive.mockReset().mockResolvedValue(true);
+  mocks.patchSessionMetaInDb.mockReset();
+  mocks.remoteInvoke.mockReset();
+  setDeepLinkMainWindow(null);
+  takePendingDeepLink();
   mocks.getSessionRowSnapshot.mockReset();
   mocks.getSessionRowSnapshot.mockResolvedValue(null);
+  mocks.readAgentIslandCompanion.mockReset();
+  mocks.readAgentIslandCompanion.mockResolvedValue(null);
+  mocks.companionAvatarThumbnail.mockReset();
+  mocks.companionAvatarThumbnail.mockResolvedValue(undefined);
   mocks.displays.splice(0, mocks.displays.length, mocks.primaryDisplay);
   mocks.getPrimaryDisplay.mockReset();
   mocks.getDisplayMatching.mockReset();
@@ -145,6 +202,7 @@ beforeEach(() => {
   mocks.getPreferredSystemLanguages.mockReset();
   mocks.getLocale.mockReset();
   mocks.ipcHandle.mockReset();
+  mocks.assertTrustedAppRendererEvent.mockReset();
   mocks.browserWindowFromWebContents.mockReset();
   mocks.browserWindowFromWebContents.mockReturnValue(null);
   mocks.browserWindowGetAllWindows.mockReset();
@@ -278,9 +336,9 @@ describe('Agent Island window geometry', () => {
     };
 
     expect(computeAgentIslandWindowBounds(display)).toEqual({
-      x: 624,
+      x: 724,
       y: -900,
-      width: 680,
+      width: 480,
       height: 580,
     });
   });
@@ -304,9 +362,9 @@ describe('Agent Island window geometry', () => {
     };
 
     expect(computeAgentIslandWindowBounds(display, true)).toEqual({
-      x: 564,
+      x: 664,
       y: -900,
-      width: 800,
+      width: 600,
       height: 640,
     });
   });
@@ -317,9 +375,9 @@ describe('Agent Island window geometry', () => {
     };
 
     expect(computeAgentIslandWindowBounds(display, { expanded: true, contentHeight: 240 })).toEqual({
-      x: 564,
+      x: 664,
       y: -900,
-      width: 800,
+      width: 600,
       height: 320,
     });
   });
@@ -330,16 +388,16 @@ describe('Agent Island window geometry', () => {
     };
 
     expect(computeAgentIslandWindowBounds(display, { expanded: false, centerXRatio: 1 })).toEqual({
-      x: 1088,
+      x: 1288,
       y: -900,
-      width: 680,
+      width: 480,
       height: 580,
     });
 
     expect(computeAgentIslandWindowBounds(display, { expanded: true, centerXRatio: 1 })).toEqual({
-      x: 1028,
+      x: 1228,
       y: -900,
-      width: 800,
+      width: 600,
       height: 640,
     });
   });
@@ -515,6 +573,453 @@ describe('Agent Island expanded content height', () => {
 });
 
 describe('AgentIslandService native publishing', () => {
+  beforeEach(async () => {
+    // Load after the outer mock setup, outside the first behavior test's budget.
+    // Cold Vite transforms can otherwise consume its entire 5-second timeout.
+    await import('../service.js');
+  }, 60_000);
+
+  // Unit: native click -> existing chat deep link must preserve unread; group cards never
+  // have task archive/read actions, sounds or relay rows. Existing tests only clicked tasks.
+  it('opens the exact group/thread message without reading it, and falls back when native publishing fails', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    setDeepLinkMainWindow(null);
+    takePendingDeepLink();
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const nativeHost = { failed: false, available: false, publish, playSound, suspend: () => undefined };
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost });
+    syncEnabledForTest(service, publish);
+    const input = { groupId: 'group', name: 'Product', messageId: 'message', threadRootId: 'topic',
+      mentioned: true, preview: 'Chris: hello', lastMessageAt: 1, members: [] };
+    service.setGroupChat(input.groupId, input);
+    expect(publish.mock.calls.at(-1)![0].mode).toBe('compact');
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].mode).toBe('compact');
+    nativeHost.available = true;
+    expect(service.notifyGroupChat(input.groupId)).toBe(true);
+    expect(publish.mock.calls.at(-1)![0].displayPolicy).toBe('transient');
+    expect(playSound).not.toHaveBeenCalled();
+    expect(service.getSessionActivitySnapshot('chat-group:group')).toBeNull();
+    (service as unknown as { focusSession(id: string): void }).focusSession('chat-group:group');
+    expect(takePendingDeepLink()).toEqual({ type: 'chat-message', groupId: 'group', messageId: 'message', threadRootId: 'topic' });
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(1);
+    expect(await service.handleCompletionAction('chat-group:group', 'mark-read', 'forged')).toBe(false);
+    nativeHost.failed = true;
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    nativeHost.failed = false;
+    publish.mockReturnValue(false);
+    expect(service.notifyGroupChat(input.groupId)).toBe(false);
+    service.setGroupChat(input.groupId, null);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+  });
+
+  it('defers to native notifications when disabled or headless and keeps late avatar reads out of cleared cards', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    let avatar!: (value: string) => void;
+    mocks.companionAvatarThumbnail.mockReturnValueOnce(new Promise(resolve => { avatar = resolve; }));
+    const input = { groupId: 'group', name: 'Product', messageId: 'message', mentioned: false,
+      preview: 'hello', lastMessageAt: 1, members: [{ name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue' }] };
+    service.setGroupChat('group', input);
+    service.setEnabled(false);
+    expect(service.notifyGroupChat('group')).toBe(false);
+    service.setGroupChat('group', null);
+    avatar('late-avatar');
+    await Promise.resolve();
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+    const headless = new AgentIslandService({ getMainWindow: () => null, nativeHost: { headless: true, failed: false, publish } });
+    headless.setGroupChat('group', { ...input, members: [] });
+    headless.setEnabled(true);
+    expect(headless.notifyGroupChat('group')).toBe(false);
+    headless.resetRuntimeState();
+  });
+
+  it('keeps group lane approvals but lets chat unread own the successful reply reminder', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', title: 'Chris', userSendAt: null,
+      workingDir: '/home', workspaceKind: null, source: 'bot' });
+    mocks.readAgentIslandCompanion.mockResolvedValue({ botId: 'bot', groupId: 'group',
+      companion: { name: 'Chris', groupName: 'Product', hue: 'blue', glyph: 'C', glyphIsInitial: true } });
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 'lane' }, 'please help');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.companion?.groupName).toBe('Product'));
+    handleInteractionRequestForTest(service, { sessionId: 'lane' }, { kind: 'ask_user_question', requestId: 'q', questions: [] });
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ phase: 'needs-interaction', attention: true });
+    service.handleInteractionDismissed('lane', 'q');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'lane' }, { type: 'done', source: 'codex', data: { result: 'done' } });
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    service.setGroupChat('group', { groupId: 'group', name: 'Product', messageId: 'reply', mentioned: false,
+      preview: 'Chris: done', lastMessageAt: Date.now(), members: [] });
+    expect(publish.mock.calls.at(-1)?.[0].pillSnapshot.attentionCount).toBe(1);
+    service.resetRuntimeState();
+  });
+
+  // #7307 review: accepted group input provenance exists before the avatar/identity read.
+  // Unit: done arriving during that read must never emit completion attention or sound.
+  it('silences a fast group reply before companion identity finishes loading', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let finishIdentity!: (identity: AgentIslandCompanionIdentity | null) => void;
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', title: 'Chris', userSendAt: null,
+      workingDir: '/home', workspaceKind: null, source: 'bot' });
+    mocks.readAgentIslandCompanion.mockReturnValueOnce(new Promise(resolve => { finishIdentity = resolve; }));
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn();
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 'fast-lane' }, 'please help');
+    await vi.waitFor(() => expect(finishIdentity).toBeTypeOf('function'));
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'fast-lane' }, { type: 'done', source: 'codex',
+      agentMeta: { botGroupLane: true }, data: { result: 'done' } });
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(service.getSessionActivitySnapshot('fast-lane')).toBeNull();
+    expect(playSound).not.toHaveBeenCalled();
+    finishIdentity({ botId: 'bot', groupId: 'group', companion: { name: 'Chris', groupName: 'Product', hue: 'blue', glyph: 'C', glyphIsInitial: true } });
+    await vi.waitFor(() => expect((service as unknown as {
+      metadataCache: Map<string, { companion?: AgentIslandCompanionIdentity | null }>;
+    }).metadataCache.get('fast-lane')?.companion?.groupId).toBe('group'));
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toEqual([]);
+    expect(playSound).not.toHaveBeenCalled();
+    service.resetRuntimeState();
+  });
+
+  // Old unread has no runtime event after restart. Verify the real IPC -> native -> read
+  // route, including owner fencing and stale-card rejection; existing event tests miss this (unit).
+  it('restores companion chats from the owner snapshot and reads offline chats locally', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const send = vi.fn();
+    const mainWindow = { webContents: { send }, isDestroyed: () => false } as unknown as BrowserWindow;
+    const service = new AgentIslandService({ getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish, suspend: () => undefined } });
+    syncEnabledForTest(service, publish);
+    service.registerDeviceSessionIpc();
+    const sync = registeredIpcHandler(AGENT_ISLAND_SET_COMPANION_CHATS_CHANNEL);
+    const chat = { sessionId: 'offline-chat', botId: 'remote-bot', deviceId: 'offline-home',
+      companion: { name: 'Cindy', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'blue' }, visible: true, unread: true,
+      lastMessageAt: 1, preview: 'Unread reply' };
+    const snapshot = { dataOwnerId: 'test-owner', ownerGeneration: 1, chats: [chat] };
+    sync({ sender: mainWindow.webContents }, { ...snapshot, ownerGeneration: 0 });
+    expect(publish).not.toHaveBeenCalled();
+    sync({ sender: {} }, snapshot);
+    expect(publish).not.toHaveBeenCalled();
+    sync({ sender: mainWindow.webContents }, snapshot);
+    const display = publish.mock.calls.at(-1)![0];
+    expect(display.pillSnapshot.attentionCount).toBe(1);
+    expect(service.getSessionActivitySnapshot(chat.sessionId)).toBeNull();
+    const token = display.sessions[0].completionToken!;
+    await Promise.resolve();
+    mocks.companionAvatarThumbnail.mockResolvedValueOnce('restored-avatar');
+    sync({ sender: mainWindow.webContents }, snapshot);
+    await Promise.resolve();
+    expect(publish.mock.calls.at(-1)![0].sessions[0].companion?.imageJpeg).toBe('restored-avatar');
+    expect(publish.mock.calls.at(-1)![0].sessions[0].completionToken).toBe(token);
+    expect(await service.handleCompletionAction(chat.sessionId, 'archive', token)).toBe(false);
+    expect(await service.handleCompletionAction(chat.sessionId, 'mark-read', token)).toBe(true);
+    expect(send).toHaveBeenCalledWith(AGENT_ISLAND_READ_COMPANION_CHAT_CHANNEL,
+      { ...chat, readThroughAt: chat.lastMessageAt }, { dataOwnerId: 'test-owner', ownerGeneration: 1 });
+    expect(mocks.remoteInvoke).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    sync({ sender: mainWindow.webContents }, { ...snapshot, chats: [{ ...chat, lastMessageAt: 2 }] });
+    expect(await service.handleCompletionAction(chat.sessionId, 'mark-read', token)).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(1);
+    service.resetRuntimeState();
+    service.setEnabled(true);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+  });
+
+  // Unit regression #7134: the earlier test only checked sound after an unread snapshot arrived.
+  it.each([false, true])('keeps fresh completion sounds before chat unread=%s and clears explicit reads', async (unread) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const playSound = vi.fn(() => true);
+    const mainWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false } as unknown as BrowserWindow;
+    const service = new AgentIslandService({ getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish, playSound, suspend: () => undefined } });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav') } });
+    const input = { sessionId: 'local-chat', botId: 'local-bot', deviceId: null,
+      companion: { name: 'Cindy', avatar: '', avatarColor: 'blue' }, visible: true, unread: false,
+      lastMessageAt: 1, preview: '' };
+    service.setCompanionChats([input]);
+    service.handleUserPrompt({ sessionId: input.sessionId }, 'hello');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: input.sessionId }, doneEvent());
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    if (!unread) {
+      service.setCompanionChats([input]);
+      expect(playSound).toHaveBeenCalledTimes(1);
+      expect(publish.mock.calls.at(-1)![0].sessions).toEqual([]);
+      service.resetRuntimeState();
+      return;
+    }
+    const runtimeToken = (service.getSessionActivitySnapshot(input.sessionId) as AgentIslandSessionActivity).completionToken!;
+    service.setCompanionChats([{ ...input, unread: true, lastMessageAt: Date.now(), preview: 'Reply' }]);
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(await service.handleCompletionAction(input.sessionId, 'mark-read', runtimeToken)).toBe(false);
+    const token = publish.mock.calls.at(-1)![0].sessions[0].completionToken!;
+    expect(await service.handleCompletionAction(input.sessionId, 'mark-read', token)).toBe(true);
+    expect(service.getSessionActivitySnapshot(input.sessionId)?.attention ?? false).toBe(false);
+    expect(publish.mock.calls.at(-1)![0].pillSnapshot.attentionCount).toBe(0);
+    service.resetRuntimeState();
+  });
+
+  // Unit: the menu bar must observe the final chat projection even with the island hidden.
+  it.each([true, false])('publishes shared attention counts with island enabled=%s', async (enabled) => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish: () => true, suspend: () => undefined } });
+    service.setEnabled(enabled);
+    const counts = vi.fn();
+    const unsubscribe = service.subscribeAttentionCount(counts);
+    const chat = { sessionId: 'unread-chat', botId: 'bot', deviceId: 'offline-home',
+      companion: { name: 'Cindy', avatar: '', avatarColor: 'blue' }, visible: true, unread: true,
+      lastMessageAt: 1, preview: 'Unread reply' };
+    service.handleUserPrompt({ sessionId: 'running-task' }, 'work');
+    expect(service.getAttentionCount()).toBe(0);
+    service.setCompanionChats([chat]);
+    expect(service.getAttentionCount()).toBe(1);
+    expect(counts.mock.calls).toEqual([[1]]);
+    service.setCompanionChats([chat]);
+    expect(counts).toHaveBeenCalledTimes(1);
+    service.setCompanionChats([{ ...chat, unread: false }]);
+    expect(counts.mock.calls).toEqual([[1], [0]]);
+    service.setCompanionChats([chat]);
+    service.resetRuntimeState();
+    expect(service.getAttentionCount()).toBe(0);
+    expect(counts.mock.calls).toEqual([[1], [0], [1], [0]]);
+    unsubscribe();
+    service.setEnabled(enabled);
+    service.setCompanionChats([chat]);
+    expect(counts).toHaveBeenCalledTimes(4);
+    service.resetRuntimeState();
+  });
+
+  it.each([true, false])('waits across status Done → native done for the shared local/remote completion decision (%s)', async handled => {
+    const { AgentIslandService } = await import('../service.js');
+    const remoteEvents: string[] = [];
+    const controller = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      onDeviceSessionEvent: event => remoteEvents.push(event.kind),
+    });
+    controller.setEnabled(false);
+    mocks.tapWindowBroadcast.mockImplementation((channel, payload) => {
+      if (channel !== SESSION_ACTIVITY_CHANNEL) return;
+      controller.setDeviceSessions([{
+        ...payload,
+        deviceId: 'execution-host',
+        deviceName: 'Host',
+        title: 'Delegated task',
+        detail: payload.compactDetail,
+      }]);
+    });
+    let settlement: Promise<boolean> | undefined;
+    let resolve!: (handled: boolean) => void;
+    const check = vi.fn(async () => await settlement ?? false);
+    const source = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+      isCompletionHandledByTeammate: check,
+    });
+    source.setEnabled(false);
+    const meta = { sessionId: 'delegated-status-done', agentKind: 'codex' as const };
+    source.handleUserPrompt(meta, 'run task');
+    source.handleAgentEvent(meta, textEvent('Final result', true));
+    source.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { status: 'Done', isRunning: false } });
+    // Native events cross separate iterator awaits. A microtask delay at status
+    // Done alone must never decide ownership before the later done boundary.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(check).not.toHaveBeenCalled();
+    expect(remoteEvents).toEqual([]);
+    const localDecision = source.waitForCompletionNotification(meta.sessionId);
+    expect(localDecision).toBeDefined();
+    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
+    source.handleAgentEvent(meta, doneEvent());
+    // The synchronous terminal adapter registers settlement after island delivery.
+    settlement = new Promise<boolean>(r => { resolve = r; });
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledOnce();
+    expect(remoteEvents).toEqual([]);
+    resolve(handled);
+    await expect(localDecision).resolves.toBe(handled);
+    expect(remoteEvents).toEqual(handled ? [] : ['done']);
+    source.handleAgentEvent(meta, doneEvent());
+    source.replaySessionActivity();
+    expect(check).toHaveBeenCalledOnce();
+    expect(remoteEvents).toEqual(handled ? [] : ['done']);
+    expect(source.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ phase: 'completed', attention: true });
+    source.resetRuntimeState(); controller.resetRuntimeState();
+    mocks.tapWindowBroadcast.mockReset();
+  });
+
+  // Swipe actions must use the real lifecycle entry and retain attention on failure.
+  // Existing focus tests do not cover background completion actions (unit tier).
+  it('reads or archives completed tasks without focusing, and retains failed archives', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless: true, publish: () => true, suspend: () => undefined },
+    });
+    service.setEnabled(false);
+    const meta = { sessionId: 'swipe-task', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'run');
+    await service.handleCompletionAction(meta.sessionId, 'archive', 'missing');
+    expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+    service.handleAgentEvent(meta, doneEvent());
+    const token = (service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken!;
+    mocks.patchSessionMetaInDb.mockRejectedValueOnce(new Error('offline'));
+    await service.handleCompletionAction(meta.sessionId, 'archive', token);
+    expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ attention: true });
+    expect(mocks.showMessageBox).toHaveBeenCalled();
+    mocks.patchSessionMetaInDb.mockResolvedValueOnce({ status: 'archived' });
+    await service.handleCompletionAction(meta.sessionId, 'archive', token);
+    expect(mocks.patchSessionMetaInDb).toHaveBeenLastCalledWith(meta.sessionId, { status: 'archived' }, {
+      routeLockHeld: true, beforeWrite: expect.any(Function),
+    });
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention ?? false).toBe(false);
+    service.handleUserPrompt(meta, 'again');
+    service.handleAgentEvent(meta, doneEvent());
+    const nextToken = (service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken!;
+    await service.handleCompletionAction(meta.sessionId, 'mark-read', nextToken);
+    expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention ?? false).toBe(false);
+    expect(mocks.patchSessionMetaInDb).toHaveBeenCalledTimes(2);
+    service.resetRuntimeState();
+  });
+
+  it('routes remote swipe actions to their owner and excludes companion archives', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, suspend: () => undefined },
+    });
+    syncEnabledForTest(service, publish);
+    const input = { sessionId: 'remote-swipe', deviceId: 'owner-device', deviceName: 'Mac',
+      completionToken: 'owner-completion',
+      title: 'Task', workingDir: null, workspaceKind: null, agentKind: 'codex', detail: '' };
+    const complete = () => {
+      service.setDeviceSessions([{ ...input, phase: 'running' }]);
+      service.setDeviceSessions([{ ...input, phase: 'completed' }]);
+    };
+    complete();
+    mocks.remoteInvoke.mockResolvedValueOnce({ ok: false, error: { message: 'offline' } });
+    await service.handleCompletionAction(input.sessionId, 'mark-read', input.completionToken);
+    expect(publish.mock.calls.at(-1)?.[0].sessions).toContainEqual(expect.objectContaining({ sessionId: input.sessionId, attention: true }));
+    mocks.remoteInvoke.mockResolvedValue({ ok: true, result: true });
+    await service.handleCompletionAction(input.sessionId, 'mark-read', input.completionToken);
+    expect(mocks.remoteInvoke).toHaveBeenLastCalledWith('owner-device', 'agent-island:completion-action', ['remote-swipe', 'mark-read', input.completionToken]);
+    expect(publish.mock.calls.at(-1)?.[0].sessions.some(s => s.sessionId === input.sessionId && s.attention)).toBe(false);
+    complete();
+    await service.handleCompletionAction(input.sessionId, 'archive', input.completionToken);
+    expect(mocks.remoteInvoke).toHaveBeenLastCalledWith('owner-device', 'agent-island:completion-action', ['remote-swipe', 'archive', input.completionToken]);
+    const count = mocks.remoteInvoke.mock.calls.length;
+    service.setDeviceSessions([{ ...input, phase: 'completed', companion: { name: 'Teammate', avatar: '', avatarColor: 'teal' } }]);
+    await service.handleCompletionAction(input.sessionId, 'archive', input.completionToken);
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(count);
+    expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+    service.resetRuntimeState();
+  });
+
+  // IPC security §5: a valid completion token cannot authorize a foreign frame.
+  // The same owner mutation remains available through authenticated device-link.
+  it.each(['mark-read', 'archive'] as const)('rejects an untrusted %s sender before side effects and accepts its tunneled equivalent', async action => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null });
+    service.setEnabled(false);
+    service.registerDeviceSessionIpc();
+    const meta = { sessionId: 'sender-guard', agentKind: 'codex' as const };
+    service.handleUserPrompt(meta, 'run');
+    service.handleAgentEvent(meta, doneEvent());
+    const token = (service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken!;
+    const handler = registeredIpcHandler('agent-island:completion-action');
+    const event = { senderFrame: null };
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('[FORBIDDEN] Untrusted renderer'); });
+    try {
+      expect(() => handler(event, meta.sessionId, action, token)).toThrow('[FORBIDDEN]');
+      expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
+      expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+      expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ attention: true });
+      mocks.assertTrustedAppRendererEvent.mockClear();
+      expect(await runDeviceLinkInvokeContext({ controllerDeviceId: 'paired', channel: 'agent-island:completion-action' },
+        () => handler(null, meta.sessionId, action, token))).toBe(true);
+      expect(mocks.assertTrustedAppRendererEvent).not.toHaveBeenCalled();
+      expect(mocks.patchSessionMetaInDb).toHaveBeenCalledTimes(action === 'archive' ? 1 : 0);
+      expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention ?? false).toBe(false);
+    } finally {
+      service.resetRuntimeState();
+    }
+  });
+
+  // Owner handler + existing send lock: stale network/queue deliveries must not
+  // archive or acknowledge the next completion, even in the same millisecond.
+  it.each(['mark-read', 'archive'] as const)('rejects an old %s on the owning device after its route wait', async action => {
+    const { AgentIslandService } = await import('../service.js');
+    const { setSessionRouteLockImplementation } = await import('../../localDb/sessionRouteLock.js');
+    const service = new AgentIslandService({ getMainWindow: () => null });
+    service.setEnabled(false);
+    service.registerDeviceSessionIpc();
+    const meta = { sessionId: 'owner-race', agentKind: 'codex' as const };
+    const complete = () => { service.handleUserPrompt(meta, 'run'); service.handleAgentEvent(meta, doneEvent()); };
+    complete();
+    const token = (service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken!;
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    setSessionRouteLockImplementation(async (_id, task) => { await blocked; return task(); });
+    try {
+      const actionPromise = runDeviceLinkInvokeContext({ controllerDeviceId: 'paired', channel: 'agent-island:completion-action' },
+        () => registeredIpcHandler('agent-island:completion-action')(null, meta.sessionId, action, token));
+      complete();
+      release();
+      expect(await actionPromise).toBe(false);
+      expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+      expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ attention: true });
+      expect((service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken).not.toBe(token);
+    } finally {
+      setSessionRouteLockImplementation(null);
+      service.resetRuntimeState();
+    }
+  });
+
+  it('keeps a cancelled archive and rechecks its card after confirmation and worktree waits', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({ getMainWindow: () => null });
+    service.setEnabled(false);
+    const meta = { sessionId: 'archive-wait', agentKind: 'codex' as const };
+    const complete = () => { service.handleUserPrompt(meta, 'run'); service.handleAgentEvent(meta, doneEvent()); };
+    complete();
+    const token = () => (service.getSessionActivitySnapshot(meta.sessionId) as AgentIslandSessionActivity).completionToken!;
+    mocks.confirmIslandArchive.mockResolvedValueOnce(false);
+    expect(await service.handleCompletionAction(meta.sessionId, 'archive', token())).toBe(false);
+    expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+    mocks.confirmIslandArchive.mockImplementationOnce(async () => { complete(); return true; });
+    expect(await service.handleCompletionAction(meta.sessionId, 'archive', token())).toBe(false);
+    expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+    mocks.attached.mockReturnValueOnce({ channel: 'feishu' });
+    expect(await service.handleCompletionAction(meta.sessionId, 'archive', token())).toBe(false);
+    expect(mocks.patchSessionMetaInDb).not.toHaveBeenCalled();
+    mocks.patchSessionMetaInDb.mockImplementationOnce(async (_id, _patch, options) => {
+      complete();
+      options.beforeWrite();
+      throw new Error('unreachable');
+    });
+    expect(await service.handleCompletionAction(meta.sessionId, 'archive', token())).toBe(false);
+    expect(service.getSessionActivitySnapshot(meta.sessionId)).toMatchObject({ attention: true });
+    service.resetRuntimeState();
+  });
+
   it('keeps compact activity broadcasting alive in headless mode', async () => {
     const { AgentIslandService } = await import('../service.js');
     const service = new AgentIslandService({
@@ -551,7 +1056,79 @@ describe('AgentIslandService native publishing', () => {
         compactDetail: 'check logs',
       }),
     );
-  });
+    // 首个动态 import('../service.js') 在高并行 worker 下可能超过 vitest 默认 5s，
+    // 显式放宽本用例的超时(用例本身是纯同步断言，不是真长跑)。
+  }, 20_000);
+
+  it('「消息免打扰」只把任务从岛面拿掉，侧栏活动快照照旧保留', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const published: AgentIslandDisplayState[] = [];
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: {
+        failed: false,
+        headless: false,
+        publish: (display) => {
+          published.push(display);
+          return true;
+        },
+        suspend: () => undefined,
+      },
+    });
+
+    service.setEnabled(true);
+    mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'muted-task');
+    service.handleUserPrompt({ sessionId: 'muted-task', agentKind: 'codex' }, 'run tests');
+
+    // 岛面（含菜单栏与提示音）里没有它。
+    expect(published.at(-1)?.sessions).toEqual([]);
+    // 但侧栏卡片与远端活动镜像仍有实时活动：静音不是把任务藏起来。
+    expect(service.getSessionActivitySnapshots()).toEqual([
+      expect.objectContaining({ sessionId: 'muted-task', phase: 'running' }),
+    ]);
+
+    // 取消静音 → 重发展示面，任务回到岛上，状态一直都在。
+    mocks.isSessionNotificationsMutedSync.mockReturnValue(false);
+    service.handleNotificationMuteChanged();
+    expect(published.at(-1)?.sessions.map((session) => session.sessionId)).toEqual(['muted-task']);
+  }, 20_000);
+
+  it('取消静音时不为静音期间已经发生的旧状态补播提示音', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: {
+        failed: false,
+        headless: false,
+        publish,
+        suspend: () => undefined,
+        playSound,
+      },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'),
+        complete: customSound('complete.wav'),
+      },
+    });
+
+    // 静音期间任务跑完：岛面看不到它，自然也不响。
+    mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'muted-task');
+    playSound.mockClear();
+    service.handleUserPrompt({ sessionId: 'muted-task', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 'muted-task', agentKind: 'codex' }, doneEvent());
+    expect(playSound).not.toHaveBeenCalled();
+
+    // 取消静音 → 任务带着「已完成」重新出现在岛面上，但那是旧状态，不该补播完成音。
+    mocks.isSessionNotificationsMutedSync.mockReturnValue(false);
+    service.handleNotificationMuteChanged();
+    expect(playSound).not.toHaveBeenCalled();
+  }, 20_000);
 
   it('exposes the canonical snapshot and emits per-session transition edges', async () => {
     const { AgentIslandService } = await import('../service.js');
@@ -900,6 +1477,7 @@ describe('AgentIslandService native publishing', () => {
 
       service.setEnabled(false);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, textEvent('Tests pass.', true));
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
       const sessions = (
         service as unknown as { state: { sessions: Map<string, unknown>; remoteUnreadTerminals: Map<string, unknown> } }
@@ -945,6 +1523,7 @@ describe('AgentIslandService native publishing', () => {
 
       service.setEnabled(true);
       service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
+      service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, textEvent('Tests pass.', true));
       service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
       expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
         totalCount: 1,
@@ -1140,6 +1719,37 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({
         sessionId: 's1',
         attention: false,
+      }),
+    );
+  });
+
+  // #7566 review, unit: verify the actual producer marks converted text so a
+  // second host can retain literal code instead of applying Markdown twice.
+  it('relays the last reply as a plain-text completion summary for other devices', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: {
+        failed: false,
+        headless: true,
+        publish: () => true,
+        suspend: () => undefined,
+      },
+    });
+    service.setEnabled(false);
+    const meta = { sessionId: 'summary', agentKind: 'codex' as const };
+
+    service.handleUserPrompt(meta, 'fix the login bug');
+    service.handleAgentEvent(meta, textEvent('**Fixed**: `foo_bar **literal**`', true));
+    service.handleAgentEvent(meta, doneEvent());
+
+    expect(mocks.tapWindowBroadcast).toHaveBeenLastCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({
+        sessionId: 'summary',
+        phase: 'completed',
+        compactDetail: 'Fixed: foo_bar **literal**',
+        summaryFormat: 'plain-text',
       }),
     );
   });
@@ -1598,6 +2208,182 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  // Companion Sessions are Bot Sessions whose title and home folder are not what the user
+  // knows them by; the island must load the companion and follow its renames.
+  it('loads a companion identity for Bot Sessions and refreshes it when the companion changes', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const workingDir = '/Users/alice/Library/Application Support/Cindy/owners/o1/bots/b1/workspace';
+    const identity = (name: string): AgentIslandCompanionIdentity => ({
+      botId: 'b1',
+      companion: { name, hue: 'violet', glyph: name[0]!, glyphIsInitial: true },
+    });
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active', title: 'Opus', userSendAt: null, workingDir, workspaceKind: null, source: 'bot',
+    }));
+    mocks.readAgentIslandCompanion.mockResolvedValue(identity('Opus'));
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'claude-code', workingDir }, 'hi');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: 'Opus',
+      projectName: null,
+      companion: identity('Opus').companion,
+    }));
+
+    // A title patch must not drop the companion that was already resolved.
+    service.handleSessionMetadataPatch('s1', { title: 'Renamed task' });
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.companion?.name).toBe('Opus');
+
+    service.handleCompanionProfileChanged('another-bot');
+    expect(mocks.readAgentIslandCompanion).toHaveBeenCalledTimes(1);
+
+    mocks.readAgentIslandCompanion.mockResolvedValue(identity('Sonnet'));
+    service.handleCompanionProfileChanged('b1');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: 'Sonnet',
+      companion: { name: 'Sonnet' },
+    }));
+  });
+
+  // Review of #6436: a group rename never reached open group-lane cards, an older slow read
+  // could overwrite a newer one, and a failed remote avatar read stayed a glyph forever.
+  it('refreshes group-lane cards on a group rename, keeping only the latest of overlapping reads', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const lane = (groupName: string): AgentIslandCompanionIdentity => ({
+      botId: 'b1', groupId: 'g1', companion: { name: 'Opus', groupName, hue: 'teal', glyph: 'O', glyphIsInitial: true },
+    });
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active', title: 'Opus', userSendAt: null, workingDir: '/home', workspaceKind: null, source: 'bot',
+    }));
+    mocks.readAgentIslandCompanion.mockResolvedValue(lane('旧群名'));
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'claude-code', workingDir: '/home' }, 'hi');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.projectName).toBe('旧群名'));
+
+    service.handleBotGroupChanged('other-group');
+    expect(mocks.readAgentIslandCompanion).toHaveBeenCalledTimes(1);
+
+    let releaseSlow!: (identity: AgentIslandCompanionIdentity) => void;
+    mocks.readAgentIslandCompanion.mockImplementationOnce(() => new Promise((resolve) => { releaseSlow = resolve; }));
+    service.handleBotGroupChanged('g1');
+    mocks.readAgentIslandCompanion.mockResolvedValueOnce(lane('新群名'));
+    service.handleBotGroupChanged('g1');
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.projectName).toBe('新群名'));
+    releaseSlow(lane('过期群名'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.projectName).toBe('新群名');
+  });
+
+  // Review of #6436 (round 5): a rename landing while the FIRST identity read was still
+  // encoding the avatar found no resolved companion to refresh, then the stale read committed.
+  it('re-reads an identity whose first load overlapped a companion change', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const named = (name: string): AgentIslandCompanionIdentity => ({
+      botId: 'b1', companion: { name, hue: 'teal', glyph: name[0]!, glyphIsInitial: true },
+    });
+    mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+      status: 'active', title: 'x', userSendAt: null, workingDir: '/home', workspaceKind: null, source: 'bot',
+    }));
+    let releaseFirst!: (identity: AgentIslandCompanionIdentity) => void;
+    mocks.readAgentIslandCompanion.mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve; }));
+    mocks.readAgentIslandCompanion.mockResolvedValue(named('新名字'));
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 's1', agentKind: 'claude-code', workingDir: '/home' }, 'hi');
+    await vi.waitFor(() => expect(mocks.readAgentIslandCompanion).toHaveBeenCalledTimes(1));
+
+    // Several edits during one slow first read: only a read that saw none of them may commit.
+    service.handleCompanionProfileChanged('b1');
+    service.handleCompanionProfileChanged('b1');
+    service.handleCompanionProfileChanged('b1');
+    let releaseSecond!: (identity: AgentIslandCompanionIdentity) => void;
+    mocks.readAgentIslandCompanion.mockImplementationOnce(() => new Promise((resolve) => { releaseSecond = resolve; }));
+    releaseFirst(named('旧名字'));
+    await vi.waitFor(() => expect(mocks.readAgentIslandCompanion).toHaveBeenCalledTimes(2));
+    service.handleCompanionProfileChanged('b1');
+    releaseSecond(named('中间名字'));
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.title).toBe('新名字'));
+    expect(mocks.readAgentIslandCompanion).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a remote companion avatar after a failed read instead of keeping the glyph forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+        void state;
+        void frameOrFrames;
+        return true;
+      });
+      const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+      syncEnabledForTest(service, publish);
+      const input = {
+        sessionId: 'r1', deviceId: 'd1', deviceName: 'Studio', title: 'Opus', workingDir: null, workspaceKind: null,
+        agentKind: null, phase: 'running' as const, detail: 'x',
+        companion: { name: 'Opus', avatar: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png', avatarColor: 'teal' },
+      };
+      service.setDeviceSessions([input]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.companionAvatarThumbnail).toHaveBeenCalledTimes(1);
+      service.setDeviceSessions([input]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.companionAvatarThumbnail).toHaveBeenCalledTimes(1);
+
+      mocks.companionAvatarThumbnail.mockResolvedValue('JPEGDATA');
+      await vi.advanceTimersByTimeAsync(61_000);
+      service.setDeviceSessions([input]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(publish.mock.calls.at(-1)?.[0].sessions[0]?.companion?.imageJpeg).toBe('JPEGDATA');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review of #6436: a fixed 64-entry FIFO thrashed once more companions than that were active.
+  it('keeps every remote companion identity stable when more than 64 are active', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish } });
+    syncEnabledForTest(service, publish);
+    const inputs = Array.from({ length: 70 }, (_, index) => ({
+      sessionId: `r${index}`, deviceId: 'd1', deviceName: 'Studio', title: `Bot${index}`, workingDir: null, workspaceKind: null,
+      agentKind: null, phase: 'running' as const, detail: 'x',
+      companion: { name: `Bot${index}`, avatar: '🦊', avatarColor: 'teal' },
+    }));
+    service.setDeviceSessions(inputs);
+    const first = publish.mock.calls.at(-1)?.[0].sessions.map((session) => session.companion);
+    const publishedBefore = publish.mock.calls.length;
+    service.setDeviceSessions(inputs);
+    expect(publish.mock.calls.length).toBe(publishedBefore);
+    expect(first).toHaveLength(70);
+    expect(new Set(first).size).toBe(70);
+  });
+
   it('refreshes placeholder titles and hides dialogue workspace folders', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
@@ -1883,11 +2669,15 @@ describe('AgentIslandService native publishing', () => {
     const mainWindow = {
       isDestroyed: () => false,
       isMinimized: () => false,
+      isVisible: () => true,
       restore: vi.fn(),
       show: vi.fn(),
       focus: vi.fn(),
-      webContents: { send },
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send, isLoading: () => false },
     } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
       void state;
       void frameOrFrames;
@@ -1924,11 +2714,67 @@ describe('AgentIslandService native publishing', () => {
       'target-session',
     );
 
-    expect(send).toHaveBeenCalledWith('notification:focus-session', 'target-session');
+    expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'session', id: 'target-session' });
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
       mode: 'compact',
       currentSessionId: 'target-session',
     });
+  });
+
+  it('collapses a completion before opening a loading window and retains its navigation', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const send = vi.fn();
+    const mainWindow = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => false,
+      isFocused: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send, isLoading: () => true },
+    } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
+    const publish = vi.fn((_state: AgentIslandDisplayState) => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    service.handleUserPrompt({ sessionId: 'completed-session', agentKind: 'codex' }, 'run tests');
+    service.handleAgentEvent({ sessionId: 'completed-session', agentKind: 'codex' }, doneEvent());
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
+    const focusSession = (service as unknown as { focusSession(id: string): void }).focusSession.bind(service);
+
+    vi.mocked(mainWindow.show).mockImplementation(() => {
+      expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
+    });
+    focusSession('completed-session');
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
+
+    // A loading renderer has no notification listener. The existing deep-link
+    // pull-on-mount path must retain the click instead of sending it into the gap.
+    expect(send).not.toHaveBeenCalled();
+    expect(mainWindow.show).toHaveBeenCalled();
+    expect(mainWindow.focus).toHaveBeenCalled();
+    // The click on an unread card also carries its click id for disposal on landing.
+    expect(takePendingDeepLink()).toEqual({
+      type: 'session',
+      id: 'completed-session',
+      islandEntryId: expect.any(String),
+    });
+    expect(takePendingDeepLink()).toBeNull();
+
+    service.setAppFocused(true);
+    mocks.browserWindowFromWebContents.mockReturnValue(mainWindow);
+    await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)(
+      { sender: {} },
+      'completed-session',
+    );
+    expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'compact' });
   });
 
   it('smart-suppresses all visible split sessions', async () => {
@@ -3460,6 +4306,118 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  it('keeps a deferred completion running for activity consumers until it is replayed', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    let deferCompletion = true;
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void frameOrFrames;
+      return state.visible;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      onSessionActivityChange,
+    });
+    service.setCompletionDeferResolver(() => deferCompletion);
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        complete: customSound('complete.wav'),
+      },
+    });
+
+    // An Orca Lead turn that only dispatched Workers ends while their reports are owed.
+    service.handleUserPrompt({ sessionId: 'lead', agentKind: 'codex' }, 'split the work');
+    service.handleAgentEvent({ sessionId: 'lead', agentKind: 'codex' }, doneEvent());
+    playSound.mockClear();
+
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'lead', phase: 'running', attention: false }),
+    ]);
+
+    // Still owed: a replay attempt keeps the Lead running.
+    service.notifyQueueEmptied('lead');
+    expect(playSound).not.toHaveBeenCalled();
+
+    deferCompletion = false;
+    service.notifyQueueEmptied('lead');
+
+    expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'lead', phase: 'completed', attention: true }),
+    ]);
+  });
+
+  it.each([
+    [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
+  ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    const onSessionActivityChange = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, headless, publish, playSound },
+      onSessionActivityChange,
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: {
+      ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: customSound('complete.wav'),
+    } });
+    const meta = { sessionId: 'im', agentKind: 'codex' as const };
+    const turnOrigin = { kind, surface: 'im' } as const;
+    // Both IM runners send directly without the App's handleUserPrompt path.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.setCompletionDeferResolver(() => true);
+    playSound.mockClear();
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    service.notifyQueueEmptied(meta.sessionId);
+    expect(playSound).not.toHaveBeenCalled();
+    // Quiet completions are removed from the compact activity list, like silent schedules.
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+
+    service.setCompletionDeferResolver(() => false);
+    service.handleUserPrompt(meta, 'App message');
+    service.handleAgentEvent(meta, doneEvent());
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'completed', attention: true }),
+    ]);
+    // A later IM reply must not erase the earlier unread App reply.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    service.resetRuntimeState();
+    syncEnabledForTest(service, publish);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, {
+      type: 'error', data: { message: 'model unavailable' }, turnOrigin,
+    });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', phase: 'error', attention: true }),
+    ]);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    // Reading the old result during the IM turn must not resurrect it on completion.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleSessionAttentionCleared(meta.sessionId, 'explicit');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    service.resetRuntimeState();
+  });
+
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {
     vi.useFakeTimers();
     try {
@@ -3735,6 +4693,61 @@ describe('AgentIslandService native publishing', () => {
       expect(lastState?.totalCount).toBe(1);
       vi.runOnlyPendingTimers();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('keeps scheduled completions silent on source and remote devices (oldUnread=%s)', async oldUnread => {
+    vi.useFakeTimers();
+    const { AgentIslandService } = await import('../service.js');
+    const sourcePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const sourceSound = vi.fn(() => true);
+    const remotePublish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+    const remoteSound = vi.fn(() => true);
+    const desktopEvent = vi.fn();
+    const source = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: sourcePublish, playSound: sourceSound }, isCompletionHandledByTeammate: async () => false });
+    const remote = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: remotePublish, playSound: remoteSound } });
+    const desktop = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: () => false }, onDeviceSessionEvent: desktopEvent });
+    try {
+      syncEnabledForTest(source, sourcePublish);
+      syncEnabledForTest(remote, remotePublish);
+      for (const service of [source, remote]) service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: customSound('complete.wav') } });
+      mocks.tapWindowBroadcast.mockImplementation((channel, raw) => {
+        if (channel !== SESSION_ACTIVITY_CHANNEL) return;
+        const p = raw as { sessionId: string; phase: 'running' | 'needs-interaction' | 'completed' | 'error'; compactDetail: string; attention: boolean; completionNotification?: 'pending' | 'teammate' | 'silent' };
+        const keep = p.phase === 'running' || p.phase === 'needs-interaction' || p.attention;
+        const inputs = keep ? [{ sessionId: p.sessionId, deviceId: 'source', deviceName: 'Source', title: 'Task', workingDir: null, workspaceKind: 'conversation' as const, agentKind: 'cc' as const, phase: p.phase, detail: p.compactDetail, completionNotification: p.completionNotification }] : [];
+        remote.setDeviceSessions(inputs);
+        desktop.setDeviceSessions(inputs);
+      });
+      const meta = { sessionId: 'scheduled-silent', agentKind: 'codex' };
+      if (oldUnread) {
+        source.handleUserPrompt(meta, 'Earlier manual task');
+        source.handleAgentEvent(meta, doneEvent());
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+      source.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId });
+      source.handleUserPrompt(meta, 'Scheduled check');
+      await vi.advanceTimersByTimeAsync(2000);
+      sourceSound.mockClear(); remoteSound.mockClear(); desktopEvent.mockClear();
+      source.handleAgentEvent(meta, doneEvent());
+      source.handleScheduleEvent({ type: 'completed', scheduleId: 'schedule', runId: 'run', sessionId: meta.sessionId, silenced: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sourceSound).not.toHaveBeenCalled();
+      expect(desktopEvent).not.toHaveBeenCalled();
+      expect(remoteSound).not.toHaveBeenCalled();
+      expect(remotePublish.mock.calls.at(-1)?.[0].pillSnapshot.unreadCompletedCount).toBe(oldUnread ? 1 : 0);
+
+      source.handleUserPrompt(meta, 'Manual follow-up');
+      await vi.advanceTimersByTimeAsync(2000);
+      source.handleAgentEvent(meta, doneEvent());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sourceSound).toHaveBeenCalledWith(customSound('complete.wav'));
+      expect(remoteSound).toHaveBeenCalledWith(customSound('complete.wav'));
+      expect(desktopEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'done' }));
+    } finally {
+      source.resetRuntimeState(); remote.resetRuntimeState(); desktop.resetRuntimeState();
+      mocks.tapWindowBroadcast.mockReset();
       vi.useRealTimers();
     }
   });
@@ -4064,7 +5077,7 @@ describe('AgentIslandService native publishing', () => {
     };
     handleInteractionRequestForTest(service, { sessionId: 's1', agentKind: 'codex' }, request);
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
-    expect(latestNativeFrame(publish)).toMatchObject({ width: 800 });
+    expect(latestNativeFrame(publish)).toMatchObject({ width: 600 });
 
     setLayoutPreference({ expandedContentWidth: 700 });
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({ mode: 'expanded' });
@@ -4225,7 +5238,7 @@ describe('AgentIslandService native publishing', () => {
 
       const framesById = new Map(latestNativeFrames(publish).map((frame) => [frame.displayId, frame]));
       expect(framesById.get(1)).toMatchObject({ width: 368 });
-      expect(framesById.get(2)).toMatchObject({ width: 800 });
+      expect(framesById.get(2)).toMatchObject({ width: 600 });
       vi.runOnlyPendingTimers();
     } finally {
       vi.useRealTimers();
@@ -5753,6 +6766,263 @@ describe('AgentIslandService session attention cleared bridge (error read semant
   });
 });
 
+// 群专线 / 只读历史 / 不可用的伙伴任务没有报错横幅:灵动岛点击落地后由 renderer 请求
+// 处置,main 只处置被点的那一张卡(点击时记下的身份),不碰之后出现的新提醒。
+describe('AgentIslandService island-entry alert disposal', () => {
+  async function setup() {
+    const { AgentIslandService } = await import('../service.js');
+    const { initAppBadgeService, clearAllSessionAttention } = await import('../../appBadgeService.js');
+    clearAllSessionAttention();
+    const mainWindow = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+      isFocused: () => true,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      moveTop: vi.fn(),
+      webContents: { send: vi.fn(), isLoading: () => true },
+    } as unknown as BrowserWindow;
+    setDeepLinkMainWindow(mainWindow);
+    const publish = vi.fn((state: AgentIslandDisplayState) => {
+      void state;
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => mainWindow,
+      nativeHost: { failed: false, publish },
+    });
+    initAppBadgeService({
+      getWindow: () => null,
+      onSessionAttentionCleared: (sessionId, intent) => service.handleSessionAttentionCleared(sessionId, intent),
+    });
+    syncEnabledForTest(service, publish);
+    service.registerIpc();
+    /** A real island click; returns the click id main put into the deep link (null = none). */
+    const click = (sessionId: string): string | null => {
+      (service as unknown as { focusSession(id: string): void }).focusSession(sessionId);
+      const payload = takePendingDeepLink() as { type: string; id?: string; islandEntryId?: string } | null;
+      expect(payload).toMatchObject({ type: 'session', id: sessionId });
+      return payload?.islandEntryId ?? null;
+    };
+    const consume = (sessionId: unknown, entryId: unknown, sender: unknown = mainWindow.webContents) =>
+      registeredIpcHandler(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL)({ sender }, sessionId, entryId) as {
+        ok: true;
+        consumed: boolean;
+      };
+    const shown = () => (publish.mock.calls.at(-1)?.[0]?.sessions ?? []).map((session) => session.sessionId);
+    const island = (service as unknown as {
+      state: { sessions: Map<string, { phase: string; unread: boolean; pendingInteractionIds: Set<string> }> };
+    }).state;
+    return { service, click, consume, shown, island, mainWindow };
+  }
+  const lane = { sessionId: 'lane', agentKind: 'codex' as const };
+  const other = { sessionId: 'other-err', agentKind: 'codex' as const };
+
+  it('disposes only the clicked card for that click, once', async () => {
+    const { service, click, consume, shown, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('400 invalid_request_error'));
+    service.handleAgentEvent(other, terminalErrorEvent('boom'));
+    service.handleUserPrompt({ sessionId: 'done', agentKind: 'codex' }, 'run');
+    service.handleAgentEvent({ sessionId: 'done', agentKind: 'codex' }, doneEvent());
+    service.handleUserPrompt({ sessionId: 'running', agentKind: 'codex' }, 'run');
+    handleInteractionRequestForTest(service, { sessionId: 'ask', agentKind: 'codex' }, {
+      kind: 'permission',
+      requestId: 'ask-r1',
+      toolName: 'Bash',
+      input: { command: 'pnpm test' },
+    } as InteractionRequest);
+
+    // URL-only entries carry no click id; a guessed one is not a click either.
+    expect(consume('lane', '1')).toEqual({ ok: true, consumed: false });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+
+    const entryId = click('lane');
+    expect(entryId).toEqual(expect.any(String));
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+    expect(shown()).not.toContain('lane');
+    expect(shown()).toEqual(expect.arrayContaining(['other-err', 'done', 'running', 'ask']));
+    expect(island.sessions.get('other-err')).toMatchObject({ phase: 'error', unread: true });
+    expect(island.sessions.get('ask')?.pendingInteractionIds.has('ask-r1')).toBe(true);
+    // The same click cannot dispose twice; clicking a card that is gone records nothing.
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+    expect(click('lane')).toBeNull();
+    // App badge / pending-alert re-marking the same old error cannot revive the card.
+    service.handleSessionAttentionMarked('lane');
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  it('a newer click on another card supersedes the earlier one, including a later manual visit', async () => {
+    const { service, click, consume, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('lane failure'));
+    service.handleAgentEvent(other, terminalErrorEvent('other failure'));
+    const laneEntry = click('lane');
+    const otherEntry = click('other-err');
+    // The unavailable page / any late request for A, inside the TTL, after B was clicked.
+    expect(consume('lane', laneEntry)).toEqual({ ok: true, consumed: false });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    // A stale request for A does not cancel B's own disposal.
+    expect(consume('other-err', otherEntry)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+  });
+
+  it('two clicks on the same card: a late first request never takes the second click', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const first = click('lane');
+      vi.setSystemTime(1_000_500);
+      service.handleUserPrompt(lane, 'try again');
+      vi.setSystemTime(1_001_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      const second = click('lane');
+      expect(first).not.toEqual(second);
+      // The first click's navigation lands after the second click was recorded.
+      expect(consume('lane', first)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+      expect(consume('lane', second)).toEqual({ ok: true, consumed: true });
+      expect(island.sessions.has('lane')).toBe(false);
+
+      // Unchanged card clicked twice: only the latest click disposes it.
+      vi.setSystemTime(1_002_000);
+      service.handleUserPrompt(lane, 'again');
+      service.handleAgentEvent(lane, terminalErrorEvent('third failure'));
+      const third = click('lane');
+      const fourth = click('lane');
+      expect(consume('lane', third)).toEqual({ ok: true, consumed: false });
+      expect(consume('lane', fourth)).toEqual({ ok: true, consumed: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a failure that arrived after the click, and alerts on it normally', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const first = click('lane');
+      vi.setSystemTime(1_000_500);
+      service.handleUserPrompt(lane, 'try again');
+      // Still running when the stale click lands: the old card is no longer what it showed.
+      expect(consume('lane', first)).toEqual({ ok: true, consumed: false });
+      vi.setSystemTime(1_001_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+
+      const second = click('lane');
+      vi.setSystemTime(1_001_500);
+      service.handleAgentEvent(lane, terminalErrorEvent('third failure'));
+      expect(consume('lane', second)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review P1:重试在同一毫秒内又落新终态时,毫秒时间戳的身份会撞上,旧点击会误处置
+  // 新提醒。卡片身份用无碰撞的活动代数后,新报错卡必须留下。
+  it('a same-millisecond terminal after the click never gets consumed by the old click', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('first failure'));
+      const entryId = click('lane');
+      // 同一毫秒内重试并再次失败:新的报错卡是新的提醒。
+      service.handleUserPrompt(lane, 'try again');
+      service.handleAgentEvent(lane, terminalErrorEvent('second failure'));
+      expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review P1 后续:失败 turn 的收尾记账 done 保留同一张错误卡(completeAgentIslandSession
+  // 主动 early-return),不得驱逐被点击的那张,否则迟到的处置会失败、卡留着。
+  it('a trailing bookkeeping done keeps the clicked error card disposable', async () => {
+    const { service, click, consume, island } = await setup();
+    service.handleAgentEvent(lane, terminalErrorEvent('boom'));
+    const entryId = click('lane');
+    // 配对的收尾 done 不换卡(未获准替换报错)。
+    service.handleAgentEvent(lane, doneEvent());
+    expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+    expect(consume('lane', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  // The read-only history page reports its session as visible; a click on that card
+  // must still reach the renderer, whose navigator disposes it on the open target.
+  it('delivers the click id even when the target is the visible, focused session', async () => {
+    const { service, click, consume, island, mainWindow } = await setup();
+    const history = { sessionId: 'history', agentKind: 'codex' as const };
+    service.handleAgentEvent(history, terminalErrorEvent('history failure'));
+    service.setAppFocused(true);
+    mocks.browserWindowFromWebContents.mockReturnValue(mainWindow);
+    await registeredIpcHandler(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL)({ sender: mainWindow.webContents }, 'history');
+    // Passive visibility never clears an unread error.
+    expect(island.sessions.get('history')).toMatchObject({ phase: 'error', unread: true });
+    const entryId = click('history');
+    expect(entryId).toEqual(expect.any(String));
+    expect(consume('history', entryId)).toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('history')).toBe(false);
+  });
+
+  // Run the production preload bridge source against the real registered handler, so
+  // the renderer → main argument order (sessionId, islandEntryId) cannot drift.
+  it('the production preload bridge reaches the handler with this click id', async () => {
+    const preloadSource = readFileSync(new URL('../../../preload/preload.ts', import.meta.url), 'utf8');
+    const start = preloadSource.indexOf('    consumeEntryAlert: (');
+    const end = preloadSource.indexOf('\n', preloadSource.indexOf('AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL, sessionId', start));
+    expect(start).toBeGreaterThan(0);
+    const compiled = transpileModule(`const bridge = {${preloadSource.slice(start, end)}};`, {
+      compilerOptions: { target: ScriptTarget.ES2022 },
+    }).outputText;
+    const { service, click, island, mainWindow } = await setup();
+    const ipcRenderer = {
+      invoke: (channel: string, ...args: unknown[]) =>
+        Promise.resolve(registeredIpcHandler(channel)({ sender: mainWindow.webContents }, ...args)),
+    };
+    const bridge = new Function('ipcRenderer', 'AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL', `${compiled}; return bridge;`)(
+      ipcRenderer,
+      AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
+    ) as { consumeEntryAlert(sessionId: string, islandEntryId: string): Promise<{ ok: true; consumed: boolean }> };
+    service.handleAgentEvent(lane, terminalErrorEvent('lane failure'));
+    const entryId = click('lane');
+    await expect(bridge.consumeEntryAlert('lane', 'not-this-click')).resolves.toEqual({ ok: true, consumed: false });
+    await expect(bridge.consumeEntryAlert('lane', entryId!)).resolves.toEqual({ ok: true, consumed: true });
+    expect(island.sessions.has('lane')).toBe(false);
+  });
+
+  it('expires an unconsumed click and rejects senders other than the main window', async () => {
+    const { service, click, consume, island } = await setup();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(2_000_000);
+      service.handleAgentEvent(lane, terminalErrorEvent('boom'));
+      const entryId = click('lane');
+      expect(consume('lane', entryId, { other: true })).toEqual({ ok: true, consumed: false });
+      vi.setSystemTime(2_000_000 + 60_001);
+      expect(consume('lane', entryId)).toEqual({ ok: true, consumed: false });
+      expect(island.sessions.get('lane')).toMatchObject({ phase: 'error', unread: true });
+      expect(() => consume('', entryId)).toThrow();
+      expect(() => consume('x'.repeat(129), entryId)).toThrow();
+      expect(() => consume('lane', undefined)).toThrow();
+      expect(() => consume('lane', 'x'.repeat(33))).toThrow();
+      expect(mocks.assertTrustedAppRendererEvent).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('会话关闭原因决定条目去留', () => {
   it('进程关闭保留仍在展示的完成卡片,归档/删除照常硬删', async () => {
     const { AgentIslandService } = await import('../service.js');
@@ -5937,4 +7207,163 @@ describe('会话关闭原因决定条目去留', () => {
       vi.useRealTimers();
     }
   });
+});
+
+describe('Agent Island device sessions', () => {
+  // 有的用例会按 id 把静音索引指到某个任务；失败时也要还原，避免污染后面的用例。
+  afterEach(() => {
+    mocks.isSessionNotificationsMutedSync.mockReturnValue(false);
+  });
+
+  function deviceSession(
+    phase: 'running' | 'needs-interaction' | 'completed' | 'error',
+    sessionId = 'remote-1',
+  ) {
+    return {
+      sessionId,
+      deviceId: 'device-a',
+      deviceName: 'Studio Mac',
+      title: 'Fix login',
+      workingDir: '/Users/me/code/cindy',
+      workspaceKind: 'project',
+      agentKind: 'codex',
+      phase,
+      detail: '',
+    };
+  }
+
+  it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      onDeviceSessionEvent,
+    });
+    syncEnabledForTest(service, publish);
+
+    service.setDeviceSessions([deviceSession('running'), deviceSession('completed', 'remote-2')]);
+    expect(publish).toHaveBeenCalled();
+    expect(playSound).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
+    expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+    // 岛面开启时由岛展示,不再另发桌面通知。
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+    // 不进入本机活动快照,也就不会被 relay 回推给控制端。
+    expect(service.getSessionActivitySnapshots()).toEqual([]);
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 'remote-1' }),
+    );
+  });
+
+  it('本机同 id 任务被静音时不吞掉其它设备投影来的任务', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const published: AgentIslandDisplayState[] = [];
+    const publish = vi.fn((display: AgentIslandDisplayState) => {
+      published.push(display);
+      return true;
+    });
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound: () => true },
+    });
+    syncEnabledForTest(service, publish);
+
+    // 还原/复制过的库里可能留着同 id 的本地任务行；那一行的静音标记属于另一条任务，
+    // 不能压掉其它设备发来的卡片与提示音。
+    mocks.isSessionNotificationsMutedSync.mockImplementation((id: string) => id === 'remote-1');
+    service.setDeviceSessions([deviceSession('needs-interaction')]);
+
+    expect(published.at(-1)?.sessions.map((session) => session.sessionId)).toEqual(['remote-1']);
+  });
+
+  it('keeps first-seen remote tasks silent when they arrive before the island setting syncs', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+
+    service.setDeviceSessions([deviceSession('running'), deviceSession('completed', 'remote-2')]);
+    service.setEnabled(true);
+    expect(playSound).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
+    expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+  });
+
+  it('registers the remote-session channel on platforms without the native island', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const { initAgentIslandService } = await import('../service.js');
+      initAgentIslandService({ getMainWindow: () => null });
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+    }
+
+    const channels = mocks.ipcHandle.mock.calls.map(([channel]) => channel);
+    expect(channels).toContain(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL);
+    // 原生岛面专属的 IPC 仍只在支持的平台注册。
+    expect(channels).not.toContain(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL);
+  });
+
+  it('keeps the originating device when a remote island card opens its task', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    setDeepLinkMainWindow(null);
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish: () => true } });
+    service.setDeviceSessions([deviceSession('completed')]);
+    (service as unknown as { focusSession(id: string): void }).focusSession('remote-1');
+    expect(takePendingDeepLink()).toMatchObject({ type: 'session', id: 'remote-1', deviceId: 'device-a' });
+    service.resetRuntimeState();
+  });
+
+  it('hands observed transitions to desktop notifications when the island is off', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onDeviceSessionEvent,
+    });
+    service.setEnabled(false);
+
+    service.setDeviceSessions([deviceSession('running')]);
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed')]);
+    expect(onDeviceSessionEvent).toHaveBeenCalledTimes(1);
+    expect(onDeviceSessionEvent).toHaveBeenCalledWith({
+      sessionId: 'remote-1',
+      deviceId: 'device-a',
+      title: 'Fix login',
+      deviceName: 'Studio Mac',
+      kind: 'done',
+    });
+  });
+});
+
+it('does not sound or mark attention for internal coordination completion, but surfaces a failure', async () => {
+  const { AgentIslandService } = await import('../service.js');
+  const publish = vi.fn(() => true);
+  const playSound = vi.fn(() => true);
+  const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound } });
+  syncEnabledForTest(service, publish);
+  service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+    complete: customSound('complete.wav'), error: customSound('error.wav') } });
+  const meta = { sessionId: 'coordination', agentKind: 'codex' as const };
+  service.handleAgentEvent(meta, { type: 'status', source: 'codex', data: { isRunning: true } });
+  playSound.mockClear();
+  service.handleAgentEvent(meta, { ...doneEvent(), agentMeta: { botTaskCoordination: true, botPrivateReply: false } });
+  expect(playSound).not.toHaveBeenCalled();
+  expect(service.getSessionActivitySnapshot(meta.sessionId)?.attention).not.toBe(true);
+  service.handleAgentEvent(meta, terminalErrorEvent('User action required'));
+  expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
 });

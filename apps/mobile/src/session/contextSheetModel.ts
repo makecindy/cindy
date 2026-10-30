@@ -27,6 +27,20 @@ const FULL_TOP_RESERVED_HEIGHT = 64;
 /** 松手高度低于 half 档的该比例时判定为「想关掉」。 */
 export const CONTEXT_SHEET_DISMISS_RATIO = 0.62;
 
+// Keep worklet helpers before their callers. The Worklets Babel transform
+// materializes worklet function declarations in source order; a later helper
+// would otherwise be captured as `undefined` during module initialization.
+function normalizeHeights(heights: ContextSheetSnapHeights): ContextSheetSnapHeights {
+  'worklet';
+  const half = Math.max(1, Math.round(heights.half));
+  return { half, full: Math.max(half, Math.round(heights.full)) };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  'worklet';
+  return Math.min(Math.max(value, min), max);
+}
+
 export interface ComputeContextSheetSnapHeightsInput {
   /** 窗口高度（useWindowDimensions().height）。 */
   screenHeight: number;
@@ -57,6 +71,7 @@ export interface ApplyContextSheetDragInput {
 
 /** 拖动跟手：位移换算成面板高度，上限 full；向下允许拖过 half（用于 dismiss 判定）。 */
 export function applyContextSheetDrag(input: ApplyContextSheetDragInput): number {
+  'worklet';
   const heights = normalizeHeights(input.heights);
   return clamp(Math.round(input.startHeight - input.translationY), 0, heights.full);
 }
@@ -74,16 +89,12 @@ export interface SettleContextSheetDragInput {
  * 其余情况回 half。half === full（小屏钳住）时只在 full 与 dismiss 之间二选一。
  */
 export function settleContextSheetDrag(input: SettleContextSheetDragInput): ContextSheetSettle {
+  'worklet';
   const heights = normalizeHeights(input.heights);
   if (input.draggedHeight < heights.half * CONTEXT_SHEET_DISMISS_RATIO) return 'dismiss';
   if (heights.full <= heights.half) return 'full';
   if (input.draggedHeight >= (heights.half + heights.full) / 2) return 'full';
   return 'half';
-}
-
-function normalizeHeights(heights: ContextSheetSnapHeights): ContextSheetSnapHeights {
-  const half = Math.max(1, Math.round(heights.half));
-  return { half, full: Math.max(half, Math.round(heights.full)) };
 }
 
 function normalizePositiveDimension(value: number | undefined, fallback: number): number {
@@ -92,8 +103,4 @@ function normalizePositiveDimension(value: number | undefined, fallback: number)
 
 function normalizeNonNegativeDimension(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }

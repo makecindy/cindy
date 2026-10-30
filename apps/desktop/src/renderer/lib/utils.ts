@@ -1,3 +1,4 @@
+import { NUMERIC_TEXT_CLASSES } from '../styles/generated/token-mappings';
 import { type ClassValue, clsx } from 'clsx';
 import { extendTailwindMerge } from 'tailwind-merge';
 
@@ -6,19 +7,7 @@ const customTwMerge = extendTailwindMerge({
     classGroups: {
       'font-size': [
         {
-          text: [
-            '10',
-            '11',
-            '12',
-            '13',
-            '14',
-            '15',
-            '16',
-            '18',
-            '20',
-            '24',
-            '28',
-          ],
+          text: NUMERIC_TEXT_CLASSES,
         },
       ],
     },

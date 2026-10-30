@@ -1,3 +1,4 @@
+@import './generated/tokens.css';
 @import 'highlight.js/styles/github.css' layer(hljs-light);
 
 /* biome-ignore lint/suspicious/noUnknownAtRules: Tailwind directives are expanded by PostCSS. */
@@ -8,84 +9,7 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --app-font-ui-default:
-      'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-      'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
-      'Source Han Sans SC', 'Segoe UI', Roboto, sans-serif;
-    /* 默认代码字体使用系统等宽字体(mac 上 SF Mono 不对网页暴露字体名,
-       实际命中 Menlo;Win 命中 Consolas)。JetBrains Mono 已降级为可选预设、不再是
-       默认。CJK 显式回退 PingFang/雅黑,保证代码块中英混排统一等宽。 */
-    --app-font-code-default:
-      ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono',
-      'Courier New', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei',
-      'Noto Sans CJK SC', 'Source Han Sans SC', monospace;
-    /* 代码字号体系基础:本期已接入块级代码缩放、内联不缩放、紧凑栏 -1px 补偿。
-       Phase 2 会接 UI 字号(uiSize 已预留),并把下面手写转义的 compact 规则
-       收敛成统一 compact-delta 机制。 */
-    --app-code-font-size: 14px;
-    --app-ui-font-size: 14px;
-    --text-xs: 12px;
-    --text-sm: 14px;
-    --text-base: 16px;
-    --text-lg: 18px;
-    --text-xl: 20px;
-    --text-2xl: 24px;
-    --text-3xl: 30px;
-    --text-4xl: 36px;
-    --text-5xl: 48px;
-    --text-xs-line-height: 16px;
-    --text-sm-line-height: 20px;
-    --text-base-line-height: 24px;
-    --text-lg-line-height: 28px;
-    --text-xl-line-height: 28px;
-    --text-2xl-line-height: 32px;
-    --text-3xl-line-height: 36px;
-    --text-4xl-line-height: 40px;
-    --text-5xl-line-height: 48px;
-    /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
-       useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
-       UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持权威来源与消费端一致。 */
-    --text-10: 10px;
-    --text-11: 11px;
-    --text-12: 12px;
-    --text-13: 13px;
-    --text-14: 14px;
-    --text-15: 15px;
-    --text-16: 16px;
-    --text-18: 18px;
-    --text-20: 20px;
-    --text-24: 24px;
-    --text-28: 28px;
-
-    /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
-       引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
-    --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
-    --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
-    --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
-    --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
-    --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
-    --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
-    --motion-sidebar-title-marquee-per-viewport: 2400ms; /* 溢出标题每个可视宽度的阅读时长(§14.4 窄例外) */
-    --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
-    --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
-    --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
-
-    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
-    --quota-bar-fill: var(--text-secondary);
-    --quota-bar-warn: var(--warning-fg);
-    --quota-bar-crit: var(--error-flat);
-    --quota-bar-track: var(--surface-chip);
-  }
-
-  .dark {
-    --quota-bar-fill: var(--text-secondary);
-    --quota-bar-warn: var(--warning-fg);
-    --quota-bar-crit: var(--error-flat);
-    --quota-bar-track: var(--surface-chip);
-  }
-
+  /* Static defaults and quota bootstrap aliases: generated/tokens.css. */
   body {
     -webkit-user-select: text;
     user-select: text;
@@ -142,6 +66,14 @@
   /* F2: Global disable element drag — prevent image and element dragging */
   *:not(input):not(textarea):not([contenteditable='true']) {
     -webkit-user-drag: none;
+  }
+
+  /* Native Sortable marks its direct row draggable after pointerdown. Restore
+     its subtree too: Chromium can start the drag on a project title or icon.
+     Filtered controls never arm the row, and fallback lists stay unchanged. */
+  [data-sortable-native-dnd='true'] > [draggable='true'],
+  [data-sortable-native-dnd='true'] > [draggable='true'] * {
+    -webkit-user-drag: element !important;
   }
 
   /* SessionItem 是同窗分屏的原生 HTML5 拖拽源。拖拽通常从标题、图标或时间
@@ -407,9 +339,25 @@ html:lang(ko) {
   content: none;
 }
 /* 输入框推荐提示词生效时,推荐词由 ChatInput 的 overlay 承载,关掉原生 placeholder。 */
+[data-voice-hint-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
+[data-voice-hint-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before,
 [data-recommendation-active='true'] .ProseMirror > p.is-editor-empty:first-child::before,
 [data-recommendation-active='true'] .ProseMirror > p.is-empty:first-child:only-child::before {
   content: none;
+}
+.ProseMirror[data-voice-holding='true'],
+.ProseMirror[data-voice-holding='true'] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* 空框用完整语音提示替代语音光标，避免图标压住提示首字。 */
+[data-voice-hint-active='true'] [data-voice-caret] {
+  visibility: hidden;
+}
+/* 首页建议悬停预览:预览由 ChatInput 的 overlay 承载,暂时隐去正文/placeholder;
+   预览不改变编辑器高度,见 ChatInput 的 promptPreviewLines。 */
+[data-prompt-preview-active='true'] .ProseMirror {
+  opacity: 0;
 }
 .ProseMirror {
   caret-color: var(--caret-accent);
@@ -728,14 +676,15 @@ html:lang(ko) {
 
 /* Keep the caret and surrounding prose a consistent, readable distance from
    every composer pill. This is external spacing, independent of chip padding. */
-.ProseMirror :is(
-  [data-mention-chip],
-  [data-pasted-text-chip],
-  [data-composer-quote],
-  .ghost-cmd-pill,
-  .slash-cmd-pill,
-  .quick-start-pill
-) {
+.ProseMirror
+  :is(
+    [data-mention-chip],
+    [data-pasted-text-chip],
+    [data-composer-quote],
+    .ghost-cmd-pill,
+    .slash-cmd-pill,
+    .quick-start-pill
+  ) {
   margin-inline: 4px;
 }
 
@@ -863,6 +812,20 @@ html:lang(ko) {
   padding-left: 0;
 }
 .ProseMirror .ghost-cmd-pill + .ghost-cmd-pill::before {
+  content: none;
+}
+/* 同名冲突的 `/slug`、`/@root` 限定符:字符留在 doc 里供发送期消歧,渲染层
+   收起;企业实例在同一颗胶囊尾部显示「团队共享」标签。 */
+.ProseMirror .ghost-cmd-qualifier {
+  display: none;
+}
+.ProseMirror .ghost-cmd-pill[data-ghost-cmd-origin]::after {
+  content: attr(data-ghost-cmd-origin);
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+/* CJK 标点会把胶囊切成多段、每段都带来源属性:只在最后一段显示标签。 */
+.ProseMirror .ghost-cmd-pill[data-ghost-cmd-origin]:has(+ .ghost-cmd-pill)::after {
   content: none;
 }
 
@@ -1023,6 +986,19 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* Bot Market 详情页入场(DESIGN.md §14.4):按 --rise-index 依次淡入并上移 6px,
+   相邻错峰 30ms、最多 6 段;仅 transform / opacity,减弱动态效果下直落终态。 */
+.bot-market-rise {
+  animation: bot-market-rise var(--motion-base) var(--motion-ease-out)
+    calc(var(--rise-index, 0) * 30ms) both;
+}
+@keyframes bot-market-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-voice-mic-active='true'] [data-voice-mic-bar],
   .status-bar-shimmer,
@@ -1035,7 +1011,8 @@ body.resizing-pane [data-ghost-webview] {
   .thinking-dot,
   .stream-word,
   [data-stream-marker]::marker,
-  .card-col-fade {
+  .card-col-fade,
+  .bot-market-rise {
     animation: none !important;
     will-change: auto;
   }
@@ -1182,25 +1159,21 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
-/* 消息流条目级渲染跳过(Codex Desktop 同款,2026-08-09):视口外的 render
-   item 跳过整棵子树的布局与绘制,只按 contain-intrinsic-size 估高占位
-   (auto 前缀:渲染过一次后记住真实高度,滚回时用真实值,锚点不漂)。
-   切入长 session 时首帧只需布局视口内的几条消息 —— 之前是渲染窗口全量
-   80 条同步布局,几万字的会话切换有数百毫秒长任务(2026-08-09 实测卡顿)。
-   仅作用于 .msg-stream-items 的直接子元素(每条 render item 的根节点):
-   滚动恢复(measureViewportTop/applyRestore)按 children 索引取
-   getBoundingClientRect —— 对 content-visibility 隐藏的条目返回估高盒,
-   量测仍然成立,进入视口后 ResizeObserver 纠偏收敛到真实高度。
-   打印/导出走独立渲染树,不经过本容器,不受影响。 */
+/* #5406: Electron 41 的 Blink 在跳过消息行布局后,正文更新/滚动触发的
+   原生 AX 增量序列化会在 AXBlockFlowData::ComputeNeighborOnLine 断言崩溃。
+   已用真实 MessageStream 复现,不依赖 CDP 查询。消息行必须保持真实布局,
+   不能恢复 content-visibility:auto 的估高占位,也不能靠关闭无障碍规避。
+   逻辑尾窗保留 80 个条目;历史正文按视口挂载,其余用实测高度占位。
+   复现及对照见 scripts/ax5406/COMPONENT-REPRO.md。 */
 .msg-stream-items > * {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
+  content-visibility: visible;
+  contain-intrinsic-size: none;
 }
 
 /* Fixed-position menu triggers must keep the viewport as their containing
    block. Their menu content is portaled to body, but Radix still measures the
-   zero-size trigger inside the render item. Opt only those items out of the
-   containment boundary; plain text items keep the render-skip optimization. */
+   zero-size trigger inside the render item. Keep this explicit exception when
+   changing message-row layout rules: a containing block would offset the menu. */
 .msg-stream-items > *:has([data-fixed-menu-anchor]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
@@ -1208,8 +1181,10 @@ body.resizing-pane [data-ghost-webview] {
 
 /* 分享选择模式会在消息 wrapper 左侧动态挂载绝对定位的选择框。该元素需要真实
    消息盒参与布局与绘制；继续使用视口外 intrinsic 占位会让长消息末尾的选择框
-   被压缩或裁切。仅让可分享消息退出隔离，常态和工具类条目继续保留渲染跳过。 */
-.msg-stream-items[data-share-selection-active] > [data-share-message-id] {
+   被压缩或裁切。伙伴消息的分享 wrapper 位于含时间分组的条目内部，也必须让
+   外层条目保持真实布局,包括伙伴消息的嵌套分享 wrapper。 */
+.msg-stream-items[data-share-selection-active] > [data-share-message-id],
+.msg-stream-items[data-share-selection-active] > :has([data-share-message-id]) {
   content-visibility: visible;
   contain-intrinsic-size: none;
 }
@@ -1234,12 +1209,7 @@ body.resizing-pane [data-ghost-webview] {
   position: absolute;
   inset: 0;
   width: 45%;
-  background: linear-gradient(
-    100deg,
-    transparent 10%,
-    var(--text-primary) 50%,
-    transparent 90%
-  );
+  background: linear-gradient(100deg, transparent 10%, var(--text-primary) 50%, transparent 90%);
   transform: translateX(-120%);
   animation: brand-loading-sheen 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
@@ -1650,6 +1620,23 @@ body.resizing-pane [data-ghost-webview] {
   background-color: var(--msg-scrollbar-hover);
 }
 
+/* workdir-browse FileTreeView 的横向滚动条 —— 常显,不参与 `.is-scrolling` 自动隐藏
+   体系。
+   why:文件树行宽由内容决定(行 min-w-max:深层缩进 + 完整文件名/输入框),窄面板里
+   必须横滚才能看到深层目标;横向溢出没有“被截断”的视觉线索,thumb 默认透明时用户会认为
+   这里没有滚动条(2026-09-14 用户反馈「文件树缺少横向滚动条,层级过深看不见目标层级」)。
+   槽厚 12px 与全局纵向槽宽对齐,thumb 同样靠 3px 透明 border 收成可见 6px;
+   `:horizontal` 让规则只吃横向条,纵向条继续走 auto-hide。 */
+.tree-hscroll::-webkit-scrollbar:horizontal {
+  height: 12px;
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal {
+  background-color: var(--msg-scrollbar);
+}
+.tree-hscroll::-webkit-scrollbar-thumb:horizontal:hover {
+  background-color: var(--msg-scrollbar-hover);
+}
+
 /* F-QUEUE-DEFER · PendingQueuePanel — slim 4px scrollbar so the
    `scrollbar-gutter: stable both-edges` reserved slot is small
    (4px each side instead of 12px). Without this, the chip-bg rows
@@ -1664,6 +1651,18 @@ body.resizing-pane [data-ghost-webview] {
 }
 .pending-queue-scroll::-webkit-scrollbar-thumb:hover {
   background-color: var(--msg-scrollbar-hover);
+}
+
+/* 项目选择菜单的列表:还能继续滚动的一侧 24px 渐隐,提示列表未完(只改透明度,双模式通用)。
+   遮罩只取不透明度:currentColor 继承菜单的不透明正文色,不引入字面颜色。 */
+.folder-picker-fade-top {
+  mask-image: linear-gradient(to bottom, transparent, currentColor 24px);
+}
+.folder-picker-fade-bottom {
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - 24px), transparent);
+}
+.folder-picker-fade-top.folder-picker-fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent, currentColor 24px, currentColor calc(100% - 24px), transparent);
 }
 
 /* Composer 形变面板(MorphPopover)内的下拉列表 — 8px 细滚动条。
@@ -1928,12 +1927,12 @@ body.resizing-pane [data-ghost-webview] {
 
 /* FileBodyView Ctrl+F — local search highlight inside doc preview.
    Two states:
-     .doc-search-mark              → normal match (淡黄底, text inherit)
-     .doc-search-mark[data-active] → currently focused match (中黄实底 + 1px 琥珀内描边)
-   Color spec follows the GitHub Primer attention family. */
+     .doc-search-mark              → normal match
+     .doc-search-mark[data-active] → currently focused match + inset outline
+   Share the theme tokens with global find and the file editor. */
 .doc-search-mark {
-  background-color: #fff8c5; /* Primer attention-muted */
-  color: inherit;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   /* font / line-height 显式继承 —— <mark> 是 phrasing element,Chromium UA
      默认不改字号,但跨主题 / 跨 reset 时把字体属性钉在 inherit 最稳,避免
      把 code block 里那段被高亮的字渲染得跟周围尺寸不一致。 */
@@ -1943,18 +1942,12 @@ body.resizing-pane [data-ghost-webview] {
   border-radius: 2px;
 }
 .doc-search-mark[data-active] {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* 用 inset box-shadow 模拟外框 —— 比 outline 好在不会在盒子外多画
      1px,高亮块严格等于行高,视觉上不会觉得"字变大了"。 */
-  box-shadow: inset 0 0 0 1px #d4a72c;
-}
-.dark .doc-search-mark {
-  background-color: #362d1b; /* ≈ #bb8009 @ 15% on dark bg */
-}
-.dark .doc-search-mark[data-active] {
-  background-color: #9e6a03;
-  box-shadow: inset 0 0 0 1px #d4a72c;
+  box-shadow: inset 0 0 0 1px hsl(var(--search-match-active-fg));
 }
 
 /* CodeMirror search highlight (PlaintextEditor — code 模式 + plain 模式都
@@ -1963,24 +1956,38 @@ body.resizing-pane [data-ghost-webview] {
    the active match IN ADDITION TO .cm-doc-search-match — second selector
    wins via source order, no specificity tricks needed. */
 .cm-doc-search-match {
-  background-color: #fff8c5;
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
   border-radius: 2px;
 }
 .cm-doc-search-active {
-  background-color: #fae17d;
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
   font-weight: 500;
   /* outline 而不是 inset box-shadow:CodeMirror 的 .cm-line 自己用
      box-shadow 画选区背景层,inset 会被它的层级压掉,outline 走的是
      完全独立的绘制通道,稳定可见。1px 外描边在等宽字体里几乎不会让
      字符看起来变大。 */
-  outline: 1px solid #d4a72c;
+  outline: 1px solid hsl(var(--search-match-active-fg));
 }
-.dark .cm-doc-search-match {
-  background-color: #362d1b;
+
+/* Syntax decorations may sit inside search marks. Keep their text on the
+   mark's foreground instead of repainting pale syntax colors on a gold fill. */
+.cm-editor .cm-content .cm-doc-search-match *,
+mark.doc-search-mark [class] {
+  color: inherit;
 }
-.dark .cm-doc-search-active {
-  background-color: #9e6a03;
-  outline: 1px solid #d4a72c;
+
+/* Settings search navigation briefly marks the section selected from the
+   sidebar. Reuse the existing dual-theme search tokens instead of baking a
+   light-only color into the settings surface. */
+.settings-search-target-highlight {
+  outline: 1px solid hsl(var(--search-match-active-fg));
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px hsl(var(--search-match-active-bg) / 0.28);
+  transition:
+    outline-color var(--motion-fast) var(--motion-ease-move),
+    box-shadow var(--motion-fast) var(--motion-ease-move);
 }
 
 @layer utilities {
@@ -2106,6 +2113,31 @@ body.resizing-pane [data-ghost-webview] {
   flex: 0 0 auto;
   background: var(--border-default);
 }
+/* CINDY 毛玻璃下根容器透明,缝的背后是窗口原生材质;CINDY 边框是半透明墨水
+   (DESIGN.md §15.16),先垫页面底色再叠线色,不让窗外透出来。壁纸模式下两侧面板
+   本身就透出壁纸画布,缝照常直接叠在画布上。 */
+[data-theme='cindy-light'] :is(.layout-divider-v, .layout-divider-h),
+[data-theme='cindy-dark'] :is(.layout-divider-v, .layout-divider-h) {
+  background: linear-gradient(var(--border-default), var(--border-default)), var(--surface);
+}
+html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
+  background: var(--border-default);
+}
+/* CINDY 文字色是半透明墨水,图标经 currentColor 继承同一颜色;图标由多段描边拼成,
+   半透明时每段各叠一次,交叠处出深点(浅色)/亮点(深色)。改为整枚合成:子元素按同色
+   不透明绘制,整枚图标再按原色透明度蒙一层,等同实色图标整体降透明度。不透明颜色时
+   蒙层全透光,视觉零变化;:where 不加优先级,组件可自行覆盖。lucide 图标自动生效,
+   手写的单色多段图标加 data-ink-icon(子元素若另有颜色会被一起蒙淡,不要加)。 */
+@supports (color: rgb(from currentColor r g b / 1)) {
+  :where([data-theme='cindy-light'], [data-theme='cindy-dark'])
+    :where(svg.lucide, svg[data-ink-icon]) {
+    mask-image: linear-gradient(currentColor, currentColor);
+  }
+  :where([data-theme='cindy-light'], [data-theme='cindy-dark'])
+    :where(svg.lucide > *, svg[data-ink-icon] > *) {
+    color: rgb(from currentColor r g b / 1);
+  }
+}
 /* 隐线规则是**单侧**的 —— 面板收起/隐藏后它两侧的缝要"合并成一条",不能两条全藏
    (否则收起中间面板后,剩下相邻两块之间反而没线了,2026-07-08 实测 bug):
    - 折叠(0 宽)面板:藏它**前面**那条缝,保留后面那条作为合并后的缝;
@@ -2133,6 +2165,7 @@ body.resizing-pane [data-ghost-webview] {
 [data-theme='cindy-dark'] .h-screen.bg-content-area {
   background: transparent;
 }
+
 /* 模式1 侧栏(light):半透底,壁纸模糊由原生 vibrancy sidebar 材质提供。
    红渐变覆盖层已拆除(用户裁决 2026-07-18:Figma 该两块渐变矩形按装饰废稿处理,不实现);
    CSS backdrop-filter 已撤(A/B 实证:blur 会把透明窗背衬黑箱)。 */
@@ -2176,107 +2209,257 @@ body.resizing-pane [data-ghost-webview] {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
+/* Windows 例外:cmd-palette 浮层一律不透明、不加模糊 —— 透明窗口背景上的 CSS
+   backdrop-filter 可能渲染成黑块(§15.12,菜单常在侧栏上方打开),集显 / 软件渲染有性能风险,
+   Windows 原生材质也未实机验证。回落 --cmd-palette-bg 本身(CINDY 下即 Card 面板色
+   --surface-elevated),1px 描边与阴影不变。 */
+[data-platform='win32'][data-theme='cindy-light'] .bg-\[var\(--cmd-palette-bg\)\],
+[data-platform='win32'][data-theme='cindy-dark'] .bg-\[var\(--cmd-palette-bg\)\] {
+  background: var(--cmd-palette-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
-/* ── 插件面板悬浮球(GhostPanelBubbleLayer)────────────────────────────
-   动效按 engineering-conventions §7 红线:只动 transform/opacity、动画挂
-   HTML wrapper(不挂 SVG)、常驻循环仅 hover 期间播放、减弱动效时停用。
-   任何动画都不压在气泡按钮本体上 —— 按钮本体只管落位与 no-drag 命中区
-   (left/top 定位,app-region 挖洞按布局矩形算、不跟随 transform,见
-   GhostPanelBubbleLayer.tsx 文件头);圆圈与幽灵各自分层
-   (.ghost-bubble-circle / .ghost-bubble-face-jump)编排。
-   时序(2026-07-25 Lizi 定案"两段都要有戏"):
-   出现 = 面板收走 → 等 300ms → 圆圈渐显(160ms)→ 幽灵跳进来(240ms,回弹);
-   消失 = 幽灵跳走(160ms)→ 圆圈渐隐(120ms 延迟 + 140ms)→ 面板滑入。 */
-@keyframes ghost-bubble-circle-in {
+/* 弹窗外框(DESIGN §4 Dialog & Modal):所有模态弹窗的遮罩与面板都用这两个类,不在调用处
+   另写颜色、模糊、圆角、底色、描边或阴影(modalSurfaceContract.test.ts 守护)。
+   - 遮罩:--overlay-modal 压暗 + 背后内容模糊 4px;Windows 不模糊 —— 透明窗口上的 CSS
+     backdrop-filter 可能渲染成黑块,集显 / 软件渲染有性能风险(§15.12,与菜单毛玻璃同口径)。
+   - 面板:12px 容器圆角、--confirm-bg 卡片底、1px Board 描边、与下拉菜单同一个登记浮层阴影 --shadow-menu。
+   - 出现 / 消失(DESIGN §14.4 heavy overlay,参照 Fluid Functionalism chat-message 的入场):
+     遮罩淡入;面板淡入 + 上浮 8px + 0.96→1,--motion-enter / --motion-ease-out。
+     消失只淡出、不倒放入场,--motion-exit / --motion-ease-in。Radix 弹窗按 data-state 走
+     入退场(Presence 等退场动画结束才卸载);手写弹窗没有 data-state,只有挂载时的入场。
+     用 left-1/2 top-1/2 + -translate-x/y-1/2 居中的面板,关键帧要带上 translate(-50%,-50%),
+     否则动画期间会盖掉 Tailwind 的居中位移、整块跳到左上。时长走 motion token,减弱动效时归零。
+   放在 components 层,宽度、定位、内边距等布局类照常由 Tailwind 工具类决定。 */
+@keyframes modal-scrim-in {
   from {
-    transform: scale(0.85);
     opacity: 0;
   }
+}
+@keyframes modal-fade-out {
   to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-@keyframes ghost-bubble-circle-out {
-  to {
-    transform: scale(0.9);
     opacity: 0;
   }
 }
-@keyframes ghost-bubble-ghost-in {
-  0% {
-    transform: translateY(12px) scale(0.4);
-    opacity: 0;
-  }
-  65% {
-    transform: translateY(-4px) scale(1.08);
-    opacity: 1;
-  }
-  100% {
-    transform: none;
-    opacity: 1;
-  }
-}
-@keyframes ghost-bubble-ghost-out {
-  to {
-    transform: translateY(-14px) scale(0.4);
-    opacity: 0;
-  }
-}
-@keyframes ghost-bubble-bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-3px);
-  }
-}
-.ghost-bubble-enter .ghost-bubble-circle {
-  animation: ghost-bubble-circle-in 160ms ease-out 300ms backwards;
-}
-.ghost-bubble-enter .ghost-bubble-face-jump {
-  animation: ghost-bubble-ghost-in 240ms cubic-bezier(0.34, 1.4, 0.64, 1) 420ms backwards;
-}
-.ghost-bubble-exit .ghost-bubble-face-jump {
-  animation: ghost-bubble-ghost-out 160ms ease-in forwards;
-}
-.ghost-bubble-exit .ghost-bubble-circle {
-  animation: ghost-bubble-circle-out 140ms ease-in 120ms forwards;
-}
-.ghost-bubble:hover .ghost-bubble-face {
-  animation: ghost-bubble-bob 1.1s ease-in-out infinite;
-}
-/* 停靠面板出现/收起(气泡展开/合并/装入/启用出现,点最小化收起;启动首屏
-   豁免与提交时序都在 ghostPanels.tsx):外层壳宽度 0↔实宽 折叠展开。
-   这是 §7 compositor-only 的窄例外(同登录 handoff 的容器形变口径):
-   一次性、有状态含义;内容层定实宽被外壳裁切,webview 不逐帧重排。
-   keyframes 缺省端取元素实宽(inline style),不用变量传宽。 */
-@keyframes ghost-panel-expand {
+@keyframes modal-panel-in {
   from {
-    width: 0;
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
   }
 }
-@keyframes ghost-panel-collapse {
+@keyframes modal-panel-in-centered {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) translateY(8px) scale(0.96);
+  }
   to {
-    width: 0;
+    transform: translate(-50%, -50%);
   }
 }
-.ghost-panel-enter {
-  animation: ghost-panel-expand 200ms ease-out;
+@layer components {
+  .modal-scrim {
+    background-color: var(--overlay-modal);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: modal-scrim-in var(--motion-enter) var(--motion-ease-out);
+  }
+  .modal-panel.-translate-x-1\/2 {
+    animation-name: modal-panel-in-centered;
+  }
+  .modal-scrim[data-state='closed'],
+  .modal-panel[data-state='closed'] {
+    animation: modal-fade-out var(--motion-exit) var(--motion-ease-in) forwards;
+  }
+  [data-platform='win32'] .modal-scrim {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .modal-panel {
+    border-radius: 0.75rem;
+    border: 1px solid var(--border-default);
+    background-color: var(--confirm-bg);
+    box-shadow: var(--shadow-menu);
+    animation: modal-panel-in var(--motion-enter) var(--motion-ease-out);
+  }
 }
-/* exit 在 enter 之后声明:出现瞬间就点收起时,后者整段覆盖前者。 */
-.ghost-panel-exit {
-  animation: ghost-panel-collapse 180ms ease-in forwards;
+
+/* MorphPopover 菜单面板(输入框的模型 / 权限 / + 菜单)终态与共享下拉菜单同一材质:面板底色
+   经内联 background-color 从 chip 底色形变过去,所以用变量承接上面两条规则的取值 ——
+   其它主题 = --cmd-palette-bg,Cindy 主题 = 毛玻璃底 + blur 6px,Windows 一律实色、无模糊。 */
+:root {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'],
+[data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--surface-translucent-overlay);
+}
+[data-platform='win32'][data-theme='cindy-light'],
+[data-platform='win32'][data-theme='cindy-dark'] {
+  --menu-panel-surface: var(--cmd-palette-bg);
+}
+[data-theme='cindy-light'] [data-menu-surface],
+[data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+[data-platform='win32'][data-theme='cindy-light'] [data-menu-surface],
+[data-platform='win32'][data-theme='cindy-dark'] [data-menu-surface] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 共享下拉菜单行(components/ui/dropdown-menu.tsx,DESIGN §4):行内 Lucide 图标平时线宽 1.5,
+   高亮 / 勾选 / 展开时回到 2。只动默认线宽(stroke-width="2")的图标:显式传了其他 strokeWidth 的
+   不命中;显式传 2 的由组件标上 data-menu-icon-stroke(行内直接子元素与普通标签内可识别)。
+   data-menu-row="skip" 是面板里的非选项块(开关、价格卡,menu-row.tsx menuSkipAttrs),不变细。 */
+[data-menu-row]:not([data-menu-row='skip']) svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 1.5;
+  transition: stroke-width var(--motion-instant) var(--motion-ease-out);
+}
+[data-menu-row]:is(
+    [data-menu-active],
+    [data-highlighted],
+    [data-state='checked'],
+    [data-state='open']
+  )
+  svg.lucide[stroke-width='2']:not([data-menu-icon-stroke]) {
+  stroke-width: 2;
+}
+
+/* Opt-in whole-window wallpaper. Page surfaces share one fixed canvas;
+   elevated controls and external web content keep their readable surfaces. */
+html[data-wallpaper-active='true'] body {
+  isolation: isolate;
+  background: var(--surface);
+}
+html[data-wallpaper-active='true'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  pointer-events: none;
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+html[data-wallpaper-active='true'] :is(
+  .bg-content-area,
+  .app-wallpaper-surface,
+  main[class~='bg-[var(--surface)]'],
+  [class~='bg-[var(--panel-bg)]'],
+  [class~='bg-[var(--settings-bg)]']
+) {
+  background-color: transparent;
+}
+html[data-wallpaper-active='true'] aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+  background: transparent;
+}
+/* Fixed attachment uses the same viewport coordinates as the canvas. The
+   footer masks scrolled messages without introducing a differently tinted slab. */
+html[data-wallpaper-active='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+html[data-wallpaper-active='true'] .wallpaper-composer-fade {
+  mask-image: linear-gradient(transparent, currentColor);
+}
+
+/* Keep the decoded old canvas above the new one and fade only its opacity.
+   Fixed composer copies follow the same transition, preserving the crop and
+   theme veil across the entire window without fading text or controls.
+   Zero-specificity mode guards let local positioning and reduced motion win. */
+html[data-wallpaper-transition='true'] body::after,
+html[data-wallpaper-transition='true']:where(:not([data-wallpaper-motion='dynamic']):not([data-wallpaper-blur='true'])) :is(.wallpaper-composer-zone, .wallpaper-composer-fade)::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background-color: var(--surface);
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent),
+    color-mix(in srgb, var(--surface) var(--app-wallpaper-veil), transparent)
+  ), var(--app-wallpaper-previous-image);
+  background-size: auto, cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  animation: app-wallpaper-image-out var(--motion-fast) var(--motion-ease-move) both;
+}
+html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade)::before {
+  position: absolute;
+  z-index: -1;
+  background-attachment: fixed;
+}
+@keyframes app-wallpaper-image-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ghost-bubble-enter .ghost-bubble-circle,
-  .ghost-bubble-enter .ghost-bubble-face-jump,
-  .ghost-bubble-exit .ghost-bubble-circle,
-  .ghost-bubble-exit .ghost-bubble-face-jump,
-  .ghost-panel-enter,
-  .ghost-panel-exit,
-  .ghost-bubble:hover .ghost-bubble-face {
+  html[data-wallpaper-transition='true'] body::after,
+  html[data-wallpaper-transition='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade)::before {
     animation: none;
+    opacity: 0;
   }
+}
+
+/* Blend video into an opaque theme surface before composing with the UI.
+   A separate translucent veil over a hardware video overlay changes brightness
+   when P3 content switches Windows HDR output to scRGB. Keep visibility on the
+   video itself; the wrapper opacity is reserved for loading/exit crossfades. */
+.app-wallpaper-video {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--surface);
+  transition: opacity var(--motion-base) var(--motion-ease-move);
+}
+.app-wallpaper-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: calc(100% - var(--app-wallpaper-veil));
+}
+/* Fade the message layer itself, so the moving scene remains continuous behind
+   the composer. Repainting a static copy there would create a visible seam. */
+html:is([data-wallpaper-motion='dynamic'], [data-wallpaper-blur='true']) .wallpaper-message-viewport [data-scroll-container] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
+}
+html:is([data-wallpaper-motion='dynamic'], [data-wallpaper-blur='true']) :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background: transparent;
+}
+
+/* Opt-in media-only blur. Overscan by three radii before clipping to avoid
+   sampling transparent edges. Static and moving canvases share the same crop;
+   zero blur leaves the original compositor path entirely unchanged. */
+html[data-wallpaper-blur='true'] body::before,
+html[data-wallpaper-blur='true'] body::after {
+  inset: calc(-3 * var(--app-wallpaper-blur));
+  filter: blur(var(--app-wallpaper-blur));
+}
+html[data-wallpaper-blur='true'] .app-wallpaper-video {
+  overflow: hidden;
+}
+html[data-wallpaper-blur='true'] .app-wallpaper-video video {
+  position: absolute;
+  inset: calc(-3 * var(--app-wallpaper-blur));
+  width: calc(100% + 6 * var(--app-wallpaper-blur));
+  height: calc(100% + 6 * var(--app-wallpaper-blur));
+  max-width: none;
+  filter: blur(var(--app-wallpaper-blur));
 }

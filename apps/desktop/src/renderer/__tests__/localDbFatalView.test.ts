@@ -6,6 +6,9 @@ import {
 } from '../components/error/localDbFatalView';
 
 describe('resolveLocalDbFatalView', () => {
+  it.each(['ready', 'downloading', 'idle'] as const)('schema lock failure offers DB retry regardless of update status %s (#7135)', (status) => {
+    expect(resolveLocalDbFatalView(status, 'DB_SCHEMA_LOCKED')).toBe('retry-local-db');
+  });
   it('ready → install-update（补丁就绪，可一键重启安装）', () => {
     expect(resolveLocalDbFatalView('ready')).toBe('install-update');
   });

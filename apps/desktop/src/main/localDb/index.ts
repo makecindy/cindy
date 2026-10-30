@@ -26,11 +26,11 @@
 import type Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { app, dialog, BrowserWindow } from 'electron';
-import path from 'node:path';
+import { isCindyPersonalRuntime } from '../cindy-make/versionRuntimeIdentity.js';
 import fs from 'node:fs';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 
 import { createBetterSqliteDatabase } from './betterSqliteFactory';
+import { ensureCjkFtsTempTriggersInstalled } from './registerCjkSeg';
 import {
   getDrizzleDir,
   prepareBackupDiskSpace,
@@ -44,7 +44,7 @@ import { reconcileKnownEquivalentMigrationHashes } from './schemaDriftCompatibil
 import { cleanupStaleOrcaLeadIndex, hasStaleOrcaLeadIndex } from './orcaStaleIndexCleanup';
 import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
-import { dialogueWorkspaceRootDir } from './dialogueWorkspace';
+import { dialogueWorkspaceRoots } from './dialogueWorkspace';
 import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspaceRepair';
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
@@ -66,6 +66,7 @@ import {
 import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalDialogPolicy';
 import { runPendingDbSlimmingAtStartup } from './dbSlimmingStartup';
 import { deferReleaseUntilDbSlimmingWorkerTermination } from './dbSlimmingWorkerClient';
+import { ownerDatabasePath, prepareModelDefaultsProfile } from './modelDefaultsProfile';
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
@@ -106,7 +107,7 @@ export function getCurrentUserId(): string | null {
 }
 
 function dbPath(userId: string): string {
-  return path.join(app.getPath('userData'), `${BRAND_IDENTITY.dbFilePrefix}-${userId}.db`);
+  return ownerDatabasePath(app.getPath('userData'), userId);
 }
 
 export function getDbPathForUser(userId: string): string {
@@ -155,7 +156,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   const filePath = dbPath(userId);
-  const passiveSharedUserData = !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+  const passiveSharedUserData = (isCindyPersonalRuntime() && fs.existsSync(filePath)) || (!app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1');
   // A packaged release may be launched while a shared passive dev instance is still
   // open.  The passive reader lease must continue to block schema writes, but an
   // already-compatible database does not need any startup DDL; let the release use
@@ -165,27 +166,21 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   let startupWriterLease: SchemaMigrationLease | null = null;
   let readerLeaseAcquiredThisCall = false;
 
-  const startupLease = acquireSchemaStartupLease({
+  const startupLease = await acquireSchemaStartupLease({
     dbFilePath: filePath,
     packaged: app.isPackaged,
     sharedPassive: passiveSharedUserData,
     readerLifecycle: schemaMigrationReaderLeaseLifecycle,
   });
   if (!startupLease.acquired) {
-    const readerHint = startupLease.activeReaderCount
-      ? `（当前有 ${startupLease.activeReaderCount} 个 passive 实例）`
-      : '';
-    const waitingForWriter = startupLease.reason === 'writer-active';
-    const message = waitingForWriter
-      ? '另一个实例正在执行数据库 schema migration，当前实例无法同时启动维护。请等待迁移完成后重试，或改用 --isolated 启动独立数据。'
-      : `当前不能执行数据库 schema 启动维护${readerHint}。` +
-        '请先关闭共享该 userData 的 passive dev 后重试，或让这些实例使用 --isolated。';
+    const message = t(`localDbFatal.schemaLease.${startupLease.reason}`);
+    log.warn(JSON.stringify({ event: 'localDb.schemaLease.blocked', reason: startupLease.reason }));
     showFatalDialog(
-      waitingForWriter ? '数据库 schema 正在维护' : '数据库 schema 正被其它实例使用',
+      t('localDbFatal.schemaLease.title'),
       message,
-      'MIGRATE_FAILED',
+      'DB_SCHEMA_LOCKED',
     );
-    return { ready: false, error: { code: 'MIGRATE_FAILED', message } };
+    return { ready: false, error: { code: 'DB_SCHEMA_LOCKED', message } };
   }
   const schemaMaintenanceReadOnly = startupLease.kind === 'reader' && !passiveSharedUserData;
   readerLeaseAcquiredThisCall = startupLease.kind === 'reader' && startupLease.newlyAcquired;
@@ -245,6 +240,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   try {
+    if (startupLease.kind === 'writer') prepareModelDefaultsProfile(filePath);
     _db = openWithPragmas(filePath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -409,7 +405,9 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   try {
-    const repaired = repairManagedDialogueWorkspaceSessions(db, dialogueWorkspaceRootDir());
+    const repaired = dialogueWorkspaceRoots().reduce(
+      (count, root) => count + repairManagedDialogueWorkspaceSessions(db, root), 0,
+    );
     if (repaired > 0) {
       log.info(
         JSON.stringify({
@@ -451,6 +449,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   // 见 orcaStrandedLeadReconcile.ts。同样必须在 migration / drift-repair 之后跑(依赖 orca_teams)。
   reconcileStrandedOrcaLeads(db);
 
+  // #3841：openWithPragmas 时三表可能还不存在（全新库），ensure 会早退。
+  // migration / drift-repair 建完表后必须再收口一次，否则 in-proc 回退走这条
+  // 主连接写 messages 时，持久触发器因 cjk_seg 已注册而跳过、TEMP 又不在，
+  // 增量消息继续漏 FTS。已挂则是 no-op。
+  ensureCjkFtsTempTriggersInstalled(db);
+
   // 启动 optimize: 0x10002 mask 会强制对从未 ANALYZE 过的表跑一次,
   // 之后挂 24h 周期任务按需更新统计。详见 runOptimize 注释。
   runOptimize(0x10002);
@@ -461,22 +465,38 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
 }
 
 function openWithPragmas(filePath: string): Database.Database {
+  // 顺序硬约束（#3841）：`temp_store` 一旦变更会立即删除连接上所有已存在的 TEMP
+  // 对象（SQLite 文档化语义），而工厂内部会注册 cjk_seg 并挂 TEMP 触发器。
+  // 理想顺序是「pragma → 工厂」，但工厂承担 native binding 解析与权限收紧，
+  // 不宜绕开；故保持「工厂 → pragma」，由 ensureCjkFtsTempTriggersInstalled
+  // 在 pragma 清掉刚挂的触发器后重挂收口。新增 pragma 时禁止挪到收口之后。
   const db = createBetterSqliteDatabase(filePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  // 性能/并发相关 (社区生产推荐组合):
-  //   synchronous=NORMAL  WAL 下安全; fsync 大幅减少, 仅掉电时可能丢最近一笔事务,
-  //                       进程崩溃不丢
-  //   temp_store=MEMORY   临时表/排序/中间结果走 RAM
-  //   mmap_size=256MB     读热数据零拷贝, 降低系统调用开销
-  //   cache_size=-65536   page cache 64MB (负值=KB)
-  //   busy_timeout=5000   多 writer 时自动重试而非立刻抛 SQLITE_BUSY
-  db.pragma('synchronous = NORMAL');
-  db.pragma('temp_store = MEMORY');
-  db.pragma('mmap_size = 268435456');
-  db.pragma('cache_size = -65536');
-  db.pragma('busy_timeout = 5000');
-  return db;
+  try {
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    // 性能/并发相关 (社区生产推荐组合):
+    //   synchronous=NORMAL  WAL 下安全; fsync 大幅减少, 仅掉电时可能丢最近一笔事务,
+    //                       进程崩溃不丢
+    //   temp_store=MEMORY   临时表/排序/中间结果走 RAM
+    //   mmap_size=256MB     读热数据零拷贝, 降低系统调用开销
+    //   cache_size=-65536   page cache 64MB (负值=KB)
+    //   busy_timeout=5000   多 writer 时自动重试而非立刻抛 SQLITE_BUSY
+    db.pragma('synchronous = NORMAL');
+    db.pragma('temp_store = MEMORY');
+    db.pragma('mmap_size = 268435456');
+    db.pragma('cache_size = -65536');
+    db.pragma('busy_timeout = 5000');
+    // temp_store 切换刚清掉了工厂挂的 TEMP 触发器；收口重挂（#3841）。
+    ensureCjkFtsTempTriggersInstalled(db);
+    return db;
+  } catch (err) {
+    try {
+      db.close();
+    } catch {
+      // 初始化失败后关闭连接是 best-effort，原始错误更重要。
+    }
+    throw err;
+  }
 }
 
 /**

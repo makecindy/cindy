@@ -198,7 +198,7 @@ describe('PiPackagesSection interaction state machine', () => {
     await waitFor(() => expect((updateButtons[1] as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it('routes install directly into the Main-owned confirmation flow and keeps retry state on failure', async () => {
+  it('installs an extension with compatibility limits without a confirmation dialog and keeps retry state on failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const enabledPackage: PiPackageView = {
       ...packageView(1),
@@ -289,6 +289,125 @@ describe('PiPackagesSection interaction state machine', () => {
       expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.operationFailed'),
     );
     expect(toastMocks.success).not.toHaveBeenCalled();
+  });
+
+  it('keeps cancellation out of failure toasts', async () => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[MUTATION_CANCELLED] cancelled');
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    const remove = screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!;
+    fireEvent.click(remove);
+    await waitFor(() => expect(remove.hasAttribute('disabled')).toBe(false));
+    expect(toastMocks.error).not.toHaveBeenCalled();
+    expect(toastMocks.success).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['native-command', 'failed', 'check-credentials', 'commandFailed', 'check-credentials'],
+    ['prepare', 'failed', 'check-runtime', 'commandNotStarted', 'check-runtime'],
+    ['native-command', 'timed-out', 'inspect-state-before-retry', 'commandTimedOut', 'inspect-state-before-retry'],
+    ['native-command', 'unknown', 'inspect-state-before-retry', 'commandUnknown', 'inspect-state-before-retry'],
+    ['native-command', 'failed', 'fake-private-recovery', 'commandFailed', 'inspect-state-before-retry'],
+  ])('localizes serialized IPC diagnostics for %s / %s', async (phase, outcome, recovery, statusKey, recoveryKey) => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[PI_PACKAGE_MUTATION_FAILED] Legacy message ' + JSON.stringify({
+        phase, outcome, recovery, reason: 'unknown', exitCode: 1, stderr: 'fake-private-output',
+      }));
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith(
+      `settings.piPackages.failure.${statusKey} settings.piPackages.recovery.${recoveryKey}`,
+    ));
+    expect(toastMocks.success).not.toHaveBeenCalled();
+    expect(JSON.stringify(toastMocks.error.mock.calls)).not.toMatch(/Legacy message|fake-private|exitCode|"phase"/);
+  });
+
+  it('does not show malformed IPC diagnostic JSON', async () => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => {
+      throw new Error('[PI_PACKAGE_MUTATION_FAILED] Legacy message {"phase":');
+    }) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.operationFailed'));
+  });
+
+  it.each([
+    ['build-failed', 'check-build-dependencies', 'check-build-dependencies'],
+    ['network', 'check-network', 'check-network'],
+    ['permission', 'check-permissions', 'check-permissions'],
+    ['disk-full', 'free-disk-space', 'free-disk-space'],
+    ['authentication', 'check-credentials', 'check-credentials'],
+    // The recovery decision takes precedence over a tentative cause.
+    ['network', 'inspect-state-before-retry', 'inspect-state-before-retry'],
+    ['unknown', 'fake-private-recovery', 'inspect-state-before-retry'],
+  ])('preserves native success and follows recovery for %s / %s', async (reason, recovery, expectedRecovery) => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => ({
+      available: true, packages: [], changed: true, nativeCommandSucceeded: true,
+      diagnostics: [{ phase: 'cindy-analysis',
+        outcome: recovery === 'inspect-state-before-retry' ? 'timed-out' : 'failed', exitCode: 1,
+        reason, recovery, ...(reason === 'network' ? { nativeCode: 'ENOTFOUND' } : {}) }],
+    })) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.removeAria' })[0]!);
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.settingsRemove'));
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      `settings.piPackages.warning.analysisIncomplete settings.piPackages.recovery.${expectedRecovery}`,
+    );
+    expect(JSON.stringify(toastMocks.error.mock.calls)).not.toContain('fake-private-recovery');
+    expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
+  });
+
+  it('reports confirmed native install success when Cindy cannot project its enabled state', async () => {
+    installElectronApi({
+      mutatePiPackage: vi.fn(async () => ({
+        available: false, packages: [], changed: true,
+        nativeCommandSucceeded: true, projectionUnavailable: true,
+      })),
+    });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    fireEvent.change(screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder'), {
+      target: { value: 'npm:sample' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith('settings.piPackages.success.install'));
+    expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.failure.stateUnavailable');
+    expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
+    expect(toastMocks.success).not.toHaveBeenCalledWith('settings.piPackages.success.installEnabled');
+  });
+
+  it.each([
+    ['install', 'permission', 'check-permissions'],
+    ['update', 'package-not-found', 'check-source'],
+  ])('keeps recovery visible after native %s when projection is unavailable', async (action, reason, recovery) => {
+    installElectronApi({ mutatePiPackage: vi.fn(async () => ({
+      available: false, packages: [], changed: true,
+      nativeCommandSucceeded: true, projectionUnavailable: true,
+      diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', reason, recovery }],
+    })) });
+    render(<PiPackagesSection />);
+    await screen.findByText('sample-extension-2');
+    if (action === 'install') {
+      fireEvent.change(screen.getByPlaceholderText('settings.piPackages.sourcePlaceholder'), {
+        target: { value: 'npm:sample' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'settings.piPackages.install' }));
+    } else {
+      fireEvent.click(screen.getAllByRole('button', { name: 'settings.piPackages.updateAria' })[0]!);
+    }
+    await waitFor(() => expect(toastMocks.success).toHaveBeenCalledWith(`settings.piPackages.success.${action}`));
+    expect(toastMocks.error).toHaveBeenCalledWith('settings.piPackages.failure.stateUnavailable');
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      `settings.piPackages.warning.analysisIncomplete settings.piPackages.recovery.${recovery}`,
+    );
+    expect(toastMocks.error).not.toHaveBeenCalledWith('settings.piPackages.operationFailed');
+    expect(screen.getByText('sample-extension-2')).toBeTruthy();
   });
 
   it('preserves the last complete roster when native success has no fresh projection', async () => {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  isCodexBucketStale,
   nextCodexBucketStaleAtMs,
   resolveCodexBucketTable,
   selectCodexUsageForModel,
@@ -88,11 +89,11 @@ describe('summarizeCodexRateLimitReset', () => {
     });
   });
 
-  it('does not offer reset before exhaustion and leaves offer expiry to desktop', () => {
+  it('allows manual reset before exhaustion and leaves offer expiry to desktop', () => {
     expect(summarizeCodexRateLimitReset({
       ...base,
       rateLimits: { primary: { usedPercent: 99.9 } },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
     expect(summarizeCodexRateLimitReset({
       ...base,
       resetOffer: { ...base.resetOffer, validUntil: NOW_MS },
@@ -111,7 +112,7 @@ describe('summarizeCodexRateLimitReset', () => {
         primary: { usedPercent: 100 },
         rateLimitReachedType: 'workspace_owner_credits_depleted',
       },
-    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: false });
+    }, NOW_MS)).toMatchObject({ shouldPrompt: false, canReset: true });
   });
 
   it('omits the reset count when credit availability was not returned', () => {
@@ -151,6 +152,36 @@ describe('summarizeAccountRateLimits', () => {
     expect(summary!.rows[1].value).toContain('已用 40%');
     expect(summary!.rows[1].value).toContain('重置');
     expect(summary!.rows[2]).toEqual({ label: '周', value: '剩余 87.5% · 已用 12.5%' });
+  });
+
+  it('lets callers label windows by their reset countdown instead of duration', () => {
+    const resetsAt = Math.floor(NOW_MS / 1000) + 2 * 60 * 60;
+    const resetLabel = vi.fn((value: number) => (value === resetsAt ? '2小时' : null));
+    const summary = summarizeAccountRateLimits({
+      primary: { usedPercent: 40, windowMinutes: 300, resetsAt },
+      secondary: { usedPercent: 10, windowMinutes: 10080, resetsAt: resetsAt + 1 },
+    }, NOW_MS, undefined, resetLabel);
+    expect(summary!.rows).toEqual([
+      { label: '2小时', value: '剩余 60% · 已用 40%' },
+      { label: '周', value: '剩余 90% · 已用 10%' },
+    ]);
+    // The window length reaches the label so a countdown can cap at it.
+    expect(resetLabel).toHaveBeenCalledWith(resetsAt, 300);
+    expect(resetLabel).toHaveBeenCalledWith(resetsAt + 1, 10080);
+  });
+
+  it('omits windows whose reset has passed when labelling by countdown', () => {
+    const past = Math.floor(NOW_MS / 1000) - 60;
+    const summary = summarizeAccountRateLimits({
+      primary: { usedPercent: 40, windowMinutes: 300, resetsAt: past },
+      secondary: { usedPercent: 10, windowMinutes: 10080 },
+    }, NOW_MS, undefined, () => 'unused');
+    expect(summary!.rows).toEqual([{ label: '周', value: '剩余 90% · 已用 10%' }]);
+    // Without countdown labels the existing reset-time rendering is unchanged.
+    const legacy = summarizeAccountRateLimits({
+      primary: { usedPercent: 40, windowMinutes: 300, resetsAt: past },
+    }, NOW_MS);
+    expect(legacy!.rows[0].value).toContain('重置');
   });
 
   it('follows upstream window composition instead of assuming 5h exists (weekly-only)', () => {
@@ -287,6 +318,34 @@ describe('generic bucket alias priority', () => {
     expect(nextCodexBucketStaleAtMs(null, NOW)).toBeNull();
     expect(nextCodexBucketStaleAtMs({}, NOW)).toBeNull();
   });
+
+  it('keeps the transition armed at the exact stale instant', () => {
+    const resetsAt = Math.floor(NOW / 1000);
+    const staleAt = resetsAt * 1000 + 24 * 60 * 60 * 1000;
+    const promo = {
+      limitId: 'codex_bengalfox',
+      limitName: 'GPT-5.3-Codex-Spark',
+      primary: { usedPercent: 100, resetsAt },
+    };
+    // 陈旧判据是严格 `<`: staleAt 这一毫秒仍有效, staleAt + 1 才陈旧。
+    expect(isCodexBucketStale(promo, staleAt)).toBe(false);
+    expect(isCodexBucketStale(promo, staleAt + 1)).toBe(true);
+    // 定时器正是在返回的那一刻回调, 因此这里仍须给出 staleAt, 否则面板不再重选。
+    expect(nextCodexBucketStaleAtMs({ codex_bengalfox: promo }, staleAt)).toBe(staleAt);
+    expect(nextCodexBucketStaleAtMs({ codex_bengalfox: promo }, staleAt + 1)).toBeNull();
+    // 选桶同理: staleAt 这一毫秒仍能选中 promo, 再下一毫秒才被排除 —— 否则这条断言
+    // 只是因为桶表匹配不到模型而恒为 null, 证明不了过期桶被排除。
+    expect(selectCodexUsageForModel({
+      byLimitId: { codex_bengalfox: promo },
+      modelId: 'gpt-5.3-codex-spark',
+      nowMs: staleAt,
+    })).toBe(promo);
+    expect(selectCodexUsageForModel({
+      byLimitId: { codex_bengalfox: promo },
+      modelId: 'gpt-5.3-codex-spark',
+      nowMs: staleAt + 1,
+    })).toBeNull();
+  });
 });
 
 describe('overlapping bucket names', () => {
@@ -351,3 +410,4 @@ describe('resolveCodexBucketTable (selector / timer must agree)', () => {
     expect(resolveCodexBucketTable({ byLimitId: [], appServerBuckets: 'nope' })).toBeNull();
   });
 });
+

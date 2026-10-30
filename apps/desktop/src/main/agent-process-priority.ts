@@ -5,7 +5,7 @@
  * 对 agent 进程树里的一切子进程(bash / 测试 / 构建)都生效:降档后 agent 照常
  * 用满空闲核,但用户前台应用永远优先,机器不再卡顿。
  *
- * 实现方式: claude 子进程由 Claude SDK 内部 spawn(host 拿不到 pid),codex 由
+ * 实现方式: claude 子进程由 Claude SDK 内部 spawn(host 拿不到 pid),codex / pi 由
  * maker-core spawn —— 统一用周期扫描:找到"当前主进程直接子进程 + 命中本产品
  * agent 二进制路径 marker"的进程,按设置档位调 os.setPriority;后续 spawn 的
  * 子进程(bash / 测试 worker)自动继承。发现窗口 ≤ intervalMs,即会话最初几秒
@@ -46,7 +46,7 @@ const DEFAULT_INTERVAL_MS = 15_000;
 
 export interface AgentProcessRow {
   pid: number;
-  kind: 'claude' | 'codex';
+  kind: 'claude' | 'codex' | 'pi';
 }
 
 /**
@@ -86,15 +86,18 @@ export interface AgentProcessPriorityWatcher {
 
 /**
  * codex 二进制路径 marker(与 buildClaudePathMarkers 同构):
- * <userData>/codex/<ver>/ 及 dev checkout 的 apps/codex-package-bin/。
+ * <userData>/codex[-package]/<ver>/ 及 dev checkout 的 apps/codex-package-bin/。
  */
 export function buildCodexPathMarkers(dirNames: readonly string[]): string[] {
   return dirNames.flatMap((dirName) => {
     const dir = dirName.toLowerCase();
     return [
       `appdata\\roaming\\${dir}\\codex\\`,
+      `appdata\\roaming\\${dir}\\codex-package\\`,
       `appdata/roaming/${dir}/codex/`,
+      `appdata/roaming/${dir}/codex-package/`,
       `/library/application support/${dir}/codex/`,
+      `/library/application support/${dir}/codex-package/`,
     ];
   });
 }
@@ -112,8 +115,9 @@ export function buildLinuxPathMarkers(
 ): string[] {
   return dirNames.flatMap((dirName) => {
     const dir = dirName.toLowerCase();
+    const installSubdirs = kind === 'codex' ? ['codex', 'codex-package'] : [kind];
     return [
-      `/.config/${dir}/${kind}/`,
+      ...installSubdirs.map((installSubdir) => `/.config/${dir}/${installSubdir}/`),
       `/.config/${dir}/agent-runtime/${kind}/`,
     ];
   });
@@ -136,34 +140,64 @@ const CODEX_MARKERS = [
 ];
 
 /**
+ * pi 二进制路径 marker,布局见 agent-binaries/index.ts CONFIG.pi:托管装在
+ * <userData>/pi/<version>/,dev 为 apps/pi-bin/<platform>/。与 process-monitor/
+ * agent-scan 的 buildPiPathMarkers 是同一套路径;那边 import 本文件(分类复用),
+ * 反向复用会成环,两处需同步修改。
+ */
+const PI_MARKERS = [
+  'apps\\pi-bin\\',
+  'apps/pi-bin/',
+  ...allUserDataDirNames(CURRENT_CINDY_REGION).flatMap((dirName) => {
+    const dir = dirName.toLowerCase();
+    return [
+      `appdata\\roaming\\${dir}\\pi\\`,
+      `appdata/roaming/${dir}/pi/`,
+      `/library/application support/${dir}/pi/`,
+      `/.config/${dir}/pi/`,
+    ];
+  }),
+];
+
+/**
  * 运行时 userData 派生 marker:Linux 的 userData 可被 XDG_CONFIG_HOME /
  * --user-data-dir 重定向,静态 ~/.config/<brand>/ 形态的 marker 会整体失配,
  * watcher 静默失明(bot review fresh evidence)。以 app.getPath('userData') 的
  * 实际解析值补一组 marker;静态品牌 marker 仍保留(覆盖历史目录名与另一实例
  * 的标准布局)。start 入口注册,重复调用整组替换(幂等)。
  */
-const runtimeUserDataMarkers: { claude: string[]; codex: string[] } = { claude: [], codex: [] };
+const runtimeUserDataMarkers: { claude: string[]; codex: string[]; pi: string[] } = {
+  claude: [],
+  codex: [],
+  pi: [],
+};
 
 export function registerUserDataMarkers(userDataPath: string): void {
-  const markersFor = (kind: 'claude-code' | 'codex'): string[] => {
+  const markersFor = (kind: 'claude-code' | 'codex' | 'pi'): string[] => {
     const lower = userDataPath.toLowerCase();
     // 命令行里的分隔符形态可能与 app.getPath 返回值不同(Windows 下 / 与 \ 混用),
     // 两种形态都登记;非本平台形态的变体永不命中,无害。
     const variants = new Set([lower.replace(/\\/g, '/'), lower.replace(/\//g, '\\')]);
     const out: string[] = [];
+    const installSubdirs = kind === 'codex' ? ['codex', 'codex-package'] : [kind];
     for (const v of variants) {
       const sep = v.includes('\\') ? '\\' : '/';
-      out.push(`${v}${sep}${kind}${sep}`);
+      for (const installSubdir of installSubdirs) {
+        out.push(`${v}${sep}${installSubdir}${sep}`);
+      }
       out.push(`${v}${sep}agent-runtime${sep}${kind}${sep}`);
     }
     return out;
   };
   runtimeUserDataMarkers.claude = markersFor('claude-code');
   runtimeUserDataMarkers.codex = markersFor('codex');
+  runtimeUserDataMarkers.pi = markersFor('pi');
 }
 
 /** 命令行(已小写)→ agent 种类;不命中任何 marker = 不是我们的 agent 进程。 */
-export function classifyAgentCommandLine(cmdLineLower: string): 'claude' | 'codex' | null {
+export function classifyAgentCommandLine(
+  cmdLineLower: string,
+): 'claude' | 'codex' | 'pi' | null {
   if (
     CLAUDE_MARKERS.some((m) => cmdLineLower.includes(m)) ||
     runtimeUserDataMarkers.claude.some((m) => cmdLineLower.includes(m))
@@ -175,6 +209,12 @@ export function classifyAgentCommandLine(cmdLineLower: string): 'claude' | 'code
     runtimeUserDataMarkers.codex.some((m) => cmdLineLower.includes(m))
   ) {
     return 'codex';
+  }
+  if (
+    PI_MARKERS.some((m) => cmdLineLower.includes(m)) ||
+    runtimeUserDataMarkers.pi.some((m) => cmdLineLower.includes(m))
+  ) {
+    return 'pi';
   }
   return null;
 }
@@ -212,10 +252,18 @@ async function scanPosix(): Promise<AgentProcessRow[]> {
   return parsePosixAgentProcesses(stdout, process.pid);
 }
 
+/**
+ * Windows CIM 扫描按进程名过滤(命令行全表扫描太慢)。新增受治理的 agent 二进制
+ * 时同步这里;漏名等于该类 agent 的优先级治理在 Windows 整体失明(2026-10-25
+ * 本机事故:pi 会话全速清理脚本占满一核,治理设置对 pi 无效,即此漏名)。
+ */
+export const WINDOWS_AGENT_PROCESS_NAMES = ['claude.exe', 'codex.exe', 'pi.exe'] as const;
+
 async function scanWindows(): Promise<AgentProcessRow[]> {
   // 与 claude-orphan-reaper 的 Windows 扫描同一套写法(含行尾管道符的坑,见其注释)。
+  const filter = WINDOWS_AGENT_PROCESS_NAMES.map((name) => `Name='${name}'`).join(' OR ');
   const script = [
-    'Get-CimInstance Win32_Process -Filter "Name=\'claude.exe\' OR Name=\'codex.exe\'" |',
+    `Get-CimInstance Win32_Process -Filter "${filter}" |`,
     'ForEach-Object {',
     '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
     '  Write-Output ("{0}|{1}|{2}" -f $_.ProcessId, $_.ParentProcessId, $cmd)',
@@ -402,7 +450,7 @@ export function createAgentProcessPriorityWatcher(
   };
 }
 
-export const __testing = { makeDefaultApplyPriority };
+export const __testing = { makeDefaultApplyPriority, scanWindows };
 
 /** 生产入口:默认依赖(设置 store + 平台扫描 + os.setPriority/taskpolicy)组装并启动。 */
 export function startAgentProcessPriorityWatcher(): AgentProcessPriorityWatcher {

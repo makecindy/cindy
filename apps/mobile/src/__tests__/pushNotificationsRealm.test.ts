@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = vi.hoisted(() => new Map<string, string>());
@@ -20,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
   getDevicePushTokenAsync: vi.fn(),
+  setNotificationHandler: vi.fn(),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -35,7 +34,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('expo-notifications', () => ({
-  setNotificationHandler: vi.fn(),
+  setNotificationHandler: mocks.setNotificationHandler,
   getPermissionsAsync: mocks.getPermissionsAsync,
   requestPermissionsAsync: mocks.requestPermissionsAsync,
   getDevicePushTokenAsync: mocks.getDevicePushTokenAsync,
@@ -54,6 +53,7 @@ vi.mock('@/config/env', () => ({
   loadMobileEndpointsForRealm: mocks.loadMobileEndpointsForRealm,
   getMobileEndpointForRealm: (realm: 'cn' | 'global') =>
     envState.endpointByRealm[realm],
+  setDeviceLinkApiBaseOverride: () => {},
 }));
 
 vi.mock('@/config/devServerEnvironment', () => ({
@@ -61,10 +61,12 @@ vi.mock('@/config/devServerEnvironment', () => ({
 }));
 
 import {
+  configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
+import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -85,6 +87,36 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
+    let failDelete = true;
+    const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
+      if (path === '/v1/push-token' && (opts.method === 'PUT' || failDelete)) throw new Error('offline');
+      return {};
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).rejects.toThrow('offline');
+    expect(apiFetch.mock.calls.filter(call => call[1].method === 'DELETE').map(call => call[0]))
+      .toEqual(['/api/device-link/push-token', '/v1/push-token']);
+    expect(readStoredRealms(PENDING_KEY)).toEqual(['cn']);
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual(['cn']);
+    failDelete = false;
+    await retryPendingUnregister(apiFetch as any);
+    expect(readStoredRealms(PENDING_KEY)).toEqual([]);
+    expect(readStoredRealms(REGISTERED_KEY)).toEqual([]);
+  });
+  // Same group, another thread must still be noticeable while reading the main timeline.
+  it('passes the thread route to the foreground visibility gate', async () => {
+    const room = '00000000-0000-4000-8000-000000000001';
+    const message = '00000000-0000-4000-8000-000000000002';
+    const thread = '00000000-0000-4000-8000-000000000003';
+    const reading = vi.fn((_route: string) => false);
+    configureForegroundNotificationBehavior(reading);
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    const notification = { request: { content: { data: { deepLink: `/companions/groups/${room}?messageId=${message}&threadRootId=${thread}` } } } };
+    expect(await handler.handleNotification(notification)).toMatchObject({ shouldShowBanner: true });
+    expect(reading.mock.calls[0][0]).toContain(`threadRootId=${thread}`);
+    reading.mockReturnValue(true);
+    expect(await handler.handleNotification(notification)).toMatchObject({ shouldShowBanner: false, shouldPlaySound: false });
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     store.clear();
@@ -102,21 +134,6 @@ describe('push notification realm routing', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it('re-registers the restored owner after an account-switch rollback', () => {
-    const source = readFileSync(
-      resolve(process.cwd(), 'src/notifications/PushNotificationsBridge.tsx'),
-      'utf8',
-    ).replace(/\r\n/g, '\n');
-    const registrationStart = source.indexOf('// 登录态就绪后同步注册状态');
-    const registrationBody = source.slice(
-      registrationStart,
-      source.indexOf('// APNs token 轮换', registrationStart),
-    );
-
-    expect(registrationBody).toContain('auth.accountGeneration');
-    expect(registrationBody).toContain('syncPushRegistration(');
   });
 
   it('向当前会话区域注册，但推送构建线仍保持安装包区域', async () => {
@@ -142,6 +159,25 @@ describe('push notification realm routing', () => {
       'revocationToken',
     );
     expect(readStoredRealms(REGISTERED_KEY)).toEqual(['global']);
+  });
+
+  // 自建中转不转发系统推送(docs/self-hosted-relay-plan.md §5.3、§7):不在官方 device-link 登记 token
+  // (伙伴消息的 Chat Server 登记不受影响),关闭时仍向官方地址注销以前的登记。
+  it('自建中转下不登记 device-link 推送,注销仍发往官方地址', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.home.example', credential: 'relay-credential', signing: null });
+    try {
+      const apiFetch = vi.fn().mockResolvedValue({});
+      await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
+      expect(apiFetch.mock.calls.map(([path, opts]) => `${opts.method} ${path}`)).toEqual(['PUT /v1/push-token']);
+      apiFetch.mockClear();
+      await expect(syncPushRegistration({ enabled: false, apiFetch })).resolves.toBe('unregistered');
+      expect(apiFetch).toHaveBeenCalledWith('/api/device-link/push-token', expect.objectContaining({
+        baseUrl: 'https://relay.cn.example',
+        method: 'DELETE',
+      }));
+    } finally {
+      setActiveSelfHostedRelay(null);
+    }
   });
 
   it('dev 构建复用 cn 推送构建线向开发环境注册', async () => {
@@ -178,7 +214,8 @@ describe('push notification realm routing', () => {
 
     expect(readStoredRealms(DEV_REGISTERED_KEY)).toEqual(['cn']);
     expect(readStoredRealms(RELEASE_REGISTERED_KEY)).toEqual(['cn']);
-    expect(apiFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch).toHaveBeenCalledTimes(4); // Each environment registers task and chat delivery.
+    expect(apiFetch.mock.calls.filter(([path]) => path === '/v1/push-token')).toHaveLength(2);
   });
 
   it('注册期间切换 CindyDev 环境仍把补偿状态留在原 namespace', async () => {

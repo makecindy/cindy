@@ -337,7 +337,7 @@ describe('渲染主流程', () => {
     expect(loadedContent).toBe('<p>safe</p>');
   });
 
-  it('排版参数原样交给 printToPDF(margins 用 custom)', async () => {
+  it('排版参数原样交给 Electron 42 的 printToPDF margins', async () => {
     await renderHtmlToPdf({
       ...BASE_INPUT,
       html: '<p/>',
@@ -350,7 +350,7 @@ describe('渲染主流程', () => {
       pageSize: 'Letter',
       landscape: true,
       printBackground: false,
-      margins: { marginType: 'custom', top: 1, bottom: 0.2, left: 0.3, right: 0.4 },
+      margins: { top: 1, bottom: 0.2, left: 0.3, right: 0.4 },
     });
   });
 

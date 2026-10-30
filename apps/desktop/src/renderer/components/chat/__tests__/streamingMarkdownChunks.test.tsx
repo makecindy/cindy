@@ -7,11 +7,37 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { StreamingMarkdownChunk } from '../StreamingMarkdownChunk';
 import { createWordFadeState } from '../rehypeStreamWordFade';
-import { splitStreamingMarkdownChunks } from '../streamingMarkdownChunks';
+import {
+  getStreamingMarkdownThrottleInterval,
+  splitStreamingMarkdownChunks,
+  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
+  STREAMING_MARKDOWN_THROTTLE_MAX_MS,
+} from '../streamingMarkdownChunks';
 
 afterEach(cleanup);
 
 describe('splitStreamingMarkdownChunks', () => {
+  it('自适应节流只提高复杂长文的间隔并保持有界', () => {
+    const short = getStreamingMarkdownThrottleInterval('short prose');
+    const longSingleHeading = getStreamingMarkdownThrottleInterval(
+      `# Heading\n\n${'paragraph '.repeat(2_000)}`,
+    );
+    const longMultiHeading = getStreamingMarkdownThrottleInterval(
+      Array.from(
+        { length: 12 },
+        (_, index) => `## Section ${index}\n\n${'paragraph '.repeat(2_000)}`,
+      ).join('\n\n'),
+    );
+
+    expect(short).toBe(STREAMING_MARKDOWN_THROTTLE_BASE_MS);
+    expect(longSingleHeading).toBeGreaterThan(short);
+    expect(longMultiHeading).toBeGreaterThanOrEqual(longSingleHeading);
+    expect(longMultiHeading).toBeLessThanOrEqual(STREAMING_MARKDOWN_THROTTLE_MAX_MS);
+    expect(getStreamingMarkdownThrottleInterval('x'.repeat(320_001))).toBe(
+      STREAMING_MARKDOWN_THROTTLE_MAX_MS,
+    );
+  });
+
   it('只在已经出现下一段的顶层空行后确认稳定前缀', () => {
     expect(splitStreamingMarkdownChunks('alpha\n\n')).toEqual([
       { start: 0, content: 'alpha\n\n' },

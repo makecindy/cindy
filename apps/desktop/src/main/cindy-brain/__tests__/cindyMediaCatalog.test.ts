@@ -10,7 +10,6 @@ import { describe, it, expect } from 'vitest';
 
 import {
   deriveCindyMediaConfig,
-  filterLegacyCindyMediaConfig,
   selectExecutableCoreMediaModels,
   type CindyMediaProviderSlice,
 } from '../cindyMediaCatalog';
@@ -51,47 +50,6 @@ describe('selectExecutableCoreMediaModels', () => {
     expect(
       selectExecutableCoreMediaModels(models, 'video', (model) => model.coreExecutable),
     ).toEqual([{ id: 'minimax/minimax-h3', mode: 'video_generation', coreExecutable: true }]);
-  });
-});
-
-describe('filterLegacyCindyMediaConfig', () => {
-  const models = [
-    {
-      id: 'media:xd:core-video', modelId: 'core-video', providerId: 'xd',
-      label: 'Core', supportsEdit: true,
-    },
-    {
-      id: 'media:xd:shared-video', modelId: 'shared-video', providerId: 'xd',
-      label: 'Gateway', supportsEdit: true,
-    },
-    {
-      id: 'media:local:shared-video', modelId: 'shared-video', providerId: 'local',
-      label: 'Local', supportsEdit: true,
-    },
-  ];
-  const config = {
-    models,
-    defaults: { standard: models[0]!.id, draft: models[0]!.id, best: models[0]!.id },
-  };
-
-  it('旧通道按完整来源筛选并恢复失效默认，不缩减 Core 原目录', () => {
-    const legacy = filterLegacyCindyMediaConfig(
-      config,
-      (model) => model.providerId === 'local' && model.modelId === 'shared-video',
-    );
-    expect(legacy.models).toEqual([models[2]]);
-    expect(legacy.defaults).toEqual({
-      standard: models[2]!.id,
-      draft: models[2]!.id,
-      best: models[2]!.id,
-    });
-    expect(config.models).toHaveLength(3);
-    expect(config.defaults.standard).toBe(models[0]!.id);
-  });
-
-  it('保留仍可执行的默认；没有旧通道候选时不伪造选型', () => {
-    expect(filterLegacyCindyMediaConfig(config, () => true)).toEqual(config);
-    expect(filterLegacyCindyMediaConfig(config, () => false)).toEqual({ models: [], defaults: null });
   });
 });
 
@@ -261,6 +219,20 @@ describe('deriveCindyMediaConfig — 停用过滤(model-disable override)', () =
 
   it('不传谓词 = 不过滤(既有调用方为空的兼容路径)', () => {
     expect(deriveCindyMediaConfig([XD], 'image').models).toHaveLength(3);
+  });
+
+  it('显示开关关闭的图像型号不进作图清单,目录默认回落可见项', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD],
+      'image',
+      undefined,
+      undefined,
+      undefined,
+      (_providerId, modelId, defaultEnabled) =>
+        modelId === 'gpt-image-2' ? false : defaultEnabled !== false,
+    );
+    expect(cfg.models.map((m) => m.id)).toEqual(['gemini-3-pro-image', 'gemini-3.1-flash-image']);
+    expect(cfg.defaults?.standard).toBe('gemini-3-pro-image');
   });
 });
 

@@ -1,17 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+
+vi.mock('electron', () => ({ app: { getPath: () => '/tmp/cindy-credential-switch-test' } }));
+vi.mock('original-fs', async () => {
+  const fs = await import('node:fs');
+  return { ...fs, default: fs };
+});
+vi.mock('electron-store', () => ({ default: class {
+  get(): unknown { return undefined; }
+  set(): void {}
+  delete(): void {}
+} }));
+
+const nativeLogin = vi.hoisted(() => ({ connected: false }));
+vi.mock('../claude-native-auth.js', () => ({ hasClaudeNativeLogin: () => nativeLogin.connected }));
 
 import {
   isCodexThreadModelProviderIdentityMismatch,
-  piProxyProviderIdentity,
   prepareLocalSessionCredentialModeSwitch,
   prepareLocalCodexCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
   type PrepareLocalCodexCredentialModeSwitchInput,
 } from '../codex-credential-switch.js';
 import { rehydrateCloseSuppression } from '../rehydrateCloseSuppression.js';
+import { setActiveCatalog } from '../active-catalog.js';
 
 afterEach(() => {
   rehydrateCloseSuppression.resetForTest();
+  setActiveCatalog(BUNDLED_CATALOG);
+  nativeLogin.connected = false;
 });
 
 describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
@@ -47,6 +64,13 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       currentModel: 'codex/gpt-5.5',
       nextModel: 'codex/gpt-5.4',
       currentCodexProxyActive: true,
+    })).toBe(false);
+  });
+
+  it('keeps a task on its sticky native summary fallback', () => {
+    expect(isCodexThreadModelProviderIdentityMismatch({ agentKind: 'codex',
+      currentProviderId: 'xd', nextProviderId: 'xd', currentModel: 'codex/gpt-6-astra', nextModel: 'codex/gpt-6-astra',
+      currentCodexProxyActive: true, currentCodexThreadModelProviderId: 'cindy_summary',
     })).toBe(false);
   });
 
@@ -125,6 +149,118 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
       nextModel: 'deepseek/deepseek-v4-pro',
       currentCodexProxyActive: true,
       currentCodexThreadModelProviderId: 'cindy_gateway',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  it('rebuilds when the live thread reports a non-Cindy provider before switching to Cindy', () => {
+    // Older app-server/provider combinations report `openai` or a vendor id
+    // instead of Cindy's cindy_* aliases. That is still a sticky thread
+    // identity; hot-switching would reuse response items that the Cindy route
+    // cannot resolve (`Item ... not found`, store=false).
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: 'openai',
+      nextProviderId: 'xd',
+      currentModel: 'gpt-5.4',
+      nextModel: 'codex/gpt-5.5',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'openai',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(true);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(true);
+  });
+
+  it('keeps a raw provider identity for same-provider model changes', () => {
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: 'openai',
+      nextProviderId: 'openai',
+      currentModel: 'gpt-5.4',
+      nextModel: 'gpt-5.5',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'openai',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  it('matches a raw OpenAI identity for an account-specific Codex provider id', () => {
+    const account = buildUserProvider({
+      id: 'openai-account', name: 'OpenAI account',
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    setActiveCatalog({
+      ...BUNDLED_CATALOG,
+      providers: [...BUNDLED_CATALOG.providers, account],
+    });
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: 'openai',
+      nextProviderId: 'openai-account',
+      currentModel: 'gpt-5.4',
+      nextModel: 'gpt-5.5',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'openai',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  it('keeps a raw OpenAI identity for the implicit OAuth route', () => {
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: null,
+      nextProviderId: null,
+      currentModel: 'gpt-5.4',
+      nextModel: 'gpt-5.5',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'openai',
+      codexAuthInjection: 'oauth-bearer',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  it('matches raw Azure identity for a renamed Azure preset connection', () => {
+    const preset = BUNDLED_CATALOG.presets!.find((entry) => entry.id === 'azure-openai-responses')!;
+    const account = buildUserProvider({
+      id: 'azure-openai', name: 'Azure account',
+      auth: { method: 'apiKey' },
+      runtimes: { codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry, presets: BUNDLED_CATALOG.presets });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: 'azure-openai',
+      nextProviderId: 'azure-openai',
+      currentModel: 'gpt-4.1',
+      nextModel: 'gpt-4.1',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'azure',
+    } as const;
+    expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
+    expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
+  });
+
+  it('matches raw source identity for a renamed official preset connection', () => {
+    const preset = BUNDLED_CATALOG.presets!.find((entry) => entry.id === 'openai-api')!;
+    const account = buildUserProvider({
+      id: 'openai-api-account', name: 'OpenAI API account',
+      auth: { method: 'apiKey' },
+      runtimes: { codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry, presets: BUNDLED_CATALOG.presets });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const input = {
+      agentKind: 'codex',
+      currentProviderId: 'openai-api-account',
+      nextProviderId: 'openai-api-account',
+      currentModel: 'gpt-4.1',
+      nextModel: 'gpt-4.1',
+      currentCodexProxyActive: true,
+      currentCodexThreadModelProviderId: 'openai',
     } as const;
     expect(isCodexThreadModelProviderIdentityMismatch(input)).toBe(false);
     expect(shouldCloseSessionForCredentialSwitch(input)).toBe(false);
@@ -258,56 +394,39 @@ describe('shouldCloseSessionForCredentialSwitch codex mode', () => {
   });
 });
 
-describe('piProxyProviderIdentity', () => {
-  it('collapses Cindy gateway aliases to the headerless proxy identity', () => {
-    expect(piProxyProviderIdentity(null)).toBeNull();
-    expect(piProxyProviderIdentity(undefined)).toBeNull();
-    expect(piProxyProviderIdentity('xd')).toBeNull();
-    expect(piProxyProviderIdentity('cindy')).toBeNull();
-    expect(piProxyProviderIdentity('  xd  ')).toBeNull();
-  });
-
-  it('pins native subscription and BYOM sources', () => {
-    expect(piProxyProviderIdentity('xai')).toBe('xai');
-    expect(piProxyProviderIdentity('openai')).toBe('openai');
-    expect(piProxyProviderIdentity('anthropic')).toBe('anthropic');
-    expect(piProxyProviderIdentity('litellm-custom')).toBe('litellm-custom');
-  });
-});
-
-describe('shouldCloseSessionForCredentialSwitch pi proxy identity', () => {
-  it('closes idle Pi when crossing xAI and OpenAI even though both are provider-oauth', () => {
+describe('shouldCloseSessionForCredentialSwitch Pi routing', () => {
+  it('leaves cross-provider viability to the Pi runtime', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'pi',
       currentProviderId: 'xai',
       nextProviderId: 'openai',
       currentModel: 'grok-4.6',
       nextModel: 'gpt-5.6-sol',
-    })).toBe(true);
+    })).toBe(false);
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'pi',
       currentProviderId: 'openai',
       nextProviderId: 'xai',
       currentModel: 'gpt-5.6-sol',
       nextModel: 'grok-4.6',
-    })).toBe(true);
+    })).toBe(false);
   });
 
-  it('closes idle Pi when crossing native xAI and Cindy AI gateway', () => {
+  it('does not infer a restart from native and gateway identities', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'pi',
       currentProviderId: 'xai',
       nextProviderId: 'xd',
       currentModel: 'grok-4.6',
       nextModel: 'gpt-5.6-sol',
-    })).toBe(true);
+    })).toBe(false);
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'pi',
       currentProviderId: 'xd',
       nextProviderId: 'xai',
       currentModel: 'gpt-5.6-sol',
       nextModel: 'grok-4.6',
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('keeps a live Pi process for same-family model changes', () => {
@@ -357,6 +476,48 @@ describe('shouldCloseSessionForCredentialSwitch', () => {
     })).toBe(true);
   });
 
+  describe('未指定来源的会话可能跑在本机 Claude Code 登录上', () => {
+    const implicit = (next: { providerId: string | null; model: string }, current = 'claude-opus-4-7') => ({
+      agentKind: 'claude-code' as const,
+      currentProviderId: null,
+      nextProviderId: next.providerId,
+      currentModel: current,
+      nextModel: next.model,
+    });
+
+    it('订阅已连接:隐式会话换到显式来源、或在 Claude 与非 Claude 模型间切换,都重建', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: 'xd', model: 'claude-opus-4-7' }))).toBe(true);
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'glm-5' }))).toBe(true);
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: null,
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-opus-4-7',
+      })).toBe(true);
+    });
+
+    it('订阅已连接:隐式会话内 Claude 模型之间切换可热切', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'claude-sonnet-4-6' }))).toBe(false);
+    });
+
+    it('没连订阅:行为与改动前一致,不因此重建', () => {
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'glm-5' }))).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch(implicit({ providerId: null, model: 'claude-sonnet-4-6' }))).toBe(false);
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: 'xd',
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-sonnet-4-6',
+      })).toBe(false);
+    });
+
+    it('两侧都是显式来源:不受订阅连接状态影响', () => {
+      nativeLogin.connected = true;
+      expect(shouldCloseSessionForCredentialSwitch({
+        agentKind: 'claude-code', currentProviderId: 'xd', nextProviderId: 'xd',
+        currentModel: 'claude-opus-4-7', nextModel: 'claude-sonnet-4-6',
+      })).toBe(false);
+    });
+  });
+
   it('does not close remote Claude sessions for provider switches', () => {
     expect(shouldCloseSessionForCredentialSwitch({
       agentKind: 'claude-code',
@@ -400,7 +561,7 @@ describe('prepareLocalSessionCredentialModeSwitch', () => {
 
     expect(result).toEqual({ closedSessionIds: ['target-claude'] });
     expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith('target-claude');
+    expect(closeSession).toHaveBeenCalledWith('target-claude', 'runtime-refresh');
     expect(sideEffect).not.toHaveBeenCalled();
   });
 
@@ -482,7 +643,7 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
 
     expect(result).toEqual({ closedSessionIds: ['local-codex-1'] });
     expect(closeSession).toHaveBeenCalledTimes(1);
-    expect(closeSession).toHaveBeenCalledWith('local-codex-1');
+    expect(closeSession).toHaveBeenCalledWith('local-codex-1', 'runtime-refresh');
     expect(sideEffect).not.toHaveBeenCalled();
   });
 
@@ -569,5 +730,75 @@ describe('prepareLocalCodexCredentialModeSwitch', () => {
       fromModeEffective: 'oauth-bearer',
       toMode: 'gateway-key',
     })).rejects.toThrow(/\(oauth-bearer\(registered: fallback\) -> gateway-key\).*busy-codex-1/);
+  });
+});
+
+
+describe('Codex host-scoped credential coordination', () => {
+  it('soft-closes all selected gateway hosts while preserving busy siblings and history resources', async () => {
+    const sideEffect = vi.fn(async () => undefined);
+    const closeSession = vi.fn(async (sessionId: string) => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, sideEffect);
+    });
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local-custom-context:gateway:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'shared', agentKind: 'codex', isTurnRunning: () => false },
+          { id: 'isolated', agentKind: 'codex', codexHostKey: 'local-custom-context:gateway:external-auth', isTurnRunning: () => false },
+          { id: 'oauth', agentKind: 'codex', codexHostKey: 'local-account:openai:oauth', isTurnRunning: () => true },
+          { id: 'remote', agentKind: 'codex', remoteHostId: 'ssh', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual(['shared', 'isolated']);
+    expect(closeSession.mock.calls.map(([id]) => id)).toEqual(['shared', 'isolated']);
+    expect(sideEffect).not.toHaveBeenCalled();
+  });
+
+  it('refuses the entire key refresh before closing any selected busy host', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    await expect(prepareLocalCodexCredentialModeSwitch({
+      hostKeys: ['local', 'local:external-auth'],
+      maker: {
+        listActiveSessions: () => [
+          { id: 'idle', agentKind: 'codex', codexHostKey: 'local', isTurnRunning: () => false },
+          { id: 'busy', agentKind: 'codex', codexHostKey: 'local:external-auth', isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    })).rejects.toThrow(/busy/);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  it('does not close sessions when no host uses the rotated key', async () => {
+    const closeSession = vi.fn(async () => undefined);
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKeys: [],
+      maker: {
+        listActiveSessions: () => [{ id: 'oauth', agentKind: 'codex', isTurnRunning: () => true }],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual([]);
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['local', 'local:external-auth'])('does not block or close a busy sibling when replacing %s', async (hostKey) => {
+    const sibling = hostKey === 'local' ? 'local:external-auth' : 'local';
+    const closeSession = vi.fn(async () => undefined);
+    const result = await prepareLocalCodexCredentialModeSwitch({
+      hostKey,
+      maker: {
+        listActiveSessions: () => [
+          { id: 'target', agentKind: 'codex', codexHostKey: hostKey, isTurnRunning: () => false },
+          { id: 'sibling', agentKind: 'codex', codexHostKey: sibling, isTurnRunning: () => true },
+        ],
+        closeSession,
+      },
+    });
+    expect(result.closedSessionIds).toEqual(['target']);
+    expect(closeSession).toHaveBeenCalledExactlyOnceWith('target', 'runtime-refresh');
   });
 });

@@ -17,6 +17,7 @@
  * "父目录/祖先" 不在这里挡 — UI 已经弹 confirmDialog 警告过, 通过则放行。
  */
 
+import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 
@@ -54,6 +55,16 @@ export function splitExtraDirSlots(dirs: readonly string[]): { user: string[]; l
 /** 运行时 extraDirs 去掉 library 槽前缀,只留真实绝对路径。 */
 export function extraDirsForRuntime(dirs: readonly string[]): string[] {
   return dirs.map((dir) => libraryRootFromSlot(dir));
+}
+
+/** Keep the host-owned slot identity alongside native absolute directory grants. */
+export function libraryRootForRuntime(dirs: readonly string[]): string | null {
+  const slots = dirs.filter(isLibraryExtraDirSlot);
+  return slots.length === 1 ? libraryRootFromSlot(slots[0]) : null;
+}
+
+export function directoryGrantsForRuntime(dirs: readonly string[]) {
+  return { extraDirs: extraDirsForRuntime(dirs), [LIBRARY_READ_ROOT]: libraryRootForRuntime(dirs) };
 }
 
 /** 保留用户自选目录,library 槽最多一条。root 为 null 则撤槽。 */
@@ -107,6 +118,7 @@ function isSelfOrSubdir(candidate: string, base: string): boolean {
 export async function validateExtraDirs(
   rawDirs: string[] | undefined | null,
   workingDir: string | undefined | null,
+  statDirectory: (dir: string) => Promise<{ isDirectory(): boolean }> = fs.stat,
 ): Promise<ValidateResult> {
   const valid: string[] = [];
   const rejected: ValidateResult['rejected'] = [];
@@ -138,11 +150,11 @@ export async function validateExtraDirs(
     }
 
     // 完全重复 — 第一次出现已 push 到 valid; 后续直接静默丢
-    if (seen.has(dir) || seen.has(root)) continue;
+    if (seen.has(dir)) continue;
 
     let stat;
     try {
-      stat = await fs.stat(root);
+      stat = await statDirectory(root);
     } catch {
       rejected.push({ path: dir, reason: 'not-exist' });
       continue;
@@ -165,7 +177,6 @@ export async function validateExtraDirs(
     }
 
     seen.add(dir);
-    seen.add(root);
     valid.push(dir);
   }
 
@@ -192,15 +203,22 @@ async function canonicalDirectoryKey(dir: string): Promise<string> {
 export async function excludeDirectoryGrantConflicts(
   candidates: readonly string[],
   blocked: readonly string[],
+  resolvePath?: (dir: string) => Promise<string>,
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
-  const blockedKeys = await Promise.all(blocked.map(canonicalDirectoryKey));
+  // Bounded recovery probes must not treat a timed-out alias as a disjoint tree.
+  const canonical = (dir: string) => resolvePath
+    ? resolvePath(dir).catch(() => null)
+    : canonicalDirectoryKey(dir);
+  const blockedKeys = await Promise.all(blocked.map(canonical));
+  if (blockedKeys.some((key) => key === null)) return [];
   const result: string[] = [];
   const acceptedKeys: string[] = [];
   for (const candidate of candidates) {
-    const candidateKey = await canonicalDirectoryKey(candidate);
+    const candidateKey = await canonical(candidate);
+    if (candidateKey === null) continue;
     const overlapsBlockedTree = blockedKeys.some((blockedKey) =>
-      isSelfOrSubdir(candidateKey, blockedKey) || isSelfOrSubdir(blockedKey, candidateKey));
+      isSelfOrSubdir(candidateKey, blockedKey!) || isSelfOrSubdir(blockedKey!, candidateKey));
     const overlapsAcceptedTree = acceptedKeys.some((acceptedKey) =>
       isSelfOrSubdir(candidateKey, acceptedKey) || isSelfOrSubdir(acceptedKey, candidateKey));
     if (!overlapsBlockedTree && !overlapsAcceptedTree) {

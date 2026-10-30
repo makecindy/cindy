@@ -3,195 +3,235 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { GuardCommandResult, GuardCommandRunner } from '../codexMicroGuardCore.js';
-
-vi.mock('electron', () => ({
-  app: { getPath: () => '/unused' },
-}));
-
+vi.mock('electron', () => ({ app: { getPath: () => '/unused' } }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
-  desktopMakerLogger: {
-    child: () => ({ info: vi.fn(), warn: vi.fn() }),
-  },
+  desktopMakerLogger: { child: () => ({ info: vi.fn(), warn: vi.fn() }) },
 }));
 
 import { CodexMicroGuardService } from '../CodexMicroGuardService.js';
+import { CodexMicroGuardStore } from '../codexMicroGuardCore.js';
+import { createCodexMicroGuardIpc } from '../codexMicroGuardIpc.js';
+import { GuardEnvironmentRunner, seedLegacyGuard } from './guardRecoveryFixture';
 
 const roots: string[] = [];
+const services: CodexMicroGuardService[] = [];
+const PAUSED = { supported: true, enabled: false, status: 'paused', restartRequired: false };
 
-class EnvironmentRunner implements GuardCommandRunner {
-  nodeOptions: string | null;
-  readonly commands: string[][] = [];
-  failNextMutation = false;
-
-  constructor(nodeOptions: string | null) {
-    this.nodeOptions = nodeOptions;
-  }
-
-  async run(arguments_: readonly string[]): Promise<GuardCommandResult> {
-    this.commands.push([...arguments_]);
-    if (arguments_[0] === 'print') {
-      return {
-        status: 0,
-        stdout: printEnvironment(this.nodeOptions),
-        stderr: '',
-      };
-    }
-    if (this.failNextMutation) {
-      this.failNextMutation = false;
-      return { status: 7, stdout: '', stderr: 'failed' };
-    }
-    if (arguments_[0] === 'setenv') this.nodeOptions = arguments_[2] ?? '';
-    if (arguments_[0] === 'unsetenv') this.nodeOptions = null;
-    return { status: 0, stdout: '', stderr: '' };
-  }
-}
-
-function printEnvironment(nodeOptions: string | null): string {
-  return `gui/501 = {\n\tenvironment = {\n\t\tPATH => /bin\n${
-    nodeOptions === null ? '' : `\t\tNODE_OPTIONS =>${nodeOptions ? ` ${nodeOptions}` : ''}\n`
-  }\t}\n}\n`;
-}
-
-function paths() {
+function fixture(legacy = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-guard-service-'));
   roots.push(root);
-  return {
-    supportPath: path.join(root, 'support'),
-    settingsPath: path.join(root, 'settings.json'),
+  const supportPath = path.join(root, 'CindyCodexMicroGuard', 'aaaaaaaaaaaa');
+  const store = new CodexMicroGuardStore(supportPath);
+  const runner = new GuardEnvironmentRunner(legacy ? seedLegacyGuard(store) : null);
+  const environment = { NODE_OPTIONS: runner.nodeOptions ?? '' };
+  const make = (overrides: ConstructorParameters<typeof CodexMicroGuardService>[0] = {}) => {
+    const service = new CodexMicroGuardService({
+      platform: 'darwin',
+      supportPath,
+      launchctlDomain: 'gui/501',
+      runner,
+      environment,
+      ...overrides,
+    });
+    services.push(service);
+    return service;
   };
+  return { root, supportPath, store, runner, environment, make };
 }
 
-function service(
-  paths_: ReturnType<typeof paths>,
-  runner: GuardCommandRunner,
-): CodexMicroGuardService {
-  return new CodexMicroGuardService({
-    platform: 'darwin',
-    ...paths_,
-    launchctlDomain: 'gui/501',
-    runner,
-    hookContents: '// safe test hook\n',
-    heartbeatIntervalMs: 60_000,
-  });
-}
-
-afterEach(() => {
+afterEach(async () => {
+  for (const service of services.splice(0)) await service.dispose();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe('CodexMicroGuardService', () => {
-  it('reports unsupported without touching launchctl on other platforms', async () => {
-    const locations = paths();
-    const runner = new EnvironmentRunner('--trace-warnings');
-    const instance = new CodexMicroGuardService({
-      platform: 'win32',
-      ...locations,
-      runner,
-      hookContents: '// hook\n',
-    });
-
-    expect(await instance.getState()).toEqual({
-      supported: false,
-      enabled: false,
-      status: 'unsupported',
-    });
-    expect(runner.commands).toEqual([]);
-    await instance.dispose();
+describe('CodexMicroGuardService suspension', () => {
+  it('starts paused without installing a hook, setting NODE_OPTIONS or scheduling a heartbeat', async () => {
+    const f = fixture();
+    const interval = vi.spyOn(globalThis, 'setInterval');
+    try {
+      expect(await f.make().getState()).toEqual(PAUSED);
+      expect(f.runner.commands).toEqual([['print', 'gui/501']]);
+      expect(fs.existsSync(f.store.hookPath)).toBe(false);
+      expect(interval).not.toHaveBeenCalled();
+    } finally {
+      interval.mockRestore();
+    }
   });
 
-  it('persists an override, reports interception, and restores on graceful quit', async () => {
-    const locations = paths();
-    const runner = new EnvironmentRunner('--trace-warnings');
-    const instance = service(locations, runner);
+  it.each(['{"enabled":true}', '{"enabled":false}', 'broken'])(
+    'retires previous protection regardless of legacy preference %s and preserves that file',
+    async (preference) => {
+      const f = fixture(true);
+      const settingsPath = path.join(f.root, 'codex-micro-guard.json');
+      fs.writeFileSync(settingsPath, preference);
+      const service = f.make();
+      expect(await service.getState()).toEqual(PAUSED);
+      expect(f.runner.nodeOptions).toBeNull();
+      expect(f.environment.NODE_OPTIONS).toBeUndefined();
+      expect(f.store.isFresh()).toBe(false);
+      expect(fs.existsSync(f.store.hookPath)).toBe(true);
+      expect(fs.readFileSync(settingsPath, 'utf8')).toBe(preference);
+      await service.dispose();
+      expect(await f.make().getState()).toEqual(PAUSED);
+      expect(f.runner.commands.filter(([command]) => command === 'setenv')).toEqual([]);
+    },
+  );
 
-    expect(await instance.getState()).toMatchObject({ enabled: false, status: 'disabled' });
-    expect(await instance.setEnabled(true)).toMatchObject({ enabled: true, status: 'protecting' });
-    expect(runner.nodeOptions).toBe(
-      `--trace-warnings --require=${path.join(locations.supportPath, 'guard-hook.cjs')}`,
-    );
-    expect(JSON.parse(fs.readFileSync(locations.settingsPath, 'utf8'))).toEqual({ enabled: true });
-
-    fs.writeFileSync(
-      path.join(locations.supportPath, 'receipt.json'),
-      JSON.stringify({ interceptedAt: Date.now() / 1_000, service: 'service-fixture.js' }),
-      { mode: 0o600 },
-    );
-    expect(await instance.getState()).toMatchObject({ status: 'intercepted' });
-
-    await instance.dispose();
-    expect(runner.nodeOptions).toBe('--trace-warnings');
-    // Graceful quit restores the environment but preserves the user's setting,
-    // so the next Cindy launch resumes protection.
-    expect(JSON.parse(fs.readFileSync(locations.settingsPath, 'utf8'))).toEqual({ enabled: true });
+  it('cannot reactivate through old IPC enable requests, rapid toggles or subsequent startup', async () => {
+    const f = fixture();
+    const service = f.make();
+    const assertTrustedSender = vi.fn();
+    const ipc = createCodexMicroGuardIpc({
+      assertTrustedSender,
+      getState: () => service.getState(),
+      setEnabled: (enabled) => service.setEnabled(enabled),
+      recover: () => service.recover(),
+    });
+    const results = await Promise.all([
+      ipc.setEnabled({}, true),
+      ipc.setEnabled({}, false),
+      ipc.setEnabled({}, true),
+    ]);
+    expect(results).toEqual([PAUSED, PAUSED, PAUSED]);
+    expect(assertTrustedSender).toHaveBeenCalledTimes(3);
+    await service.dispose();
+    expect(await f.make().getState()).toEqual(PAUSED);
+    expect(f.runner.commands.every(([command]) => command === 'print')).toBe(true);
+    expect(fs.existsSync(f.store.hookPath)).toBe(false);
   });
 
-  it('keeps shared protection until the final live instance exits', async () => {
-    const locations = paths();
-    const runner = new EnvironmentRunner(null);
-    const first = service(locations, runner);
-    const second = service(locations, runner);
-    const token = `--require=${path.join(locations.supportPath, 'guard-hook.cjs')}`;
+  it('exposes failed restoration and broadcasts the paused state after a manual retry', async () => {
+    const f = fixture(true);
+    f.runner.failNextMutation = true;
+    const service = f.make();
+    const listener = vi.fn();
+    service.subscribe(listener);
+    expect(await service.getState()).toMatchObject({ enabled: false, status: 'recovery-required' });
+    expect(f.store.readState()).not.toBeNull();
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'recovery-required' }),
+    );
+    expect(await service.recover()).toEqual(PAUSED);
+    expect(listener).toHaveBeenLastCalledWith(PAUSED);
+    expect(f.runner.nodeOptions).toBeNull();
+  });
 
-    await first.setEnabled(true);
-    expect(await second.getState()).toMatchObject({ enabled: true, status: 'protecting' });
+  it('keeps failed recovery visible through IPC instead of treating the request as completed', async () => {
+    const f = fixture(true);
+    f.runner.ignoreMutations = true;
+    const service = f.make();
+    const ipc = createCodexMicroGuardIpc({
+      assertTrustedSender: () => undefined,
+      getState: () => service.getState(),
+      setEnabled: (enabled) => service.setEnabled(enabled),
+      recover: () => service.recover(),
+    });
+    expect(await ipc.get({})).toMatchObject({ status: 'recovery-required' });
+    await expect(ipc.recover({})).rejects.toThrow('INTERNAL');
+    expect(await service.getState()).toMatchObject({ status: 'recovery-required' });
+    f.runner.ignoreMutations = false;
+  });
 
+  it('retries failed recovery on normal exit and on a later launch', async () => {
+    const f = fixture(true);
+    f.runner.ignoreMutations = true;
+    const first = f.make();
+    expect(await first.getState()).toMatchObject({ status: 'recovery-required' });
     await first.dispose();
-    expect(runner.nodeOptions).toBe(token);
-    expect(fs.existsSync(path.join(locations.supportPath, 'enabled'))).toBe(true);
-    expect(await second.getState()).toMatchObject({ enabled: true, status: 'protecting' });
-
-    await second.dispose();
-    expect(runner.nodeOptions).toBeNull();
-    expect(fs.existsSync(path.join(locations.supportPath, 'enabled'))).toBe(false);
+    expect(f.runner.commands.filter(([command]) => command === 'unsetenv')).toHaveLength(2);
+    f.runner.ignoreMutations = false;
+    expect(await f.make().getState()).toEqual(PAUSED);
+    expect(f.runner.nodeOptions).toBeNull();
   });
 
-  it('re-enables a persisted preference on startup and recover turns it off', async () => {
-    const locations = paths();
-    fs.writeFileSync(locations.settingsPath, JSON.stringify({ enabled: true }));
-    const runner = new EnvironmentRunner(null);
-    const instance = service(locations, runner);
+  it.each(['current', 'previous'] as const)(
+    'rechecks late injection from the %s profile on normal exit after successful startup cleanup',
+    async (profile) => {
+      const testFixture = fixture(true);
+      const service = testFixture.make();
+      expect(await service.getState()).toEqual(PAUSED);
+      expect(testFixture.runner.nodeOptions).toBeNull();
+      const legacyStore =
+        profile === 'current'
+          ? testFixture.store
+          : new CodexMicroGuardStore(
+              path.join(path.dirname(testFixture.supportPath), 'bbbbbbbbbbbb'),
+            );
+      const externalOptions = '--trace-warnings --require=unrelated-preload.cjs';
+      const token = seedLegacyGuard(legacyStore, externalOptions);
+      testFixture.runner.nodeOptions = `${externalOptions} ${token}`;
+      expect(await service.getState()).toEqual(PAUSED);
 
-    expect(await instance.getState()).toMatchObject({ enabled: true, status: 'protecting' });
-    expect(runner.nodeOptions).toBe(
-      `--require=${path.join(locations.supportPath, 'guard-hook.cjs')}`,
+      await service.dispose();
+
+      expect(testFixture.runner.nodeOptions).toBe(externalOptions);
+      expect(legacyStore.isFresh()).toBe(false);
+      expect(legacyStore.readState()).toBeNull();
+      expect(fs.existsSync(legacyStore.hookPath)).toBe(true);
+      const commandCount = testFixture.runner.commands.length;
+      await service.dispose();
+      expect(testFixture.runner.commands).toHaveLength(commandCount);
+    },
+  );
+
+  it('preserves failed late-injection recovery for the next startup without blocking exit', async () => {
+    const testFixture = fixture(true);
+    const service = testFixture.make();
+    expect(await service.getState()).toEqual(PAUSED);
+    const token = seedLegacyGuard(testFixture.store);
+    testFixture.runner.nodeOptions = token;
+    testFixture.runner.failNextMutation = true;
+
+    await expect(service.dispose()).resolves.toBeUndefined();
+
+    expect(testFixture.runner.nodeOptions).toBe(token);
+    expect(testFixture.store.readState()).not.toBeNull();
+    expect(await service.getState()).toMatchObject({ status: 'recovery-required' });
+    expect(await testFixture.make().getState()).toEqual(PAUSED);
+    expect(testFixture.runner.nodeOptions).toBeNull();
+    expect(testFixture.store.readState()).toBeNull();
+  });
+
+  it('cleans old profiles on an upgrade with no current-profile recovery state', async () => {
+    const f = fixture();
+    const previous = new CodexMicroGuardStore(
+      path.join(path.dirname(f.supportPath), 'bbbbbbbbbbbb'),
     );
-
-    expect(await instance.recover()).toMatchObject({ enabled: false, status: 'disabled' });
-    expect(runner.nodeOptions).toBeNull();
-    expect(fs.existsSync(locations.settingsPath)).toBe(false);
-    await instance.dispose();
+    f.runner.nodeOptions = seedLegacyGuard(previous);
+    expect(await f.make().getState()).toEqual(PAUSED);
+    expect(f.runner.nodeOptions).toBeNull();
+    expect(previous.isFresh()).toBe(false);
+    expect(previous.readState()).toBeNull();
   });
 
-  it('serializes rapid toggles and preserves the original environment', async () => {
-    const locations = paths();
-    const runner = new EnvironmentRunner('--trace-warnings');
-    const instance = service(locations, runner);
-
-    const enable = instance.setEnabled(true);
-    const disable = instance.setEnabled(false);
-    await Promise.all([enable, disable]);
-
-    expect(await instance.getState()).toMatchObject({ enabled: false, status: 'disabled' });
-    expect(runner.nodeOptions).toBe('--trace-warnings');
-    expect(fs.existsSync(locations.settingsPath)).toBe(false);
-    await instance.dispose();
+  it('allows multiple new instances to start and exit without reinstalling any preload', async () => {
+    const f = fixture(true);
+    const first = f.make();
+    const second = f.make();
+    expect(await Promise.all([first.getState(), second.getState()])).toEqual([PAUSED, PAUSED]);
+    await first.dispose();
+    expect(await second.getState()).toEqual(PAUSED);
+    expect(f.runner.nodeOptions).toBeNull();
+    expect(f.runner.commands.filter(([command]) => command === 'unsetenv')).toHaveLength(1);
   });
 
-  it('deactivates markers and exposes recovery when restoration fails', async () => {
-    const locations = paths();
-    const runner = new EnvironmentRunner(null);
-    const instance = service(locations, runner);
-    await instance.setEnabled(true);
-    runner.failNextMutation = true;
-
-    await expect(instance.setEnabled(false)).rejects.toThrow();
-    expect(await instance.getState()).toMatchObject({
-      enabled: false,
-      status: 'recovery-required',
-    });
-    expect(fs.existsSync(path.join(locations.supportPath, 'enabled'))).toBe(false);
-    await instance.recover();
-    await instance.dispose();
-  });
+  it.each(['win32', 'linux'] as const)(
+    'leaves the environment and filesystem alone on %s',
+    async (platform) => {
+      const f = fixture();
+      f.runner.nodeOptions = '--trace-warnings';
+      f.environment.NODE_OPTIONS = '--require=' + f.store.hookPath;
+      const service = f.make({ platform });
+      expect(await service.getState()).toEqual({
+        supported: false,
+        enabled: false,
+        status: 'unsupported',
+      });
+      expect(await service.setEnabled(true)).toMatchObject({ status: 'unsupported' });
+      await service.dispose();
+      expect(f.runner.commands).toEqual([]);
+      expect(f.environment.NODE_OPTIONS).toBe('--require=' + f.store.hookPath);
+      expect(fs.existsSync(path.dirname(f.supportPath))).toBe(false);
+    },
+  );
 });

@@ -504,18 +504,8 @@ export function restoreInvalidationStateOnStartup(
         : { recoveryRequiredReason: persistedMarker.reason }),
     };
   }
-  // marker 是 logout 的提交点。若进程在「写 marker → unlink auth」之间崩溃，启动时按
-  // local fingerprint 识别并清掉旧凭证；即使删除失败，readLocalCodexAuthState 也会忽略它。
-  if (
-    isDurableDisconnectMarker(marker) &&
-    localFileMatchesInvalidatedMarker(marker, localAuthPath)
-  ) {
-    try {
-      fs.unlinkSync(localAuthPath);
-    } catch {
-      /* read path 仍会按 marker fingerprint 抑制，不能让残留文件复活登录态。 */
-    }
-  }
+  // A user disconnect only disables Cindy's use. Keep the credential intact,
+  // including when localAuthPath is the native/shared login file itself.
   const localExists = fs.existsSync(localAuthPath);
   const hasReplacementLocalCredential =
     localExists &&

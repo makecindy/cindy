@@ -1,13 +1,43 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canOfferCodexHistoryRecovery,
   extractNonSecretErrorSignals,
   GATEWAY_PROXY_TOKEN_INVALID_REASON,
   isCindyGatewayProxyTokenInvalidError,
   isGatewayProxyTokenInvalidError,
+  isResponsesLiteParallelToolCallsError,
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
+  redactSensitiveTextDeep,
+  parseAgentErrorCode,
 } from './errorRedaction.js';
+
+describe('explicit Codex history recovery offer', () => {
+  const message = 'stream disconnected before completion: stream closed before response.completed';
+  it('offers recovery for the terminal close without classifying it as encryption failure', () => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex' })).toBe(true);
+  });
+  it.each([
+    { running: true }, { remoteHostId: 'ssh' }, { agentDeviceId: 'worker' },
+    { agentKind: 'cc' }, { message: 'Connection reset' },
+    { message: 'stream disconnected before completion: timeout' },
+  ])('does not offer unsupported or unrelated recovery: %s', overrides => {
+    expect(canOfferCodexHistoryRecovery({ message, agentKind: 'codex', ...overrides })).toBe(false);
+  });
+});
+
+describe('Responses Lite request error classification', () => {
+  it('recognizes the upstream error inside a JSON envelope', () => {
+    expect(isResponsesLiteParallelToolCallsError(JSON.stringify({ error: {
+      message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
+      type: 'invalid_request_error', param: 'parallel_tool_calls', code: 'unsupported_value',
+    } }))).toBe(true);
+  });
+  it.each(['Invalid API key', 'Unsupported effort value', 'parallel_tool_calls is unsupported', ''])('does not misclassify unrelated errors: %s', message => {
+    expect(isResponsesLiteParallelToolCallsError(message)).toBe(false);
+  });
+});
 
 describe('matchesDeterministicUsageExhaustionText', () => {
   it.each([
@@ -27,6 +57,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'exceeded_budget',
     '账户余额不足，请充值',
     '账户欠费',
+    'You hit your spend cap set by the owner of your workspace. Ask them to raise it.',
   ])('recognizes deterministic usage exhaustion: %s', (message) => {
     expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
   });
@@ -213,6 +244,84 @@ describe('redactSensitiveText', () => {
   });
 });
 
+describe('redactSensitiveTextDeep', () => {
+  const SK = 'sk-live-abcdef123456';
+  const BEARER = 'Bearer eyJhbGciOiJIUzI1NiJ9.payload';
+  const AIGW = 'aigw:user-9f3a2b';
+  const PASSWORD = 'password=hunter2';
+
+  it('redacts every string leaf of a nested object and preserves the shape', () => {
+    expect(
+      redactSensitiveTextDeep({
+        message: `provider refused key=${SK}`,
+        nested: { deep: { sdkError: `unauthorized ${BEARER}` } },
+        reason: `principal ${AIGW} rejected`,
+        sibling: 'plain diagnostic text',
+      }),
+    ).toEqual({
+      message: 'provider refused key=[REDACTED_KEY]',
+      nested: { deep: { sdkError: 'unauthorized Bearer [REDACTED]' } },
+      reason: 'principal aigw:[REDACTED] rejected',
+      sibling: 'plain diagnostic text',
+    });
+    // 顶层字符串本身也走同一条规则。
+    expect(redactSensitiveTextDeep(SK)).toBe('[REDACTED_KEY]');
+  });
+
+  it('walks arrays and the objects nested inside them', () => {
+    expect(redactSensitiveTextDeep([SK, { reason: AIGW }, [`x ${PASSWORD}`]])).toEqual([
+      '[REDACTED_KEY]',
+      { reason: 'aigw:[REDACTED]' },
+      ['x password=[REDACTED]'],
+    ]);
+  });
+
+  it('returns non-string leaves untouched', () => {
+    // 不要用 new Date() 当样本:deep 走 Object.entries, Date 没有自有可枚举属性,
+    // 会被重建成空对象 {}。用 number / boolean / null / undefined。
+    const output = redactSensitiveTextDeep({
+      code: 42,
+      ok: true,
+      nil: null,
+      missing: undefined,
+    });
+    expect(output).toStrictEqual({ code: 42, ok: true, nil: null, missing: undefined });
+    expect(Object.keys(output as Record<string, unknown>)).toEqual([
+      'code',
+      'ok',
+      'nil',
+      'missing',
+    ]);
+  });
+
+  it('does not mutate the input', () => {
+    const input = { message: `key=${SK}`, nested: [{ reason: AIGW }] };
+    const snapshot = structuredClone(input);
+
+    const output = redactSensitiveTextDeep(input) as typeof input;
+
+    expect(input).toEqual(snapshot);
+    expect(output).not.toBe(input);
+    expect(output.nested).not.toBe(input.nested);
+  });
+
+  it('is idempotent across repeated passes', () => {
+    const first = redactSensitiveTextDeep({
+      message: `key=${SK} ${BEARER}`,
+      reason: AIGW,
+      list: [PASSWORD],
+    });
+    const second = redactSensitiveTextDeep(first);
+
+    expect(second).toEqual(first);
+    const serialized = JSON.stringify(second);
+    // 占位符不能被第二轮再吃一遍(撑成 [REDACTED]])。
+    expect(serialized).not.toContain('[REDACTED]]');
+    expect(serialized).not.toContain('abcdef123456');
+    expect(serialized).not.toContain('hunter2');
+  });
+});
+
 describe('isGatewayProxyTokenInvalidError', () => {
   it('matches LiteLLM invalid proxy-token 401 copy after redaction', () => {
     expect(
@@ -241,5 +350,22 @@ describe('isGatewayProxyTokenInvalidError', () => {
     expect(isCindyGatewayProxyTokenInvalidError({ message, providerId: 'custom-litellm' })).toBe(
       false,
     );
+  });
+});
+
+
+describe('agent error envelopes shared by desktop and mobile', () => {
+  it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
+    'parses %s directly and inside an IPC error', code => {
+      for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: "]) {
+        expect(parseAgentErrorCode(`${prefix}[${code}] first line\nsecond line`)).toEqual({ code, fallback: 'first line\nsecond line' });
+      }
+    },
+  );
+  it('preserves the legacy unknown-REMOTE fallback without treating arbitrary bracket text as a code', () => {
+    expect(parseAgentErrorCode('[REMOTE_FUTURE] diagnostic')).toEqual({ code: 'REMOTE_FUTURE', fallback: 'diagnostic' });
+    expect(parseAgentErrorCode('[REMOTE_FUTURE]')).toEqual({ code: 'REMOTE_FUTURE', fallback: '[REMOTE_FUTURE]' });
+    expect(parseAgentErrorCode('[CUSTOM_ERROR] diagnostic')).toBeNull();
+    expect(parseAgentErrorCode('prose containing [REMOTE_FUTURE] diagnostic')).toBeNull();
   });
 });

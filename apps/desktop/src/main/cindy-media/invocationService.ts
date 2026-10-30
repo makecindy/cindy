@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { MediaCapability } from '@cindy/model-providers';
 import type { CindyMediaToolRequest } from 'cindy-tools';
 import type {
@@ -11,7 +12,7 @@ import type {
   ResolvedMediaInvocationGuide,
 } from '../../shared/mediaInvocation.js';
 import { MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION } from '../../shared/mediaInvocation.js';
-import { GHOST_IMAGE_ASPECT_RATIOS, type GhostImageAspectRatio } from '../../shared/ghost.js';
+import { imageParameterSchema, normalizeImageParameters, type ImageParameters } from './imageParameters.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.js';
@@ -21,6 +22,7 @@ import { ServerApiError } from '../serverApiClient.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   fetchMediaInvocationGuide,
@@ -32,13 +34,19 @@ import {
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import * as blobStore from './blobStore.js';
 import { ingestMedia } from './ingest.js';
-import { mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { downloadMediaResult, MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
+import { mediaErrorForLog, mediaErrorStackForLog, mediaRequestParamsForLog, mediaRequestUrlForLog } from './mediaRequestLog.js';
+import { normalizeBase64Payload, parseDataUrl } from './dataUrl.js';
 import {
   invokeProviderMedia,
   resolveProviderMediaModel,
+  resolveProviderVideoConnection,
   type ProviderMediaRuntimeModel,
+  type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
-import { sniffMediaMime } from './sniffMediaMime.js';
+import { CLIENT_PROVIDER_VIDEO_GUIDE_ID, customVideoGuide, validateCustomVideoBody } from './customVideoProtocol.js';
+import { fetchVideoTaskContent, isVideoTaskContentRef } from './videoTaskContent.js';
+import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
 import {
   countMediaInvocations,
   createMediaInvocation,
@@ -61,18 +69,17 @@ const MAX_MEDIA_RESULTS = 16;
 const MAX_LOCAL_MEDIA_INPUTS = 32;
 const MAX_LOCAL_MEDIA_INPUT_TOTAL_BYTES = 128 * 1024 * 1024;
 const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
-const TERMINAL_MEDIA_RESULT_ERRORS = new Set([
-  'MEDIA_DOWNLOAD_REJECTED',
-  'MEDIA_RESULT_INVALID',
-  'MEDIA_RESULT_MISSING',
-  'MEDIA_RESULT_TOO_LARGE',
-  'RESPONSE_TOO_LARGE',
-]);
 const CLIENT_PROVIDER_IMAGE_GUIDE_ID = 'cindy-provider-image-v1';
 
 interface MediaConnection {
   baseUrl: string;
   apiKey: string;
+  pathPrefix?: string;
+  headers?: Record<string, string>;
+  assertCurrent?(): void;
+  beforeSubmit?(): void;
+  /** 上游以 401 拒绝时调用;只有携带 Cindy AI Key 的网关连接提供。 */
+  onUnauthorized?(): void;
 }
 
 class MediaInvocationError extends Error {
@@ -87,28 +94,38 @@ class MediaInvocationError extends Error {
 }
 
 const recoveredDatabases = new WeakSet<DbClient>();
+// Only coalesce active operations; the persisted invocation remains the result source.
+const activeInvocations = new Set<string>();
 
 interface MediaAuthScope {
   owner: string;
   dbOwnerId: string;
   generation: number;
+  downloadContext?: MediaDownloadContext;
+  assertSourceCurrent?(): void;
+  taskContent?: { connection: ProviderVideoConnection; taskId: string };
 }
 
-function currentAuthScope(): MediaAuthScope {
+function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScope {
   const state = authManager.getAuthState();
   const userId = state.user?.id ?? null;
   const dbOwnerId = state.dataOwnerId;
-  if (!userId || !dbOwnerId) {
+  if (!dbOwnerId || (state.mode !== 'local' && !userId) || state.mode === 'signed-out') {
     throw new MediaInvocationError('CONNECTION_UNAVAILABLE', '当前没有可用的 Cindy 登录态');
   }
   return {
-    owner: `${authManager.getActiveAuthRealm()}:${userId}`,
+    owner: state.mode === 'local'
+      ? `local:${dbOwnerId}`
+      : `${authManager.getActiveAuthRealm()}:${userId}`,
     dbOwnerId,
     generation: state.ownerGeneration,
+    downloadContext,
   };
 }
 
 function assertAuthScope(scope: MediaAuthScope, expectedOwner = scope.owner): void {
+  scope.downloadContext?.assertActive();
+  scope.assertSourceCurrent?.();
   const current = currentAuthScope();
   if (
     current.owner !== expectedOwner ||
@@ -195,7 +212,7 @@ function providerImageGuide(
     schemaVersion: MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION,
     guideId: CLIENT_PROVIDER_IMAGE_GUIDE_ID,
     modelId: model.id,
-    revision: '1',
+    revision: '3',
     connection: { providerId: model.providerId },
     capability,
     request: {
@@ -209,11 +226,13 @@ function providerImageGuide(
     },
     response: {
       mode: 'sync',
-      media: [{ path: ['image'], encoding: 'base64', kind: 'image' }],
+      media: [
+        { path: ['image'], encoding: 'base64', kind: 'image' },
+      ],
     },
     instructions: edit
-      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组；可选 aspect_ratio。'
-      : '必填 prompt；可选 aspect_ratio。model 与凭证由 Cindy 注入。',
+      ? '必填 prompt 和 image。image 可传一条 Cindy 本地媒体引用或引用数组。尺寸与质量参数见 inputSchema；不要丢弃用户的明确要求。'
+      : '必填 prompt。尺寸与质量参数见 inputSchema；不指定时由上游决定。model 与凭证由 Cindy 注入。',
     exampleBody: {
       prompt: edit ? '描述希望如何修改图片' : '描述希望生成的图片',
       ...(edit ? { image: 'cindy-media://blobs/<hash>.png' } : {}),
@@ -234,7 +253,7 @@ function providerImageGuide(
               },
             }
           : {}),
-        aspect_ratio: { type: 'string', enum: [...GHOST_IMAGE_ASPECT_RATIOS] },
+        ...imageParameterSchema(model.imageProtocol, model.id),
       },
     },
     officialDocs: model.officialDocs ?? 'https://platform.openai.com/docs/guides/images',
@@ -243,6 +262,33 @@ function providerImageGuide(
 
 function isClientProviderInvocation(invocation: StoredMediaInvocation): boolean {
   return invocation.guide.guideId === CLIENT_PROVIDER_IMAGE_GUIDE_ID;
+}
+
+function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
+  return invocation.guide.guideId === CLIENT_PROVIDER_VIDEO_GUIDE_ID;
+}
+
+function resolveInvocationConnection(invocation: StoredMediaInvocation): MediaConnection {
+  if (!isClientVideoInvocation(invocation)) return resolveConnection(invocation.guide.connection.providerId);
+  const connection = resolveProviderVideoConnection(invocation.guide.connection.providerId, invocation.modelId);
+  if (!connection || connection.revision !== invocation.guide.revision) {
+    throw new MediaInvocationError('CONNECTION_CHANGED', '视频连接已改变，请恢复原连接后查询原任务；不要重新生成');
+  }
+  const assertCurrent = () => {
+    try { connection.assertCurrent(); }
+    catch { throw new MediaInvocationError('CONNECTION_CHANGED', '视频连接或账号已改变，本次操作已停止'); }
+  };
+  assertCurrent();
+  return {
+    ...connection, apiKey: '', pathPrefix: new URL(connection.baseUrl).pathname.replace(/\/+$/, ''), assertCurrent,
+    beforeSubmit: () => {
+      // Re-read executable membership after reference reads and the database claim.
+      // Paid task polling/recovery remains independent of the model's enable switch.
+      if (!resolveProviderMediaModel(invocation.guide.connection.providerId, invocation.modelId, invocation.capability)) {
+        throw new MediaInvocationError('MODEL_NOT_AVAILABLE', '该模型或来源已停用或不再支持本次能力，本次生成未发出');
+      }
+    },
+  };
 }
 
 function resolveConnection(providerId: string): MediaConnection {
@@ -273,7 +319,7 @@ function resolveConnection(providerId: string): MediaConnection {
   ) {
     throw new MediaInvocationError('CONNECTION_INVALID', 'Cindy AI endpoint 不合法');
   }
-  return { baseUrl, apiKey };
+  return { baseUrl, apiKey, onUnauthorized: () => reportCindyGatewayKeyRejected(apiKey) };
 }
 
 function requestUrl(baseUrl: string, relativePath: string): string {
@@ -373,15 +419,18 @@ function multipartRequestBody(
       if (typeof item !== 'string') {
         throw new MediaInvocationError('MEDIA_INPUT_INVALID', `媒体字段 ${field} 必须是媒体地址`);
       }
-      const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/i.exec(item);
-      if (!match) {
+      // 结构性解析（#5081）：单张 ≥ ~3MiB 的参考图在组装阶段抛 RangeError，
+      // 这里不再对数百万字符的 base64 载荷跑带捕获组的正则，只切分前缀并逐字符校验。
+      const parsed = parseDataUrl(item);
+      const encoded = parsed?.base64 ? normalizeBase64Payload(parsed.payload) : null;
+      if (!parsed || !encoded) {
         throw new MediaInvocationError(
           'MEDIA_INPUT_INVALID',
           `multipart 媒体字段 ${field} 必须使用 Cindy 受管媒体`,
         );
       }
-      const mimeType = match[1].toLowerCase();
-      const buffer = Buffer.from(match[2].replace(/[\r\n]/g, ''), 'base64');
+      const mimeType = parsed.mimeType;
+      const buffer = Buffer.from(encoded, 'base64');
       if (
         buffer.byteLength === 0 ||
         !mimeType.startsWith(`${fileGuide.kind}/`) ||
@@ -425,11 +474,12 @@ async function dispatchRequest(input: {
   timeoutMs: number;
   maxResponseBytes: number;
   operation: 'submit' | 'poll';
+  recordBilling?(response: Response): Promise<void>;
 }): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   timeout.unref?.();
-  const url = requestUrl(input.connection.baseUrl, input.path);
+  const url = requestUrl(input.connection.baseUrl, `${input.connection.pathPrefix ?? ''}${input.path}`);
   const startedAt = Date.now();
   const requestLog = {
     invocationId: input.invocationId,
@@ -441,6 +491,9 @@ async function dispatchRequest(input: {
     url: mediaRequestUrlForLog(url),
   };
   let responseStatus: number | undefined;
+  // 组装/日志阶段任何异常都发生在出站之前：请求从未发起、不产生费用，必须与
+  // 「结果未知」的上游失败区分开（#5081：RangeError 曾被包成 SUBMISSION_OUTCOME_UNKNOWN）。
+  let dispatched = false;
   try {
     const requestBody = input.body
       ? input.bodyEncoding === 'multipart'
@@ -451,6 +504,9 @@ async function dispatchRequest(input: {
       ...requestLog,
       params: mediaRequestParamsForLog(input.body ?? {}),
     });
+    input.connection.assertCurrent?.();
+    if (input.operation === 'submit') input.connection.beforeSubmit?.();
+    dispatched = true;
     const response = await outboundFetch(url, {
       method: input.method,
       headers: {
@@ -459,19 +515,32 @@ async function dispatchRequest(input: {
           ? { 'Content-Type': 'application/json' }
           : {}),
         ...(input.headers ?? {}),
-        Authorization: `Bearer ${input.connection.apiKey}`,
+        ...(input.connection.apiKey ? { Authorization: `Bearer ${input.connection.apiKey}` } : {}),
+        ...(input.connection.headers ?? {}),
       },
       ...(requestBody ? { body: requestBody } : {}),
       redirect: 'error',
       signal: controller.signal,
     });
     responseStatus = response.status;
+    if (response.status === 401) input.connection.onUnauthorized?.();
     log.info('media request response', {
       ...requestLog,
       status: response.status,
       durationMs: Date.now() - startedAt,
     });
-    const buffer = await readBoundedResponse(response, input.maxResponseBytes);
+    const [body, billing] = await Promise.allSettled([
+      readBoundedResponse(response, input.maxResponseBytes).finally(() => clearTimeout(timeout)),
+      input.recordBilling?.(response),
+    ]);
+    if (body.status === 'rejected') throw body.reason;
+    if (billing.status === 'rejected') {
+      log.warn('media billing failed', { error: mediaErrorForLog(billing.reason) });
+    }
+    const buffer = body.value;
+    // A successful paid response belongs to the original invocation even if
+    // its connection changed in flight. Save it before guarding later reads.
+    if (input.operation === 'poll') input.connection.assertCurrent?.();
     if (!response.ok) {
       const message = providerErrorMessage(buffer);
       if (response.status >= 500) {
@@ -505,13 +574,28 @@ async function dispatchRequest(input: {
       throw new MediaInvocationError('UPSTREAM_RESPONSE_INVALID', '上游成功响应不是合法 JSON');
     }
   } catch (error) {
+    const stack = mediaErrorStackForLog(error);
     log.warn('media request failed', {
       ...requestLog,
       ...(responseStatus !== undefined ? { status: responseStatus } : {}),
       durationMs: Date.now() - startedAt,
+      dispatched,
       error: mediaRequestParamsForLog(error instanceof Error ? error.message : String(error)),
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      ...(stack ? { stack } : {}),
     });
-    if (error instanceof MediaInvocationError) throw error;
+    if (error instanceof MediaInvocationError) {
+      if (error.code === 'CONNECTION_CHANGED' && dispatched && input.operation === 'submit') {
+        throw new MediaInvocationError('SUBMISSION_OUTCOME_UNKNOWN', '视频请求已发出后连接发生改变，无法确认结果；不要重新提交', true);
+      }
+      throw error;
+    }
+    if (!dispatched) {
+      throw new MediaInvocationError(
+        'REQUEST_BUILD_FAILED',
+        `请求在本地组装失败，未向上游发起、不产生费用，可安全重试：${mediaErrorForLog(error)}`,
+      );
+    }
     const aborted = error instanceof Error && error.name === 'AbortError';
     if (input.operation === 'poll') {
       throw new MediaInvocationError(
@@ -696,27 +780,29 @@ async function localImagePath(
 async function providerImageRequest(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
-): Promise<{
+  model: ProviderMediaRuntimeModel,
+): Promise<ImageParameters & {
   prompt: string;
   imagePaths: string[];
-  aspectRatio?: GhostImageAspectRatio;
 }> {
   const prompt = body.prompt;
   if (typeof prompt !== 'string' || prompt.trim().length === 0 || prompt.length > 100_000) {
     throw new MediaInvocationError('REQUEST_INVALID', 'prompt 必须是非空字符串');
   }
-  let aspectRatio: GhostImageAspectRatio | undefined;
-  if (body.aspect_ratio !== undefined) {
-    if (
-      typeof body.aspect_ratio !== 'string' ||
-      !(GHOST_IMAGE_ASPECT_RATIOS as readonly string[]).includes(body.aspect_ratio)
-    ) {
-      throw new MediaInvocationError(
-        'REQUEST_INVALID',
-        `aspect_ratio 只支持 ${GHOST_IMAGE_ASPECT_RATIOS.join(' / ')}`,
-      );
+  let options: ImageParameters;
+  try {
+    const fields = new Set(['model', 'prompt', 'image', 'aspect_ratio', 'size', 'resolution', 'quality']);
+    for (const key of Object.keys(body)) {
+      if (!fields.has(key)) throw new Error(`Unsupported image parameter: ${key}; use prepare.input_schema.`);
     }
-    aspectRatio = body.aspect_ratio as GhostImageAspectRatio;
+    options = normalizeImageParameters(model.imageProtocol, model.id, {
+      aspectRatio: body.aspect_ratio as string | undefined,
+      size: body.size as string | undefined,
+      resolution: body.resolution as string | undefined,
+      quality: body.quality as string | undefined,
+    });
+  } catch (error) {
+    throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
   }
   const imagePaths: string[] = [];
   if (invocation.capability === 'image.edit') {
@@ -734,7 +820,7 @@ async function providerImageRequest(
   return {
     prompt,
     imagePaths,
-    ...(aspectRatio ? { aspectRatio } : {}),
+    ...options,
   };
 }
 
@@ -753,65 +839,45 @@ function assertResultMime(kind: MediaResultKind, mimeType: string): void {
   }
 }
 
-function allowedDownloadUrl(raw: string, extractor: MediaResultExtractor): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游媒体 URL 不合法');
-  }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
-    throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游媒体 URL 必须是 HTTPS');
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  if (parsed.port) {
-    throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游媒体 URL 不允许自定义端口');
-  }
-  const allowed = (extractor.allowedUrlHosts ?? []).some((suffix) => {
-    const normalized = suffix.toLowerCase();
-    return hostname === normalized || hostname.endsWith(`.${normalized}`);
-  });
-  if (!allowed) {
-    throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游媒体 URL 不在调用说明的可信域名内');
-  }
-  return parsed;
-}
-
 async function mediaBytes(
   raw: string,
   extractor: MediaResultExtractor,
-): Promise<{ buffer: Buffer; mimeType: string }> {
+  scope: MediaAuthScope,
+): Promise<blobStore.BlobSource & { mimeType: string; dispose?(): Promise<void> }> {
   let buffer: Buffer;
   let headerMime: string | null = null;
   if (extractor.encoding === 'url') {
-    const url = allowedDownloadUrl(raw, extractor);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 120_000);
-    timeout.unref?.();
+    const downloaded = scope.taskContent && isVideoTaskContentRef(raw, scope.taskContent.taskId, scope.taskContent.connection.baseUrl)
+      ? await fetchVideoTaskContent(scope.taskContent.connection, scope.taskContent.taskId, scope.downloadContext?.signal)
+      : await downloadMediaResult({
+      raw,
+      allowedHosts: extractor.allowedUrlHosts,
+      context: scope.downloadContext,
+      assertActive: () => assertAuthScope(scope),
+    });
     try {
-      const response = await outboundFetch(url.toString(), {
-        method: 'GET',
-        redirect: 'error',
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const permanentClientError =
-          response.status >= 400 &&
-          response.status < 500 &&
-          ![408, 425, 429].includes(response.status);
-        throw new MediaInvocationError(
-          permanentClientError ? 'MEDIA_DOWNLOAD_REJECTED' : 'MEDIA_DOWNLOAD_FAILED',
-          `媒体下载失败 (HTTP ${response.status})`,
-        );
+      const file = await fs.open(downloaded.filePath, 'r');
+      try {
+        // Reuse the existing bounded MIME probe; file size never controls allocation.
+        let probe = Buffer.alloc(4096);
+        const first = await file.read(probe, 0, probe.length, 0);
+        probe = probe.subarray(0, first.bytesRead);
+        const needed = additionalMp3BytesNeeded(probe);
+        if (needed && needed > probe.length) {
+          probe = Buffer.alloc(needed);
+          const read = await file.read(probe, 0, probe.length, 0);
+          probe = probe.subarray(0, read.bytesRead);
+        }
+        const mimeType = sniffMediaMime(probe, extractor.mediaType ?? downloaded.headerMime ?? '');
+        if (!mimeType) throw new MediaInvocationError('MEDIA_RESULT_INVALID', '无法从上游字节识别媒体类型');
+        assertResultMime(extractor.kind, mimeType);
+        return { filePath: downloaded.filePath, mimeType, dispose: downloaded.dispose };
+      } finally {
+        await file.close();
       }
-      headerMime =
-        response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() ?? null;
-      buffer = await readBoundedResponse(response, maxResultBytes(extractor.kind));
     } catch (error) {
-      if (error instanceof MediaInvocationError) throw error;
-      throw new MediaInvocationError('MEDIA_DOWNLOAD_FAILED', '媒体下载超时或网络失败');
-    } finally {
-      clearTimeout(timeout);
+      await downloaded.dispose();
+      throw error;
     }
   } else {
     const dataUrl = /^data:([^;,]+);base64,(.+)$/s.exec(raw);
@@ -820,7 +886,9 @@ async function mediaBytes(
     if (encoded.length > Math.ceil((maxResultBytes(extractor.kind) * 4) / 3) + 16) {
       throw new MediaInvocationError('MEDIA_RESULT_TOO_LARGE', '上游 base64 媒体超过大小限制');
     }
-    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    // Repeating four-character groups exhausts V8's regexp stack on large images.
+    // Check quartet length separately so the alphabet scan uses constant stack space.
+    if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
       throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游 base64 媒体编码不合法');
     }
     buffer = Buffer.from(encoded, 'base64');
@@ -865,26 +933,43 @@ async function materializeResults(
     assertAuthScope(scope);
     let media: Awaited<ReturnType<typeof mediaBytes>>;
     try {
-      media = await mediaBytes(item.raw, item.extractor);
+      media = await mediaBytes(item.raw, item.extractor, scope);
     } catch (error) {
       // 账号切换与下载失败同时发生时，账号边界优先，避免旧账号结果继续落状态。
       assertAuthScope(scope);
       throw error;
     }
-    assertAuthScope(scope);
-    const stored = await ingestMedia(
-      {
-        buffer: media.buffer,
-        mimeType: media.mimeType,
-        refs: [],
-        assertStillValid: () => assertAuthScope(scope),
-      },
-      db.drizzle,
-    );
-    assertAuthScope(scope);
-    if (item.extractor.kind === 'image') images.push(stored.url);
-    else if (item.extractor.kind === 'video') videos.push(stored.url);
-    else audio.push(stored.url);
+    try {
+      assertAuthScope(scope);
+      let stored: Awaited<ReturnType<typeof ingestMedia>>;
+      for (let attempt = 0; ; attempt += 1) {
+        assertAuthScope(scope);
+        try {
+          // Content-addressed writes and zero-reference ledger updates are
+          // idempotent. Retry these same bytes without downloading or approving again.
+          stored = await ingestMedia(
+            {
+              ...(media.filePath !== undefined ? { filePath: media.filePath } : { buffer: media.buffer }),
+              mimeType: media.mimeType,
+              refs: [],
+              assertStillValid: () => assertAuthScope(scope),
+            },
+            db.drizzle,
+          );
+          break;
+        } catch (error) {
+          assertAuthScope(scope);
+          if (attempt >= 2) throw error;
+          await delay(250 * 2 ** attempt, undefined, { signal: scope.downloadContext?.signal });
+        }
+      }
+      assertAuthScope(scope);
+      if (item.extractor.kind === 'image') images.push(stored.url);
+      else if (item.extractor.kind === 'video') videos.push(stored.url);
+      else audio.push(stored.url);
+    } finally {
+      await media.dispose?.();
+    }
   }
   return {
     ...(images.length > 0 ? { xdt_image_urls: images } : {}),
@@ -972,7 +1057,7 @@ async function submitProviderInvocation(
   if (!providerModel) {
     return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源已不可用，本次生成未发出');
   }
-  const input = await providerImageRequest(invocation, body);
+  const input = await providerImageRequest(invocation, body, providerModel);
   assertAuthScope(scope, invocation.owner);
   const claimed = await transitionMediaInvocation(
     {
@@ -1001,6 +1086,23 @@ async function submitProviderInvocation(
       signal: AbortSignal.timeout(invocation.guide.request.timeoutMs),
     });
     assertAuthScope(scope, invocation.owner);
+    if ('url' in result) {
+      // Persist the successful generation before downloading. A denied/failed
+      // CDN download can resume this result without paying for another image.
+      const response = { url: result.url };
+      const responseJson = JSON.stringify(response);
+      const persisted = await transitionMediaInvocation(
+        { id: invocation.id, owner: invocation.owner, from: 'submitting', to: 'pending', responseJson },
+        db,
+      );
+      assertAuthScope(scope, invocation.owner);
+      if (!persisted) {
+        return submissionOutcomeUnknown('第三方媒体已生成，但本地未能保存结果；不要自动重提');
+      }
+      return materializeSyncInvocation(
+        { ...invocation, state: 'pending', responseJson }, response, scope, db,
+      );
+    }
     if (
       result.buffer.byteLength === 0 ||
       result.buffer.byteLength > MAX_IMAGE_RESULT_BYTES ||
@@ -1063,11 +1165,11 @@ async function submitProviderInvocation(
     log.warn('provider media submission failed after claim', {
       providerId,
       modelId: providerModel.id,
-      error: error instanceof Error ? error.message : String(error),
+      error: mediaErrorForLog(error),
     });
     return submissionOutcomeUnknown(
       error instanceof Error
-        ? `第三方媒体请求未能确认结果：${error.message}`
+        ? `第三方媒体请求未能确认结果：${mediaErrorForLog(error)}`
         : '第三方媒体请求未能确认结果；不要自动重提',
     );
   }
@@ -1084,39 +1186,31 @@ async function materializeSyncInvocation(
     throw new MediaInvocationError('MEDIA_RESULT_INVALID', '同步媒体调用缺少同步响应说明');
   }
   try {
-    const media = await materializeResults(response, responseGuide.media, scope, db);
+    // Client channels may return an arbitrary CDN URL. Keep it out of the
+    // persisted server-guide contract, which requires a trusted host list.
+    // With no trusted hosts, the existing download gate requires approval.
+    const extractors: readonly MediaResultExtractor[] = isClientProviderInvocation(invocation)
+      ? [{ path: ['url'], encoding: 'url', kind: 'image' }, ...responseGuide.media]
+      : responseGuide.media;
+    const media = await materializeResults(response, extractors, scope, db);
     assertAuthScope(scope, invocation.owner);
     return persistCompletedInvocation(invocation, media, scope, db);
   } catch (error) {
     assertAuthScope(scope, invocation.owner);
-    if (error instanceof MediaInvocationError) {
-      if (TERMINAL_MEDIA_RESULT_ERRORS.has(error.code)) {
-        await transitionMediaInvocation(
-          {
-            id: invocation.id,
-            owner: invocation.owner,
-            from: 'pending',
-            to: 'failed',
-          },
-          db,
-        );
-        assertAuthScope(scope, invocation.owner);
-        return failure(error.code, error.message);
-      }
-      if (error.code === 'MEDIA_DOWNLOAD_FAILED') {
-        return {
-          ...failure(error.code, error.message, true),
-          retry_action: 'request',
-        };
-      }
-      throw error;
+    if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) {
+      // Network recovery is owned by the client. Do not ask the agent to start
+      // another operation (and a fresh approval) after denial or exhausted retries.
+      return {
+        ...failure(error.code, error.message, false),
+        invocation_id: invocation.id,
+      };
     }
     log.warn('sync media materialization failed', {
       error: error instanceof Error ? error.message : String(error),
     });
     return {
-      ...failure('MEDIA_MATERIALIZATION_FAILED', '媒体结果暂时无法保存', true),
-      retry_action: 'request',
+      ...failure('MEDIA_MATERIALIZATION_FAILED', '媒体结果暂时无法保存', false),
+      invocation_id: invocation.id,
     };
   }
 }
@@ -1131,7 +1225,9 @@ async function prepareInvocation(
   const db = captureMediaDb(scope);
   await ensureOwnerRecovered(scope, db);
   assertAuthScope(scope);
-  const models = await listAvailableMediaModels(capability);
+  const models = await listAvailableMediaModels(capability, {
+    skipGateway: !getAppCapabilities().canUseCindyGateway,
+  });
   assertAuthScope(scope);
   let matchingModels = models.filter(
     (candidate) => candidate.id === modelId && (!providerId || candidate.providerId === providerId),
@@ -1162,9 +1258,6 @@ async function prepareInvocation(
   const resolvedModelId = model.id;
   let preparedGuide: PreparedMediaInvocationGuide;
   if (model.providerId !== 'xd') {
-    if (capability !== 'image.generate' && capability !== 'image.edit') {
-      return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
-    }
     const providerModel = resolveProviderMediaModel(
       model.providerId,
       resolvedModelId,
@@ -1173,8 +1266,19 @@ async function prepareInvocation(
     if (!providerModel) {
       return failure('MODEL_NOT_AVAILABLE', '该第三方媒体模型或执行来源当前不可用');
     }
-    preparedGuide = providerImageGuide(providerModel, capability);
+    if (capability === 'image.generate' || capability === 'image.edit') {
+      preparedGuide = providerImageGuide(providerModel, capability);
+    } else if (providerModel.videoProtocol === 'xai-videos') {
+      const connection = resolveProviderVideoConnection(model.providerId, resolvedModelId);
+      if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
+      preparedGuide = customVideoGuide(providerModel, capability, connection.revision);
+    } else {
+      return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
+    }
   } else {
+    if (!getAppCapabilities().canUseCindyGateway) {
+      return failure('CONNECTION_UNAVAILABLE', '当前账号不能使用 Cindy AI 网关');
+    }
     let resolvedGuide: ResolvedMediaInvocationGuide;
     try {
       resolvedGuide = await fetchMediaInvocationGuide(resolvedModelId);
@@ -1281,8 +1385,10 @@ async function requireInvocation(id: string): Promise<StoredMediaInvocation> {
 async function submitInvocation(
   invocation: StoredMediaInvocation,
   body: Record<string, unknown>,
+  context?: MediaDownloadContext,
+  sessionId?: string,
 ): Promise<Record<string, unknown>> {
-  const scope = currentAuthScope();
+  const scope = currentAuthScope(context);
   assertAuthScope(scope, invocation.owner);
   const db = captureMediaDb(scope);
   if (invocation.state === 'complete') {
@@ -1296,6 +1402,9 @@ async function submitInvocation(
     const media = persistedResponse(invocation);
     if (!media || typeof media !== 'object' || Array.isArray(media)) {
       return failure('MEDIA_RESULT_INVALID', '第三方媒体调用保存的结果不合法');
+    }
+    if ('url' in media) {
+      return materializeSyncInvocation(invocation, media, scope, db);
     }
     return persistCompletedInvocation(invocation, media as Record<string, unknown>, scope, db);
   }
@@ -1330,16 +1439,39 @@ async function submitInvocation(
   }
   // prepare 与实际付费提交之间可能隔着 Agent 组装参数的时间；提交边界重新读取
   // Gateway 清单和客户端停用状态，避免模型/供应商刚被停用后仍发出新请求。
-  const models = await listAvailableMediaModels(invocation.capability);
+  const models = await listAvailableMediaModels(invocation.capability, {
+    skipGateway: !getAppCapabilities().canUseCindyGateway,
+  });
   assertAuthScope(scope, invocation.owner);
-  if (!models.some((model) => model.providerId === 'xd' && model.id === invocation.modelId)) {
+  if (!models.some((model) => model.providerId === (isClientVideoInvocation(invocation) ? invocation.guide.connection.providerId : 'xd') && model.id === invocation.modelId)) {
     return failure('MODEL_NOT_AVAILABLE', '该模型已下架或被停用，本次生成未发出');
   }
-  const requestBody = await prepareRequestBody(body, invocation.guide);
+  let validatedBody = body;
+  if (isClientVideoInvocation(invocation)) {
+    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video'); }
+    catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
+  }
+  if (invocation.capability.startsWith('image.') && /^openai\/gpt-image-[12]/.test(invocation.modelId)) {
+    try {
+      validatedBody = { ...body, ...normalizeImageParameters('openai', invocation.modelId, {
+        size: body.size as string | undefined,
+        quality: body.quality as string | undefined,
+      }) };
+    } catch (error) {
+      throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message);
+    }
+  }
+  const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
   assertAuthScope(scope, invocation.owner);
+  if (isClientVideoInvocation(invocation)) {
+    // Managed refs have now become data URLs with their actual stored media MIME.
+    const { model: _injectedModel, ...videoBody } = requestBody;
+    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video'); }
+    catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
+  }
   let connection: MediaConnection;
   try {
-    connection = resolveConnection(invocation.guide.connection.providerId);
+    connection = resolveInvocationConnection(invocation);
   } catch (error) {
     if (error instanceof MediaInvocationError) {
       return failure(error.code, error.message, error.code === 'CONNECTION_UNAVAILABLE', {
@@ -1348,45 +1480,113 @@ async function submitInvocation(
     }
     throw error;
   }
-  const claimed = await transitionMediaInvocation(
-    {
-      id: invocation.id,
-      owner: invocation.owner,
-      from: 'prepared',
-      to: 'submitting',
-    },
-    db,
-  );
-  if (!claimed) {
-    const current = await getMediaInvocation(invocation.id, invocation.owner, db);
-    assertAuthScope(scope, invocation.owner);
-    return failure(
-      'INVOCATION_ALREADY_USED',
-      `该 invocation 当前状态为 ${current?.state ?? 'unknown'}；付费提交不可重复执行`,
-    );
-  }
-  // claim 之后再过一次认证代次闸；通过后到 outboundFetch 发起之间没有异步让出点，
-  // 因而不会拿切换后账号的 endpoint / key 提交旧账号的付费请求。
-  assertAuthScope(scope, invocation.owner);
+  const recordBilling = invocation.guide.connection.providerId === 'xd'
+    ? await import('../usage/gatewayMediaBilling.js').then(({ prepareGatewayMediaBilling }) =>
+        prepareGatewayMediaBilling({ model: invocation.modelId, sessionId, db }),
+      )
+    : undefined;
   try {
-    const response = await dispatchRequest({
-      invocationId: invocation.id,
-      providerId: invocation.guide.connection.providerId,
-      modelId: invocation.modelId,
-      capability: invocation.capability,
-      connection,
-      method: invocation.guide.request.method,
-      path: invocation.guide.request.path,
-      headers: invocation.guide.request.headers,
-      body: requestBody,
-      bodyEncoding: invocation.guide.request.bodyEncoding,
-      multipartFiles: invocation.guide.request.multipartFiles,
-      timeoutMs: invocation.guide.request.timeoutMs,
-      maxResponseBytes: invocation.guide.request.maxResponseBytes,
-      operation: 'submit',
-    });
-    if (invocation.guide.response.mode === 'sync') {
-      const responseJson = JSON.stringify(response);
+    assertAuthScope(scope, invocation.owner);
+    const claimed = await transitionMediaInvocation(
+      {
+        id: invocation.id,
+        owner: invocation.owner,
+        from: 'prepared',
+        to: 'submitting',
+      },
+      db,
+    );
+    if (!claimed) {
+      const current = await getMediaInvocation(invocation.id, invocation.owner, db);
+      assertAuthScope(scope, invocation.owner);
+      return failure(
+        'INVOCATION_ALREADY_USED',
+        `该 invocation 当前状态为 ${current?.state ?? 'unknown'}；付费提交不可重复执行`,
+      );
+    }
+    // claim 之后再过一次认证代次闸；通过后到 outboundFetch 发起之间没有异步让出点，
+    // 因而不会拿切换后账号的 endpoint / key 提交旧账号的付费请求。
+    assertAuthScope(scope, invocation.owner);
+    try {
+      const response = await dispatchRequest({
+        invocationId: invocation.id,
+        providerId: invocation.guide.connection.providerId,
+        modelId: invocation.modelId,
+        capability: invocation.capability,
+        connection,
+        method: invocation.guide.request.method,
+        path: invocation.guide.request.path,
+        headers: invocation.guide.request.headers,
+        body: requestBody,
+        bodyEncoding: invocation.guide.request.bodyEncoding,
+        multipartFiles: invocation.guide.request.multipartFiles,
+        timeoutMs: invocation.guide.request.timeoutMs,
+        maxResponseBytes: invocation.guide.request.maxResponseBytes,
+        operation: 'submit',
+        recordBilling,
+      });
+      if (invocation.guide.response.mode === 'sync') {
+        const responseJson = JSON.stringify(response);
+        let persisted = false;
+        try {
+          persisted = await transitionMediaInvocation(
+            {
+              id: invocation.id,
+              owner: invocation.owner,
+              from: 'submitting',
+              to: 'pending',
+              responseJson,
+            },
+            db,
+          );
+        } catch (error) {
+          log.warn('persist sync media response failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await transitionMediaInvocation(
+            {
+              id: invocation.id,
+              owner: invocation.owner,
+              from: 'submitting',
+              to: 'unknown',
+            },
+            db,
+          ).catch(() => false);
+          return submissionOutcomeUnknown(
+            '上游结果已生成，但本地未能保存结果；不要自动重提',
+          );
+        }
+        if (!persisted) {
+          return submissionOutcomeUnknown(
+            '上游结果已生成，但本地未能保存结果；不要自动重提',
+          );
+        }
+        connection.assertCurrent?.();
+        assertAuthScope(scope, invocation.owner);
+        return materializeSyncInvocation(
+          { ...invocation, state: 'pending', responseJson },
+          response,
+          scope,
+          db,
+        );
+      }
+      const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      );
+      if (!taskId) {
+        await transitionMediaInvocation(
+          {
+            id: invocation.id,
+            owner: invocation.owner,
+            from: 'submitting',
+            to: 'unknown',
+          },
+          db,
+        );
+        return submissionOutcomeUnknown(
+          '上游响应没有任务 id，无法确认任务状态；不要自动重提',
+        );
+      }
       let persisted = false;
       try {
         persisted = await transitionMediaInvocation(
@@ -1395,12 +1595,12 @@ async function submitInvocation(
             owner: invocation.owner,
             from: 'submitting',
             to: 'pending',
-            responseJson,
+            taskId,
           },
           db,
         );
       } catch (error) {
-        log.warn('persist sync media response failed', {
+        log.warn('persist async media task id failed', {
           error: error instanceof Error ? error.message : String(error),
         });
         await transitionMediaInvocation(
@@ -1413,100 +1613,53 @@ async function submitInvocation(
           db,
         ).catch(() => false);
         return submissionOutcomeUnknown(
-          '上游结果已生成，但本地未能保存结果；不要自动重提',
+          '上游任务已创建，但本地未能保存任务 id；不要自动重提',
         );
       }
       if (!persisted) {
         return submissionOutcomeUnknown(
-          '上游结果已生成，但本地未能保存结果；不要自动重提',
+          '上游任务已创建，但本地未能保存任务 id；不要自动重提',
         );
       }
+      connection.assertCurrent?.();
       assertAuthScope(scope, invocation.owner);
-      return materializeSyncInvocation(
-        { ...invocation, state: 'pending', responseJson },
-        response,
-        scope,
-        db,
-      );
-    }
-    const taskId = valuesAtPath(response, invocation.guide.response.taskIdPath).find(
-      (value): value is string => typeof value === 'string' && value.length > 0,
-    );
-    if (!taskId) {
-      await transitionMediaInvocation(
-        {
-          id: invocation.id,
-          owner: invocation.owner,
-          from: 'submitting',
-          to: 'unknown',
-        },
-        db,
-      );
-      return submissionOutcomeUnknown(
-        '上游响应没有任务 id，无法确认任务状态；不要自动重提',
-      );
-    }
-    let persisted = false;
-    try {
-      persisted = await transitionMediaInvocation(
-        {
-          id: invocation.id,
-          owner: invocation.owner,
-          from: 'submitting',
-          to: 'pending',
-          taskId,
-        },
-        db,
-      );
+      return {
+        ok: true,
+        status: 'pending',
+        invocation_id: invocation.id,
+        recommended_poll_after_ms: invocation.guide.response.poll.recommendedIntervalMs,
+      };
     } catch (error) {
-      log.warn('persist async media task id failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await transitionMediaInvocation(
+      const expected = error instanceof MediaInvocationError ? error : null;
+      // 本地组装失败、提交前模型停用或连接变化：请求从未出站、无费用，把 invocation 放回 prepared，
+      // 让同一 invocation_id 可以直接再次 request；其余失败仍进入 failed / unknown。
+      // 已保存结果为 pending 时，submitting 条件更新不匹配，不回退已付费任务。
+      const notSubmitted = expected?.code === 'REQUEST_BUILD_FAILED' || expected?.code === 'MODEL_NOT_AVAILABLE' || expected?.code === 'CONNECTION_CHANGED';
+      const restored = await transitionMediaInvocation(
         {
           id: invocation.id,
           owner: invocation.owner,
           from: 'submitting',
-          to: 'unknown',
+          to: notSubmitted ? 'prepared' : expected?.outcomeUnknown ? 'unknown' : 'failed',
         },
         db,
       ).catch(() => false);
-      return submissionOutcomeUnknown(
-        '上游任务已创建，但本地未能保存任务 id；不要自动重提',
-      );
+      if (expected) {
+        if (expected.outcomeUnknown) return submissionOutcomeUnknown(expected.message);
+        if (notSubmitted && restored) {
+          return failure(expected.code, `${expected.message}；同一 invocation_id 可直接再次 request`, true, {
+            outcomeKnown: true,
+          });
+        }
+        return failure(expected.code, expected.message, false, { outcomeKnown: true });
+      }
+      log.warn('media submission failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return failure('INTERNAL', '媒体任务提交失败');
     }
-    if (!persisted) {
-      return submissionOutcomeUnknown(
-        '上游任务已创建，但本地未能保存任务 id；不要自动重提',
-      );
-    }
-    assertAuthScope(scope, invocation.owner);
-    return {
-      ok: true,
-      status: 'pending',
-      invocation_id: invocation.id,
-      recommended_poll_after_ms: invocation.guide.response.poll.recommendedIntervalMs,
-    };
-  } catch (error) {
-    const expected = error instanceof MediaInvocationError ? error : null;
-    await transitionMediaInvocation(
-      {
-        id: invocation.id,
-        owner: invocation.owner,
-        from: 'submitting',
-        to: expected?.outcomeUnknown ? 'unknown' : 'failed',
-      },
-      db,
-    ).catch(() => false);
-    if (expected) {
-      return expected.outcomeUnknown
-        ? submissionOutcomeUnknown(expected.message)
-        : failure(expected.code, expected.message, false, { outcomeKnown: true });
-    }
-    log.warn('media submission failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return failure('INTERNAL', '媒体任务提交失败');
+  } finally {
+    recordBilling?.finish();
   }
 }
 
@@ -1532,45 +1685,36 @@ async function materializeAsyncInvocation(
     throw new MediaInvocationError('MEDIA_RESULT_INVALID', '异步媒体调用缺少轮询响应说明');
   }
   try {
+    if (isClientVideoInvocation(invocation)) resolveInvocationConnection(invocation).assertCurrent?.();
     const media = await materializeResults(response, responseGuide.poll.media, scope, db);
     assertAuthScope(scope, invocation.owner);
     return persistCompletedInvocation(invocation, media, scope, db);
   } catch (error) {
     assertAuthScope(scope, invocation.owner);
-    if (error instanceof MediaInvocationError) {
-      if (TERMINAL_MEDIA_RESULT_ERRORS.has(error.code)) {
-        await transitionMediaInvocation(
-          {
-            id: invocation.id,
-            owner: invocation.owner,
-            from: 'pending',
-            to: 'failed',
-          },
-          db,
-        );
-        assertAuthScope(scope, invocation.owner);
-        return failure(error.code, error.message);
-      }
-      if (error.code === 'MEDIA_DOWNLOAD_FAILED') {
-        return {
-          ...failure(error.code, error.message, true),
-          retry_action: 'poll',
-        };
-      }
-      throw error;
+    if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) {
+      // Network recovery is owned by the client. Do not ask the agent to start
+      // another operation (and a fresh approval) after denial or exhausted retries.
+      return {
+        ...failure(error.code, error.message, false),
+        invocation_id: invocation.id,
+      };
     }
     log.warn('async media materialization failed', {
       error: error instanceof Error ? error.message : String(error),
     });
     return {
-      ...failure('MEDIA_MATERIALIZATION_FAILED', '媒体结果暂时无法保存', true),
-      retry_action: 'poll',
+      ...failure('MEDIA_MATERIALIZATION_FAILED', '媒体结果暂时无法保存', false),
+      invocation_id: invocation.id,
     };
   }
 }
 
-async function pollInvocation(invocation: StoredMediaInvocation): Promise<Record<string, unknown>> {
-  const scope = currentAuthScope();
+async function pollInvocation(
+  invocation: StoredMediaInvocation,
+  context?: MediaDownloadContext,
+  refreshExpiredUrl = false,
+): Promise<Record<string, unknown>> {
+  const scope = currentAuthScope(context);
   assertAuthScope(scope, invocation.owner);
   const db = captureMediaDb(scope);
   if (invocation.guide.response.mode !== 'async') {
@@ -1583,7 +1727,18 @@ async function pollInvocation(invocation: StoredMediaInvocation): Promise<Record
     return failure('INVOCATION_NOT_PENDING', `该 invocation 当前状态为 ${invocation.state}`);
   }
   const guide = invocation.guide.response.poll;
-  if (invocation.responseJson) {
+  if (isClientVideoInvocation(invocation)) {
+    try {
+      const connection = resolveInvocationConnection(invocation);
+      scope.assertSourceCurrent = connection.assertCurrent;
+      scope.taskContent = {
+        connection: { baseUrl: connection.baseUrl, headers: connection.headers ?? {}, revision: invocation.guide.revision, assertCurrent: () => assertAuthScope(scope, invocation.owner) },
+        taskId: invocation.taskId,
+      };
+    }
+    catch (error) { return failure('CONNECTION_CHANGED', (error as Error).message); }
+  }
+  if (invocation.responseJson && !refreshExpiredUrl) {
     // 已有成功响应的 poll 是结果恢复重试；刷新活动时间，避免仍在主动恢复的
     // 已付费结果被常规 TTL 清理。保持 pending，不引入新的本地状态。
     await transitionMediaInvocation(
@@ -1596,27 +1751,50 @@ async function pollInvocation(invocation: StoredMediaInvocation): Promise<Record
       db,
     );
     assertAuthScope(scope, invocation.owner);
-    return materializeAsyncInvocation(invocation, persistedResponse(invocation), scope, db);
+    const restored = await materializeAsyncInvocation(invocation, persistedResponse(invocation), scope, db);
+    if (restored.errorCode !== 'MEDIA_DOWNLOAD_URL_EXPIRED') return restored;
+    // Refresh an expired signed URL through the existing read-only task poll.
+    // Never submit another paid generation to repair a download.
+    refreshExpiredUrl = true;
   }
   try {
-    const response = await dispatchRequest({
-      invocationId: invocation.id,
-      providerId: invocation.guide.connection.providerId,
-      modelId: invocation.modelId,
-      capability: invocation.capability,
-      connection: resolveConnection(invocation.guide.connection.providerId),
-      method: guide.method,
-      path: pollPath(guide.path, invocation.taskId),
-      headers: guide.headers,
-      body: pollBody(guide, invocation.taskId),
-      timeoutMs: guide.timeoutMs,
-      maxResponseBytes: guide.maxResponseBytes,
-      operation: 'poll',
-    });
+    let response: unknown;
+    for (let attempt = 0; ; attempt += 1) {
+      assertAuthScope(scope, invocation.owner);
+      try {
+        response = await dispatchRequest({
+          invocationId: invocation.id,
+          providerId: invocation.guide.connection.providerId,
+          modelId: invocation.modelId,
+          capability: invocation.capability,
+          connection: resolveInvocationConnection(invocation),
+          method: guide.method,
+          path: pollPath(guide.path, invocation.taskId),
+          headers: guide.headers,
+          body: pollBody(guide, invocation.taskId),
+          timeoutMs: guide.timeoutMs,
+          maxResponseBytes: guide.maxResponseBytes,
+          operation: 'poll',
+        });
+        break;
+      } catch (error) {
+        assertAuthScope(scope, invocation.owner);
+        if (!refreshExpiredUrl || attempt >= 2 ||
+            !(error instanceof MediaInvocationError) || error.code !== 'POLL_UNAVAILABLE') {
+          throw error;
+        }
+        await delay(250 * (attempt + 1), undefined, { signal: context?.signal });
+      }
+    }
     assertAuthScope(scope, invocation.owner);
     const rawStatus = valuesAtPath(response, guide.statusPath)[0];
     const status = typeof rawStatus === 'string' ? rawStatus : '';
     if (guide.successValues.includes(status)) {
+      if (invocation.responseJson) {
+        // Keep the original durable response until refreshed media has actually
+        // been ingested. Completion replaces it atomically with managed URLs.
+        return materializeAsyncInvocation(invocation, response, scope, db);
+      }
       const responseJson = JSON.stringify(response);
       const persisted = await transitionMediaInvocation(
         {
@@ -1645,12 +1823,21 @@ async function pollInvocation(invocation: StoredMediaInvocation): Promise<Record
         }
         return failure('POLL_UNAVAILABLE', '上游结果已生成，但本地未能保存结果', true);
       }
-      return materializeAsyncInvocation(
+      const downloaded = await materializeAsyncInvocation(
         { ...invocation, responseJson },
         response,
         scope,
         db,
       );
+      if (downloaded.errorCode === 'MEDIA_DOWNLOAD_URL_EXPIRED' && !refreshExpiredUrl) {
+        return pollInvocation({ ...invocation, responseJson }, context, true);
+      }
+      return downloaded;
+    }
+    if (invocation.responseJson) {
+      return failure('MEDIA_DOWNLOAD_FAILED', '暂时无法刷新下载地址，已保留原生成结果', false, {
+        invocation_id: invocation.id,
+      });
     }
     if (guide.failureValues.includes(status)) {
       await transitionMediaInvocation(
@@ -1673,17 +1860,23 @@ async function pollInvocation(invocation: StoredMediaInvocation): Promise<Record
       recommended_poll_after_ms: guide.recommendedIntervalMs,
     };
   } catch (error) {
+    assertAuthScope(scope, invocation.owner);
+    if (error instanceof MediaDownloadError) return failure(error.code, error.message, false);
     if (error instanceof MediaInvocationError) {
-      // Poll is read-only/idempotent: transient failure does not invalidate the submitted task.
-      return failure(error.code, error.message, true);
+      // Polling an unfinished generation is safe to retry; completed-result
+      // recovery must not start a new operation after its client retries finish.
+      return failure(error.code, error.message, error.code !== 'CONNECTION_CHANGED' && !invocation.responseJson);
     }
-    return failure('POLL_UNAVAILABLE', '媒体任务状态查询失败', true);
+    return failure('POLL_UNAVAILABLE', '媒体任务状态查询失败', !invocation.responseJson);
   }
 }
 
 /** 当前 Agent 永久注册的 `mcp__cindy__media` 工具实现；不暴露给插件运行时。 */
 export async function callCindyMedia(
   request: CindyMediaToolRequest,
+  context?: MediaDownloadContext,
+  /** Trusted Host context; never supplied through the model's tool arguments. */
+  sessionId?: string,
 ): Promise<Record<string, unknown>> {
   try {
     if (request.action === 'resolve_local_path') {
@@ -1721,6 +1914,7 @@ export async function callCindyMedia(
         mime_type: resolved.mimeType,
       };
     }
+    if (request.action === 'import_image' || request.action === 'inspect') return failure('PERMISSION_DENIED', '图片导入和媒体检查必须通过当前任务的 Host 授权入口。');
     if (request.action === 'list_models') {
       const capability = request.capability as MediaCapability | undefined;
       const availability = await listExecutableMediaModels(
@@ -1771,18 +1965,27 @@ export async function callCindyMedia(
       };
     }
     if (request.action === 'prepare') {
-      return prepareInvocation(
+      return await prepareInvocation(
         request.providerId,
         request.modelId,
         request.capability as MediaCapability,
       );
     }
     const invocation = await requireInvocation(request.invocationId);
-    return await (request.action === 'request'
-      ? submitInvocation(invocation, request.body)
-      : pollInvocation(invocation));
+    const operationKey = `${invocation.owner}:${invocation.id}`;
+    if (activeInvocations.has(operationKey)) {
+      return failure('MEDIA_INVOCATION_BUSY', '此媒体操作正在进行，请等待当前下载或确认完成', false);
+    }
+    activeInvocations.add(operationKey);
+    try {
+      return await (request.action === 'request'
+        ? submitInvocation(invocation, request.body, context, sessionId)
+        : pollInvocation(invocation, context));
+    } finally {
+      activeInvocations.delete(operationKey);
+    }
   } catch (error) {
-    if (error instanceof MediaInvocationError) return failure(error.code, error.message);
+    if (error instanceof MediaInvocationError || error instanceof MediaDownloadError) return failure(error.code, error.message);
     if (error instanceof MediaModelCatalogError) {
       log.warn('media model catalog rejected by current client', { detail: error.detail });
       return failure('MODEL_CATALOG_UNAVAILABLE', error.message, true, {

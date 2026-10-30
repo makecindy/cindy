@@ -268,7 +268,6 @@ async function renderOnce(input: DocsPdfRenderInput): Promise<RenderAttemptResul
           printBackground: input.printBackground,
           pageSize: input.pageSize,
           margins: {
-            marginType: 'custom',
             top: input.margins.top,
             bottom: input.margins.bottom,
             left: input.margins.left,

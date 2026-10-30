@@ -18,13 +18,22 @@ describe('Ghost account-boundary teardown ordering', () => {
       'async function teardownGhostProjectionBoundary(reason: string): Promise<void> {',
     );
     const end = bootstrap.indexOf('\n}\n', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
     const body = bootstrap.slice(start, end);
 
-    const interrupt = body.indexOf('interruptGhostCallsForAccountBoundary));');
-    const wait = body.indexOf('waitForGhostMutations));');
-    const suspend = body.indexOf('suspendAllGhosts);');
+    // Match complete awaited calls, allowing formatter-only whitespace/trailing commas.
+    const interrupt = body.search(
+      /await\s+run\(\s*'interruptGhostCallsForAccountBoundary'\s*,\s*\(\s*\)\s*=>\s*withAuthBoundaryTimeout\(\s*'interrupt Ghost calls'\s*,\s*interruptGhostCallsForAccountBoundary\s*,?\s*\)\s*,?\s*\)\s*;/,
+    );
+    const wait = body.search(
+      /await\s+run\(\s*'waitForGhostMutations'\s*,\s*\(\s*\)\s*=>\s*withAuthBoundaryTimeout\(\s*'wait for Ghost mutations'\s*,\s*waitForGhostMutations\s*,?\s*\)\s*,?\s*\)\s*;/,
+    );
+    const suspend = body.search(/await\s+run\(\s*'suspendAllGhosts'\s*,\s*suspendAllGhosts\s*,?\s*\)\s*;/);
 
     expect(interrupt).toBeGreaterThan(-1);
+    expect(wait).toBeGreaterThan(-1);
+    expect(suspend).toBeGreaterThan(-1);
     expect(interrupt).toBeLessThan(wait);
     expect(wait).toBeLessThan(suspend);
   });

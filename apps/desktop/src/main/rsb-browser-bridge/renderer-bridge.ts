@@ -37,8 +37,14 @@ interface PendingRequest {
 }
 
 export interface RendererBridgeOptions {
-  /** Resolves to the host renderer to talk to; null when no main window. */
-  getHostWebContents: () => WebContents | null;
+  /**
+   * Resolves to the host renderer to talk to; null when no main window.
+   * Receives the op being dispatched so tab-scoped ops (focus / close /
+   * ensure) can land in the window that currently hosts that tab — a tab
+   * popped out into its own sidebar tab window lives in a different renderer
+   * than the embedded sidebar.
+   */
+  getHostWebContents: (op?: RsbBrowserBridgeTabOp) => WebContents | null;
   /**
    * Optional pre-dispatch hook: awaited before resolving the host webContents.
    * Used by the detached right-sidebar window — when the user prefers the
@@ -112,7 +118,7 @@ export async function dispatchTabOp(
     await opts.ensureHost(sessionId);
     assertActive?.();
   }
-  const wc = opts.getHostWebContents();
+  const wc = opts.getHostWebContents(op);
   if (!wc || wc.isDestroyed()) {
     return Promise.reject(new Error('host renderer not available'));
   }

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 
-import { BrowserBackendController } from '../controller.js';
+import { BrowserBackendController, resolveBackendProfile } from '../controller.js';
+import { createBrowserProfileLifecycleQueue } from '../../browser-real-profile/runtime-stop.js';
 import type { BackendKind, BrowserBackend } from '../types.js';
 
 function fakeLogger() {
@@ -31,6 +32,179 @@ function fakeBackend(kind: BackendKind): BrowserBackend & {
 }
 
 describe('BrowserBackendController', () => {
+  // Review regression, unit: cached page evidence must expire both when a
+  // transition is admitted and when its backend actually becomes active.
+  it('exposes stable scope identities across queued, applied and return transitions', async () => {
+    const external = fakeBackend('external');
+    let release!: () => void;
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    const initial = controller.getBackendScope();
+    expect(controller.getBackendScope()).toEqual(initial);
+    const changed = controller.setKind('rsb-webview', () => new Promise<void>(resolve => { release = resolve; }));
+    const queued = controller.getBackendScope();
+    expect(queued.lifecycle).not.toBe(initial.lifecycle);
+    expect(queued.backend).toBe(initial.backend);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    release();
+    await changed;
+    const applied = controller.getBackendScope();
+    expect(applied.lifecycle).not.toBe(queued.lifecycle);
+    expect(applied.backend).not.toBe(queued.backend);
+    await controller.setKind('external');
+    const returned = controller.getBackendScope();
+    expect(returned.backend).toBe(initial.backend);
+    expect(returned.lifecycle).not.toBe(initial.lifecycle);
+  });
+
+  // Same failure family as backend switching: consent changes must invalidate
+  // evidence even when kind/profile later return to their original values.
+  // Unit/host protocol: queued and settled changes differ; ordinary page work
+  // does not change the scope. This distinguishes the previous partial fix.
+  it.each(['resolve', 'reject'] as const)('scopes profile consent changes without another queue or backend selection (%s)', async outcome => {
+    const profileQueue = createBrowserProfileLifecycleQueue();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    let enabled = true;
+    const initial = controller.getBackendScope();
+    await profileQueue.run(async () => undefined); // Ordinary page work.
+    expect(controller.getBackendScope()).toEqual(initial);
+    let release!: () => void;
+    const change = controller.runLifecycle(() => profileQueue.run(async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      if (outcome === 'reject') throw new Error('stop failed');
+      enabled = false;
+      return enabled;
+    }));
+    const queued = controller.getBackendScope();
+    expect(queued.lifecycle).not.toBe(initial.lifecycle);
+    expect(queued.backend).toBe(initial.backend);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const settled = outcome === 'reject'
+      ? expect(change).rejects.toThrow('stop failed') : expect(change).resolves.toBe(false);
+    let releaseLater!: () => void;
+    const later = controller.runLifecycle(() => profileQueue.run(() => new Promise<void>(resolve => { releaseLater = resolve; })));
+    const bothQueued = controller.getBackendScope();
+    release();
+    await settled;
+    expect(controller.getBackendScope().lifecycle).not.toBe(queued.lifecycle);
+    const firstSettled = controller.getBackendScope();
+    await vi.waitFor(() => expect(releaseLater).toBeTypeOf('function'));
+    releaseLater();
+    await later;
+    expect(firstSettled.lifecycle).not.toBe(bothQueued.lifecycle);
+    expect(controller.getBackendScope().lifecycle).not.toBe(firstSettled.lifecycle);
+    expect(enabled).toBe(outcome === 'reject');
+    await controller.runLifecycle(() => profileQueue.run(async () => { enabled = true; }));
+    expect(enabled).toBe(true);
+    expect(controller.getBackendScope().lifecycle).not.toBe(initial.lifecycle);
+    expect(controller.getBackendScope().backend).toBe(initial.backend);
+    // A later backend choice cannot be undone by a profile setter that
+    // captured the earlier kind; the lifecycle operation never selects it.
+    await Promise.all([
+      controller.setKind('rsb-webview'),
+      controller.runLifecycle(() => profileQueue.run(async () => { enabled = false; })),
+    ]);
+    expect(controller.kind).toBe('rsb-webview');
+    expect(enabled).toBe(false);
+  });
+
+  it('serializes reset cleanup after outgoing profile disposal without deadlocking', async () => {
+    const queue = createBrowserProfileLifecycleQueue();
+    const external = fakeBackend('external');
+    const events: string[] = [];
+    let release!: () => void;
+    const busy = queue.run(() => new Promise<void>((resolve) => { release = resolve; }));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    external.dispose.mockImplementation(() => queue.run(async () => { events.push('dispose'); }));
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), logger: fakeLogger(),
+    });
+    const change = controller.setKind('rsb-webview');
+    await vi.waitFor(() => expect(external.dispose).toHaveBeenCalledOnce());
+    const reset = controller.setKind('external', () => queue.run(async () => { events.push('reset'); }));
+    release();
+    await Promise.all([busy, change, reset]);
+    expect(events).toEqual(['dispose', 'reset']);
+    expect(controller.kind).toBe('external');
+    await expect(controller.setKind('rsb-webview', async () => { throw new Error('cleanup failed'); }))
+      .rejects.toThrow('cleanup failed');
+    expect(controller.kind).toBe('external');
+  });
+
+  it('does not save a selection when its backend factory fails', async () => {
+    const persistKind = vi.fn();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => { throw new Error('factory failed'); }, persistKind, logger: fakeLogger(),
+    });
+    await expect(controller.setKind('rsb-webview')).rejects.toThrow('factory failed');
+    expect(persistKind).not.toHaveBeenCalled();
+    expect(controller.kind).toBe('external');
+  });
+
+  it('clears an override on reset without losing a later same-kind explicit choice', async () => {
+    let override: BackendKind | undefined = 'external';
+    const persistKind = vi.fn((kind: BackendKind) => { override = kind; });
+    const clearOverride = vi.fn(() => { override = undefined; });
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: fakeBackend('external'),
+      createRsbBackend: () => fakeBackend('rsb-webview'), persistKind, logger: fakeLogger(),
+    });
+    await controller.setKind('external', clearOverride);
+    expect(override).toBeUndefined();
+    expect(persistKind).not.toHaveBeenCalled();
+    await Promise.all([
+      controller.setKind('external', clearOverride),
+      controller.setKind('external'),
+    ]);
+    expect(override).toBe('external');
+    expect(persistKind).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the active backend usable when saving fails, then retries the selection', async () => {
+    const external = fakeBackend('external');
+    const embedded = fakeBackend('rsb-webview');
+    const createRsbBackend = vi.fn(() => embedded);
+    const persistKind = vi.fn().mockImplementationOnce(() => { throw new Error('disk full'); });
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external, createRsbBackend, persistKind, logger: fakeLogger(),
+    });
+    await expect(controller.setKind('rsb-webview')).rejects.toThrow('disk full');
+    expect(controller.kind).toBe('external');
+    expect(await controller.call({ action: 'status' })).toMatchObject({ data: { kind: 'external' } });
+    expect(external.dispose).not.toHaveBeenCalled();
+    await expect(controller.setKind('rsb-webview')).resolves.toBe(true);
+    expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['rsb-webview']]);
+    expect(createRsbBackend).toHaveBeenCalledTimes(2);
+    expect(external.dispose).toHaveBeenCalledOnce();
+    expect(embedded.dispose).not.toHaveBeenCalled();
+  });
+
+  it('persists overlapping selections in the same order as activation', async () => {
+    const external = fakeBackend('external');
+    let release!: () => void;
+    external.dispose.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const persistKind = vi.fn();
+    const controller = new BrowserBackendController({
+      initialKind: 'external', externalBackend: external,
+      createRsbBackend: () => fakeBackend('rsb-webview'), persistKind, logger: fakeLogger(),
+    });
+    const first = controller.setKind('rsb-webview');
+    await vi.waitFor(() => expect(external.dispose).toHaveBeenCalledOnce());
+    const second = controller.setKind('external');
+    expect(persistKind.mock.calls).toEqual([['rsb-webview']]);
+    release();
+    await Promise.all([first, second]);
+    expect(persistKind.mock.calls).toEqual([['rsb-webview'], ['external']]);
+    expect(controller.kind).toBe('external');
+  });
+
   it('creates a fresh embedded backend when switching away and back', async () => {
     const external = fakeBackend('external');
     const embedded: ReturnType<typeof fakeBackend>[] = [];
@@ -109,5 +283,20 @@ describe('BrowserBackendController', () => {
 
     expect(first.probeControl).not.toHaveBeenCalled();
     expect(second.probeControl).toHaveBeenCalledOnce();
+  });
+});
+
+describe('resolveBackendProfile', () => {
+  // Bug regression, unit: with the user's browser active, the MCP layer used to
+  // substitute the managed Chrome profile name for a missing `profile`; the
+  // extension backend matched no connection and every tool reported the
+  // extension as disconnected.
+  it('never substitutes the managed profile for the user browser backend', () => {
+    const managed = vi.fn(() => 'Cindy-real');
+    expect(resolveBackendProfile('user-browser', undefined, managed)).toBeUndefined();
+    expect(resolveBackendProfile('user-browser', 'abc12345', managed)).toBe('abc12345');
+    expect(managed).not.toHaveBeenCalled();
+    expect(resolveBackendProfile('external', undefined, managed)).toBe('Cindy-real');
+    expect(resolveBackendProfile('rsb-webview', 'ignored', managed)).toBe('rsb');
   });
 });

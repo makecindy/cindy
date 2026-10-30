@@ -20,7 +20,14 @@
     "allowOnceAccessibility": "권한 요청 한 번 허용",
     "allowOnceConfirm": "한 번 허용 확인",
     "highRisk": "고위험",
-    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요."
+    "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+    "autoReviewReason": "자동 승인이 판단을 요청했어요: {{reason}}",
+    "fullAccessConfirm": {
+      "title": "전체 접근을 활성화할까요?",
+      "description": "전체 접근은 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. {{appName}}가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
+      "confirm": "전체 접근 활성화",
+      "cancel": "현재 권한 유지"
+    }
   },
   "planMode": {
     "label": "플랜 모드",
@@ -37,7 +44,7 @@
     "queuePositionNth": "{{index}}번째",
     "composerBlockedByPending": "컴퓨터의 대기 중인 요청을 처리한 뒤 계속 입력할 수 있습니다.",
     "missingRequestId": "이 원격 상호작용에는 requestId가 없어 결정을 돌려보낼 수 없습니다.",
-    "desktopConfirmUnsupported": "이 확인은 제어 중인 컴퓨터에서만 처리할 수 있습니다. 데스크톱 앱으로 돌아가 계속하세요.",
+    "desktopConfirmUnsupported": "이 확인은 원격 컴퓨터에서만 처리할 수 있습니다. 데스크톱 앱으로 돌아가 계속하세요.",
     "unsupportedType": "이 원격 상호작용 유형은 모바일에서 아직 지원되지 않습니다.",
     "unsupportedKind": "미지원",
     "desktopOnlyKind": "컴퓨터에서 처리",
@@ -57,6 +64,7 @@
     "collapsedHint": "탭하여 답변",
     "selectAnswer": "답변 {{label}} 선택",
     "submittingHint": "결정을 컴퓨터로 전송 중입니다. 중복 제출하지 마세요.",
+    "decisionNotAccepted": "응답을 제출하지 못했습니다. 다시 시도하세요.",
     "customAnswerInputAccessibility": "사용자 지정 답변 입력",
     "customAnswerPlaceholder": "다른 답변 입력",
     "customAnswerButtonText": "다른 답변 입력…",
@@ -68,6 +76,8 @@
     "next": "다음",
     "answerRequired": "답변을 선택하거나 입력해야 계속할 수 있습니다.",
     "submit": "제출",
+    "sendAndContinue": "보내고 계속",
+    "closeAnswer": "닫기",
     "planReviewTitle": "Claude의 플랜 검토",
     "planExpand": "플랜 펼치기",
     "planEditHint": "편집 모드로 플랜 조정",
@@ -122,11 +132,17 @@
     "fallback": {
       "title": "원격 요청을 처리해야 합니다",
       "label": "요청"
+    },
+    "input_handoff": {
+      "title": "대리 입력이 필요합니다",
+      "label": "대리 입력"
     }
   },
   "rewind": {
     "readError": "되감기 미리보기를 읽을 수 없습니다. 다시 동기화한 후 시도하세요.",
-    "noFilesNote": "롤백할 파일이 없습니다. 이 메시지 이후의 대화 기록만 잘립니다.",
+    "noFilesNote": "이 메시지 이후 프로젝트 파일 변경이 감지되지 않았습니다. 계속하면 이후 채팅이 삭제됩니다.",
+    "conversationOnlyNote": "사용할 수 있는 Git 저장 지점이 없어 프로젝트 파일을 복원할 수 없습니다. 계속하면 이 메시지 이후의 채팅이 삭제되고 파일은 이전 상태로 돌아가지 않습니다.",
+    "gitSafetyDisabledNote": "Git 안전 저장 지점이 비활성화되어 프로젝트 파일을 복원할 수 없습니다. 컴퓨터 설정에서 켜세요. 계속하면 이 메시지 이후의 채팅이 삭제됩니다.",
     "moreFiles": "파일 {{count}}개 더",
     "stats": "파일 {{count}}개 · +{{insertions}} / -{{deletions}} 줄",
     "gotIt": "확인",
@@ -140,7 +156,8 @@
     "titleError": "되감을 수 없음",
     "detailLoading": "컴퓨터에서 파일 되감기 미리보기를 읽는 중입니다.",
     "detailDefault": "아래 파일을 롤백하고 이 메시지 이후의 대화 기록을 자릅니다.",
-    "detailEmpty": "롤백할 파일이 없습니다. 확인하면 이 메시지 이후의 대화 기록만 잘립니다.",
+    "detailEmpty": "이 메시지 이후 프로젝트 파일 변경이 감지되지 않았습니다.",
+    "detailConversationOnly": "프로젝트 파일은 이전 상태로 돌아가지 않습니다.",
     "detailError": "컴퓨터가 이 되감기를 거부했습니다."
   },
   "collab": {
@@ -153,8 +170,10 @@
     "dispatchBodyFallback": "Worker 생성",
     "sendTitle": "Worker에게 메시지 전송",
     "sendBodyFallback": "메시지 전송",
-    "reportTitle": "Worker 보고",
-    "reportBodyFallback": "(빈 보고)"
+    "fromLead": "Lead에서 온 메시지",
+    "fromWorkerNamed": "Worker 「{{role}}」에서 온 메시지",
+    "fromWorker": "Worker에서 온 메시지",
+    "emptyMessageBody": "(빈 메시지)"
   },
   "contextSheet": {
     "backAccessibility": "컨텍스트 패널로 돌아가기",
@@ -171,7 +190,7 @@
     "goalObjectiveAccessibility": "목표 내용",
     "goalPlaceholder": "무엇을 달성하고 싶나요? 에이전트가 완료하거나 한도에 도달할 때까지 이 목표를 중심으로 자동으로 계속 진행합니다.",
     "advancedSettings": "고급 설정",
-    "limitsHint": "변경하지 않으면 제어 대상 컴퓨터의 기본 한도를 따릅니다. 한도 중 하나에 도달하면 목표가 자동으로 중지되며 언제든지 수동으로 종료할 수 있습니다. \"무제한\"은 해당 한도를 설정하지 않음을 의미합니다.",
+    "limitsHint": "변경하지 않으면 원격 컴퓨터의 기본 한도를 따릅니다. 한도 중 하나에 도달하면 목표가 자동으로 중지되며 언제든지 수동으로 종료할 수 있습니다. \"무제한\"은 해당 한도를 설정하지 않음을 의미합니다.",
     "maxTurns": "최대 턴 수",
     "tokenBudget": "토큰 예산",
     "noProgressLimit": "무진전 한도",
@@ -193,7 +212,8 @@
     "photoNotReadable": "이 사진은 지금 읽을 수 없습니다(iCloud에서 다운로드가 완료되지 않았을 수 있습니다). 나중에 다시 시도하세요."
   },
   "pluginSetup": {
-    "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+    "remoteDesktop": "데스크톱 열기",
+    "completeOnDesktop": "원격 데스크톱으로 컴퓨터를 조작하여 설정하세요. 로그인, 인증 및 인증 정보 저장은 모두 해당 컴퓨터에서 이루어지며 이 카드는 자동으로 업데이트됩니다.",
     "chooseOne": "설정 방법을 하나 선택하세요",
     "progress": "{{satisfied}}/{{total}} 완료",
     "desktopActionHint": "컴퓨터에서 {{action}}",
@@ -231,8 +251,133 @@
     "inlineFormAction": "컴퓨터에서 {{label}} 입력",
     "inlineFormActionGeneric": "컴퓨터에서 설정 입력"
   },
+  "inputHandoff": {
+    "originWarning": {
+      "insecure": "이 페이지는 보안 연결을 사용하지 않습니다. 입력한 내용이 다른 사람에게 노출될 수 있습니다.",
+      "ip-address": "이 페이지는 도메인 대신 IP 주소를 사용합니다. 예상한 사이트인지 확인하세요.",
+      "local-host": "이 페이지는 이 컴퓨터의 서비스에서 제공됩니다. 예상한 앱인지 확인하세요.",
+      "local-file": "이 페이지는 로컬 파일입니다. 예상한 내용인지 확인하세요.",
+      "punycode": "이 주소에는 특수 문자가 포함되어 다른 사이트를 사칭할 수 있습니다. 자세히 확인하세요.",
+      "embedded-frame": "입력란이 페이지에 삽입된 다른 사이트 안에 있습니다. 출처를 신뢰할 수 있는지 확인하세요."
+    },
+    "agentControlled": "이 화면은 Agent가 열었습니다. 입력하기 전에 실제로 로그인하려는 곳인지 확인하세요.",
+    "error": {
+      "decision": "요청이 전달되지 않았습니다. 다시 시도하세요.",
+      "stale": "화면이 바뀌었습니다. 최신 내용으로 진행하세요.",
+      "submit": "입력이 전달되지 않았습니다. 다시 시도하세요."
+    },
+    "terminal": {
+      "succeeded": "Agent에게 넘겼습니다.",
+      "cancelled": "대리 입력을 취소했습니다.",
+      "failed": "대리 입력이 종료되었습니다.",
+      "expired": "대기 시간이 너무 길어 대리 입력이 종료되었습니다."
+    },
+    "failure": {
+      "permission": "Cindy에 이 컴퓨터 화면을 읽을 권한이 없습니다. 시스템 설정의 손쉬운 사용에서 Cindy를 허용하세요.",
+      "target_gone": "대상 창이 닫혔습니다.",
+      "unreadable": "이 화면을 읽을 수 없습니다. 호스트 컴퓨터에서 직접 완료한 뒤 Agent에게 넘기세요.",
+      "action_failed": "방금 작업이 적용되지 않았습니다. 화면을 확인하고 다시 시도하세요.",
+      "timeout": "대기 시간이 너무 길어 대리 입력이 종료되었습니다.",
+      "unsupported": "이 컴퓨터는 아직 대리 입력을 지원하지 않습니다.",
+      "origin_changed": "입력하기 전에 페이지가 바뀌어 아무것도 입력하지 않았습니다. 현재 페이지를 확인한 후 다시 입력하세요.",
+      "picture_unavailable": "이 단계의 화면을 표시하지 못했습니다. 시스템 설정에서 Cindy의 화면 기록을 허용하고 윈도우가 최소화되지 않았는지 확인하세요.",
+      "screen_locked": "이 컴퓨터의 화면이 잠겨 있습니다(디스플레이가 잠자기 상태가 되어도 잠깁니다). 화면을 깨우고 잠금을 해제한 후 Agent에게 다시 시도하도록 요청하세요.",
+      "nothing_to_fill": "이 화면에는 입력할 내용이 없어 Agent가 이어서 진행합니다."
+    },
+    "phase": {
+      "reading": "화면을 읽는 중…",
+      "working": "입력하는 중…",
+      "finishing": "완료된 것 같습니다. {{count}}초 후 Agent에게 넘깁니다.",
+      "finishingNow": "완료된 것 같습니다. Agent에게 넘기는 중…"
+    },
+    "action": {
+      "stay": "아직 안 끝났어요",
+      "done": "Agent에게 넘기기",
+      "cancel": "대리 입력 취소",
+      "claim": "여기서 처리",
+      "picture": "화면 보기",
+      "backToForm": "양식으로 돌아가기",
+      "liveView": "실시간 화면",
+      "fill": "입력",
+      "skip": "건너뛰기",
+      "continue": "계속",
+      "close": "취소",
+      "showPassword": "암호 표시",
+      "hidePassword": "암호 숨기기",
+      "scan": "스캔"
+    },
+    "remoteUnavailable": "이 컴퓨터는 원격으로 입력을 받을 수 없습니다. 호스트 컴퓨터에서 이 단계를 완료한 뒤 Agent에게 넘기세요.",
+    "unnamedField": "입력란",
+    "passwordField": "비밀번호",
+    "codeField": "인증 코드",
+    "filledHint": "이미 내용이 있습니다. 비워 두면 그대로 유지됩니다.",
+    "record": {
+      "doneOn_one": "소유자가 {{device}}에서 {{count}}단계 입력을 마쳤습니다",
+      "doneOn_other": "소유자가 {{device}}에서 {{count}}단계 입력을 마쳤습니다",
+      "doneHost_one": "소유자가 호스트 컴퓨터에서 {{count}}단계 입력을 마쳤습니다",
+      "doneHost_other": "소유자가 호스트 컴퓨터에서 {{count}}단계 입력을 마쳤습니다",
+      "donePhone_one": "소유자가 휴대폰에서 {{count}}단계 입력을 마쳤습니다",
+      "donePhone_other": "소유자가 휴대폰에서 {{count}}단계 입력을 마쳤습니다",
+      "doneElsewhere_one": "소유자가 다른 기기에서 {{count}}단계 입력을 마쳤습니다",
+      "doneElsewhere_other": "소유자가 다른 기기에서 {{count}}단계 입력을 마쳤습니다",
+      "done": "대리 입력을 마쳤습니다",
+      "nothingToFill": "입력할 내용이 없어 Agent에게 넘겼습니다",
+      "cancelled": "대리 입력을 취소했습니다",
+      "expired": "대리 입력 시간이 초과되었습니다",
+      "failed": "대리 입력을 마치지 못했습니다"
+    },
+    "holder": {
+      "elsewhere": "{{device}}에서 처리 중입니다. 여기서 이어받을 수도 있습니다.",
+      "host": "호스트 컴퓨터",
+      "phone": "휴대폰",
+      "otherDevice": "다른 기기"
+    },
+    "agentNote": "Agent 메모: {{note}}",
+    "picture": {
+      "hint": "화면에서 위치를 탭하면 Cindy가 호스트 컴퓨터의 같은 위치를 클릭합니다.",
+      "open": "이 단계 화면 보기",
+      "openHint": "이 단계는 양식으로 정리할 수 없습니다. 화면은 이 기기로만 암호화되어 전송되며 저장되지 않습니다.",
+      "alt": "대상 윈도우의 화면",
+      "loading": "화면을 가져오는 중…",
+      "error": "화면을 가져오지 못했습니다. 다시 시도하세요.",
+      "field": "선택된 입력란",
+      "type": "입력",
+      "typeEnter": "입력 후 Return"
+    },
+    "liveViewHint": "이 창 하나만 여기에서 실시간으로 봅니다. 클릭과 입력은 이 창 안에만 전달됩니다.",
+    "deviceCode": {
+      "prompt": "이 코드로 로그인",
+      "copy": "코드 복사",
+      "copied": "코드를 복사했습니다",
+      "copyFailed": "복사하지 못했습니다",
+      "open": "이 기기에서 열기",
+      "openFailed": "링크를 열지 못했습니다",
+      "then": "열린 페이지에 코드를 입력해 로그인을 마친 뒤 「Agent에게 넘기기」를 선택하세요."
+    },
+    "sheetNote": "컴퓨터의 이 위치에만 입력됩니다. 에이전트에게 전달되거나 저장되지 않습니다.",
+    "nothingLeft": "여기에는 입력할 항목이 없습니다.",
+    "qr": {
+      "open": "이 기기에서 {{site}} 열기",
+      "openApp": "이 기기에서 {{site}} 링크 열기",
+      "share": "이미지 저장 또는 공유",
+      "copyLink": "링크 복사",
+      "copyText": "내용 복사",
+      "copied": "복사했습니다.",
+      "copyFailed": "복사하지 못했습니다. 다시 시도하세요.",
+      "openFailed": "이 기기에서 링크를 열 수 없습니다. 이미지를 저장한 뒤 앱의 스캔 화면에서 사진으로 인식하세요.",
+      "shareFailed": "공유를 열지 못했습니다. 다시 시도하세요.",
+      "hintLink": "이 기기에서 열면 해당 앱에서 로그인을 마칠 수 있습니다. 이미지를 저장한 뒤 앱의 스캔 화면에서 사진으로 인식할 수도 있습니다. 로그인하면 자동으로 계속합니다.",
+      "hint": "이미지를 저장한 뒤 앱의 스캔 화면에서 사진으로 인식하거나, 다른 기기로 이 코드를 스캔하세요. 로그인하면 자동으로 계속합니다.",
+      "alt": "컴퓨터의 QR 코드. 탭하면 컴퓨터의 이 코드를 탭합니다.",
+      "loading": "QR 코드를 가져오는 중…",
+      "failed": "QR 코드를 가져오지 못했습니다. 탭해서 다시 시도하세요.",
+      "scanned": "스캔했습니다. 휴대폰에서 확인하세요. 확인하면 자동으로 계속합니다."
+    }
+  },
   "presentation": {
-    "action": { "submitting": "제출 중" },
+    "action": {
+      "submitting": "제출 중"
+    },
     "permission": {
       "highRiskTitle": "고위험 권한은 한 번 더 확인해야 합니다",
       "highRiskDetail": "명령 내용을 확인한 뒤 허용을 다시 누르세요. 확실하지 않으면 거부하세요.",
@@ -240,7 +385,12 @@
       "allowTitle": "허용하면 컴퓨터에서 실행을 계속합니다",
       "tool": "도구: {{tool}}",
       "title": "{{tool}} 사용을 허용할까요?",
-      "risk": "이 명령은 시스템, 저장소 또는 외부 서비스 상태를 변경할 수 있습니다. 허용하기 전에 현재 작업과 명령을 신뢰할 수 있는지 확인하세요."
+      "risk": "이 명령은 시스템, 저장소 또는 외부 서비스 상태를 변경할 수 있습니다. 허용하기 전에 현재 작업과 명령을 신뢰할 수 있는지 확인하세요.",
+      "titleCommand": "이 명령 실행을 허용할까요?",
+      "titleFileRead": "파일 읽기를 허용할까요?",
+      "titleFileWrite": "파일 변경을 허용할까요?",
+      "titleBrowser": "이 브라우저 작업을 허용할까요?",
+      "titlePlugin": "{{plugin}} 플러그인 사용을 허용할까요?"
     },
     "ask": {
       "progress": "질문 {{current}}/{{total}}",
@@ -260,7 +410,6 @@
     },
     "queue": {
       "count": "{{count}}개",
-      "readOnlyHint": "협업은 읽기 전용이며 컴퓨터의 요청만 표시합니다.",
       "empty": "대기 중인 요청 없음",
       "hint": {
         "plan_review": "계획을 확인하고 필요하면 수정을 요청하세요. 승인한 뒤 컴퓨터에서 계속 실행합니다.",
@@ -270,6 +419,19 @@
         "plugin_setup": "설정은 컴퓨터에서 완료해야 합니다. 여기에서는 이 요청을 취소할 수 있습니다.",
         "fallback": "모바일은 데스크톱에서 보낸 순서대로 원격 요청을 처리합니다."
       }
+    }
+  },
+  "companion": {
+    "permissionRequest": "{{name}} 님이 확인을 기다리고 있어요",
+    "operation": "작업",
+    "details": "세부 정보",
+    "fields": {
+      "path": "파일",
+      "file_path": "파일",
+      "url": "주소",
+      "command": "명령",
+      "ghost_id": "플러그인",
+      "tool": "도구"
     }
   }
 }

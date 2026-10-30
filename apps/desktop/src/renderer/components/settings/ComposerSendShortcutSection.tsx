@@ -8,6 +8,13 @@ import {
 } from '@/hooks/useComposerSendShortcutPreference';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import {
+  SETTINGS_CARD_CLASS,
+  SETTINGS_ROW_CLASS,
+  SETTINGS_ROW_HINT_CLASS,
+  SETTINGS_ROW_LABEL_CLASS,
+  SETTINGS_SECTION_TITLE_CLASS,
+} from './settingsRowClasses';
 
 export function ComposerSendShortcutSection() {
   const { t } = useTranslation();
@@ -21,19 +28,15 @@ export function ComposerSendShortcutSection() {
 
   return (
     <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.composer.title')}
-        </h2>
-      </div>
+      <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.composer.title')}</h2>
 
-      <div className="flex flex-col gap-[14px] rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-14 font-medium leading-[1.3] text-[var(--text-primary)]">
+      <div className={SETTINGS_CARD_CLASS}>
+        <div className={SETTINGS_ROW_CLASS}>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
               {t('settings.composer.sendShortcut.label', { shortcut })}
             </p>
-            <p className="mt-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
+            <p className={SETTINGS_ROW_HINT_CLASS}>
               {t('settings.composer.sendShortcut.hint', { shortcut })}
             </p>
           </div>

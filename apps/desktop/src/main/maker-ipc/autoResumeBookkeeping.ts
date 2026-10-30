@@ -20,6 +20,8 @@
  * 副作用全部经注入的 deps，因此可以在没有 electron / DB 的环境里整体驱动。
  */
 
+import type { BotGroupLaneTerminal } from './botGroupChatService.js';
+
 export type AutoResumeOutcome = 'succeeded' | 'failed';
 
 /** 被压住的那条 terminal error 的可落库详情（已 redact，与 error 行的 content 同形）。 */
@@ -57,6 +59,7 @@ interface SuppressedTurnErrorEntry {
    * flush / discard 只丢掉它；surface 才让 host 收口。
    */
   orcaTerminal: OrcaSuppressedTerminal | null;
+  groupTerminal: BotGroupLaneTerminal | null;
   /** The retry queue item that will replace the failed turn. */
   retryOwnerClientId: string | null;
   /**
@@ -83,6 +86,8 @@ export interface AutoResumeBookkeepingDeps {
    * 调用 `handleWorkerTerminalTurn`；flush/discard 不得走这条。
    */
   finalizeOrcaSuppressedTerminal?: (sessionId: string, payload: OrcaSuppressedTerminal) => void;
+  /** Group executions share the suppressed error's exact input owner and lifetime. */
+  finalizeBotGroupSuppressedTerminal?: (terminal: BotGroupLaneTerminal) => void;
   /** 回填一条自动续跑记录的结果（`agentMeta.autoResumeOutcome`）。 */
   markOutcome: (sessionId: string, clientId: string, outcome: AutoResumeOutcome) => void;
   /** 回滚守卫的 pendingResume（不回滚会让该会话之后的中断永远被判成「上一次还在路上」）。 */
@@ -200,6 +205,7 @@ export class AutoResumeBookkeeping {
         ...(typeof d.sdkError === 'string' ? { sdkError: d.sdkError } : {}),
       },
       orcaTerminal: null,
+      groupTerminal: null,
       retryOwnerClientId: null,
       islandReplacementPreviewed: false,
       replacementDispatching: false,
@@ -218,6 +224,13 @@ export class AutoResumeBookkeeping {
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
     entry.orcaTerminal = payload;
+    return true;
+  }
+
+  stashBotGroupSuppressedTerminal(sessionId: string, terminal: BotGroupLaneTerminal): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry) return false;
+    entry.groupTerminal = terminal;
     return true;
   }
 
@@ -374,6 +387,7 @@ export class AutoResumeBookkeeping {
     this.deps.persistSuppressedError(sessionId, entry.detail);
     if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, entry.detail);
     this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);
+    if (surfaceError && entry.groupTerminal) this.deps.finalizeBotGroupSuppressedTerminal?.(entry.groupTerminal);
     if (attemptToken !== null) this.releaseAttemptIfUnowned(sessionId, attemptToken);
     return true;
   }
@@ -452,6 +466,18 @@ export class AutoResumeBookkeeping {
   /** 是否仍有一条失败轮的终态等待 disposition；供同轮 completion tail 共用这一边界。 */
   hasSuppressedError(sessionId: string): boolean {
     return this.suppressedErrors.has(sessionId);
+  }
+
+  /** 供应商组接管尚未排期的候选错误：交出同一轮的详情与全部终态，不落库、不提前回报失败。 */
+  takeDeferredError(
+    sessionId: string,
+    owner: SuppressedTurnErrorOwner,
+  ): Pick<SuppressedTurnErrorEntry, 'detail' | 'orcaTerminal' | 'groupTerminal'> | null {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry || entry.attemptToken !== null || !sameSuppressedTurnErrorOwner(entry.deferredOwner, owner)) return null;
+    this.suppressedErrors.delete(sessionId);
+    this.suppressedErrorClients.delete(sessionId);
+    return { detail: entry.detail, orcaTerminal: entry.orcaTerminal, groupTerminal: entry.groupTerminal };
   }
 
   /** Product terminal error（非 continuation）记下随后那条同一代 unclaimed done。 */
@@ -553,6 +579,7 @@ export class AutoResumeBookkeeping {
         if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, detail);
       }
       this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, surfaceError);
+      if (surfaceError && entry?.groupTerminal) this.deps.finalizeBotGroupSuppressedTerminal?.(entry.groupTerminal);
     }
     this.deps.abandonTakeover(sessionId, surfaceError ? detail?.message : undefined, token);
     this.deps.onAutoResumeFailed?.(sessionId, token);
@@ -631,6 +658,38 @@ export class AutoResumeBookkeeping {
       return false;
     }
     return this.settleOutcome(sessionId, attemptToken, outcome);
+  }
+
+  /**
+   * 已落库的隐藏 CONTINUE 无法确认 vendor 是否 accept。把这条续跑记成 failed，
+   * 丢掉原 suppressed error（不再补落、不再恢复 recovery），并回滚守卫 pendingResume。
+   * 终态错误由调用方自己表面；这里不得 requeue、不得把旧中断再弹出来。
+   */
+  abandonUnconfirmedPersistedResume(
+    sessionId: string,
+    attemptToken: number,
+    clientId: string,
+  ): boolean {
+    if (!this.isCurrentAttempt(sessionId, attemptToken)) return false;
+    const pending = this.pendingOutcomes.get(sessionId);
+    const entry = this.suppressedErrors.get(sessionId);
+    if (pending && (pending.clientId !== clientId || pending.attemptToken !== attemptToken)) {
+      return false;
+    }
+    if (entry?.retryOwnerClientId && entry.retryOwnerClientId !== clientId) return false;
+    if (!pending && entry?.retryOwnerClientId !== clientId) return false;
+    const orcaTerminal = entry?.orcaTerminal ?? null;
+    this.settleOutcomeForClient(sessionId, attemptToken, clientId, 'failed');
+    this.discardSuppressedErrorForRetry(sessionId, clientId);
+    this.discardSuppressedError(sessionId, attemptToken);
+    // The unconfirmed send is a product failure. Settle its captured Worker once
+    // without restoring the old error card or replaying the continuation.
+    this.releaseOrcaSuppressedTerminal(sessionId, orcaTerminal, true);
+    if (entry?.groupTerminal) this.deps.finalizeBotGroupSuppressedTerminal?.(entry.groupTerminal);
+    this.deps.rollbackGuardPendingResume(sessionId, attemptToken);
+    this.deps.onAutoResumeFailed?.(sessionId, attemptToken);
+    this.releaseAttemptIfUnowned(sessionId, attemptToken);
+    return true;
   }
 
   private releaseAttemptIfUnowned(sessionId: string, attemptToken: number): void {
@@ -781,12 +840,24 @@ export class AutoResumeBookkeeping {
   }
 
   /**
+   * Whether the exact attempt still owns a schedule: waiting timer **or**
+   * in-flight callback. Unexpected close during either phase must preserve the
+   * approved continuation-only retry.
+   */
+  hasLiveSchedule(sessionId: string, attemptToken: number): boolean {
+    const scheduled = this.schedules.get(sessionId);
+    return (
+      scheduled?.attemptToken === attemptToken &&
+      this.currentAttempts.get(sessionId) === attemptToken
+    );
+  }
+
+  /**
    * Whether the exact attempt is still waiting for its timer to fire.
    *
-   * `hasSchedule()` intentionally also returns true while the callback is
-   * awaiting DB/coordinator work. Session-close handoff must distinguish that
-   * execution phase from the pre-fire rebuild window; once the timer has fired,
-   * the old Session is no longer safe to preserve.
+   * `hasLiveSchedule()` / `hasSchedule()` also return true while the callback is
+   * awaiting DB/coordinator work. Tests use this narrower check to distinguish
+   * those phases; session-close handoff must not treat timer-fired as cancelled.
    */
   hasWaitingSchedule(sessionId: string, attemptToken: number): boolean {
     const scheduled = this.schedules.get(sessionId);

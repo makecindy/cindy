@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   BARE_RADIUS_RE,
+  mobileRouteCoverage,
   createBareRadiusRe,
   INVENTORY_REL_PATH,
   MAIN_ENTRY_REL_PATH,
@@ -53,8 +54,8 @@ const MAIN_ENTRY_PATH = path.join(repoRoot, ...MAIN_ENTRY_REL_PATH.split('/'));
 const RENDERER_INDEX_PATH = path.join(repoRoot, ...RENDERER_INDEX_REL_PATH.split('/'));
 
 /**
- * 生成模式用当天日期快照计数事实；--check 用文件里已有日期重渲染，避免跨日假红。
- * 日期只在生成时求值（不进 shared 纯函数），保证同一天内连续两次生成字节一致。
+ * GENERATED 区块不写生成日期：它只取决于源码树，跨日重新生成字节一致，
+ * 不同日期各自重新生成的分支也不会在日期行上合并冲突。事实变化时间以 git 历史为准。
  */
 const GENERATE_COMMAND = 'pnpm design:inventory';
 
@@ -64,12 +65,7 @@ function readExisting() {
   return fs.existsSync(DOC_PATH) ? fs.readFileSync(DOC_PATH, 'utf8') : '';
 }
 
-function snapshotDateFromExisting(existing) {
-  const match = /计数快照日期：(\d{4}-\d{2}-\d{2})/.exec(existing);
-  return match?.[1] ?? new Date().toISOString().slice(0, 10);
-}
-
-function buildGenerated(existing) {
+function buildGenerated() {
   const routerSource = fs.readFileSync(ROUTER_PATH, 'utf8');
   const { surfaces, missingStyleRoots, danglingExtraStyleRoots } = buildGeneratedSurfaces(
     repoRoot,
@@ -77,12 +73,15 @@ function buildGenerated(existing) {
   );
   const routerCoverage = productionRouterCoverage(routerSource, catalog);
   const redirects = listRedirectExclusions(routerSource);
-  const snapshotDate = checkOnly ? snapshotDateFromExisting(existing) : new Date().toISOString().slice(0, 10);
+  const mobileCoverage = mobileRouteCoverage(repoRoot, catalog);
+  if (mobileCoverage.missing.length || mobileCoverage.stale.length) {
+    throw new Error('Mobile route inventory mismatch: ' + JSON.stringify(mobileCoverage));
+  }
   const generated = renderGeneratedBlock(surfaces, {
-    snapshotDate,
     generateCommand: GENERATE_COMMAND,
     routerCoverage,
     redirects,
+    mobileCoverage,
   });
   return { surfaces, routerCoverage, generated, missingStyleRoots, danglingExtraStyleRoots };
 }
@@ -91,7 +90,7 @@ const catalog = catalogSurfaces();
 
 const existing = readExisting();
 const { surfaces, routerCoverage, generated, missingStyleRoots, danglingExtraStyleRoots } =
-  buildGenerated(existing);
+  buildGenerated();
 const orphanIds = findOrphanHumanIds(
   splitInventoryDocument(existing).suffix,
   surfaces.map((surface) => surface.id),

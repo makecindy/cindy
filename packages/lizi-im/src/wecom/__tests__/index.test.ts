@@ -126,6 +126,30 @@ function deferred<T>() {
 }
 
 describe("WecomIM routing and ownership", () => {
+  it("keeps a quote-only invocation empty and does not claim quoted media was delivered", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+    await im.init();
+    const frame = message({ id: "quote-only", sender: "owner", text: "", chatId: "group-1" });
+    client.emit("message.text", {
+      ...frame,
+      body: { ...frame.body, quote: { msgtype: "image", image: { url: "https://example.com/image" } } },
+    });
+    await flush();
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      text: "", invoked: true, attachments: [],
+      replyContext: { unavailableAttachments: ["引用消息的 1 个附件未提供文件内容"] },
+    });
+    expect(received[0].replyContext?.attachmentCount).toBeUndefined();
+    expect(client.downloadFile).not.toHaveBeenCalled();
+    await im.dispose();
+  });
+
   it("TOFU-binds the first DM sender and only accepts that owner afterwards", async () => {
     const { host, secrets } = createHost();
     const client = new FakeClient();
@@ -223,6 +247,23 @@ describe("WecomIM routing and ownership", () => {
       true,
     );
     expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('empty final does not send a placeholder (passive=%s)', async (passive) => {
+    const { host, secrets } = createHost();
+    secrets.set('wecom-owner-user-id', 'owner');
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never, now: () => 1_000 });
+    await im.init();
+    const frame = message({ id: 'm-empty', sender: 'owner', text: 'task' });
+    client.emit('message.text', frame);
+    await flush();
+    if (passive) await im.beginReply('owner');
+    await im.commitFinal({ userId: 'owner', text: ' \n ', terminal: 'done' });
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    if (passive) expect(client.replyStream).toHaveBeenLastCalledWith(frame, expect.any(String), ' ', true);
+    else expect(client.replyStream).not.toHaveBeenCalled();
+    await im.dispose();
   });
 
   it("keeps later inbound frames available while terminal attachments use active send", async () => {
@@ -578,6 +619,18 @@ describe("WecomIM routing and ownership", () => {
     expect(im.getStatus()).toEqual({ kind: "connecting" });
   });
 
+  it("clears an old authentication failure after recovery", async () => {
+    const { host } = createHost();
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    await im.init();
+    client.emit("error", new Error("Authentication failed: old failure"));
+    client.emit("authenticated");
+    client.emit("error", new Error("network unavailable"));
+    expect(im.getStatus()).toEqual({ kind: "error", reason: "network unavailable" });
+    await im.dispose();
+  });
+
   it.each([
     {
       channel: "wecomBot:set-config",
@@ -876,15 +929,22 @@ describe("WecomIM routing and ownership", () => {
     expect(client.downloadFile).not.toHaveBeenCalled();
   });
 
-  it("does not persist an inbound file after the transport generation changes", async () => {
+  it("does not stage an inbound file after the transport generation changes", async () => {
     const { host, secrets } = createHost();
     secrets.set("wecom-owner-user-id", "owner");
-    const mediaDir = join(tmpdir(), `cindy-wecom-stale-${randomUUID()}`);
-    host.paths.wecomMediaDir = mediaDir;
+    const legacyDir = join(tmpdir(), `cindy-wecom-stale-${randomUUID()}`);
+    host.paths.wecomMediaDir = legacyDir;
+    const stage = vi.fn(async () => ({
+      absPath: "C:\\staged\\report.txt",
+      discard: vi.fn(async () => {}),
+    }));
+    host.files = { stage };
     const client = new FakeClient();
     const download = deferred<Awaited<ReturnType<FakeClient["downloadFile"]>>>();
     client.downloadFile.mockImplementationOnce(() => download.promise);
     const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
 
     try {
       await im.init();
@@ -905,10 +965,305 @@ describe("WecomIM routing and ownership", () => {
       await flush();
       await flush();
 
-      expect(existsSync(mediaDir)).toBe(false);
+      expect(stage).not.toHaveBeenCalled();
+      expect(received).toEqual([]);
+      expect(existsSync(legacyDir)).toBe(false);
     } finally {
-      await rm(mediaDir, { recursive: true, force: true });
+      await rm(legacyDir, { recursive: true, force: true });
     }
+  });
+
+  it("stages inbound files through host.files instead of the legacy media dir", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const legacyDir = join(tmpdir(), `cindy-wecom-legacy-${randomUUID()}`);
+    host.paths.wecomMediaDir = legacyDir;
+    const discard = vi.fn(async () => {});
+    const stage = vi.fn(async () => ({ absPath: "C:\\staged\\report.txt", discard }));
+    host.files = { stage };
+    const client = new FakeClient();
+    client.downloadFile.mockResolvedValueOnce({
+      buffer: Buffer.from("file"),
+      filename: "../report.txt",
+    });
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    try {
+      await im.init();
+      client.emit("message.file", {
+        body: {
+          msgid: "file-1",
+          aibotid: "bot-1",
+          chattype: "single",
+          from: { userid: "owner" },
+          msgtype: "file",
+          file: { url: "https://example.invalid/file" },
+        },
+      });
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+
+      expect(stage).toHaveBeenCalledWith({
+        integration: "wecom",
+        buffer: Buffer.from("file"),
+        fileName: "report.txt",
+      });
+      expect(received[0]?.attachments).toEqual([
+        {
+          kind: "file",
+          absPath: "C:\\staged\\report.txt",
+          originalName: "report.txt",
+          mimeType: "text/plain",
+        },
+      ]);
+      expect(received[0]?.unsupported).toEqual([]);
+      expect(discard).not.toHaveBeenCalled();
+      expect(existsSync(legacyDir)).toBe(false);
+    } finally {
+      await rm(legacyDir, { recursive: true, force: true });
+    }
+  });
+
+  it("discards file staging when the owning account closes during the write", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const accountToken = { id: 1 };
+    let accountActive = true;
+    host.accountScope = {
+      capture: () => (accountActive ? accountToken : null),
+      isCurrent: (token) => accountActive && token === accountToken,
+      run: async (_token, operation) => operation(),
+    };
+    const client = new FakeClient();
+    client.downloadFile.mockResolvedValueOnce({
+      buffer: Buffer.from("file"),
+      filename: "report.txt",
+    });
+    const staged = deferred<{ absPath: string; discard: () => Promise<void> }>();
+    const discard = vi.fn(async () => {});
+    const stage = vi.fn(() => staged.promise);
+    host.files = { stage };
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.file", {
+      body: {
+        msgid: "stale-staged-file",
+        aibotid: "bot-1",
+        chattype: "single",
+        from: { userid: "owner" },
+        msgtype: "file",
+        file: { url: "https://example.invalid/file" },
+      },
+    });
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledOnce());
+
+    accountActive = false;
+    staged.resolve({ absPath: "C:\\staged\\report.txt", discard });
+    await vi.waitFor(() => expect(discard).toHaveBeenCalledOnce());
+    await flush();
+
+    expect(received).toEqual([]);
+  });
+
+  it("reports inbound files unsupported without downloading when host.files is missing", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.file", {
+      body: {
+        msgid: "no-staging-file",
+        aibotid: "bot-1",
+        chattype: "single",
+        from: { userid: "owner" },
+        msgtype: "file",
+        file: { url: "https://example.invalid/file" },
+      },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(client.downloadFile).not.toHaveBeenCalled();
+    expect(received[0]?.attachments).toEqual([]);
+    expect(received[0]?.unsupported).toEqual([
+      { type: "file:unsupported", label: "文件暂不支持" },
+    ]);
+  });
+
+  it.each([
+    { event: "message.image", msgtype: "image", body: { image: { url: "https://example.invalid/i" } }, filename: "image", mime: "image/jpeg", store: "cacheImage" },
+    { event: "message.video", msgtype: "video", body: { video: { url: "https://example.invalid/v" } }, filename: "clip", mime: "video/mp4", store: "cacheMedia" },
+  ])("uses the native $msgtype default MIME when the downloaded name has no extension", async ({ event, msgtype, body, filename, mime, store }) => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const cacheImage = vi.fn(async () => ({ absPath: "/blobs/x", url: "cindy-media://blobs/x", discard: vi.fn(async () => {}) }));
+    const cacheMedia = vi.fn(async ({ mimeType }: { mimeType: string }) => ({
+      absPath: "/blobs/x",
+      url: "cindy-media://blobs/x",
+      mimeType,
+      discard: vi.fn(async () => {}),
+    }));
+    host.files = { stage: vi.fn() };
+    host.media = { cacheImage, cacheMedia, getCachedImage: vi.fn(async () => null), resolveMediaUrl: () => null } as never;
+    const client = new FakeClient();
+    client.downloadFile.mockImplementationOnce(async () => ({ buffer: Buffer.from("x"), filename }));
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((e) => received.push(e));
+
+    await im.init();
+    client.emit(event, {
+      body: { msgid: `native-${msgtype}`, aibotid: "bot-1", chattype: "single", from: { userid: "owner" }, msgtype, ...body },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    const spy = store === "cacheImage" ? cacheImage : cacheMedia;
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ mimeType: mime }));
+    expect(received[0]?.attachments).toHaveLength(1);
+  });
+
+  it("applies the 50MB inbound cap to file messages routed to the media store", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const cacheMedia = vi.fn();
+    host.files = { stage: vi.fn() };
+    host.media = { cacheImage: vi.fn(), cacheMedia, getCachedImage: vi.fn(async () => null), resolveMediaUrl: () => null } as never;
+    const client = new FakeClient();
+    client.downloadFile.mockImplementationOnce(async () => ({
+      buffer: Buffer.alloc(50 * 1024 * 1024 + 1),
+      filename: "big.mp4",
+    }));
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((e) => received.push(e));
+
+    await im.init();
+    client.emit("message.file", {
+      body: { msgid: "big-av", aibotid: "bot-1", chattype: "single", from: { userid: "owner" }, msgtype: "file", file: { url: "https://example.invalid/f" } },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(cacheMedia).not.toHaveBeenCalled();
+    expect(received[0]?.unsupported).toEqual([{ type: "file:oversize", label: "文件超过大小上限：big.mp4" }]);
+  });
+
+  it("routes an inbound image file message to the media store as a staged image", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const stage = vi.fn();
+    const cacheImage = vi.fn(async () => ({ absPath: "/blobs/p.png", url: "cindy-media://blobs/p.png", discard: vi.fn(async () => {}) }));
+    host.files = { stage };
+    host.media = { cacheImage, getCachedImage: vi.fn(async () => null), resolveMediaUrl: () => null } as never;
+    const client = new FakeClient();
+    client.downloadFile.mockImplementationOnce(async () => ({ buffer: Buffer.from("p"), filename: "scan.PNG" }));
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.file", {
+      body: {
+        msgid: "img-file",
+        aibotid: "bot-1",
+        chattype: "single",
+        from: { userid: "owner" },
+        msgtype: "file",
+        file: { url: "https://example.invalid/file" },
+      },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(stage).not.toHaveBeenCalled();
+    expect(cacheImage).toHaveBeenCalledWith(expect.objectContaining({ mimeType: "image/png", staging: true }));
+    expect(received[0]?.attachments).toEqual([expect.objectContaining({ kind: "image", originalName: "scan.PNG" })]);
+  });
+
+  it.each([
+    { name: "clip.mp4", accepted: true },
+    { name: "clip.mkv", accepted: false },
+  ])("routes an inbound $name file message to the media store only", async ({ name, accepted }) => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const stage = vi.fn();
+    const cacheMedia = vi.fn(async ({ mimeType }: { mimeType: string }) => {
+      if (!accepted) throw new Error("unsupported mime type");
+      return { absPath: "/blobs/v.mp4", url: "cindy-media://blobs/v.mp4", mimeType, discard: vi.fn(async () => {}) };
+    });
+    host.files = { stage };
+    host.media = {
+      cacheImage: vi.fn(),
+      cacheMedia,
+      getCachedImage: vi.fn(async () => null),
+      resolveMediaUrl: () => null,
+    } as never;
+    const client = new FakeClient();
+    client.downloadFile.mockImplementationOnce(async () => ({ buffer: Buffer.from("v"), filename: name }));
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.file", {
+      body: {
+        msgid: `av-file-${name}`,
+        aibotid: "bot-1",
+        chattype: "single",
+        from: { userid: "owner" },
+        msgtype: "file",
+        file: { url: "https://example.invalid/file" },
+      },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(stage).not.toHaveBeenCalled();
+    expect(cacheMedia).toHaveBeenCalledTimes(1);
+    if (accepted) {
+      expect(received[0]?.attachments).toEqual([
+        { kind: "file", absPath: "/blobs/v.mp4", originalName: name, mimeType: "video/mp4", url: "cindy-media://blobs/v.mp4" },
+      ]);
+    } else {
+      expect(received[0]?.attachments).toEqual([]);
+      expect(received[0]?.unsupported).toEqual([
+        { type: "file:unsupported-media", label: `媒体格式暂不支持：${name}` },
+      ]);
+    }
+  });
+
+  it("does not download an inbound image when host.media is missing", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    host.files = { stage: vi.fn() };
+    const client = new FakeClient();
+    const im = new WecomIM(host, { clientFactory: () => client as never });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.image", {
+      body: {
+        msgid: "no-media-image",
+        aibotid: "bot-1",
+        chattype: "single",
+        from: { userid: "owner" },
+        msgtype: "image",
+        image: { url: "https://example.invalid/image" },
+      },
+    });
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(client.downloadFile).not.toHaveBeenCalled();
+    expect(host.files.stage).not.toHaveBeenCalled();
+    expect(received[0]?.attachments).toEqual([]);
+    expect(received[0]?.unsupported).toEqual([
+      { type: "image:download-failed", label: "图片下载失败" },
+    ]);
   });
 
   it("does not cache an inbound video after the transport generation changes", async () => {
@@ -1103,5 +1458,31 @@ describe("WecomIM routing and ownership", () => {
         url: `cindy-media://blobs/${"a".repeat(64)}.mp4`,
       },
     ]);
+  });
+
+  it("keeps a prefixed, IPC-less instance on its own credential keys and off the settings channels", async () => {
+    const { host, secrets, broadcasts, ipcHandlers } = createHost();
+    secrets.clear();
+    secrets.set("bot-im-abc-wecom-bot-id", "bot-2");
+    secrets.set("bot-im-abc-wecom-bot-secret", "secret-2");
+    const client = new FakeClient();
+    const im = new WecomIM(host, {
+      clientFactory: () => client as never,
+      secretKeyPrefix: "bot-im-abc-",
+      ipc: false,
+    });
+    im.registerIpc();
+    expect(ipcHandlers.size).toBe(0);
+    await im.init();
+    expect(im.getStatus()).toEqual({ kind: "connected", appId: "bot-2" });
+    expect(broadcasts).toEqual([]);
+    const state = await im.setConfig({ botId: "bot-3", secret: "secret-3" });
+    expect(state.botId).toBe("bot-3");
+    expect(secrets.get("bot-im-abc-wecom-bot-id")).toBe("bot-3");
+    expect(secrets.has("wecom-bot-id")).toBe(false);
+    await im.clearCredentials();
+    expect([...secrets.keys()]).toEqual([]);
+    expect(im.getStatus()).toEqual({ kind: "idle" });
+    expect(broadcasts).toEqual([]);
   });
 });

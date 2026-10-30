@@ -1,3 +1,14 @@
+import { pickFileIcon } from '@/components/ui/file-type-icon';
+import { Button } from '@/components/ui/button';
+import { MENU_CURRENT_ROW_ATTR, MENU_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 /**
  * Unified composer suggestion panel (command-palette F2 / F5, `@` + `+`).
  *
@@ -23,12 +34,18 @@
  * Embedded content must be `w-full` — a second 480px inside the 1px-bordered
  * Morph shell overflows by 2px and flashes a 2s horizontal scrollbar.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Bot,
   Check,
   ClipboardList,
-  File as FileIcon,
   Folder as FolderIcon,
   FolderPlus,
   Globe2,
@@ -36,6 +53,8 @@ import {
   Monitor,
   Paperclip,
   Plug,
+  RotateCw,
+  Search,
   Sparkles,
   Target,
   UsersRound,
@@ -48,6 +67,8 @@ import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
   composerSuggestionEntryKey,
+  isComposerSuggestionEntryDisabled,
+  nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
   type ComposerSuggestionEntry,
 } from '@/lib/composerSuggestion';
@@ -71,7 +92,7 @@ function isPluginEntry(entry: ComposerSuggestionEntry): boolean {
 
 function isAddDirEntry(entry: ComposerSuggestionEntry): boolean {
   return entry.kind === 'action'
-    && (entry.action.id === 'add-extra-dir' || entry.action.id === 'add-writable-dir');
+    && entry.action.id === 'add-extra-dir';
 }
 
 export type AtPanelState =
@@ -102,17 +123,24 @@ interface AtMentionPanelProps {
   writableDirs?: ReferenceDirsSection | null;
   /** `+` 的 MorphPopover 内嵌形态；容器、阴影与 outside-click 由 MorphPopover 负责。 */
   embedded?: boolean;
+  /**
+   * 面板内搜索框(合成「+」形态)：传了才渲染搜索框，否则底部只留静态提示行。
+   * 「+」面板是浮在输入框上方的,盖住了输入框本身 —— 让用户在看不见的输入框里盲打
+   * 是死路,所以这条形态自带一个可见的输入框。
+   */
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
 
 const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
+  'retry-plugins': RotateCw,
   'attach-files': Paperclip,
   'new-goal': Target,
   'plan-mode': ClipboardList,
   collaboration: UsersRound,
   'add-extra-dir': FolderPlus,
-  'add-writable-dir': FolderPlus,
 };
 
 export function AtMentionPanel({
@@ -127,13 +155,36 @@ export function AtMentionPanel({
   referenceDirs = null,
   writableDirs = null,
   embedded = false,
+  searchValue = '',
+  onSearchChange,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
+  const libraryReadOnlyLabel = t('extraDirs.libraryReadOnlyLabel');
+  // 搜索框的占位文字兼可访问名(五个语言都有,复用同一个 key 不新增词条)。
+  const hint = t('newChat.atMention.typeToSearchFiles');
+  // 本形态自带搜索框:静态提示行与「继续输入」提示都让位给搜索框。
+  const hasSearchBox = Boolean(onSearchChange);
   const rootRef = useRef<HTMLDivElement>(null);
   const focusedRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the focused index; arrow keys are pressed in the editor.
+  const highlightPanelRef = useMenuPanel(panelRef, {
+    lockWidth: false,
+    options: {
+      current: currentMarkedRow,
+      currentAttributes: [MENU_CURRENT_ROW_ATTR],
+      keyboardSource: document,
+    },
+  });
   const tooltipRef = useRef<HTMLDivElement>(null);
+  // 搜索框是本面板的输入面:面板浮在编辑器上方、盖住了编辑器,所以打开就把焦点给它,
+  // 用户不用先点一下才能打字。
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!onSearchChange) return;
+    searchRef.current?.focus();
+  }, [onSearchChange]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,
@@ -152,13 +203,13 @@ export function AtMentionPanel({
   const addDirEntry = isEmptyRootQuery
     ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-extra-dir')
     : undefined;
-  const addWritableDirEntry = isEmptyRootQuery
-    ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-writable-dir')
-    : undefined;
+  // Merge presentation only: removal keeps each persisted grant's original path.
+  const directoryRows = [referenceDirs, writableDirs].flatMap((section) =>
+    section ? section.dirs.map((path) => ({ path, onRemove: section.onRemove })) : [],
+  );
   const addSectionVisible = isEmptyRootQuery && addEntries.length > 0;
   const pluginSectionVisible = isEmptyRootQuery && pluginEntries.length > 0;
-  const referenceDirsVisible = isEmptyRootQuery && (!!referenceDirs || !!addDirEntry);
-  const writableDirsVisible = isEmptyRootQuery && (!!writableDirs || !!addWritableDirEntry);
+  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || !!addDirEntry);
 
   useEffect(() => {
     if (entries.length === 0) return;
@@ -287,33 +338,24 @@ export function AtMentionPanel({
         onMouseEnter={() => {
           if (!action.disabled) onFocusedIndexChange(idx);
         }}
+        // Shared menu row: the panel's glide highlight follows the focused index, a checked
+        // action is the check and 500; collaboration's orange tints the text only.
+        {...menuRowAttrs({ checked: action.checked === true, current: focused, disabled: action.disabled })}
         className={cn(
-          'flex w-full items-center gap-2',
-          'rounded-[8px] px-3 py-2',
-          'text-left outline-none transition-colors',
-          focused && 'bg-[var(--model-item-hover)]',
-          'hover:bg-[var(--model-item-hover)]',
-          emphasized && 'bg-[var(--model-item-hover)]',
+          COMPOSER_MENU_ROW,
+          'flex w-full items-center gap-2 px-3 py-2 text-left',
+          emphasized && 'text-[var(--warning-accent)]',
           action.disabled && 'cursor-not-allowed opacity-50',
         )}
       >
-        <Icon
-          size={14}
-          className={cn(
-            'shrink-0',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
-          )}
-        />
-        <span
-          className={cn(
-            'min-w-0 flex-1 truncate text-13',
-            emphasized ? 'text-[var(--warning-accent)]' : 'text-[var(--model-item-text)]',
-          )}
-        >
-          {action.label}
-        </span>
-        {isCheckbox && action.checked && (
-          <Check size={13} className="ml-auto shrink-0 text-[var(--model-item-check)]" />
+        {withMenuLabels(
+          <>
+            <Icon size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{action.label}</span>
+            {isCheckbox && action.checked && (
+              <Check size={13} className="ml-auto shrink-0 text-[var(--model-item-check)]" />
+            )}
+          </>,
         )}
       </button>
     );
@@ -345,6 +387,8 @@ export function AtMentionPanel({
       meta = item.description || t('newChat.atMention.desktopWindow');
     } else if (item.type === 'session') {
       meta = t('newChat.atMention.task');
+    } else if (item.type === 'bot') {
+      meta = t('newChat.atMention.bot');
     } else if (item.type === 'plugin-command') {
       // Plugin rows follow the compact icon + name presentation used by the
       // installed-plugin menu; the command remains an internal selection key.
@@ -372,9 +416,11 @@ export function AtMentionPanel({
             ? Monitor
             : item.type === 'session'
               ? History
+              : item.type === 'bot'
+                ? Bot
               : item.type === 'plugin-command' || item.type === 'plugin-resource'
                 ? Plug
-              : FileIcon;
+              : pickFileIcon(item.name);
 
     return (
       <button
@@ -393,11 +439,11 @@ export function AtMentionPanel({
         onMouseEnter={() => {
           if (!disabled) onFocusedIndexChange(idx);
         }}
+        {...menuRowAttrs({ current: focused, disabled })}
         className={cn(
+          COMPOSER_MENU_ROW,
           'flex w-full items-center gap-2',
-          'h-[44px] px-[10px] rounded-[6px]',
-          'text-left outline-none transition-colors',
-          focused && 'bg-[var(--cmd-palette-item-hover)]',
+          'h-[44px] px-[10px] text-left',
           disabled && 'cursor-not-allowed opacity-45',
         )}
       >
@@ -411,18 +457,11 @@ export function AtMentionPanel({
         ) : (
           <Icon size={16} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
         )}
-        <span
-          className={cn(
-            'min-w-0 truncate text-14 font-medium',
-            'text-[var(--cmd-palette-item-text)]',
-          )}
-        >
-          {displayName}
-        </span>
+        {withMenuLabels(<span className="min-w-0 truncate">{displayName}</span>)}
         {disabled && entry.disabledReason ? (
           <span
             className={cn(
-              'shrink-0 text-12 truncate max-w-[240px]',
+              'shrink-0 text-12 font-normal truncate max-w-[240px]',
               'text-[var(--cmd-palette-item-meta)]',
               'ml-auto',
             )}
@@ -433,7 +472,7 @@ export function AtMentionPanel({
           <Tip text={meta} mono>
             <span
               className={cn(
-                'shrink-0 text-12 truncate max-w-[240px]',
+                'shrink-0 text-12 font-normal truncate max-w-[240px]',
                 'text-[var(--cmd-palette-item-meta)]',
                 'ml-auto',
               )}
@@ -451,22 +490,64 @@ export function AtMentionPanel({
       ? renderActionRow(entry.action, index)
       : renderResourceRow(entry, index);
 
-  const showLoadingSkeleton = state.kind === 'loading' && entries.length === 0;
-  const showErrorState = state.kind === 'error' && entries.length === 0;
-  const showEmptyState = !showLoadingSkeleton && !showErrorState && entries.length === 0;
+  /**
+   * 面板内搜索框的按键：↑↓ 移动焦点行,Enter 选中,空框退格收面板。
+   * 搜索框拿到焦点后编辑器收不到按键,键盘导航必须在这里自己实现一份。
+   */
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    // 输入法组字期间的 Enter 属于候选词确认,不能当成选中条目。
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      onFocusedIndexChange(
+        nextEnabledSuggestionIndex(entries, focusedIndex, event.key === 'ArrowDown' ? 1 : -1),
+      );
+      return;
+    }
+    if (event.key === 'Enter') {
+      const entry = entries[focusedIndex];
+      if (!entry || isComposerSuggestionEntryDisabled(entry)) return;
+      event.preventDefault();
+      onSelect(entry);
+      return;
+    }
+    // 空框退格 = 往回退一步(收面板)。编辑器里同一条规则在 captureKey 里,
+    // 但搜索框拿到焦点后编辑器收不到按键,这里补一份。
+    if (event.key === 'Backspace' && !searchValue) {
+      event.preventDefault();
+      onClose();
+    }
+  };
+
+  const hasDirectoryRows = isEmptyRootQuery && directoryRows.length > 0;
+  const showLoadingSkeleton = state.kind === 'loading' && entries.length === 0 && !hasDirectoryRows;
+  const showErrorState = state.kind === 'error' && entries.length === 0 && !hasDirectoryRows;
+  const showEmptyState = !showLoadingSkeleton && !showErrorState && entries.length === 0 && !hasDirectoryRows;
 
   return (
     <div
       ref={rootRef}
+      // 面板根标记:宿主(ChatInput)用它判定「关闭时焦点是否仍在本面板内」,
+      // 决定要不要把焦点交还编辑器(搜索框退格/Esc 收起 vs 用户 Tab 走)。
+      data-composer-suggestion-panel=""
+      onMouseDown={(event) => {
+        // 点面板空白/分组标题时别把焦点挪到面板容器:容器可聚焦(tabIndex=-1)且没有键盘
+        // 处理,焦点落它身上会让 ↑↓/Enter 无人接收(打字黑洞)。行与输入框不受影响。
+        const target = event.target as Element | null;
+        if (target?.closest(`input, textarea, [${MENU_ROW_ATTR}]`)) return;
+        event.preventDefault();
+      }}
       className={cn(
         'pointer-events-auto',
         embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
       )}
     >
       <div
-        ref={panelRef}
+        ref={highlightPanelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+        {...menuPanelAttrs}
         className={cn(
+          'relative',
           // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
@@ -479,14 +560,46 @@ export function AtMentionPanel({
             'border-[var(--cmd-palette-border)]',
           ],
         )}
-        style={{ boxShadow: embedded ? undefined : 'var(--cmd-palette-shadow)', maxHeight }}
+        // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
+        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
       >
+        <MenuHighlightLayer />
+        {hasSearchBox ? (
+          <div className="px-[4px] pb-[6px]">
+            <div className="relative">
+              <Search
+                size={12}
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--cmd-palette-item-meta)]"
+              />
+              <input
+                ref={searchRef}
+                data-composer-suggestion-search=""
+                type="text"
+                value={searchValue}
+                onChange={(event) => onSearchChange?.(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={hint}
+                aria-label={hint}
+                className={cn(
+                  'h-8 w-full rounded-full border border-[var(--cmd-palette-border)] bg-transparent',
+                  'pl-7 pr-2 text-13 text-[var(--cmd-palette-item-text)] outline-none',
+                  'placeholder:text-[var(--text-placeholder)]',
+                  // 聚焦描边走中性弱化 token（同 composer 输入框口径）。--focus-ring
+                  // 是强蓝且只用于键盘可达性环,拿来当输入框聚焦边框会突兀成蓝框
+                  // (DESIGN §2:Focus Blue「正常交互流里不出现」);文本输入框的
+                  // :focus-visible 恒成立,所以这里不能靠 focus-visible 区分鼠标/键盘。
+                  'focus:border-[var(--chat-input-border-focus)]',
+                )}
+              />
+            </div>
+          </div>
+        ) : null}
         {showLoadingSkeleton && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-[44px] rounded-[6px] bg-[var(--cmd-palette-item-hover)] opacity-40 animate-pulse"
+                className="h-[44px] rounded-lg bg-[var(--cmd-palette-item-hover)] opacity-40 animate-pulse"
               />
             ))}
           </div>
@@ -499,7 +612,10 @@ export function AtMentionPanel({
             <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
               {state.kind === 'error' ? state.message : ''}
             </div>
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
+              compact
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
@@ -507,16 +623,13 @@ export function AtMentionPanel({
               onClick={() => {
                 onRetry();
               }}
-              className={cn(
-                'h-[28px] px-[12px] rounded-full text-12 font-medium',
-                'bg-[var(--cmd-palette-item-hover)] text-[var(--cmd-palette-item-text)]',
-              )}
             >
               {t('newChat.atMention.retry')}
-            </button>
+            </Button>
           </div>
         )}
-        {showEmptyState && (
+        {/* 搜索形态下:空查询不占位(搜索框已经说明了怎么办),有查询但没命中才提示。 */}
+        {showEmptyState && (!hasSearchBox || !isEmptyRootQuery) && (
           <div
             className={cn(
               'flex items-center justify-center',
@@ -531,7 +644,7 @@ export function AtMentionPanel({
                 : t('newChat.atMention.noMatch')}
           </div>
         )}
-        {entries.length > 0 && (
+        {(entries.length > 0 || hasDirectoryRows) && (
           <>
             {isEmptyRootQuery ? (
               <>
@@ -539,37 +652,38 @@ export function AtMentionPanel({
                 {addEntries.map(renderEntryRow)}
                 {pluginSectionVisible && renderSectionHeader(t('extraDirs.pluginsTitle'))}
                 {pluginEntries.map(renderEntryRow)}
-                {referenceDirsVisible && (
+                {directoriesVisible && (addSectionVisible || pluginSectionVisible) && (
+                  <div role="separator" className="my-2 border-t border-[var(--cmd-palette-border)]" />
+                )}
+                {directoriesVisible && (
                   <>
-                    {renderSectionHeader(t('extraDirs.sectionTitle'))}
-                    {referenceDirs && referenceDirs.dirs.length > 0 && (
+                    {directoryRows.length > 0 && renderSectionHeader(t('extraDirs.sectionTitle'))}
+                    {directoryRows.length > 0 && (
                       <div role="list" aria-label={t('extraDirs.sectionTitle')}>
-                        {referenceDirs.dirs.map((p) => (
+                        {directoryRows.map(({ path: p, onRemove }) => (
                           <div
                             key={p}
-                            className={cn(
-                              'group flex h-[44px] items-center gap-2 rounded-[6px] px-[10px]',
-                              'hover:bg-[var(--cmd-palette-item-hover)]',
-                            )}
+                            {...menuRowAttrs()}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
                           >
                             <FolderPlus
                               size={16}
-                              className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
+                              className="shrink-0 text-[var(--text-tertiary)]"
                             />
                             <Tip
-                              text={isLibraryExtraDirSlot(p) ? extraDirDisplayLabel(p) : p}
+                              text={isLibraryExtraDirSlot(p) ? extraDirDisplayLabel(p, libraryReadOnlyLabel) : p}
                               mono={!isLibraryExtraDirSlot(p)}
                               side="top"
                             >
-                              <span className="min-w-0 flex-1 truncate text-left text-14 text-[var(--cmd-palette-item-text)]">
-                                {extraDirDisplayLabel(p)}
+                              <span className="min-w-0 flex-1 truncate text-left">
+                                {extraDirDisplayLabel(p, libraryReadOnlyLabel)}
                               </span>
                             </Tip>
                             {isLibraryExtraDirSlot(p) ? null : (
                               <button
                                 type="button"
                                 onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => referenceDirs.onRemove(p)}
+                                onClick={() => onRemove(p)}
                                 className={cn(
                                   'rounded-full p-1 opacity-0 transition-opacity',
                                   'hover:bg-[var(--cmd-palette-item-hover)]',
@@ -586,78 +700,24 @@ export function AtMentionPanel({
                         ))}
                       </div>
                     )}
-                    {referenceDirs && referenceDirs.dirs.length === 0 && (
-                      <div className="px-[10px] py-[8px] text-12 text-[var(--cmd-palette-item-meta)]">
-                        {t('extraDirs.empty')}
-                      </div>
-                    )}
                     {addDirEntry && renderEntryRow(addDirEntry)}
-                  </>
-                )}
-                {writableDirsVisible && (
-                  <>
-                    {renderSectionHeader(t('extraDirs.writableSectionTitle'))}
-                    {writableDirs && writableDirs.dirs.length > 0 && (
-                      <div role="list" aria-label={t('extraDirs.writableSectionTitle')}>
-                        {writableDirs.dirs.map((p) => (
-                          <div
-                            key={p}
-                            className={cn(
-                              'group flex h-[44px] items-center gap-2 rounded-[6px] px-[10px]',
-                              'hover:bg-[var(--cmd-palette-item-hover)]',
-                            )}
-                          >
-                            <FolderPlus
-                              size={16}
-                              className="shrink-0 text-[var(--cmd-palette-item-icon)] opacity-60"
-                            />
-                            <Tip text={p} mono side="top">
-                              <span className="min-w-0 flex-1 truncate text-left text-14 text-[var(--cmd-palette-item-text)]">
-                                {extraDirBasename(p)}
-                              </span>
-                            </Tip>
-                            <button
-                              type="button"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => writableDirs.onRemove(p)}
-                              className={cn(
-                                'rounded-full p-1 opacity-0 transition-opacity',
-                                'hover:bg-[var(--cmd-palette-item-hover)]',
-                                'group-hover:opacity-70 hover:!opacity-100',
-                                'focus-visible:opacity-100 focus-visible:outline-none',
-                                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                              )}
-                              aria-label={t('extraDirs.remove', { name: extraDirBasename(p) })}
-                            >
-                              <X size={12} className="text-[var(--cmd-palette-item-text)]" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {writableDirs && writableDirs.dirs.length === 0 && (
-                      <div className="px-[10px] py-[8px] text-12 text-[var(--cmd-palette-item-meta)]">
-                        {t('extraDirs.writableEmpty')}
-                      </div>
-                    )}
-                    {addWritableDirEntry && renderEntryRow(addWritableDirEntry)}
                   </>
                 )}
               </>
             ) : (
               indexed.map(renderEntryRow)
             )}
-            {isEmptyRootQuery && (
+            {isEmptyRootQuery && !hasSearchBox && (
               <div
                 className={cn(
-                  'select-none px-[10px] py-[8px] text-12',
+                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-[10px] py-[8px] text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
                 {t('newChat.atMention.typeToSearchFiles')}
               </div>
             )}
-            {!isEmptyRootQuery && state.kind === 'ready' && state.truncated && (
+            {!isEmptyRootQuery && !hasSearchBox && state.kind === 'ready' && state.truncated && (
               <div
                 className={cn(
                   'select-none px-[10px] py-[8px] text-12',
@@ -676,10 +736,11 @@ export function AtMentionPanel({
                 onClick={() => {
                   onRetry();
                 }}
+                {...menuRowAttrs()}
                 className={cn(
-                  'flex w-full items-center gap-2 px-[10px] py-[8px] rounded-[6px] text-left',
+                  COMPOSER_MENU_ROW,
+                  'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
                   'text-12 text-[var(--destructive)]',
-                  'transition-colors hover:bg-[var(--cmd-palette-item-hover)]',
                 )}
               >
                 {t('newChat.atMention.scanFailed')} · {t('newChat.atMention.retry')}

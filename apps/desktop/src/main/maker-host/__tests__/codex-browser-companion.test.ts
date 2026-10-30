@@ -190,6 +190,31 @@ afterEach(async () => {
 });
 
 describe('prepareCodexBrowserCompanion', () => {
+  it.each([false, true])('uses the history config when account configs differ (history transport: %s)', async (historyHasTransport) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-browser-companion-'));
+    tempDirs.push(root);
+    const historyHome = path.join(root, 'history-a');
+    const credentialHome = path.join(root, 'credentials-b');
+    const transport = '[mcp_servers.node_repl]\ncommand = "fixture-node-repl"\n';
+    for (const [home, config] of [
+      [historyHome, historyHasTransport ? transport : ''],
+      [credentialHome, historyHasTransport ? '' : transport],
+    ]) {
+      await fs.mkdir(home);
+      await fs.writeFile(path.join(home, 'config.toml'), config);
+    }
+    // Guard the Desktop wiring as well as the filesystem-dependent preflight.
+    const source = await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/prepareCodexBrowserCompanion\(\{\s*codexHome: ctx\.runtimeCodexHome \?\? effectiveCodexHome/);
+    const companion = await prepareCodexBrowserCompanion({ codexHome: historyHome, platform: 'win32' });
+    expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: historyHasTransport ? ['-c', 'mcp_servers.node_repl.enabled=false'] : [],
+    });
+    expect(await fs.readFile(path.join(historyHome, 'config.toml'), 'utf8')).toBe(historyHasTransport ? transport : '');
+    expect(await fs.readFile(path.join(credentialHome, 'config.toml'), 'utf8')).toBe(historyHasTransport ? '' : transport);
+  });
+
   it('anchors macOS verification to the signed OpenAI Codex identity', () => {
     const args = buildOfficialMacBundleVerificationArgs('/tmp/ChatGPT.app');
 

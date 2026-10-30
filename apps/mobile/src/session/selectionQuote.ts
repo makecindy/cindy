@@ -1,15 +1,14 @@
 /**
- * selectionQuote — 聊天流「选中文字 → 添加到对话」的选区采集纯逻辑层
- * (chat-text-quote,对照桌面 SelectionQuoteButton)。
+ * selectionQuote — 聊天流「选中文字 → 添加到对话 / 侧边追问」的选区分发。
  *
- * 采集入口是 iOS 系统选择菜单里的自定义项(react-native-uitextview patch 的
- * `menuActionLabel` / `onMenuAction`,iOS 16+ 的 editMenuForTextInRange)——
+ * iOS 使用 UITextView 的 editMenuForTextInRange，Android 扩展现有 TextView 的
+ * ActionMode；两端都使用系统选区菜单。
  * 不用自绘浮动按钮:真机实测浮层与系统 Copy / Look Up 菜单撞位。
  *
  * 数据通路:MarkdownSelectableText 缓存 `onTextLayout` 的逐行渲染文本;用户点
  * 菜单项时 `onMenuAction` 带回选区 UTF-16 偏移,`sliceRenderedSelection` 切出
- * 选中文本,经 SelectionQuoteContext 直接提交进 chatQuoteStore(原生侧在事件
- * 发出后自行清除选区)。
+ * 选中文本。Android 直接回传点击时的选中文本。SelectionQuoteContext 分别路由到
+ * 主任务引用或侧边追问；原生侧在事件发出后自行清除选区。
  *
  * 本模块不 import react-native——纯函数可被 vitest 直接单测。
  */
@@ -29,6 +28,8 @@ export function selectionQuoteMenuLabel(): string {
 export interface SelectionQuoteContextValue {
   /** 把选中文本提交为一条引用(宿主负责截断与写入 store)。 */
   commitQuote: (text: string) => void;
+  /** Open a separate side chat with this selection, without changing the main draft. */
+  askInSideChat?: (text: string) => void;
 }
 
 export const SelectionQuoteContext = createContext<SelectionQuoteContextValue | null>(null);
@@ -64,8 +65,20 @@ export function handleSelectionQuoteMenuAction(
   event: SelectionQuoteMenuEvent,
   lines: readonly string[],
   ctx: SelectionQuoteContextValue,
+  action: 'quote' | 'side-chat' = 'quote',
 ): void {
   const { start, end } = event.nativeEvent;
   const text = sliceRenderedSelection(lines, start, end);
-  if (text) ctx.commitQuote(text);
+  if (text) commitSelectionMenuAction(action, text, ctx);
+}
+
+/** Both native menus share the same availability and empty-selection checks. */
+export function commitSelectionMenuAction(
+  action: string,
+  text: string,
+  ctx: SelectionQuoteContextValue,
+): void {
+  if (!text.trim()) return;
+  if (action === 'quote') ctx.commitQuote(text);
+  if (action === 'side-chat') ctx.askInSideChat?.(text);
 }

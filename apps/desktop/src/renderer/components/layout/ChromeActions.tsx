@@ -12,7 +12,8 @@
  *   触发钮(折叠按钮)因此有稳定的触发区域。唯一的位移是 mac 进出全屏
  *   （78 ↔ 8）,保留 250ms 过渡与红绿灯出现/消失同步。
  *
- * 顺序：折叠按钮在左（紧贴红绿灯,对齐 Codex）,菜单（三横杠）在其右。
+ * 顺序：折叠按钮在左（紧贴红绿灯,对齐 Codex）,菜单（三横杠）在其右,
+ * 再往右是任务浏览历史的「后退 / 前进」（见 SessionHistoryButtons）。
  *
  * 尺寸：按钮 h-7 w-7(28px)+ 图标 15 + rounded-md —— 与折叠态标题行的
  * 「…」按钮(SessionContentHeader,h-7 w-7 / Ellipsis 15 / rounded-md)同一
@@ -32,12 +33,15 @@
  * 用 transform 平移后按钮视觉位置和 no-drag 挖洞错位，点击会变成拖拽窗口。
  */
 
-import { PanelLeft } from 'lucide-react';
+import { ArrowLeft, ArrowRight, PanelLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { MenuButton } from '@/components/title-bar/MenuButton';
+import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
 import { Tip } from '@/components/ui/tooltip';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
+import { useAppShortcutDisplay } from '@/hooks/useAppShortcut';
+import type { SessionBrowseNavigation } from '@/features/cc-agent/useSessionBrowseHistory';
 import { cn } from '@/lib/utils';
 
 import type { SidebarPeekTriggerProps } from '@/hooks/useSidebarPeek';
@@ -46,6 +50,11 @@ import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
 interface ChromeActionsProps {
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  /**
+   * 任务浏览栈。由常驻壳层 MainLayout 持有：设置页会整个卸载本按钮簇，
+   * 快捷键监听不能跟着按钮一起消失。
+   */
+  browseHistory: SessionBrowseNavigation;
   /**
    * 完全隐藏态 hover peek 的触发钮 props(useSidebarPeek)——只挂在折叠按钮上,
    * MenuButton 的 hover 有自己的语义(打开菜单),不参与 peek。
@@ -56,6 +65,7 @@ interface ChromeActionsProps {
 export function ChromeActions({
   isSidebarCollapsed,
   onToggleSidebar,
+  browseHistory,
   peekTriggerProps,
 }: ChromeActionsProps) {
   const { t } = useTranslation();
@@ -104,6 +114,55 @@ export function ChromeActions({
           isMac && isFullscreen ? () => window.electronAPI?.windowExitFullscreen() : undefined
         }
       />
+      {/* 任务浏览历史：与浏览器同惯例，左键后退、右键前进；到边界置灰并把
+          tooltip 换成「为什么不可用」。尺寸与相邻的菜单/折叠按钮同为 28px，
+          圆角走 ChromeIconButton 默认的控件 pill（DESIGN §5）。 */}
+      <SessionHistoryButtons {...browseHistory} />
     </div>
+  );
+}
+
+/**
+ * 任务浏览历史的两个导航钮。拆成单独导出仅为测试可直接渲染真实按钮,生产
+ * 只由 ChromeActions 挂一次。
+ */
+export function SessionHistoryButtons({
+  canBack,
+  canForward,
+  goBack,
+  goForward,
+}: SessionBrowseNavigation): React.ReactElement {
+  const { t } = useTranslation();
+  const backShortcut = useAppShortcutDisplay('session-history-back');
+  const forwardShortcut = useAppShortcutDisplay('session-history-forward');
+  // 与其它快捷键提示同形:动作 + 生效组合(跟随用户改绑)。
+  const withShortcut = (label: string, shortcut: string) =>
+    shortcut ? `${label} (${shortcut})` : label;
+
+  return (
+    <>
+      <ChromeIconButton
+        className="disabled:opacity-40"
+        disabled={!canBack}
+        onClick={goBack}
+        tooltip={withShortcut(t('titleBar.historyBack'), backShortcut)}
+        disabledTooltip={t('titleBar.historyBackUnavailable')}
+        tooltipSide="bottom"
+        aria-label={t('titleBar.historyBack')}
+      >
+        <ArrowLeft size={15} />
+      </ChromeIconButton>
+      <ChromeIconButton
+        className="disabled:opacity-40"
+        disabled={!canForward}
+        onClick={goForward}
+        tooltip={withShortcut(t('titleBar.historyForward'), forwardShortcut)}
+        disabledTooltip={t('titleBar.historyForwardUnavailable')}
+        tooltipSide="bottom"
+        aria-label={t('titleBar.historyForward')}
+      >
+        <ArrowRight size={15} />
+      </ChromeIconButton>
+    </>
   );
 }

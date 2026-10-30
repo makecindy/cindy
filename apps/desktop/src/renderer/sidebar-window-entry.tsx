@@ -5,7 +5,8 @@
  * 直接渲染 SidebarWindowLayout，不经过 main-entry.tsx 的完整 App 链
  * (完整 App 包含 maker-ipc 会话、登录、设置、语音等上千行启动代码)。
  *
- * 由 index.tsx 的 ?sidebarWindow=1 分发进入。
+ * 由 index.tsx 的 ?sidebarWindow=1 分发进入;再按 ?sidebarTabWindow=1 分流:
+ * 整栏子窗口挂 SidebarWindowLayout,单页签独立窗口挂 SidebarTabWindowLayout。
  */
 
 import { createRoot } from 'react-dom/client';
@@ -20,15 +21,20 @@ import './styles/globals.css';
 
 import { TopLevelErrorBoundary } from './components/error/TopLevelErrorBoundary';
 import { SidebarWindowLayout } from './components/layout/SidebarWindowLayout';
+import { SidebarTabWindowLayout } from './components/layout/SidebarTabWindowLayout';
+import { isSidebarTabWindow } from './lib/sidebarTabWindow';
 import { AuthProvider } from './contexts/AuthContext';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
 import { LocaleProvider, bootstrapInitialLocale } from './hooks/useLocale';
 import { getInitialThemeVariant } from './hooks/useTheme';
+import { WallpaperSettingsProvider } from './hooks/useWallpaperSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
+import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
+installHiddenAnimationGate();
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
 applyFontSettings(getInitialFontSettings());
@@ -42,7 +48,9 @@ createRoot(rootElement).render(
     <LocaleProvider>
       <ConfirmDialogProvider>
         <AuthProvider enableSessionExpiredPrompt={false}>
-          <SidebarWindowLayout />
+          <WallpaperSettingsProvider>
+            {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
+          </WallpaperSettingsProvider>
         </AuthProvider>
       </ConfirmDialogProvider>
     </LocaleProvider>

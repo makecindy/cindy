@@ -1,0 +1,7 @@
+{
+  "gateway": {
+    "baseUrl": "https://llm-proxy.example.com",
+    "apiKey": "replace-with-your-local-key",
+    "codexBasePath": "/v1"
+  }
+}

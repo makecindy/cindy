@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * TakeoverMask
  * ---------------------------------------------------------------------------
@@ -85,23 +86,21 @@ export function TakeoverMask({ sessionId, channel, userId, displayName }: Takeov
           </div>
         </div>
       </div>
-      <button
+      <Button
+        variant="secondary"
+        size="md"
+        compact
+        loading={revoking}
         type="button"
         onClick={handleRevoke}
         disabled={revoking}
-        className={cn(
-          'flex h-8 shrink-0 items-center gap-1.5 rounded-full px-4',
-          'bg-[hsl(var(--sidebar-item-hover))]',
-          'text-13 font-medium text-[var(--msg-assistant-text)]',
-          'transition-colors hover:opacity-85',
-          revoking && 'cursor-not-allowed opacity-60',
-        )}
         aria-label={t('newChat.takeoverMask.revokeAria')}
+        className="shrink-0"
       >
         <Undo2 size={14} />
         {/* relative top-[2px]: 中文字面视觉中心略偏上, 下移 2px 跟 icon 视觉对齐 */}
-        <span className="relative top-[2px]">{revoking ? t('newChat.takeoverMask.revoking') : t('newChat.takeoverMask.revoke')}</span>
-      </button>
+        <span className="relative top-[2px]">{t('newChat.takeoverMask.revoke')}</span>
+      </Button>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BrowserBackendHealth } from '../../../../shared/browserBackend';
+import { readComputerStatusForSettings } from '../../../../main/maker-ipc/computerStatusHandler';
 
 const api = vi.hoisted(() => ({
   getPluginState: vi.fn(),
@@ -16,10 +17,23 @@ const api = vi.hoisted(() => ({
   getBackendHealth: vi.fn(),
   setBackendKind: vi.fn(),
   recoverBackend: vi.fn(),
+  openForLogin: vi.fn(),
+  warningToast: vi.fn(),
+  successToast: vi.fn(),
+  errorToast: vi.fn(),
+}));
+
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useNavigate: () => vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: { warning: api.warningToast, success: api.successToast, error: api.errorToast },
 }));
 
 import { ComputerUseSection } from '../ComputerUseSection';
@@ -69,7 +83,7 @@ beforeEach(() => {
   });
   api.getAndroidStatus.mockResolvedValue(androidUnavailable);
   api.getBackendState.mockResolvedValue({ active: 'rsb-webview' });
-  api.setBackendKind.mockImplementation(async (kind: 'external' | 'rsb-webview') => ({
+  api.setBackendKind.mockImplementation(async (kind: 'external' | 'rsb-webview' | 'user-browser') => ({
     active: kind,
   }));
   api.recoverBackend.mockResolvedValue({
@@ -90,7 +104,7 @@ beforeEach(() => {
         },
         browser: {
           status: api.getBrowserStatus,
-          openForLogin: vi.fn(),
+          openForLogin: api.openForLogin,
         },
         computer: {
           status: api.getComputerStatus,
@@ -117,9 +131,318 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe('ComputerUseSection browser backend health loading', () => {
+  // Regression: the four base reads used to gate the entire page via Promise.all.
+  // Existing tests cover slow runtime probes only. A never-settling base read
+  // must leave the other cards and their loaded controls usable (unit/jsdom).
+  it.each(['browser', 'computer', 'availability', 'backend'])(
+    'keeps other settings usable while %s configuration never returns',
+    async (pending) => {
+      const never = new Promise<never>(() => {});
+      if (pending === 'availability') api.getBrowserStatus.mockReturnValue(never);
+      else if (pending === 'backend') api.getBackendState.mockReturnValue(never);
+      else
+        api.getPluginState.mockImplementation(async (id: string) =>
+          id === pending ? never : { effectiveEnabled: id === 'browser' },
+        );
+
+      await act(async () => {
+        render(<ComputerUseSection workingDir="/tmp/project" />);
+      });
+
+      expect(screen.getByText('settings.computerUse.title')).toBeTruthy();
+      expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
+      const browserSwitch = screen.getByRole('switch', {
+        name: 'settings.computerUse.browser.toggleAria',
+      }) as HTMLButtonElement;
+      expect(browserSwitch.disabled).toBe(pending === 'browser');
+      expect(
+        (
+          screen.getByRole('switch', {
+            name: 'settings.computerUse.android.toggleAria',
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false);
+      if (pending !== 'backend') {
+        expect(
+          screen.getByRole('radio', {
+            name: 'settings.computerUse.browserBackend.rsbWebview.title',
+          }),
+        ).toBeTruthy();
+      }
+    },
+  );
+
+  it('automatically recovers a failed read without presenting a default as persisted state', async () => {
+    vi.useFakeTimers();
+    let failed = false;
+    api.getPluginState.mockImplementation((id: string) => {
+      if (id === 'browser' && !failed) {
+        failed = true;
+        throw new Error('bridge unavailable');
+      }
+      return Promise.resolve({ effectiveEnabled: id === 'browser' });
+    });
+    await act(async () => {
+      render(<ComputerUseSection workingDir="/tmp/project" />);
+    });
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.computerUse.browser.toggleAria',
+    }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(screen.getByText('settings.computerUse.configurationRead.retrying')).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText('settings.computerUse.configurationRead.retrying')).toBeNull();
+  });
+
+  it('bounds timeout retries, allows manual recovery, and ignores a late timed-out result', async () => {
+    vi.useFakeTimers();
+    const initialDetection = deferred<BrowserAvailability>();
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    api.getBrowserStatus.mockReturnValue(initialDetection.promise);
+    await act(async () => {
+      render(<ComputerUseSection workingDir="/tmp/project" />);
+    });
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(21_000);
+    });
+    expect(screen.getByText('settings.computerUse.configurationRead.error')).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(api.getBrowserStatus).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        screen.getByRole('switch', {
+          name: 'settings.computerUse.browser.toggleAria',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+
+    api.getBrowserStatus.mockResolvedValue({
+      detected: true,
+      browserKind: 'chrome',
+      executablePath: '/chrome',
+    });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.computerUse.configurationRead.retry' }),
+      );
+    });
+    expect(screen.getByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
+    await act(async () => {
+      initialDetection.resolve({ detected: false, browserKind: null, executablePath: null });
+    });
+    expect(screen.getByText('settings.computerUse.browser.openForLogin')).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.download')).toBeNull();
+  });
+
+  it('ignores the previous project read after switching projects', async () => {
+    const previous = deferred<{ effectiveEnabled: boolean }>();
+    api.getPluginState.mockImplementation(async (id: string, directory?: string) =>
+      id === 'browser' && directory === '/tmp/previous'
+        ? previous.promise
+        : { effectiveEnabled: false },
+    );
+    const { rerender } = render(<ComputerUseSection workingDir="/tmp/previous" />);
+    await act(async () => {
+      rerender(<ComputerUseSection workingDir="/tmp/current" />);
+    });
+    const toggle = screen.getByRole('switch', {
+      name: 'settings.computerUse.browser.toggleAria',
+    }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    await act(async () => {
+      previous.resolve({ effectiveEnabled: true });
+    });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('keeps the current project read alive when a previous project save completes', async () => {
+    const save = deferred<void>();
+    const current = deferred<{ effectiveEnabled: boolean }>();
+    vi.mocked(window.electronAPI.maker.plugins.setProjectEnabled).mockReturnValue(save.promise);
+    api.getPluginState.mockImplementation(async (id: string, directory?: string) =>
+      id === 'browser' && directory === '/tmp/current'
+        ? current.promise
+        : { effectiveEnabled: id === 'browser' },
+    );
+    const { rerender } = render(<ComputerUseSection workingDir="/tmp/previous" />);
+    const toggle = (await screen.findByRole('switch', {
+      name: 'settings.computerUse.browser.toggleAria',
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(toggle.disabled).toBe(false));
+    fireEvent.click(toggle);
+    await act(async () => {
+      rerender(<ComputerUseSection workingDir="/tmp/current" />);
+    });
+    await act(async () => {
+      save.resolve();
+    });
+    expect(toggle.disabled).toBe(true);
+    await act(async () => {
+      current.resolve({ effectiveEnabled: true });
+    });
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('cancels pending recovery when the panel is closed', async () => {
+    vi.useFakeTimers();
+    api.getBackendState.mockRejectedValue(new Error('unavailable'));
+    const { unmount } = render(<ComputerUseSection workingDir="/tmp/project" />);
+    await act(async () => {});
+    expect(screen.getByText('settings.computerUse.configurationRead.retrying')).toBeTruthy();
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(api.getBackendState).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders other settings while computer permission detection is pending', async () => {
+    const initialComputer = deferred<ComputerDriverStatus>();
+    api.getComputerStatus.mockReturnValueOnce(initialComputer.promise);
+    const { rerender } = render(<ComputerUseSection workingDir="/tmp/project" />);
+
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
+    const computerToggle = screen.getByRole('switch', {
+      name: 'settings.computerUse.directControl.toggleAria',
+    });
+    expect((computerToggle as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText('settings.computerUse.directControl.update.readingVersion'),
+    ).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.directControl.notDetected')).toBeNull();
+    expect(api.getComputerStatus).toHaveBeenCalledWith({
+      refreshPermissionGuide: false,
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    });
+
+    fireEvent.click(
+      await screen.findByRole('radio', {
+        name: 'settings.computerUse.browserBackend.external.title',
+      }),
+    );
+    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
+    rerender(<ComputerUseSection workingDir="/tmp/other-project" />);
+    expect(api.getComputerStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      initialComputer.resolve(computerUnavailable);
+    });
+    expect((computerToggle as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      screen.queryByText('settings.computerUse.directControl.update.readingVersion'),
+    ).toBeNull();
+  });
+
+  it('settles a failed computer probe without hiding the settings', async () => {
+    api.getComputerStatus.mockRejectedValueOnce(new Error('probe failed'));
+    await act(async () => {
+      render(<ComputerUseSection workingDir="/tmp/project" />);
+    });
+    expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
+    expect(
+      screen.queryByText('settings.computerUse.directControl.update.readingVersion'),
+    ).toBeNull();
+    expect(
+      (
+        screen.getByRole('switch', {
+          name: 'settings.computerUse.directControl.toggleAria',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it('preserves a newer native status when the initial probe returns late', async () => {
+    const initialComputer = deferred<ComputerDriverStatus>();
+    // Use the real IPC business handler: forced reads normally broadcast before
+    // resolving, which must not overwrite a newer guide event for page entry.
+    const broadcast = vi.fn((status: ComputerDriverStatus) => {
+      vi.mocked(window.electronAPI.maker.computer.onPermissionGuideStatusChanged).mock.calls.at(
+        -1,
+      )![0](status);
+    });
+    api.getComputerStatus.mockImplementationOnce((options) =>
+      readComputerStatusForSettings(options, {
+        getStatus: () => initialComputer.promise,
+        refreshPermissionGuide: broadcast,
+      }),
+    );
+    vi.mocked(window.electronAPI.maker.computer.checkUpdate).mockResolvedValue({
+      currentVersion: '0.12.2',
+      latestVersion: null,
+      updateAvailable: false,
+      updating: false,
+    });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    await screen.findByText('settings.computerUse.title');
+    const onStatus = vi
+      .mocked(window.electronAPI.maker.computer.onPermissionGuideStatusChanged)
+      .mock.calls.at(-1)![0];
+    await act(async () => {
+      onStatus({ ...computerUnavailable, installed: true, version: '0.12.2' });
+    });
+    expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
+    await act(async () => {
+      initialComputer.resolve(computerUnavailable);
+    });
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.computerUse.directControl.status.version')).toBeTruthy();
+  });
+
+  it('keeps optional copy diagnostics out of user-facing launch notifications', async () => {
+    api.getBackendState.mockResolvedValue({ active: 'external' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'external',
+      status: 'ready',
+      canRecover: false,
+    });
+    api.getBrowserStatus.mockResolvedValue({
+      detected: true,
+      browserKind: 'chrome',
+      executablePath: '/chrome',
+    });
+    api.openForLogin.mockResolvedValue({
+      launched: true,
+      warnings: [
+        { database: 'Login Data', reason: 'locked' },
+        { database: 'Login Data For Account', reason: 'locked' },
+        { database: 'Web Data', reason: 'permission-denied' },
+      ],
+    });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.computerUse.browser.openForLogin' }),
+    );
+    await waitFor(() =>
+      expect(api.successToast).toHaveBeenCalledWith(
+        'settings.computerUse.browser.toast.openedForLogin',
+      ),
+    );
+    expect(api.warningToast).not.toHaveBeenCalled();
+    expect(api.errorToast).not.toHaveBeenCalled();
+  });
+
   it('renders the Automation settings while the recoverable health probe is still pending', async () => {
     const initialHealth = deferred<BrowserBackendHealth>();
     api.getBackendHealth.mockReturnValueOnce(initialHealth.promise);
@@ -127,9 +450,11 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    })).toBeTruthy();
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    ).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
 
     await act(async () => {
@@ -155,19 +480,27 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
-    fireEvent.click(await screen.findByRole('tab', {
-      name: 'settings.computerUse.browserBackend.external.title',
-    }));
-    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
-    await waitFor(() => expect(
-      screen.getByRole('tab', {
+    fireEvent.click(
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.external.title',
-      }).getAttribute('aria-selected'),
-    ).toBe('true'));
+      }),
+    );
+    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('radio', {
+            name: 'settings.computerUse.browserBackend.external.title',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
+    );
 
-    fireEvent.click(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    }));
+    fireEvent.click(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    );
     await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('rsb-webview'));
     expect((await screen.findByRole('status')).textContent).toContain(
       'settings.computerUse.browserBackend.health.ready',
@@ -186,6 +519,96 @@ describe('ComputerUseSection browser backend health loading', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('status').textContent).toContain(
       'settings.computerUse.browserBackend.health.ready',
+    );
+  });
+
+  // My browser without its plugin: step 1 installs the plugin in place (no trip to the market page)
+  // and the guidance moves on to step 2 as soon as the host reports the extension as the gap.
+  it('installs the My browser plugin from settings and moves on to the extension step', async () => {
+    const detail = {
+      pluginId: 'market-opaque-id',
+      releaseId: 'release-1',
+      manifest: { id: 'my-browser' },
+      installState: 'not-installed',
+    };
+    // Market ids are opaque: the plugin has to be found by the ghost id it installs as.
+    const snapshot = vi.fn().mockResolvedValue({
+      items: [
+        { pluginId: 'other-id', ghostId: 'other-plugin' },
+        { pluginId: 'market-opaque-id', ghostId: 'my-browser' },
+      ],
+    });
+    const marketDetail = vi.fn().mockResolvedValue(detail);
+    const install = vi.fn().mockResolvedValue({ ghost: { manifest: { name: 'Cindy Chrome' } } });
+    Object.assign(window.electronAPI, { pluginMarket: { snapshot, detail: marketDetail, install } });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser' });
+    api.getBackendHealth
+      .mockResolvedValueOnce({ active: 'user-browser', status: 'error', reason: 'plugin-missing', canRecover: false })
+      .mockResolvedValue({
+        active: 'user-browser',
+        status: 'error',
+        reason: 'extension-disconnected',
+        canRecover: false,
+      });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.installPlugin',
+      }),
+    );
+
+    expect(
+      await screen.findByText('settings.computerUse.browserBackend.userBrowserSetup.installExtensionTitle'),
+    ).toBeTruthy();
+    expect(install).toHaveBeenCalledWith('market-opaque-id', {
+      expectedReleaseId: 'release-1',
+      expectedManifest: { id: 'my-browser' },
+      allowSourceReplacement: false,
+    });
+    expect(api.successToast).toHaveBeenCalledWith('settings.ghosts.toast.installed');
+  });
+
+  // Copying Chrome logins only serves the standalone browser, so the switch is hidden elsewhere,
+  // but a switch that is still on must stay reachable so the copied logins can be deleted.
+  it('shows the login copy switch on other browsers only while it is still on', async () => {
+    api.getBackendHealth.mockResolvedValue({ active: 'user-browser', status: 'ready', canRecover: false });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: false });
+    const first = render(<ComputerUseSection workingDir="/tmp/project" />);
+    await screen.findByRole('radio', { name: 'settings.computerUse.browserBackend.userBrowser.title' });
+    expect(screen.queryByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' })).toBeNull();
+    first.unmount();
+
+    api.getBackendState.mockResolvedValue({ active: 'user-browser', useRealProfile: true });
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    expect(
+      await screen.findByRole('switch', { name: 'settings.computerUse.realProfile.toggleAria' }),
+    ).toBeTruthy();
+  });
+
+  // The extension step finishes in Settings: the store page opens in the user's browser rather
+  // than routing through the plugin page.
+  it('opens the extension store from Settings when only the extension is missing', async () => {
+    const openExtensionStore = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(window.electronAPI.browserBackend, { openExtensionStore });
+    api.getBackendState.mockResolvedValue({ active: 'user-browser' });
+    api.getBackendHealth.mockResolvedValue({
+      active: 'user-browser',
+      status: 'error',
+      reason: 'extension-disconnected',
+      canRecover: false,
+    });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.computerUse.browserBackend.userBrowserSetup.installExtension',
+      }),
+    );
+
+    await waitFor(() => expect(openExtensionStore).toHaveBeenCalledTimes(1));
+    expect(api.successToast).toHaveBeenCalledWith(
+      'settings.computerUse.browserBackend.userBrowserSetup.storeOpened',
     );
   });
 });

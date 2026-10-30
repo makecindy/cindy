@@ -1,0 +1,593 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
+const state = vi.hoisted(() => ({ root: '', userData: '' }));
+const notify = vi.hoisted(() => vi.fn());
+const readIdentity = vi.hoisted(() => vi.fn());
+vi.mock('electron', () => ({ app: { getPath: (name: string) => name === 'appData' ? path.join(state.root, 'app-data') : (state.userData || state.root) } }));
+vi.mock('../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: notify }));
+vi.mock('../desktopProcessIdentity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../desktopProcessIdentity')>(),
+  readDesktopProcessIdentity: readIdentity,
+}));
+vi.mock('../worktree/gitExec', () => ({
+  isGitProcessTreeAlive: vi.fn(async (pid: number) => pid === process.pid),
+}));
+
+import {
+  acquireWorktreeRuntimeLease,
+  recordWorktreeRuntimeLeaseChild,
+  reclaimOrphanedWorktreeRuntimeLeases,
+  releaseWorktreeRuntimeLease,
+  readWorktreeRuntimePaths,
+  retryPendingWorktreeRuntimeLeaseReleases,
+} from '../worktree/runtimeLeases';
+import { physicalWorktreeKey, withWorktreeResourceLock } from '../worktree/resourceLock';
+import { createLinkedWorktreeMetadata } from './fixtures/linkedWorktree';
+import { seedLegacySharedRuntimeLease } from './fixtures/legacySharedRuntimeLease';
+
+// Registrations in identity tests start after boot, so only process identity decides.
+const t0 = Date.now();
+
+describe('worktree runtime evidence and physical locks', () => {
+  let worktree: string;
+  let gitLock: string;
+  const seedLegacyLease = () => seedLegacySharedRuntimeLease(path.join(state.root, 'app-data'), worktree, gitLock);
+  const hasGitLock = () => fs.stat(gitLock).then(() => true, () => false);
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  // The lease heartbeat interval is module-wide and starts with the first lease any test holds.
+  beforeAll(() => { vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] }); });
+  afterAll(() => { vi.useRealTimers(); });
+  beforeEach(async () => {
+    state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-runtime-'));
+    state.userData = '';
+    worktree = path.join(state.root, 'repo', '.cindy-worktrees', 'one');
+    await fs.mkdir(path.join(worktree, 'src'), { recursive: true });
+    gitLock = await createLinkedWorktreeMetadata(worktree);
+    await fs.mkdir(path.join(state.root, '.dev-instances'));
+    notify.mockClear();
+    readIdentity.mockReset().mockResolvedValue(null);
+  });
+  afterEach(async () => {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    vi.restoreAllMocks();
+    await fs.rm(state.root, { recursive: true, force: true });
+  });
+
+  it('publishes a root lease before using a descendant and wakes retries only on actual release', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', path.join(worktree, 'src')))!;
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    await releaseWorktreeRuntimeLease(lease);
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    expect(notify).toHaveBeenCalledOnce();
+    expect(await hasGitLock()).toBe(false);
+    await expect(fs.stat(path.join(state.root, 'app-data', 'Cindy', 'shared-worktree-runtime-leases')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps the replacement runtime protected when an older close finishes late', async () => {
+    const oldLease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    const replacementLease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    expect(oldLease.file).not.toBe(replacementLease.file);
+    await releaseWorktreeRuntimeLease(oldLease);
+    await releaseWorktreeRuntimeLease(oldLease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    await releaseWorktreeRuntimeLease(replacementLease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('persists a failed release and retries it without treating a dead PID as idle', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    const unlink = vi.spyOn(fs, 'unlink').mockImplementationOnce(async () => {
+      throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+    });
+    await expect(releaseWorktreeRuntimeLease(lease)).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    expect(notify).toHaveBeenCalledTimes(2);
+    unlink.mockRestore();
+  });
+
+  it('cleans only the failed acquisition when publishing a replacement lease fails', async () => {
+    const oldLease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    const write = fs.writeFile.bind(fs);
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await write(...args);
+      throw Object.assign(new Error('lease write interrupted'), { code: 'EIO' });
+    });
+    await expect(acquireWorktreeRuntimeLease('one', worktree)).rejects.toThrow('lease write interrupted');
+    expect(await fs.readdir(path.dirname(oldLease.file))).toEqual([path.basename(oldLease.file)]);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    await releaseWorktreeRuntimeLease(oldLease);
+  });
+
+  it('retries a failed shared lease release from another isolated profile', async () => {
+    const lease = await seedLegacyLease();
+    const unlink = fs.unlink.bind(fs);
+    let blocked = true;
+    vi.spyOn(fs, 'unlink').mockImplementation(async (file) => {
+      if (file === lease.file && blocked) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return unlink(file);
+    });
+    await expect(releaseWorktreeRuntimeLease(lease)).rejects.toMatchObject({ code: 'EBUSY' });
+    state.userData = path.join(state.root, 'profile-b');
+    await fs.mkdir(path.join(state.userData, '.dev-instances'), { recursive: true });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(1);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    blocked = false;
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['crashed-owner', 'partial-write'] as const)('keeps shared lease evidence protective after %s', async (reason) => {
+    const lease = await seedLegacyLease();
+    state.userData = path.join(state.root, 'profile-b');
+    await fs.mkdir(path.join(state.userData, '.dev-instances'), { recursive: true });
+    if (reason === 'partial-write') await fs.writeFile(lease.file!, '{');
+    else vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toEqual(reason === 'partial-write' ? null : new Set([await physicalWorktreeKey(worktree)]));
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it.each(['file', 'directory'] as const)('preserves an existing user Git lock %s', async (kind) => {
+    const file = gitLock;
+    if (kind === 'file') await fs.writeFile(file, 'user requested retention');
+    else await fs.mkdir(file);
+    const lease = (await acquireWorktreeRuntimeLease('ordinary', worktree))!;
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await hasGitLock()).toBe(true);
+    if (kind === 'file') expect(await fs.readFile(file, 'utf8')).toBe('user requested retention');
+    else expect(await fs.readdir(file)).toEqual([]);
+  });
+
+  it('keeps legacy protection until the last borrower in either profile finishes', async () => {
+    const first = await seedLegacyLease();
+    state.userData = path.join(state.root, 'second-profile');
+    const second = await seedLegacyLease();
+    expect(first.keepSentinel).toBeDefined();
+    expect(second.keepSentinel).toEqual(first.keepSentinel);
+    await releaseWorktreeRuntimeLease(first);
+    await releaseWorktreeRuntimeLease(first);
+    expect(await hasGitLock()).toBe(true);
+    await releaseWorktreeRuntimeLease(second);
+    expect(await hasGitLock()).toBe(false);
+  });
+
+  it.each(['edited', 'replaced'] as const)('preserves a runtime marker %s by the user', async (change) => {
+    const lease = await seedLegacyLease();
+    const file = gitLock;
+    if (change === 'edited') await fs.writeFile(file, 'keep my checkout');
+    else {
+      // Keep the old inode alive so a replacement containing identical bytes
+      // cannot be confused with the marker this acquisition actually owns.
+      await fs.rename(file, `${file}.previous`);
+      await fs.writeFile(file, lease.keepSentinel!.content);
+    }
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await hasGitLock()).toBe(true);
+    expect(await fs.readFile(file, 'utf8')).toBe(change === 'edited' ? 'keep my checkout' : lease.keepSentinel!.content);
+  });
+
+  it('distinguishes exact file IDs that collide as Numbers when creation time is inherited', async () => {
+    const lease = await seedLegacyLease();
+    const oldIno = 9_007_199_254_740_992n;
+    const replacementIno = oldIno + 1n;
+    expect(Number(oldIno)).toBe(Number(replacementIno));
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const identity = await lstat(...args);
+      if (args[0] === gitLock) Object.assign(identity, { dev: 1n, ino: replacementIno, birthtimeNs: 42_000_000n });
+      return identity;
+    });
+    await releaseWorktreeRuntimeLease({
+      ...lease, keepSentinel: { ...lease.keepSentinel!, identity: `bigint:1:${oldIno}:42000000` },
+    });
+    expect(await hasGitLock()).toBe(true);
+    expect(await fs.readFile(gitLock, 'utf8')).toBe(lease.keepSentinel!.content);
+  });
+
+  it.each([
+    { label: 'matching safe legacy ID', recordedIno: 123, observedIno: 123, preserved: false },
+    { label: 'replaced safe legacy ID', recordedIno: 123, observedIno: 124, preserved: true },
+    { label: 'rounded legacy ID', recordedIno: 2 ** 53, observedIno: 2 ** 53, preserved: true },
+    { label: 'missing legacy ID', recordedIno: 0, observedIno: 0, preserved: true },
+  ])('releases old receipts only with unambiguous ownership: $label', async ({ recordedIno, observedIno, preserved }) => {
+    const lease = await seedLegacyLease();
+    const lstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
+      const identity = await lstat(...args);
+      if (args[0] === gitLock) Object.assign(identity, { dev: 1, ino: observedIno, birthtimeMs: 42 });
+      return identity;
+    });
+    await releaseWorktreeRuntimeLease({
+      ...lease, keepSentinel: { ...lease.keepSentinel!, identity: `1:${recordedIno}:42` },
+    });
+    expect(await hasGitLock()).toBe(preserved);
+    if (preserved) expect(await fs.readFile(gitLock, 'utf8')).toBe(lease.keepSentinel!.content);
+    await expect(fs.stat(lease.file)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not remove legacy protection when another borrower crashes', async () => {
+    const crashed = await seedLegacyLease();
+    const active = await seedLegacyLease();
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    await releaseWorktreeRuntimeLease(active);
+    await retryPendingWorktreeRuntimeLeaseReleases();
+    expect(await hasGitLock()).toBe(true);
+    expect(await fs.stat(crashed.file!)).toBeDefined();
+    // Only confirmed source I/O teardown authorizes the remaining release.
+    await releaseWorktreeRuntimeLease(crashed);
+    expect(await hasGitLock()).toBe(false);
+  });
+
+  it('retries failed sentinel cleanup through the shared durable release intent', async () => {
+    const lease = await seedLegacyLease();
+    const unlink = fs.unlink.bind(fs);
+    const sentinel = lease.keepSentinel!.file!;
+    let blocked = true;
+    vi.spyOn(fs, 'unlink').mockImplementation(async (file) => {
+      if (file === sentinel && blocked) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+      return unlink(file);
+    });
+    await expect(releaseWorktreeRuntimeLease(lease)).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(await hasGitLock()).toBe(true);
+    expect(await fs.stat(lease.file!)).toBeDefined();
+    state.userData = path.join(state.root, 'maintenance-profile');
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(1);
+    blocked = false;
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
+    expect(await hasGitLock()).toBe(false);
+    await expect(fs.stat(lease.file!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('still cleans an owned in-tree marker from an older durable release receipt', async () => {
+    const lease = await seedLegacyLease();
+    const marker = lease.keepSentinel!;
+    const oldFile = path.join(worktree, '.worktree-keep');
+    await fs.rename(marker.file!, oldFile);
+    // Older receipts carried identity and content, with no explicit marker path.
+    const keepSentinel = { identity: marker.identity, content: marker.content };
+    await fs.writeFile(`${lease.file}.release`, JSON.stringify({
+      version: 1, file: lease.file, path: lease.physicalPath, keepSentinel,
+    }));
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
+    await expect(fs.stat(oldFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(lease.file!)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(`${lease.file}.release`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await releaseWorktreeRuntimeLease(lease);
+  });
+
+  it('keeps legacy protection while another shared borrower record is unreadable', async () => {
+    const first = await seedLegacyLease();
+    const second = await seedLegacyLease();
+    await fs.writeFile(second.file!, '{');
+    await expect(releaseWorktreeRuntimeLease(first)).rejects.toThrow();
+    expect(await hasGitLock()).toBe(true);
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(1);
+    await releaseWorktreeRuntimeLease(second);
+    expect(await hasGitLock()).toBe(true);
+    expect(await retryPendingWorktreeRuntimeLeaseReleases()).toBe(0);
+    expect(await hasGitLock()).toBe(false);
+  });
+
+  it('preserves when another live instance cannot publish runtime evidence', async () => {
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), JSON.stringify({ pid: 4242 }));
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('prefers a valid current instance record over its older backup', async () => {
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), JSON.stringify({ pid: 4242, worktreeLeaseProtocol: 1 }));
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json.bak'), JSON.stringify({ pid: 4242 }));
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    expect(readIdentity).not.toHaveBeenCalled();
+  });
+
+  it('ignores a legacy registration whose PID was reused, but keeps its detached-child lease', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    const raw = JSON.stringify({ pid: 4242, startedAtMs: t0 + 10_000 });
+    await fs.writeFile(file, raw);
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: t0 + 100_000, executablePath: path.join(state.root, 'chrome.exe') });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    expect(await fs.readFile(file, 'utf8')).toBe(raw);
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('keeps a real legacy Cindy instance protective', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: t0 + 100_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: t0 + 99_000, executablePath: process.execPath });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  describe('POSIX SingletonLock PID reuse', () => {
+    const raw = JSON.stringify({ pid: 4242, startedAtMs: t0 + 10_000 });
+    const identity = { startedAtMs: t0 + 100_000, executablePath: '/usr/bin/other' };
+    beforeEach(async () => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'darwin' });
+      await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), raw);
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      vi.spyOn(fs, 'readlink').mockResolvedValue('hostname-4242');
+      readIdentity.mockResolvedValue(identity);
+    });
+
+    it.each(['darwin', 'linux'])('ignores a proven reused lock PID on %s while retaining detached-child leases', async (platform) => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+      const root = path.join(state.root, 'worktree-runtime-leases');
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, `4242-${'a'.repeat(64)}.json`),
+        JSON.stringify({ version: 1, pid: 4242, path: worktree }));
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([worktree]));
+      expect(await fs.readFile(path.join(state.root, '.dev-instances', '4242.json'), 'utf8')).toBe(raw);
+    });
+
+    it('still blocks an unrelated live lock PID without reuse evidence', async () => {
+      vi.mocked(fs.readlink).mockResolvedValue('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each([null, { ...identity, executablePath: '/opt/Cindy.app/Contents/MacOS/Cindy' }])
+      ('does not waive the lock when identity becomes unavailable or a runtime replaces the process: %j', async (latest) => {
+        readIdentity.mockResolvedValueOnce(identity).mockResolvedValueOnce(latest);
+        expect(await readWorktreeRuntimePaths()).toBeNull();
+      });
+
+    it('does not waive a lock whose target changes during revalidation', async () => {
+      vi.mocked(fs.readlink).mockResolvedValueOnce('hostname-4242').mockResolvedValueOnce('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each(['replace', 'remove'])('does not waive the lock when its instance registration changes: %s', async (change) => {
+      readIdentity.mockResolvedValueOnce(identity).mockImplementationOnce(async () => {
+        const file = path.join(state.root, '.dev-instances', '4242.json');
+        if (change === 'remove') await fs.unlink(file);
+        else await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: t0 + 200_000 }));
+        return identity;
+      });
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+  });
+
+  it('keeps a replacement Cindy protective before its new registration is published', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: t0 + 1 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: t0 + 100_000, executablePath: path.join(state.root, 'Cindy.exe') });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('preserves when process identity is unavailable even for a very old registration', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: t0 + 1 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('rechecks liveness when the process exits during the identity query', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), JSON.stringify({ pid: 4242 }));
+    vi.spyOn(process, 'kill').mockReturnValueOnce(true).mockImplementation(() => {
+      throw Object.assign(new Error('exited'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('does not apply stale evidence after another instance replaces the registry record', async () => {
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: t0 + 10_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockImplementation(async () => {
+      await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: t0 + 200_000 }));
+      return { startedAtMs: t0 + 100_000, executablePath: path.join(state.root, 'chrome.exe') };
+    });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('does not trust a backup after a new primary registration appears during the probe', async () => {
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    await fs.writeFile(`${file}.bak`, JSON.stringify({ pid: 4242, startedAtMs: t0 + 10_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockImplementation(async () => {
+      await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: t0 + 200_000 }));
+      return { startedAtMs: t0 + 100_000, executablePath: path.join(state.root, 'chrome.exe') };
+    });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('does not mistake an unreadable live lease for a stopped runtime', async () => {
+    await acquireWorktreeRuntimeLease('one', worktree);
+    const root = path.join(state.root, 'worktree-runtime-leases');
+    const [name] = await fs.readdir(root);
+    await fs.writeFile(path.join(root, name), '{');
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('keeps a crashed owner lease protective because its child may still run', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  describe('leases and registrations nothing will ever release', () => {
+    const hourMs = 60 * 60_000;
+    const ownedBy = async (lease: { file: string }, pid: number, ageMs: number, extra: Record<string, unknown> = {}) => {
+      const value = JSON.parse(await fs.readFile(lease.file, 'utf8')) as Record<string, unknown>;
+      await fs.writeFile(lease.file, JSON.stringify({ ...value, ...extra, pid }));
+      const at = new Date(Date.now() - ageMs);
+      await fs.utimes(lease.file, at, at);
+    };
+    const exitedOwner = (alive: (pid: number) => boolean = () => false) => vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (alive(Number(pid))) return true;
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+
+    it('waives a lease from before this boot only once its live PID is proven to be another process', async () => {
+      vi.spyOn(os, 'uptime').mockReturnValue(60);
+      const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      const protectedPath = new Set([await physicalWorktreeKey(worktree)]);
+      // A corrected clock can make a live owner's lease look older than this boot.
+      await ownedBy(lease, 4242, hourMs);
+      expect(await readWorktreeRuntimePaths()).toEqual(protectedPath);
+      await ownedBy(lease, 4242, hourMs + 1_000);
+      readIdentity.mockResolvedValueOnce({ startedAtMs: Date.now() - 2 * hourMs, executablePath: path.join(state.root, 'Cindy.exe') });
+      expect(await readWorktreeRuntimePaths()).toEqual(protectedPath);
+
+      await ownedBy(lease, 4242, hourMs + 2_000);
+      readIdentity.mockResolvedValueOnce({ startedAtMs: Date.now(), executablePath: path.join(state.root, 'wechat-pad.exe') });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+      // Leases are never adopted, so a later Node or Electron process with the PID is not the owner either.
+      await ownedBy(lease, 4242, hourMs + 3_000);
+      readIdentity.mockResolvedValueOnce({ startedAtMs: Date.now(), executablePath: path.join(state.root, 'node.exe') });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    });
+
+    it('recognises its live owner by recorded identity even when the clock was corrected after it started', async () => {
+      vi.spyOn(os, 'uptime').mockReturnValue(30 * 24 * 60 * 60);
+      const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      // The owner was born by a fast clock, so its OS birth is later than every heartbeat since.
+      const owner = { startedAtMs: Date.now() + hourMs, executablePath: path.join(state.root, 'Cindy.exe') };
+      await ownedBy(lease, 4242, 2 * hourMs, { processIdentity: owner });
+      readIdentity.mockResolvedValueOnce(owner);
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+      readIdentity.mockResolvedValueOnce({ ...owner, startedAtMs: owner.startedAtMs + 60_000 });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    });
+
+    it('counts the grace period from the last heartbeat, and much longer for leases without one', async () => {
+      vi.spyOn(os, 'uptime').mockReturnValue(30 * 24 * 60 * 60);
+      const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+      exitedOwner();
+      await ownedBy(lease, 4242, 2 * hourMs, { heartbeatMs: undefined });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+      await ownedBy(lease, 4242, 25 * hourMs, { heartbeatMs: undefined });
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+
+      // A lease with this process's PID that it does not hold was left by an earlier process.
+      const stray = path.join(path.dirname(lease.file), `${process.pid}-${'a'.repeat(64)}.json`);
+      await fs.writeFile(stray, JSON.stringify({ version: 1, pid: process.pid, path: await physicalWorktreeKey(worktree), heartbeatMs: 300_000 }));
+      await ownedBy({ file: stray }, process.pid, 2 * hourMs);
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    });
+
+    it('refreshes the leases this process holds so a long task is not mistaken for an abandoned one', async () => {
+      const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+      const old = new Date(Date.now() - 2 * hourMs);
+      await fs.utimes(lease.file, old, old);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      // Heartbeat writes are asynchronous; a rounded old mtime is not evidence of a refresh.
+      await vi.waitFor(async () => {
+        expect((await fs.stat(lease.file)).mtimeMs).toBeGreaterThan(Date.now() - 60_000);
+      });
+      await releaseWorktreeRuntimeLease(lease);
+    });
+
+    it('waives an exited owner lease after the grace period while a recorded child keeps it protective', async () => {
+      vi.spyOn(os, 'uptime').mockReturnValue(30 * 24 * 60 * 60);
+      const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+      await ownedBy(lease, 4242, 2 * hourMs);
+      exitedOwner();
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+
+      await ownedBy(lease, 4242, 2 * hourMs, { childPid: 4343 });
+      exitedOwner((pid) => pid === 4343);
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    });
+
+    it('falls back to the boot time for an unsupported instance only when its identity is unavailable', async () => {
+      vi.spyOn(os, 'uptime').mockReturnValue(60);
+      await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+        JSON.stringify({ pid: 4242, startedAtMs: Date.now() - hourMs, state: 'failed' }));
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+      // A runtime born before the registration is that instance, whatever the boot estimate says.
+      readIdentity.mockResolvedValueOnce({ startedAtMs: Date.now() - 2 * hourMs, executablePath: path.join(state.root, 'Cindy.exe') });
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+  });
+
+  it('reclaims a dead-owner lease only through explicit orphan cancellation', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('orphan', worktree))!;
+    recordWorktreeRuntimeLeaseChild(lease, 12345);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    await expect(reclaimOrphanedWorktreeRuntimeLeases(worktree)).resolves.toBe(1);
+    await expect(fs.stat(lease.file)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('keeps an orphan lease while its detached checkout child is alive', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('checkout:orphan', worktree))!;
+    recordWorktreeRuntimeLeaseChild(lease, process.pid);
+    const leaseValue = JSON.parse(await fs.readFile(lease.file, 'utf8')) as Record<string, unknown>;
+    const ownerPid = 12345;
+    await fs.writeFile(lease.file, JSON.stringify({ ...leaseValue, pid: ownerPid }));
+    vi.spyOn(process, 'kill').mockImplementation((pid) => {
+      if (pid === ownerPid) throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+      return true;
+    });
+
+    await expect(reclaimOrphanedWorktreeRuntimeLeases(worktree)).resolves.toBe(0);
+    await expect(fs.stat(lease.file)).resolves.toBeDefined();
+  });
+
+  it.each([undefined, null, 0, -1, '12345'])('preserves unknown child evidence: %s', async (childPid) => {
+    const lease = (await acquireWorktreeRuntimeLease('orphan', worktree))!;
+    const value = JSON.parse(await fs.readFile(lease.file, 'utf8'));
+    await fs.writeFile(lease.file, JSON.stringify({ ...value, childPid }));
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    await expect(reclaimOrphanedWorktreeRuntimeLeases(worktree)).resolves.toBe(0);
+    await expect(fs.stat(lease.file)).resolves.toBeDefined();
+  });
+
+  it('does not treat a crashed owner partial lease as evidence of an idle directory', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    await fs.writeFile(lease.file, '{');
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('owner is gone'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('serializes independent callers and allows a nested call in the same operation', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const order: string[] = [];
+    const first = withWorktreeResourceLock(worktree, async () => {
+      await withWorktreeResourceLock(path.join(worktree, 'src', '..'), async () => { order.push('nested'); });
+      entered(); await gate; order.push('released');
+    });
+    await enteredPromise;
+    const second = withWorktreeResourceLock(worktree, async () => { order.push('second'); });
+    expect(order).toEqual(['nested']);
+    release(); await Promise.all([first, second]);
+    expect(order).toEqual(['nested', 'released', 'second']);
+  });
+});

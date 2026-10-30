@@ -13,18 +13,125 @@ import {
 } from '../provider-model-fetch.js';
 
 function spec(over: Partial<ProviderModelsFetchSpec> = {}): ProviderModelsFetchSpec {
-  return { agent: 'claude-code', baseUrl: 'https://api.acme.example/anthropic', apiKey: 'sk-test', ...over };
+  return {
+    agent: 'claude-code',
+    baseUrl: 'https://api.acme.example/anthropic',
+    apiKey: 'sk-test',
+    ...over,
+  };
 }
 
 function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
 
+describe('import discovery limits', () => {
+  it('passes redirect rejection with all credentials to the transport', async () => {
+    const fetcher = vi.fn(async (_url, init) => {
+      expect(init.redirect).toBe('error');
+      expect(init.headers).toMatchObject({ 'x-api-key': 'sk-test', 'x-secret': 'fake-secret' });
+      throw new TypeError('redirect rejected');
+    });
+    expect(await fetchProviderModels(spec({ redirect: 'error', headers: { 'X-Secret': 'fake-secret' } }), fetcher)).toMatchObject({ ok: false });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 400])('cancels oversized streamed %i responses even with a false content length', async (status) => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(9)); },
+      cancel,
+    });
+    const response = new Response(body, { status, headers: { 'content-length': '1' } });
+    const result = await fetchProviderModels(spec({ responseByteLimit: 16 }), vi.fn(async () => response));
+    expect(result.ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('rejects oversized declared bodies without reading and accepts bounded JSON', async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }), { headers: { 'content-length': '100' } });
+    expect((await fetchProviderModels(spec({ responseByteLimit: 32 }), vi.fn(async () => response))).ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(await fetchProviderModels(spec({ responseByteLimit: 32 }), vi.fn(async () => fakeResponse(200, '{"data":["model"]}')))).toMatchObject({ ok: true, models: [{ id: 'model' }] });
+  });
+});
+
 describe('buildModelsFetchRequest', () => {
+  it('discovers ElevenLabs speech capabilities through the existing custom-header connection', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex', apiKey: undefined,
+      baseUrl: 'https://api.elevenlabs.io/v1', headers: { 'xi-api-key': 'fake-elevenlabs-key' },
+    }), async (url, init) => {
+      expect(url).toBe('https://api.elevenlabs.io/v1/models');
+      expect(init?.headers).toEqual({ 'xi-api-key': 'fake-elevenlabs-key' });
+      return fakeResponse(200, JSON.stringify([
+        { model_id: 'eleven_multilingual_v2', name: 'Eleven Multilingual v2', can_do_text_to_speech: true },
+        { model_id: 'voice-conversion', can_do_text_to_speech: false, can_do_voice_conversion: true },
+      ]));
+    });
+    expect(result).toMatchObject({ ok: true, models: [
+      { id: 'eleven_multilingual_v2', discoveredMetadata: { mode: 'audio_speech' } },
+      { id: 'voice-conversion', discoveredMetadata: { mode: 'other' } },
+    ] });
+  });
+
+  it('discovers Sub2API Codex capabilities at the backend path', async () => {
+    const result = await fetchProviderModels(spec({ agent: 'codex',
+      baseUrl: 'https://sub2api.example/backend-api/codex', wireProtocol: 'openai-responses',
+    }), async (url, init) => {
+      expect(url).toBe('https://sub2api.example/backend-api/codex/models');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer sk-test' });
+      return fakeResponse(200, JSON.stringify({ models: [{ slug: 'gpt-6-sol',
+        supported_reasoning_levels: [{ effort: 'high' }, { effort: 'max' }], default_reasoning_level: 'high',
+      }] }));
+    });
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'gpt-6-sol',
+      discoveredMetadata: { efforts: ['high', 'max'], defaultEffort: 'high' },
+    }] });
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('uses the complete OpenRouter catalog for %s without Anthropic ID rewriting', async (agent) => {
+    const request = buildModelsFetchRequest(spec({
+      agent,
+      baseUrl: agent === 'claude-code' ? 'https://openrouter.ai/api' : 'https://openrouter.ai/api/v1',
+      headers: { 'anthropic-version': '2023-06-01', 'x-api-key': 'old-test-key' },
+    }));
+    expect(request.url).toBe('https://openrouter.ai/api/v1/models');
+    expect(request.init.headers).toEqual({ authorization: 'Bearer sk-test' });
+    const result = await fetchProviderModels(spec({ agent, baseUrl: 'https://openrouter.ai/api' }),
+      async (_url, init) => {
+        const headers = init?.headers as Record<string, string>;
+        return fakeResponse(200, JSON.stringify({ data: headers['anthropic-version']
+          ? [{ id: 'anthropic/openai/model[1m]' }]
+          : [{ id: 'openai/model', architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, pricing: { prompt: '0.000001', completion: '0.000002' } }] }));
+      });
+    expect(result.models?.[0]).toMatchObject({ id: 'openai/model', discoveredCost: { input: 1, output: 2 },
+      discoveredMetadata: { supportsImageInput: true } });
+  });
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({
+        field,
+        userinfo,
+      })),
+    ),
+  )('rejects credentials in $field before building a request: $userinfo', ({ field, userinfo }) => {
+    expect(() =>
+      buildModelsFetchRequest(
+        spec({
+          [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+        }),
+      ),
+    ).toThrow('model discovery requires HTTP(S) URLs without embedded credentials');
+  });
+
   it('derives {base}/v1/models for non-/vN baseUrl; appends /models when baseUrl ends with /vN', () => {
-    expect(buildModelsFetchRequest(spec()).url).toBe('https://api.acme.example/anthropic/v1/models');
+    expect(buildModelsFetchRequest(spec()).url).toBe(
+      'https://api.acme.example/anthropic/v1/models',
+    );
     expect(
-      buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://openrouter.ai/api/v1' })).url,
+      buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://openrouter.ai/api/v1' }))
+        .url,
     ).toBe('https://openrouter.ai/api/v1/models');
   });
 
@@ -40,7 +147,10 @@ describe('buildModelsFetchRequest', () => {
     // 同主机（Moonshot 形态：baseUrl …/anthropic，列模型在同 host 的 /v1/models）→ 采用。
     expect(
       buildModelsFetchRequest(
-        spec({ baseUrl: 'https://api.moonshot.cn/anthropic', modelsUrl: 'https://api.moonshot.cn/v1/models' }),
+        spec({
+          baseUrl: 'https://api.moonshot.cn/anthropic',
+          modelsUrl: 'https://api.moonshot.cn/v1/models',
+        }),
       ).url,
     ).toBe('https://api.moonshot.cn/v1/models');
     // 跨主机（用户改了 baseUrl、快照仍指旧主机）→ 忽略隐藏字段，回退 baseUrl 推导，防 key 误投。
@@ -50,13 +160,15 @@ describe('buildModelsFetchRequest', () => {
   });
 
   it('cc wire sends anthropic-version + x-api-key + Bearer; codex wire sends Bearer only', () => {
-    const cc = buildModelsFetchRequest(spec({
-      headers: {
-        Authorization: 'Bearer stale',
-        'X-API-Key': 'stale',
-        'x-extra': '1',
-      },
-    })).init.headers as Record<string, string>;
+    const cc = buildModelsFetchRequest(
+      spec({
+        headers: {
+          Authorization: 'Bearer stale',
+          'X-API-Key': 'stale',
+          'x-extra': '1',
+        },
+      }),
+    ).init.headers as Record<string, string>;
     expect(cc['anthropic-version']).toBe('2023-06-01');
     expect(cc['x-api-key']).toBe('sk-test');
     expect(cc['authorization']).toBe('Bearer sk-test');
@@ -64,7 +176,10 @@ describe('buildModelsFetchRequest', () => {
     expect(cc['X-API-Key']).toBeUndefined();
     expect(cc['x-extra']).toBe('1');
 
-    const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<string, string>;
+    const codex = buildModelsFetchRequest(spec({ agent: 'codex' })).init.headers as Record<
+      string,
+      string
+    >;
     expect(codex['anthropic-version']).toBeUndefined();
     expect(codex['x-api-key']).toBeUndefined();
     expect(codex['authorization']).toBe('Bearer sk-test');
@@ -96,15 +211,17 @@ describe('buildModelsFetchRequest', () => {
   it.each(['none', 'oauth'] as const)(
     'strips legacy credential headers for %s auth even without an apiKey',
     (authMethod) => {
-      const h = buildModelsFetchRequest(spec({
-        authMethod,
-        apiKey: null,
-        headers: {
-          Authorization: 'Bearer legacy',
-          'X-API-Key': 'legacy',
-          'x-extra': '1',
-        },
-      })).init.headers as Record<string, string>;
+      const h = buildModelsFetchRequest(
+        spec({
+          authMethod,
+          apiKey: null,
+          headers: {
+            Authorization: 'Bearer legacy',
+            'X-API-Key': 'legacy',
+            'x-extra': '1',
+          },
+        }),
+      ).init.headers as Record<string, string>;
 
       expect(h.Authorization).toBeUndefined();
       expect(h['X-API-Key']).toBeUndefined();
@@ -116,6 +233,33 @@ describe('buildModelsFetchRequest', () => {
 });
 
 describe('fetchProviderModels', () => {
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({
+        field,
+        userinfo,
+      })),
+    ),
+  )(
+    'does not dispatch a request with credentials in $field: $userinfo',
+    async ({ field, userinfo }) => {
+      const fetchImpl = vi.fn<typeof fetch>();
+      const result = await fetchProviderModels(
+        spec({
+          [field]: `https://${userinfo}api.acme.example/anthropic/v1/models`,
+          authMethod: 'apiKey',
+        }),
+        fetchImpl,
+      );
+      expect(result).toEqual({
+        ok: false,
+        code: 'UNKNOWN',
+        detail: 'model discovery requires HTTP(S) URLs without embedded credentials',
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       baseUrl: 'https://remote.example/v1',
@@ -160,9 +304,9 @@ describe('fetchProviderModels', () => {
     );
     expect(r.ok).toBe(true);
     expect(r.models).toEqual([
-      { id: 'kimi-k3', name: 'Kimi K3' },
-      { id: 'kimi-k2.6', name: 'Kimi K2.6' },
-      { id: 'bare-id', name: 'bare-id' },
+      { id: 'kimi-k3', name: 'Kimi K3', discoveredMetadata: { name: 'Kimi K3' } },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', discoveredMetadata: { name: 'Kimi K2.6' } },
+      { id: 'bare-id', name: 'bare-id', discoveredMetadata: {} },
     ]);
   });
 
@@ -170,14 +314,14 @@ describe('fetchProviderModels', () => {
     const a = await fetchProviderModels(spec(), async () =>
       fakeResponse(200, JSON.stringify({ models: [{ id: 'm1' }] })),
     );
-    expect(a.models).toEqual([{ id: 'm1', name: 'm1' }]);
+    expect(a.models).toEqual([{ id: 'm1', name: 'm1', discoveredMetadata: {} }]);
 
     const b = await fetchProviderModels(spec(), async () =>
       fakeResponse(200, JSON.stringify({ data: ['m1', 'm2'] })),
     );
     expect(b.models).toEqual([
-      { id: 'm1', name: 'm1' },
-      { id: 'm2', name: 'm2' },
+      { id: 'm1', name: 'm1', discoveredMetadata: {} },
+      { id: 'm2', name: 'm2', discoveredMetadata: {} },
     ]);
   });
 
@@ -186,15 +330,18 @@ describe('fetchProviderModels', () => {
       fakeResponse(
         200,
         JSON.stringify({
-          models: [
-            { slug: 'glm-5.3', display_name: 'GLM-5.3', context_window: 202_752 },
-          ],
+          models: [{ slug: 'glm-5.3', display_name: 'GLM-5.3', context_window: 202_752 }],
         }),
       ),
     );
 
     expect(result.models).toEqual([
-      { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 202_752 },
+      {
+        id: 'glm-5.3',
+        name: 'GLM-5.3',
+        contextWindow: 202_752,
+        discoveredMetadata: { name: 'GLM-5.3', contextWindow: 202_752 },
+      },
     ]);
   });
 
@@ -213,7 +360,9 @@ describe('fetchProviderModels', () => {
   });
 
   it('returns non-ok UNKNOWN for 200 with unrecognized / empty payload', async () => {
-    const empty = await fetchProviderModels(spec(), async () => fakeResponse(200, JSON.stringify({ data: [] })));
+    const empty = await fetchProviderModels(spec(), async () =>
+      fakeResponse(200, JSON.stringify({ data: [] })),
+    );
     expect(empty).toMatchObject({ ok: false, code: 'UNKNOWN' });
     const weird = await fetchProviderModels(spec(), async () => fakeResponse(200, '"not-a-list"'));
     expect(weird).toMatchObject({ ok: false, code: 'UNKNOWN' });
@@ -225,7 +374,10 @@ describe('fetchProviderModels', () => {
     let seenUrl = '';
     let seenHeaders: Record<string, string> = {};
     await fetchProviderModels(
-      spec({ baseUrl: 'https://api.moonshot.cn/anthropic', modelsUrl: 'https://api.moonshot.cn/v1/models' }),
+      spec({
+        baseUrl: 'https://api.moonshot.cn/anthropic',
+        modelsUrl: 'https://api.moonshot.cn/v1/models',
+      }),
       async (url, init) => {
         seenUrl = String(url);
         seenHeaders = (init?.headers ?? {}) as Record<string, string>;
@@ -254,5 +406,107 @@ describe('fetchProviderModels', () => {
     expect(seenHeaders['x-api-key']).toBe('sk-test');
     expect(seenHeaders.authorization).toBe('Bearer sk-test');
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
+  });
+});
+
+
+it('discovers native Google models with Google auth and exact declared limits', async () => {
+  const result = await fetchProviderModels(spec({ agent: 'pi', wireProtocol: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    headers: { authorization: 'Bearer stale', 'x-goog-api-key': 'stale' },
+  }), async (url, init) => {
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(init?.headers).toEqual({ 'x-goog-api-key': 'sk-test' });
+    return fakeResponse(200, JSON.stringify({ models: [{ name: 'models/new-gemini', displayName: 'New Gemini',
+      supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 }] }));
+  });
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'new-gemini', name: 'New Gemini', contextWindow: 1048576,
+    discoveredMetadata: { contextWindow: 1048576, maxOutputTokens: 65536 } }] });
+});
+
+
+it('uses Bearer discovery for LongCat Messages without moving its inference endpoint', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    headers: { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'fixture-beta' } }));
+  expect(result.url).toBe('https://api.longcat.chat/openai/v1/models');
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer sk-test');
+  expect(headers.has('anthropic-version')).toBe(false);
+  expect(headers.has('x-api-key')).toBe(false);
+});
+
+
+it('retains LongCat legacy header-only credentials when selecting its Bearer catalog', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    apiKey: null, headers: { 'x-api-key': 'fixture-legacy-key' } }));
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer fixture-legacy-key');
+  expect(headers.has('x-api-key')).toBe(false);
+});
+
+it.each(['claude-code', 'codex', 'pi'] as const)('discovers Google native catalog from a saved compatibility entry (%s)', agent => {
+  const request = buildModelsFetchRequest(spec({ agent,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' }));
+  expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+  expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  expect(request.init.headers).not.toHaveProperty('anthropic-version');
+});
+
+it('does not rewrite private Google-compatible discovery or an explicit catalog', () => {
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://private.example/v1beta/openai', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://private.example/v1beta/openai/v1/models');
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    modelsUrl: 'https://generativelanguage.googleapis.com/custom/models', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://generativelanguage.googleapis.com/custom/models');
+});
+
+ it('normalizes the real bundled Google discovery URL for all generated harnesses', async () => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const runtime = preset.runtimes[agent]!;
+    const request = buildModelsFetchRequest(spec({ agent, baseUrl: runtime.baseUrl,
+      modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol }));
+    expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  }
+});
+
+it.each([404, 405])('falls back from an unavailable manifest (%i) on the same authenticated endpoint', async status => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(fakeResponse(status, '{}'))
+    .mockResolvedValueOnce(fakeResponse(200, '{"data":[{"id":"grok-4.7","reasoningEfforts":["low","high"]}]}'));
+  const result = await fetchProviderModels(spec({ baseUrl: 'https://relay.example/proxy/v1',
+    modelsUrl: 'https://relay.example/proxy/v1/models?client_version=0.147.0&tenant=test',
+  }), fetcher);
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'grok-4.7', discoveredMetadata: { efforts: ['low', 'high'] } }] });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher.mock.calls[1][0]).toBe('https://relay.example/proxy/v1/models?tenant=test');
+  expect(fetcher.mock.calls[1][1].headers).toEqual(fetcher.mock.calls[0][1].headers);
+});
+
+it.each([401, 403, 429, 503])('does not disguise manifest authorization or availability failures (%i)', async status => {
+  const fetcher = vi.fn(async () => fakeResponse(status, '{}'));
+  const result = await fetchProviderModels(spec({ modelsUrl: 'https://relay.example/v1/models?client_version=0.147.0' }), fetcher);
+  expect(result.ok).toBe(false);
+  expect(fetcher).toHaveBeenCalledOnce();
+});
+
+describe('ElevenLabs catalog authentication', () => {
+  it('uses xi-api-key on the official endpoint even when stored in an Anthropic runtime', () => {
+    const result = buildModelsFetchRequest(spec({
+      baseUrl: 'https://api.elevenlabs.io/v1', apiKey: 'fake-eleven-key', authMethod: 'apiKey',
+      headers: { Authorization: 'stale', 'X-Api-Key': 'stale', 'Xi-Api-Key': 'stale', 'anthropic-version': 'stale' },
+    }));
+    expect(result.url).toBe('https://api.elevenlabs.io/v1/models');
+    expect(result.init.headers).toEqual({ 'xi-api-key': 'fake-eleven-key' });
+  });
+  it('does not guess ElevenLabs authentication for a custom host or leak a stale key in no-auth mode', () => {
+    const custom = buildModelsFetchRequest(spec({ agent: 'codex', baseUrl: 'https://elevenlabs.example/v1', apiKey: 'fake-key' }));
+    expect(custom.init.headers).toEqual({ authorization: 'Bearer fake-key' });
+    const noAuth = buildModelsFetchRequest(spec({ baseUrl: 'https://api.elevenlabs.io/v1', apiKey: undefined, authMethod: 'none', headers: { 'Xi-Api-Key': 'stale' } }));
+    expect(noAuth.init.headers).toEqual({});
   });
 });

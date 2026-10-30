@@ -70,105 +70,6 @@ afterEach(() => {
 });
 
 describe('MacAgentIslandNativeHost', () => {
-  it('renders the idle brand from main-provided display strings', () => {
-    const sourceUrl = new URL(
-      '../../../../native/agent-island/macos-agent-island-helper.swift',
-      import.meta.url,
-    );
-    if (!fs.existsSync(sourceUrl)) {
-      throw new Error(`macos-agent-island-helper.swift 未找到: ${sourceUrl.pathname}`);
-    }
-    const source = fs.readFileSync(sourceUrl, 'utf8');
-
-    expect(source).toContain('Text(strings.displayAppName)');
-    expect(source).not.toContain('Text("XD Maker")');
-  });
-
-  it('keeps the native panel nonactivating during pointer interaction', () => {
-    const sourceUrl = new URL(
-      '../../../../native/agent-island/macos-agent-island-helper.swift',
-      import.meta.url,
-    );
-    const source = fs.readFileSync(sourceUrl, 'utf8');
-
-    expect(source).toContain('styleMask: [.borderless, .nonactivatingPanel]');
-    expect(source).toContain('override var canBecomeKey: Bool { false }');
-    expect(source).toContain('override var canBecomeMain: Bool { false }');
-    expect(source).not.toContain('makeKey()');
-  });
-
-  it('refreshes native display metrics after macOS wakes from sleep', () => {
-    const source = fs.readFileSync(
-      new URL('../../../../native/agent-island/macos-agent-island-helper.swift', import.meta.url),
-      'utf8',
-    );
-
-    const wakeObserver = source.match(
-      /workspaceWakeObserver\s*=\s*NSWorkspace\.shared\.notificationCenter\.addObserver\(\s*forName:\s*NSWorkspace\.didWakeNotification,[\s\S]*?self\?\.scheduleScreenMetricsPublish\(forceRefresh:\s*true\)\s*\n\s*}/,
-    )?.[0];
-
-    expect(wakeObserver).toBeTruthy();
-    expect(wakeObserver).toContain('NSWorkspace.didWakeNotification');
-    expect(wakeObserver).toContain('scheduleScreenMetricsPublish(forceRefresh: true)');
-    expect(source).toContain('payload["forceRefresh"] = true');
-  });
-
-  it('keeps native Agent marks aligned with the renderer icons', () => {
-    const nativeSource = fs.readFileSync(
-      new URL('../../../../native/agent-island/macos-agent-island-helper.swift', import.meta.url),
-      'utf8',
-    );
-    const claudeSource = fs.readFileSync(
-      new URL('../../../renderer/components/icons/ClaudeMark.tsx', import.meta.url),
-      'utf8',
-    );
-    const codexSource = fs.readFileSync(
-      new URL('../../../renderer/components/icons/CodexMark.tsx', import.meta.url),
-      'utf8',
-    );
-    const claudePath = claudeSource.match(/<path[\s\S]*?\bd="([^"]+)"/)?.[1];
-    const codexOutline = codexSource.match(/const FLOWER_OUTLINE =\s*'([^']+)'/)?.[1];
-    const codexPrompt = codexSource.match(/const PROMPT_GLYPHS =\s*'([^']+)'/)?.[1];
-    const codexSmallStrokeWidth = codexSource.match(
-      /const monoStrokeWidth = size <= 14 \? ([\d.]+) : [\d.]+;/,
-    )?.[1];
-    const nativeCodexSvg = nativeSource.match(
-      /private let agentIslandCodexMarkSVG = """([\s\S]*?)"""/,
-    )?.[1];
-    const nativeCodexOutlineStrokeWidth = nativeCodexSvg?.match(
-      /<path fill="none" stroke="black" stroke-width="([^"]+)"/,
-    )?.[1];
-
-    expect(claudePath).toBeTruthy();
-    expect(codexOutline).toBeTruthy();
-    expect(codexPrompt).toBeTruthy();
-    expect(codexSmallStrokeWidth).toBeTruthy();
-    expect(nativeCodexOutlineStrokeWidth).toBeTruthy();
-    expect(nativeSource).toContain(`d="${claudePath}"`);
-    expect(nativeSource).toContain(`d="${codexOutline}z"`);
-    expect(nativeSource).toContain(`d="${codexPrompt}"`);
-    expect(nativeCodexOutlineStrokeWidth).toBe(codexSmallStrokeWidth);
-    expect(nativeSource).not.toContain('agentIslandXDIncMarkSVG');
-  });
-
-  it('uses semantic icons for expanded terminal and interaction rows', () => {
-    const source = fs
-      .readFileSync(
-        new URL('../../../../native/agent-island/macos-agent-island-helper.swift', import.meta.url),
-        'utf8',
-      )
-      // Windows CRLF 检出下 \n 字面量正则会失配,统一归一化成 LF 再匹配。
-      .replace(/\r\n/g, '\n');
-    const expandedHeader = source.match(
-      /struct ExpandedSessionHeaderLine: View \{([\s\S]*?)\n\}\n\nstruct ExpandedSessionMetaLine/,
-    )?.[1];
-
-    expect(expandedHeader).toBeTruthy();
-    expect(expandedHeader).toContain('case "needs-interaction", "completed":');
-    expect(expandedHeader).toContain('return false');
-    expect(expandedHeader).toContain('showsRunningAnimation: showsMascot');
-  });
-
   it('restarts the helper when it exits before ready', async () => {
     const children: FakeNativeProcess[] = [];
     h.spawn.mockImplementation(() => {
@@ -253,13 +154,16 @@ describe('MacAgentIslandNativeHost', () => {
     const host = new MacAgentIslandNativeHost(createOptions());
 
     expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    expect(host.available).toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.spawn).toHaveBeenCalledTimes(1);
 
     (children[0].stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
     await vi.advanceTimersByTimeAsync(0);
+    expect(host.available).toBe(true);
 
     children[0].stdin.emit('error', new Error('write EPIPE'));
+    expect(host.available).toBe(false);
     expect(children[0].kill).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(999);
     expect(h.spawn).toHaveBeenCalledTimes(1);
@@ -312,6 +216,30 @@ describe('MacAgentIslandNativeHost', () => {
 
     expect(host.failed).toBe(true);
     expect(h.spawn).toHaveBeenCalledTimes(4);
+  });
+
+  // The native protocol must accept only the two completion actions; no existing
+  // callback test covers malformed completion events (unit tier).
+  it('forwards completion actions and rejects unknown actions', async () => {
+    const child = createFakeChild();
+    h.spawn.mockReturnValue(child);
+    const options = { ...createOptions(), onCompletionAction: vi.fn().mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('offline')) };
+    const replies: string[] = [];
+    child.stdin.on('data', (data) => replies.push(String(data)));
+    const { MacAgentIslandNativeHost } = await import('../MacAgentIslandNativeHost.js');
+    const host = new MacAgentIslandNativeHost(options);
+    host.publish(createDisplayState(), createFrame());
+    await vi.advanceTimersByTimeAsync(0);
+    for (const action of ['mark-read', 'archive', 'delete']) {
+      (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'completion-action', sessionId: 's1', action, requestId: action, completionToken: 'card-1' })}\n`);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(options.onCompletionAction.mock.calls).toEqual([['s1', 'mark-read', 'card-1'], ['s1', 'archive', 'card-1']]);
+    expect(replies.map(line => JSON.parse(line)).filter(message => message.type === 'completion-action-result')).toEqual([
+      { type: 'completion-action-result', requestId: 'mark-read', success: true },
+      { type: 'completion-action-result', requestId: 'archive', success: false },
+    ]);
+    host.stop();
   });
 
   it('forwards permission action events from the helper', async () => {

@@ -11,6 +11,7 @@ describe('custom provider Codex wire protocols', () => {
       'openai-responses',
       'openai-chat',
       'anthropic-messages',
+      'google-generative-ai',
     ]);
   });
 

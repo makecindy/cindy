@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { SESSION_PERMISSION_DESTINATION, type InteractionRequest } from '@cindy/maker-core';
+import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../../shared/providerShareCredentialConsent';
 
 import { composeInteractionCard } from '../../../hook-control/interactions';
 import { ui } from '../../feishu/uiText';
@@ -67,7 +68,7 @@ function imDecisionFromButton(
       return buildPermissionAllowOnceDecision();
     case 'permission:allow:always':
       return toolName
-        ? buildPermissionAllowAlwaysDecision(toolName)
+        ? buildPermissionAllowAlwaysDecision({ toolName })
         : buildPermissionAllowOnceDecision();
     case 'permission:deny':
       return buildPermissionDenyDecision(PERMISSION_USER_DENIED_REASON);
@@ -263,7 +264,7 @@ describe('composeInteractionModel — v1 规则', () => {
   });
 
   it('permission 的会话级 addRules destination 与 maker-core 常量同值(防漂移)', () => {
-    const decision = buildPermissionAllowAlwaysDecision('Bash');
+    const decision = buildPermissionAllowAlwaysDecision({ toolName: 'Bash' });
     expect(decision).toEqual({
       kind: 'permission',
       behavior: 'allow',
@@ -280,6 +281,24 @@ describe('composeInteractionModel — v1 规则', () => {
 });
 
 describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard', () => {
+  it('本机凭证卡回传专用授权标记，普通卡不采信孤立的标记或 metadata', () => {
+    const req: PermissionRequest = {
+      ...PERMISSION_RICH,
+      metadata: { hostOwnedConfirmation: 'shared_provider_credential' },
+      suggestions: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+    };
+    const expected = {
+      kind: 'permission', behavior: 'allow',
+      permissionUpdates: [PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL],
+    };
+    expect(composeInteractionModel(req).choices[1].decision).toEqual(expected);
+    const hook = composeInteractionCard(req)!;
+    expect(hook.decisions.get(hook.card.buttons[1].id)).toEqual(expected);
+    const ordinary = buildPermissionAllowAlwaysDecision({ toolName: req.toolName });
+    expect(buildPermissionAllowAlwaysDecision({ ...req, metadata: undefined })).toEqual(ordinary);
+    expect(buildPermissionAllowAlwaysDecision({ ...req, suggestions: undefined })).toEqual(ordinary);
+  });
+
   it('ask(多问 / 多选 / 超长 label): 两侧选项集与决策逐项对齐', () => {
     const model = composeInteractionModel(ASK_MULTI)!;
     if (model.kind !== 'ask_user_question') throw new Error('unreachable');
@@ -383,8 +402,11 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
 
     // 两侧都渲染 toolName 与入参摘要, 但上限不同(600 单行 vs 800 pretty) —— 渲染差异
     expect(hook.card.body).toContain('Bash');
+    expect(hook.card.body).toContain('echo ');
     expect(hook.card.body.length).toBeLessThan(800);
-    expect(im.body).toContain('command');
+    // Shell calls show the command itself, not its JSON envelope.
+    expect(im.body).toContain('echo ');
+    expect(im.body).not.toContain('"command"');
     expect(im.body!.length).toBeLessThan(1000);
     expect(im.body).not.toContain('自动审批没完成');
   });
@@ -396,11 +418,26 @@ describe('跨实现一致性 — IM cardBuilders vs hook composeInteractionCard'
       metadata: { autoReviewUnavailable: true },
     });
     expect(im.body).toContain('自动审批没完成，请确认要不要允许这次操作。');
-    expect(im.body).toContain('command');
+    expect(im.body).toContain('echo ');
     expect(im.buttons.map((b) => b.id)).toEqual([
       'permission:allow:once',
       'permission:deny',
     ]);
+  });
+
+  it('AI ask 的富卡片写明审阅原因，且只能允许这一次', () => {
+    const request = {
+      ...PERMISSION_RICH,
+      requestId: 'req-perm-ask',
+      metadata: { autoReviewReason: '这会删除所有 iOS 模拟器，你只让我排查键盘问题。' },
+    };
+    const im = cards.buildPermissionCard(request);
+    expect(im.body).toContain('自动审批需要你决定：这会删除所有 iOS 模拟器，你只让我排查键盘问题。');
+    expect(im.buttons.map((b) => b.id)).toEqual(['permission:allow:once', 'permission:deny']);
+    const hook = composeInteractionCard(request);
+    expect(hook?.card.body).toContain('自动审批需要你决定：');
+    expect(hook?.card.buttons.map((b) => b.id)).toEqual(['perm:allow', 'perm:deny']);
+    expect(hook?.decisions.has('perm:always')).toBe(false);
   });
 
   it('安全默认: IM cancelPending 与 hook defaultDecision 同形(只有 reason 由渠道给)', async () => {

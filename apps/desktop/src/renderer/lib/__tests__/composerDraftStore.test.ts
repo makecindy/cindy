@@ -31,6 +31,19 @@ import {
 } from '@/lib/composerDraftStore';
 
 const emptyDoc: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] };
+
+// Unit: a routed built-in must survive the editor/attachment snapshot saves, but
+// cease owning the draft when the user replaces its command (PR #6433).
+it('retains a built-in draft intent through body edits and releases it when the command changes', () => {
+  const key = 'builtin-creator-intent';
+  const intent = { name: 'cindy-plugin-creator', commandName: 'cindy:cindy-plugin-creator' };
+  saveDraft(key, { text: plainTextToTiptapDoc('/cindy:cindy-plugin-creator Create a plugin'), attachments: [], builtInSkillIntent: intent });
+  saveDraft(key, { text: plainTextToTiptapDoc('/cindy:cindy-plugin-creator Create a calendar plugin'), attachments: [] }, { silent: true });
+  expect(getDraft(key)?.builtInSkillIntent).toEqual(intent);
+  saveDraft(key, { text: plainTextToTiptapDoc('/custom Create a calendar plugin'), attachments: [] }, { silent: true });
+  expect(getDraft(key)?.builtInSkillIntent).toBeUndefined();
+  clearDraft(key);
+});
 const whitespaceDoc: JSONContent = {
   type: 'doc',
   content: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }],
@@ -293,6 +306,26 @@ describe('draft discard lifecycle', () => {
 });
 
 describe('remote optimistic draft recovery', () => {
+  // PR #6433: a failed creator send must retain its built-in identity through
+  // the real optimistic clear/restore path, including a later failure fragment.
+  it('restores the leading built-in identity along with failed message text', () => {
+    const key = 'creator-retry';
+    const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+    restoreRemoteOptimisticDraft(key, {
+      clientId: 'creator-first', text: plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin'),
+      attachments: [], browserComments: [], builtInSkillIntent: intent,
+    });
+    restoreRemoteOptimisticDraft(key, {
+      clientId: 'later-message', text: plainTextToTiptapDoc('/learn Also add a panel'),
+      attachments: [], browserComments: [], builtInSkillIntent: { name: 'learn', commandName: 'learn' },
+    });
+    expect(getDraft(key)?.builtInSkillIntent).toEqual(intent);
+    expect(getDraft(key)?.text?.content?.[0]).toEqual(
+      plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin').content![0],
+    );
+    clearDraft(key);
+  });
+
   it('removes a sent prefix while preserving newer composer input', () => {
     const current = {
       text: recoveredTextDoc(['sent'], ['newer']),

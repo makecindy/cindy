@@ -96,9 +96,7 @@ describe('searchChatHistoryHybrid', () => {
     expect(dbMocks.queryOne).not.toHaveBeenCalled();
     expect(embeddingMocks.embedSync).not.toHaveBeenCalled();
     expect(result.vectorUsed).toBe(false);
-    expect(result.vectorSkipReason).toBe(
-      '聊天记录语义索引未启用, 本次仅用 FTS 全文检索。',
-    );
+    expect(result.vectorSkipReason).toBe('聊天记录语义索引未启用, 本次仅用 FTS 全文检索。');
   });
 
   it('short-circuits before both arms when the workdir filter matches no stored directory', async () => {
@@ -128,6 +126,246 @@ describe('searchChatHistoryHybrid', () => {
     expect(result.vectorSkipReason).toBe('workdir 过滤在历史库中无匹配目录, 已短路跳过检索。');
   });
 
+  it('hydrates every radius-zero anchor with one batch query', async () => {
+    dbMocks.query.mockResolvedValue([
+      { messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1_000, snippet: 'first' },
+      { messageId: 'm2', sessionId: 's1', role: 'assistant', createdAt: 2_000, snippet: 'second' },
+    ]);
+    const anchorRows = [
+      {
+        id: 'm1',
+        clientId: 'c1',
+        sessionId: 's1',
+        role: 'user',
+        content: JSON.stringify('first'),
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 1_000,
+        rewindAt: null,
+      },
+      {
+        id: 'm2',
+        clientId: 'c2',
+        sessionId: 's1',
+        role: 'assistant',
+        content: JSON.stringify('second'),
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 2_000,
+        rewindAt: null,
+      },
+    ];
+    dbMocks.select.mockImplementation((selection?: unknown) => ({
+      from: () => ({
+        where: () => Promise.resolve(selection ? [] : anchorRows),
+      }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'message',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 0,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(dbMocks.select.mock.calls.filter(([selection]) => selection === undefined)).toHaveLength(
+      1,
+    );
+    expect(result.hits.map((hit) => hit.context.map((item) => item.id))).toEqual([['m1'], ['m2']]);
+  });
+
+  it('keeps a radius-zero hit when its anchor row is missing', async () => {
+    dbMocks.query.mockResolvedValue([
+      { messageId: 'm1', sessionId: 's1', role: 'user', createdAt: 1_000, snippet: 'first' },
+      { messageId: 'm2', sessionId: 's1', role: 'assistant', createdAt: 2_000, snippet: 'second' },
+    ]);
+    dbMocks.select.mockImplementation((selection?: unknown) => ({
+      from: () => ({
+        where: () =>
+          Promise.resolve(
+            selection
+              ? []
+              : [
+                  {
+                    id: 'm1',
+                    clientId: 'c1',
+                    sessionId: 's1',
+                    role: 'user',
+                    content: JSON.stringify('first'),
+                    toolUseId: null,
+                    agentMeta: null,
+                    createdAt: 1_000,
+                    rewindAt: null,
+                  },
+                ],
+          ),
+      }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'message',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 0,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(result.hits.map((hit) => [hit.messageId, hit.context.length])).toEqual([
+      ['m1', 1],
+      ['m2', 0],
+    ]);
+  });
+
+  it('hydrates a positive-radius context window through the production batch query', async () => {
+    const rows = {
+      before: {
+        id: 'm1',
+        clientId: 'c1',
+        sessionId: 's1',
+        role: 'user',
+        content: JSON.stringify('before'),
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 1_000,
+        rewindAt: null,
+      },
+      anchor: {
+        id: 'm2',
+        clientId: 'c2',
+        sessionId: 's1',
+        role: 'assistant',
+        content: JSON.stringify('anchor'),
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 2_000,
+        rewindAt: null,
+      },
+      after: {
+        id: 'm3',
+        clientId: 'c3',
+        sessionId: 's1',
+        role: 'user',
+        content: JSON.stringify('after'),
+        toolUseId: null,
+        agentMeta: null,
+        createdAt: 3_000,
+        rewindAt: null,
+      },
+    };
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'm2',
+            sessionId: 's1',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'anchor',
+          },
+        ];
+      }
+      return [
+        { ...rows.before, _anchorOrder: 0, _side: 0 },
+        { ...rows.anchor, _anchorOrder: 0, _side: 1 },
+        { ...rows.after, _anchorOrder: 0, _side: 2 },
+      ];
+    });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'anchor',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 1,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(dbMocks.query).toHaveBeenCalledTimes(2);
+    expect(result.hits[0].context.map((item) => item.id)).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('keeps another batched context intact when an anchor disappears before hydration', async () => {
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'missing',
+            sessionId: 's1',
+            role: 'user',
+            createdAt: 1_000,
+            snippet: 'missing',
+          },
+          {
+            messageId: 'present',
+            sessionId: 's2',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'present',
+          },
+        ];
+      }
+      return [
+        {
+          _anchorOrder: 1,
+          _side: 1,
+          id: 'present',
+          clientId: 'c-present',
+          sessionId: 's2',
+          role: 'assistant',
+          content: JSON.stringify('present'),
+          toolUseId: null,
+          agentMeta: null,
+          agentKind: null,
+          createdAt: 2_000,
+          rewindAt: null,
+        },
+      ];
+    });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'anchor',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 2,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(result.hits.map((hit) => [hit.messageId, hit.context.map((row) => row.id)])).toEqual([
+      ['missing', []],
+      ['present', ['present']],
+    ]);
+  });
+
   it('can page beyond the default FTS pool for conversation search', async () => {
     const ftsRows = Array.from({ length: 51 }, (_, index) => ({
       messageId: `m${index + 1}`,
@@ -144,8 +382,8 @@ describe('searchChatHistoryHybrid', () => {
       from: () => ({
         where: () => {
           if (selection) return Promise.resolve([]);
-          return {
-            limit: async () => [{
+          return Promise.resolve([
+            {
               id: 'm51',
               clientId: 'c51',
               sessionId: 's2',
@@ -155,8 +393,8 @@ describe('searchChatHistoryHybrid', () => {
               agentMeta: null,
               createdAt: 1_050,
               rewindAt: null,
-            }],
-          };
+            },
+          ]);
         },
       }),
     }));
@@ -204,8 +442,8 @@ describe('searchChatHistoryHybrid', () => {
       from: () => ({
         where: () => {
           if (selection) return Promise.resolve([]);
-          return {
-            limit: async () => [{
+          return Promise.resolve([
+            {
               id: 'm51',
               clientId: 'c51',
               sessionId: 's2',
@@ -215,8 +453,8 @@ describe('searchChatHistoryHybrid', () => {
               agentMeta: null,
               createdAt: 1_050,
               rewindAt: null,
-            }],
-          };
+            },
+          ]);
         },
       }),
     }));
@@ -270,8 +508,8 @@ describe('searchChatHistoryHybrid', () => {
       from: () => ({
         where: () => {
           if (selection) return Promise.resolve([]);
-          return {
-            limit: async () => [{
+          return Promise.resolve([
+            {
               id: 'm1',
               clientId: 'c1',
               sessionId: 's1',
@@ -281,8 +519,8 @@ describe('searchChatHistoryHybrid', () => {
               agentMeta: null,
               createdAt: 1_000,
               rewindAt: null,
-            }],
-          };
+            },
+          ]);
         },
       }),
     }));

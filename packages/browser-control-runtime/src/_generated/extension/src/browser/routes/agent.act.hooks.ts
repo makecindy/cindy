@@ -13,6 +13,7 @@ import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -99,6 +100,7 @@ export function registerBrowserAgentActHookRoutes(
             await pw.setInputFilesViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               inputRef,
               element,
               paths: resolvedPaths,
@@ -114,7 +116,7 @@ export function registerBrowserAgentActHookRoutes(
               await pw.clickViaPlaywright({
                 cdpUrl,
                 targetId: tab.targetId,
-                ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                ...browserNavigationPolicyForProfile(ctx, profileCtx),
                 ref,
               });
             }

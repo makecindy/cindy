@@ -9,9 +9,11 @@ export function migrateStoredManifest(manifest: StoredManifest): {
   manifest: StoredManifest;
   changed: boolean;
 } {
-  let changed = false;
+  const legacyManifest = manifest as StoredManifest & { catalogScopeMigrated?: unknown };
+  let changed = 'catalogScopeMigrated' in legacyManifest;
+  const baseManifest = { ...legacyManifest };
+  delete baseManifest.catalogScopeMigrated;
   const installs: Record<string, StoredInstall> = {};
-  const shouldBackfillCatalogScope = manifest.catalogScopeMigrated !== true;
 
   for (const [installPath, rawEntry] of Object.entries(manifest.installs ?? {})) {
     const entry = { ...rawEntry } as StoredInstall & { isMine?: unknown };
@@ -23,16 +25,15 @@ export function migrateStoredManifest(manifest: StoredManifest): {
       delete entry.isMine;
       changed = true;
     }
-    if (shouldBackfillCatalogScope && !entry.catalogScope) {
-      entry.catalogScope = 'team';
+    if (entry.catalogScopeMigrated !== true) {
+      if (!entry.catalogScope) entry.catalogScope = 'team';
+      entry.catalogScopeMigrated = true;
       changed = true;
     }
     installs[installPath] = entry;
   }
 
-  if (shouldBackfillCatalogScope) changed = true;
-
   return changed
-    ? { manifest: { ...manifest, catalogScopeMigrated: true, installs }, changed: true }
+    ? { manifest: { ...baseManifest, installs }, changed: true }
     : { manifest, changed: false };
 }

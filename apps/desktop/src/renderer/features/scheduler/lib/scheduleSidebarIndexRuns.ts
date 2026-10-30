@@ -14,6 +14,9 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  errorMsg?: string;
+  failureRecovered?: boolean;
 }
 
 /**

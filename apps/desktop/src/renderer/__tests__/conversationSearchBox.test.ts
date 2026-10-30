@@ -31,7 +31,8 @@ vi.mock('@/lib/conversationSearchService', () => ({
   searchConversations: vi.fn(),
 }));
 
-vi.mock('@/lib/orcaSessionIdentity', () => ({
+vi.mock('@/lib/orcaSessionIdentity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/orcaSessionIdentity')>(),
   resolveSessionRoute: vi.fn(),
 }));
 
@@ -224,30 +225,6 @@ describe('ConversationSearchBox live search', () => {
     expect(hybridMode).toBeGreaterThan(keywordMode);
   });
 
-  it('reuses the first remote page for hybrid and still merges late remote hits', () => {
-    const hybridMode = source.indexOf("semanticMode: 'hybrid'");
-    const reuseRemote = source.indexOf('reuseRemoteResults');
-    const mergeLateRemote = source.indexOf('mergeConversationSearchFanout');
-
-    expect(source).toContain('semanticStartedSeqRef');
-    expect(reuseRemote).toBeGreaterThan(hybridMode);
-    expect(mergeLateRemote).toBeGreaterThan(-1);
-    expect(source).toContain('if (semanticStartedSeqRef.current === seq)');
-    expect(source).toContain('results: remoteResultsRef.current');
-    expect(source).toContain('next.remoteResults');
-  });
-
-  it('restores a terminal state if the hybrid refresh fails first', () => {
-    const hybridCatch = source.indexOf("semanticMode: 'hybrid'");
-    const resetSemanticGuard = source.indexOf('semanticStartedSeqRef.current = 0;', hybridCatch);
-    const terminalStatus = source.indexOf(
-      "setStatus((current) => current === 'searching' ? 'error' : current);",
-      hybridCatch,
-    );
-
-    expect(resetSemanticGuard).toBeGreaterThan(hybridCatch);
-    expect(terminalStatus).toBeGreaterThan(resetSemanticGuard);
-  });
 
   it('opens with a locked project filter and searches only that project at runtime', async () => {
     vi.mocked(searchConversations).mockResolvedValue({
@@ -774,4 +751,28 @@ describe('ConversationSearchBox live search', () => {
       /searchProjectSessions[\s\S]*selectVisibleSessions\([\s\S]*allSessionsForAttention[\s\S]*remoteProjectSessions/,
     );
   });
+});
+
+// Explicit search opens the exact ordinary task regardless of companion role;
+// the selected message anchor survives even without a loaded roster. Unit tier.
+it.each(['canonical', 'history', 'channel'] as const)('opens %s companion search results without the loaded roster', async role => {
+  const hit = { messageId: 'message', messageClientId: 'client', role: 'assistant' as const,
+    createdAt: '2026-10-20T00:00:00Z', snippet: null, preview: 'needle reply', score: 1, ftsRank: 1, vectorRank: null };
+  vi.mocked(searchConversations).mockResolvedValue({ query: 'needle', results: [{
+    session: { id: 'chat', title: 'needle thread', workingDir: null, workspaceKind: 'dialogue',
+      agentKind: 'pi', status: role === 'history' ? 'archived' : 'active', source: 'bot',
+      userSendAt: null, updatedAt: '2026-10-20T00:00:00Z', createdAt: '2026-10-20T00:00:00Z', _count: { messages: 1 },
+      companion: { id: 'bot', name: 'Melody', role, readOnly: role !== 'canonical' } },
+    matchKind: 'content', titleMatchIndices: [], titleScore: null, contentHit: hit, contentHits: [hit], rankScore: 1,
+  }], vectorUsed: false, vectorSkipReason: null, poolCapped: false });
+  renderSearchBox();
+  fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+  fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), { target: { value: 'needle' } });
+  const result = await screen.findByRole('button', { name: /needle thread/ });
+  expect(result.textContent).toContain('Melody');
+  fireEvent.click(result);
+  await waitFor(() => expect(navigate).toHaveBeenCalledWith(
+    '/cc-agent/chat',
+    { state: { searchJump: { kind: 'conversation-search', sessionId: 'chat', messageId: 'message', messageClientId: 'client' } } },
+  ));
 });

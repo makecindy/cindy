@@ -1,4 +1,4 @@
-import { apiFetchRaw } from '@/api/client';
+import { ApiError, apiFetchRaw } from '@/api/client';
 import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { i18n } from '@/i18n';
 import {
@@ -7,6 +7,8 @@ import {
 } from '@/session/mobileVoiceLanguage';
 import {
   DictationRefiner,
+  formatVoiceInputHistoryContext,
+  normalizeVoiceHistoryText,
   extractJsonStringFieldSnapshot,
   type DictationRefinementContext,
   type TextModelClient,
@@ -48,6 +50,18 @@ export function mobileVoiceMicPermissionError(): string {
 export function mobileVoiceRealtimeAudioUnavailableError(): string {
   return i18n.t('composer.voice.realtimeAudioUnavailable');
 }
+/**
+ * Structured account rate limit from managed voice-session allocation (same
+ * judgement as desktop). Every mobile ASR candidate shares that account quota,
+ * so switching providers or reconnecting cannot get past it.
+ */
+export function isMobileVoiceRateLimited(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'RATE_LIMITED' && error.status === 429;
+}
+/** Only a recognized account limit replaces the generic failure text. */
+export function mobileVoiceRateLimitMessage(error: unknown): string | undefined {
+  return isMobileVoiceRateLimited(error) ? i18n.t('composer.voice.rateLimited') : undefined;
+}
 
 export type MobileVoiceState = ComposerVoiceState;
 
@@ -72,6 +86,26 @@ export interface MobileVoiceDraftInsertion {
   text: string;
 }
 
+export interface MobileVoiceSelection {
+  start: number;
+  end: number;
+}
+
+export function insertVoiceTranscriptDraftWithRange(
+  current: string,
+  transcript: string,
+  selection: MobileVoiceSelection,
+): { draft: string; insertion: MobileVoiceDraftInsertion | null } {
+  const text = transcript.trim();
+  if (!text) return { draft: current, insertion: null };
+  const start = Math.max(0, Math.min(current.length, selection.start));
+  const end = Math.max(start, Math.min(current.length, selection.end));
+  return {
+    draft: current.slice(0, start) + text + current.slice(end),
+    insertion: { start, end: start + text.length, text },
+  };
+}
+
 interface VoicePresignResult {
   putUrl: string;
   key: string;
@@ -87,10 +121,13 @@ interface CloudVoiceDeps {
   fetch?: typeof fetch;
 }
 
-const MOBILE_VOICE_INPUT_HISTORY_HEADER = '语音输入历史（旧到新，仅作术语、别名和用词风格参考）：';
-const MAX_MOBILE_VOICE_HISTORY_ENTRIES_FOR_REFINEMENT = 100;
-const MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS = 360;
+// Caps the model's output text and any single SSE event. The whole response
+// gets a far larger cap: each event wraps one or two characters in ~180 chars
+// of JSON, so a 64K response cap rejected every refinement over ~550
+// characters. 2M still bounds endless framing-only events while staying ~10x
+// above the managed server's 1,024-token output.
 const MAX_REFINER_RESPONSE_CHARS = 64_000;
+const MAX_REFINER_STREAM_CHARS = 2_000_000;
 const MAX_ERROR_DETAIL_CHARS = 1_000;
 
 export function appendVoiceTranscriptDraft(current: string, transcript: string): string {
@@ -247,6 +284,7 @@ export function buildMobileVoiceRefinementContext(
     uiLanguage?: string;
     sourceLanguage?: string;
     refinementContext?: DictationRefinementContext;
+    /** Persisted per-host history, including the imported desktop snapshot. */
     localVoiceInputHistory?: readonly string[];
     /**
      * 从被控桌面拉来的词典快照。托管路径的 credential 本身不带词典
@@ -258,7 +296,7 @@ export function buildMobileVoiceRefinementContext(
 ): DictationRefinementContext {
   const settings = credential.settings;
   const dictionaryEntries = options.dictionaryEntries ?? settings?.dictionaryEntries ?? [];
-  const history = mergeMobileVoiceHistories(settings?.voiceInputHistory, options.localVoiceInputHistory);
+  const history = normalizeMobileVoiceHistoryNewestFirst(options.localVoiceInputHistory ?? settings?.voiceInputHistory ?? []);
   const uiLanguage = options.refinementContext?.uiLanguage?.trim()
     || options.uiLanguage?.trim()
     || currentMobileVoiceUiLanguage();
@@ -364,17 +402,17 @@ export class MobileLiteLlmTextModelClient implements TextModelClient {
     }
     const buffered = await readBufferedResponseText(response);
     if (buffered.trim()) {
-      if (buffered.length > MAX_REFINER_RESPONSE_CHARS) {
-        throw new Error(i18n.t('composer.voice.refineResponseTooLarge', { max: MAX_REFINER_RESPONSE_CHARS }));
-      }
+      assertRefinerResponseWithinLimit(buffered.length, MAX_REFINER_STREAM_CHARS);
       const streamedContent = readBufferedChatCompletion(buffered, input.onTextSnapshot);
       if (streamedContent) return parseJsonObject(streamedContent) as T;
       const payload = parseJsonObject(buffered);
       const content = extractChatCompletionContent(payload);
+      assertRefinerResponseWithinLimit(content.length);
       return parseJsonObject(content) as T;
     }
     const payload = await response.json().catch(() => null);
     const content = extractChatCompletionContent(payload);
+    assertRefinerResponseWithinLimit(content.length);
     return parseJsonObject(content) as T;
   }
 }
@@ -437,14 +475,13 @@ async function readStreamingChatCompletion(
       if (done) break;
       const chunk = decoder.decode(value, { stream: true });
       rawChars += chunk.length;
-      if (rawChars > MAX_REFINER_RESPONSE_CHARS) {
-        throw new Error(i18n.t('composer.voice.refineResponseTooLarge', { max: MAX_REFINER_RESPONSE_CHARS }));
-      }
+      assertRefinerResponseWithinLimit(rawChars, MAX_REFINER_STREAM_CHARS);
       buffer += normalizeSseLineEndings(chunk);
       let splitAt = buffer.indexOf('\n\n');
       while (splitAt >= 0) {
         const block = buffer.slice(0, splitAt);
         buffer = buffer.slice(splitAt + 2);
+        assertRefinerResponseWithinLimit(block.length);
         const event = parseSseBlock(block);
         if (event) {
           if (isRecord(event.data) && isRecord(event.data.error)) {
@@ -455,6 +492,7 @@ async function readStreamingChatCompletion(
           const delta = extractDeltaContent(event.data);
           if (delta) {
             content += delta;
+            assertRefinerResponseWithinLimit(content.length);
             const snapshot = extractJsonStringFieldSnapshot(content, 'text');
             if (snapshot && snapshot !== lastSnapshot) {
               lastSnapshot = snapshot;
@@ -464,6 +502,7 @@ async function readStreamingChatCompletion(
         }
         splitAt = buffer.indexOf('\n\n');
       }
+      assertRefinerResponseWithinLimit(buffer.length);
     }
 
     if (buffer.trim()) {
@@ -471,6 +510,7 @@ async function readStreamingChatCompletion(
       const delta = event ? extractDeltaContent(event.data) : '';
       if (delta) {
         content += delta;
+        assertRefinerResponseWithinLimit(content.length);
         const snapshot = extractJsonStringFieldSnapshot(content, 'text');
         if (snapshot && snapshot !== lastSnapshot) onTextSnapshot?.(snapshot);
       }
@@ -544,6 +584,7 @@ function readBufferedChatCompletion(raw: string, onTextSnapshot?: (text: string)
   const normalized = normalizeSseLineEndings(raw);
   for (const block of normalized.split(/\n\n+/)) {
     if (!block.trim()) continue;
+    assertRefinerResponseWithinLimit(block.length);
     const event = parseSseBlock(block);
     if (event) applyChatCompletionEvent(event, state, onTextSnapshot);
   }
@@ -580,11 +621,17 @@ function applyChatCompletionEvent(
   const delta = extractDeltaContent(event.data);
   if (!delta) return;
   state.content += delta;
+  assertRefinerResponseWithinLimit(state.content.length);
   const snapshot = extractJsonStringFieldSnapshot(state.content, 'text');
   if (snapshot && snapshot !== state.lastSnapshot) {
     state.lastSnapshot = snapshot;
     onTextSnapshot?.(snapshot);
   }
+}
+
+function assertRefinerResponseWithinLimit(chars: number, max = MAX_REFINER_RESPONSE_CHARS): void {
+  if (chars <= max) return;
+  throw new Error(i18n.t('composer.voice.refineResponseTooLarge', { max }));
 }
 
 function parseSseBlock(block: string): ParsedSseBlock | null {
@@ -669,35 +716,15 @@ function formatMobileVoiceDictionary(
 }
 
 function formatMobileVoiceHistory(history: readonly string[]): string {
-  const entries = normalizeMobileVoiceHistoryNewestFirst(history).reverse();
-  if (entries.length === 0) return '';
-  return [
-    MOBILE_VOICE_INPUT_HISTORY_HEADER,
-    ...entries.map((entry) => `- ${entry}`),
-  ].join('\n');
-}
-
-function mergeMobileVoiceHistories(
-  syncedDesktopHistory: readonly string[] | undefined,
-  localMobileHistory: readonly string[] | undefined,
-): string[] {
-  return normalizeMobileVoiceHistoryNewestFirst([
-    ...(localMobileHistory ?? []),
-    ...(syncedDesktopHistory ?? []),
-  ]);
+  return formatVoiceInputHistoryContext(history.map((text) => ({ text })));
 }
 
 function normalizeMobileVoiceHistoryNewestFirst(history: readonly string[]): string[] {
   const entries: string[] = [];
   for (const item of history) {
-    const text = item
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS)
-      .trim();
+    const text = normalizeVoiceHistoryText(item);
     if (!text || entries.includes(text)) continue;
     entries.push(text);
-    if (entries.length >= MAX_MOBILE_VOICE_HISTORY_ENTRIES_FOR_REFINEMENT) break;
   }
   return entries;
 }

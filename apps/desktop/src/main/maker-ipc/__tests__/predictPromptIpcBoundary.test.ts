@@ -6,6 +6,7 @@
  * 必须做 sender 断言 + 运行期结构/长度/枚举校验(TS 类型不等于运行期校验)。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -271,6 +272,13 @@ vi.mock('../../localDb/client/current.js', () => ({
 vi.mock('../promptPrediction.js', () => ({
   generatePromptPrediction: h.predict,
 }));
+// `maker-ipc/title.ts` statically imports the auxiliary title router, whose
+// production default dependency reads the Maker facade. Keep this boundary
+// test's existing lightweight module graph instead of evaluating the full
+// maker-host assembly during collection.
+vi.mock('../../maker-host/index.js', () => ({
+  getMaker: vi.fn(() => ({})),
+}));
 vi.mock('../../messagePersistBroadcaster.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
@@ -329,6 +337,15 @@ beforeEach(() => {
 });
 
 describe('maker:predict-prompt — sender 断言', () => {
+  it.each(['win32', 'darwin', 'ios', 'android'])('trusted %s controllers can request host predictions', async (controllerPlatform) => {
+    h.trusted = false; // Tunnel dispatch has no local Renderer sender.
+    const result = await runDeviceLinkInvokeContext({
+      controllerDeviceId: 'controller-a', controllerPlatform, channel: 'maker:predict-prompt',
+    }, () => invokePredict(VALID_REQUEST));
+    expect(result).toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it('非受信来源(子 frame / WebView)被拒,且不调用付费模型', async () => {
     h.trusted = false;
 
@@ -348,6 +365,40 @@ describe('maker:predict-prompt — sender 断言', () => {
 });
 
 describe('maker:predict-prompt — payload 运行期校验', () => {
+  it.each([undefined, 0, -1, 1.5, '2'])('取消请求拒绝无效完成轮次 %s', async (completionRevision) => {
+    await expect(invokePredict({ sessionId: 'session-1', cancel: true, completionRevision })).rejects.toThrow(/INVALID_PARAMS/);
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('取消仍校验来源，且取消本身不读取素材或调用模型', async () => {
+    const request = { sessionId: 'session-1', completionRevision: 2, cancel: true };
+    h.trusted = false;
+    await expect(invokePredict(request)).rejects.toThrow(/PERMISSION_DENIED/);
+    h.trusted = true;
+    await expect(invokePredict(request)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+  });
+
+  it('远控取消沿原通道执行，迟到的旧轮取消不阻塞下一完成轮', async () => {
+    h.trusted = false;
+    await runDeviceLinkInvokeContext({
+      controllerDeviceId: 'controller-a', controllerPlatform: 'win32', channel: 'maker:predict-prompt',
+    }, () => invokePredict({ sessionId: 'session-1', completionRevision: 1, cancel: true }));
+    h.trusted = true;
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消当前轮后不再复用已缓存的成功结果', async () => {
+    await invokePredict(VALID_REQUEST);
+    await invokePredict({ sessionId: 'session-1', completionRevision: 2, cancel: true });
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: null });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['非对象', null],
     ['数组', []],
@@ -497,6 +548,23 @@ describe('maker:predict-prompt — DB 防御纵深(远程会话拒绝)', () => {
 });
 
 describe('maker:predict-prompt — 多窗口同轮幂等', () => {
+  it('cache-only navigation never starts a prediction and can reuse a later live result', async () => {
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: null });
+    expect(h.predict).not.toHaveBeenCalled();
+    expect(h.drainPersistQueue).not.toHaveBeenCalled();
+
+    await expect(invokePredict(VALID_REQUEST)).resolves.toEqual({ prompt: '下一步做什么' });
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: '下一步做什么' });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
+  it('cache-only requests still reject a cached result after a new turn starts', async () => {
+    await invokePredict(VALID_REQUEST);
+    h.sessionRow = { ...h.sessionRow!, activeTurnStartedAt: 3 };
+    await expect(invokePredict({ ...VALID_REQUEST, cacheOnly: true })).resolves.toEqual({ prompt: null });
+    expect(h.predict).toHaveBeenCalledTimes(1);
+  });
+
   it('同一 session 同一 completion revision 并发时共享 Promise 和结果', async () => {
     let resolveFirst!: (value: string) => void;
     h.predict.mockImplementationOnce(

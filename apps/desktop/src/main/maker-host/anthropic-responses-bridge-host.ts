@@ -1,3 +1,18 @@
+import {
+  captureGuestRequestUsage,
+  guestProviderModelDenial,
+  guestProviderOffersModel,
+  guestProviderRouteForSession,
+  hostedProviderOffersModel,
+} from './guest-provider-route-store.js';
+import { hasHostedSessionModelAccess } from './session-provider-store.js';
+import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
+import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
+import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
+import { getSessionFastMode } from './session-effort-store.js';
+import { standardSpeedRequest } from '@cindy/maker-core';
+import { subscriptionRequestAllowsFast } from './subscription-fast-request-policy.js';
+import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 anthropic-responses-bridge 装配 ——
  *
@@ -21,7 +36,7 @@
 import { app } from 'electron';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { zstdCompress, zstdDecompress } from 'node:zlib';
 
 import {
@@ -31,10 +46,12 @@ import {
 import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 
 import { createMakerLogger } from './logger-adapter.js';
+import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { getGrokAccessToken } from './grok-oauth-login.js';
+import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
-import { chatgptAccountIdFromIdToken, desktopCodexAuthAdapter } from './auth-adapters.js';
+import { chatgptAccountIdFromTokens, desktopCodexAuthAdapter } from './auth-adapters.js';
+import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import {
   bearerAccessTokenFromHeaders,
   createChatgptBridgeAuthInvalidator,
@@ -106,12 +123,6 @@ function jwtExpSec(token: string | undefined): number | null {
   }
 }
 
-/** tokens.account_id 优先;回落解 id_token(复用 auth-adapters 的 claim 解析,单点维护)。 */
-function accountIdFrom(tokens: NonNullable<CodexAuthFile['tokens']>): string | null {
-  if (typeof tokens.account_id === 'string' && tokens.account_id.length > 0) return tokens.account_id;
-  return typeof tokens.id_token === 'string' ? chatgptAccountIdFromIdToken(tokens.id_token) : null;
-}
-
 function isExpired(accessToken: string | undefined): boolean {
   const exp = jwtExpSec(accessToken);
   if (exp == null) return false; // 解不出 exp → 不主动刷,靠上游 401 暴露
@@ -119,7 +130,7 @@ function isExpired(accessToken: string | undefined): boolean {
 }
 
 // 刷新串行 mutex —— 防同一进程内并发请求同时打 refresh(会各自旋转 refresh_token 互相作废)。
-let _refreshChain: Promise<void> = Promise.resolve();
+const refreshChains = new Map<string, Promise<void>>();
 
 /**
  * 兜底刷新:用 refresh_token + codex client_id 打 auth.openai.com/oauth/token,原地写回 auth.json。
@@ -129,7 +140,7 @@ async function refreshIfNeeded(authPath: string, current: CodexAuthFile): Promis
   if (!isExpired(current.tokens?.access_token)) return current;
 
   let result = current;
-  const run = _refreshChain.then(async () => {
+  const run = (refreshChains.get(authPath) ?? Promise.resolve()).then(async () => {
     // 重读:可能有别的进程(codex app-server)刚刷过。
     const fresh = await readAuthFile(authPath);
     if (fresh === null) {
@@ -203,7 +214,9 @@ async function refreshIfNeeded(authPath: string, current: CodexAuthFile): Promis
     result = next;
   });
   // 把本次刷新接到链上(无论成败都释放锁给下一个)。
-  _refreshChain = run.catch(() => undefined);
+  const settled = run.catch(() => undefined);
+  refreshChains.set(authPath, settled);
+  void settled.then(() => { if (refreshChains.get(authPath) === settled) refreshChains.delete(authPath); });
   await run.catch((err) => {
     log.warn('token 刷新异常', { err: err instanceof Error ? err.message : String(err) });
   });
@@ -227,13 +240,27 @@ export function clearChatgptBridgeCredentialCache(): void {
   _authCache = null;
 }
 
-export const invalidateChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
+const invalidateDefaultChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
   getCurrentAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
   invalidate: async (reason) => {
     clearChatgptBridgeCredentialCache();
     await desktopCodexAuthAdapter.invalidate(reason);
   },
 });
+
+export async function invalidateChatgptBridgeAuth(
+  input: Parameters<typeof invalidateDefaultChatgptBridgeAuth>[0], providerId = 'openai',
+): Promise<boolean> {
+  if (providerId === 'openai') return invalidateDefaultChatgptBridgeAuth(input);
+  const owner = activeOwnerScopeKey();
+  return createChatgptBridgeAuthInvalidator({
+    getCurrentAccessToken: () => desktopCodexAuthAdapter.getAccessToken(providerId),
+    invalidate: async (reason) => {
+      throwIfOwnerBoundDispatchUnsafe(owner);
+      await invalidateCodexAccount(providerId, reason, input.failedAccessToken);
+    },
+  })(input);
+}
 
 function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
   if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== scopeAtStart) {
@@ -242,9 +269,19 @@ function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
 }
 
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
-export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; accountId: string | null }> {
+export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ accessToken: string; accountId: string | null }> {
   const scopeAtStart = activeOwnerScopeKey();
   throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+  if (providerId !== 'openai') {
+    if (!codexAccountState(providerId).authenticated) throw new Error('OpenAI account is disconnected or requires login');
+    const authPath = path.join(codexAccountHome(providerId), 'auth.json');
+    const current = await readAuthFile(authPath);
+    if (!current?.tokens?.access_token) throw new Error('OpenAI account credentials are unavailable');
+    const refreshed = await refreshIfNeeded(authPath, current);
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+    if (!codexAccountState(providerId).authenticated || !refreshed.tokens?.access_token) throw new Error('OpenAI account changed during authentication');
+    return { accessToken: refreshed.tokens.access_token, accountId: chatgptAccountIdFromTokens(refreshed.tokens) };
+  }
   const now = Date.now();
   if (_authCache && now - _authCache.readAt < AUTH_CACHE_TTL_MS && !isExpired(_authCache.accessToken)) {
     throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
@@ -270,7 +307,7 @@ export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; acc
   obj = await refreshIfNeeded(authPath, obj);
   throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
   const accessToken = obj.tokens?.access_token;
-  const accountId = obj.tokens ? accountIdFrom(obj.tokens) : null;
+  const accountId = chatgptAccountIdFromTokens(obj.tokens);
   if (!accessToken) {
     _authCache = null;
     throw new Error('codex auth.json 缺 access_token');
@@ -279,8 +316,29 @@ export async function getChatgptBridgeAuth(): Promise<{ accessToken: string; acc
   return _authCache;
 }
 
+/** A deferred child request must revalidate both credential and authorization at dispatch/retry. */
+export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Promise<{
+  accessToken: string; accountId: string | null; canDispatch(): boolean;
+}> {
+  const ownerScope = activeOwnerScopeKey();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const auth = await getChatgptBridgeAuth(providerId);
+    throwIfOwnerBoundDispatchUnsafe(ownerScope);
+    const proof = desktopCodexAuthAdapter.captureOAuthDispatchProof(auth.accessToken, auth.accountId, providerId);
+    if (proof) return {
+      ...auth,
+      canDispatch: () => ownerScope === activeOwnerScopeKey()
+        && !isAppSessionBoundaryPending() && proof(),
+    };
+    // The existing cache can straddle native account replacement. Only a fresh,
+    // proven credential may produce a new decision; the old decision stays invalid.
+    clearChatgptBridgeCredentialCache();
+  }
+  throw new Error('OpenAI authorization changed while preparing the child request');
+}
+
 /** codex(ChatGPT 订阅)provider 配置:chatgpt/ 前缀 → codex 后端,注入订阅 OAuth + codex 专属头。 */
-function codexProviderConfig(): BridgeProviderConfig {
+function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
   return {
     prefix: CHATGPT_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
@@ -288,22 +346,26 @@ function codexProviderConfig(): BridgeProviderConfig {
     // Fast 模式:codex models_cache 的 service_tiers 声明 {id:'priority', name:'Fast'},
     // handler 在 prefs.fast 时映射成 Responses 的 service_tier:'priority'。
     fastServiceTier: 'priority',
+    supportedReasoningEfforts: (model) => getActiveCatalog().providers
+      .find((provider) => provider.id === providerId)?.models['claude-code']
+      ?.find((entry) => entry.id === `${CHATGPT_MODEL_PREFIX}${model}`)?.efforts,
     // codex 后端不支持 max_output_tokens(会 400),保持默认 false。
     buildHeaders: async ({ sessionId }) => {
-      const { accessToken, accountId } = await getChatgptBridgeAuth();
+      const { accessToken, accountId } = await getChatgptBridgeAuth(providerId);
       return buildChatgptBridgeHeaders({ accessToken, accountId, sessionId });
     },
     onUpstreamError: async ({ status, body, requestHeaders }) => {
       const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
       if (!failedAccessToken) return;
-      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken });
+      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken }, providerId);
     },
   };
 }
 
 /** xAI(SuperGrok 订阅)provider 配置:xai/ 前缀 → api.x.ai/v1,注入 Grok OAuth Bearer。 */
-function xaiProviderConfig(): BridgeProviderConfig {
+function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
   return {
+    fastModel: model => fastModelId(providerId, 'claude-code', `xai/${model}`)?.replace(/^xai\//, ''),
     prefix: XAI_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
     upstreamBase: 'https://api.x.ai/v1',
@@ -320,18 +382,21 @@ function xaiProviderConfig(): BridgeProviderConfig {
     // Grok 的 X 实时视野来自 xAI 服务端工具 x_search:不声明就搜不了 X(见 xai-server-side-tools.ts)。
     serverSideTools: xaiServerSideTools,
     buildHeaders: async () => ({
-      authorization: `Bearer ${await getGrokAccessToken()}`,
+      authorization: `Bearer ${await getGrokAccessToken(providerId)}`,
     }),
     // 周用量走 cli-chat-proxy billing,不在这条推理链上。这里只尽力抓 x-ratelimit-*
     // 作为 RPM/TPM 瞬时值;拿不到不影响账号周用量 chip。
-    onRateLimit: (info) => recordXaiRateLimitSnapshot(info),
+    onRateLimit: (info, requestHeaders) => {
+      const token = bearerAccessTokenFromHeaders(requestHeaders);
+      if (!isAppSessionBoundaryPending() && token && token === peekGrokAccessToken(providerId)) recordXaiRateLimitSnapshot(info, providerId);
+    },
     // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
     // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
     // 一直显示已连接,用户没有任何线索该去重连。
     onUpstreamError: async ({ status, body, requestHeaders }) => {
       const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
       if (!failedAccessToken) return;
-      await invalidateXaiBridgeAuth({ status, body, failedAccessToken });
+      await invalidateXaiBridgeAuth({ status, body, failedAccessToken }, providerId);
     },
   };
 }
@@ -341,7 +406,14 @@ function xaiProviderConfig(): BridgeProviderConfig {
  * 装配失败(理论上仅配置错误,如未实现的 wireProtocol)→ 返 null 并记 ERROR,routingTransform
  * 据此 passthrough(fail-open),不反复重试刷日志。
  */
-export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
+export function getResponsesBridgeHandler(providerId = 'openai'): ResponsesBridgeHandler | null {
+  if (providerId !== 'xai' && isXaiSubscriptionProviderId(providerId)) {
+    return createResponsesHandler({ providers: [xaiProviderConfig(providerId)], logger: log, fetchImpl: outboundFetch });
+  }
+  if (providerId !== 'openai' && providerId !== 'xai') {
+    if (!isOpenAiSubscriptionProviderId(providerId)) return null;
+    return createResponsesHandler({ providers: [codexProviderConfig(providerId), xaiProviderConfig()], logger: log, fetchImpl: outboundFetch });
+  }
   if (_initialized) return _handler;
   _initialized = true;
   try {
@@ -365,7 +437,7 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
   return _handler;
 }
 
-type PiNativeSubscriptionProvider = 'openai' | 'xai';
+type PiNativeSubscriptionProvider = string;
 type PiNativeWireProtocol = 'openai-responses' | 'openai-chat';
 
 interface PiNativeUpstream {
@@ -377,6 +449,7 @@ export interface PiNativeSubscriptionHandlerDeps {
   fetch: typeof outboundFetch;
   getChatgptAuth: typeof getChatgptBridgeAuth;
   getGrokToken: typeof getGrokAccessToken;
+  peekGrokToken: typeof peekGrokAccessToken;
   invalidateChatgpt: typeof invalidateChatgptBridgeAuth;
   invalidateXai: typeof invalidateXaiBridgeAuth;
   recordXaiRateLimit: typeof recordXaiRateLimitSnapshot;
@@ -386,6 +459,7 @@ const defaultPiNativeSubscriptionHandlerDeps: PiNativeSubscriptionHandlerDeps = 
   fetch: outboundFetch,
   getChatgptAuth: getChatgptBridgeAuth,
   getGrokToken: getGrokAccessToken,
+  peekGrokToken: peekGrokAccessToken,
   invalidateChatgpt: invalidateChatgptBridgeAuth,
   invalidateXai: invalidateXaiBridgeAuth,
   recordXaiRateLimit: recordXaiRateLimitSnapshot,
@@ -401,7 +475,7 @@ function piNativeUpstream(
   } catch {
     return null;
   }
-  if (providerId === 'openai') {
+  if (isOpenAiSubscriptionProviderId(providerId)) {
     return pathname === '/codex/responses'
       ? {
           url: 'https://chatgpt.com/backend-api/codex/responses',
@@ -409,6 +483,7 @@ function piNativeUpstream(
         }
       : null;
   }
+  if (!isXaiSubscriptionProviderId(providerId)) return null;
   const normalized = pathname.startsWith('/v1/') ? pathname : `/v1${pathname}`;
   if (normalized === '/v1/responses') {
     return { url: `https://api.x.ai${normalized}`, wireProtocol: 'openai-responses' };
@@ -447,6 +522,7 @@ function finiteRateLimitHeader(headers: Headers, name: string): number | undefin
 function recordNativeXaiRateLimit(
   headers: Headers,
   record: typeof recordXaiRateLimitSnapshot,
+  providerId: string,
 ): void {
   const info = {
     limitRequests: finiteRateLimitHeader(headers, 'x-ratelimit-limit-requests'),
@@ -455,7 +531,7 @@ function recordNativeXaiRateLimit(
     remainingTokens: finiteRateLimitHeader(headers, 'x-ratelimit-remaining-tokens'),
   };
   if (Object.values(info).some((value) => value !== undefined)) {
-    record(info);
+    record(info, providerId);
   }
 }
 
@@ -469,32 +545,6 @@ function withOpenaiContextProfileModel(body: unknown): Record<string, unknown> |
     return null;
   }
   return { ...body, model: body.model.slice(0, -'[1m]'.length) };
-}
-
-async function rewriteOpenaiContextProfileRequest(
-  rawBody: Buffer,
-  parsedBody: unknown,
-  contentEncoding: string | undefined,
-): Promise<{ body: Buffer; contentEncoding: string | undefined } | null> {
-  const parsedProfile = withOpenaiContextProfileModel(parsedBody);
-  if (parsedProfile) {
-    return { body: Buffer.from(JSON.stringify(parsedProfile)), contentEncoding: undefined };
-  }
-  if (parsedBody !== undefined || contentEncoding?.toLowerCase() !== 'zstd') return null;
-  try {
-    // Near-1M-token payloads are large enough to stall Electron main. Node's async
-    // zstd APIs move compression work to the libuv worker pool.
-    const decodedBody = await zstdDecompressAsync(rawBody);
-    const decoded = JSON.parse(decodedBody.toString('utf8')) as unknown;
-    const compressedProfile = withOpenaiContextProfileModel(decoded);
-    if (!compressedProfile) return null;
-    return {
-      body: await zstdCompressAsync(Buffer.from(JSON.stringify(compressedProfile))),
-      contentEncoding,
-    };
-  } catch {
-    return null;
-  }
 }
 
 function parseJsonRecord(rawBody: Buffer): Record<string, unknown> | null {
@@ -649,7 +699,7 @@ function withNativeXaiServerSideTools(
   return toolsChanged ? next : null;
 }
 
-async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res']): Promise<void> {
+async function pipeNativeResponse(response: Response, res: Parameters<LocalRequestHandler>[0]['res'], observer?: ResponseObserverSink): Promise<void> {
   res.writeHead(response.status, nativeResponseHeaders(response));
   if (!response.body) {
     res.end();
@@ -659,7 +709,8 @@ async function pipeNativeResponse(response: Response, res: Parameters<LocalReque
   try {
     while (!res.destroyed) {
       const chunk = await reader.read();
-      if (chunk.done) break;
+      if (chunk.done) { observer?.onEnd?.(); break; }
+      observer?.onData?.(Buffer.from(chunk.value));
       if (!res.write(Buffer.from(chunk.value))) {
         await new Promise<void>((resolve) => {
           const done = (): void => {
@@ -700,46 +751,94 @@ export function getPiNativeSubscriptionHandler(
     const abortOnClose = (): void => controller.abort();
     res.once('close', abortOnClose);
     const scopeAtStart = activeOwnerScopeKey();
+    const fastAtStart = getSessionFastMode(sessionId);
+    const guest = guestProviderRouteForSession(sessionId);
+    const hostedModelAccess = hasHostedSessionModelAccess(sessionId);
+    // Preserve the original catalog profile across wire rewrites (e.g. [1m])
+    // and recheck after asynchronous codecs/auth before any upstream request.
+    let requestedModel = '';
+    const modelAllowed = async (): Promise<boolean> => {
+      if (!guest && !hostedModelAccess) return true;
+      const allowed = guest
+        ? guest.providerId === providerId && await guestProviderOffersModel(providerId, 'pi', requestedModel, sessionId)
+        : hasHostedSessionModelAccess(sessionId) && hostedProviderOffersModel(sessionId, providerId, 'pi', requestedModel);
+      if (allowed) return true;
+      const denial = guest && requestedModel ? guestProviderModelDenial(sessionId, requestedModel, 'pi') : null;
+      res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ type: 'error', error: {
+        type: 'authorization_error',
+        code: denial?.code ?? (guest ? 'shared_provider_only' : 'remote_model_not_allowed'),
+        message: denial?.message ?? (guest
+          ? `model '${requestedModel}' is not available from the provider shared with you`
+          : 'This model is not available for this remote task.'),
+      } }));
+      return false;
+    };
     try {
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
-      let accessToken: string;
-      let headers: Record<string, string>;
-      if (providerId === 'openai') {
-        const auth = await deps.getChatgptAuth();
-        accessToken = auth.accessToken;
-        headers = buildChatgptBridgeHeaders({
-          accessToken,
-          accountId: auth.accountId,
-          sessionId,
-        });
-      } else {
-        accessToken = await deps.getGrokToken();
-        headers = { authorization: `Bearer ${accessToken}` };
-      }
-      headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
-      headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      let recordUsage: ReturnType<typeof captureUsagePricing> | undefined;
+      let recordGuestUsage: ReturnType<typeof captureGuestRequestUsage>;
       let outboundBody = rawBody;
       let contentEncoding: string | undefined = ctx.headers['content-encoding'];
-      if (providerId === 'openai') {
-        const rewritten = await rewriteOpenaiContextProfileRequest(
-          rawBody,
-          parsedBody,
-          contentEncoding,
-        );
-        if (rewritten) {
-          outboundBody = rewritten.body;
-          contentEncoding = rewritten.contentEncoding;
+      let rewriteOpenaiBody: (() => Promise<void> | null) | undefined;
+      if (isOpenAiSubscriptionProviderId(providerId)) {
+        // Retain the decoded object across both rewrites. Unchanged requests keep
+        // their original bytes; changed zstd requests stay compressed on the wire.
+        let forceStandard = !subscriptionRequestAllowsFast(sessionId, providerId);
+        const compressed = parsedBody === undefined && contentEncoding?.toLowerCase() === 'zstd';
+        let current: unknown = parsedBody;
+        let decodeError: unknown;
+        try {
+          if (current === undefined) {
+            const bytes = compressed ? await zstdDecompressAsync(rawBody) : rawBody;
+            current = JSON.parse(bytes.toString('utf8')) as unknown;
+          }
+        } catch (error) {
+          decodeError = error;
         }
-      } else if (providerId === 'xai') {
+        requestedModel = isPlainRecord(current) && typeof current.model === 'string' ? current.model : '';
+        if (!await modelAllowed()) return;
+        recordGuestUsage = captureGuestRequestUsage(sessionId, isPlainRecord(current) && typeof current.model === 'string' ? current.model : '');
+        const profile = withOpenaiContextProfileModel(current);
+        current = profile ?? current;
+        let changed = profile !== null;
+        let standardApplied = false;
+        // Finalize only after credentials and the latest model grant are read.
+        // Return pending codec work so every async rewrite is followed by another
+        // grant/Fast check, with no async gap between the last check and dispatch.
+        rewriteOpenaiBody = () => {
+          forceStandard ||= !subscriptionRequestAllowsFast(sessionId, providerId);
+          if (forceStandard && !standardApplied) {
+            if (decodeError) throw decodeError;
+            const standard = standardSpeedRequest(current);
+            changed ||= !isDeepStrictEqual(standard, current);
+            current = standard;
+            standardApplied = true;
+          }
+          if (!changed) return null;
+          const bytes = Buffer.from(JSON.stringify(current));
+          changed = false;
+          // Keep large codecs off Electron main, as in the existing profile path.
+          if (compressed) return zstdCompressAsync(bytes).then(encoded => { outboundBody = encoded; });
+          outboundBody = bytes;
+          contentEncoding = undefined;
+          return null;
+        };
+      } else if (isXaiSubscriptionProviderId(providerId)) {
         const parsed = isPlainRecord(parsedBody)
           ? parsedBody
           : parseJsonRecord(rawBody);
+        requestedModel = parsed && typeof parsed.model === 'string' ? parsed.model : '';
+        if (!await modelAllowed()) return;
         const sanitized = parsed ? sanitizeXaiModelInputBody(parsed) : null;
-        const current = sanitized ?? parsed;
+        const withFast = parsed ? rewriteFastModel(providerId, 'pi', sanitized ?? parsed, fastAtStart) : null;
+        const current = withFast ?? sanitized ?? parsed;
+        recordUsage = captureUsagePricing(sessionId,
+          withFast && withFast.model !== parsed?.model ? 'priority' : 'standard');
         const withServerTools = current
           ? withNativeXaiServerSideTools(current, upstream.wireProtocol)
           : null;
-        if (sanitized || withServerTools) {
+        if (sanitized || withFast || withServerTools) {
           outboundBody = Buffer.from(JSON.stringify(withServerTools ?? current));
           // The proxy parsed a plain JSON request. After reserializing it the
           // original content encoding, if any, no longer describes the bytes.
@@ -747,38 +846,69 @@ export function getPiNativeSubscriptionHandler(
         }
       }
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+      let accessToken: string;
+      let headers: Record<string, string>;
+      if (isOpenAiSubscriptionProviderId(providerId)) {
+        const auth = providerId === 'openai' ? await deps.getChatgptAuth() : await deps.getChatgptAuth(providerId);
+        accessToken = auth.accessToken;
+        headers = buildChatgptBridgeHeaders({
+          accessToken,
+          accountId: auth.accountId,
+          sessionId,
+        });
+      } else {
+        accessToken = providerId === 'xai' ? await deps.getGrokToken() : await deps.getGrokToken(providerId);
+        headers = { authorization: `Bearer ${accessToken}` };
+      }
+      headers['content-type'] = ctx.headers['content-type'] ?? 'application/json';
+      headers.accept = ctx.headers.accept ?? 'text/event-stream';
+      for (;;) {
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        if (!await modelAllowed()) return;
+        throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+        const pendingRewrite = rewriteOpenaiBody?.();
+        if (!pendingRewrite) break;
+        await pendingRewrite;
+      }
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
-
+      throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       const response = await deps.fetch(upstream.url, {
         method: 'POST',
         headers,
         body: new Uint8Array(outboundBody),
         signal: controller.signal,
       });
-      if (providerId === 'xai' && response.ok) {
-        recordNativeXaiRateLimit(response.headers, deps.recordXaiRateLimit);
+      if (isXaiSubscriptionProviderId(providerId) && response.ok && !isAppSessionBoundaryPending() && scopeAtStart === activeOwnerScopeKey()) {
+        try {
+          if (accessToken === deps.peekGrokToken(providerId)) recordNativeXaiRateLimit(response.headers, deps.recordXaiRateLimit, providerId);
+        } catch { /* Display-only; never interrupt successful forwarding. */ }
       }
       if (!response.ok) {
         const errorBody = Buffer.from(await response.arrayBuffer());
         const errorText = errorBody.toString('utf8');
-        if (providerId === 'openai') {
-          await deps.invalidateChatgpt({
+        if (isOpenAiSubscriptionProviderId(providerId)) {
+          const failure = {
             status: response.status,
             body: errorText,
             failedAccessToken: accessToken,
-          });
+          };
+          if (providerId === 'openai') await deps.invalidateChatgpt(failure);
+          else await deps.invalidateChatgpt(failure, providerId);
         } else {
-          await deps.invalidateXai({
+          const failure = {
             status: response.status,
             body: errorText,
             failedAccessToken: accessToken,
-          });
+          };
+          if (providerId === 'xai') await deps.invalidateXai(failure);
+          else await deps.invalidateXai(failure, providerId);
         }
         res.writeHead(response.status, nativeResponseHeaders(response));
         res.end(errorBody);
         return;
       }
-      await pipeNativeResponse(response, res);
+      await pipeNativeResponse(response, res, recordUsage || recordGuestUsage
+        ? createUsagePricingObserver(response.headers.get('content-type') ?? '', value => { recordUsage?.(value); recordGuestUsage?.(value); }) : undefined);
     } catch (err) {
       if (controller.signal.aborted || res.destroyed) return;
       // Once a 200/SSE response has started, an upstream body failure cannot

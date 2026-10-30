@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import {
+  consumePendingReanchorForAutoFollow,
   pickIntersectingChildAnchor,
   readAnchorClientId,
   readViewportChildAnchorClientId,
@@ -58,6 +59,36 @@ describe('focus scroll cancellation decisions', () => {
         hasDeferredDelete: true,
       }),
     ).toBe('stale');
+  });
+});
+
+describe('render-item compensation priority', () => {
+  it('consumes pending reanchor and short-circuits old compensation while following the tail', () => {
+    let pendingReanchor = true;
+
+    const shouldShortCircuit = consumePendingReanchorForAutoFollow({
+      isNearBottom: true,
+      clearPendingReanchor: () => {
+        pendingReanchor = false;
+      },
+    });
+
+    expect(shouldShortCircuit).toBe(true);
+    expect(pendingReanchor).toBe(false);
+  });
+
+  it('preserves pending reanchor and continues compensation after the user scrolls up', () => {
+    let clearCount = 0;
+
+    const shouldShortCircuit = consumePendingReanchorForAutoFollow({
+      isNearBottom: false,
+      clearPendingReanchor: () => {
+        clearCount += 1;
+      },
+    });
+
+    expect(shouldShortCircuit).toBe(false);
+    expect(clearCount).toBe(0);
   });
 });
 
@@ -387,7 +418,7 @@ describe('MessageStream focus cancellation wiring', () => {
       'const scrollbarDragStartTopRef',
     );
     expect(pin).toContain('if (!windowCoversEndRef.current) return');
-    expect(pin).toContain('setUnreadCount(0)');
+    expect(pin).toContain('setUnreadKeys(NO_UNREAD_KEYS)');
     expect(pin).toContain('setFirstVisibleItemKey(null)');
   });
 
@@ -423,6 +454,26 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(compensation).toContain('queryVisibleAggregateContainer(root, survivorMessageId)');
     expect(compensation).toContain('toRenderItemViewportSnapshot(');
     expect(compensation).not.toContain('if (anchor.messageClientId && snapshotMessageGone) {');
+  });
+
+  it('uses the auto-follow decision as a hard return before viewport compensation', () => {
+    const compensation = sourceBetween(
+      '// ── 删除靠前 message 后的视口保位（#2289）──',
+      '// ── post-load auto-expand ──',
+    );
+    const guardStart = compensation.indexOf('consumePendingReanchorForAutoFollow({');
+    const guardEnd = compensation.indexOf(
+      'const snapshot = lastViewportTopRef.current;',
+      guardStart,
+    );
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = compensation.slice(guardStart, guardEnd);
+
+    expect(guard).toContain('isNearBottom: isNearBottomRef.current');
+    expect(guard).toContain('pendingReanchorScrollRef.current = null;');
+    expect(guard).toMatch(/\)\s*\{\s*return;\s*\}/);
+    expect(compensation).not.toContain('if (isNearBottomRef.current) return;');
   });
 
   it('finishes an older chip or rail navigation before starting a jump to bottom', () => {
@@ -495,11 +546,12 @@ describe('MessageStream focus cancellation wiring', () => {
     expect(recoveredStart).toBeGreaterThanOrEqual(0);
     expect(recoveredEnd).toBeGreaterThan(recoveredStart);
     const recovered = compensation.slice(recoveredStart, recoveredEnd);
-    expect(recovered).toContain('restoreViewportSnapshot(rebased, 0)');
+    expect(recovered).toContain('offset: snapshot.offset');
+    expect(recovered).toContain('restoreViewportSnapshot(rebased)');
     expect(recovered).toContain(
       'if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore)',
     );
-    const restoreIndex = recovered.indexOf('restoreViewportSnapshot(rebased, 0)');
+    const restoreIndex = recovered.indexOf('restoreViewportSnapshot(rebased)');
     const guardIndex = recovered.indexOf(
       'if (!windowAnchorLost && !programmaticScrollRef.current && !isLoadingMore)',
     );

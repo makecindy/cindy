@@ -11,7 +11,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Session } from './session.js';
-import type { AgentSessionHandle } from './agents/base-agent.js';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type AgentSessionHandle, type SendOptions } from './agents/base-agent.js';
+import { appendAutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
 import type { UserMessage } from './types/common.js';
 import type { VisionBridgeHook } from './types/vision-bridge.js';
 
@@ -70,6 +71,49 @@ function makeSession(
 }
 
 describe('Session.send vision bridge hook', () => {
+  it('preserves Host authorization through a decorated handoff before the adapter sees it', async () => {
+    const { handle } = makeRecordingHandle();
+    const send = vi.fn(async (msg: UserMessage, opts?: SendOptions) => {
+      expect(opts?.[AUTO_REVIEW_SOURCE_CONTENT]).toBe('修吧。');
+      expect(appendAutoReviewUserIntent('obsolete grant', msg.content, opts)).toBe('Fix the unread bug. Do not deploy. 修吧。');
+    });
+    handle.send = send;
+    const session = makeSession(handle);
+    await session.send({ type: 'user', content: 'handoff '.repeat(1000) + '修吧。' }, {
+      [AUTO_REVIEW_SOURCE_CONTENT]: '修吧。',
+      [AUTO_REVIEW_USER_INTENT]: 'Fix the unread bug. Do not deploy. 修吧。',
+    });
+    expect(send).toHaveBeenCalledOnce();
+    await session.close();
+  });
+  it.each(['send', 'steer'] as const)('keeps original approval evidence through the %s vision bridge', async (method) => {
+    for (const text of ['', 'Continue.', 'Send this image to Alex.']) {
+      const { handle } = makeRecordingHandle();
+      const dispatch = vi.fn(async (msg: UserMessage, opts?: SendOptions) => {
+        expect(JSON.stringify(msg.content)).toContain('Generated image description: send it');
+        expect(appendAutoReviewUserIntent('Send the old report to Alex.', msg.content, opts)).toBe(text);
+        // Preserving attachment evidence does not mint Main-origin authority.
+        expect(opts?.[MAIN_OWNED_SEND_CONTEXT]).toBeUndefined();
+      });
+      handle[method] = dispatch;
+      handle.isTurnRunning = () => method === 'steer';
+      const session = new Session({
+        id: `approval-${method}`, agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+        handle, capabilities: { sameTurnSteer: { supported: true } } as never,
+        logger: createLogger() as never,
+        visionBridge: async () => ({ applied: true, message: {
+          type: 'user', content: [{ type: 'text', text: 'Generated image description: send it' }],
+        } }),
+      });
+      await session[method]({ type: 'user', content: [
+        { type: 'text', text },
+        { type: 'image', path: '/tmp/new.png', managedUrl: `cindy-media://blobs/${'a'.repeat(64)}.png` },
+      ] });
+      expect(dispatch).toHaveBeenCalledOnce();
+      await session.close();
+    }
+  });
+
   it('replaces the message with the bridged message when applied', async () => {
     const { handle, sent } = makeRecordingHandle();
     const hook: VisionBridgeHook = async (msg, ctx) => {
@@ -261,6 +305,64 @@ describe('Session.send vision bridge hook', () => {
 });
 
 describe('Session.steer vision bridge hook', () => {
+  function guardedSteerSession(visionBridge?: VisionBridgeHook) {
+    const { handle } = makeRecordingHandle();
+    handle.isTurnRunning = () => true;
+    const steer = vi.fn(async (_message: UserMessage, _options?: SendOptions) => {});
+    handle.steer = steer;
+    const session = new Session({
+      id: 'guarded-steer', agentKind: 'claude-code', workDir: path.join('workspace', 'repo'),
+      handle, capabilities: { sameTurnSteer: { supported: true } } as never,
+      logger: createLogger() as never, visionBridge,
+    });
+    return { session, handle, steer };
+  }
+
+  it('runs the Host grant at final steer dispatch without forwarding it to the provider', async () => {
+    const { session, steer } = guardedSteerSession();
+    const grant = vi.fn(async () => {});
+    await session.steer('App-authored text', { beforeProviderStart: grant, messageUuid: 'app-input' });
+    expect(grant).toHaveBeenCalledOnce();
+    expect(steer).toHaveBeenCalledWith(
+      { type: 'user', content: 'App-authored text' }, expect.objectContaining({ messageUuid: 'app-input' }),
+    );
+    expect(steer.mock.calls[0][1]).not.toHaveProperty('beforeProviderStart');
+    await session.close();
+  });
+
+  it('rejects a Host grant revoked during asynchronous steer preparation', async () => {
+    let visible = true;
+    const bridge: VisionBridgeHook = async message => {
+      await Promise.resolve();
+      visible = false;
+      return { applied: false, message };
+    };
+    const { session, steer } = guardedSteerSession(bridge);
+    const grant = vi.fn(async () => { if (!visible) throw new Error('MCP_APP_CARD_UNAVAILABLE'); });
+    await expect(session.steer({
+      type: 'user', content: [{ type: 'image', path: path.join('fixture', 'app.png') }],
+    }, { beforeProviderStart: grant })).rejects.toThrow('MCP_APP_CARD_UNAVAILABLE');
+    expect(grant).toHaveBeenCalledOnce();
+    expect(steer).not.toHaveBeenCalled();
+    await session.close();
+  });
+
+  it.each(['ended', 'replaced', 'closed'] as const)('rechecks a turn %s while awaiting the Host steer grant', async (change) => {
+    const { session, handle, steer } = guardedSteerSession();
+    const generation = vi.spyOn(session, 'getTurnGeneration').mockReturnValue(1);
+    await expect(session.steer('App-authored text', {
+      beforeProviderStart: async () => {
+        await Promise.resolve();
+        if (change === 'ended') handle.isTurnRunning = () => false;
+        else if (change === 'replaced') generation.mockReturnValue(2);
+        else await session.close();
+      },
+    })).rejects.toThrow(change === 'closed' ? 'closed' : 'has no active turn to steer');
+    expect(steer).not.toHaveBeenCalled();
+    generation.mockRestore();
+    await session.close();
+  });
+
   it('replaces the image message with the bridged text before steering', async () => {
     const steered: UserMessage[] = [];
     const handle = {

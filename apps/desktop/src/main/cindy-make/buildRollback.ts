@@ -1,0 +1,185 @@
+import type { CindyMakeHistoryStore, MakeBuildRollbackEntry } from './historyStore.js';
+import { hasPendingBuild, dropPendingBuild } from './pendingBuild.js';
+import { contentRef, snapshotContent, taskContentRef, type ContentGit } from './sourceContent.js';
+import { CINDY_PERSONAL_BRANCH } from './sourcePaths.js';
+
+type IsPublishedCommit = (commit: string) => boolean;
+
+/** Shared by failed generation and retrying a confirmed cancellation after restart. */
+export async function rollbackUnbuiltHistory(
+  store: CindyMakeHistoryStore,
+  source: string,
+  git: ContentGit,
+  isPublishedCommit: IsPublishedCommit,
+  recordRoot?: string,
+): Promise<void> {
+  const rollback = historyBuildRollback(store, source, isPublishedCommit, recordRoot);
+  await rollback.recoverRollback(git);
+  const commit = (await git(['rev-parse', 'HEAD'], source)).trim();
+  const tree = await snapshotContent(git, source);
+  await rollback.prepareRollback({ commit, tree }, git)();
+}
+
+/**
+ * Restore only an unchanged, unpublished build candidate; never discard user edits.
+ * The restored-over snapshot leaves the source here, so its pending-generation
+ * fact is dropped with it (see `pendingBuild`).
+ */
+export async function restoreBuildSource(
+  git: ContentGit,
+  source: string,
+  before: { commit: string; tree: string },
+  after: { commit: string; tree: string },
+  recordRoot?: string,
+): Promise<void> {
+  const head = (await git(['rev-parse', 'HEAD'], source)).trim();
+  const tree = await snapshotContent(git, source);
+  if (
+    (await git(['rev-parse', '--abbrev-ref', 'HEAD'], source)).trim() !== CINDY_PERSONAL_BRANCH ||
+    (await git(['status', '--porcelain'], source)).trim()
+  )
+    throw new Error('Personal source changed');
+  if (head === before.commit && tree === before.tree) {
+    // The source never carried `after`, or an earlier restore got here first:
+    // its fact is stale either way.
+    if (recordRoot) dropPendingBuild(recordRoot, after);
+    return;
+  }
+  if (head !== after.commit || tree !== after.tree) throw new Error('Personal source changed');
+  // Retain the failed candidate independently of the personal branch and task worktree.
+  await git(['update-ref', 'refs/cindy-make/failed-builds/' + after.commit, after.commit], source);
+  await git(['reset', '--keep', before.commit], source);
+  if (
+    (await git(['rev-parse', 'HEAD'], source)).trim() !== before.commit ||
+    (await snapshotContent(git, source)) !== before.tree
+  )
+    throw new Error('Personal source recovery incomplete');
+  if (recordRoot) dropPendingBuild(recordRoot, after);
+}
+
+/**
+ * Walk back from `head` over the consecutive integrations that no saved version
+ * contains. These are exactly the receipts a failed generation would undo.
+ */
+function unbuiltHistoryEntries(
+  records: ReturnType<CindyMakeHistoryStore['list']>,
+  head: { commit: string; tree: string },
+  isPublishedCommit: IsPublishedCommit,
+): MakeBuildRollbackEntry[] {
+  const entries: MakeBuildRollbackEntry[] = [];
+  let current = head;
+  while (true) {
+    if (
+      isPublishedCommit(current.commit) ||
+      records.some((record) => record.versions.some((version) => version.commit === current.commit))
+    )
+      break;
+    const record = records
+      .sort((a, b) => (b.receipts.at(-1)?.at ?? 0) - (a.receipts.at(-1)?.at ?? 0))
+      .find((record) => {
+        const receipt = record.receipts.at(-1);
+        return receipt?.commit === current.commit && receipt.tree === current.tree;
+      });
+    if (
+      !record ||
+      record.versions.some((version) => version.operationId === record.receipts.at(-1)?.id)
+    )
+      break;
+    const receipt = record.receipts.pop()!;
+    const previous = record.receipts.at(-1);
+    entries.push({
+      runId: record.runId,
+      receipt,
+      previousTaskTree: previous?.action !== 'revert' ? previous?.taskTree : undefined,
+    });
+    current = { commit: receipt.baselineCommit, tree: receipt.beforeTree };
+  }
+  return entries;
+}
+
+/** A personal version with such integrations is still provisional and must not be shared. */
+export function hasUnbuiltHistory(
+  store: CindyMakeHistoryStore,
+  head: { commit: string; tree: string },
+  isPublishedCommit: IsPublishedCommit,
+): boolean {
+  return unbuiltHistoryEntries(store.list(), head, isPublishedCommit).length > 0;
+}
+
+/**
+ * Whether the personal version at `head` carries changes that are not generated
+ * on this computer yet and a failed generation could still undo. The managed
+ * source is shared by every Cindy account on the device while the build history
+ * stays account-isolated: the account's own facts answer for its own
+ * integrations, and the device-level record (see `pendingBuild`) answers for
+ * whatever another account or another computer carried in — "this account has
+ * no receipts for it" never reads as "nothing is pending".
+ */
+export function hasUnbuiltPersonalChanges(
+  store: CindyMakeHistoryStore,
+  recordRoot: string,
+  head: { commit: string; tree: string },
+  isPublishedCommit: IsPublishedCommit,
+): boolean {
+  if (store.readBuildRollback().length > 0) return true;
+  if (hasUnbuiltHistory(store, head, isPublishedCommit)) return true;
+  const pending = hasPendingBuild(recordRoot, head);
+  // A missing or unreadable record (`undefined`) proves nothing: pending unless a
+  // generated personal version already covers this snapshot.
+  return pending !== false && !isPublishedCommit(head.commit);
+}
+
+/** Build cleanup owns only the consecutive integrations not present in a saved version. */
+export function historyBuildRollback(
+  store: CindyMakeHistoryStore,
+  source: string,
+  isPublishedCommit: IsPublishedCommit = () => false,
+  recordRoot?: string,
+) {
+  const recover = async (git: ContentGit) => {
+    const entries = store.readBuildRollback();
+    while (entries.length) {
+      const { runId, receipt, previousTaskTree } = entries[0];
+      const record = store.read(runId);
+      if (
+        !record ||
+        record.versions.some((version) => version.operationId === receipt.id) ||
+        (record.receipts.some((entry) => entry.id === receipt.id) &&
+          record.receipts.at(-1)?.id !== receipt.id)
+      )
+        throw new Error('Integration changed during build rollback');
+      const ref = taskContentRef(runId, 'integrated');
+      const taskTree = await contentRef(git, source, ref);
+      if (
+        taskTree !== previousTaskTree &&
+        taskTree !== (receipt.action === 'revert' ? undefined : receipt.taskTree)
+      )
+        throw new Error('Task integration changed during build rollback');
+      await restoreBuildSource(
+        git,
+        source,
+        { commit: receipt.baselineCommit, tree: receipt.beforeTree },
+        receipt,
+        recordRoot,
+      );
+      await git(
+        previousTaskTree ? ['update-ref', ref, previousTaskTree] : ['update-ref', '-d', ref],
+        source,
+      );
+      store.rollbackReceipt(runId, receipt.id);
+      entries.shift();
+      store.saveBuildRollback(entries);
+    }
+  };
+  return {
+    recoverRollback: recover,
+    prepareRollback: (head: { commit: string; tree: string }, git: ContentGit) => {
+      const entries = unbuiltHistoryEntries(store.list(), head, isPublishedCommit);
+      return async () => {
+        if (!entries.length) return;
+        store.saveBuildRollback(entries);
+        await recover(git);
+      };
+    },
+  };
+}

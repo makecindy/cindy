@@ -111,8 +111,8 @@ function lookup(bundle: Record<string, unknown>, key: string): string | null {
  * {{appName}} 由品牌常量注入(本迷你 i18n 不支持其它变量,main 消费的 key 若
  * 需要更多插值,应像 bootstrap 菜单那样在调用点自行 replace)。
  */
-export function t(key: string): string {
-  const loc = getMainLocale();
+export function t(key: string, locale?: SupportedLocale): string {
+  const loc = locale ?? getMainLocale();
   let raw: string | null = null;
   for (const chainLocale of FALLBACK_CHAIN[loc]) {
     raw = lookup(resources[chainLocale], key);
@@ -139,4 +139,37 @@ export function lookupWithFallbackForTest(
   }
   const fallbackBundle = bundles[DEFAULT_LOCALE];
   return (fallbackBundle ? lookup(fallbackBundle, key) : null) ?? key;
+}
+
+/**
+ * Raw template for `key` (no interpolation) walking the same fallback chain as t(), or null
+ * when no locale has it. For native surfaces that fill their own placeholders.
+ */
+export function rawMainString(key: string, locale?: SupportedLocale): string | null {
+  const loc = locale ?? getMainLocale();
+  for (const chainLocale of FALLBACK_CHAIN[loc]) {
+    const raw = lookup(resources[chainLocale], key);
+    if (raw !== null) return raw.replaceAll('{{appName}}', BRAND_NAME);
+  }
+  return null;
+}
+
+/** Leaf keys under `prefix` in the default locale, relative to `prefix` (dot-separated). */
+export function mainStringKeysUnder(prefix: string): string[] {
+  let cur: unknown = resources[DEFAULT_LOCALE];
+  for (const part of prefix.split('.')) {
+    if (typeof cur !== 'object' || cur === null) return [];
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  const keys: string[] = [];
+  const walk = (node: unknown, path: string): void => {
+    if (typeof node === 'string') {
+      keys.push(path);
+      return;
+    }
+    if (typeof node !== 'object' || node === null) return;
+    for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
+  };
+  walk(cur, '');
+  return keys;
 }

@@ -4,8 +4,8 @@
  * ErrorBanner — Cindy AI 网关余额耗尽的导流不变量：
  *   1. 来源确定是 xd 且计费面可见（父组件传了 onViewBalance）→ 文案换成「余额不足，
  *      请充值后继续」并给出右端内联「查看余额」。
- *   2. 来源是其它供应商 → 一个字都不改，也不加按钮（没有可跳的地方）。
- *   3. 来源是 xd 但计费面不可见（org / local，父组件不传回调）→ 同样不改、不加按钮。
+ *   2. 来源是其它供应商 → 使用通用本地化摘要，不加余额按钮（没有可跳的地方）。
+ *   3. 来源是 xd 但计费面不可见（org / local，父组件不传回调）→ 同样走通用摘要、不加余额按钮。
  *   4. 非余额类错误不被这条分支吃掉。
  */
 
@@ -89,7 +89,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(onRetry).toHaveBeenCalledWith('retry-token');
   });
 
-  it('其它供应商保持现状：不改文案、不加按钮', () => {
+  it('其它供应商使用通用摘要，不加余额按钮', () => {
     render(
       createElement(ErrorBanner, {
         error: QUOTA_ERROR,
@@ -101,6 +101,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
@@ -118,6 +121,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
@@ -133,6 +139,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
@@ -206,6 +215,9 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
       }),
     );
 
+    expect(screen.getByText('chat.errorBanner.replyFailed')).toBeTruthy();
+    expect(screen.queryByText(QUOTA_ERROR)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();

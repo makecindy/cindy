@@ -1,16 +1,36 @@
 {
   "id": "substack-search",
-  "match": ["substack.com"],
-  "description": "按关键词搜索 Substack 文章(标题/作者/日期/摘要/链接)。先落到 substack.com 域,再在页面内同源 fetch 官方搜索 JSON 接口——同源调用带正确 headers、不被风控挡(直接 navigate 到 api 路径会被喂 SPA HTML)。无需登录。query 是搜索关键词。",
-  "inputs": { "query": { "required": true } },
-  "steps": [
-    { "action": "navigate", "url": "https://substack.com" },
-    { "action": "wait", "loadState": "load" },
-    {
-      "action": "evaluate",
-      "as": "posts",
-      "fn": "async () => { const r = await fetch('/api/v1/post/search?query=' + encodeURIComponent('{{query|js}}') + '&page=0&includePlatformResults=true', { credentials: 'include', headers: { Accept: 'application/json' } }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch (e) { throw new Error('Substack 返回非 JSON(被风控挡或接口变动),请在持久浏览器里正常访问 substack.com 后重试'); } return (d && Array.isArray(d.results) ? d.results : []).map(x => ({ title: x.title, author: (x.publishedBylines && x.publishedBylines[0] && x.publishedBylines[0].name) || '', date: (x.post_date || '').split('T')[0], description: (x.description || x.subtitle || x.truncated_body_text || '').slice(0, 200), url: x.canonical_url })); }"
-    }
+  "match": [
+    "substack.com"
   ],
-  "output": "{{posts}}"
+  "description": "搜索 Substack 文章和 Newsletter",
+  "access": "read",
+  "adapter": "substack/search",
+  "adapterInputMap": {
+    "query": "keyword"
+  },
+  "inputs": {
+    "query": {
+      "required": true,
+      "type": "str",
+      "description": "搜索关键词"
+    },
+    "type": {
+      "required": false,
+      "type": "str",
+      "default": "posts",
+      "description": "搜索类型（posts=文章, publications=Newsletter）",
+      "choices": [
+        "posts",
+        "publications"
+      ]
+    },
+    "limit": {
+      "required": false,
+      "type": "int",
+      "default": 20,
+      "description": "返回结果数量"
+    }
+  },
+  "steps": []
 }

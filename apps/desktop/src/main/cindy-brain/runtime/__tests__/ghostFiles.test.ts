@@ -37,5 +37,11 @@ describe('ghostFileMime / ghostBootHtml', () => {
     const html = ghostBootHtml('main.js');
     expect(html).toContain('<script src="/main.js">');
     expect(html).toContain('Content-Security-Policy');
+    // boot 同时受 meta 与响应头 CSP 约束；meta 相对基线只增加 HTTPS 图片，
+    // 不能把响应头原有的 data/blob 图片或 media 能力带进有效交集。
+    expect(html).toContain("img-src 'self' https:");
+    expect(html).not.toContain("img-src 'self' data:");
+    expect(html).not.toContain('blob:');
+    expect(html).not.toContain('media-src');
   });
 });

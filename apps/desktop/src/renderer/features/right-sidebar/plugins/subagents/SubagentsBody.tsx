@@ -1,3 +1,8 @@
+import { useInRouterContext, useNavigate } from 'react-router-dom';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { buildErrorDiagnosisPrompt, prefillErrorDiagnosisDraft, type ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
+import { buildSessionDeepLink } from '@/lib/deepLink';
+import { Button } from '@/components/ui/button';
 /**
  * SubagentsBody — data orchestration for the durable Subagent workspace tab.
  *
@@ -91,7 +96,23 @@ export function SubagentsBody(props: SubagentsBodyProps) {
     props.ctx.deviceLinkDeviceId,
     props.ctx.remoteHostId,
   );
-  return <ScopedSubagentsBody key={scopeKey} {...props} />;
+  const canNavigate = useInRouterContext();
+  return canNavigate
+    ? <NavigableSubagentsBody key={scopeKey} {...props} />
+    : <ScopedSubagentsBody key={scopeKey} {...props} />;
+}
+
+function NavigableSubagentsBody(props: SubagentsBodyProps) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { sessionId, deviceLinkDeviceId } = props.ctx;
+  const diagnose = useCallback((source: ErrorDiagnosisSource) => {
+    prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
+      buildSessionDeepLink(sessionId, { deviceId: deviceLinkDeviceId }), source));
+    navigate('/cc-agent/new');
+  }, [t, navigate, sessionId, deviceLinkDeviceId]);
+  return <ScopedSubagentsBody {...props}
+    onDiagnose={deviceLinkDeviceId !== undefined && !isSharedTaskPeer(deviceLinkDeviceId) ? diagnose : undefined} />;
 }
 
 function ScopedSubagentsBody({
@@ -99,7 +120,8 @@ function ScopedSubagentsBody({
   ctx,
   active = true,
   shellVisible = true,
-}: SubagentsBodyProps) {
+  onDiagnose,
+}: SubagentsBodyProps & { onDiagnose?: (source: ErrorDiagnosisSource) => void }) {
   const { t } = useTranslation();
   const visible = active && shellVisible;
   const [loadState, setLoadState] = useState<LoadState>('idle');
@@ -601,6 +623,7 @@ function ScopedSubagentsBody({
         onBack={back}
         onStop={stopRun}
         onControl={controlRun}
+        onDiagnose={onDiagnose}
       />
     );
   }
@@ -610,14 +633,17 @@ function ScopedSubagentsBody({
         icon={AlertCircle}
         label={t('rightSidebar.subagents.loadFailed')}
         action={
-          <button
+          <Button
+            variant="secondary"
+            size="md"
+            compact
             type="button"
             onClick={() => void loadRuns()}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-full border border-[var(--border-default)] px-3 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="mt-3"
           >
             <RefreshCw size={13} aria-hidden="true" />
             {t('rightSidebar.subagents.retry')}
-          </button>
+          </Button>
         }
       />
     );

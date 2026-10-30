@@ -35,6 +35,14 @@ export interface MobileHistoryAnchorResolveState {
   topOffsetAdjustment?: number;
 }
 
+export interface MobileHistoryAnchorPendingCorrection {
+  /** Native scroll-event sequence observed immediately before issuing the correction. */
+  requestedAfterNativeScrollSequence: number;
+  targetOffset: number;
+}
+
+export type MobileHistoryAnchorCorrectionStatus = 'acknowledged' | 'missed' | 'waiting';
+
 export interface MobileHistoryTopOffsetState {
   contentLength: number;
   data: readonly unknown[];
@@ -46,6 +54,38 @@ export interface MobileHistoryTopOffsetState {
 const MAX_MOBILE_HISTORY_ANCHOR_CANDIDATES = 8;
 const MAX_MOBILE_HISTORY_ANCHOR_POSITION_PROBES = 24;
 const MOBILE_HISTORY_SHORT_LIST_TOLERANCE = 2;
+
+/**
+ * Android needs the app-owned prepend transaction because its native MVCP can commit the new cell
+ * coordinates before the ScrollView offset. iOS keeps the native path, which applies the data and
+ * offset change atomically and must not be followed by imperative app scrolls.
+ */
+export function mobileHistoryPrependUsesAppOwnedAnchor(platformOS: string): boolean {
+  return platformOS === 'android';
+}
+
+/**
+ * Distinguish LegendList's optimistic internal scroll bookkeeping from a native ScrollView ack.
+ * `LegendList.getState().scroll` moves to the requested offset before the native command lands, so
+ * only a later `onScroll` sequence can prove that the physical viewport caught up.
+ */
+export function mobileHistoryAnchorCorrectionStatus(
+  correction: MobileHistoryAnchorPendingCorrection,
+  state: {
+    nativeOffset: number;
+    nativeScrollSequence: number;
+  },
+  tolerance: number,
+): MobileHistoryAnchorCorrectionStatus {
+  if (state.nativeScrollSequence <= correction.requestedAfterNativeScrollSequence) {
+    return 'waiting';
+  }
+  return Number.isFinite(state.nativeOffset)
+    && Number.isFinite(correction.targetOffset)
+    && Math.abs(state.nativeOffset - correction.targetOffset) <= Math.max(0, tolerance)
+    ? 'acknowledged'
+    : 'missed';
+}
 
 /**
  * Translate LegendList's data-relative item positions into its raw ScrollView coordinates.
@@ -105,22 +145,24 @@ function findClosestMobileHistoryAnchorIndex<ItemT>(
   // viewport with O(log n) position reads instead of scanning the whole retained history.
   let lower = 0;
   let upper = state.data.length - 1;
-  let closestIndex: number | null = null;
-  let closestDistance = Number.POSITIVE_INFINITY;
+  let containingIndex: number | null = null;
+  let firstFollowingIndex: number | null = null;
+  const dataScroll = state.scroll - (state.topOffsetAdjustment ?? 0);
   while (lower <= upper) {
     const index = Math.floor((lower + upper) / 2);
     const position = state.positionAtIndex(index);
     if (!Number.isFinite(position)) break;
-    const dataScroll = state.scroll - (state.topOffsetAdjustment ?? 0);
-    const distance = Math.abs((position as number) - dataScroll);
-    if (distance < closestDistance) {
-      closestDistance = distance;
-      closestIndex = index;
+    // Anchor the row containing the viewport top, not the next row whose top
+    // happens to be closer. That next row can be offscreen and still estimated.
+    if ((position as number) <= dataScroll) {
+      containingIndex = index;
+      lower = index + 1;
+    } else {
+      firstFollowingIndex = index;
+      upper = index - 1;
     }
-    if ((position as number) < dataScroll) lower = index + 1;
-    else upper = index - 1;
   }
-  return closestIndex;
+  return containingIndex ?? firstFollowingIndex;
 }
 
 /**

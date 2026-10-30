@@ -7,6 +7,7 @@ const R = resolve(__dirname, '..');
 const read = (rel: string) => readFileSync(resolve(R, rel), 'utf8').replace(/\r\n?/g, '\n');
 
 const sessionViewSource = read('features/cc-agent/CCAgentSessionView.tsx');
+const overlayMetricsSource = read('features/cc-agent/useComposerOverlayMetrics.ts');
 const splitViewSource = read('features/cc-agent/OrcaSplitView.tsx');
 const routeSource = read('features/cc-agent/OrcaWorkflowRoute.tsx');
 const workerPanelSource = read('features/cc-agent/OrcaWorkerPanel.tsx');
@@ -20,7 +21,7 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain('showControlledBanner?: boolean;');
     expect(sessionViewSource).toContain('showControlledBanner = false');
     expect(sessionViewSource).toContain(
-      'const showComposerControlledBanner = ownsRoute || showControlledBanner;',
+      'const showComposerControlledBanner = viewVisible && (ownsRoute || showControlledBanner);',
     );
     expect(sessionViewSource).toContain(
       'const hasControlledBanner = showComposerControlledBanner && controlledBy.length > 0;',
@@ -29,20 +30,22 @@ describe('controlled banner placement', () => {
       'const controlledBannerCollapsed = useComposerCollapsed(sessionId ?? null);',
     );
     expect(sessionViewSource).toContain(
-      'const showExpandedControlledBanner = hasControlledBanner && !controlledBannerCollapsed;',
+      'const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;',
     );
     expect(sessionViewSource).toContain('placement="composer"');
     expect(sessionViewSource).toContain('sessionId={sessionId ?? null}');
     expect(sessionViewSource).toContain('rightLeadingSlot={');
     expect(sessionViewSource).toContain('hasControlledBanner && controlledBannerCollapsed ? (');
+    // 伙伴与普通任务共用 RunningStatusBar；折叠呼吸灯随 token 元数据一起显示。
     expect(sessionViewSource).toContain(
-      '{(!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed)) && (',
+      '{!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (',
     );
+    expect(sessionViewSource).not.toContain('<BotWorkingStatus');
     expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
     expect(sessionViewSource).toContain(
       'const isHidden = suppressContent || (!showContent && !visible);',
     );
-    expect(sessionViewSource).toContain('{showExpandedControlledBanner && (');
+    expect(sessionViewSource).toContain('{showCenteredControlledBanner && (');
     expect(sessionViewSource).toContain('rightLeadingSlot?: ReactNode;');
     expect(sessionViewSource).toContain('{rightLeadingSlot}');
     expect(sessionViewSource).toContain('data-running-status-meta="true"');
@@ -54,7 +57,9 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
-    expect(sessionViewSource).toContain('if (isHidden && !rightLeadingSlot) return null;');
+    expect(sessionViewSource).toContain(
+      'if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;',
+    );
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
     expect(controlledBannerSource).toContain(
       'className="pointer-events-auto flex min-w-0 max-w-full shrink justify-end"',
@@ -109,10 +114,10 @@ describe('controlled banner placement', () => {
     );
     expect(todoListSource).toContain('data-plan-pill-anchor="true"');
     expect(todoListSource).toContain('data-plan-flyout-positioner="composer"');
-    expect(sessionViewSource).toContain(
-      'const mutationObserver = new MutationObserver(syncResizeTargetsAndMeasure);',
+    expect(overlayMetricsSource).toContain(
+      'const mutationObserver = new MutationObserver(() => syncResizeTargetsAndMeasure(true));',
     );
-    expect(sessionViewSource).toContain(
+    expect(overlayMetricsSource).toContain(
       'mutationObserver.observe(overlayEl, { childList: true, subtree: true });',
     );
     expect(sessionViewSource).not.toContain('fitContent=');
@@ -128,7 +133,7 @@ describe('controlled banner placement', () => {
 
   it('opts in only route-owned chat views, not Worker panes or embedded doc rails', () => {
     expect(sessionViewSource).toContain(
-      'const showComposerControlledBanner = ownsRoute || showControlledBanner;',
+      'const showComposerControlledBanner = viewVisible && (ownsRoute || showControlledBanner);',
     );
     expect(routeSource).not.toContain('<CCAgentSessionView');
     expect(routeSource).not.toContain('showControlledBanner');
@@ -139,13 +144,8 @@ describe('controlled banner placement', () => {
     expect(workerPanelSource).not.toContain('showControlledBanner');
   });
 
-  it('suppresses the global floating fallback on legacy Orca redirect pages', () => {
-    expect(mainLayoutSource).toContain(
-      'function hasInlineControlledBannerPath(pathname: string): boolean',
-    );
-    expect(mainLayoutSource).toContain(
-      "return parts.length === 3 && parts[1] === 'orca' && parts[2] !== 'new';",
-    );
-    expect(mainLayoutSource).toContain('{!hasInlineControlledBanner && <ControlledBanner />}');
+  it('always mounts the global fallback so loading and unavailable routes retain a control notice', () => {
+    expect(mainLayoutSource).toContain('<ControlledBanner />');
+    expect(mainLayoutSource).not.toContain('hasInlineControlledBannerPath');
   });
 });

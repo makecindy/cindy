@@ -70,36 +70,13 @@ describe('resolveVoiceInputStartGuards', () => {
     expect(apis.setRendererMicrophonePermissionVerified).not.toHaveBeenCalled();
   });
 
-  it('refreshes a missing Windows permission cache before allowing voice input to start', async () => {
-    const unknownPermission = {
-      ok: false as const,
-      status: 'unknown',
-      error: 'Microphone permission is required for voice input. Enable it in Windows Settings.',
-    };
-    const apis = stubVoiceInputApis('win32', unknownPermission);
-    const denial = {
-      ok: false as const,
-      status: 'denied',
-      error: 'Microphone permission is required for voice input. Enable it in Windows Settings.',
-    };
-    apis.getUserMedia.mockRejectedValue(new Error('Permission denied'));
-    apis.requestMicrophonePermission.mockResolvedValue(denial);
-    apis.getSystemPermissions.mockResolvedValue({
-      microphone: denial,
-      inputMonitoring: grantedPermission,
-      accessibility: grantedPermission,
-    });
-
+  it.each(['unknown', 'denied'])('leaves %s permission to the real capture without opening a probe', async (status) => {
+    const apis = stubVoiceInputApis('win32', { ok: false, status, error: 'Permission required' });
     const result = await resolveVoiceInputStartGuards();
-
-    expect(result).toMatchObject({
-      ok: false,
-      failed: 'permission',
-      permission: denial,
-      permissionSource: 'async',
-    });
-    expect(apis.getUserMedia).toHaveBeenCalledWith({ audio: true });
-    expect(apis.setRendererMicrophonePermissionVerified).toHaveBeenCalledWith(false);
+    expect(result).toMatchObject({ ok: true, permissionSource: 'capture' });
+    expect(apis.getUserMedia).not.toHaveBeenCalled();
+    expect(apis.requestMicrophonePermission).not.toHaveBeenCalled();
+    expect(apis.setRendererMicrophonePermissionVerified).not.toHaveBeenCalled();
   });
 
   it('keeps trusting a positive macOS cache on the start path', async () => {

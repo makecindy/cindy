@@ -9,6 +9,8 @@
  */
 import crypto from "node:crypto";
 import path from "node:path";
+import { getBrowserControlState } from "../browser-control-state.js";
+import { isManagedLocalCdpConnection } from "../../../../shim/cdp-locality.js";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -945,9 +947,12 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         const endpoint = wsUrl ?? normalized;
         const connectEndpoint = async (target: string) => {
           const headers = getHeadersWithAuth(target);
+          const isLocal = isManagedLocalCdpConnection(
+            normalized, target, getBrowserControlState()?.profiles.values() ?? [],
+          );
           // Bypass proxy for loopback CDP connections (#31219)
           return await withNoProxyForCdpUrl(target, () =>
-            chromium.connectOverCDP(target, { timeout, headers }),
+            chromium.connectOverCDP(target, { timeout, headers, isLocal }),
           );
         };
         let browser: Browser;
@@ -1282,6 +1287,22 @@ async function quarantineBlockedTarget(opts: {
   if (targetIdToBlock) {
     markTargetBlocked(opts.cdpUrl, targetIdToBlock);
   }
+}
+
+/**
+ * Mark a target unusable WITHOUT closing it.
+ *
+ * closeBlockedNavigationTarget awaits page.close(), which an adversarial or
+ * hung page can stall indefinitely. Quarantine is the part that must not
+ * depend on the page cooperating: marking is synchronous bookkeeping, so a
+ * target can be made unselectable even when its close never returns.
+ */
+export async function quarantineTargetWithoutClosing(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  await quarantineBlockedTarget(opts);
 }
 
 // Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.

@@ -1,0 +1,860 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, it, expect, vi } from 'vitest';
+import { mountRemoteDesktopViewer } from '@cindy/maker-shared/remote-desktop-viewer';
+import { DESKTOP_KEY_CODES, REMOTE_DESKTOP_NETWORK } from '@cindy/device-link';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const viewerCss = readFileSync(resolve(__dirname, '..', 'viewerWindow.css'), 'utf8');
+
+let viewer: ReturnType<typeof mountRemoteDesktopViewer>;
+let messages: Record<string, unknown>[];
+let stage: HTMLElement;
+let drawImage: ReturnType<typeof vi.fn>;
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+  drawImage = vi.fn();
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    setTransform: vi.fn(),
+    clearRect: vi.fn(),
+    drawImage,
+  } as unknown as CanvasRenderingContext2D);
+  document.body.innerHTML =
+    '<div id="stage"><div id="bg"><canvas id="bg-canvas"></canvas></div><img id="image"><video id="video"></video><div id="cursor"><img id="cursor-image"></div></div><textarea id="keyboard-input"></textarea><div id="mouse-buttons"><button id="mouse-left"></button><button id="mouse-right"></button><button id="mouse-wheel"><span id="mouse-wheel-grip"></span></button></div>';
+  stage = document.getElementById('stage')!;
+  Object.defineProperties(stage, {
+    clientWidth: { value: 1000, configurable: true },
+    clientHeight: { value: 600, configurable: true },
+  });
+  stage.setPointerCapture = vi.fn();
+  vi.spyOn(stage, 'getBoundingClientRect').mockReturnValue({
+    x: 0,
+    y: 52,
+    left: 0,
+    top: 52,
+    width: 1000,
+    height: 600,
+    right: 1000,
+    bottom: 652,
+    toJSON() {},
+  });
+  messages = [];
+  viewer = mountRemoteDesktopViewer(
+    document,
+    (message) => {
+      messages.push(message);
+      if (message.type === 'input')
+        viewer.receive({ type: 'ack', epoch: 'lease', sequence: message.sequence });
+    },
+    { desktop: true, net: REMOTE_DESKTOP_NETWORK, iceServers: [], keyCodes: DESKTOP_KEY_CODES },
+  );
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+});
+afterEach(() => {
+  viewer.dispose();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+function pointer(type: string, x = 500, y = 352, button = 0) {
+  const e = new MouseEvent(type, {
+    clientX: x,
+    clientY: y,
+    button,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(e, 'pointerId', { value: 1 });
+  stage.dispatchEvent(e);
+}
+function events() {
+  return messages.flatMap((m) =>
+    m.type === 'input' ? (m.events as Record<string, unknown>[]) : [],
+  );
+}
+
+it('keeps a frameless picture hidden by the viewer stylesheet so it never paints a broken image', () => {
+  const style = document.createElement('style');
+  style.textContent = viewerCss;
+  document.head.append(style);
+  document.body.className = 'remote-viewer-content';
+  const image = document.getElementById('image')!;
+  try {
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'stop' });
+    expect(getComputedStyle(image).visibility).toBe('hidden');
+    viewer.receive({ type: 'init', epoch: 'next', width: 1000, height: 600 });
+    viewer.receive({ type: 'frame', jpeg: 'AA==' });
+    expect(getComputedStyle(image).visibility).toBe('visible');
+  } finally {
+    style.remove();
+    document.body.className = '';
+  }
+});
+
+it('zooms locally within bounds and fit restores scale and position', () => {
+  const image = document.getElementById('image')!;
+  viewer.receive({ type: 'zoom', factor: 1.25 });
+  expect(image.style.width).toBe('1250px');
+  expect(image.style.left).toBe('-125px');
+  viewer.receive({ type: 'zoom', factor: 0.8 });
+  expect(image.style.width).toBe('1000px');
+  viewer.receive({ type: 'zoom', factor: 100 });
+  expect(image.style.width).toBe('5000px');
+  viewer.receive({ type: 'zoom', factor: NaN });
+  expect(image.style.width).toBe('5000px');
+  viewer.receive({ type: 'fit' });
+  expect(image.style.width).toBe('1000px');
+  expect(image.style.left).toBe('0px');
+  viewer.receive({ type: 'zoom', factor: 0.1 });
+  expect(image.style.width).toBe('100px');
+  viewer.receive({ type: 'zoom', factor: 0.1 });
+  expect(image.style.width).toBe('100px');
+  expect(events()).toEqual([]);
+});
+
+it('maps clicks through the zoomed picture and allows local zoom in view-only mode', () => {
+  viewer.receive({ type: 'zoom', factor: 2 });
+  pointer('pointerdown', 750, 352);
+  pointer('pointerup', 750, 352);
+  vi.advanceTimersByTime(40);
+  expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.625, y: 0.5 });
+  viewer.receive({ type: 'control', enabled: false });
+  messages = [];
+  viewer.receive({ type: 'zoom', factor: 1.25 });
+  expect(document.getElementById('image')!.style.width).toBe('2500px');
+  expect(events()).toEqual([]);
+});
+
+it('pans a zoomed view with middle drag, preserves middle click and resets with fit', () => {
+  const image = document.getElementById('image')!;
+  viewer.receive({ type: 'zoom', factor: 2 });
+  pointer('pointerdown', 500, 352, 1);
+  pointer('pointermove', 600, 352, 1);
+  pointer('pointerup', 600, 352, 1);
+  vi.advanceTimersByTime(250);
+  expect(parseFloat(image.style.left)).toBeGreaterThan(-500);
+  expect(events()).toEqual([]);
+  viewer.receive({ type: 'fit' });
+  expect(image.style.left).toBe('0px');
+  viewer.receive({ type: 'zoom', factor: 2 });
+  pointer('pointerdown', 500, 352, 1);
+  pointer('pointerup', 500, 352, 1);
+  vi.advanceTimersByTime(40);
+  expect(
+    events()
+      .filter((e) => e.kind === 'button')
+      .map((e) => [e.button, e.down]),
+  ).toEqual([
+    [1, true],
+    [1, false],
+  ]);
+});
+
+it('uses the local pointer while retaining immediate remote input coordinates', () => {
+  const cursor = {
+    visible: true,
+    x: 0.1,
+    y: 0.1,
+    width: 32,
+    height: 32,
+    hotX: 2,
+    hotY: 3,
+    png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+  };
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor });
+  pointer('pointermove', 800, 452);
+  const overlay = document.getElementById('cursor')!;
+  expect(overlay.style.display).toBe('none');
+  expect(stage.style.cursor).toBe('default');
+  expect(overlay.style.left).toBe('798px');
+  expect(overlay.style.top).toBe('397px');
+  expect(events()).toEqual([]);
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor: { ...cursor, x: 0.2, y: 0.2 } });
+  expect(overlay.style.left).toBe('798px');
+  vi.advanceTimersByTime(34);
+  expect(events()).toContainEqual({ kind: 'move', x: 0.8, y: 400 / 600 });
+  viewer.receive({ type: 'control', enabled: false });
+  viewer.receive({ type: 'frame', jpeg: 'frame', cursor });
+  expect(overlay.style.left).toBe('98px');
+});
+it('uses the local system cursor to the remote picture regardless of window focus or cursor metadata', () => {
+  expect(stage.style.cursor).toBe('default');
+  viewer.receive({ type: 'frame', jpeg: 'frame' });
+  expect(stage.style.cursor).toBe('default');
+  pointer('pointerleave');
+  expect(getComputedStyle(document.body).cursor).not.toBe('none');
+  expect(getComputedStyle(document.getElementById('mouse-left')!).cursor).not.toBe('none');
+  pointer('pointerenter');
+  expect(stage.style.cursor).toBe('default');
+  window.dispatchEvent(new Event('blur'));
+  expect(stage.style.cursor).toBe('default');
+  window.dispatchEvent(new Event('focus'));
+  expect(stage.style.cursor).toBe('default');
+  viewer.receive({ type: 'control', enabled: false });
+  expect(stage.style.cursor).toBe('default');
+  viewer.receive({ type: 'control', enabled: true });
+  viewer.receive({ type: 'stop' });
+  expect(stage.style.cursor).toBe('default');
+});
+it.each([
+  'text',
+  'pointer',
+  'ew-resize',
+  'grab',
+  undefined,
+  'future-shape',
+  'url(https://invalid/cursor)',
+])('uses only native cursor keywords for %s, regardless of remote size and zoom', (shape) => {
+  viewer.receive({
+    type: 'frame',
+    jpeg: 'frame',
+    cursor: {
+      visible: true,
+      x: 0.5,
+      y: 0.5,
+      width: 256,
+      height: 256,
+      hotX: 32,
+      hotY: 32,
+      png: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+      shape,
+    },
+  });
+  viewer.receive({ type: 'zoom', factor: 5 });
+  expect(document.getElementById('cursor')!.style.display).toBe('none');
+  expect(stage.style.cursor).toBe(
+    ['text', 'pointer', 'ew-resize', 'grab'].includes(shape ?? '') ? shape : 'default',
+  );
+  viewer.receive({ type: 'control', enabled: false });
+  expect(stage.style.cursor).toBe('default');
+});
+
+it.each(['control', 'meta'])(
+  'forwards %s clipboard shortcuts to the remote computer as ordinary keys',
+  (modifier) => {
+    viewer.receive({
+      type: 'init',
+      epoch: 'lease',
+      width: 1000,
+      height: 600,
+      clipboardModifier: modifier,
+    });
+    viewer.receive({ type: 'control', enabled: true });
+    pointer('pointerdown');
+    pointer('pointerup');
+    messages = [];
+    const input = document.getElementById('keyboard-input')!;
+    const modifiers = { ctrlKey: modifier === 'control', metaKey: modifier === 'meta' };
+    const modifierCode = modifier === 'meta' ? 'MetaLeft' : 'ControlLeft';
+    // The other modifier is an ordinary chord on this computer (Ctrl+C in a macOS
+    // terminal, Win+V on Windows): no announcement, no waiting.
+    const other = modifier === 'meta' ? 'ControlLeft' : 'MetaLeft';
+    const otherFlags = { ctrlKey: modifier !== 'control', metaKey: modifier !== 'meta' };
+    for (const code of ['KeyC', 'KeyV']) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { code: other, ...otherFlags, bubbles: true }),
+      );
+      input.dispatchEvent(new KeyboardEvent('keydown', { code, ...otherFlags, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { code, ...otherFlags, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { code: other, bubbles: true }));
+    }
+    vi.advanceTimersByTime(34);
+    expect(messages.some((m) => m.type === 'clipboardIntent')).toBe(false);
+    expect(events().filter((event) => event.kind === 'key')).toHaveLength(8);
+    messages = [];
+    for (const code of ['KeyC', 'KeyV']) {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { code: modifierCode, ...modifiers, bubbles: true }),
+      );
+      const event = new KeyboardEvent('keydown', {
+        code,
+        ...modifiers,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(event);
+      // The local textarea must not copy or paste on its own.
+      expect(event.defaultPrevented).toBe(true);
+      input.dispatchEvent(
+        new KeyboardEvent('keyup', { code, ...modifiers, bubbles: true, cancelable: true }),
+      );
+      input.dispatchEvent(new KeyboardEvent('keyup', { code: modifierCode, bubbles: true }));
+    }
+    vi.advanceTimersByTime(34);
+    expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
+    // The shortcuts are only announced: copy so the controller pulls the computer's
+    // clipboard soon after, paste so it pushes the local one first. Until the
+    // controller releases the paste gate, the queued keys wait.
+    expect(messages.filter((m) => m.type === 'clipboardIntent').map((m) => m.action)).toEqual([
+      'copy',
+      'paste',
+    ]);
+    expect(events()).toEqual([]);
+    viewer.receive({ type: 'inputGate' });
+    expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual(
+      ['KeyC', 'KeyV'].flatMap((code) => [
+        { kind: 'key', code: modifierCode, down: true },
+        { kind: 'key', code, down: true },
+        { kind: 'key', code, down: false },
+        { kind: 'key', code: modifierCode, down: false },
+      ]),
+    );
+  },
+);
+const macHost = () => {
+  viewer.receive({
+    type: 'init',
+    epoch: 'lease',
+    width: 1000,
+    height: 600,
+    clipboardModifier: 'meta',
+  });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  const key = (type: 'keydown' | 'keyup', code: string) =>
+    input.dispatchEvent(new KeyboardEvent(type, { code, metaKey: true, bubbles: true }));
+  const chord = (code: string) => {
+    key('keydown', 'MetaLeft');
+    key('keydown', code);
+    key('keyup', code);
+    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  };
+  return { input, key, chord };
+};
+it('a held paste is dropped, not sent late, when the window loses focus', () => {
+  const { key } = macHost();
+  key('keydown', 'MetaLeft');
+  key('keydown', 'KeyV');
+  vi.advanceTimersByTime(34);
+  expect(events()).toEqual([]);
+  window.dispatchEvent(new Event('blur'));
+  vi.advanceTimersByTime(34);
+  // The release goes out at once; the queued Command and V never do.
+  expect(events()).toEqual([{ kind: 'release' }]);
+  vi.advanceTimersByTime(1300);
+  expect(events()).toEqual([{ kind: 'release' }]);
+});
+it('re-arming the paste gate never ages the held batch into an input overflow', () => {
+  const { chord } = macHost();
+  chord('KeyV');
+  vi.advanceTimersByTime(900);
+  chord('KeyV');
+  vi.advanceTimersByTime(900);
+  chord('KeyV');
+  // Older than the 2 s freshness budget, but held on purpose: no overflow, no reconnect.
+  vi.advanceTimersByTime(300);
+  expect(events()).toEqual([]);
+  expect(messages.some((m) => m.type === 'inputOverflow')).toBe(false);
+  viewer.receive({ type: 'inputGate' });
+  vi.advanceTimersByTime(34);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(12);
+  expect(messages.some((m) => m.type === 'inputOverflow')).toBe(false);
+});
+it('releases a paste that the controller never answers after 1.2s, and never holds a copy', () => {
+  const { input, chord } = macHost();
+  chord('KeyC');
+  vi.advanceTimersByTime(34);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(4);
+  chord('KeyV');
+  vi.advanceTimersByTime(1100);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(4);
+  vi.advanceTimersByTime(200);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(8);
+  // Auto-repeat of a held paste neither re-announces nor re-arms the gate.
+  messages = [];
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'KeyV', metaKey: true, repeat: true, bubbles: true }),
+  );
+  vi.advanceTimersByTime(34);
+  expect(messages.some((m) => m.type === 'clipboardIntent')).toBe(false);
+  expect(events().filter((event) => event.kind === 'key')).toHaveLength(1);
+});
+// Invariant: a remote key is released only when its local keyup arrives, except
+// keys pressed while Command is held on a macOS controller (macOS swallows their
+// keyup); those alone are released together with Command.
+it.each([
+  {
+    name: 'macOS Cmd+C with swallowed C keyup releases C with Command',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    name: 'macOS key held before Command keeps waiting for its own keyup',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS auto-repeat of a key held before Command keeps it held',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS auto-repeat under Command still releases the key once',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    // Known boundary: at Command keyup a key pressed during Command may be released
+    // (keyup swallowed) or still held; it is released to avoid a stuck key, and the
+    // next auto-repeat presses it again so its real keyup still releases it.
+    name: 'macOS key still held after Command is re-pressed by its next auto-repeat',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+    remote: ['+MetaLeft', '+ArrowUp', '-ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+  },
+  {
+    name: 'macOS delivered keyup is not released twice',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    name: 'macOS other modifiers are never released early',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-MetaLeft', '-ShiftLeft'],
+    remote: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-KeyC', '-MetaLeft', '-ShiftLeft'],
+  },
+  {
+    name: 'Windows Win released first keeps the ordinary key down',
+    macKeyboard: false,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+  },
+])('$name', ({ macKeyboard, steps, remote }) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  const held = new Set<string>();
+  for (const step of steps) {
+    const code = step.slice(1);
+    const repeat = step[0] === '+' && held.has(code);
+    if (step[0] === '+') held.add(code);
+    else held.delete(code);
+    input.dispatchEvent(
+      new KeyboardEvent(step[0] === '+' ? 'keydown' : 'keyup', {
+        code,
+        metaKey: held.has('MetaLeft'),
+        shiftKey: held.has('ShiftLeft'),
+        repeat,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(remote);
+});
+it('forgets Command-held keys when the picture loses keyboard focus', () => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard: true });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  const input = document.getElementById('keyboard-input')!;
+  const key = (type: 'keydown' | 'keyup', code: string, metaKey = false) =>
+    input.dispatchEvent(new KeyboardEvent(type, { code, metaKey, bubbles: true }));
+  key('keydown', 'MetaLeft', true);
+  key('keydown', 'KeyC', true);
+  input.blur();
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  key('keydown', 'MetaLeft', true);
+  key('keyup', 'MetaLeft');
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(['+MetaLeft', '-MetaLeft']);
+});
+it.each(['key', 'button', 'scroll'])('keeps a held modifier around ordinary %s input', (kind) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'ControlLeft', ctrlKey: true, bubbles: true }),
+  );
+  if (kind === 'key') {
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'KeyA', ctrlKey: true, bubbles: true }),
+    );
+    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyA', ctrlKey: true, bubbles: true }));
+  } else if (kind === 'button') {
+    pointer('pointerdown');
+    pointer('pointerup');
+  } else {
+    stage.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: 32, ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+  }
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ControlLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(events()[0]).toEqual({ kind: 'key', code: 'ControlLeft', down: true });
+  expect(events().at(-1)).toEqual({ kind: 'key', code: 'ControlLeft', down: false });
+  expect(events().some((event) => event.kind === kind)).toBe(true);
+  expect(events().some((event) => event.kind === 'release')).toBe(false);
+});
+it('forwards Cmd+W to the remote computer while the picture owns the keyboard', () => {
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'MetaLeft', metaKey: true, bubbles: true }),
+  );
+  const close = new KeyboardEvent('keydown', {
+    code: 'KeyW',
+    key: 'w',
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(close);
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', metaKey: true, bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(close.defaultPrevented).toBe(true);
+  expect(events().filter((event) => event.kind === 'key')).toEqual([
+    { kind: 'key', code: 'MetaLeft', down: true },
+    { kind: 'key', code: 'KeyW', down: true },
+    { kind: 'key', code: 'KeyW', down: false },
+    { kind: 'key', code: 'MetaLeft', down: false },
+  ]);
+});
+it('maps real mouse movement, right button and wheel to the picture below the toolbar', () => {
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  expect(events()).toContainEqual({ kind: 'move', x: 0.5, y: 0.5 });
+  expect(document.getElementById('cursor')!.style.display).toBe('none');
+  pointer('pointerdown', 500, 352, 2);
+  pointer('pointerup', 500, 352, 2);
+  stage.dispatchEvent(new WheelEvent('wheel', { deltaY: 32, bubbles: true, cancelable: true }));
+  vi.advanceTimersByTime(33);
+  expect(events()).toContainEqual({ kind: 'button', button: 2, down: true, x: 0.5, y: 0.5 });
+  expect(events()).toContainEqual({ kind: 'button', button: 2, down: false, x: 0.5, y: 0.5 });
+  expect(events()).toContainEqual({ kind: 'scroll', dx: 0, dy: 32 });
+});
+it('carries sub-pixel wheel deltas instead of letting hosts truncate them away', () => {
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  const wheel = (deltaX: number, deltaY: number) =>
+    stage.dispatchEvent(
+      new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true }),
+    );
+  wheel(0, 0.4);
+  wheel(0, 0.4);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([]);
+  wheel(-0.5, 0.4);
+  vi.advanceTimersByTime(33);
+  wheel(-0.7, 2.5);
+  vi.advanceTimersByTime(33);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([
+    { kind: 'scroll', dx: 0, dy: 1 },
+    { kind: 'scroll', dx: -1, dy: 2 },
+  ]);
+});
+// Regression: desktop wheel bypassed the shared batching timer, sending a
+// message per trackpad event. Exercise DOM input, preserving distance/order;
+// existing wheel tests only covered individual deltas (unit, fake timers).
+it('coalesces a wheel burst on the input tick and flushes it before a button edge', () => {
+  const wheel = (deltaY: number) =>
+    stage.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
+  wheel(2);
+  vi.advanceTimersByTime(8);
+  wheel(3);
+  vi.advanceTimersByTime(24);
+  expect(events()).toEqual([]);
+  vi.advanceTimersByTime(1);
+  expect(messages.filter((m) => m.type === 'input')).toHaveLength(1);
+  expect(events()).toEqual([{ kind: 'scroll', dx: 0, dy: 5 }]);
+  messages = [];
+  wheel(4);
+  wheel(5);
+  pointer('pointerdown');
+  expect(events().filter((e) => e.kind !== 'move')).toEqual([
+    { kind: 'scroll', dx: 0, dy: 9 },
+    { kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 },
+  ]);
+});
+// The host retires only input-v1 if input/release fails. Exercise the real viewer's
+// transport selection: later input uses relay with its sequence intact, while
+// the video peer remains alive (unit, fake RTC transport).
+it('continues input over relay after the input channel closes without replacing video', async () => {
+  const channel = { readyState: 'open', bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+  const close = vi.fn();
+  class Peer {
+    connectionState = 'connected';
+    iceGatheringState = 'complete';
+    localDescription = { sdp: 'offer' };
+    close = close;
+    createDataChannel() {
+      return channel;
+    }
+    addTransceiver() {}
+    async createOffer() {
+      return this.localDescription;
+    }
+    async setLocalDescription() {}
+  }
+  vi.stubGlobal('RTCPeerConnection', Peer);
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  const config = messages.findLast((message) => message.type === 'iceConfig')!;
+  viewer.receive({
+    type: 'iceConfig',
+    epoch: 'lease',
+    attemptId: config.attemptId,
+    iceServers: [],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  viewer.receive({ type: 'control', enabled: true });
+  messages = [];
+  pointer('pointermove');
+  vi.advanceTimersByTime(33);
+  const direct = JSON.parse(channel.send.mock.calls.at(-1)![0]);
+  expect(direct.events).toEqual([{ kind: 'move', x: 0.5, y: 0.5 }]);
+  expect(messages.filter((message) => message.type === 'input')).toEqual([]);
+  channel.readyState = 'closed';
+  pointer('pointerdown');
+  expect(messages.find((message) => message.type === 'input')).toMatchObject({
+    epoch: 'lease',
+    sequence: direct.sequence + 1,
+    events: expect.arrayContaining([{ kind: 'button', button: 0, down: true, x: 0.5, y: 0.5 }]),
+  });
+  expect(channel.send).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
+  expect(messages.some((message) => message.type === 'fallback')).toBe(false);
+});
+it('commits IME text once and never forwards local toolbar keyboard input', () => {
+  pointer('pointerdown');
+  pointer('pointerup');
+  const input = document.getElementById('keyboard-input') as HTMLTextAreaElement;
+  input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', {
+      code: 'KeyN',
+      key: 'Process',
+      isComposing: true,
+      bubbles: true,
+    }),
+  );
+  input.value = '你好';
+  input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+  expect(events().filter((e) => e.kind === 'text')).toEqual([{ kind: 'text', text: '你好' }]);
+  input.blur();
+  document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA', key: 'a', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(events().some((e) => e.kind === 'key' && e.code === 'KeyA')).toBe(false);
+});
+it('releases held buttons on window blur and disposal removes all timers', () => {
+  pointer('pointerdown');
+  window.dispatchEvent(new Event('blur'));
+  expect(events()).toContainEqual({ kind: 'release' });
+  viewer.dispose();
+  messages = [];
+  vi.advanceTimersByTime(5000);
+  expect(messages).toEqual([]);
+});
+
+it.each([500, 2000, 10000])('shows a %spx desktop at 1:1 independently of fit bounds', (width) => {
+  const image = document.getElementById('image')!;
+  viewer.receive({ type: 'init', epoch: 'lease', width, height: width * 0.6 });
+  viewer.receive({ type: 'actualSize' });
+  expect(image.style.width).toBe(`${width}px`);
+  expect(parseFloat(image.style.left)).toBe((1000 - width) / 2);
+  expect(messages).toContainEqual(expect.objectContaining({ type: 'scaleMode', mode: 'actual' }));
+  viewer.receive({ type: 'zoom', factor: 1.25 });
+  expect(parseFloat(image.style.width)).toBe(width * 1.25);
+  viewer.receive({ type: 'actualSize' });
+  Object.defineProperty(stage, 'clientWidth', { value: 800 });
+  viewer.receive({ type: 'control', enabled: true });
+  expect(image.style.width).toBe(`${width}px`);
+  expect(parseFloat(image.style.left)).toBe((800 - width) / 2);
+  viewer.receive({ type: 'fit' });
+  expect(image.style.width).toBe('800px');
+});
+
+it('maps input and pans an actual-size desktop larger than the window', () => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 2000, height: 1200 });
+  viewer.receive({ type: 'control', enabled: true });
+  viewer.receive({ type: 'actualSize' });
+  pointer('pointerdown', 750, 352);
+  pointer('pointerup', 750, 352);
+  vi.advanceTimersByTime(40);
+  expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.625, y: 0.5 });
+  pointer('pointerdown', 500, 352, 1);
+  pointer('pointermove', 600, 352, 1);
+  pointer('pointerup', 600, 352, 1);
+  vi.advanceTimersByTime(300);
+  expect(parseFloat(document.getElementById('image')!.style.left)).toBeGreaterThan(-500);
+});
+
+it('fills all margins of a shrunken desktop with the shared fitted backdrop', () => {
+  const image = document.getElementById('image')!;
+  const bg = document.getElementById('bg')!;
+  Object.defineProperties(image, { naturalWidth: { value: 1000 }, naturalHeight: { value: 600 } });
+  viewer.receive({ type: 'zoom', factor: 0.8 });
+  vi.advanceTimersByTime(32);
+  expect(image.style.width).toBe('800px');
+  expect(image.style.left).toBe('100px');
+  expect(image.style.top).toBe('60px');
+  expect(bg.style.display).toBe('block');
+  expect(drawImage).toHaveBeenCalledTimes(3);
+  expect(drawImage.mock.calls[0]).toEqual([image, 0, 0, 50, 600, 0, 0, 50, 600]);
+  expect(drawImage.mock.calls[1].slice(5)).toEqual([50, 0, 900, 600]);
+  expect(drawImage.mock.calls[2].slice(5)).toEqual([950, 0, 50, 600]);
+  pointer('pointerdown', 700, 352);
+  pointer('pointerup', 700, 352);
+  vi.advanceTimersByTime(40);
+  expect(events()).toContainEqual({ kind: 'button', button: 0, down: true, x: 0.75, y: 0.5 });
+  viewer.receive({ type: 'fit' });
+  expect(bg.style.display).toBe('none');
+});
+
+it('keeps the letterbox backdrop fitted while the foreground shrinks', () => {
+  const image = document.getElementById('image')!;
+  Object.defineProperties(image, { naturalWidth: { value: 600 }, naturalHeight: { value: 600 } });
+  viewer.receive({ type: 'init', epoch: 'lease', width: 600, height: 600 });
+  vi.advanceTimersByTime(32);
+  const fittedRects = drawImage.mock.calls.slice(-3).map((call) => call.slice(5));
+  expect(fittedRects).toEqual([
+    [0, 0, 230, 600],
+    [230, 0, 540, 600],
+    [770, 0, 230, 600],
+  ]);
+  drawImage.mockClear();
+  viewer.receive({ type: 'zoom', factor: 0.8 });
+  vi.advanceTimersByTime(32);
+  expect(image.style.width).toBe('480px');
+  expect(drawImage.mock.calls.map((call) => call.slice(5))).toEqual(fittedRects);
+});
+
+it.each([
+  [995, 352, 'left', -500, -1],
+  [5, 352, 'left', -500, 1],
+  [500, 647, 'top', -300, -1],
+  [500, 57, 'top', -300, 1],
+] as const)(
+  'pans continuously toward pointer at %s,%s and stops on leaving',
+  (x, y, axis, initial, direction) => {
+    viewer.receive({ type: 'zoom', factor: 2 });
+    const image = document.getElementById('image')!;
+    pointer('pointermove', x, y);
+    vi.advanceTimersByTime(200);
+    expect((parseFloat(image.style[axis]) - initial) * direction).toBeGreaterThan(0);
+    const moved = image.style[axis];
+    pointer('pointerleave', x, y);
+    vi.advanceTimersByTime(200);
+    expect(image.style[axis]).toBe(moved);
+  },
+);
+
+it('clamps edge panning to desktop bounds and keeps the remote pointer mapped', () => {
+  viewer.receive({ type: 'zoom', factor: 2 });
+  pointer('pointermove', 995, 647);
+  vi.advanceTimersByTime(3000);
+  const image = document.getElementById('image')!;
+  expect(image.style.left).toBe('-1000px');
+  expect(image.style.top).toBe('-600px');
+  expect(
+    events()
+      .filter((e) => e.kind === 'move')
+      .at(-1),
+  ).toEqual({ kind: 'move', x: 0.9975, y: 1195 / 1200 });
+  pointer('pointermove', 500, 352);
+  vi.advanceTimersByTime(100);
+  expect(image.style.left).toBe('-1000px');
+});
+
+it('allows view-only edge panning but stops on focus loss and fit', () => {
+  viewer.receive({ type: 'control', enabled: false });
+  viewer.receive({ type: 'zoom', factor: 2 });
+  messages = [];
+  pointer('pointermove', 995, 352);
+  vi.advanceTimersByTime(200);
+  const image = document.getElementById('image')!;
+  expect(parseFloat(image.style.left)).toBeLessThan(-500);
+  expect(events()).toEqual([]);
+  window.dispatchEvent(new Event('blur'));
+  const left = image.style.left;
+  vi.advanceTimersByTime(400);
+  expect(image.style.left).toBe(left);
+  pointer('pointermove', 995, 352);
+  viewer.receive({ type: 'fit' });
+  vi.advanceTimersByTime(200);
+  expect(image.style.left).toBe('0px');
+  pointer('pointermove', 995, 352);
+  vi.advanceTimersByTime(200);
+  expect(image.style.left).toBe('0px');
+});
+
+it('continues edge panning when the first browser frame predates the pointer event', () => {
+  viewer.receive({ type: 'zoom', factor: 2 });
+  vi.advanceTimersByTime(32);
+  let firstFrame!: FrameRequestCallback;
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementationOnce((callback) => {
+    firstFrame = callback;
+    return 123456;
+  });
+  pointer('pointermove', 995, 352);
+  firstFrame(performance.now() - 1);
+  vi.advanceTimersByTime(200);
+  expect(parseFloat(document.getElementById('image')!.style.left)).toBeLessThan(-500);
+});
+it('still releases host input when a local view-only switch abandons an in-flight batch', () => {
+  viewer.dispose();
+  messages = [];
+  // No automatic ACK: the first batch stays in flight.
+  viewer = mountRemoteDesktopViewer(document, (message) => messages.push(message), {
+    desktop: true,
+    net: REMOTE_DESKTOP_NETWORK,
+    iceServers: [],
+    keyCodes: DESKTOP_KEY_CODES,
+  });
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  pointer('pointerdown');
+  vi.advanceTimersByTime(34);
+  const before = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false, release: true });
+  const after = messages.filter((m) => m.type === 'input');
+  expect(after.length).toBe(before + 1);
+  expect(after.at(-1)?.events).toEqual([{ kind: 'release' }]);
+  // Without the flag (the host revoked control) an in-flight batch still
+  // drops the queued release, as before.
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove', 400, 300);
+  vi.advanceTimersByTime(34);
+  const count = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false });
+  expect(messages.filter((m) => m.type === 'input').length).toBe(count);
+});

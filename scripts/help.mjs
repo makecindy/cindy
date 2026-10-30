@@ -61,6 +61,10 @@ export function printHelp(log = console.log) {
   log('    pnpm mobile:sim:start -- --region=cn');
   log('    # 查看当前 Metro 对应的 checkout / branch');
   log('    pnpm mobile:sim:whoami');
+  log('    # macOS：打开唯一已启动设备的 Device Hub / Simulator 窗口（多设备时加 -- --udid <UDID>）');
+  log('    pnpm mobile:sim:open');
+  log('    # 外部窗口验收：额外检查所选 Xcode 的窗口程序是否运行');
+  log('    pnpm mobile:sim:whoami -- --viewer --json');
 
   log('\n  Mobile 构建(纯构建,无上传/发布;region 必填,无默认值):');
   log('    # 配置:按 apps/mobile/scripts/self-host-regions.json.example 复制填写');
@@ -80,6 +84,8 @@ export function printHelp(log = console.log) {
   log('    pnpm test:unit');
   log('    # 排查并发相关问题时，可把 workspace runner 临时退回串行');
   log('    pnpm test:unit -- --workspace-concurrency=1');
+  log('    # 仅在需要跨 worktree 排队时主动开启；默认各任务独立运行');
+  log('    pnpm test:unit:related -- --lock');
   log('    pnpm benchmark:desktop-workers -- --workers=1,2,4,8 --output=<report.json>');
   log('    pnpm test:all');
   log('    pnpm test:db');

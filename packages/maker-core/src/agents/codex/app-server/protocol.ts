@@ -208,7 +208,7 @@ export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none';
  * 'default' = 显式 standard 档:关 Fast 后 server 在 thread/settings/updated 通知里
  * 实际回带的就是这个值 (实测 0.142.0, 切到不支持 fast 的模型时 serviceTier→'default')。
  */
-export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex';
+export type ServiceTier = 'default' | 'fast' | 'priority' | 'flex' | 'ultrafast';
 
 export interface ThreadStartParams {
   /** 缺省走 server 端 config 的默认 model。 */
@@ -452,9 +452,11 @@ export type SandboxPolicy =
 
 export interface ThreadForkParams {
   threadId: string;
+  /** Fork the source thread at this provider-native turn boundary. */
+  lastTurnId?: string;
   /** 可选: 从特定 rollout path fork (绝大多数场景用 threadId)。 */
   path?: string;
-  /** Codex 自家前端 fork 精确节点时会开启, 保留完整历史供后续 rollback。 */
+  /** Legacy fork + rollback path only; lastTurnId precision path omits it. */
   persistExtendedHistory?: boolean;
   model?: string;
   cwd?: string;
@@ -488,6 +490,20 @@ export interface ThreadRollbackParams {
   threadId: string;
   /** 从 thread 尾部回滚多少个完整 turn。 */
   numTurns: number;
+}
+
+/** Codex 0.153.4: bounded turn metadata, including failed/interrupted turns. */
+export interface ThreadTurnsListParams {
+  threadId: string;
+  cursor?: string;
+  limit: number;
+  sortDirection: 'desc';
+  itemsView: 'notLoaded';
+}
+
+export interface ThreadTurnsListResponse {
+  data: Array<{ id: string; status: string; startedAt?: number | null }>;
+  nextCursor: string | null;
 }
 
 export interface ThreadRollbackResponse {
@@ -906,6 +922,8 @@ export interface TokenUsageBreakdown {
   totalTokens: number;
   inputTokens: number;
   cachedInputTokens: number;
+  /** Present in Codex 0.153.0; older app-server versions omit this subset. */
+  cacheWriteInputTokens?: number;
   outputTokens: number;
   reasoningOutputTokens: number;
 }
@@ -1164,6 +1182,12 @@ export interface GuardianWarningServerNotification {
   params: GuardianWarningNotification;
 }
 
+/** User-facing warning (v2 WarningNotification); threadId is set when it targets a thread. */
+export interface WarningNotification {
+  method: 'warning';
+  params: { message: string; threadId?: string | null };
+}
+
 /**
  * v2 ThreadItem 的 envelope — 至少有 id / type, 余字段按 type narrow。
  * 完整 union 在 v2.rs ThreadItem (太大, 不在 Phase 1 全列)。translator 用
@@ -1195,6 +1219,7 @@ export type ServerNotification =
   | ItemGuardianApprovalReviewStartedServerNotification
   | ItemGuardianApprovalReviewCompletedServerNotification
   | GuardianWarningServerNotification
+  | WarningNotification
   | ErrorNotification;
 
 // ── 方法名常量 (避免 string typo) ────────────────────────────────────────────
@@ -1206,8 +1231,10 @@ export const Method = {
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',
+  ThreadInjectItems: 'thread/inject_items',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
+  ThreadTurnsList: 'thread/turns/list',
   ThreadUnsubscribe: 'thread/unsubscribe',
   ThreadSettingsUpdate: 'thread/settings/update',
   TurnStart: 'turn/start',
@@ -1218,6 +1245,11 @@ export const Method = {
   // Memory (实验性, experimentalApi 必须 true 才能用):
   // app-server/README.md:202-203 + 155
   ConfigRead: 'config/read',
+  /** EXPERIMENTAL. Register a remote exec-server as a named environment. */
+  EnvironmentAdd: 'environment/add',
+  /** EXPERIMENTAL. Read a named environment's status without starting or recovering it. */
+  EnvironmentStatus: 'environment/status',
+  ExperimentalFeatureList: 'experimentalFeature/list',
   ExperimentalFeatureEnablementSet: 'experimentalFeature/enablement/set',
   MemoryReset: 'memory/reset',
   // ServerRequest (Phase 2 + permissions):

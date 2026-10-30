@@ -2,6 +2,7 @@ import { deriveSkillhubIdentityPolicy } from '../../shared/skillhubIdentityPolic
 import { getAuthState } from '../authManager';
 import { ServerApiError } from '../serverApiClient';
 import type { SkillhubPublishVisibility } from '../../shared/skillhubIdentityPolicy';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
 
 export function currentSkillhubIdentityPolicy() {
   return deriveSkillhubIdentityPolicy(getAuthState().user);
@@ -12,6 +13,13 @@ function skillhubWritePolicyError(): ServerApiError {
 }
 
 export function assertSkillhubWriteAllowed(): void {
+  if (isAppSessionBoundaryPending()) {
+    throw new ServerApiError(
+      'PRECONDITION_FAILED',
+      409,
+      'App session is switching; retry after the owner boundary settles',
+    );
+  }
   const policy = currentSkillhubIdentityPolicy();
   if (policy.canWrite) return;
   throw skillhubWritePolicyError();
@@ -20,8 +28,8 @@ export function assertSkillhubWriteAllowed(): void {
 export function assertSkillhubVisibilityAllowed(
   visibility: 'private' | 'shared' | 'public',
 ): void {
+  assertSkillhubWriteAllowed();
   const policy = currentSkillhubIdentityPolicy();
-  if (!policy.canWrite) throw skillhubWritePolicyError();
   const clientVisibility: SkillhubPublishVisibility = visibility === 'shared'
     ? 'DEPARTMENT_SCOPED'
     : visibility.toUpperCase() as SkillhubPublishVisibility;

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  bridgeLatestMessagePage,
   hasMoreOlderMessages,
   hasOlderMessagesAfterReopen,
   collectCompleteIncrementalMessages,
@@ -8,6 +9,7 @@ import {
   latestMessageCursor,
   listMessagesWithPayloadRetry,
   MESSAGE_PAGE_SIZE,
+  type MessagePageRetryResult,
   oldestMessageCursor,
   projectLoadedMessageWindow,
   projectLoadedMessageWindowIncrementally,
@@ -38,6 +40,28 @@ function sessionVersion(patch: Partial<Pick<RemoteSession, '_count' | 'updatedAt
 }
 
 describe('messagePaging', () => {
+  it('never sends temporary stream identities as host pagination cursors', () => {
+    const rows = [
+      message('mobile-stream-old', '2026-01-01T00:00:01.000Z'),
+      message('host-row', '2026-01-01T00:00:02.000Z'),
+      message('mobile-stream-new', '2026-01-01T00:00:03.000Z'),
+    ];
+    expect(oldestMessageCursor(rows)).toBe('host-row');
+    expect(latestMessageCursor(rows)).toBe('host-row');
+    expect(oldestMessageCursor([rows[0], rows[2]])).toBeNull();
+    expect(latestMessageCursor([rows[0], rows[2]])).toBeNull();
+  });
+
+  it('does not let running stream rows consume the remaining host history count', () => {
+    const rows = [
+      message('host-row', '2026-01-01T00:00:01.000Z'),
+      message('mobile-stream-new', '2026-01-01T00:00:02.000Z'),
+    ];
+    expect(hasOlderMessagesAfterReopen(2, rows)).toBe(true);
+    expect(hasOlderMessagesByServerCount(2, rows)).toBe(true);
+    expect(hasOlderMessagesAfterReopen(undefined, [rows[1]], 1)).toBe(false);
+  });
+
   it('finds the oldest message id without relying on current array order', () => {
     expect(oldestMessageCursor([
       message('m3', '2026-01-01T00:00:03.000Z'),
@@ -270,6 +294,17 @@ describe('messagePaging', () => {
       limit: 10,
       reducedByPayloadTooLarge: true,
     });
+    expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
+  });
+
+  it('uses small network pages without reducing the cached history window', async () => {
+    const calls: number[] = [];
+    const result = await listMessagesWithPayloadRetry(async (limit) => {
+      calls.push(limit);
+      return Array.from({ length: limit }, (_, i) => message(`m${i}`, '2026-01-01T00:00:01.000Z'));
+    });
+    expect(calls).toEqual([20]);
+    expect(MESSAGE_PAGE_SIZE).toBe(80);
     expect(shouldKeepOlderMessagesAffordance(result)).toBe(true);
   });
 
@@ -635,6 +670,64 @@ describe('messagePaging', () => {
       const withSystemCard = [...loaded, message('mobile-system-1', '2026-01-01T00:00:04.000Z')];
       expect(hasOlderMessagesByServerCount(2, withSystemCard)).toBe(false);
       expect(hasOlderMessagesByServerCount(3, withSystemCard)).toBe(true);
+    });
+  });
+
+  describe('bridgeLatestMessagePage', () => {
+    const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, '0')}.000Z`;
+    const page = (ids: number[], limit = 2): MessagePageRetryResult => ({
+      messages: ids.map((id) => message(`m${id}`, at(id))),
+      limit,
+      reducedByPayloadTooLarge: false,
+    });
+    // m1..m9 on the host; the client already verified up to m3.
+    const host = (before: string) => {
+      const index = Number(before.slice(1));
+      return Promise.resolve(page([index - 2, index - 1].filter((id) => id >= 1)));
+    };
+    const reachesM3 = (rows: readonly RemoteMessage[]) => !rows.some((row) => row.id === 'm3');
+
+    it('returns the latest page unchanged when it already joins', async () => {
+      const latest = page([8, 9]);
+      const readBefore = vi.fn(host);
+      await expect(bridgeLatestMessagePage(latest, {
+        needsBridge: () => false, readBefore, isCurrent: () => true,
+      })).resolves.toBe(latest);
+      expect(readBefore).not.toHaveBeenCalled();
+    });
+
+    it('reads older pages until the window joins and keeps the oldest page continuation', async () => {
+      const readBefore = vi.fn(host);
+      const bridged = await bridgeLatestMessagePage(page([8, 9]), {
+        needsBridge: reachesM3, readBefore, isCurrent: () => true,
+      });
+      expect(readBefore.mock.calls.map(([before]) => before)).toEqual(['m8', 'm6', 'm4']);
+      expect(bridged.messages.map((row) => row.id)).toEqual(['m2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9']);
+      expect(shouldKeepOlderMessagesAffordance(bridged)).toBe(true);
+    });
+
+    it('stops at the page budget, at history start, or when superseded', async () => {
+      const capped = await bridgeLatestMessagePage(page([8, 9]), {
+        needsBridge: reachesM3, readBefore: host, isCurrent: () => true, maxPages: 1,
+      });
+      expect(capped.messages.map((row) => row.id)).toEqual(['m6', 'm7', 'm8', 'm9']);
+
+      const start = await bridgeLatestMessagePage(page([2, 3]), {
+        needsBridge: () => true, readBefore: host, isCurrent: () => true,
+      });
+      expect(start.messages.map((row) => row.id)).toEqual(['m1', 'm2', 'm3']);
+      expect(shouldKeepOlderMessagesAffordance(start)).toBe(false);
+
+      const latest = page([8, 9]);
+      await expect(bridgeLatestMessagePage(latest, {
+        needsBridge: reachesM3, readBefore: host, isCurrent: () => false,
+      })).resolves.toBe(latest);
+    });
+
+    it('fails the snapshot when a bridge read fails, so recovery retries instead of committing a gap', async () => {
+      await expect(bridgeLatestMessagePage(page([8, 9]), {
+        needsBridge: reachesM3, readBefore: () => Promise.reject(new Error('INVOKE_TIMEOUT')), isCurrent: () => true,
+      })).rejects.toThrow('INVOKE_TIMEOUT');
     });
   });
 });

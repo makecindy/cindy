@@ -41,7 +41,12 @@ import {
 import { i18n } from '@/i18n';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 
-export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, NormalizedToolMedia>;
+export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, NormalizedToolMedia> & {
+  /** Mobile 查看器内的附件身份，不参与跨端传输；地址变化时仍能定位同一页。 */
+  galleryImageKey?: string;
+  /** 待发送图片条中的位置（含未就绪格），仅在打开前附件被替换、身份失效时兜底。 */
+  galleryImageSlot?: number;
+};
 
 export {
   buildPayloadToolDiff,
@@ -81,7 +86,11 @@ export function buildMediaPayload(
 }
 
 export function buildAttachmentPayload(attachment: NormalizedAttachment): MessagePayload {
-  return buildSharedAttachmentPayload(attachment, mobilePresentationLocalizer);
+  const payload = buildSharedAttachmentPayload(attachment, mobilePresentationLocalizer);
+  if (payload.kind === 'media' && attachment.mimeType) {
+    return { ...payload, media: { ...payload.media, mimeType: attachment.mimeType } };
+  }
+  return payload;
 }
 
 export function buildFilePayload(title: string, sourcePath: string): Extract<MessagePayload, { kind: 'file' }> {

@@ -1,0 +1,1 @@
+ALTER TABLE `bot_delegations` ADD `group_task_posts_json` text DEFAULT '{}' NOT NULL;

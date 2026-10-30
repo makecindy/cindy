@@ -21,9 +21,11 @@
  * the Projects view, this component unmounts, watcher closes.
  */
 
+import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronDown, ChevronsDownUp, RefreshCw, Search, X as XIcon } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -37,13 +39,14 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { useFileTree, type DirEntry } from './hooks/useFileTree';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from './hooks/useProjectFileList';
+import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
+import { FileTreeHeaderActions } from './FileTreeHeaderActions';
 import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
@@ -51,10 +54,6 @@ import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
 import { loadSelectedFile, saveSelectedFile } from './lib/selectedFileStore';
 import { loadExpandedSet, saveExpandedSet } from './lib/expandedStore';
 import { clearFileScroll } from './lib/fileScrollStore';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import {
   addTab as storeAddTab,
   removeTab as storeRemoveTab,
@@ -217,7 +216,18 @@ export function WorkdirBrowseSidebar({
   // 要递归扫一遍判断 "有没有 doc 文件"(即使 sibling 已经并行,顶层走完一轮
   // 仍然有感知)。先放开让用户看全部文件,等 hasDocDescendant 加缓存或换成
   // 流式增量返回再启用。scanner.ts 的过滤逻辑保留,改回 true 即可恢复。
-  const tree = useFileTree({ workdir, remoteHostId, deviceId, hideMetaFiles: true, docMode: false });
+  //
+  // showIgnoredDirs 来自设置页「显示被忽略的目录」开关(默认关):打开后
+  // build / dist / out / node_modules 等被内置清单隐藏的目录会出现在树里。
+  const { showIgnoredDirs } = useFileBrowserPreference();
+  const tree = useFileTree({
+    workdir,
+    remoteHostId,
+    deviceId,
+    hideMetaFiles: true,
+    docMode: false,
+    showIgnoredDirs,
+  });
 
   // 文件名筛选 query —— tree 模式下用,独立于内容搜索。空 query 显示文件树,有
   // 内容显示筛选结果列表。workdir 切换时自动清空(下方 useEffect)。
@@ -489,43 +499,36 @@ export function WorkdirBrowseSidebar({
 
   const handleOpenInSidebarBrowser = useCallback(
     async (entry: DirEntry) => {
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await openUrlInSidebarBrowser(sessionId, pathToFileUrl(abs));
-      } catch (err) {
-        log.warn('open in sidebar browser failed', { relPath: entry.relPath, error: String(err) });
-        toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-      }
+      await openHtmlFileByPreference(
+        sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'sidebar',
+      );
     },
-    [sessionId, workdir, t],
+    [sessionId, workdir, deviceId, remoteHostId, t],
   );
 
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await window.electronAPI.openFileInBrowser(abs);
-      } catch (error) {
-        log.warn('open in browser failed', {
-          relPath: entry.relPath,
-          errorCode: extractIpcError(error)?.code ?? 'unknown',
-        });
-        toast.error(
-          t(
-            mapIpcErrorToI18nKey(error, {
-              namespace: 'chat.markdownRenderer',
-              fallback: 'chat.markdownRenderer.openInBrowserFailed',
-            }),
-          ),
-        );
-      }
+      await openHtmlFileByPreference(
+        sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'external',
+      );
     },
-    [workdir, t],
+    [sessionId, workdir, deviceId, remoteHostId, t],
   );
 
-  // 右键 文件/文件夹 → 重命名。进入 inline 编辑态;真正的 IPC + 副作用清理
-  // 在 handleRenameSubmit 里跑(回车 / 失焦后)。
-  // 同时关掉 pendingCreate 防止两个编辑态同屏(用户先开新建再去 rename 别人的情况)。
   const handleRename = useCallback((entry: DirEntry) => {
     setPendingCreate(null);
     setRenamingPath(entry.relPath);
@@ -605,8 +608,14 @@ export function WorkdirBrowseSidebar({
 
       // 文件夹 rename:把 expanded 持久化里所有 oldRel / oldRel/* 的条目改前缀。
       // 实时 expanded 集合不改 — 反正打开重命名后的新文件夹时会重新 fetch。
+      //
+      // scope 必须与 tree store **实际生效**的开关一致:device-link 被控端不支持
+      // 「显示被忽略的目录」时 useFileTree 会退回隐藏态 store;若这里仍按用户偏好
+      // 写 reveal scope,迁移就落在不生效的那一格 —— 当前隐藏 scope 仍存旧路径,
+      // 面板重挂载后会去请求已不存在的目录,新目录的展开态也丢了(评审 P2)。
       if (entry.type === 'directory') {
-        const persisted = loadExpandedSet(workdir);
+        const scopedShowIgnoredDirs = showIgnoredDirs && tree.showIgnoredDirsSupported !== false;
+        const persisted = loadExpandedSet(workdir, { showIgnoredDirs: scopedShowIgnoredDirs });
         let dirty = false;
         const next = new Set<string>();
         for (const p of persisted) {
@@ -620,10 +629,19 @@ export function WorkdirBrowseSidebar({
             next.add(p);
           }
         }
-        if (dirty) saveExpandedSet(workdir, next);
+        if (dirty) saveExpandedSet(workdir, next, { showIgnoredDirs: scopedShowIgnoredDirs });
       }
     },
-    [renamingPath, tree.entries, workdir, selectedPath, setSearchParams, t],
+    [
+      renamingPath,
+      tree.entries,
+      tree.showIgnoredDirsSupported,
+      workdir,
+      showIgnoredDirs,
+      selectedPath,
+      setSearchParams,
+      t,
+    ],
   );
 
   // 右键 文件 → Copy File Path。Electron renderer 启用了 clipboard write,
@@ -687,7 +705,7 @@ export function WorkdirBrowseSidebar({
                   type="button"
                   aria-label={t('ccAgent.workdirBrowse.switchProject')}
                   className={cn(
-                    'flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 -ml-1.5',
+                    'flex min-w-0 items-center gap-1.5 rounded-full px-1.5 py-1 -ml-1.5',
                     'text-sm font-semibold text-foreground transition-colors',
                     'hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
                     'data-[state=open]:bg-sidebar-item-active data-[state=open]:text-sidebar-item-active-foreground',
@@ -701,12 +719,7 @@ export function WorkdirBrowseSidebar({
             <DropdownMenuContent
               align="start"
               sideOffset={4}
-              className={cn(
-                'rounded-xl p-0.5 overflow-hidden min-w-[180px] max-w-[260px]',
-                'bg-[var(--cmd-palette-bg)]',
-                'border border-[var(--cmd-palette-border)]',
-                'shadow-[var(--shadow-menu)]',
-              )}
+              className="min-w-[180px] max-w-[260px]"
             >
               {switchProjects.map((project) => {
                 const active = project.projectKey === projectKey;
@@ -714,10 +727,9 @@ export function WorkdirBrowseSidebar({
                   <DropdownMenuItem
                     key={project.projectKey}
                     onSelect={() => handleSwitchProject(project)}
-                    className="h-8 px-2.5 rounded-md text-13 text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                   >
                     <span className="min-w-0 flex-1 truncate">{project.displayName}</span>
-                    <span className="ml-2 shrink-0 text-11 text-[var(--cmd-palette-item-meta)]">
+                    <span className="ml-2 shrink-0 text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
                       {t('ccAgent.workdirBrowse.activeSessionCount', {
                         count: project.activeSessionCount,
                       })}
@@ -734,49 +746,14 @@ export function WorkdirBrowseSidebar({
           </span>
         )}
         <div className="flex shrink-0 items-center gap-1.5">
-          {mode === 'search' ? (
-            // search 是独立态: refresh / collapse 只对文件树有意义,搜索时不该出现。
-            // 只保留 X = 退出搜索回到 tree 模式。
-            <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
-              <button
-                type="button"
-                onClick={handleToggleSearchMode}
-                className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-              >
-                <XIcon size={14} strokeWidth={2} />
-              </button>
-            </Tip>
-          ) : (
-            <>
-              <Tip text={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}>
-                <button
-                  type="button"
-                  onClick={handleToggleSearchMode}
-                  className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-                >
-                  <Search size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-              <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
-                <button
-                  type="button"
-                  onClick={handleCollapseAll}
-                  className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-                >
-                  <ChevronsDownUp size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-              <Tip text={t('ccAgent.workdirBrowse.treeAction.refresh')}>
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-                >
-                  <RefreshCw size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-            </>
-          )}
+          {/* 搜索 / 显示被忽略的目录 / 收起 / 刷新 —— 与 RSB 文件浏览器同一组件。 */}
+          <FileTreeHeaderActions
+            mode={mode}
+            onToggleSearch={handleToggleSearchMode}
+            onCollapseAll={handleCollapseAll}
+            onRefresh={handleRefresh}
+            ignoredDirsUnsupported={tree.showIgnoredDirsSupported === false}
+          />
         </div>
       </div>
 
@@ -808,6 +785,7 @@ export function WorkdirBrowseSidebar({
             <FileTreeView
               ref={fileTreeRef}
               tree={tree}
+              scrollScope="doc"
               selectedPath={selectedPath}
               onSelectFile={handleSelectFile}
               onNewFile={handleNewFile}
@@ -815,8 +793,8 @@ export function WorkdirBrowseSidebar({
               onDeleteFile={handleDeleteFile}
               onCopyFilePath={handleCopyFilePath}
               onRevealInFolder={remoteHostId || deviceId ? undefined : handleRevealInFolder}
-              onOpenInSidebarBrowser={remoteHostId || deviceId ? undefined : handleOpenInSidebarBrowser}
-              onOpenInBrowser={remoteHostId || deviceId ? undefined : handleOpenInBrowser}
+              onOpenInSidebarBrowser={handleOpenInSidebarBrowser}
+              onOpenInBrowser={handleOpenInBrowser}
               onRename={handleRename}
               pendingCreate={pendingCreate}
               onPendingSubmit={handlePendingSubmit}

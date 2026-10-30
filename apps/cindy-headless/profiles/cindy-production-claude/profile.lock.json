@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "status": "frozen",
+  "profileId": "cindy-production-claude",
+  "aliases": [
+    "cindy-production-cc"
+  ],
+  "profileFile": "profile.example.json",
+  "profileFileSha256": "c68abee4421450519a7bbe6d99e9122a18e446876ab996b43f42298aff085146",
+  "profileDigest": "39ca06941fd203e360b22f41590fde8b7310c6bc412be956320640ad5ec53858",
+  "systemPromptDigest": "b5a12214b75db6628f1e619f170af54fb14b0702934620b4dbfc66b12380f879",
+  "agentBinaryVersion": "2.1.312",
+  "cindyUpstreamCommit": "fa3fc88d37d205ea993a67d85612fa9a5436fae5"
+}

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { net } from 'electron';
 import { ServerApiError } from '../serverApiClient';
+import { publishErrorDetail, serverPublishErrorCode, type SkillhubPublishErrorCode } from '../../shared/skillhubPublishErrors';
 import { skillhubApiFetch } from './hubApi';
 import { computeFolderHash } from './folderHash';
 import { writeSnapshot } from './snapshot';
@@ -22,6 +23,7 @@ import type { PackResult } from './zipPacker';
 import { registryService } from './registry';
 import type { SkillhubCatalogScope } from '../../shared/skillhubCatalog';
 import { getCurrentDataOwnerId, getCurrentUserId } from '../authManager';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { currentSkillhubIdentityPolicy } from './identityPolicy';
 
@@ -50,24 +52,7 @@ export interface PublishParams {
   changelog?: string;
 }
 
-export type PublishErrorCode =
-  | 'NAME_TAKEN'
-  | 'INVALID_DEPT'
-  | 'INVALID_NAME'
-  | 'VERSION_RACE'
-  | 'CHECKSUM_MISMATCH'
-  | 'NOT_AUTHOR'
-  | 'PACK_FAILED'
-  | 'OSS_PUT_FAILED'
-  | 'OSS_PUT_EXPIRED'
-  | 'OSS_OBJECT_NOT_FOUND'
-  | 'API_KEY_MISSING'
-  | 'CATEGORY_REQUIRED'
-  | 'MANIFEST_INVALID'
-  | 'CANCELLED'
-  | 'SKILL_HUB_READ_ONLY'
-  | 'INVALID_VISIBILITY'
-  | 'INTERNAL';
+export type PublishErrorCode = SkillhubPublishErrorCode;
 
 export type PublishProgressEvent =
   | { phase: 'packing' }
@@ -76,7 +61,7 @@ export type PublishProgressEvent =
   | { phase: 'commit' }
   | { phase: 'done'; name: string; version: string }
   | { phase: 'scan-status'; name: string; version: string; status: string; gates?: ScanGate[] }
-  | { phase: 'scan-result'; name: string; version: string; status: string; gates?: ScanGate[] }
+  | { phase: 'scan-result'; name: string; version: string; status: string; rejectionReason?: string; gates?: ScanGate[] }
   | { phase: 'failed'; name?: string; errorCode: PublishErrorCode; message: string };
 
 type ProgressCb = (e: PublishProgressEvent) => void;
@@ -98,6 +83,7 @@ export interface ScanGate {
 
 interface ScanStatusResponse {
   status: string;
+  rejectionReason?: string;
   gates?: ScanGate[];
   scorecard?: unknown;
 }
@@ -131,21 +117,14 @@ async function updateSkillMdVersion(absolutePath: string, version: string): Prom
 // ── errorCode 映射 ────────────────────────────────────────────────────────────
 
 function serverErrorToCode(err: unknown): PublishErrorCode {
-  if (err instanceof ServerApiError) {
-    const code = err.code;
-    if (code === 'NAME_TAKEN') return 'NAME_TAKEN';
-    if (code === 'INVALID_DEPT') return 'INVALID_DEPT';
-    if (code === 'INVALID_NAME') return 'INVALID_NAME';
-    if (code === 'VERSION_RACE') return 'VERSION_RACE';
-    if (code === 'CHECKSUM_MISMATCH') return 'CHECKSUM_MISMATCH';
-    if (code === 'NOT_AUTHOR') return 'NOT_AUTHOR';
-    if (code === 'INVALID_VISIBILITY') return 'INVALID_VISIBILITY';
-    if (code === 'OSS_OBJECT_NOT_FOUND') return 'OSS_OBJECT_NOT_FOUND';
-    if (err.message.includes('manifest') || err.message.includes('frontmatter'))
-      return 'MANIFEST_INVALID';
-    return 'INTERNAL';
-  }
-  return 'INTERNAL';
+  return err instanceof ServerApiError
+    ? serverPublishErrorCode(err.code, err.message, err.statusCode)
+    : 'INTERNAL';
+}
+
+function publicServerErrorMessage(err: unknown, code: PublishErrorCode): string {
+  if (!(err instanceof ServerApiError) || /^HTTP_\d+$/.test(err.code)) return '';
+  return publishErrorDetail(code, err.message);
 }
 
 function unhandledPublishErrorToCode(err: unknown): PublishErrorCode {
@@ -178,24 +157,24 @@ async function syncPublishedRegistry(
   absolutePath: string,
   version: string,
   folderHash: string,
+  authorId: string,
   catalogScope?: SkillhubCatalogScope | null,
 ): Promise<void> {
   const nowSec = Math.floor(Date.now() / 1000);
-  const myUserId = getCurrentUserId() ?? '';
   const existing = await registryService.getInstall(slug, absolutePath);
   if (existing) {
     await registryService.updateInstall(slug, absolutePath, {
       version,
       folderHash,
       updatedAt: nowSec,
-      authorId: myUserId,
+      authorId,
       origin: 'published',
       ...(catalogScope !== undefined ? { catalogScope: catalogScope ?? undefined } : {}),
     });
   } else {
     await registryService.addInstall(slug, absolutePath, {
       version,
-      authorId: myUserId,
+      authorId,
       folderHash,
       installedAt: nowSec,
       updatedAt: nowSec,
@@ -233,82 +212,83 @@ export class SkillPublishService {
   async publish(
     params: PublishParams,
     onProgress: ProgressCb = () => {},
+    execution: { isCurrent?: () => boolean } = {},
   ): Promise<{
     success: boolean;
     result?: { name: string; version: string };
     errorCode?: string;
     error?: string;
   }> {
-    if (!getAppCapabilities().canUseSkillHubCloud) {
-      this.emitProgress(
+    // Capture before identity hydration: every await belongs to this publication's owner.
+    const publishOwnerScope = activeOwnerScopeKey();
+    const publishOwnerId = getCurrentDataOwnerId();
+    const publishAuthorId = getCurrentUserId() ?? '';
+    const isPublishOwnerCurrent = () => !isAppSessionBoundaryPending()
+      && activeOwnerScopeKey() === publishOwnerScope;
+    const emitProgress = (event: PublishProgressEvent) => this.emitProgress(event, onProgress, publishOwnerScope);
+    if (!getAppCapabilities().canUseSkillHubCloud || execution.isCurrent?.() === false) {
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
           errorCode: 'CANCELLED',
           message: 'SkillHub publish is unavailable in local mode',
         },
-        onProgress,
       );
       return { success: false, errorCode: 'CANCELLED' };
     }
     const identityPolicy = await currentSkillhubIdentityPolicy();
+    if (!isPublishOwnerCurrent() || execution.isCurrent?.() === false) return { success: false, errorCode: 'CANCELLED' };
     if (!identityPolicy.canWrite) {
-      this.emitProgress(
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
-          errorCode: 'CANCELLED',
-          message: 'SkillHub publish requires sign-in',
+          errorCode: 'AUTH_REQUIRED',
+          message: '请登录后再发布 Skill',
         },
-        onProgress,
       );
-      return { success: false, errorCode: 'CANCELLED' };
+      return { success: false, errorCode: 'AUTH_REQUIRED' };
     }
     if (
       params.isFirstPublish
       && params.visibility
       && !identityPolicy.allowedVisibilities.includes(params.visibility)
     ) {
-      this.emitProgress(
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
           errorCode: 'INVALID_VISIBILITY',
-          message: identityPolicy.ownerType === 'organization'
-            ? 'Organization skills only support public or organization visibility'
-            : 'Personal skills only support public or private visibility',
+          // Local policy rejection uses the renderer's localized recovery copy.
+          message: '',
         },
-        onProgress,
       );
       return { success: false, errorCode: 'INVALID_VISIBILITY' };
     }
-    const publishOwnerId = getCurrentDataOwnerId();
     if (!publishOwnerId) {
-      this.emitProgress(
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
           errorCode: 'CANCELLED',
           message: 'SkillHub publish requires an active data owner',
         },
-        onProgress,
       );
       return { success: false, errorCode: 'CANCELLED' };
     }
+    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
     if (this.current) {
-      this.emitProgress(
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
-          errorCode: 'INTERNAL',
-          message: '已有发布任务进行中',
+          errorCode: 'PUBLISH_BUSY',
+          message: '已有发布任务进行中，请等待当前发布结束后重试',
         },
-        onProgress,
       );
-      return { success: false, errorCode: 'INTERNAL' };
+      return { success: false, errorCode: 'PUBLISH_BUSY' };
     }
-
-    const tags = params.isFirstPublish ? normalizePublishTags(params.tags) : undefined;
 
     const abortController = new AbortController();
     const state: InternalState = { abortController };
@@ -318,7 +298,8 @@ export class SkillPublishService {
     const isCancelled = (): boolean =>
       signal.aborted ||
       !getAppCapabilities().canUseSkillHubCloud ||
-      getCurrentDataOwnerId() !== publishOwnerId;
+      execution.isCurrent?.() === false ||
+      !isPublishOwnerCurrent();
 
     let originalSkillMd: string | null = null;
     let publishSucceeded = false;
@@ -339,11 +320,10 @@ export class SkillPublishService {
 
       // ── 步骤 2: 打包 ─────────────────────────────────────────────────────
       if (!state.packCache) {
-        this.emitProgress({ phase: 'packing' }, onProgress);
+        emitProgress({ phase: 'packing' });
         if (isCancelled()) {
-          this.emitProgress(
+          emitProgress(
             { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-            onProgress,
           );
           return { success: false, errorCode: 'CANCELLED' };
         }
@@ -356,23 +336,21 @@ export class SkillPublishService {
           if (isCancelled()) throw err;
           const message = err instanceof Error ? err.message : String(err);
           log.error(`[publish:pack] failed | name=${params.name}:`, err);
-          this.emitProgress(
+          emitProgress(
             {
               phase: 'failed',
               name: params.name,
               errorCode: 'PACK_FAILED',
               message,
             },
-            onProgress,
           );
           return { success: false, errorCode: 'PACK_FAILED', error: message };
         }
       }
 
       if (isCancelled()) {
-        this.emitProgress(
+        emitProgress(
           { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-          onProgress,
         );
         return { success: false, errorCode: 'CANCELLED' };
       }
@@ -382,11 +360,10 @@ export class SkillPublishService {
 
       for (;;) {
         if (!state.initCache) {
-          this.emitProgress({ phase: 'init' }, onProgress);
+          emitProgress({ phase: 'init' });
           if (isCancelled()) {
-            this.emitProgress(
+            emitProgress(
               { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-              onProgress,
             );
             return { success: false, errorCode: 'CANCELLED' };
           }
@@ -420,32 +397,30 @@ export class SkillPublishService {
           } catch (err) {
             log.error(`[publish:init] failed | name=${params.name} err=`, err);
             if (isCancelled()) {
-              this.emitProgress(
+              emitProgress(
                 { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-                onProgress,
               );
               return { success: false, errorCode: 'CANCELLED' };
             }
             const code = serverErrorToCode(err);
-            this.emitProgress(
+            const message = publicServerErrorMessage(err, code);
+            emitProgress(
               {
                 phase: 'failed',
                 name: params.name,
                 errorCode: code,
-                message: err instanceof Error ? err.message : String(err),
+                message,
               },
-              onProgress,
             );
-            return { success: false, errorCode: code };
+            return { success: false, errorCode: code, error: message };
           }
         }
 
         // ── 步骤 5: OSS PUT ──────────────────────────────────────────────
-        this.emitProgress({ phase: 'uploading' }, onProgress);
+        emitProgress({ phase: 'uploading' });
         if (isCancelled()) {
-          this.emitProgress(
+          emitProgress(
             { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-            onProgress,
           );
           return { success: false, errorCode: 'CANCELLED' };
         }
@@ -511,9 +486,8 @@ export class SkillPublishService {
         }
 
         if (isCancelled()) {
-          this.emitProgress(
+          emitProgress(
             { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-            onProgress,
           );
           return { success: false, errorCode: 'CANCELLED' };
         }
@@ -521,37 +495,34 @@ export class SkillPublishService {
         if (ossExpired) {
           state.initCache = undefined;
           state.packCache = undefined;
-          this.emitProgress(
+          emitProgress(
             {
               phase: 'failed',
               name: params.name,
               errorCode: 'OSS_PUT_EXPIRED',
               message: '上传链接已过期,请重新发布',
             },
-            onProgress,
           );
           return { success: false, errorCode: 'OSS_PUT_EXPIRED' };
         }
 
         if (!ossOk) {
-          this.emitProgress(
+          emitProgress(
             {
               phase: 'failed',
               name: params.name,
               errorCode: 'OSS_PUT_FAILED',
               message: ossFailDetail || '上传失败,请重试',
             },
-            onProgress,
           );
           return { success: false, errorCode: 'OSS_PUT_FAILED' };
         }
 
         // ── 步骤 6: publish/commit ───────────────────────────────────────
-        this.emitProgress({ phase: 'commit' }, onProgress);
+        emitProgress({ phase: 'commit' });
         if (isCancelled()) {
-          this.emitProgress(
+          emitProgress(
             { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-            onProgress,
           );
           return { success: false, errorCode: 'CANCELLED' };
         }
@@ -603,6 +574,7 @@ export class SkillPublishService {
             params.absolutePath,
             publishedVersion,
             folderHash,
+            publishAuthorId,
             params.isFirstPublish
               ? params.visibility === 'DEPARTMENT_SCOPED'
                   ? 'team'
@@ -610,19 +582,17 @@ export class SkillPublishService {
               : undefined,
           ).catch((err) => log.warn('[publish] registry sync failed (non-fatal):', err));
 
-          this.emitProgress(
+          emitProgress(
             { phase: 'done', name: params.name, version: publishedVersion },
-            onProgress,
           );
           // 公开发布完成机审后会进入 pending，等待 Platform 人工审核。收到 pending 后
           // 结束本轮轮询；用户主动刷新列表或详情时再读取最新审核状态。
-          this.startScanPoll(params.name, publishedVersion);
+          this.startScanPoll(params.name, publishedVersion, publishOwnerScope);
           return { success: true, result: { name: params.name, version: publishedVersion } };
         } catch (err) {
           if (isCancelled()) {
-            this.emitProgress(
+            emitProgress(
               { phase: 'failed', name: params.name, errorCode: 'CANCELLED', message: '已取消' },
-              onProgress,
             );
             return { success: false, errorCode: 'CANCELLED' };
           }
@@ -634,16 +604,16 @@ export class SkillPublishService {
             }
           }
           const code = serverErrorToCode(err);
-          this.emitProgress(
+          const message = publicServerErrorMessage(err, code);
+          emitProgress(
             {
               phase: 'failed',
               name: params.name,
               errorCode: code,
-              message: err instanceof Error ? err.message : String(err),
+              message,
             },
-            onProgress,
           );
-          return { success: false, errorCode: code };
+          return { success: false, errorCode: code, error: message };
         }
       }
     } catch (err) {
@@ -654,14 +624,13 @@ export class SkillPublishService {
       } else {
         log.error(`[publish] unexpected failure | name=${params.name} code=${code}:`, err);
       }
-      this.emitProgress(
+      emitProgress(
         {
           phase: 'failed',
           name: params.name,
           errorCode: code,
           message,
         },
-        onProgress,
       );
       return { success: false, errorCode: code, error: message };
     } finally {
@@ -686,14 +655,26 @@ export class SkillPublishService {
     }
   }
 
-  startScanPoll(slug: string, version: string): void {
+  startScanPoll(slug: string, version: string, ownerScope = activeOwnerScopeKey()): void {
+    // A late committed publication must neither bind to the next owner nor stop their newer poll.
+    if (!getCurrentDataOwnerId() || isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) return;
     this.stopScanPoll();
     const generation = this.scanPollGeneration;
-    const isCurrentPoll = () =>
-      this.scanPollGeneration === generation &&
-      this.activeScanPoll?.slug === slug &&
-      this.activeScanPoll?.version === version;
+    const isCurrentPoll = () => {
+      if (
+        this.scanPollGeneration !== generation ||
+        this.activeScanPoll?.slug !== slug ||
+        this.activeScanPoll?.version !== version
+      ) return false;
+      if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) {
+        this.stopScanPoll();
+        return false;
+      }
+      return true;
+    };
     const poll = async (): Promise<void> => {
+      // A scheduled request must not start with another account's credentials.
+      if (!isCurrentPoll()) return;
       try {
         const result = await this.getScanStatus(slug, version);
         if (!isCurrentPoll()) return;
@@ -714,6 +695,7 @@ export class SkillPublishService {
             version,
             status: result.status,
             gates: result.gates,
+            rejectionReason: result.rejectionReason,
           });
           return;
         }
@@ -739,8 +721,11 @@ export class SkillPublishService {
     );
   }
 
-  private emitProgress(event: PublishProgressEvent, localProgress?: ProgressCb): void {
+  private emitProgress(event: PublishProgressEvent, localProgress?: ProgressCb, ownerScope = activeOwnerScopeKey()): void {
+    const isCurrent = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScope;
+    if (!isCurrent()) return;
     localProgress?.(event);
-    this.onProgress?.(event);
+    // Callback delivery is synchronous with the IPC stamp; never stamp old progress as the new owner.
+    if (isCurrent()) this.onProgress?.(event);
   }
 }

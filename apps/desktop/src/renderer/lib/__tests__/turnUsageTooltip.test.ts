@@ -30,6 +30,8 @@ const t = ((key: string, opts?: Record<string, unknown>) => {
   if (key === 'usageDetails.durationMinutesSeconds') {
     return `${opts?.minutes}分 ${opts?.seconds}秒`;
   }
+  if (key === 'usageDetails.durationHoursMinutes') return `${opts?.hours} 小时 ${opts?.minutes} 分`;
+  if (key === 'usageDetails.durationDaysHoursMinutes') return `${opts?.days} 天 ${opts?.hours} 小时 ${opts?.minutes} 分`;
   return opts ? `${key}|${JSON.stringify(opts)}` : key;
 }) as unknown as TFunction;
 
@@ -260,6 +262,13 @@ describe('buildTurnUsageTooltipLines — 输出速度', () => {
     expect(formatTurnDuration(119_600)).toBe('2m 00s');
     expect(formatTurnDuration(12_345, t)).toBe('12.3秒');
     expect(formatTurnDuration(119_600, t)).toBe('2分 00秒');
+    expect(formatTurnDuration(3_599_600)).toBe('1h 0m');
+    expect(formatTurnDuration(77_516_000)).toBe('21h 31m');
+    expect(formatTurnDuration(77_516_000, t)).toBe('21 小时 31 分');
+    expect(formatTurnDuration(86_399_600, t)).toBe('1 天 0 小时 0 分');
+    expect(formatTurnDuration(86_700_000)).toBe('1d 0h 5m');
+    expect(formatTurnDuration(183_845_000)).toBe('2d 3h 4m');
+    expect(formatTurnDuration(183_845_000, t)).toBe('2 天 3 小时 4 分');
   });
 });
 

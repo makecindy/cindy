@@ -99,6 +99,14 @@ describe('ConfirmDialog confirmIcon', () => {
 });
 
 describe('ConfirmDialog action layout', () => {
+  it.each([false, true])('preserves cancel focus with cancelFirst=%s', (cancelFirst) => {
+    render(<ConfirmDialog presentation="standard" cancelFirst={cancelFirst} open onOpenChange={() => {}}
+      title="Confirm" description="Description" confirmText="Confirm action" cancelText="Keep" />);
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(
+      cancelFirst ? ['Keep', 'Confirm action'] : ['Confirm action', 'Keep'],
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep' }));
+  });
   it('keeps action labels on one line without allowing buttons to shrink', () => {
     render(
       <ConfirmDialog

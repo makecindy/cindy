@@ -5,13 +5,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type { Schedule } from '@cindy/maker-scheduler';
+import { AUTO_REVIEW_DELEGATED_CONTINUATION } from '@cindy/maker-core';
 import { GhostCardService } from '../../cindy-brain/cardService.js';
 import { GhostFsSlot } from '../../cindy-brain/fsSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { GhostPipeToolCall, InstalledGhost } from '../../../shared/ghost.js';
+import { installedGhostStoragePart, resolveInstalledGhost } from '../../../shared/pluginIdentity.js';
 import { SchedulerScriptCapabilityBroker } from '../script-capability-broker';
 
 const sendToSessionMock = vi.hoisted(() => vi.fn());
+const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
+const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
+vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend, getSessionRowSnapshotStrict }));
 // ghost pipe 统一入口:缺省回显请求(jira/feishu 用例断言请求形状),
 // 单个用例可 mockResolvedValueOnce 覆盖返回(断言 data 解包 / 错误映射)。
 const callGhostToolMock = vi.hoisted(() =>
@@ -27,8 +32,12 @@ const callGhostToolMock = vi.hoisted(() =>
 // cardService 账本:缺省 void spy(生命周期断言用);端到端用例转发到真实实例。
 const registerCallMock = vi.hoisted(() => vi.fn());
 const finalizeCallMock = vi.hoisted(() => vi.fn());
+const findAvailableGhostMock = vi.hoisted(() => vi.fn());
+const findTrustedXdGhostMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../cindy-brain/index.js', () => ({
+  findAvailableGhostForAuthorization: findAvailableGhostMock,
+  findTrustedXdGhostForScript: findTrustedXdGhostMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: callGhostToolMock }),
   getGhostCardService: () => ({ registerCall: registerCallMock, finalizeCall: finalizeCallMock }),
 }));
@@ -73,10 +82,99 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
 describe('SchedulerScriptCapabilityBroker', () => {
   beforeEach(() => {
     sendToSessionMock.mockReset();
+    restoreArchivedSessionForSend.mockReset();
+    getSessionRowSnapshotStrict.mockReset().mockResolvedValue({ status: 'active', source: 'user' });
     callGhostToolMock.mockReset();
     callGhostToolMock.mockImplementation(async (request: unknown) => ({ ok: true, result: request }));
     registerCallMock.mockReset();
     finalizeCallMock.mockReset();
+    mockAvailableGhosts(['xd-atlassian', 'xd-feishu'].map((id) => ({
+      ...makeInstalledGhost(id), namespaceState: 'pending',
+    })), ['xd-atlassian', 'xd-feishu']);
+  });
+
+  it.each([
+    ['xd-atlassian', 'jira.get', { issue_key: 'DING-1' }, 'jira.read'],
+    ['xd-feishu', 'feishu.recent_chats', {}, 'feishu.read'],
+  ] as const)('binds %s to XD instead of a same-name root', async (id, method, params, capability) => {
+    const enterprise = { ...makeInstalledGhost(id), namespace: 'xd', dir: '/fake/ghosts/_ns/xd/' + id };
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespace: null }, enterprise]);
+    await new SchedulerScriptCapabilityBroker().call(
+      { method, params }, new Set([capability]), { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: installedGhostStoragePart(enterprise) }));
+    expect(registerCallMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ ghostId: installedGhostStoragePart(enterprise) }));
+    expect(findTrustedXdGhostMock).toHaveBeenCalledWith(id);
+    expect(findAvailableGhostMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['xd-atlassian', 'xd-feishu'])('rejects a confirmed root impersonating %s before registration', async (id) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespace: null }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      id === 'xd-atlassian'
+        ? { method: 'jira.get', params: { issue_key: 'DING-1' } }
+        : { method: 'feishu.recent_chats', params: {} },
+      new Set(['jira.read', 'feishu.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { namespace: 'other-org' },
+    {},
+    { namespace: null, namespaceState: 'pending' as const },
+  ])('rejects an unverified or foreign install: %j', async (identity) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), ...identity }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it('preserves an approved pre-namespace XD install captured as pending', async () => {
+    mockAvailableGhosts([{ ...makeInstalledGhost('xd-atlassian'), namespaceState: 'pending' }], ['xd-atlassian']);
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    );
+    expect(callGhostToolMock).toHaveBeenCalledWith(expect.objectContaining({ ghostId: 'xd-atlassian' }));
+  });
+
+  it.each(['xd-atlassian', 'xd-feishu'])('does not authorize an approved pending ordinary root %s', async (id) => {
+    mockAvailableGhosts([{ ...makeInstalledGhost(id), namespaceState: 'pending' }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      id === 'xd-atlassian'
+        ? { method: 'jira.get', params: { issue_key: 'DING-1' } }
+        : { method: 'feishu.recent_chats', params: {} },
+      new Set(['jira.read', 'feishu.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['legacy-unapproved', 'invalid'] as const)('rejects a pending install with %s approval', async (state) => {
+    mockAvailableGhosts([{
+      ...makeInstalledGhost('xd-atlassian'), namespaceState: 'pending', approval: { state },
+    }]);
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
+  });
+
+  it('checks the resolved manifest rather than trusting a mismatched lookup result', async () => {
+    findTrustedXdGhostMock.mockReturnValue({ ...makeInstalledGhost('other-plugin'), namespace: 'xd' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'jira.get', params: { issue_key: 'DING-1' } },
+      new Set(['jira.read']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'GHOST_NOT_FOUND' });
+    expect(registerCallMock).not.toHaveBeenCalled();
+    expect(callGhostToolMock).not.toHaveBeenCalled();
   });
 
   it('maps Jira reads to the current xd-atlassian argument contract', async () => {
@@ -389,6 +487,77 @@ describe('SchedulerScriptCapabilityBroker', () => {
     ).rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' });
   });
 
+  it('uses the bound owner for omitted dispatch targets and rejects another target', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+    const broker = new SchedulerScriptCapabilityBroker();
+    const context = { schedule: schedule({ targetSessionId: 'owner' }) };
+    await broker.call({ method: 'sessions.dispatch', params: { message: 'update' } }, new Set(['sessions.dispatch']), context);
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'owner' }));
+    sendToSessionMock.mockClear();
+    await expect(broker.call({ method: 'sessions.dispatch', params: { target_session_id: 'other', message: 'update' } },
+      new Set(['sessions.dispatch']), context)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('marks script follow-ups as continuations of the target user authorization', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'claude-code', wakeKind: 'queued' });
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'CI failed; fix the PR' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule() },
+    );
+    expect(sendToSessionMock.mock.calls[0]?.[0][AUTO_REVIEW_DELEGATED_CONTINUATION]).toBe(true);
+  });
+
+  // User decision 2026-10-23: unbound scripts select a target only at dispatch;
+  // they must restore it before the normal sender rejects ARCHIVED. Unit, no I/O.
+  it('restores an explicitly selected archived target before delivering the message', async () => {
+    let status = 'archived';
+    restoreArchivedSessionForSend.mockImplementation(async () => { status = 'active'; });
+    sendToSessionMock.mockImplementation(async () => {
+      expect(status).toBe('active');
+      return { ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' };
+    });
+    const result = await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    );
+    expect(result).toMatchObject({ target_session_id: 'owner', wake_kind: 'queued' });
+    expect(status).toBe('active');
+  });
+
+  // PR #6864: rejected Review input must not reactivate an archived audit task.
+  // Exercise the real broker/policy boundary; previous happy-path mocks missed it.
+  it.each(['active', 'archived'])('rejects a %s Review target without changing its lifecycle', async (status) => {
+    const target = { status, source: 'review' };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    restoreArchivedSessionForSend.mockImplementation(async () => { target.status = 'active'; });
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Review input rejected' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'review', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+    expect(target.status).toBe(status);
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: 'bot' },
+    { orcaRole: 'worker' },
+    { orcaRemoteLead: '{"leadSessionId":"lead"}' },
+  ])('leaves an archived managed dispatch target to its service lifecycle: %j', async (managed) => {
+    const target = { status: 'archived', ...managed };
+    getSessionRowSnapshotStrict.mockResolvedValue(target);
+    sendToSessionMock.mockResolvedValue({ ok: false, errorCode: 'ARCHIVED', message: 'Target archived' });
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { target_session_id: 'owner', message: 'update' } },
+      new Set(['sessions.dispatch']), { schedule: schedule() },
+    )).rejects.toMatchObject({ code: 'ARCHIVED' });
+    expect(target.status).toBe('archived');
+    expect(restoreArchivedSessionForSend).not.toHaveBeenCalled();
+  });
+
   it('dispatches sessions with host-owned create defaults from the schedule', async () => {
     sendToSessionMock.mockResolvedValue({
       ok: true,
@@ -430,6 +599,37 @@ describe('SchedulerScriptCapabilityBroker', () => {
     expect(result).toMatchObject({ target_session_id: 'session-1', wake_kind: 'created' });
   });
 
+  // PR #6830 / unit: MCP may persist a different model Harness. Exercise the
+  // actual dispatch entry, which previously paired this Codex model with Claude.
+  it('dispatches a new task with the explicit model Harness', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'new', agentKind: 'codex', wakeKind: 'created' });
+    await new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'claude-code', modelAgentKind: 'codex', modelAgentDeviceId: '' }) },
+    );
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      createDefaults: expect.objectContaining({ agentKind: 'codex', model: 'gpt-5.5', providerId: 'provider-1' }),
+    }));
+  });
+
+  // Integration regression: a persisted remote route must never become local
+  // create defaults merely because sessions.dispatch omits a target task.
+  it.each([
+    { modelAgentDeviceId: 'shared:owner', modelAgentKind: 'codex' as const },
+    { agentDeviceId: 'studio' },
+  ])('rejects remote script-dispatch defaults before opening a local session (%j)', async (location) => {
+    await expect(new SchedulerScriptCapabilityBroker().call(
+      { method: 'sessions.dispatch', params: { message: 'run task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule(location) },
+    )).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: expect.stringContaining('script execution does not support remote model sources'),
+    });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
   it('resolves blank Pi script-dispatch defaults as one model/provider route', async () => {
     sendToSessionMock.mockResolvedValue({
       ok: true,
@@ -459,6 +659,22 @@ describe('SchedulerScriptCapabilityBroker', () => {
         providerId: 'local-byom',
       }),
     }));
+  });
+
+  it('does not resolve or require a default route when dispatching to an existing task', async () => {
+    sendToSessionMock.mockResolvedValue({ ok: true, targetSessionId: 'owner', agentKind: 'codex', wakeKind: 'queued' });
+    const resolveDefaultModelRoute = vi.fn(async () => null);
+    const broker = new SchedulerScriptCapabilityBroker({ resolveDefaultModelRoute });
+
+    await broker.call(
+      { method: 'sessions.dispatch', params: { message: 'update' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'claude-code', model: undefined, targetSessionId: 'owner' }) },
+    );
+
+    expect(resolveDefaultModelRoute).not.toHaveBeenCalled();
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'owner' }));
+    expect(sendToSessionMock.mock.calls[0]?.[0]).not.toHaveProperty('createDefaults');
   });
 
   it('rejects blank Pi script-dispatch defaults before opening a session when no source is connected', async () => {
@@ -640,8 +856,7 @@ describe('SchedulerScriptCapabilityBroker', () => {
       const { fsSlot } = wireRealChannel(tmp);
       // 真实 dispatcher:资格审 + callId 配对 + 错误折叠全真,只有「意识进程」
       // 本身由 sendToGhost 内联模拟(先经 fs 槽写盘,再 handleToolResult 交卷)。
-      let dispatcher!: GhostPipeDispatcher;
-      dispatcher = new GhostPipeDispatcher({
+      const dispatcher = new GhostPipeDispatcher({
         getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
         runtimeStateOf: () => 'running',
         spawn: async () => ({ ok: true }),
@@ -676,6 +891,57 @@ describe('SchedulerScriptCapabilityBroker', () => {
       expect(await fsSlot.handleFsRequest('xd-atlassian', {
         op: 'write', root: 'workdir', callId: usedCallId, path: 'r/late.json', content: 'x',
       })).toMatchObject({ ok: false });
+    } finally {
+      await fs.promises.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('writes namespaced out_file through the real dispatcher, card service and fs slot', async () => {
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'broker-ns-pipe-'));
+    try {
+      const installed = { ...makeInstalledGhost('xd-atlassian'), namespace: 'xd', dir: path.join(tmp, '_ns', 'xd', 'xd-atlassian') };
+      mockAvailableGhosts([installed]);
+      const instanceId = installedGhostStoragePart(installed);
+      const { fsSlot } = wireRealChannel(tmp, installed);
+      let offPathResult: { ok: boolean } | undefined;
+      const dispatcher: GhostPipeDispatcher = new GhostPipeDispatcher({
+        getGhost: (id) => id === instanceId || id === installed.manifest.id ? installed : null,
+        runtimeStateOf: () => 'running',
+        spawn: async () => ({ ok: true }),
+        sendToGhost: (ghostId, payload) => {
+          void (async () => {
+            const outFile = (payload.args as Record<string, unknown>).out_file as string;
+            const result = await fsSlot.handleFsRequest(ghostId, {
+              op: 'write', root: 'workdir', callId: payload.callId, path: outFile, content: 'namespaced result',
+            });
+            offPathResult = await fsSlot.handleFsRequest(ghostId, {
+              op: 'write', root: 'workdir', callId: payload.callId, path: 'other.json', content: 'forbidden',
+            });
+            dispatcher.handleToolResult(ghostId, result.ok
+              ? { callId: payload.callId, ok: true, result: { saved_to: outFile } }
+              : { callId: payload.callId, ok: false, errorCode: 'INTERNAL', message: result.message });
+          })();
+          return true;
+        },
+        timeoutMs: 1_000,
+      });
+      callGhostToolMock.mockImplementation((request: unknown) => dispatcher.callGhostTool(
+        request as { ghostId: string; tool: string; args: Record<string, unknown> },
+      ));
+
+      await expect(new SchedulerScriptCapabilityBroker().call(
+        { method: 'jira.get', params: { issue_key: 'DING-1', out_file: 'reports/result.json' } },
+        new Set(['jira.read']), { schedule: schedule({ workingDir: tmp }) },
+      )).resolves.toEqual({ saved_to: 'reports/result.json' });
+      expect(await fs.promises.readFile(path.join(tmp, 'reports/result.json'), 'utf8')).toBe('namespaced result');
+      expect(offPathResult).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(tmp, 'other.json'))).toBe(false);
+      const callId = registerCallMock.mock.calls[0][0] as string;
+      expect(registerCallMock.mock.calls[0][1]).toMatchObject({ ghostId: instanceId });
+      expect(await fsSlot.handleFsRequest(instanceId, {
+        op: 'write', root: 'workdir', callId, path: 'reports/result.json', content: 'late result',
+      })).toMatchObject({ ok: false });
+      expect(await fs.promises.readFile(path.join(tmp, 'reports/result.json'), 'utf8')).toBe('namespaced result');
     } finally {
       await fs.promises.rm(tmp, { recursive: true, force: true });
     }
@@ -816,12 +1082,29 @@ function makeInstalledGhost(id: string): InstalledGhost {
   };
 }
 
+function mockAvailableGhosts(ghosts: InstalledGhost[], trustedLegacyIds: string[] = []): void {
+  findAvailableGhostMock.mockReset();
+  findAvailableGhostMock.mockImplementation((id: string, namespace?: string | null) => {
+    const resolved = resolveInstalledGhost(ghosts, id, namespace);
+    return resolved.status === 'unique' ? resolved.ghost : null;
+  });
+  findTrustedXdGhostMock.mockReset();
+  findTrustedXdGhostMock.mockImplementation((id: string) => {
+    const explicit = resolveInstalledGhost(ghosts, id, 'xd');
+    if (explicit.status === 'unique') return explicit.ghost;
+    const legacy = resolveInstalledGhost(ghosts, id);
+    return legacy.status === 'unique' && trustedLegacyIds.includes(installedGhostStoragePart(legacy.ghost))
+      ? legacy.ghost
+      : null;
+  });
+}
+
 /**
  * 端到端 harness:真实 GhostCardService + 真实 GhostFsSlot,把 broker 的
  * mock 边界(register/finalize)接到真实账本——用例只需替换意识行为
  * (callGhostToolMock 的实现),其余链路全真。
  */
-function wireRealChannel(tmp: string): { cardService: GhostCardService; fsSlot: GhostFsSlot } {
+function wireRealChannel(tmp: string, installed = makeInstalledGhost('xd-atlassian')): { cardService: GhostCardService; fsSlot: GhostFsSlot } {
   const cardService = new GhostCardService({
     hasCardSlot: () => false,
     sanitize: (html: string) => ({ ok: true, html }),
@@ -829,7 +1112,7 @@ function wireRealChannel(tmp: string): { cardService: GhostCardService; fsSlot: 
     broadcast: () => {},
   });
   const fsSlot = new GhostFsSlot({
-    getGhost: (id) => (id === 'xd-atlassian' ? makeInstalledGhost(id) : null),
+    getGhost: (id) => id === installedGhostStoragePart(installed) ? installed : null,
     dataRootDir: () => path.join(tmp, 'ghost-fs'),
     callInfo: (callId) => cardService.callInfoOf(callId),
     inFlightCallInfo: (callId) => cardService.inFlightCallInfoOf(callId),

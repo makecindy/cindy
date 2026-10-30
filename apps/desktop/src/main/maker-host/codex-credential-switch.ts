@@ -1,21 +1,36 @@
+import { providerCatalogId, sourceProviderForPreset } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
   isCindyProviderCodexRemoteCompactionRoute,
-  resolveAgentCredentialMode,
+  resolveAgentCredentialMode as resolveBaseCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
+import { isAnthropicWireModel } from './claude-gateway-config.js';
+import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import {
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
-import { crossesCodexAppliedCustomProviderIdentity } from './codex-custom-provider-route.js';
+import {
+  crossesCodexAppliedCustomProviderIdentity,
+  isAppliedCodexCustomProviderIdentity,
+} from './codex-custom-provider-route.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import { getActiveCatalog } from './active-catalog.js';
+
+function resolveAgentCredentialMode(input: Parameters<typeof resolveBaseCredentialMode>[0]): AgentCredentialMode | undefined {
+  if (input.agentKind === 'codex' && getActiveCatalog().providers.some(
+    (provider) => provider.id === input.providerId && provider.auth.native === 'codex',
+  )) return 'oauth-bearer';
+  return resolveBaseCredentialMode(input);
+}
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -56,6 +71,7 @@ function credentialFamilyFromAuthInjection(
 }
 
 interface LocalAgentSession {
+  codexHostKey?: string;
   id: string;
   agentKind: AgentKind;
   remoteHostId?: string | null;
@@ -64,10 +80,14 @@ interface LocalAgentSession {
 
 interface LocalCredentialModeSwitchMaker {
   listActiveSessions: () => LocalAgentSession[];
-  closeSession: (sessionId: string) => Promise<void>;
+  closeSession: (sessionId: string, reason?: 'runtime-refresh') => Promise<void>;
 }
 
 export interface PrepareLocalCodexCredentialModeSwitchInput {
+  /** Restrict arbitration to the host being replaced, preserving sibling hosts. */
+  hostKey?: string;
+  /** Hosts selected by the credential-change guard, including isolated hosts. */
+  hostKeys?: readonly string[];
   maker: LocalCredentialModeSwitchMaker;
   isSessionInTurn?: (sessionId: string) => boolean;
   signal?: AbortSignal;
@@ -170,6 +190,9 @@ export function isCodexThreadModelProviderIdentityMismatch(
     return true;
   }
 
+  // This native identity records a sticky summary fallback, not a broken route.
+  if (input.currentCodexThreadModelProviderId === CODEX_SUMMARY_COMPACT_PROVIDER_ID) return false;
+
   const nextProviderId = normalizeProviderId(input.nextProviderId);
   const nextMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
@@ -191,13 +214,43 @@ export function isCodexThreadModelProviderIdentityMismatch(
         ? CODEX_GATEWAY_PROVIDER_ID
         : null;
   const actualThreadModelProviderId = normalizeProviderId(input.currentCodexThreadModelProviderId);
-  const actualThreadIdentityKnown =
-    actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
-    actualThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID ||
-    actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
-
+  const actualIsAppliedCustomProviderIdentity = isAppliedCodexCustomProviderIdentity(
+    actualThreadModelProviderId,
+  );
+  const targetProvider = getActiveCatalog().providers.find(
+    (provider) => provider.id === nextProviderId,
+  );
+  const targetCatalogId = targetProvider ? providerCatalogId(targetProvider) : null;
+  const targetRawProviderIds = new Set(
+    targetProvider?.models.codex?.flatMap((model) => [
+      model.catalogPresetId,
+      model.catalogPresetId ? sourceProviderForPreset(model.catalogPresetId) : undefined,
+      model.api === 'azure-openai-responses' ? 'azure' : undefined,
+    ].filter((id): id is string => typeof id === 'string')) ?? [],
+  );
+  // Older app-server versions may report the logical provider id directly
+  // (for example `openai`) instead of Cindy's materialized `cindy_openai`
+  // alias. Account-specific OpenAI ids also share the catalog identity
+  // `openai`; when the target catalog identity matches, only a route crossing
+  // needs a rebuild.
+  const actualMatchesTargetLogicalProvider =
+    actualThreadModelProviderId !== null &&
+    (actualThreadModelProviderId === nextProviderId ||
+      actualThreadModelProviderId === targetCatalogId ||
+      targetRawProviderIds.has(actualThreadModelProviderId) ||
+      (nextProviderId === null &&
+        effectiveNextMode === 'oauth-bearer' &&
+        actualThreadModelProviderId === 'openai'));
+  // The app-server may report a provider id that is not one of Cindy's
+  // materialized identities (for example `openai`, Azure, or a custom provider).
+  // It is still a sticky thread identity. Treating those ids as unknown lets a
+  // live thread cross into the Cindy gateway and keeps sending old response-item
+  // ids to the new route, which fails with `Item ... not found` when `store=false`.
+  // A missing id is the only case where there is no identity to compare.
   return (
-    actualThreadIdentityKnown &&
+    !actualIsAppliedCustomProviderIdentity &&
+    !actualMatchesTargetLogicalProvider &&
+    actualThreadModelProviderId !== null &&
     expectedThreadModelProviderId !== null &&
     actualThreadModelProviderId !== expectedThreadModelProviderId
   );
@@ -233,43 +286,22 @@ function throwIfCredentialSwitchAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
- * Pi loopback proxy identity that must agree across request header
- * `x-cindy-pi-provider-id`, `registerPiProxySession`, and `sessions.provider_id`.
- *
- * Cindy gateway (`xd` / `cindy` / unset) sends no provider header. Native
- * subscription and BYOM sources pin that id. Pi `set_model` does not reread
- * spawn-time `models.json`, so crossing this identity on a live process leaves
- * a stale header and the proxy returns 403 `pi_provider_mismatch`.
- */
-export function piProxyProviderIdentity(
-  providerId: string | null | undefined,
-): string | null {
-  const normalized = normalizeProviderId(providerId);
-  if (!normalized || normalized === 'xd' || normalized === 'cindy') return null;
-  return normalized;
-}
-
-/**
  * 判断运行中的本地会话是否必须关闭后重建。
  *
  * provider route 可以在空闲时或 turn 边界热切，但 agent 子进程的凭证形态是 spawn-time 状态；
  * 只要旧/新来源解析出的 credential family 不同，就不能继续复用当前进程。
- * Pi 还要额外对齐 proxy 供应商身份：Grok/xAI 与 GPT/OpenAI 同属
- * `provider-oauth`，但活进程仍会带旧 `x-cindy-pi-provider-id`。
+ * Pi 的实际启动输入和目录刷新能力由该会话的 previewModelSwitch 判定，
+ * 不能用来源身份或凭证家族代替原生运行时的判断。
  */
 export function shouldCloseSessionForCredentialSwitch(
   input: ShouldCloseSessionForCredentialSwitchInput,
 ): boolean {
   if (input.remoteHostId) return false;
 
+  if (input.agentKind === 'pi') return false;
+
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
-  if (
-    input.agentKind === 'pi'
-    && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
-  ) {
-    return true;
-  }
   const currentMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: currentProviderId,
@@ -281,14 +313,27 @@ export function shouldCloseSessionForCredentialSwitch(
     model: input.nextModel,
   });
 
-  // Tool Search 是 Claude 子进程的 spawn-time env。跨越上游 capability 边界时即使
-  // provider-oauth 凭证家族可复用，也必须重建本会话，不能把旧 flag 热切到新来源。
-  if (
-    input.agentKind === 'claude-code' &&
-    claudeToolSearchMode(currentProviderId, currentMode) !==
-      claudeToolSearchMode(nextProviderId, nextMode)
-  ) {
-    return true;
+  if (input.agentKind === 'claude-code') {
+    const providers = getActiveCatalog().providers;
+    const current = providers.find(provider => provider.id === currentProviderId);
+    const next = providers.find(provider => provider.id === nextProviderId);
+    // Native Claude tokens and account IDs are frozen in the spawn env. Equal
+    // credential families do not make two accounts interchangeable in a live process.
+    if (currentProviderId !== nextProviderId && [current, next].some(
+      provider => provider && providerCatalogId(provider) === 'anthropic',
+    )) return true;
+    // 未指定来源的会话在没有网关 key 时,Anthropic 模型跑在本机 Claude Code 登录上(CLI 直连,
+    // 进程里没有 proxy 地址),其它模型经 proxy。是哪种取决于 spawn 那一刻,这里回看不到:
+    // 订阅已连接时,隐式一侧换来源、或在 Anthropic 与非 Anthropic 模型之间切换,一律重建。
+    if (
+      (currentProviderId === null || nextProviderId === null) &&
+      (currentProviderId !== nextProviderId ||
+        isAnthropicWireModel(input.currentModel) !== isAnthropicWireModel(input.nextModel)) &&
+      hasClaudeNativeLogin()
+    ) return true;
+    // Tool Search is also spawn-time state, independent of the credential family.
+    if (claudeToolSearchMode(currentProviderId, currentMode, current?.auth.native) !==
+      claudeToolSearchMode(nextProviderId, nextMode, next?.auth.native)) return true;
   }
 
   // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────
@@ -361,7 +406,7 @@ export async function prepareLocalSessionCredentialModeSwitch(
 
   await withRehydrateCloseSuppressed(session.id, async () => {
     throwIfCredentialSwitchAborted(input.signal);
-    await input.maker.closeSession(session.id);
+    await input.maker.closeSession(session.id, 'runtime-refresh');
   });
   return { closedSessionIds: [session.id] };
 }
@@ -376,7 +421,11 @@ export async function prepareLocalCodexCredentialModeSwitch(
   input: PrepareLocalCodexCredentialModeSwitchInput,
 ): Promise<PrepareLocalCodexCredentialModeSwitchResult> {
   throwIfCredentialSwitchAborted(input.signal);
-  const localCodexSessions = input.maker.listActiveSessions().filter(isLocalCodexSession);
+  const localCodexSessions = input.maker.listActiveSessions().filter((session) =>
+    isLocalCodexSession(session) &&
+    (input.hostKey === undefined || (session.codexHostKey ?? 'local') === input.hostKey)
+    && (input.hostKeys === undefined || input.hostKeys.includes(session.codexHostKey ?? 'local')),
+  );
   const busySessions = localCodexSessions.filter((session) =>
     isSessionBusy(session, input.isSessionInTurn),
   );
@@ -396,7 +445,7 @@ export async function prepareLocalCodexCredentialModeSwitch(
     throwIfCredentialSwitchAborted(input.signal);
     await withRehydrateCloseSuppressed(session.id, async () => {
       throwIfCredentialSwitchAborted(input.signal);
-      await input.maker.closeSession(session.id);
+      await input.maker.closeSession(session.id, 'runtime-refresh');
     });
     closedSessionIds.push(session.id);
   }

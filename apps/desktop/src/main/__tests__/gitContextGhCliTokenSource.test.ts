@@ -25,6 +25,7 @@ describe('createGhCliTokenSource', () => {
     });
     expect(await src.readToken()).toBe('gho_abc123');
     expect(execFileFn.mock.calls[0][0]).toBe('/opt/homebrew/bin/gh');
+    expect(execFileFn.mock.calls[0][1]).toEqual(['auth', 'token', '--hostname', 'github.com']);
   });
 
   it('候选都不存在时退回裸 gh(win32 用 gh.exe)', async () => {
@@ -113,17 +114,12 @@ describe('createGhCliTokenSource', () => {
     expect(execFileFn).toHaveBeenCalledTimes(1);
   });
 
-  it('可用性探测只执行 gh auth status，不读取或污染 token cache', async () => {
+  it('可用性探测只执行静默账号 API，不读取或污染 token cache', async () => {
     const execFileFn = vi.fn(
-      (
-        _file: string,
-        args: string[],
-        opts: { timeout: number },
-        cb: ExecCb,
-      ) => {
-        if (args[1] === 'status') {
+      (_file: string, args: string[], opts: { timeout: number }, cb: ExecCb) => {
+        if (args[0] === 'api') {
           expect(opts.timeout).toBeLessThanOrEqual(1_000);
-          cb(null, 'logged in as octocat', '');
+          cb(null, '', '');
         } else {
           expect(opts.timeout).toBe(3_000);
           cb(null, 'gho_after_probe', '');
@@ -136,8 +132,8 @@ describe('createGhCliTokenSource', () => {
     expect(await src.probeAvailability()).toBe(true);
     expect(execFileFn).toHaveBeenCalledWith(
       expectedGhExecutable,
-      ['auth', 'status', '--hostname', 'github.com'],
-      { timeout: expect.any(Number) },
+      ['api', '--hostname', 'github.com', 'user', '--silent'],
+      { timeout: expect.any(Number), env: expect.any(Object) },
       expect.any(Function),
     );
     expect(await src.readToken()).toBe('gho_after_probe');
@@ -145,9 +141,75 @@ describe('createGhCliTokenSource', () => {
   });
 
   it('可用性探测失败只返回 false，不把 stderr/输出写进日志', async () => {
-    const execFileFn = execMock((_file, cb) => cb(new Error('not logged in'), 'secret-like-output', ''));
+    const execFileFn = execMock((_file, cb) =>
+      cb(new Error('not logged in'), 'secret-like-output', ''),
+    );
     const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
     expect(await src.probeAvailability()).toBe(false);
     expect(execFileFn).toHaveBeenCalledTimes(1);
+  });
+
+  describe('readTokenDetailed 保留失败原因', () => {
+    function errWith(extra: Record<string, unknown>): Error {
+      return Object.assign(new Error('gh failed'), extra);
+    }
+
+    it('ENOENT → gh-missing;spawn 抛错也归为 gh-missing', async () => {
+      const enoent = createGhCliTokenSource({
+        execFileFn: execMock((_f, cb) => cb(errWith({ code: 'ENOENT' }), '', '')),
+        existsFn: () => false,
+      });
+      expect(await enoent.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-missing' });
+
+      const thrown = createGhCliTokenSource({
+        execFileFn: vi.fn(() => {
+          throw new Error('spawn EACCES');
+        }),
+        existsFn: () => false,
+      });
+      expect(await thrown.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-missing' });
+    });
+
+    it('非零退出(exit 1)与空输出 → gh-not-logged-in', async () => {
+      const exit1 = createGhCliTokenSource({
+        execFileFn: execMock((_f, cb) => cb(errWith({ code: 1 }), '', 'not logged in')),
+        existsFn: () => false,
+      });
+      expect(await exit1.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-not-logged-in' });
+
+      const empty = createGhCliTokenSource({
+        execFileFn: execMock((_f, cb) => cb(null, '\n', '')),
+        existsFn: () => false,
+      });
+      expect(await empty.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-not-logged-in' });
+    });
+
+    it('子进程超时(killed + signal)→ gh-timeout', async () => {
+      const src = createGhCliTokenSource({
+        execFileFn: execMock((_f, cb) => cb(errWith({ killed: true, signal: 'SIGTERM' }), '', '')),
+        existsFn: () => false,
+      });
+      expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-timeout' });
+    });
+
+    it('EACCES / ENOEXEC 等 spawn 字符串错误 → gh-exec-failed,不当成未登录', async () => {
+      for (const code of ['EACCES', 'ENOEXEC'] as const) {
+        const src = createGhCliTokenSource({
+          execFileFn: execMock((_f, cb) => cb(errWith({ code }), '', '')),
+          existsFn: () => false,
+        });
+        expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-exec-failed' });
+      }
+    });
+
+    it('与 readToken 共享同一份缓存与 in-flight:两种读法交替调用只 spawn 一次', async () => {
+      const execFileFn = execMock((_f, cb) => cb(errWith({ code: 1 }), '', ''));
+      const src = createGhCliTokenSource({ execFileFn, existsFn: () => false });
+      const [detailed, plain] = await Promise.all([src.readTokenDetailed(), src.readToken()]);
+      expect(detailed).toEqual({ ok: false, reason: 'gh-not-logged-in' });
+      expect(plain).toBeNull();
+      expect(await src.readTokenDetailed()).toEqual({ ok: false, reason: 'gh-not-logged-in' });
+      expect(execFileFn).toHaveBeenCalledTimes(1);
+    });
   });
 });

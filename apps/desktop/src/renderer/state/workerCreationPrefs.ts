@@ -1,4 +1,9 @@
 import type { Effort } from '@/lib/userPreferences.types';
+import {
+  DEFAULT_ORCA_WORKER_AGENT,
+  DEFAULT_ORCA_WORKER_EFFORT,
+  DEFAULT_ORCA_WORKER_MODELS,
+} from '@cindy/maker-shared/orca-team';
 
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
@@ -14,9 +19,15 @@ export type WorkerAgentKind = 'codex' | 'claude-code' | 'pi';
 export interface WorkerAgentPrefs {
   model: string;
   effort: Effort;
-  fast: boolean;
+  fast: boolean | 'ultrafast';
   /** 上次显式选定的模型来源；null = 未显式选择，跟随默认路由解析。 */
   providerId: string | null;
+}
+
+/** 手动选定并提交的完整模型路线；null 位置表示任务所在电脑。 */
+export interface WorkerModelSelection extends WorkerAgentPrefs {
+  agent: WorkerAgentKind;
+  agentDeviceId: string | null;
 }
 
 export interface WorkerCreationPrefs {
@@ -26,14 +37,16 @@ export interface WorkerCreationPrefs {
   pi: WorkerAgentPrefs;
   /** 新 Worker 的默认权限；UI 与 Orca tool 共用。 */
   workerPermissionMode: OrcaWorkerPermissionMode;
+  /** 按账号与任务所在电脑隔离（JSON 二元组）；缺项时继续跟随 Lead 的位置。 */
+  modelSelectionByHost?: Record<string, WorkerModelSelection>;
 }
 
+// 首次默认值与手机端共用(@cindy/maker-shared/orca-team)。
 export const DEFAULT_WORKER_CREATION_PREFS: WorkerCreationPrefs = {
-  lastAgent: 'codex',
-  codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
-  'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
-  // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
-  pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
+  lastAgent: DEFAULT_ORCA_WORKER_AGENT,
+  codex: { model: DEFAULT_ORCA_WORKER_MODELS.codex, effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
+  'claude-code': { model: DEFAULT_ORCA_WORKER_MODELS['claude-code'], effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
+  pi: { model: DEFAULT_ORCA_WORKER_MODELS.pi, effort: DEFAULT_ORCA_WORKER_EFFORT as Effort, fast: false, providerId: null },
   workerPermissionMode: DEFAULT_ORCA_WORKER_PERMISSION_MODE,
 };
 
@@ -57,7 +70,7 @@ export function readWorkerCreationPrefs(): WorkerCreationPrefs {
       return {
         ...fallback,
         ...(value ?? {}),
-        fast: value?.fast === true,
+        fast: (value?.fast === 'ultrafast' ? 'ultrafast' : value?.fast === true),
         providerId:
           typeof value?.providerId === 'string' && value.providerId.trim()
             ? value.providerId.trim()
@@ -75,10 +88,34 @@ export function readWorkerCreationPrefs(): WorkerCreationPrefs {
       'claude-code': agentPrefs('claude-code'),
       pi: agentPrefs('pi'),
       workerPermissionMode: resolveOrcaWorkerPermissionMode(parsed.workerPermissionMode),
+      modelSelectionByHost: readModelSelections(parsed.modelSelectionByHost),
     };
   } catch {
     return defaultPrefs();
   }
+}
+
+function readModelSelections(value: unknown): Record<string, WorkerModelSelection> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([host, selection]) => {
+    if (!selection || typeof selection !== 'object') return [];
+    const item = selection as Partial<WorkerModelSelection>;
+    if (
+      (item.agent !== 'codex' && item.agent !== 'claude-code' && item.agent !== 'pi')
+      || typeof item.model !== 'string' || !item.model.trim()
+      || typeof item.effort !== 'string'
+      || (item.agentDeviceId !== null && (typeof item.agentDeviceId !== 'string' || !item.agentDeviceId.trim()))
+      || (item.providerId !== null && (typeof item.providerId !== 'string' || !item.providerId.trim()))
+    ) return [];
+    return [[host, {
+      agent: item.agent,
+      agentDeviceId: item.agentDeviceId,
+      model: item.model,
+      effort: item.effort,
+      fast: (item.fast === 'ultrafast' ? 'ultrafast' : item.fast === true),
+      providerId: item.providerId,
+    }]];
+  }));
 }
 
 export function writeWorkerCreationPrefs(prefs: WorkerCreationPrefs): void {

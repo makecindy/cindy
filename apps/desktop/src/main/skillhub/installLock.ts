@@ -12,9 +12,10 @@
  * 语义:
  *   - try-lock(fail-fast):已被持有时再次获取直接失败,不排队 —— 与两侧既有
  *     语义一致(市场侧返回"正在安装中"错误,learn 侧抛 LEARN_BUSY)。
- *   - 键为 skillName(与 installService 原 inflight Map 的键一致):自定义
- *     installPath 的市场安装同样按 name 互斥,宁可保守多拦。
- *   - 进程内即可:市场安装与 learn 落盘都跑在 desktop main 进程。
+ *   - 键为小写归一后的 skillName:自定义 installPath 同样按 name 互斥,
+ *     大小写敏感卷上的不同大小写名称也保守串行,不凭 OS 猜测卷的大小写语义。
+ *   - 文件变更还需 sharedMutationLease 的跨进程锁；本模块只提供本进程的
+ *     fail-fast 状态与持有方提示，不能单独保护正式版/dev/isolated 间的切换。
  */
 
 /** 锁持有方标识 —— 对端获取失败时据此生成可理解的错误文案。 */
@@ -22,7 +23,8 @@ export type SkillInstallLockOwner =
   | 'market-install'
   | 'market-uninstall'
   | 'learn-apply'
-  | 'local-import';
+  | 'local-import'
+  | 'local-rename';
 
 interface LockHolder {
   owner: SkillInstallLockOwner;
@@ -31,6 +33,11 @@ interface LockHolder {
 }
 
 const holders = new Map<string, LockHolder>();
+
+/** Conservatively serialize case variants, including on case-insensitive Windows/macOS volumes. */
+export function skillInstallLockKey(skillName: string): string {
+  return skillName.toLowerCase();
+}
 
 /**
  * 尝试获取 skillName 的安装锁。
@@ -41,16 +48,17 @@ export function tryAcquireSkillInstallLock(
   skillName: string,
   owner: SkillInstallLockOwner,
 ): (() => void) | null {
-  if (holders.has(skillName)) return null;
+  const key = skillInstallLockKey(skillName);
+  if (holders.has(key)) return null;
   const token = Symbol(skillName);
-  holders.set(skillName, { owner, token });
+  holders.set(key, { owner, token });
   return () => {
-    const current = holders.get(skillName);
-    if (current && current.token === token) holders.delete(skillName);
+    const current = holders.get(key);
+    if (current && current.token === token) holders.delete(key);
   };
 }
 
 /** 当前持有者(未被持有返回 null)。 */
 export function getSkillInstallLockOwner(skillName: string): SkillInstallLockOwner | null {
-  return holders.get(skillName)?.owner ?? null;
+  return holders.get(skillInstallLockKey(skillName))?.owner ?? null;
 }

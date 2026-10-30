@@ -22,6 +22,22 @@ const result = (deviceId: string): Providers =>
   ({ providers: [{ id: `${deviceId}-xd` } as ProviderView] });
 
 describe('useDeviceProviders deviceId-aware cache', () => {
+  it('unsupported refresh retires only that device cache without publishing an empty success', async () => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    await mod.fetchDeviceProviders('dev-1', async () => result('dev-1'));
+    await mod.fetchDeviceProviders('dev-2', async () => result('dev-2'));
+    const otherGen = mod.getDeviceProvidersGen('dev-2');
+    const readyListener = vi.fn();
+    mod.subscribeDeviceProviders('dev-1', readyListener);
+    await expect(mod.fetchDeviceProvidersFresh('dev-1', async () => {
+      throw new Error('[CHANNEL_NOT_ALLOWED] unavailable');
+    })).rejects.toThrow('CHANNEL_NOT_ALLOWED');
+    expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
+    expect(readyListener).not.toHaveBeenCalled();
+    expect(mod.getCachedDeviceProviders('dev-2')).toEqual(result('dev-2'));
+    expect(mod.getDeviceProvidersGen('dev-2')).toBe(otherGen);
+  });
+
   it('首次 fetch 调用注入的 fetcher', async () => {
     const fetcher = vi.fn(async () => result('dev-1'));
     const mod = await import('@/device-link/deviceProvidersCache');
@@ -69,22 +85,22 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({ providers: [{ id: 'dev-1-old-xd' }] });
   });
 
-  it('fresh 失败且曾作废普通在途 → 恢复普通拉取,目录不再卡未知(codex P2)', async () => {
+  it('fresh failure invalidates the pending read and reports the error without retrying other failures', async () => {
     const mod = await import('@/device-link/deviceProvidersCache');
-    // 普通请求在途(发起时目录 A)
-    const ordinaryResolvers: Array<(v: Providers) => void> = [];
-    const ordinary = vi.fn(() => new Promise<Providers>((r) => ordinaryResolvers.push(r)));
-    void mod.fetchDeviceProviders('dev-1', ordinary);
-    // fresh 触发并失败(瞬断)
-    const freshFetcher = vi.fn(() => Promise.reject(new Error('transient down')));
+    let release!: (v: Providers) => void;
+    const ordinary = mod.fetchDeviceProviders('dev-1', () => new Promise<Providers>((r) => { release = r; }));
+    const error = new Error('transient down');
+    const listener = vi.fn();
+    mod.subscribeDeviceProvidersError('dev-1', listener);
+    const freshFetcher = vi.fn().mockRejectedValue(error);
     await expect(mod.fetchDeviceProvidersFresh('dev-1', freshFetcher)).rejects.toThrow('transient down');
-    // 恢复拉取:cache-first 重新发起(有缓存立即恢复已知 / 无缓存访问工作站)
-    const recoveryFetcher = vi.fn(async () => result('dev-1-recovered'));
-    // 等待 fire-and-forget 恢复请求落定(经 inflight 槽,reject 后槽已清)
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    // 恢复请求应已发出并回写缓存(hook 不再停在 ready=false 未知态)
-    await mod.fetchDeviceProviders('dev-1', recoveryFetcher);
-    expect(recoveryFetcher).toHaveBeenCalled();
+    expect(freshFetcher).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(error);
+    release(result('obsolete'));
+    await ordinary;
+    expect(mod.getCachedDeviceProviders('dev-1')).toBeUndefined();
+    await mod.fetchDeviceProviders('dev-1', async () => result('recovered'));
+    expect(mod.getCachedDeviceProviders('dev-1')).toEqual(result('recovered'));
   });
 
   it('fetchDeviceProvidersFresh 无普通在途时不推进代际:守卫 genAt 校验可直接采信(codex P2)', async () => {
@@ -190,14 +206,12 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     // 无挂载 hook 的后台缓存写入路径(DeviceLinkContext provider:changed)也必须
     // mark epoch——否则断线前旧目录被当「首次挂载缓存命中」采信、永不刷新
     // (codex review P1)。捕获 epoch 在 fetch 前、mark 在成功后(失败不 mark)。
-    expect(ctxSrc).toContain('const epochAtWrite = connectionEpoch;');
-    expect(ctxSrc).toContain('markDeviceFetchEpoch(deviceId, epochAtWrite);');
+    expect(ctxSrc).toContain('connectionEpoch: () => connectionEpochRef.current');
     const ctxBlock = ctxSrc.slice(
       ctxSrc.indexOf('onProviderChanged: (deviceId) => {'),
       ctxSrc.indexOf('onProviderChanged: (deviceId) => {') + 1400,
     );
-    expect(ctxBlock).toContain('.then(() => {');
-    expect(ctxBlock).toContain('markDeviceFetchEpoch(deviceId, epochAtWrite);');
+    expect(ctxBlock).toContain('catalogRefresh.notify(deviceId);');
     // 模块级 Map + 导出存取(跨组件卸载存活)
     expect(cacheSrc).toContain('const deviceFetchEpoch = new Map<string, number>();');
     expect(cacheSrc).toContain('export function markDeviceFetchEpoch(deviceId: string, epoch: number): void');
@@ -412,15 +426,26 @@ describe('useDeviceProviders deviceId-aware cache', () => {
   });
 });
 
-describe('fetchDeviceProvidersFresh 恢复分支 (source locks)', () => {
-  it('fresh 失败恢复时缓存命中 → 主动重发快照(codex P2:缓存命中分支必须发布,否则 hook ready 一直未知)', () => {
-    // 行为时序「缓存有值 + 普通在途」在轮次 37 修复后互斥不可黑盒构造,用 source-lock
-    // 守住恢复分支的两条路径(cache-first 命中 → notify 重发;miss → 重新拉取)。
-    const source = readTextLf(
-      resolve(process.cwd(), 'src/device-link/deviceProvidersCache.ts'),
-      'utf8',
-    );
-    expect(source).toContain('notifyDeviceProviders(deviceId, cached)');
-    expect(source).toContain('void fetchDeviceProviders(deviceId, fetcher).catch(() => undefined)');
+describe('provider catalog error classification', () => {
+  it.each([
+    [new Error('[MODEL_VISIBILITY_NOT_READY] waiting'), false],
+    [new Error('[INTERNAL] mentions CHANNEL_NOT_ALLOWED'), false],
+    [new Error('MODEL_VISIBILITY_NOT_READY: raw error'), false],
+    [new Error('[CHANNEL_NOT_ALLOWED] unavailable'), true],
+    [Object.assign(new Error('unavailable'), { code: 'CHANNEL_NOT_ALLOWED' }), true],
+  ])('allows legacy fallback only for a typed unsupported error: %s', async (error, expected) => {
+    const mod = await import('@/device-link/deviceProvidersCache');
+    expect(mod.isDeviceProvidersUnsupportedError(error)).toBe(expected);
   });
+});
+
+it('uses host display order in cached and fresh reads without mutating the wire catalog', async () => {
+  const mod = await import('@/device-link/deviceProvidersCache');
+  const providers = ['a','b','c'].map(id => ({id})) as ProviderView[];
+  const first = await mod.fetchDeviceProviders('order-host', async()=>({providers,providerOrder:['b','missing','b','a']}));
+  expect(first.providers.map(p=>p.id)).toEqual(['b','a','c']);
+  expect(providers.map(p=>p.id)).toEqual(['a','b','c']);
+  const fresh = await mod.fetchDeviceProvidersFresh('order-host', async()=>({providers,providerOrder:['c']}));
+  expect(fresh.providers.map(p=>p.id)).toEqual(['c','a','b']);
+  expect(mod.getCachedDeviceProviders('order-host')?.providers.map(p=>p.id)).toEqual(['c','a','b']);
 });

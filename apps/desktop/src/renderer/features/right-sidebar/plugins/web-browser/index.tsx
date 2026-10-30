@@ -129,6 +129,7 @@ const plugin: TabKindPlugin<WebBrowserState> = {
   menu: {
     kind: 'web-browser',
     labelKey: 'rightSidebar.tabs.kinds.browser',
+    descriptionKey: 'rightSidebar.tabs.descriptions.browser',
     icon: Globe,
     order: 20,
     enabled: true,

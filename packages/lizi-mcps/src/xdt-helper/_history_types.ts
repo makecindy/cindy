@@ -25,6 +25,14 @@ export type HistoryReadErrorCode =
   | 'REMOTE_TIMEOUT'
   | 'REMOTE_PAYLOAD_TOO_LARGE';
 
+/**
+ * history 读取侧可读的 message role 全集。
+ * 'error' 是技术性 role: 由 terminal error 诊断行落库(messagePersistBroadcaster
+ * 写入 role: 'error', content 内 message / sdkError 已过 redactSensitiveText 脱敏,
+ * reason 等其余字段是入库原样内容), 与 tool_use / tool_result / thinking 一样仅在
+ * 调用方显式列出时(roles 数组里包含该项)才返回。跨设备出口会再对 error 行 content
+ * 整体过 redactSensitiveTextDeep, 因此读取侧拿到的是脱敏后的内容。
+ */
 export type HistoryRole =
   | 'user'
   | 'assistant'
@@ -32,7 +40,8 @@ export type HistoryRole =
   | 'tool_result'
   | 'ask_user'
   | 'plan_review'
-  | 'thinking';
+  | 'thinking'
+  | 'error';
 
 export interface HistoryCursor {
   /** unix ms */
@@ -56,6 +65,14 @@ export interface HistoryWorkdir {
   agentKinds: string[];
 }
 
+export interface HistoryCompanion {
+  id: string;
+  role: string;
+  channel?: string;
+  /** Routine lanes (`role = 'routine'`): the standing rule this Session runs. Absent on older hosts. */
+  routineId?: string;
+}
+
 export interface HistorySession {
   id: string;
   title: string;
@@ -66,11 +83,21 @@ export interface HistorySession {
   status: string;
   source: string;
   orcaRole: string | null;
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  };
   parentSessionId: string | null;
   createdAt: number; // unix ms
   updatedAt: number;
   userSendAt: number | null;
   messageCount: number;
+  lastActivityAt?: number;
+  companion?: HistoryCompanion | null;
 }
 
 export interface HistoryMessage {
@@ -90,12 +117,20 @@ export interface HistoryMessage {
 // ── Reader 调用参数 (host 端把 tool 解析后的参数透传给 reader) ───────────────
 
 export interface ListWorkdirsArgs {
+  /** Host-owned ownership scope. null = account history; [] = deny all. */
+  sessionIds: string[] | null;
   limit: number;
   cursor: HistoryCursor | null;
   order: HistoryOrder;
 }
 
 export interface ListSessionsArgs {
+  /** Optional filters, intersected with the host-authorized scope. */
+  teammateId?: string;
+  source?: string;
+  timeField?: 'created' | 'activity';
+  /** Host-owned ownership scope. null = account history; [] = deny all. */
+  sessionIds: string[] | null;
   workdir: string | null;
   fromMs: number | null;
   toMs: number | null;
@@ -129,6 +164,8 @@ export interface GetMessagesArgs {
 // 上下文窗口拼装; 向量不可用 / 未开 embedding 时静默退化为纯 FTS。
 
 export interface SearchChatHistoryArgs {
+  teammateId?: string;
+  source?: string;
   /** 自然语言查询(必填)。 */
   query: string;
   sessionIds: string[] | null;
@@ -180,6 +217,8 @@ export interface SearchChatHistoryHit {
 }
 
 export interface SearchChatHistorySessionMeta {
+  source?: string;
+  companion?: HistoryCompanion | null;
   workingDir: string | null;
   agentKind: string;
   title: string;
@@ -205,6 +244,14 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
+  sessionUrl?: (sessionId: string) => string;
+  remote?: import('./_history_devices.js').HistoryRemoteDeps;
+  /** Resolve the maximum history scope for the current runtime Session. */
+  resolveSessionScope?: (args: {
+    callerSessionId?: string;
+    callerMemoryScopeKey?: string;
+  }) => Promise<ControlResult<{ sessionIds: string[] | null }>>;
   listWorkdirs: (args: ListWorkdirsArgs) => Promise<ControlResult<{ page: HistoryPage<HistoryWorkdir> }>>;
   listSessions: (args: ListSessionsArgs) => Promise<ControlResult<{ page: HistoryPage<HistorySession> }>>;
   getMessages: (
@@ -213,4 +260,14 @@ export interface XdtHelperHistoryDeps {
   searchChatHistory: (
     args: SearchChatHistoryArgs,
   ) => Promise<ControlResult<{ result: SearchChatHistoryResult }>>;
+  /** get_task_digest:一件任务的短摘要(本机 id 或 deviceId::sessionId)。不注入则不注册该工具。 */
+  taskDigest?: (args: {
+    sessionId: string;
+    callerSessionId?: string;
+  }) => Promise<
+    ControlResult<
+      { digest: import('./get_task_digest.js').TaskDigestWire },
+      'NOT_FOUND' | 'REMOTE_UNAVAILABLE' | 'INVALID_ARGS'
+    >
+  >;
 }

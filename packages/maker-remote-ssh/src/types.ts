@@ -72,11 +72,19 @@ export interface HostConfig {
   managedByCindy: boolean;
 }
 
+/** Local verification result; never inferred from server-provided error text. */
+export interface HostKeyMismatch {
+  host: string;
+  trusted: string;
+  presented: string;
+}
+
 /** Snapshot of a host's runtime state for renderer. */
 export interface HostSnapshot {
   config: HostConfig;
   status: RemoteStatus;
   lastError?: string;
+  hostKeyMismatch?: HostKeyMismatch;
   /**
    * Human-readable label for the credential that succeeded on the most
    * recent connect — e.g. "ssh-agent" or "key:id_ed25519". Undefined when

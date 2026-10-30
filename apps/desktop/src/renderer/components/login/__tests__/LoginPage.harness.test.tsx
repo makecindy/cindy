@@ -140,6 +140,23 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe('error screen recovery', () => {
+  const errorState: AuthFlowState = {
+    step: 'error',
+    code: 'REGION_MISMATCH',
+    recoverTo: 'identifier',
+  };
+
+  it('allows back navigation without another reset while sign-in is loading', () => {
+    mount(errorState, { isLoading: true });
+
+    const back = screen.getByRole('button', { name: 'login.back' }) as HTMLButtonElement;
+    expect(back.disabled).toBe(false);
+    fireEvent.click(back);
+    expect(loginHook.value.dispatch).toHaveBeenCalledExactlyOnceWith({ type: 'back' });
+  });
+});
+
 /* ── wave4 视觉五维(brand-background / panel-border / wordmark / slogan) ── */
 describe('wave4 stage 视觉', () => {
   it('brand-background 纯平白底(消费 login-bg-base,无渐变;2026-07-22 对齐 PR #104,viewport 锚定)', async () => {
@@ -234,24 +251,53 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
   });
 
-  it.each([
-    ['darwin', 'mr-2'],
-    ['win32', 'mr-1'],
-  ] as const)('登录更多账号在 %s 标题栏右侧提供关闭按钮', async (platform, marginClass) => {
+  it.each([false, true])('登录更多账号首屏返回会退出流程（loading=%s）', async (isLoading) => {
+    const onClose = vi.fn();
+    mount(await identifierState('providers:both'), { isLoading }, 'add-account', onClose);
+
+    const back = screen.getByRole('button', { name: 'login.back' });
+    expect(screen.getByTestId('login-panel-identifier').contains(back)).toBe(true);
+    expect((back as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(back);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('普通登录首屏不提供退出流程的返回按钮', async () => {
+    mount(await identifierState('providers:both'));
+    expect(screen.queryByRole('button', { name: 'login.back' })).toBeNull();
+  });
+
+  it.each(['darwin', 'win32'])('登录更多账号在 %s 仅保留面板返回入口', async (platform) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: { platform, acceptPrivacyConsent: async () => ({ allowed: true }) },
     });
+    mount(await identifierState('providers:both'), undefined, 'add-account', vi.fn());
+
+    expect(screen.queryByTestId('add-account-close')).toBeNull();
+    expect(screen.getAllByTestId('login-back-button')).toHaveLength(1);
+    expect(
+      screen.getByTestId('login-drag-bar').contains(screen.getByTestId('login-back-button')),
+    ).toBe(false);
+  });
+
+  it('添加账号准备时可以返回原页面', () => {
     const onClose = vi.fn();
-    mount(await identifierState('providers:both'), undefined, 'add-account', onClose);
-
-    const dragBar = screen.getByTestId('login-drag-bar');
-    const close = screen.getByTestId('add-account-close');
-    expect(dragBar.contains(close)).toBe(true);
-    expect(close.className).toContain(marginClass);
-
-    fireEvent.click(close);
+    mount(null, { isLoading: true }, 'add-account', onClose);
+    const back = screen.getByTestId('login-back-button');
+    expect(screen.getByTestId('login-panel-preparing').contains(back)).toBe(true);
+    fireEvent.click(back);
     expect(onClose).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('添加账号后续步骤返回仍重置登录而不退出', async () => {
+    const onClose = vi.fn();
+    mount(await methodChoiceState('sso:single'), undefined, 'add-account', onClose);
+    fireEvent.click(screen.getByTestId('login-back-button'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('「跳过登录」槽与错误提示槽首尾相接且不重叠(error 出现不推移跳过入口)', async () => {
@@ -267,10 +313,10 @@ describe('identifier 态(附录 A providers 场景)', () => {
     );
   });
 
-  it('「跳过登录」= 文字按钮:统一 #6F6F6F 不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {
+  it('「跳过登录」= 文字按钮:统一次要档不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {
     mount(await identifierState('providers:both'));
     const skip = screen.getByTestId('login-skip-entry');
-    // 颜色走 --login-secondary-text(双模同值 #6F6F6F),不是 link 族 --login-link-text
+    // 颜色走 --login-secondary-text(墨水次要档),不是 link 族 --login-link-text
     const style = skip.getAttribute('style') ?? '';
     expect(style).toContain('--login-secondary-text');
     expect(style).not.toContain('--login-link-text');
@@ -551,6 +597,10 @@ describe('method-choice(附录 A sso 场景)', () => {
 describe('preparing 伪态', () => {
   it('loginState 未就绪 → preparing 面板 + 64 loading 环 @(308,193)', () => {
     mount(null);
+    expect((screen.getByTestId('login-back-button') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('login-local-mode') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('login-back-button'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'back' });
     expect(screen.getByTestId('login-panel-preparing')).toBeTruthy();
     expect(screen.getByText('login.preparing')).toBeTruthy();
     expect(screen.getByText('login.preparingSubtitle')).toBeTruthy();

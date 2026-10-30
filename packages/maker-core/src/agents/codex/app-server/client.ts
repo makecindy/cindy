@@ -45,10 +45,26 @@ export class AppServerRequestTimeoutError extends Error {
   constructor(
     public readonly method: string,
     public readonly timeoutMs: number,
+    /** 超时时的诊断(只含计数与耗时)，附在消息末尾。 */
+    detail?: string,
   ) {
-    super(`codex app-server ${method} timed out after ${timeoutMs}ms`);
+    super(`codex app-server ${method} timed out after ${timeoutMs}ms${detail ? ` (${detail})` : ''}`);
     this.name = 'AppServerRequestTimeoutError';
   }
+}
+
+/**
+ * 有进展就顺延的请求上限：到 timeoutMs 时若最近 idleMs 内仍有进展就继续等，直到连续 idleMs 没有
+ * 进展，或从发出起等满 maxMs。用于设备托管会话：线程启动要经设备互联逐个读项目文件，慢链路下
+ * 合法地超过固定上限(#5764)；真正卡住(没有任何往来)时仍按原上限结束。
+ */
+export interface RequestProgressDeadline {
+  /** 最近一次有进展的时间(Date.now 毫秒)；没有记录时为 null。 */
+  lastProgressAt(): number | null;
+  idleMs: number;
+  maxMs: number;
+  /** 超时时附在错误消息里的诊断。 */
+  describe?(): string;
 }
 
 /**
@@ -246,6 +262,7 @@ export class AppServerClient {
   private initialized = false;
   /** close() 调用后置 true, 阻止后续 request / 重复 close 的副作用。 */
   private closed = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(opts: AppServerClientOptions) {
     if (typeof opts.createTransport !== 'function') {
@@ -312,32 +329,42 @@ export class AppServerClient {
     return response;
   }
 
+  /** Only local transports can prove this pre-protocol failure and process exit. */
+  nativeSqliteInitializationFailed(): boolean {
+    return !this.initialized && this.transport?.nativeSqliteInitializationFailed?.() === true;
+  }
+
   /**
    * close() 是幂等的; reason 仅用于 reject pending requests 的错误消息。
    * - reject 所有挂起 promise
    * - 关闭 transport (杀子进程 / 关 ssh channel)
    */
   async close(opts?: { reason?: string; throwOnTransportError?: boolean }): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const reason = opts?.reason ?? 'AppServerClient.close()';
+    if (!this.closePromise) {
+      this.closed = true;
+      const reason = opts?.reason ?? 'AppServerClient.close()';
+      // 缓存未吞错的完成结果，各调用方独立选择是否传播失败。
+      const closePromise = Promise.resolve().then(() => this.transport?.close(reason)).catch((error) => {
+        // 保留 closed，后续调用仅重查幂等关闭，不重新开放协议。
+        if (this.closePromise === closePromise) this.closePromise = null;
+        this.logger.warn('transport.close threw', { message: (error as Error).message });
+        throw error;
+      });
+      this.closePromise = closePromise;
 
-    // reject 所有挂起 request — 上层 await 不会无限等。
-    const err = new Error(`codex app-server closed: ${reason}`);
-    for (const [, pending] of this.pending) {
-      if (pending.timeoutId) clearTimeout(pending.timeoutId);
-      pending.reject(err);
-    }
-    this.pending.clear();
-    this.writeFailureTombstones.clear();
-
-    if (this.transport) {
-      try {
-        await this.transport.close(reason);
-      } catch (e) {
-        this.logger.warn('transport.close threw', { message: (e as Error).message });
-        if (opts?.throwOnTransportError) throw e;
+      // reject 所有挂起 request — 包括正在 initialize 的调用。
+      const err = new Error(`codex app-server closed: ${reason}`);
+      for (const [, pending] of this.pending) {
+        if (pending.timeoutId) clearTimeout(pending.timeoutId);
+        pending.reject(err);
       }
+      this.pending.clear();
+      this.writeFailureTombstones.clear();
+    }
+    try {
+      await this.closePromise;
+    } catch (error) {
+      if (opts?.throwOnTransportError) throw error;
     }
   }
 
@@ -346,11 +373,12 @@ export class AppServerClient {
   /**
    * 发送一个 JSON-RPC request, 等待对应 id 的 response。
    * server 返回 error 时 reject 一个携带 code+message 的 Error。
+   * `extendWhileProgress` 只在给了 timeoutMs 时生效(见 RequestProgressDeadline)。
    */
   request<R = unknown>(
     method: string,
     params?: unknown,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; extendWhileProgress?: RequestProgressDeadline },
   ): Promise<R> {
     if (this.closed) {
       return Promise.reject(new Error(`AppServerClient.request(${method}) after close()`));
@@ -389,11 +417,39 @@ export class AppServerClient {
       };
       this.pending.set(id, pending);
       if (timeoutMs !== undefined) {
-        pending.timeoutId = setTimeout(() => {
+        const progress = opts?.extendWhileProgress;
+        const startedAt = Date.now();
+        let extended = false;
+        const expire = (): void => {
           if (this.pending.get(id) !== pending) return;
+          if (progress) {
+            const now = Date.now();
+            let last: number | null = null;
+            try {
+              last = progress.lastProgressAt();
+            } catch {
+              last = null;
+            }
+            const idleLeft = last === null ? 0 : progress.idleMs - (now - last);
+            const capLeft = progress.maxMs - (now - startedAt);
+            if (idleLeft > 0 && capLeft > 0) {
+              extended = true;
+              pending.timeoutId = setTimeout(expire, Math.min(idleLeft, capLeft));
+              pending.timeoutId.unref?.();
+              return;
+            }
+          }
           this.pending.delete(id);
-          reject(new AppServerRequestTimeoutError(method, timeoutMs));
-        }, timeoutMs);
+          let detail: string | undefined;
+          try {
+            detail = progress?.describe?.();
+          } catch {
+            detail = undefined;
+          }
+          // 没顺延过时照旧报配置的上限；顺延过报实际等了多久。
+          reject(new AppServerRequestTimeoutError(method, extended ? Date.now() - startedAt : timeoutMs, detail));
+        };
+        pending.timeoutId = setTimeout(expire, timeoutMs);
         pending.timeoutId.unref?.();
       }
       transport.writeLine(payload).then(undefined, (err: Error) => {

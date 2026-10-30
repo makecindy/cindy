@@ -21,8 +21,8 @@
  *     无单位后缀(与费用的货币前缀天然区分);0 视为无数据不显示。
  *   - cost:优先 totalMoney(区域币种 $/¥),回退 legacy totalCostUsd;
  *     两者都为 0 / 缺失(如订阅模式)不显示。
- *   - time:与现状时间槽同一时间轴(activityIso 由调用方传入,SessionItem 用
- *     session.updatedAt,SessionCard 同)。
+ *   - time:与列表排序同一时间轴,调用方通过 getSessionListActivityAt 依次取
+ *     lastActivityAt、userSendAt、updatedAt。
  *
  * 远程会话:token / 费用字段在远端 DB,device-link 投影可能缺失或为 0——按
  * 「无数据不显示」自然降级,不误显示 0(设计文档 §9.6:第一期仅本机会话有值)。
@@ -180,7 +180,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
   }, [fetchStatusesForSession, prRef.sessionId]);
   // 按 key 精准订阅(2026-08-13 review P1):整表快照会让任一 PR 的刷新惊动
   // 全部已挂载徽标;usePrStatus 在本 PR 结果未变时快照引用不变、不重渲染。
-  const status = usePrStatus(prStatusKey(prRef));
+  const status = usePrStatus(prRef.sessionId, prStatusKey(prRef));
   const kind = status?.ok ? status.status : null;
   const unresolvedCount = status?.ok ? status.unresolvedCount : null;
   const showDot = shouldShowPrUnresolvedDot(kind, unresolvedCount);

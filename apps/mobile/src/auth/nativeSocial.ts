@@ -47,6 +47,25 @@ export function isNativeSocialProviderSupported(
   return !!WECHAT_APP_ID && !!WECHAT_UNIVERSAL_LINK;
 }
 
+/**
+ * Resolves whether a configured native provider should be offered on this
+ * device. The current login UI offers WeChat only on Mainland China iOS after
+ * the SDK confirms that WeChat is installed. Android credential acquisition
+ * remains available to callers, but the login UI does not advertise it.
+ */
+export async function isNativeSocialProviderAvailable(
+  provider: SocialProvider,
+): Promise<boolean> {
+  if (!isNativeSocialProviderSupported(provider)) return false;
+  if (provider !== 'wechat' || Platform.OS !== 'ios') return true;
+  try {
+    const { isWechatInstalled } = await import('xdt-wechat-login');
+    return await isWechatInstalled();
+  } catch {
+    return false;
+  }
+}
+
 /** Acquires a short-lived native SDK credential. Token exchange always happens in auth-server. */
 export async function acquireNativeSocialCredential(
   provider: SocialProvider,

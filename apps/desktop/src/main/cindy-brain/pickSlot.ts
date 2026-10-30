@@ -35,11 +35,12 @@ import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 export interface PickSlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  getMutationTarget(id: string): string | null;
   /**
    * 弹系统级选文件夹窗口;返回所选绝对路径,取消返回 null。
    * 找不到可挂靠的 Cindy 窗口时应 reject(失败关闭,不弹无主对话框)。
    */
-  showDirectoryDialog(params: { ghostName: string; purpose: string | null }): Promise<string | null>;
+  showDirectoryDialog(params: { ghostName: string; purpose: string | null; ghostId: string; mobilePageId?: string }): Promise<string | null>;
   /** 签发目录过户票据(dirDeposit.deposit,userGranted 语义 = 用户已亲手选中)。 */
   depositDir(
     ghostId: string,
@@ -73,7 +74,7 @@ export class GhostPickSlot {
 
   constructor(private readonly deps: PickSlotDeps) {}
 
-  async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipePickResult> {
+  async handleRequest(ghostId: string, payload: unknown, shouldContinue: () => boolean = () => true): Promise<GhostPipePickResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost?.enabled || ghost.manifest.pick !== true) {
       return fail('PERMISSION_DENIED', '插件未申请目录选择权限(pick),或当前未启用');
@@ -82,6 +83,7 @@ export class GhostPickSlot {
       return fail('INVALID_REQUEST', 'pick-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.mobilePageId !== undefined && (typeof request.mobilePageId !== 'string' || request.mobilePageId.length > 128)) return fail('INVALID_REQUEST', 'Invalid mobile page context');
     if (request.mode !== 'directory') {
       return fail('INVALID_REQUEST', 'mode 目前只支持 "directory"');
     }
@@ -114,6 +116,8 @@ export class GhostPickSlot {
     const purposeRaw =
       typeof request.title === 'string' ? sanitizeGhostNoticeText(request.title) : '';
     const purpose = purposeRaw ? purposeRaw.slice(0, GHOST_PICK_TITLE_MAX_CHARS) : null;
+    const target = this.deps.getMutationTarget(ghostId);
+    if (target === null) return fail('PERMISSION_DENIED', '插件安装或账户状态已变化');
 
     this.dialogInFlight = true;
     let picked: string | null;
@@ -121,6 +125,8 @@ export class GhostPickSlot {
       picked = await this.deps.showDirectoryDialog({
         ghostName: ghost.manifest.name,
         purpose,
+        ghostId,
+        ...(typeof request.mobilePageId === 'string' ? { mobilePageId: request.mobilePageId } : {}),
       });
     } catch (error) {
       this.deps.log?.warn('ghost pick dialog failed', {
@@ -131,8 +137,14 @@ export class GhostPickSlot {
     } finally {
       this.dialogInFlight = false;
     }
+    if (!shouldContinue()) return fail('CANCELLED', 'The originating page has closed.');
     if (picked === null) {
       return fail('CANCELLED', '用户取消了选择');
+    }
+    const current = this.deps.getGhost(ghostId);
+    if (!current?.enabled || current.manifest.pick !== true ||
+        this.deps.getMutationTarget(ghostId) !== target) {
+      return fail('PERMISSION_DENIED', '插件安装或账户状态已变化,请重新选择');
     }
     // 用户已亲手选中:先记台账再分档发结果(票据签发失败也不该丢掉这次
     // 授权事实——用户确实选了)。

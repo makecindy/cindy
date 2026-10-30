@@ -18,7 +18,6 @@
 
 import type {
   IMCardActionEvent,
-  IMFinalReplyMirror,
   IMMessageEvent,
   IMStatus,
   InteractiveCardSpec,
@@ -36,9 +35,8 @@ export interface TextChannelIM {
   onStatusChange(handler: (s: IMStatus) => void): () => void;
 
   // ── outbound ───────────────────────────────────────────────────────────────
-  // 末位 opts.threadTs: thread 能力渠道(slack)把消息发进指定 thread;
-  // 无 thread 概念的渠道(feishu)的实现可省略该参数(结构类型兼容), 调用方
-  // 传了也只是被忽略。
+  // opts.threadTs identifies the reply root: Slack timestamp or Feishu private-topic root message id.
+  // Unsupported channels may omit it; Feishu group lanes retain their existing lane anchors.
 
   /** 纯文本消息(不渲染 markdown 标记)。 */
   sendText(
@@ -70,7 +68,7 @@ export interface TextChannelIM {
    */
   reactToMessage?(messageId: string, emoji: string): Promise<string | null>;
 
-  /** 撤销 reactToMessage 加的回应;失败吞掉(清理是尽力而为)。 */
+  /** 撤销回应；失败抛出供状态切换保留 token，终态调用方负责尽力清理。 */
   removeMessageReaction?(messageId: string, reactionToken: string): Promise<void>;
 
   // ── status ─────────────────────────────────────────────────────────────────
@@ -129,16 +127,6 @@ export interface RichChannelIM extends TextChannelIM {
     initial?: string,
     opts?: { threadTs?: string },
   ): Promise<StreamingTextHandle>;
-
-  /** Keep mirror confirmation alive while a turn is active or queued; returns its release hook. */
-  retainFinalReplyMirror?(mirror: IMFinalReplyMirror): (() => void) | void;
-
-  /** Best-effort terminal mirror when the primary rich surface could not be created. */
-  mirrorFinalReply?(
-    mirror: IMFinalReplyMirror,
-    text: string,
-    opts?: { mediaAbsPaths?: string[] },
-  ): Promise<void>;
 
   /**
    * 从出站消息的 messageId 提取 thread 维度键(= 该消息作为 thread root 时的

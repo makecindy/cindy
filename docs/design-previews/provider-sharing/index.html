@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light dark" />
+<title>供应商分享 · 交互设计稿</title>
+<style>
+  /* 自包含设计稿：数值取自 Cindy 设计 token（DESIGN.md §2 / §4 / §10），品牌图标为占位。 */
+  :root {
+    color-scheme: light;
+    --surface: #f8f8f6;
+    --card: #ffffff;
+    --border: #d7d7d4;
+    --text: #262626;
+    --secondary: #737373;
+    --tertiary: #a3a3a3;
+    --chip: #e5e5e5;
+    --hover: #f2f2ef;
+    --primary-hover: #d7d7d6;
+    --cta-bg: #000000;
+    --cta-fg: #ffffff;
+    --cta-hover: #262626;
+    --switch-on: #505153;
+    --knob: #ffffff;
+    --green: #2aae5b;
+    --danger: #ef4444;
+    --focus: rgba(65, 124, 221, 0.5);
+    --scrim: rgba(0, 0, 0, 0.5);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+    --bar: #ebebe8;
+  }
+  body.dark {
+    color-scheme: dark;
+    --surface: #1f1f1e;
+    --card: #2c2c2a;
+    --border: #3c3c3a;
+    --text: #d4d4d4;
+    --secondary: #a3a3a3;
+    --tertiary: #737373;
+    --chip: #3c3c3a;
+    --hover: #353533;
+    --primary-hover: #4a4a48;
+    --cta-bg: #ffffff;
+    --cta-fg: #000000;
+    --cta-hover: #e5e5e5;
+    --switch-on: #bdbdb8;
+    --knob: #2c2c2a;
+    --green: #55c886;
+    --danger: #ef4444;
+    --scrim: rgba(0, 0, 0, 0.7);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --bar: #353533;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--text);
+    font: 13px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  svg { display: block; flex-shrink: 0; }
+
+  /* ---------- 评审工具条（设计稿外壳，不属于产品界面） ---------- */
+  .reviewbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .reviewbar strong { font-weight: 500; font-size: 13px; margin-right: 8px; }
+  .reviewbar .spacer { flex: 1; }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 9999px; background: var(--card); flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; border-radius: 9999px; padding: 4px 12px; min-height: 28px; color: var(--secondary); font-size: 12px; }
+  .seg button[aria-pressed="true"] { background: var(--chip); color: var(--text); font-weight: 500; }
+  .variantbar { display: flex; align-items: center; gap: 10px; padding: 10px 24px 0; font-size: 12px; color: var(--secondary); min-height: 46px; }
+  .note { max-width: 1120px; margin: 4px auto 0; padding: 0 24px; color: var(--secondary); font-size: 12px; }
+
+  /* ---------- 通用控件 ---------- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 24px; border-radius: 9999px; border: 1px solid transparent;
+    font-size: 13px; font-weight: 500; white-space: nowrap; background: transparent;
+  }
+  .btn.sm { height: 28px; padding: 0 12px; }
+  .btn.primary { background: var(--chip); border-color: var(--chip); }
+  .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+  .btn.secondary { background: var(--card); border-color: var(--border); }
+  .btn.secondary:hover { background: var(--hover); }
+  .btn.cta { background: var(--cta-bg); color: var(--cta-fg); }
+  .btn.cta:hover { background: var(--cta-hover); }
+  .btn.quiet { color: var(--secondary); }
+  .btn.quiet:hover { background: var(--hover); color: var(--text); }
+  .btn.danger-text { color: var(--secondary); }
+  .btn.danger-text:hover { background: var(--hover); color: var(--danger); }
+  .btn.danger { background: var(--danger); color: #fff; }
+  .btn[disabled] { opacity: .6; cursor: default; pointer-events: none; }
+  .icon-btn {
+    position: relative; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 9999px; background: transparent; color: var(--secondary);
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .icon-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
+  .icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--secondary); }
+  .icon-btn .dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--text); border: 1.5px solid var(--card); }
+  .switch { width: 36px; height: 20px; border-radius: 9999px; background: var(--chip); border: 0; padding: 2px; display: inline-flex; flex-shrink: 0; }
+  .switch::after { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); transition: transform 150ms; }
+  body:not(.dark) .switch::after { background: #fff; }
+  .switch[aria-checked="true"] { background: var(--switch-on); }
+  .switch[aria-checked="true"]::after { transform: translateX(16px); }
+  .switch[disabled] { opacity: .45; cursor: default; }
+  .tipwrap { position: relative; display: inline-flex; }
+  .tip {
+    position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 20;
+    width: max-content; max-width: 240px; padding: 6px 10px; border-radius: 8px;
+    background: var(--cta-bg); color: var(--cta-fg); font-size: 12px; line-height: 1.4;
+    opacity: 0; pointer-events: none; transition: opacity 120ms;
+  }
+  .tipwrap:hover .tip, .tipwrap:focus-within .tip { opacity: 1; }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--chip); font-weight: 500; flex-shrink: 0; }
+  .avatar.lg { width: 40px; height: 40px; font-size: 15px; }
+  .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 9999px; background: var(--chip); color: var(--secondary); font-size: 11px; white-space: nowrap; }
+  .muted { color: var(--secondary); }
+  .faint { color: var(--tertiary); }
+  .mark { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex-shrink: 0; background: var(--card); }
+
+  /* ---------- 舞台 ---------- */
+  .stage { max-width: 1120px; margin: 12px auto 40px; padding: 0 24px; }
+  .window { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 640px; }
+  .page { padding: 24px 28px; }
+  .page h1 { margin: 0; font-size: 16px; font-weight: 500; }
+  .page .lead { margin: 4px 0 16px; color: var(--secondary); }
+
+  /* 设置页：供应商 */
+  .panel { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 540px; }
+  .rail { width: 224px; border-right: 1px solid var(--border); padding: 12px 8px; flex-shrink: 0; }
+  .railcap { font-size: 12px; color: var(--secondary); padding: 6px 12px 10px; }
+  .prov { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; }
+  .prov.active { background: var(--hover); }
+  .prov .name { flex: 1; font-weight: 500; }
+  .prov .count { font-size: 12px; color: var(--secondary); }
+  .prov .ok { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .detail { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .identity { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .identity .mark { width: 36px; height: 36px; border-radius: 12px; }
+  .identity .t { font-size: 15px; font-weight: 500; }
+  .quota { padding: 16px 20px; }
+  .quota .big { font-size: 22px; font-weight: 500; margin: 2px 0; }
+  .remote-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .remote-row .copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .remote-row .label { font-weight: 500; }
+  .remote-row .desc { font-size: 12px; color: var(--tertiary); line-height: 1.45; }
+  .remote-row .desc a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .remote-row .ctrls { display: flex; align-items: center; gap: 8px; padding-top: 1px; }
+  .highlight { box-shadow: inset 0 0 0 2px var(--text); border-radius: 8px; }
+  .models { padding: 12px 20px; }
+  .modelrow { display: flex; align-items: center; gap: 12px; padding: 9px 0; }
+  .modelrow .n { flex: 1; font-size: 14px; }
+  .bar { height: 10px; border-radius: 4px; background: var(--bar); }
+
+  /* 管理页 */
+  .back { display: inline-flex; align-items: center; gap: 4px; color: var(--secondary); border: 0; background: none; padding: 0; margin-bottom: 10px; font-size: 13px; }
+  .back:hover { color: var(--text); }
+  .mhead { display: flex; align-items: flex-start; gap: 16px; }
+  .mhead .grow { flex: 1; min-width: 0; }
+  .section { margin-top: 20px; }
+  .section-title { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 500; }
+  .section-title .count { color: var(--tertiary); font-weight: 400; }
+  .section-title .grow { flex: 1; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .row + .row, .person + .person { border-top: 1px solid var(--border); }
+  .row .who { flex: 1; min-width: 0; }
+  .row .line1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 500; }
+  .row .line2 { font-size: 12px; color: var(--secondary); margin-top: 1px; }
+  .row .actions { display: flex; gap: 6px; align-items: center; }
+  .person .row { cursor: default; }
+  .person .usage { text-align: right; font-size: 12px; color: var(--secondary); white-space: nowrap; }
+  .person .usage b { display: block; font-weight: 500; color: var(--text); font-size: 13px; }
+  .chev { transition: transform 150ms; color: var(--secondary); }
+  .person[data-open="true"] .chev { transform: rotate(90deg); }
+  .expand { border: 0; background: none; padding: 4px; border-radius: 9999px; }
+  .expand:hover { background: var(--hover); }
+  .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary); font-weight: 400; }
+  .status .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .person[data-state="paused"] .status .d { background: var(--tertiary); }
+  .person[data-state="paused"] .who, .person[data-state="paused"] .usage { opacity: .7; }
+  .breakdown { padding: 0 16px 14px 60px; }
+  .breakdown table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .breakdown th { text-align: left; font-weight: 500; color: var(--secondary); padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .breakdown td { padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .breakdown tr:last-child td { border-bottom: 0; }
+  .breakdown .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .est { color: var(--tertiary); }
+  .empty { padding: 28px 16px; text-align: center; color: var(--secondary); }
+  .linkcode { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+
+  /* 应用窗口占位（受邀者 / 分享者收到弹窗时的背景） */
+  .appshell { display: flex; min-height: 640px; }
+  .appside { width: 232px; border-right: 1px solid var(--border); padding: 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .appside .bar { height: 12px; }
+  .appmain { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+  .composer { width: min(560px, 80%); height: 96px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+
+  /* 弹窗 */
+  .scrim { position: absolute; inset: 0; background: var(--scrim); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal { width: min(460px, 100%); background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-menu); padding: 16px; }
+  .modal.narrow { width: min(400px, 100%); }
+  .modal h2 { margin: 0; font-size: 15px; font-weight: 500; }
+  .modal .desc { margin: 6px 0 0; color: var(--secondary); }
+  .modal .footer { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 16px; }
+  .idcard { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+  .idcard .nm { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 14px; }
+  .idcard .sub { font-size: 12px; color: var(--secondary); margin-top: 1px; }
+  .facts { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .facts li { display: flex; gap: 10px; color: var(--text); line-height: 1.45; }
+  .facts li svg { color: var(--secondary); margin-top: 2px; }
+  .facts li span small { display: block; color: var(--secondary); font-size: 12px; }
+  .linkfield { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 6px 6px 6px 12px; border: 1px solid var(--border); border-radius: 9999px; background: var(--surface); }
+  .linkfield input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; color: var(--secondary); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .meta { margin-top: 10px; font-size: 12px; color: var(--secondary); display: flex; gap: 6px; flex-wrap: wrap; }
+  .callout { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--surface); color: var(--secondary); font-size: 12px; line-height: 1.5; }
+  .state-center { text-align: center; padding: 8px 4px 0; }
+  .pairing { display: inline-flex; align-items: baseline; gap: 10px; margin: 2px 0 4px; padding: 8px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  .pairing-label { font-size: 12px; color: var(--secondary); }
+  .pairing-code { font-size: 24px; font-weight: 500; letter-spacing: 6px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .pairing-row { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+  .pairing-row .pairing { margin: 0; flex-shrink: 0; }
+  .pairing-hint { margin: 0; font-size: 12px; color: var(--secondary); line-height: 1.5; }
+  .pairing-inline { color: var(--text); font-weight: 500; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+  .state-center .ico { width: 40px; height: 40px; margin: 6px auto 12px; border-radius: 50%; background: var(--chip); display: flex; align-items: center; justify-content: center; }
+  .spinner { width: 16px; height: 16px; border: 2px solid var(--chip); border-top-color: var(--secondary); border-radius: 50%; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .switch::after { transition: none; } }
+
+  /* 模型选择器 */
+  .pickerwrap { padding: 28px; display: flex; justify-content: center; }
+  .picker { width: 620px; max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-menu); overflow: hidden; }
+  .psearch { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--secondary); font-size: 15px; }
+  .pbody { display: flex; min-height: 420px; }
+  .prail { width: 60px; border-right: 1px solid var(--border); padding: 10px 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .prail .sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; }
+  .ritem { position: relative; width: 44px; height: 44px; border-radius: 10px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; color: var(--secondary); font-weight: 600; }
+  .ritem:hover { background: var(--hover); }
+  .ritem[aria-pressed="true"] { background: var(--cta-bg); color: var(--cta-fg); }
+  .ritem .sig { position: absolute; top: 7px; right: 6px; }
+  .plist { flex: 1; padding: 8px 10px; min-width: 0; }
+  .ghead { padding: 10px 10px 6px; font-size: 12px; color: var(--secondary); }
+  .ghead .from { color: var(--secondary); }
+  .mitem { display: flex; gap: 10px; padding: 8px 10px; border-radius: 8px; }
+  .mitem:hover { background: var(--hover); }
+  .mitem .mi { width: 18px; color: var(--secondary); font-weight: 600; font-size: 12px; padding-top: 2px; }
+  .mitem .mn { font-size: 15px; }
+  .mitem .md { font-size: 12px; color: var(--secondary); }
+  .mitem .eff { margin-left: auto; font-size: 12px; color: var(--secondary); white-space: nowrap; padding-top: 3px; }
+  .plist.paused .mitem { opacity: .45; pointer-events: none; }
+  .notice { display: flex; gap: 10px; align-items: flex-start; margin: 4px 10px 8px; padding: 10px 12px; border-radius: 8px; background: var(--surface); font-size: 12px; color: var(--secondary); }
+  .notice b { color: var(--text); font-weight: 500; display: block; font-size: 13px; }
+
+  /* Toast */
+  .toast { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 30; display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9999px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow-menu); font-size: 13px; }
+  .toast svg { color: var(--green); }
+
+  @media (max-width: 760px) {
+    .rail { display: none; }
+    .breakdown { padding-left: 16px; }
+    .person .usage { display: none; }
+    .appside { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="reviewbar">
+  <strong>供应商分享 · 交互设计稿</strong>
+  <div class="seg" role="group" aria-label="场景">
+    <button type="button" data-scene="settings" aria-pressed="true">1 设置入口</button>
+    <button type="button" data-scene="manage" aria-pressed="false">2 管理页</button>
+    <button type="button" data-scene="link" aria-pressed="false">3 生成链接</button>
+    <button type="button" data-scene="apply" aria-pressed="false">4 受邀者申请</button>
+    <button type="button" data-scene="approve" aria-pressed="false">5 分享者审批</button>
+    <button type="button" data-scene="picker" aria-pressed="false">6 受邀者模型列表</button>
+  </div>
+  <span class="spacer"></span>
+  <div class="seg" role="group" aria-label="主题">
+    <button type="button" data-theme="light" aria-pressed="true">浅色</button>
+    <button type="button" data-theme="dark" aria-pressed="false">深色</button>
+  </div>
+</header>
+<div class="variantbar" id="variantbar"></div>
+<p class="note" id="scene-note"></p>
+
+<main class="stage">
+  <div class="window" id="window">
+
+    <!-- ===== 设置页：供应商详情 ===== -->
+    <section class="page" data-page="settings">
+      <h1>模型供应商</h1>
+      <p class="lead">选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。</p>
+      <div class="panel">
+        <aside class="rail" aria-label="供应商">
+          <div class="railcap">拖动排序</div>
+          <div class="prov active"><span class="mark">C</span><span class="name">Cindy AI</span><span class="count">70 个模型</span><span class="ok"></span></div>
+          <div class="prov"><span class="mark">O</span><span class="name">OpenAI</span><span class="count">16 个模型</span><span class="ok"></span></div>
+          <div class="prov"><span class="mark">F</span><span class="name">FP</span><span class="count">8 个模型</span><span class="ok"></span></div>
+          <div class="prov"><span class="mark">X</span><span class="name">XDT</span><span class="count">9 个模型</span><span class="ok"></span></div>
+        </aside>
+        <div class="detail">
+          <div class="identity">
+            <span class="mark">C</span>
+            <div style="flex:1"><div class="t">Cindy AI</div><div class="muted">多种模型，统一账户结算。</div></div>
+            <span class="muted">✓ 已连接</span>
+          </div>
+          <div class="quota">
+            <div class="muted" style="font-size:12px">本期剩余额度</div>
+            <div class="big">$5,481.48</div>
+            <div class="muted" style="font-size:12px">已用 $6,518.52 / 本期额度 $12,000.00</div>
+          </div>
+          <div class="remote-row highlight" id="remote-row">
+            <div class="copy">
+              <span class="label">允许被远程调用</span>
+              <span class="desc" id="remote-desc"></span>
+            </div>
+            <div class="ctrls">
+              <span class="tipwrap">
+                <button type="button" class="icon-btn" id="share-entry" aria-label="管理分享">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                  <span class="dot" id="share-dot"></span>
+                </button>
+                <span class="tip" id="share-tip" role="tooltip"></span>
+              </span>
+              <button type="button" class="switch" id="remote-switch" role="switch" aria-checked="true" aria-label="允许被远程调用"></button>
+            </div>
+          </div>
+          <div class="models">
+            <div class="muted" style="font-size:12px; margin-bottom:4px">ANTHROPIC 7</div>
+            <div class="modelrow"><span class="n">Claude Code Opus 5.5</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><span class="n">Claude Haiku 4.5</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><span class="n">Claude Sonnet 5</span><span class="switch" aria-checked="true"></span></div>
+            <div class="modelrow"><div class="bar" style="width:40%"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 管理页 ===== -->
+    <section class="page" data-page="manage" hidden>
+      <button type="button" class="back" data-goto="settings">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>
+        模型供应商
+      </button>
+      <div class="mhead">
+        <span class="mark" style="width:36px;height:36px;border-radius:12px">C</span>
+        <div class="grow">
+          <h1>分享 Cindy AI</h1>
+          <p class="lead" style="margin-bottom:0">分享给他人后，对方可以在自己的任务里选用 Cindy AI 的模型。Agent 在这台电脑（Magi's Mac Mini）上运行，用量计入你的 Cindy AI；对方的文件和命令仍在对方电脑上执行。</p>
+        </div>
+        <button type="button" class="btn cta" data-open-dialog="link">生成分享链接</button>
+      </div>
+
+      <div class="section" id="pending-section">
+        <h3 class="section-title">待处理</h3>
+        <div class="card" id="pending-list">
+          <div class="row" data-pending="request">
+            <span class="avatar">王</span>
+            <div class="who">
+              <div class="line1">王一 <span class="status" style="font-weight:400">申请使用</span></div>
+              <div class="line2">配对码 <span class="pairing-inline">4827</span> · 今天 14:20 申请 · 24 小时内未处理将自动失效</div>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn secondary sm" data-pending-action="reject">拒绝申请</button>
+              <button type="button" class="btn primary sm" data-pending-action="approve">同意分享</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3 class="section-title">已分享的人 <span class="count" id="people-count">2</span><span class="grow"></span>
+          <span class="seg" role="group" aria-label="用量时间段">
+            <button type="button" data-range="7d" aria-pressed="false">近 7 天</button>
+            <button type="button" data-range="month" aria-pressed="true">本月</button>
+            <button type="button" data-range="all" aria-pressed="false">全部</button>
+          </span>
+        </h3>
+        <div class="card" id="people"></div>
+      </div>
+    </section>
+
+    <!-- ===== 应用窗口占位（弹窗背景） ===== -->
+    <section data-page="app" hidden>
+      <div class="appshell">
+        <aside class="appside" aria-hidden="true">
+          <div class="bar" style="width:60%"></div><div class="bar" style="width:85%"></div><div class="bar" style="width:70%"></div>
+          <div class="bar" style="width:50%;margin-top:14px"></div><div class="bar" style="width:80%"></div><div class="bar" style="width:65%"></div>
+        </aside>
+        <div class="appmain" aria-hidden="true">
+          <div class="muted" style="font-size:18px">有什么要做的？</div>
+          <div class="composer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 受邀者模型列表 ===== -->
+    <section data-page="picker" hidden>
+      <div class="pickerwrap">
+        <div class="picker">
+          <div class="psearch">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            搜索模型…
+          </div>
+          <div class="pbody">
+            <nav class="prail" aria-label="来源">
+              <button type="button" class="ritem" aria-label="收藏">☆</button>
+              <span class="sep"></span>
+              <button type="button" class="ritem" aria-label="Cindy AI（本机）">C</button>
+              <button type="button" class="ritem" aria-label="OpenAI（本机）">O</button>
+              <span class="sep"></span>
+              <button type="button" class="ritem" data-remote="own" aria-pressed="false" aria-label="Anthropic · Studio Mac">A\
+                <svg class="sig" width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="2" cy="8" r="1" fill="currentColor" stroke="none"/><path d="M2 4.5A3.5 3.5 0 0 1 5.5 8"/></svg>
+              </button>
+              <button type="button" class="ritem" data-remote="shared" aria-pressed="true" aria-label="Cindy AI · Magi's Mac Mini · 来自 Magi 的分享">C
+                <svg class="sig" width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="2" cy="8" r="1" fill="currentColor" stroke="none"/><path d="M2 4.5A3.5 3.5 0 0 1 5.5 8"/></svg>
+              </button>
+            </nav>
+            <div class="plist" id="plist"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 弹窗层 ===== -->
+    <div class="scrim" id="scrim" hidden>
+      <!-- 生成分享链接 -->
+      <div class="modal" data-dialog="link" role="dialog" aria-modal="true" aria-labelledby="link-title" hidden>
+        <h2 id="link-title">分享 Cindy AI 的链接已生成</h2>
+        <p class="desc">把链接发给你想分享的人。对方打开后会先看到说明，确认后向你发送申请，你在这台电脑上同意后分享才会生效。</p>
+        <div class="linkfield">
+          <input type="text" readonly value="https://device-link.cindy.app/provider-share/join#k3XqP9vT2mWb8rLs" aria-label="分享链接" />
+          <button type="button" class="btn primary sm" id="copy-link">复制链接</button>
+        </div>
+        <div class="meta"><span>只能使用一次</span><span>·</span><span id="link-countdown">5:00 后过期</span><span>·</span><span>过期后可以重新生成</span></div>
+        <div class="footer">
+          <button type="button" class="btn secondary" data-close-dialog>返回管理页</button>
+          <button type="button" class="btn quiet" id="regen-link">重新生成链接</button>
+        </div>
+      </div>
+
+      <!-- 受邀者：申请 -->
+      <div class="modal" data-dialog="apply" role="dialog" aria-modal="true" aria-labelledby="apply-title" hidden>
+        <div data-apply-state="ask">
+          <h2 id="apply-title">Magi 想把 Cindy AI 分享给你</h2>
+          <div class="idcard">
+            <span class="avatar lg">M</span>
+            <div>
+              <div class="nm">Magi</div>
+              <div class="sub">Cindy AI · Magi's Mac Mini</div>
+            </div>
+          </div>
+          <ul class="facts">
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+              <span>Agent 在 Magi 的电脑上用 Cindy AI 运行<small>用量计入 Magi 的 Cindy AI，Magi 能看到你的用量</small></span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+              <span>你的项目文件和命令仍在你自己的电脑上执行<small>由你的任务权限把关</small></span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              <span>对话内容和 Agent 读取的文件内容会经过并保存在 Magi 的电脑上<small>Magi 只会看到你的昵称和头像</small></span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>发送申请后，需要 Magi 同意才会生效<small>Magi 可以随时关闭或删除这个分享</small></span></li>
+          </ul>
+          <div class="footer">
+            <button type="button" class="btn cta" data-apply="send">发送申请</button>
+            <button type="button" class="btn secondary" data-close-dialog>取消</button>
+          </div>
+        </div>
+        <div data-apply-state="wait" hidden>
+          <div class="state-center">
+            <div class="ico"><span class="spinner" aria-hidden="true"></span></div>
+            <h2>正在等待 Magi 同意…</h2>
+            <div class="pairing" aria-label="配对码 4 8 2 7"><span class="pairing-label">配对码</span><span class="pairing-code">4827</span></div>
+            <p class="desc">Magi 可能会问你看到的配对码，告诉对方这 4 位数字即可。对方的电脑不在线时，会在上线后看到你的申请；申请 24 小时内未处理会自动失效。</p>
+          </div>
+          <div class="footer">
+            <button type="button" class="btn secondary" data-close-dialog>关闭窗口</button>
+            <button type="button" class="btn quiet" data-apply="withdraw">撤回申请</button>
+          </div>
+        </div>
+        <div data-apply-state="done" hidden>
+          <div class="state-center">
+            <div class="ico"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg></div>
+            <h2>Magi 已同意分享 Cindy AI</h2>
+            <p class="desc">在模型列表的远程供应商里可以找到「Cindy AI · Magi's Mac Mini · 来自 Magi 的分享」。</p>
+          </div>
+          <div class="footer">
+            <button type="button" class="btn cta" data-goto-scene="picker">打开模型列表</button>
+            <button type="button" class="btn secondary" data-close-dialog>稍后再看</button>
+          </div>
+        </div>
+        <div data-apply-state="used" hidden>
+          <div class="state-center">
+            <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M3 3l18 18"/></svg></div>
+            <h2>这个分享链接已失效</h2>
+            <p class="desc" id="used-desc">链接只能使用一次，并且生成后 5 分钟内有效。它已经被使用或已经过期，请联系 Magi 重新生成链接。</p>
+          </div>
+          <div class="footer">
+            <button type="button" class="btn secondary" data-close-dialog>关闭窗口</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分享者：审批 -->
+      <div class="modal" data-dialog="approve" role="dialog" aria-modal="true" aria-labelledby="approve-title" hidden>
+        <h2 id="approve-title">王一 申请使用你分享的 Cindy AI</h2>
+        <div class="idcard">
+          <span class="avatar lg">王</span>
+          <div>
+            <div class="nm">王一</div>
+            <div class="sub">通过你今天 14:18 生成的分享链接申请</div>
+          </div>
+        </div>
+        <div class="pairing-row">
+          <div class="pairing" aria-label="配对码 4 8 2 7"><span class="pairing-label">配对码</span><span class="pairing-code">4827</span></div>
+          <p class="pairing-hint">同意前可以在发链接的聊天里问对方一句：「你看到的配对码是多少？」一致再同意。</p>
+        </div>
+        <div class="callout">同意后，王一 可以在自己的任务里使用 Cindy AI 的模型。Agent 在这台电脑上运行，用量计入你的 Cindy AI。你可以随时在「分享 Cindy AI」里关闭或删除。<br />如果你不认识申请人，请拒绝；拒绝后这条链接作废。</div>
+        <div class="footer">
+          <button type="button" class="btn cta" data-approve="yes">同意分享</button>
+          <button type="button" class="btn secondary" data-approve="no">拒绝申请</button>
+        </div>
+      </div>
+
+      <!-- 删除确认 -->
+      <div class="modal narrow" data-dialog="delete" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" hidden>
+        <h2 id="delete-title">删除对 <span data-del-name></span> 的分享？</h2>
+        <p class="desc"><span data-del-name></span> 将立即无法使用 Cindy AI，正在运行的任务会停止。之后要再分享，需要重新生成链接。用量记录会保留。</p>
+        <div class="footer">
+          <button type="button" class="btn danger" id="confirm-delete">删除分享</button>
+          <button type="button" class="btn secondary" data-close-dialog>取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" hidden>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg>
+      <span id="toast-text"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  /* ---------- 模拟数据 ---------- */
+  const usage = {
+    '7d':    { lizi: [['Claude Opus 5.5', 31, 412000, 61000, 9.8], ['Claude Sonnet 5', 18, 205000, 33000, 1.6]], kai: [['Claude Haiku 4.5', 6, 40000, 8000, 0.1]] },
+    'month': { lizi: [['Claude Opus 5.5', 96, 1310000, 188000, 31.2], ['Claude Sonnet 5', 54, 602000, 91000, 4.7], ['Claude Haiku 4.5', 12, 88000, 15000, 0.2]], kai: [['Claude Haiku 4.5', 22, 150000, 31000, 0.4]] },
+    'all':   { lizi: [['Claude Opus 5.5', 240, 3420000, 470000, 81.5], ['Claude Sonnet 5', 131, 1500000, 220000, 11.9], ['Claude Haiku 4.5', 40, 290000, 52000, 0.6]], kai: [['Claude Haiku 4.5', 61, 420000, 90000, 1.2]] },
+  };
+  let people = [
+    { id: 'lizi', name: 'Lizi', avatar: 'L', joined: '9月28日加入', last: '最近使用：刚刚', running: 1, state: 'active' },
+    { id: 'kai', name: 'Kai Chen', avatar: 'K', joined: '10月2日加入', last: '最近使用：3 天前', running: 0, state: 'paused' },
+  ];
+  let range = 'month';
+  let pending = { request: true };
+
+  const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : Math.round(n / 1000) + 'K';
+  const fmtUsd = (n) => '$' + n.toFixed(2);
+
+  function renderPeople() {
+    const box = $('#people');
+    $('#people-count').textContent = people.length;
+    if (!people.length) {
+      box.innerHTML = '<div class="empty">还没有分享给任何人。生成分享链接发给对方，对方申请、你同意后会出现在这里。</div>';
+      return;
+    }
+    box.innerHTML = people.map((p) => {
+      const rows = usage[range][p.id] || [];
+      const tokens = rows.reduce((s, r) => s + r[2] + r[3], 0);
+      const cost = rows.reduce((s, r) => s + r[4], 0);
+      const paused = p.state === 'paused';
+      const statusText = paused ? '已暂停' : (p.running ? `正常 · ${p.running} 个任务运行中` : '正常');
+      return `
+      <div class="person" data-id="${p.id}" data-state="${p.state}" data-open="${p.open ? 'true' : 'false'}">
+        <div class="row">
+          <button type="button" class="expand" data-toggle="${p.id}" aria-expanded="${p.open ? 'true' : 'false'}" aria-label="${p.open ? '收起' : '展开'} ${p.name} 的模型用量">
+            <svg class="chev" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg>
+          </button>
+          <span class="avatar">${p.avatar}</span>
+          <div class="who">
+            <div class="line1">${p.name} <span class="status"><span class="d"></span>${statusText}</span></div>
+            <div class="line2">${p.joined} · ${p.last}</div>
+          </div>
+          <div class="usage"><b>${fmtTok(tokens)} tokens</b>约 ${fmtUsd(cost)}</div>
+          <div class="actions">
+            <button type="button" class="btn secondary sm" data-person-action="${paused ? 'resume' : 'pause'}" data-id="${p.id}">${paused ? '恢复分享' : '关闭分享'}</button>
+            <button type="button" class="btn danger-text sm" data-person-action="delete" data-id="${p.id}">删除</button>
+          </div>
+        </div>
+        ${p.open ? `
+        <div class="breakdown">
+          <table>
+            <thead><tr><th>模型</th><th class="num">轮次</th><th class="num">输入</th><th class="num">输出</th><th class="num">估算金额</th></tr></thead>
+            <tbody>${rows.map((r) => `<tr><td>${r[0]}</td><td class="num">${r[1]}</td><td class="num">${fmtTok(r[2])}</td><td class="num">${fmtTok(r[3])}</td><td class="num">${fmtUsd(r[4])}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">这段时间没有用量</td></tr>'}</tbody>
+          </table>
+          <p class="est" style="margin:8px 0 0;font-size:12px">金额按本地单价估算，不代表供应商实际账单。</p>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  function renderPending() {
+    $('[data-pending="request"]').hidden = !pending.request;
+    $('#pending-section').hidden = !pending.request;
+    $('#share-dot').hidden = !pending.request || gate !== 'on';
+  }
+
+  /* ---------- 设置入口 ---------- */
+  let gate = 'on';
+  function renderGate() {
+    $('#share-dot').hidden = !pending.request || gate !== 'on';
+    const entry = $('#share-entry'), sw = $('#remote-switch'), desc = $('#remote-desc'), tip = $('#share-tip');
+    if (gate === 'on') {
+      entry.setAttribute('aria-disabled', 'false');
+      entry.setAttribute('aria-label', pending.request ? '管理分享（1 个待处理申请）' : '管理分享');
+      tip.textContent = pending.request ? '管理分享 · 1 个待处理申请' : '管理分享';
+      sw.disabled = false; sw.setAttribute('aria-checked', 'true');
+      desc.textContent = '开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和额度。';
+    } else if (gate === 'provider-off') {
+      entry.setAttribute('aria-disabled', 'true');
+      entry.setAttribute('aria-label', '管理分享：先打开「允许被远程调用」');
+      tip.textContent = '先打开「允许被远程调用」才能分享';
+      sw.disabled = false; sw.setAttribute('aria-checked', 'false');
+      desc.textContent = '开启后，你的其他电脑和你分享的人可以用这个供应商的模型。关闭期间，已有的分享暂时不可用，不会被删除。';
+    } else {
+      entry.setAttribute('aria-disabled', 'true');
+      entry.setAttribute('aria-label', '管理分享：先打开「允许远程控制」');
+      tip.textContent = '先在「远程控制」打开「允许远程控制」才能分享';
+      sw.disabled = true; sw.setAttribute('aria-checked', 'false');
+      desc.innerHTML = '这台电脑还没打开「允许远程控制」，供应商不能被远程调用或分享。<a tabindex="0">前往远程控制设置</a>';
+    }
+  }
+  $('#share-entry').addEventListener('click', () => { if (gate === 'on') setScene('manage'); });
+  $('#remote-switch').addEventListener('click', () => {
+    if (gate === 'remote-off') return;
+    gate = gate === 'on' ? 'provider-off' : 'on';
+    renderGate(); syncVariants();
+  });
+
+  /* ---------- 模型列表 ---------- */
+  let pickerVariant = 'normal', pickerRemote = 'shared';
+  const models = [['Opus 5.5', '适合复杂分析、编程与细致写作。', '超高'], ['Fable 5.1', '适合持续的编程任务与深入研究。', '中'], ['Sonnet 5', '适合日常问答、写作与编程。', '中'], ['Haiku 4.5', '适合简短问答、摘要与短文写作。', '']];
+  function renderPicker() {
+    $$('.ritem[data-remote]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.remote === pickerRemote)));
+    const list = $('#plist');
+    const shared = pickerRemote === 'shared';
+    const head = shared
+      ? `Cindy AI · Magi's Mac Mini <span class="from">· 来自 Magi 的分享</span>`
+      : `Anthropic · Studio Mac`;
+    let notice = '';
+    if (shared && pickerVariant === 'paused') notice = `<div class="notice"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></svg><span><b>Magi 已暂停对你的分享</b>恢复前不能使用这些模型。已有任务可以换成其他模型继续。</span></div>`;
+    if (shared && pickerVariant === 'offline') notice = `<div class="notice"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.17-2.8M19 13a10 10 0 0 0-2.06-1.53M12 20h.01"/></svg><span><b>Magi's Mac Mini 不在线</b>这台电脑开机并运行 Cindy 后即可使用。已有任务可以换成其他模型继续。</span></div>`;
+    list.className = 'plist' + (shared && pickerVariant !== 'normal' ? ' paused' : '');
+    list.innerHTML = `<div class="ghead">${head}</div>${notice}` + models.map((m) => `
+      <div class="mitem"><span class="mi">${shared ? 'C' : 'A\\'}</span><div><div class="mn">${m[0]}</div><div class="md">${m[1]}</div></div><span class="eff">${m[2]}</span></div>`).join('');
+  }
+  $$('.ritem[data-remote]').forEach((b) => b.addEventListener('click', () => { pickerRemote = b.dataset.remote; renderPicker(); syncVariants(); }));
+
+  /* ---------- 弹窗与 Toast ---------- */
+  let toastTimer;
+  function toast(text) {
+    $('#toast-text').textContent = text; $('#toast').hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 2600);
+  }
+  function openDialog(name) {
+    $('#scrim').hidden = false;
+    if (name === 'link') startLinkCountdown();
+    $$('[data-dialog]').forEach((d) => { d.hidden = d.dataset.dialog !== name; });
+    const d = $(`[data-dialog="${name}"]`);
+    const focusTarget = d.querySelector('[data-close-dialog]') || d.querySelector('button');
+    setTimeout(() => focusTarget && focusTarget.focus(), 0);
+  }
+  function closeDialog() { $('#scrim').hidden = true; $$('[data-dialog]').forEach((d) => { d.hidden = true; }); }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#scrim').hidden) closeDialog(); });
+  /* 点击遮罩不关闭弹窗（DESIGN.md §4 Dialog：只通过自身按钮或 Esc 关闭）。 */
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('button, a');
+    if (!t) return;
+    if (t.matches('[data-close-dialog]')) closeDialog();
+    if (t.dataset.openDialog) openDialog(t.dataset.openDialog);
+    if (t.dataset.goto) setScene(t.dataset.goto);
+    if (t.dataset.gotoScene) setScene(t.dataset.gotoScene);
+    if (t.dataset.toggle) { const p = people.find((x) => x.id === t.dataset.toggle); p.open = !p.open; renderPeople(); }
+    if (t.dataset.range) { range = t.dataset.range; $$('[data-range]').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); renderPeople(); }
+    const pa = t.dataset.personAction;
+    if (pa) {
+      const p = people.find((x) => x.id === t.dataset.id);
+      if (pa === 'pause') { p.state = 'paused'; p.running = 0; renderPeople(); toast(`已关闭对 ${p.name} 的分享，正在运行的任务已停止`); }
+      if (pa === 'resume') { p.state = 'active'; renderPeople(); toast(`已恢复对 ${p.name} 的分享`); }
+      if (pa === 'delete') { pendingDelete = p.id; $$('[data-del-name]').forEach((s) => { s.textContent = p.name; }); openDialog('delete'); }
+    }
+    const pd = t.dataset.pendingAction;
+    if (pd === 'approve') approveRequest();
+    if (pd === 'reject') { pending.request = false; renderPending(); renderGate(); toast('已拒绝王一的申请，链接已作废'); }
+    if (t.dataset.apply === 'send') showApply('wait');
+    if (t.dataset.apply === 'withdraw') { closeDialog(); toast('申请已撤回，链接已作废'); }
+    if (t.dataset.approve === 'yes') { closeDialog(); approveRequest(); }
+    if (t.dataset.approve === 'no') { closeDialog(); pending.request = false; renderPending(); toast('已拒绝王一的申请，链接已作废'); }
+  });
+  let pendingDelete = null;
+  $('#confirm-delete').addEventListener('click', () => {
+    const p = people.find((x) => x.id === pendingDelete);
+    people = people.filter((x) => x.id !== pendingDelete);
+    closeDialog(); renderPeople(); toast(`已删除对 ${p.name} 的分享`);
+  });
+  $('#copy-link').addEventListener('click', (e) => { e.target.textContent = '已复制'; setTimeout(() => { e.target.textContent = '复制链接'; }, 1600); });
+  /* 链接 5 分钟有效：倒计时演示，过期后可重新生成。 */
+  let linkTimer, linkLeft = 300;
+  function startLinkCountdown() {
+    clearInterval(linkTimer); linkLeft = 300;
+    const tick = () => {
+      const el = $('#link-countdown');
+      if (linkLeft <= 0) { el.textContent = '已过期'; $('#copy-link').disabled = true; clearInterval(linkTimer); return; }
+      el.textContent = `${Math.floor(linkLeft / 60)}:${String(linkLeft % 60).padStart(2, '0')} 后过期`;
+      linkLeft -= 1;
+    };
+    $('#copy-link').disabled = false; tick(); linkTimer = setInterval(tick, 1000);
+  }
+  $('#regen-link').addEventListener('click', () => {
+    const input = $('[data-dialog="link"] input');
+    input.value = 'https://device-link.cindy.app/provider-share/join#' + Math.random().toString(36).slice(2, 10) + 'Xq' + Math.random().toString(36).slice(2, 8);
+    startLinkCountdown(); toast('已生成新链接');
+  });
+  function approveRequest() {
+    if (!pending.request) return;
+    pending.request = false;
+    people.unshift({ id: 'wang', name: '王一', avatar: '王', joined: '今天加入', last: '还未使用', running: 0, state: 'active' });
+    usage['7d'].wang = []; usage.month.wang = []; usage.all.wang = [];
+    renderPending(); renderPeople(); renderGate();
+    toast('已同意分享 Cindy AI 给王一');
+  }
+  function showApply(state) {
+    $$('[data-apply-state]').forEach((s) => { s.hidden = s.dataset.applyState !== state; });
+    if (state === 'wait') { applyVariant = 'wait'; syncVariants(); }
+  }
+
+  /* ---------- 场景与变体 ---------- */
+  let scene = 'settings', applyVariant = 'ask';
+  const notes = {
+    settings: '入口在「允许被远程调用」一行开关左侧。能力逐级开启：允许远程控制 → 允许被远程调用 → 分享。有待处理申请时图标带提示点。',
+    manage: '每个供应商一个管理页。关闭＝暂停可恢复，删除＝要重新发链接。两者都立即生效，正在运行的任务当场停止。展开一行看按模型的用量。',
+    link: '链接只能用一次、5 分钟内有效，可以无限次重新生成：第一个申请锁定链接；同意、拒绝、撤回、过期都会让它作废。口令放在 # 之后，服务端只存摘要。',
+    apply: '受邀者点链接唤起 Cindy 后看到这个弹窗，点「发送申请」才真正提交。双方都只看到对方的昵称和头像，取自对方本人账号、经服务端核实；不展示邮箱、手机号。',
+    approve: '弹在供应商所在的电脑上；应用在后台时同时发系统通知。只显示申请人的昵称和头像。',
+    picker: '模型列表结构不变，分享来的供应商与同账号远程供应商在同一块，只在分组标题多写「来自 Magi 的分享」。点左侧两个远程图标对比。',
+  };
+  const variants = {
+    settings: { label: '能力状态', get: () => gate, set: (v) => { gate = v; renderGate(); }, opts: [['on', '全部开启'], ['provider-off', '供应商未开放'], ['remote-off', '未开远程控制']] },
+    apply: { label: '弹窗状态', get: () => applyVariant, set: (v) => { applyVariant = v; showApply(v); }, opts: [['ask', '确认申请'], ['wait', '等待同意'], ['done', '已同意'], ['used', '链接已失效']] },
+    picker: { label: '分享状态', get: () => pickerVariant, set: (v) => { pickerVariant = v; pickerRemote = 'shared'; renderPicker(); }, opts: [['normal', '正常'], ['paused', '已暂停'], ['offline', '分享者离线']] },
+  };
+  function syncVariants() {
+    const bar = $('#variantbar'); const v = variants[scene];
+    if (!v) { bar.innerHTML = ''; return; }
+    bar.innerHTML = `<span>${v.label}</span><span class="seg" role="group" aria-label="${v.label}">${v.opts.map(([k, l]) => `<button type="button" data-variant="${k}" aria-pressed="${v.get() === k}">${l}</button>`).join('')}</span>`;
+    $$('[data-variant]', bar).forEach((b) => b.addEventListener('click', () => { v.set(b.dataset.variant); syncVariants(); }));
+  }
+  function setScene(next) {
+    scene = next;
+    $$('.reviewbar [data-scene]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scene === next)));
+    const page = { settings: 'settings', manage: 'manage', link: 'manage', apply: 'app', approve: 'app', picker: 'picker' }[next];
+    $$('[data-page]').forEach((p) => { p.hidden = p.dataset.page !== page; });
+    closeDialog();
+    if (next === 'link') openDialog('link');
+    if (next === 'apply') { openDialog('apply'); showApply(applyVariant); }
+    if (next === 'approve') { if (!pending.request) { pending.request = true; people = people.filter((p) => p.id !== 'wang'); renderPending(); renderPeople(); } openDialog('approve'); }
+    if (next === 'picker') renderPicker();
+    $('#scene-note').textContent = notes[next];
+    syncVariants();
+  }
+  $$('.reviewbar [data-scene]').forEach((b) => b.addEventListener('click', () => { if (b.dataset.scene === 'apply') applyVariant = 'ask'; setScene(b.dataset.scene); }));
+
+  function setTheme(t) {
+    document.body.classList.toggle('dark', t === 'dark');
+    $$('[data-theme]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.theme === t)));
+  }
+  $$('[data-theme]').forEach((b) => b.addEventListener('click', () => setTheme(b.dataset.theme)));
+  setTheme(window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+  renderPeople(); renderPending(); renderGate(); renderPicker(); setScene('settings');
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@
  */
 
 import type { TFunction } from 'i18next';
+import { GHOST_MEDIA_HANDOVER_MIME, type GhostMediaHandover } from '../../shared/ghost';
 
 import { getMimeType, type AttachedFile } from '@/lib/fileTypes';
 import { getDraft, saveDraft } from '@/lib/composerDraftStore';
@@ -48,18 +49,41 @@ export function getGhostMediaUriFromDataTransfer(dt: DataTransfer): string | nul
   return null;
 }
 
+export function getGhostMediaHandoverFromDataTransfer(dt: DataTransfer): GhostMediaHandover | null {
+  const uri = getGhostMediaUriFromDataTransfer(dt);
+  const raw = dt.getData(GHOST_MEDIA_HANDOVER_MIME);
+  if (!raw && !Array.from(dt.types).includes(GHOST_MEDIA_HANDOVER_MIME)) return uri ? { uri, sourceToken: '' } : null;
+  try {
+    const payload = raw.length <= 4096 ? JSON.parse(raw) as unknown : null;
+    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+      const source = payload as Record<string, unknown>;
+      if (typeof source.uri === 'string' && GHOST_MEDIA_URI_RE.test(source.uri)
+        && typeof source.sourceToken === 'string' && source.sourceToken.length > 0
+        && source.sourceToken.length <= 128) {
+        return { uri: source.uri, sourceToken: source.sourceToken };
+      }
+    }
+  } catch {
+    return { uri: uri ?? '', sourceToken: '' };
+  }
+  return { uri: uri ?? '', sourceToken: '' };
+}
+
 /**
  * 把意识面板拖来的媒体落为会话附件(托盘可见,发送仍由用户决定)。
  * 失败 toast 即止——drop 已被本链路消费,不回落文件链路。
  */
 export async function attachGhostMediaToSession(
-  uri: string,
+  source: string | GhostMediaHandover,
   sessionId: string,
   t: TFunction,
 ): Promise<void> {
   try {
     // main 过闸:归属/形状/mime 任一不过统一 NOT_FOUND。
-    const resolved = await window.electronAPI.ghosts.resolvePanelMedia(uri);
+    const { uri, sourceToken } = typeof source === 'string' ? { uri: source } : source;
+    const resolved = sourceToken === undefined
+      ? await window.electronAPI.ghosts.resolvePanelMedia(uri)
+      : await window.electronAPI.ghosts.resolvePanelMedia(uri, 'attach', undefined, sourceToken);
     if (resolved.kind === 'video') {
       // 视频:不复制字节,直接以指纹仓磁盘路径落 file 类别附件(与从系统
       // 拖 .mp4 进聊天完全同款——发送时路径透传给 agent)。托盘移除 file

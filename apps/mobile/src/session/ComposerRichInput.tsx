@@ -1,12 +1,18 @@
+import { ComposerNativeInput, nativeComposerAvailable } from './ComposerNativeInput';
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { File, Paths } from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import {
   normalizeComposerDocument,
+  composerDocumentProjectedText,
+  composerCaretPosition,
+  composerSelectionOffset,
   parseStoredComposerDocument,
   type ComposerDocument,
+  type ComposerSelection,
   type ComposerNode,
   type ResolvedSessionLinkSemantic,
 } from '@/session/composerDocument';
@@ -19,9 +25,18 @@ import {
 } from '@/session/composerRichInputProtocol';
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
+import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery';
 
 export interface ComposerRichInputHandle {
+  expand?(): void;
+  /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
+  flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
+  getSelection(draft: string): ComposerSelection;
+  rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
+  applyDocumentAndFocusSelection(document: ComposerDocument, offset: number): void;
+  /** Apply a document and place the caret where possible without opening the keyboard. */
+  applyDocumentAndSetSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
   focus(): void;
   insertNode(node: ComposerNode): void;
@@ -33,7 +48,11 @@ export interface ComposerRichInputProps {
   document: ComposerDocument;
   editable?: boolean;
   height: number;
+  /** Resize follows the UI thread without an RN render or WebView reload. */
+  animatedHeight?: SharedValue<number>;
   hidden?: boolean;
+  /** Hide the native insertion caret while dictation supplies visible text. */
+  caretHidden?: boolean;
   maxHeight: number;
   onBlur?: () => void;
   onChangeDocument(document: ComposerDocument): void;
@@ -56,10 +75,11 @@ interface PendingImagePaste {
 }
 
 /** Editable WebView wrapper; the native side only accepts the semantic protocol above. */
-export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRichInputProps>(
+const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputProps>(
   function ComposerRichInput({
     accessibilityHint,
     accessibilityLabel,
+    animatedHeight,
     document,
     editable = true,
     height,
@@ -82,9 +102,14 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     useEffect(() => registerMobileMessageWebView('composer'), []);
     const readyRef = useRef(false);
     const webSignatureRef = useRef('');
+    const localDocumentsRef = useRef(new WeakSet<ComposerDocument>());
+    const projectedDraft = useMemo(() => composerDocumentProjectedText(document), [document]);
+    const webDocumentRef = useRef({ document, draft: projectedDraft, id: 0 });
+    const selectionRef = useRef<(ComposerSelection & { draft: string }) | null>(null);
     const pendingDocumentRef = useRef<{
       document: ComposerDocument;
       focusAfter: boolean;
+      caret?: { nodeIndex: number; offset: number };
     } | null>(null);
     const pendingFocusRef = useRef(false);
     const pendingNodeInsertionsRef = useRef<ComposerNode[]>([]);
@@ -94,6 +119,22 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     /** 尚未交接给附件上传 hook 的 WebView 粘贴缓存文件。 */
     const pendingPastedImageFilesRef = useRef(new Set<string>());
     const disposedRef = useRef(false);
+    const snapshotSequenceRef = useRef(0);
+    const pendingSnapshotRef = useRef<{
+      requestId: number;
+      documentId: number;
+      isCurrent?: () => boolean;
+      resolve(document: ComposerDocument): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null>(null);
+    const rejectSnapshot = useCallback(() => {
+      const pending = pendingSnapshotRef.current;
+      if (!pending) return;
+      pendingSnapshotRef.current = null;
+      clearTimeout(pending.timer);
+      pending.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+    }, []);
     const initialConfigRef = useRef({
       accessibilityLabel,
       document,
@@ -133,22 +174,47 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     const inject = useCallback((script: string) => {
       webViewRef.current?.injectJavaScript(`try { ${script} } catch (_) {} true;`);
     }, []);
+    const recovery = useComposerWebViewRecovery(inject, () => {
+      rejectSnapshot();
+      readyRef.current = false;
+      pendingFocusRef.current = false;
+      if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
+      const failedPastes = pendingImagePastesRef.current.size;
+      pendingImagePastesRef.current.clear();
+      pendingImagePasteOrderRef.current = [];
+      const pendingUris = [...pendingPastedImageFilesRef.current];
+      pendingPastedImageFilesRef.current.clear();
+      if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
+      for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      onBlur?.();
+    }, () => readyRef.current);
+    const { generation, current: currentGeneration } = recovery;
     const focusEditor = useCallback(() => {
       if (!readyRef.current) {
         pendingFocusRef.current = true;
         return;
       }
       inject('window.cindyComposer.focus();');
+      if (Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
-    const applyDocument = useCallback((value: ComposerDocument, focusAfter = false) => {
+    const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      rejectSnapshot();
+      if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
+      const documentId = webDocumentRef.current.id + 1;
+      webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
       if (!readyRef.current) {
-        pendingDocumentRef.current = { document: value, focusAfter };
+        pendingDocumentRef.current = { document: value, focusAfter, caret };
         return;
       }
-      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter});`);
-    }, [inject]);
+      inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
+      if (focusAfter && Platform.OS === 'android') webViewRef.current?.requestFocus();
+    }, [inject, rejectSnapshot]);
 
     useEffect(() => {
+      // A native edit may advance again before React commits its previous
+      // snapshot. Echoes acknowledge that edit; they must not reset the DOM
+      // or caret to an older value. External replacements still apply below.
+      if (localDocumentsRef.current.delete(document)) return;
       const signature = JSON.stringify(document);
       if (signature === webSignatureRef.current) return;
       webSignatureRef.current = signature;
@@ -161,9 +227,39 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
     useEffect(() => {
       if (!forwardedRef) return undefined;
       const handle: ComposerRichInputHandle = {
+        flushDocument: (isCurrent) => {
+          if (!readyRef.current || disposedRef.current) return Promise.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+          rejectSnapshot();
+          return new Promise<ComposerDocument>((resolve, reject) => {
+            const requestId = ++snapshotSequenceRef.current;
+            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+              resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
+            inject(`window.cindyComposer.snapshot(${requestId});`);
+          });
+        },
+        getSelection: (draft) => {
+          const saved = selectionRef.current;
+          return saved?.draft === draft
+            ? { start: saved.start, end: saved.end, ...(saved.atomRange ? { atomRange: saved.atomRange } : {}) }
+            : { start: draft.length, end: draft.length };
+        },
+        // Cache the dictated range without focusing the hidden editor (which opens the keyboard).
+        rememberSelection: (draft, selection) => {
+          selectionRef.current = { draft, ...selection };
+        },
         applyDocumentAndSetSelectionToEnd: (value) => {
           webSignatureRef.current = JSON.stringify(value);
           applyDocument(value, true);
+        },
+        applyDocumentAndFocusSelection: (value, offset) => {
+          webSignatureRef.current = JSON.stringify(value);
+          applyDocument(value, true, composerCaretPosition(value, offset));
+        },
+        // Restores the caret only if the editor is already focused; otherwise
+        // getSelection keeps the remembered insertion point until the user taps it.
+        applyDocumentAndSetSelection: (value, offset) => {
+          webSignatureRef.current = JSON.stringify(value);
+          applyDocument(value, false, composerCaretPosition(value, offset));
         },
         blur: () => {
           pendingFocusRef.current = false;
@@ -195,7 +291,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         if (typeof forwardedRef === 'function') forwardedRef(null);
         else forwardedRef.current = null;
       };
-    }, [applyDocument, focusEditor, forwardedRef, inject]);
+    }, [applyDocument, focusEditor, forwardedRef, inject, rejectSnapshot]);
 
     const persistPastedImage = useCallback(async (
       message: Extract<ComposerWebMessage, { type: 'paste-image' }>,
@@ -213,7 +309,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         await FileSystem.writeAsStringAsync(file.uri, message.base64, {
           encoding: FileSystem.EncodingType.Base64,
         });
-        if (disposedRef.current) {
+        if (disposedRef.current || generation !== currentGeneration.current) {
           throw new Error('composer disposed during pasted image write');
         }
         return file.uri;
@@ -222,7 +318,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         pendingPastedImageFilesRef.current.delete(file.uri);
         throw error;
       }
-    }, []);
+    }, [generation, currentGeneration]);
 
     const drainCompletedImagePastes = useCallback(() => {
       while (pendingImagePasteOrderRef.current.length > 0) {
@@ -252,6 +348,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       disposedRef.current = false;
       return () => {
         disposedRef.current = true;
+        rejectSnapshot();
         // sessionId 原地换代时 ComposerRichInput 会重挂载。旧实例的异步图片写盘即使
         // 随后落定，也不能再沿旧闭包调用新任务的 onPasteImages / load-failed；先摘掉
         // 批次登记，settlePastedImage 会把迟到结果视为已作废。
@@ -261,7 +358,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         pendingPastedImageFilesRef.current.clear();
         if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       };
-    }, []);
+    }, [rejectSnapshot]);
 
     const settlePastedImage = useCallback((
       requestId: string,
@@ -286,6 +383,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
           text = '';
         }
       }
+      if (disposedRef.current || generation !== currentGeneration.current) return;
       const nodes = composerNodesForBoundedPlainTextPaste(text);
       if (!nodes) {
         inject(
@@ -303,7 +401,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       hrefs.forEach((href) => {
         void resolveSessionLinkLabel(href)
           .then((semantic) => {
-            if (!semantic) return;
+            if (!semantic || disposedRef.current || generation !== currentGeneration.current) return;
             inject(
               `window.cindyComposer.resolveSessionLink(${JSON.stringify(href)}, ${JSON.stringify(semantic)});`,
             );
@@ -312,18 +410,25 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
             // Keep the stable short-id placeholder when the target is unavailable.
           });
       });
-    }, [inject, resolveSessionLinkLabel]);
+    }, [inject, resolveSessionLinkLabel, generation, currentGeneration]);
 
     const handleMessage = useCallback((event: WebViewMessageEvent) => {
       if (disposedRef.current) return;
+      if (generation !== currentGeneration.current) return;
       const message = parseComposerWebMessage(event.nativeEvent.data);
       if (!message) return;
+      if (message.type === 'pong') return recovery.onPong(message.id);
       if (message.type === 'ready') {
+        rejectSnapshot();
+        recovery.onReady();
         readyRef.current = true;
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
         const pending = pendingDocumentRef.current;
         pendingDocumentRef.current = null;
-        if (pending) applyDocument(pending.document, pending.focusAfter);
+        if (pending) applyDocument(pending.document, pending.focusAfter, pending.caret);
+        // A reloaded page starts at id 0; restore the latest accepted draft and
+        // synchronize its id through the same path, without replaying focus.
+        else applyDocument(webDocumentRef.current.document);
         const pendingNodeInsertions = pendingNodeInsertionsRef.current;
         pendingNodeInsertionsRef.current = [];
         for (const node of pendingNodeInsertions) {
@@ -335,12 +440,40 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         }
         return;
       }
-      if (message.type === 'change') {
+      if (message.type === 'change' || message.type === 'snapshot') {
+        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
+        if (message.type === 'snapshot') {
+          if (!pending || pending.requestId !== message.requestId) return;
+          // Cancellation can restore the caller's draft before its next render.
+          // Reject before touching editor state or invoking the persistence callback.
+          if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }
+          if (message.pendingPaste || message.documentId !== pending.documentId) { rejectSnapshot(); return; }
+        }
+        if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
-        if (!next) return;
+        if (!next) { if (pending) rejectSnapshot(); return; }
         const normalized = normalizeComposerDocument(next);
+        if (pending) {
+          pendingSnapshotRef.current = null;
+          clearTimeout(pending.timer);
+        }
+        if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
+        webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
+        localDocumentsRef.current.add(normalized);
         onChangeDocument(normalized);
+        pending?.resolve(normalized);
+        return;
+      }
+      if (message.type === 'selection') {
+        const current = webDocumentRef.current;
+        if (hidden || message.documentId !== current.id) return;
+        const start = composerSelectionOffset(current.document, message.before);
+        const end = composerSelectionOffset(current.document, message.through);
+        if (start !== null && end !== null && start <= end && end <= current.draft.length) {
+          selectionRef.current = { draft: current.draft, start, end,
+            atomRange: { start: message.before.atomCount, end: message.through.atomCount } };
+        }
         return;
       }
       if (message.type === 'height') {
@@ -371,14 +504,31 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       }
       if (message.type === 'paste-image') {
         void persistPastedImage(message)
-          .then((uri) => settlePastedImage(message.requestId, message.index, uri))
-          .catch(() => settlePastedImage(message.requestId, message.index));
+          .then((uri) => {
+            if (generation === currentGeneration.current && !disposedRef.current) {
+              settlePastedImage(message.requestId, message.index, uri);
+            } else {
+              void deleteComposerPastedImageUris([uri]);
+            }
+          })
+          .catch(() => {
+            if (generation === currentGeneration.current && !disposedRef.current) {
+              settlePastedImage(message.requestId, message.index);
+            }
+          });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
+    const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (
+      // WebView's imperative ref is a command handle, not a Fabric host ref.
+      // Animate its native View container and let the WebView fill that frame.
+      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
+        key={generation}
         ref={webViewRef}
+        onContentProcessDidTerminate={recovery.onTerminated}
+        onRenderProcessGone={recovery.onTerminated}
         accessibilityHint={accessibilityHint}
         accessibilityLabel={accessibilityLabel}
         // hidden 期间(语音听写)把整棵子树从无障碍树里摘掉。opacity: 0 只影响视觉与
@@ -404,10 +554,12 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
         scrollEnabled={false}
         setSupportMultipleWindows={false}
         source={{ html }}
-        style={[styles.webView, { height, opacity: hidden ? 0 : 1 }]}
+        containerStyle={styles.webView}
+        style={styles.webView}
         testID={testID}
         textInteractionEnabled
       />
+      </Animated.View>
     );
   },
 );
@@ -428,11 +580,18 @@ async function deleteComposerPastedImageUris(uris: readonly string[]): Promise<v
 }
 
 const styles = StyleSheet.create({
-  webView: {
-    backgroundColor: 'transparent',
-    // react-native-webview defaults the native child to flex: 1. Override it
-    // because this composer drives the child with an explicit measured height.
-    flex: 0,
+  frame: {
+    flex: 1,
+    minWidth: 0,
     minHeight: COMPOSER_SINGLE_LINE_HEIGHT,
   },
+  webView: {
+    backgroundColor: 'transparent',
+    flex: 1,
+  },
+});
+
+/** Older installed native builds retain the existing editor until their next native update. */
+export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRichInputProps>(function ComposerRichInput(props, ref) {
+  return nativeComposerAvailable ? <ComposerNativeInput {...props} ref={ref} /> : <ComposerWebInput {...props} ref={ref} />;
 });

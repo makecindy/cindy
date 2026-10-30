@@ -27,6 +27,7 @@ import JSZip from 'jszip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
+import { setSessionPathAuthorizer } from '../session-path-auth.js';
 import {
   DOCX_MAX_MARKDOWN_BYTES,
   DOCX_MAX_SUBTITLE_BYTES,
@@ -42,7 +43,7 @@ import {
   resolvePptxGenConstructor,
   validateDecodablePptxImage,
 } from '../cindy-docs/make_pptx.js';
-import { DocsPathError, readInputFileWithinLimit } from '../cindy-docs/_paths.js';
+import { DocsPathError, readInputFileWithinLimit, resolveSessionRoot, prepareOutputPath } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import { MAX_XLSX_ZIP_ENTRIES } from '../cindy-docs/read_sheet.js';
 import type {
@@ -57,12 +58,26 @@ import type {
 let workdir: string;
 const created: string[] = [];
 
+it('preserves the authoritative root including trailing whitespace', async () => {
+  const root = `${workdir}/project `;
+  expect(resolveSessionRoot(sessionCtx({ workingDir: root }))).toBe(root);
+  // Windows aliases ordinary trailing-space directory names; lexical identity is tested above.
+  if (process.platform === 'win32') return;
+  await fs.mkdir(root);
+  await fs.mkdir(root.trim());
+  const output = await prepareOutputPath(resolveSessionRoot(sessionCtx({ workingDir: root })), 'result.txt', false);
+  await fs.writeFile(output.abs, 'exact');
+  expect(await fs.readFile(path.join(root, 'result.txt'), 'utf8')).toBe('exact');
+  await expect(fs.stat(path.join(root.trim(), 'result.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 beforeEach(async () => {
   workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-test-'));
   created.push(workdir);
 });
 
 afterEach(async () => {
+  setSessionPathAuthorizer(undefined);
   vi.restoreAllMocks();
   while (created.length > 0) {
     const dir = created.pop()!;
@@ -1202,6 +1217,78 @@ describe('路径边界与覆盖语义', () => {
     await expect(fs.stat(path.join(outside, 'escaped.docx'))).rejects.toThrow();
   });
 
+  it('Host 授权后可以把文档写到工作目录外', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-'));
+    created.push(outside);
+    const outPath = path.join(await fs.realpath(outside), 'granted.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(outPath);
+      expect(request.operation).toBe('write');
+      expect(request.toolName).toBe('make_docx');
+      return { allowed: true, isCurrent: () => true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# granted',
+      outPath,
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(outPath)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 授权经工作目录链接时写入真实目标', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-link-granted-'));
+    created.push(outside);
+    await fs.symlink(
+      outside,
+      path.join(workdir, 'link'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
+    const canonical = path.join(await fs.realpath(outside), 'escaped.docx');
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(canonical);
+      return { allowed: true, isCurrent: () => true };
+    });
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# escaped',
+      outPath: 'link/escaped.docx',
+    });
+    expect(result.ok).toBe(true);
+    await expect(fs.stat(canonical)).resolves.toMatchObject({ size: expect.any(Number) });
+  });
+
+  it('Host 拒绝后工作目录外的文档写入仍失败', async () => {
+    const outside = path.join(os.tmpdir(), 'cindy-docs-denied.docx');
+    setSessionPathAuthorizer(async () => ({ allowed: false, reason: '审阅拒绝了这次越界写入。' }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# denied',
+      outPath: outside,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('审阅拒绝');
+    await expect(fs.stat(outside)).rejects.toThrow();
+  });
+
+  it('授权后权限失效则不再落盘', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-grant-'));
+    created.push(outside);
+    const outPath = path.join(await fs.realpath(outside), 'stale.docx');
+    const isCurrent = vi.fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    setSessionPathAuthorizer(async () => ({ allowed: true, isCurrent }));
+    const client = await connect();
+    const result = await callTool(client, 'make_docx', {
+      markdown: '# stale',
+      outPath,
+    });
+    expect(result.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect((result.data as Record<string, string>).hint).toContain('当前任务权限');
+    await expect(fs.stat(outPath)).rejects.toThrow();
+  });
+
   it('同名文件默认不覆盖,overwrite:true 才覆盖', async () => {
     const client = await connect();
     const first = await callTool(client, 'make_docx', {
@@ -1227,6 +1314,61 @@ describe('路径边界与覆盖语义', () => {
     });
     expect(forced.ok).toBe(true);
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
+  });
+
+  it('打开外部输入前授权代次失效则拒绝读取', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-stale-open-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true, isCurrent: () => false },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
+  it('获批的外部输入被换成符号链接后不再跟读', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-read-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    const other = path.join(await fs.realpath(outsideDir), 'other.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    await fs.writeFile(other, 'other-bytes');
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true },
+    )).resolves.toEqual(Buffer.from('granted-bytes'));
+
+    await fs.rm(granted);
+    // Match the directory-link fixtures above on Windows: no developer mode
+    // required, and the substituted link must be rejected before any open.
+    const targetDirectory = path.join(outsideDir, 'target');
+    await fs.mkdir(targetDirectory);
+    await fs.symlink(
+      process.platform === 'win32' ? targetDirectory : other,
+      granted,
+      process.platform === 'win32' ? 'junction' : 'file',
+    );
+    expect((await fs.lstat(granted)).isSymbolicLink()).toBe(true);
+    const open = vi.spyOn(fs, 'open');
+    try {
+      await expect(readInputFileWithinLimit(
+        workdir,
+        granted,
+        1024,
+        (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+        { allowOutsideRoot: true },
+      )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it('输入读取只接受与边界校验相同的已打开文件身份', async () => {
@@ -2568,6 +2710,29 @@ describe('inspect_pdf', () => {
     expect(result.verdict).not.toBe('ok');
   });
 
+  it('单页文字提取失败时给 warning 并指明页码,不当成空白或生成失败', async () => {
+    const client = await withPdf({
+      numPages: 2,
+      pagesInspected: 2,
+      pages: [
+        page(),
+        page({
+          page: 2,
+          textChars: 0,
+          textPreview: '',
+          blank: false,
+          visibilityUnverified: true,
+          textError: "Cannot read properties of null (reading 'name')",
+        }),
+      ],
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('warning');
+    expect(result.blankPages).toEqual([]);
+    expect(result.visibilityUnverifiedPages).toEqual([2]);
+    expect(result.warning).toContain('第 2 页是解析器读不出文字');
+  });
+
   it('横向与非标准纸张都翻译成人能对照的说法', async () => {
     const client = await withPdf({
       numPages: 2,
@@ -2716,7 +2881,9 @@ describe('inspect_pdf', () => {
     });
     const failed = await callTool(broken, 'inspect_pdf', { path: 'out.pdf' });
     expect(failed.errorCode).toBe('INSPECT_FAILED');
+    // 解析器缺陷也会走到这里:提示仍要求坏文件重做,但不能断言生成环节一定出错。
     expect((failed.data as Record<string, string>).hint).toContain('重做');
+    expect((failed.data as Record<string, string>).hint).toContain('兼容性');
   });
 });
 

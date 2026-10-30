@@ -11,7 +11,6 @@ import {
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
-import { reconcileManualProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -30,11 +29,16 @@ const log = createLogger('SidebarFilterCore');
 
 export const STATUS_KEY = 'cc-agent.sidebar.filter.status';
 export const PROJECTS_KEY = 'cc-agent.sidebar.filter.projects';
+export const CREATORS_KEY = 'cc-agent.sidebar.filter.creators';
+export type FilterCreators = 'all' | 'none' | string[];
+
 export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
+export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
+export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
@@ -52,8 +56,8 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** M41: vendor filter — 'all' = 全部；'cc' = 仅 Claude；'codex' = 仅 Codex。 */
-export type FilterVendor = 'all' | 'cc' | 'codex';
+/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -64,10 +68,11 @@ export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
 /** Sidebar 主列表任务排序。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
+ *  created = 创建时间倒序,不随任务活动重排。
  *  priority = 等待处理 > 运行中 > 其余按最近活动。
  *  旧值 'manual' 已从排序里拆出,存量回退 recency,并迁移到 projectOrder=custom。
  *  alphabetic / time(旧「最早优先」)同样回退 recency。 */
-export type FilterSortBy = 'recency' | 'priority';
+export type FilterSortBy = 'recency' | 'created' | 'priority';
 /** 按项目分组时的项目行顺序。activity = 跟任务排序走;custom = 拖拽持久序。 */
 export type FilterProjectOrder = 'activity' | 'custom';
 /**
@@ -139,6 +144,41 @@ export function loadProjects(ownerId: string | null): FilterProjects {
     return cleaned;
   }
   return 'all';
+}
+
+/** Creator keys contain both the computer and Bot identity, and are scoped to the signed-in owner. */
+export function loadCreators(ownerId: string | null): FilterCreators {
+  const raw = readSidebarOwnerStorage(CREATORS_KEY, ownerId);
+  if (!raw) return 'all';
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (value === 'none') return 'none';
+    if (!Array.isArray(value)) return 'all';
+    const keys = [...new Set(value.filter((key): key is string => typeof key === 'string' && key.length > 0))];
+    return keys.length ? keys : 'all';
+  } catch { return 'all'; }
+}
+
+export function persistCreators(value: FilterCreators, ownerId: string | null): void {
+  writeSidebarOwnerStorage(CREATORS_KEY, ownerId, JSON.stringify(value));
+}
+
+/** Canonicalize both per-device and older cloud-companion selections after discovery. */
+export function normalizeTaskCreators(
+  selected: FilterCreators,
+  options: readonly { filterKey?: string; filterMemberKeys?: readonly string[] }[],
+): FilterCreators {
+  if (selected === 'all' || selected === 'none') return selected;
+  const aliases = new Map(options.flatMap(bot => bot.filterKey
+    ? (bot.filterMemberKeys ?? []).map(member => [member, bot.filterKey!] as const) : []));
+  const next = [...new Set(selected.map(key => aliases.get(key) ?? key))];
+  return next.length === selected.length && next.every((key, i) => key === selected[i]) ? selected : next;
+}
+
+export function nextCreatorsAfterToggle(previous: FilterCreators, key: string): FilterCreators {
+  if (previous === 'all' || previous === 'none') return [key];
+  const next = previous.includes(key) ? previous.filter(value => value !== key) : [...previous, key];
+  return next.length ? next : 'all';
 }
 
 /* ============================== persist ============================== */
@@ -267,7 +307,7 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex']);
+const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
 
 export function loadVendor(): FilterVendor {
   const storage = safeStorage();
@@ -359,8 +399,8 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
 /* ============================== groupDevice load/persist ============================== */
 
 /**
- * 「按设备分组」开关(E 期):默认开(定稿)。仅在有远程设备连接时可见/生效
- * (与顶部设备切换栏同一出现条件);仅本机时选项隐藏、效果自然为单段。
+ * 「按设备分组」开关(E 期):默认开(定稿)。有可选远程设备（含断线缓存）时可见/生效；
+ * 没有可选远程设备时选项隐藏、效果自然为单段，不改写偏好。
  */
 export function loadGroupDevice(): boolean {
   const storage = safeStorage();
@@ -380,6 +420,34 @@ export function persistGroupDevice(groupDevice: boolean): void {
     storage.setItem(GROUP_DEVICE_KEY, String(groupDevice));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupDevice:', err);
+  }
+}
+
+/* ==================== device group collapsed load/persist ==================== */
+
+/** 最外层设备段按 'local' / deviceId 记忆折叠，属于本地显示偏好，默认展开。 */
+export function loadDeviceGroupCollapsedKeys(): ReadonlySet<string> {
+  const storage = safeStorage();
+  if (!storage) return new Set();
+  try {
+    const raw = storage.getItem(DEVICE_GROUP_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === 'string'));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read deviceGroupCollapsed:', err);
+    return new Set();
+  }
+}
+
+export function persistDeviceGroupCollapsedKeys(keys: ReadonlySet<string>): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(DEVICE_GROUP_COLLAPSED_KEY, JSON.stringify([...keys]));
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist deviceGroupCollapsed:', err);
   }
 }
 
@@ -420,6 +488,31 @@ export function persistDialogueGroupCollapsedKeys(keys: ReadonlySet<string>): vo
   }
 }
 
+/* ==================== pinned section collapsed load/persist ==================== */
+
+/** 置顶段整段收起，与设备段、对话组同属本地显示偏好，默认展开。 */
+export function loadPinnedSectionCollapsed(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(PINNED_SECTION_COLLAPSED_KEY) === 'true';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read pinnedSectionCollapsed:', err);
+    return false;
+  }
+}
+
+export function persistPinnedSectionCollapsed(collapsed: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (collapsed) storage.setItem(PINNED_SECTION_COLLAPSED_KEY, 'true');
+    else storage.removeItem(PINNED_SECTION_COLLAPSED_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist pinnedSectionCollapsed:', err);
+  }
+}
+
 /* ============================== lastActivity load/persist ============================== */
 
 const LAST_ACTIVITY_VALUES: ReadonlySet<string> = new Set<FilterLastActivity>([
@@ -456,7 +549,11 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'priority']);
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
+  'recency',
+  'created',
+  'priority',
+]);
 const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
@@ -553,13 +650,12 @@ const TASK_INFO_VALUES: ReadonlySet<string> = new Set<TaskInfoField>([
   'tokens',
   'cost',
 ]);
-/** 默认只显示最近活动时间（现状行为）。 */
+/** 默认仅显示最近活动时间。任务标签不属于可选信息项，始终跟在标题后显示。 */
 export const DEFAULT_TASK_INFO_FIELDS: readonly TaskInfoField[] = ['time'];
 
 /**
- * 读任务行右侧信息复选。存储为 JSON string[]；非法值逐项剔除。
- * 与其它维度不同：空数组是合法状态（用户显式全不选 = 行右侧留空），
- * 只有解析失败 / 未设置才回落默认。
+ * 兼容旧 string[] 与带版本号的字段列表，保留字段及顺序（全不选合法）。
+ * 旧版本存下的 'tags' 已不是信息项，按未知值静默丢弃。
  */
 export function loadTaskInfoFields(): TaskInfoField[] {
   const storage = safeStorage();
@@ -574,10 +670,12 @@ export function loadTaskInfoFields(): TaskInfoField[] {
   if (raw == null) return [...DEFAULT_TASK_INFO_FIELDS];
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_TASK_INFO_FIELDS];
+    const legacy = Array.isArray(parsed);
+    const values = legacy ? parsed : parsed?.version === 1 ? parsed.fields : null;
+    if (!Array.isArray(values)) return [...DEFAULT_TASK_INFO_FIELDS];
     const seen = new Set<string>();
     const cleaned: TaskInfoField[] = [];
-    for (const value of parsed) {
+    for (const value of values) {
       if (typeof value !== 'string' || !TASK_INFO_VALUES.has(value) || seen.has(value)) continue;
       seen.add(value);
       cleaned.push(value as TaskInfoField);
@@ -593,7 +691,7 @@ export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    storage.setItem(TASK_INFO_KEY, JSON.stringify(fields));
+    storage.setItem(TASK_INFO_KEY, JSON.stringify({ version: 1, fields }));
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist taskInfo:', err);
   }
@@ -642,13 +740,29 @@ export function persistManualProjectOrder(order: readonly string[], ownerId: str
 export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeWorkingDirs: readonly string[],
+  localPlatform: string = '',
 ): string[] {
+  const activeKeys = normalizeProjectKeyList(activeWorkingDirs, localPlatform);
+  const activeIdentities = new Set(
+    activeKeys.map((key) => projectKeyComparisonKey(key, localPlatform) ?? key),
+  );
   const prevKeys: string[] = [];
+  const seen = new Set<string>();
   for (const wd of prev) {
     const key = normalizeProjectKey(wd);
-    if (key) prevKeys.push(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (!activeIdentities.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
   }
-  return reconcileManualProjectOrder(prevKeys, normalizeProjectKeyList(activeWorkingDirs));
+  for (const key of activeKeys) {
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
+  }
+  return prevKeys;
 }
 
 export function moveManualProjectOrder(
@@ -657,21 +771,32 @@ export function moveManualProjectOrder(
   sourceWorkingDir: string,
   targetWorkingDir: string,
   position: ManualProjectDropPosition,
+  localPlatform: string = '',
 ): string[] {
-  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs);
+  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs, localPlatform);
   const sourceKey = normalizeProjectKey(sourceWorkingDir);
   const targetKey = normalizeProjectKey(targetWorkingDir);
-  if (!sourceKey || !targetKey || sourceKey === targetKey) return normalized;
-  const sourceIndex = normalized.indexOf(sourceKey);
-  const targetIndex = normalized.indexOf(targetKey);
+  if (!sourceKey || !targetKey) return normalized;
+  const sourceIdentity = projectKeyComparisonKey(sourceKey, localPlatform) ?? sourceKey;
+  const targetIdentity = projectKeyComparisonKey(targetKey, localPlatform) ?? targetKey;
+  if (sourceIdentity === targetIdentity) return normalized;
+  const sourceIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === sourceIdentity,
+  );
+  const targetIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (sourceIndex < 0 || targetIndex < 0) return normalized;
 
+  const sourceRepresentative = normalized[sourceIndex] as string;
   const withoutSource = normalized.slice();
   withoutSource.splice(sourceIndex, 1);
-  const targetIndexAfterRemoval = withoutSource.indexOf(targetKey);
+  const targetIndexAfterRemoval = withoutSource.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (targetIndexAfterRemoval < 0) return normalized;
   const insertIndex = position === 'after' ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
-  withoutSource.splice(insertIndex, 0, sourceKey);
+  withoutSource.splice(insertIndex, 0, sourceRepresentative);
   return withoutSource;
 }
 
@@ -753,20 +878,23 @@ export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): 
 export function normalizeManualPinnedOrder(
   prev: readonly string[],
   activeEntryIds: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
 ): string[] {
-  const activeSet = new Set(activeEntryIds);
+  const activeSet = new Set(activeEntryIds.map(comparisonKey));
   const seen = new Set<string>();
   const next: string[] = [];
 
   for (const id of prev) {
-    if (!activeSet.has(id) || seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (!activeSet.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
   for (const id of activeEntryIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
@@ -789,12 +917,18 @@ export function normalizeManualPinnedOrder(
 export function mergeVisibleReorder(
   currentFullOrder: readonly string[],
   visibleNewOrder: readonly string[],
+  comparisonKey: (id: string) => string = (id) => id,
 ): string[] {
-  const visibleSet = new Set(visibleNewOrder);
-  const queue = [...visibleNewOrder];
+  const storedRepresentatives = new Map<string, string>();
+  for (const id of currentFullOrder) {
+    const identity = comparisonKey(id);
+    if (!storedRepresentatives.has(identity)) storedRepresentatives.set(identity, id);
+  }
+  const visibleSet = new Set(visibleNewOrder.map(comparisonKey));
+  const queue = visibleNewOrder.map((id) => storedRepresentatives.get(comparisonKey(id)) ?? id);
   const result: string[] = [];
   for (const id of currentFullOrder) {
-    if (visibleSet.has(id)) {
+    if (visibleSet.has(comparisonKey(id))) {
       // 可见项槽位:按新顺序依次填;queue 异常耗尽时保留原 id 不丢。
       result.push(queue.length > 0 ? (queue.shift() as string) : id);
     } else {
@@ -806,6 +940,23 @@ export function mergeVisibleReorder(
   return result;
 }
 
+/** Build the same pinned drag request for the expanded sidebar and collapsed rail. */
+export function buildManualPinnedReorder(
+  rankedOrder: readonly string[],
+  activeEntryIds: readonly string[],
+  visibleNewOrder: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
+): { baseOrder: string[]; order: string[] } {
+  const displayOrder = normalizeManualPinnedOrder(rankedOrder, activeEntryIds, comparisonKey);
+  const rankedIdentities = new Set(rankedOrder.map(comparisonKey));
+  return {
+    // Display-only pins are new entries, not concurrently removed ranks (#6345).
+    // Keep ranks outside this status catalogue out of the base so Main retains them.
+    baseOrder: displayOrder.filter((entryId) => rankedIdentities.has(comparisonKey(entryId))),
+    order: mergeVisibleReorder(displayOrder, visibleNewOrder, comparisonKey),
+  };
+}
+
 /**
  * 第一次切到手动项目顺序:用切换前的可见视觉序填回全量 baseline 的可见槽位。
  * 隐藏项(其它机器 / 筛选)原位保留,不能把可见子集当成完整序再把其余甩到末尾。
@@ -813,9 +964,14 @@ export function mergeVisibleReorder(
 export function snapshotManualProjectOrder(
   visualVisibleKeys: readonly string[],
   baselineKeys: readonly string[],
+  localPlatform: string = '',
 ): string[] {
-  const fullOrder = normalizeManualProjectOrder([], baselineKeys);
-  return mergeVisibleReorder(fullOrder, visualVisibleKeys);
+  const fullOrder = normalizeManualProjectOrder([], baselineKeys, localPlatform);
+  return mergeVisibleReorder(
+    fullOrder,
+    visualVisibleKeys,
+    (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+  );
 }
 
 /**
@@ -853,18 +1009,14 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(
-  values: readonly unknown[],
-  localPlatform?: string,
-): string[] {
+function normalizeFilterProjectList(values: readonly unknown[], localPlatform?: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
     if (!key) continue;
-    const identity = localPlatform == null
-      ? key
-      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    const identity =
+      localPlatform == null ? key : (projectFilterEntryIdentity(key, localPlatform) ?? key);
     if (seen.has(identity)) continue;
     seen.add(identity);
     out.push(key);
@@ -872,13 +1024,15 @@ function normalizeFilterProjectList(
   return out;
 }
 
-function normalizeProjectKeyList(values: readonly unknown[]): string[] {
+function normalizeProjectKeyList(values: readonly unknown[], localPlatform: string = ''): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = typeof value === 'string' ? normalizeProjectKey(value) : null;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(key);
   }
   return out;

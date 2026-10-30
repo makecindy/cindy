@@ -33,6 +33,7 @@ import {
   type GhostPipeEventPush,
   type InstalledGhost,
 } from '../../../shared/ghost';
+import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
@@ -280,7 +281,7 @@ function makeGateway(overrides: Partial<GhostSubscriptionGatewayDeps> = {}) {
     listGhosts: () => [ghost('a', { topics: ['turn'] })],
     isRunning: (id) => running.has(id),
     wake: vi.fn(async (g: InstalledGhost) => {
-      running.add(g.manifest.id);
+      running.add(installedGhostStoragePart(g));
     }),
     sendToGhost: (ghostId, payload) => {
       sent.push({ ghostId, payload });
@@ -323,6 +324,36 @@ describe('subscriptionGateway owner boundary', () => {
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
 
 describe('did- 旁听扇出', () => {
+  it('does not deliver an old buffered event after its physical key has been reused', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const { gw, sent, running } = makeGateway({ wake: () => pending });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.dropGhost('a');
+    running.add('a');
+    release();
+    await pending;
+    await Promise.resolve();
+    expect(sent).toHaveLength(0);
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent).toHaveLength(1);
+    expect((sent[0]!.payload as { seq: number }).seq).toBe(1);
+  });
+  it('isolates same-name subscriber queues and never sends organization events to root', () => {
+    const root = ghost('helper', undefined);
+    const organization = { ...ghost('helper', { topics: ['turn'] }), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [root, organization] });
+    running.add('helper');
+    running.add('_ns__acme__helper');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent.map((event) => event.ghostId)).toEqual(['_ns__acme__helper']);
+    root.manifest.subscribe = { topics: ['turn'] };
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    expect(sent.map((event) => [event.ghostId, (event.payload as { seq: number }).seq])).toEqual([
+      ['_ns__acme__helper', 1], ['helper', 1], ['_ns__acme__helper', 2],
+    ]);
+  });
+
   it('只投声明了该 topic 的启用意识;seq 单调', async () => {
     const { gw, sent, running } = makeGateway({
       listGhosts: () => [
@@ -368,6 +399,34 @@ describe('did- 旁听扇出', () => {
     await vi.waitFor(() => expect(sent).toHaveLength(2));
     expect(deps.wake).toHaveBeenCalledTimes(1); // 唤醒去重
     expect(sent.map((s) => (s.payload as { name: string }).name)).toEqual([
+      'did-turn-start',
+      'did-turn-end',
+    ]);
+  });
+
+  it('补投首次唤醒 flush 期间新入队的终止事件', async () => {
+    const delivered: GhostPipeEventPush[] = [];
+    let gateway!: GhostSubscriptionGateway;
+    const created = makeGateway({
+      sendToGhost: (_ghostId, payload) => {
+        delivered.push(payload);
+        if ((payload as { name?: string }).name === 'did-turn-start') {
+          queueMicrotask(() => {
+            gateway.publish('turn', 'did-turn-end', {
+              ...TURN_DATA,
+              durationMs: 5,
+              endReason: 'completed',
+            });
+          });
+        }
+      },
+    });
+    gateway = created.gw;
+
+    gateway.publish('turn', 'did-turn-start', TURN_DATA);
+
+    await vi.waitFor(() => expect(delivered).toHaveLength(2));
+    expect(delivered.map((payload) => (payload as { name: string }).name)).toEqual([
       'did-turn-start',
       'did-turn-end',
     ]);
@@ -506,6 +565,21 @@ describe('GhostActivityTracker', () => {
 });
 
 describe('will- 拦截', () => {
+  it.each(['will-user-message', 'will-assistant-message'] as const)('wakes and routes %s only to its selected organization instance', async (hook) => {
+    const root = ghost('helper', undefined);
+    const org = { ...ghost('helper', { hooks: [hook] }), namespace: 'acme', dir: '/fake/_ns/acme/helper' };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [root, org] });
+    const screening = hook === 'will-user-message'
+      ? gw.screenUserMessage({ sessionId: 's', text: 'input' })
+      : gw.screenAssistantMessage({ sessionId: 's', text: 'input' });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(running).toEqual(new Set(['_ns__acme__helper']));
+    expect(sent[0]!.ghostId).toBe('_ns__acme__helper');
+    const hookId = (sent[0]!.payload as unknown as { hookId: string }).hookId;
+    gw.handleVerdict('helper', { type: 'event-verdict', hookId, action: 'rewrite', text: 'wrong instance' });
+    gw.handleVerdict('_ns__acme__helper', { type: 'event-verdict', hookId, action: 'rewrite', text: 'organization' });
+    expect(await screening).toMatchObject({ action: 'rewrite', ghostId: '_ns__acme__helper', text: 'organization' });
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -1109,6 +1183,40 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
         endReason: 'completed',
       },
     ]);
+  });
+
+  it.each([false, true])('retains output-limit usage exactly once (continuation=%s)', (continuation) => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    if (continuation) {
+      tr.handleEvent({ type: 'done', source: 'pi', turnContinuationId: 7,
+        data: { usage: { inputTokens: 2, outputTokens: 3 } } });
+    }
+    const usage = { inputTokens: 10, outputTokens: 16_000, cacheReadTokens: 4, cacheCreationTokens: 6 };
+    tr.handleEvent({ type: 'error', source: 'pi',
+      data: { reason: 'output-limit', isTerminal: true, usage } });
+    expect(ends).toEqual([expect.objectContaining({
+      endReason: 'error', agent: 'pi',
+      usage: { ...usage, inputTokens: continuation ? 12 : 10, outputTokens: continuation ? 16_003 : 16_000 },
+    })]);
+    tr.handleEvent({ type: 'done', source: 'pi', data: { status: 'failed', usage } });
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: false } });
+    vi.advanceTimersByTime(1_000);
+    expect(ends).toHaveLength(1);
+    tr.handleEvent({ type: 'status', source: 'pi', data: { isRunning: true } });
+    tr.handleEvent({ type: 'done', source: 'pi', data: { usage: { inputTokens: 1 } } });
+    expect(ends[1]).toMatchObject({ endReason: 'completed', usage: { inputTokens: 1 } });
+    expect((ends[1] as { usage: unknown }).usage).toEqual({ inputTokens: 1 });
+  });
+
+  it('ignores nonterminal error usage and preserves errors without usage', () => {
+    const { tr, ends } = makeTranslator({ t: 0 });
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    tr.handleEvent({ type: 'error', data: { isTerminal: false, usage: { inputTokens: 99 } } });
+    expect(ends).toHaveLength(0);
+    tr.handleEvent({ type: 'error', data: { isTerminal: true } });
+    expect(ends).toEqual([expect.objectContaining({ endReason: 'error' })]);
+    expect(ends[0]).not.toHaveProperty('usage');
   });
 
   it('status false 后宽限窗内无 done/error = interrupted;terminal error 定性 error', () => {

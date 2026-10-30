@@ -3,6 +3,13 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import * as taskImages from '../../../cindy-media/taskImageDelivery';
+import * as currentDb from '../../client/current';
+import { runDeviceLinkInvokeContext } from '../../../device-link/invoke-context';
+import { MAX_HISTORY_SCAN_ROWS, type HistoryPageShape } from '../historyViewReader';
+import { historyViewLeaves, type HistoryViewPage, type HistoryDetailPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
+import type { DbClient } from '../../client/DbClient';
+import { captureMediaUserTurn, refreshMediaUserTurnCost } from '../../../usage/mediaTurnCost';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -41,10 +48,6 @@ const h = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock('../../codexHistoryOversizedUpgrade', () => ({
-  maybeUpgradeCodexHistoryOversizedError: vi.fn(async () => ({ result: 'skipped' })),
-}));
-
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
@@ -80,12 +83,13 @@ vi.mock('../../../cindy-media/chatAttachments', () => ({
 }));
 vi.mock('../../client/current', () => ({
   getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
+  getCurrentDbClientSnapshot: () => ({ client: { drizzle: h.db, query: h.query, tx: h.tx }, clientEpoch: 1 }),
 }));
 
-import { maybeUpgradeCodexHistoryOversizedError } from '../../codexHistoryOversizedUpgrade';
 import {
   findParkedEngineSession,
   findPendingAgentHandoff,
+  listMessagesForAgentHandoff,
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
@@ -93,6 +97,7 @@ import {
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
+  updateMessageContent,
 } from '../messages';
 
 function createDb(): Database.Database {
@@ -101,6 +106,7 @@ function createDb(): Database.Database {
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
+      source TEXT NOT NULL DEFAULT 'desktop',
       parent_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
@@ -150,7 +156,7 @@ function insertCostMessage(
   sqlite: Database.Database,
   input: {
     id: string;
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'ask_user' | 'plan_review';
     createdAt: number;
     agentMeta?: Record<string, unknown>;
     rewindAt?: number | null;
@@ -174,9 +180,260 @@ function insertCostMessage(
 }
 
 describe('local-db:messages:list cursor', () => {
+  it('serves a lightweight SQLite view, hydrates visible text, then reads only the expanded subagent', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const add = (id: string, role: string, content: unknown, parent?: string) => insert.run(id, id, 's1', role,
+      JSON.stringify(content), role === 'tool_use' ? 'agent' : null,
+      parent ? JSON.stringify({ parentUuid: parent, model: 'actual-child-model' }) : null, Number(id));
+    add('0', 'user', 'Visible question');
+    add('1', 'tool_use', { toolName: 'Agent', toolUseId: 'agent', input: { description: 'Inspect' } });
+    const unchangedByteTail = 'q'.repeat(200);
+    for (let n = 2; n < 103; n++) add(String(n), 'thinking', {
+      text: n === 2 ? `ab${unchangedByteTail}` : 'hidden '.repeat(1000), durationMs: 10,
+    }, 'agent');
+    add('103', 'assistant', 'Visible answer');
+    registerMessageIpc();
+    const shapes: HistoryPageShape[] = [];
+    const historyView = {
+      disable() {}, setExpanded() {},
+      update(_keys: readonly string[], latest?: { shape?: HistoryPageShape }) {
+        if (latest?.shape) shapes.push(latest.shape);
+      },
+    };
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({
+      controllerDeviceId: 'd', channel, historyView,
+    }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true, workLines: true }) as HistoryViewPage<HistoryMessageSource>;
+    expect(page.hasMore).toBe(false);
+    expect(JSON.stringify(page)).not.toContain('hidden ');
+    expect(JSON.stringify(page)).toContain('Visible answer');
+    const card = page.items.find((item) => item.type === 'messages' && item.deferred);
+    if (card?.type !== 'messages' || !card.deferred) throw new Error('Missing subagent');
+    expect(card.deferred).toMatchObject({ messageCount: 101, model: 'actual-child-model' });
+    const detail = await invoke('local-db:messages:work-details', card.deferred, {}) as HistoryDetailPage<HistoryMessageSource>;
+    expect(detail.messages.length).toBeGreaterThan(0);
+    expect(detail.messages.every((row) => (row.agentMeta as { parentUuid?: string })?.parentUuid === 'agent')).toBe(true);
+    expect(JSON.stringify(detail)).toContain('hidden ');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).toEqual(shapes.at(-2)?.fingerprints);
+    // Same UTF-8 byte length and unchanged last 96 bytes, but a different character
+    // count ("ab" → "é"): the production UPDATE → outline entry must invalidate.
+    sqlite.prepare('UPDATE messages SET content = ? WHERE id = ?')
+      .run(JSON.stringify({ text: `é${unchangedByteTail}`, durationMs: 10 }), '2');
+    expect(await invoke('local-db:messages:view', { lazyDetails: true, workLines: true })).not.toEqual(page);
+    expect(shapes.at(-1)?.fingerprints).not.toEqual(shapes.at(-2)?.fingerprints);
+  });
+  it('keeps a command larger than the scan budget folded without losing its trailing artifact or full details', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const command = `echo '${'x'.repeat(9 * 1024 * 1024)}' > /work/trailing-report.txt`;
+    const insert = sqlite.prepare('INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const [id, role, content] of [
+      ['0', 'user', 'Question'],
+      ['1', 'tool_use', { toolName: 'Bash', input: { command } }],
+      ['2', 'tool_result', 'done'],
+      ['3', 'assistant', 'Answer'],
+    ] as const) insert.run(id, id, 's1', role, JSON.stringify(content), ['1', '2'].includes(id) ? 'bash' : null, Number(id));
+    registerMessageIpc();
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', { lazyDetails: true }) as HistoryViewPage<HistoryMessageSource>;
+    expect(page.hasMore).toBe(false);
+    expect(JSON.stringify(page).length).toBeLessThan(5000);
+    const work = historyViewLeaves(page.items).find((item) => item.type === 'work');
+    if (work?.type !== 'work') throw new Error('Missing folded command');
+    expect(work.summary.artifacts).toMatchObject([{ path: '/work/trailing-report.txt' }]);
+    const detail = await invoke('local-db:messages:work-details', work.summary, {}) as HistoryDetailPage<HistoryMessageSource>;
+    expect((detail.messages[0].content as { input: { command: string } }).input.command).toBe(command);
+  });
+  it.each([101, MAX_HISTORY_SCAN_ROWS])('reads all %i live rows from a generated work reference', async (count) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const live = Array.from({ length: count }, (_, i) => ({ id: `history-live:c${i}`, clientId: `c${i}`,
+      sessionId: 's1', role: 'thinking', content: 'detail', toolUseId: null,
+      agentMeta: { isStreaming: true }, createdAt: new Date(1000 + i).toISOString() })) as ReturnType<NonNullable<Parameters<typeof registerMessageIpc>[1]>>;
+    registerMessageIpc(() => true, () => live);
+    const invoke = (channel: string, ...args: unknown[]) => runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel }, () => h.handlers.get(channel)!({}, 's1', ...args));
+    const page = await invoke('local-db:messages:view', {}) as HistoryViewPage<HistoryMessageSource>;
+    const work = historyViewLeaves(page.items).find(item => item.type === 'work');
+    expect(work?.type).toBe('work');
+    if (work?.type !== 'work') throw new Error('missing work');
+    expect(work.summary.liveMessageIds).toHaveLength(count);
+    const ids: string[] = [];
+    let after: string | undefined;
+    do {
+      const detail = await invoke('local-db:messages:work-details', work.summary, { after }) as HistoryDetailPage<HistoryMessageSource>;
+      ids.push(...detail.messages.map(row => row.id));
+      after = detail.nextCursor ?? undefined;
+    } while (after);
+    expect(ids).toEqual(live.map(row => row.id));
+    sqlite.close();
+  });
+
+  it('rejects a live reference above the scan budget before reading anchors', async () => {
+    const live = vi.fn(() => []);
+    registerMessageIpc(() => true, live);
+    await expect(runDeviceLinkInvokeContext({ controllerDeviceId: 'd', channel: 'local-db:messages:work-details' },
+      () => h.handlers.get('local-db:messages:work-details')!({}, 's1', { liveMessageIds: Array(MAX_HISTORY_SCAN_ROWS + 1).fill('x') }, {})))
+      .rejects.toThrow('[INVALID_PARAMS]');
+    expect(live).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.handlers.clear();
+  });
+
+  it('does not let metadata IPC mint, replace or remove Host-authored approval text', async () => {
+    const sqlite = createDb();
+    insertCostMessage(sqlite, { id: 'trusted', role: 'user', createdAt: 1000,
+      agentMeta: { autoReviewUserText: 'Do not send.', delivery: 'turn' } });
+    insertCostMessage(sqlite, { id: 'untrusted', role: 'user', createdAt: 1001 });
+    registerMessageIpc();
+    const update = h.handlers.get('local-db:messages:updateAgentMeta')!;
+    const read = (id: string) => JSON.parse((sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get(id) as { agent_meta: string }).agent_meta);
+    await update({}, 's1', 'trusted', { autoReviewUserText: 'Send now.', delivery: 'turn' });
+    expect(read('trusted').autoReviewUserText).toBe('Do not send.');
+    await update({}, 's1', 'trusted', null);
+    expect(read('trusted').autoReviewUserText).toBe('Do not send.');
+    await update({}, 's1', 'untrusted', { autoReviewUserText: 'Send now.', delivery: 'turn' });
+    expect(read('untrusted')).toEqual({ delivery: 'turn' });
+    sqlite.close();
+  });
+
+  it('atomically stores a Host answer and retains it across old renderer card PATCHes', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'card', role: 'ask_user', createdAt: 1 });
+      const receipt = { text: 'Only build. Never src.', acceptedAt: 10 };
+      await updateMessageContent('s1', 'card', { status: 'answered' }, receipt);
+      const read = () => sqlite.prepare('SELECT content, agent_meta FROM messages WHERE id = ?').get('card') as { content: string; agent_meta: string };
+      expect(JSON.parse(read().content)).toEqual({ status: 'answered' });
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+      registerMessageIpc();
+      await h.handlers.get('local-db:messages:updateAgentMeta')!({}, 's1', 'card', { autoReviewUserText: { text: 'Delete src', acceptedAt: 20 } });
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+      h.tx.mockRejectedValueOnce(new Error('capture display write'));
+      await expect(h.handlers.get('local-db:messages:updateContent')!({}, 's1', 'card', { status: 'answered' })).rejects.toThrow('capture display write');
+      expect(JSON.parse(read().agent_meta).autoReviewUserText).toEqual(receipt);
+    } finally { sqlite.close(); }
+  });
+
+  it('replays complete authorization history while retaining clear and rewind boundaries', async () => {
+    const sqlite = createDb();
+    try {
+      for(let i=0;i<130;i++) insertCostMessage(sqlite,{id:`human-${i}`,role:'user',createdAt:i+1,
+        agentMeta:{autoReviewUserText:`no-${i}`,delivery:'steer'}});
+      expect(await listMessagesForAgentHandoff('s1',null,undefined,'authorization')).toHaveLength(130);
+      sqlite.prepare('INSERT OR REPLACE INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1',20);
+      sqlite.prepare('UPDATE messages SET rewind_at = 1000 WHERE id = ?').run('human-129');
+      const rows=await listMessagesForAgentHandoff('s1',null,undefined,'authorization');
+      expect(rows).toHaveLength(109);expect(rows[0]?.clientId).toBe('human-20');expect(rows.at(-1)?.clientId).toBe('human-128');
+      expect(await listMessagesForAgentHandoff('s1',100,undefined,'authorization')).toHaveLength(100);
+    } finally { sqlite.close(); }
+  });
+
+  // Side-chat fork boundary: inherited history remains readable but cannot authorize new actions.
+  // This real SQLite fixture covers the query predicate missing from ordinary history tests (unit).
+  it('keeps inherited context out of side-chat authorization, including late answers to old cards', async () => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare("INSERT INTO sessions (id, source, created_at) VALUES ('s1', 'side-chat', 100)").run();
+      insertCostMessage(sqlite, { id: 'parent-grant', role: 'user', createdAt: 10 });
+      insertCostMessage(sqlite, { id: 'parent-card', role: 'ask_user', createdAt: 20,
+        agentMeta: { autoReviewUserText: { text: 'Deploy now', acceptedAt: 150 } } });
+      insertCostMessage(sqlite, { id: 'side-question', role: 'user', createdAt: 100 });
+      expect((await listMessagesForAgentHandoff('s1', null)).map(row => row.clientId))
+        .toEqual(['parent-grant', 'parent-card', 'side-question']);
+      expect((await listMessagesForAgentHandoff('s1', null, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['side-question']);
+    } finally { sqlite.close(); }
+  });
+
+  it('selects a recently answered old card before limiting authorization history', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'old-question', role: 'ask_user', createdAt: 1,
+        agentMeta: { autoReviewUserText: { text: 'Do not send.', acceptedAt: 100 } } });
+      insertCostMessage(sqlite, { id: 'newer-grant', role: 'user', createdAt: 50 });
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['old-question']);
+    } finally { sqlite.close(); }
+  });
+
+  it('does not let scheduled runs evict owner restrictions from bounded authorization history', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'owner', role: 'user', createdAt: 1,
+        agentMeta: { autoReviewUserText: 'Submit PR. Do not merge.', delivery: 'turn' } });
+      insertCostMessage(sqlite, { id: 'stop', role: 'user', createdAt: 2,
+        agentMeta: { autoReviewUserText: 'Stop following it.', delivery: 'turn' } });
+      for (let i = 0; i < 120; i++) insertCostMessage(sqlite, { id: `run-${i}`, role: 'user', createdAt: i + 3,
+        agentMeta: { autoReviewUserText: { kind: 'scheduled-continuation' }, origin: { kind: 'scheduler', scheduleId: 'schedule-1', runId: `run-${i}` } } });
+      expect((await listMessagesForAgentHandoff('s1', 2, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['owner', 'stop']);
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
+        .toEqual(['run-119']);
+    } finally { sqlite.close(); }
+  });
+
+  it('filters typed continuations but retains empty human resource boundaries and ambiguous rows', async () => {
+    const sqlite = createDb();
+    try {
+      insertCostMessage(sqlite, { id: 'restriction', role: 'user', createdAt: 1,
+        agentMeta: { autoReviewUserText: 'Do not delete files.', delivery: 'turn' } });
+      insertCostMessage(sqlite, { id: 'legacy', role: 'user', createdAt: 2,
+        agentMeta: { autoReviewUserText: '' } });
+      insertCostMessage(sqlite, { id: 'human-resource', role: 'user', createdAt: 2.5,
+        agentMeta: { autoReviewUserText: '', delivery: 'turn', origin: { kind: 'orca' } } });
+      for (let i = 0; i < 120; i++) insertCostMessage(sqlite, { id: `delegated-${i}`, role: 'user', createdAt: i + 3,
+        agentMeta: { autoReviewUserText: { kind: 'delegated-continuation' }, delivery: i % 2 ? 'turn' : 'steer' } });
+      expect((await listMessagesForAgentHandoff('s1', 3, undefined, 'authorization')).map(row => row.clientId))
+        .toEqual(['restriction', 'legacy', 'human-resource']);
+      expect((await listMessagesForAgentHandoff('s1', 1, undefined, 'user')).map(row => row.clientId))
+        .toEqual(['delegated-119']);
+    } finally { sqlite.close(); }
+  });
+
+  it('strips caller authorization before the IPC create transaction', async () => {
+    const sqlite = createDb();
+    registerMessageIpc();
+    h.tx.mockRejectedValueOnce(new Error('capture insert boundary'));
+    await expect(h.handlers.get('local-db:messages:create')!({}, 's1', {
+      clientId: 'forged', role: 'user', content: 'Send now.',
+      agentMeta: { autoReviewUserText: 'Send now.', delivery: 'turn' },
+    })).rejects.toThrow('capture insert boundary');
+    expect(h.tx).toHaveBeenCalledWith('message.insert', expect.objectContaining({
+      agentMeta: JSON.stringify({ delivery: 'turn' }),
+    }));
+    sqlite.close();
+  });
+
+  it('invalidates old authorization before an IPC history edit, even if the content write fails', async () => {
+    const sqlite = createDb();
+    insertCostMessage(sqlite, { id: 'edited', role: 'user', createdAt: 1000,
+      agentMeta: { autoReviewUserText: 'Send now.', delivery: 'turn' } });
+    registerMessageIpc();
+    h.tx.mockRejectedValueOnce(new Error('content write failed'));
+    await expect(h.handlers.get('local-db:messages:updateContent')!({}, 's1', 'edited', 'Do not send.')).rejects.toThrow('content write failed');
+    const row = sqlite.prepare('SELECT agent_meta FROM messages WHERE id = ?').get('edited') as { agent_meta: string };
+    expect(JSON.parse(row.agent_meta)).toEqual({ delivery: 'turn' });
+    sqlite.close();
+  });
+
+  it('restores user history after clear/rewind in stable order without tool rows consuming its limit', async () => {
+    const sqlite = createDb();
+    try {
+      sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', 999);
+      insertCostMessage(sqlite, { id: 'cleared', role: 'user', createdAt: 999 });
+      insertCostMessage(sqlite, { id: 'grant', role: 'user', createdAt: 1000 });
+      insertCostMessage(sqlite, { id: 'revocation', role: 'user', createdAt: 1000 });
+      insertCostMessage(sqlite, { id: 'rewound', role: 'user', createdAt: 1001, rewindAt: 1002 });
+      insertCostMessage(sqlite, { id: 'tool-noise', role: 'assistant', createdAt: 1002 });
+      const rows = await listMessagesForAgentHandoff('s1', 2, undefined, 'user');
+      expect(rows.map((row) => row.clientId)).toEqual(['grant', 'revocation']);
+    } finally { sqlite.close(); }
   });
 
   it('continues through rows with the same timestamp using insertion order', async () => {
@@ -228,6 +485,55 @@ describe('local-db:messages:list cursor', () => {
     const rows = await listHandler?.({}, 's1', { limit: 1, after: 'missing' });
 
     expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual(['row-new']);
+  });
+
+  it.each([
+    ['list', false],
+    ['around', false],
+    ['around-client-id', false],
+    ['around-client-id', true],
+  ] as const)('restores visible images before returning %s (capped=%s)', async (kind, capped) => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, ?)').run('s1', 500);
+    const original = 'Full original Markdown must reach restoration before truncation';
+    for (const [id, createdAt] of [
+      ['cleared', 100], ['before', 1000], ['anchor', 1000], ['after', 1000], ['rewound', 1100],
+    ] as const) insertMessage(sqlite, { id, createdAt, content: original });
+    sqlite.prepare('UPDATE messages SET rewind_at = 1200 WHERE id = ?').run('rewound');
+    const captured = currentDb.getDbClient();
+    const capture = vi.spyOn(currentDb, 'getDbClient').mockReturnValue(captured);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const restore = vi.spyOn(taskImages, 'restoreTaskImageRows').mockImplementation(async (db, rows) => {
+      expect(db).toBe(captured);
+      expect(rows.map((row) => row.id)).toEqual(
+        kind === 'list' ? ['after', 'anchor', 'before'] : ['before', 'anchor', 'after'],
+      );
+      expect(rows.every((row) => row.content === JSON.stringify(original))).toBe(true);
+      await pending;
+      return rows.map((row) => ({ ...row, content: JSON.stringify('restored-image') }));
+    });
+    try {
+      registerMessageIpc();
+      const handler = h.handlers.get(`local-db:messages:${kind}`)!;
+      let finished = false;
+      const response = Promise.resolve(kind === 'list'
+        ? handler({}, 's1', { limit: 10 })
+        : handler({}, 's1', 'anchor', { radius: 10, ...(capped ? { contentCharLimit: 5 } : {}) }))
+        .then((rows) => { finished = true; return rows as Array<{ content: string; rowid: number }>; });
+      await vi.waitFor(() => expect(restore).toHaveBeenCalledOnce());
+      expect(finished).toBe(false);
+      release();
+      const rows = await response;
+      expect(rows).toHaveLength(3);
+      expect(rows.every((row) => row.content === (capped ? '…mage' : 'restored-image'))).toBe(true);
+      expect(rows.map((row) => row.rowid)).toEqual(kind === 'list' ? [4, 3, 2] : [2, 3, 4]);
+    } finally {
+      release();
+      restore.mockRestore();
+      capture.mockRestore();
+      sqlite.close();
+    }
   });
 
   it('keeps around windows stable for same timestamp rows', async () => {
@@ -577,18 +883,19 @@ describe('local-db:messages:list cursor', () => {
     expect(hydrateSql).not.toMatch(/json_valid\([^)]*\) = 0 OR json_extract/);
   });
 
-  it('only scans oversized-history upgrade on the first page', async () => {
+  it('preserves a reconnect error when reading first and subsequent pages', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
-    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+    const content = JSON.stringify({ reason: 'codex_reconnect_stalled', message: 'Connection reset' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'placeholder' });
+    sqlite.prepare("UPDATE messages SET role = 'error', content = ? WHERE id = 'row-new'").run(content);
     insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
     registerMessageIpc();
     const listHandler = h.handlers.get('local-db:messages:list');
     await listHandler?.({}, 's1', { limit: 1 });
     await listHandler?.({}, 's1', { limit: 1, before: 'row-new' });
     await listHandler?.({}, 's1', { limit: 1, after: 'row-old' });
-    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledTimes(1);
-    expect(maybeUpgradeCodexHistoryOversizedError).toHaveBeenCalledWith('s1');
+    expect(sqlite.prepare('SELECT content FROM messages WHERE id = ?').get('row-new')).toEqual({ content });
   });
 });
 
@@ -1145,5 +1452,58 @@ describe('readPriorUserRoundCost', () => {
       costUsd: 0.5,
       hasEstimatedValue: false,
     });
+  });
+});
+
+describe('media user-round costs', () => {
+  const actual = (amount: number) => ({ amount, currency: 'USD', approximate: false, kind: 'actual-cost' });
+  function fixture() {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id) VALUES (?)').run('s1');
+    const db = {
+      drizzle: h.db,
+      queryOne: async (query: string, params: unknown[] = []) => sqlite.prepare(query).get(...params),
+      exec: async (query: string, params: unknown[] = []) => sqlite.prepare(query).run(...params),
+    } as unknown as DbClient;
+    return { sqlite, db };
+  }
+
+  it('adds media to the visible round, keeps raw subscription valuation, and does not carry it to the next user', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 1, agentMeta: { mediaCosts: [actual(0.75)] } });
+    insertCostMessage(sqlite, { id: 'segment', role: 'assistant', createdAt: 2, agentMeta: { turnCost: actual(0.25) } });
+    insertCostMessage(sqlite, { id: 'resume', role: 'user', createdAt: 3, agentMeta: { autoResume: true } });
+    insertCostMessage(sqlite, { id: 'final', role: 'assistant', createdAt: 4,
+      agentMeta: { turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model' } });
+    expect(await captureMediaUserTurn(db, 's1')).toEqual({ clientId: 'user' });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'final', userTurnMoney: { amount: 3, kind: 'actual-cost' }, userTurnCostIsEstimate: true,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'final'").get() as { agent_meta: string }).agent_meta);
+    expect(meta).toMatchObject({ turnCostUsd: 2, turnCostIsEstimate: true, model: 'keep-model', userTurnCost: { amount: 3 } });
+    // The next real user begins a new round, including for same-millisecond rows.
+    insertCostMessage(sqlite, { id: 'next-user', role: 'user', createdAt: 4 });
+    insertCostMessage(sqlite, { id: 'next-answer', role: 'assistant', createdAt: 4 });
+    expect((await readPriorUserRoundCost('s1', 'next-answer')).money).toBeNull();
+    expect((await refreshMediaUserTurnCost(db, 's1', 'user'))?.clientId).toBe('final');
+  });
+
+  it('projects media-only responses without inventing a chat segment price and ignores clear/rewind', async () => {
+    const { sqlite, db } = fixture();
+    insertCostMessage(sqlite, { id: 'user', role: 'user', createdAt: 10, agentMeta: { mediaCosts: [actual(0.75)] } });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    insertCostMessage(sqlite, { id: 'answer', role: 'assistant', createdAt: 11 });
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toMatchObject({
+      clientId: 'answer', userTurnMoney: actual(0.75), userTurnCostIsEstimate: false,
+    });
+    const meta = JSON.parse((sqlite.prepare("SELECT agent_meta FROM messages WHERE id = 'answer'").get() as { agent_meta: string }).agent_meta);
+    expect(meta.turnCost).toBeUndefined();
+    sqlite.prepare("UPDATE messages SET rewind_at = 12 WHERE id = 'user'").run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
+    sqlite.prepare('UPDATE messages SET rewind_at = NULL').run();
+    sqlite.prepare('UPDATE sessions SET cleared_at = 10').run();
+    expect(await captureMediaUserTurn(db, 's1')).toBeNull();
+    expect(await refreshMediaUserTurnCost(db, 's1', 'user')).toBeNull();
   });
 });

@@ -1,3 +1,4 @@
+import { buildProductionFiles } from '../generate.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,7 @@ import {
   validateDualModes,
   validateStructure,
 } from '../guards.ts';
-import { findRepoRoot, referencePath, semanticPath } from '../paths.ts';
+import { findRepoRoot } from '../paths.ts';
 import { readSnapshot, snapshotById } from '../snapshot.ts';
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -24,15 +25,10 @@ describe('DS-3 · 结构守卫', () => {
   const repoRoot = findRepoRoot();
   const layers = buildLayers(snapshotById(readSnapshot(repoRoot)));
 
-  it('正式影子层 DTCG 语法合法、alias 单向、双模式齐全', () => {
+  it('生产源经 Terrazzo 校验并生成；保留历史导入结构 oracle', async () => {
     expect(validateStructure(layers)).toEqual([]);
-    expect(JSON.parse(readFileSync(referencePath(repoRoot), 'utf8'))).toEqual(
-      layers.reference,
-    );
-    expect(JSON.parse(readFileSync(semanticPath(repoRoot), 'utf8'))).toEqual(
-      layers.semantic,
-    );
-  });
+    expect((await buildProductionFiles(repoRoot)).length).toBe(18);
+  }, 30_000); // Real Terrazzo build; allow CPU contention with the workspace suite.
 
   it('错误 fixture：非法 DTCG 语法被命中', () => {
     const issues = validateDtcgSyntax(readFixture('invalid-syntax.json'), 'invalid-syntax');
@@ -48,6 +44,16 @@ describe('DS-3 · 结构守卫', () => {
     const issues = validateAliasDirection({
       reference: readFixture('alias-from-reference.json'),
       semantic: layers.semantic,
+      component: layers.component,
+    });
+    expect(issues.some((issue) => issue.code === 'alias-direction')).toBe(true);
+  });
+
+  it('错误 fixture：component 写字面量被命中', () => {
+    const issues = validateAliasDirection({
+      reference: layers.reference,
+      semantic: layers.semantic,
+      component: readFixture('component-literal.json'),
     });
     expect(issues.some((issue) => issue.code === 'alias-direction')).toBe(true);
   });

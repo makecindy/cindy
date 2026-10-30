@@ -1,5 +1,6 @@
 import {
   DEFAULT_NEAR_BOTTOM_THRESHOLD,
+  historyPrefetchThreshold,
   isNearMessageListBottom,
   type MessageScrollMetrics,
 } from '@cindy/maker-shared/message-window';
@@ -29,7 +30,12 @@ export const MOBILE_MESSAGE_LIST_BOTTOM_PADDING = 132;
 export const MOBILE_NEAR_BOTTOM_THRESHOLD =
   DEFAULT_NEAR_BOTTOM_THRESHOLD + MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
 
-export function mobileMessageListBottomPadding(bottomOverlayHeight?: number): number {
+export function mobileMessageListBottomPadding(bottomOverlayHeight?: number, contentBottomInset?: number): number {
+  // An inline interaction replaces the composer; an explicit inset must not
+  // retain the fallback space reserved for that now-hidden composer.
+  if (typeof contentBottomInset === 'number' && Number.isFinite(contentBottomInset)) {
+    return Math.max(0, Math.ceil(contentBottomInset));
+  }
   if (typeof bottomOverlayHeight !== 'number' || !Number.isFinite(bottomOverlayHeight)) {
     return MOBILE_MESSAGE_LIST_BOTTOM_PADDING;
   }
@@ -58,8 +64,11 @@ export function mobileMessageListEndOffset(metrics: MessageScrollMetrics): numbe
 // 距底仍在阈值带内 → 仍被判「近底」→ 下一帧内容增长又被拽回最底。触摸惯性
 // 大多一次就滑出阈值,所以比桌面版难触发,但结构性竞态相同。
 // 修复:「解除」看手势意图(拖动中向上位移超过死区,只有用户能产生),
-// 「恢复」保留距离判定但要求 scroll 方向明确向下——否则解除后紧跟着的上滑
-// scroll 事件(距底仍在阈值带内)会把刚解除的跟随立刻翻回去。
+// 「恢复」要求 scroll 方向明确向下——否则解除后紧跟着的上滑 scroll 事件
+// (距底仍在阈值带内)会把刚解除的跟随立刻翻回去。
+// 恢复的距离只认「真正到底」(MOBILE_FOLLOW_REPIN_END_TOLERANCE),不用 228px
+// 的近底阈值带:停在距底两三行时,手指微调或抬手那一下常有几 px 的向下位移,
+// 会被当成「滑回底部」恢复跟随,松手后的落底校验随即把列表拽到最新。
 
 /**
  * 拖动解除跟随的累计位移死区(px)。手指按住不动也有 ±2-3px 抖动,取 8px
@@ -73,6 +82,13 @@ export const MOBILE_FOLLOW_UNPIN_DRAG_DEAD_ZONE = 8;
  * 1px 内的增量不算「明确向下」。
  */
 export const MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE = 1;
+
+/**
+ * 已解除跟随时,恢复跟随允许的距底容差(px,相对内容末端 offset)。底部留白
+ * 已计入 contentHeight,到达末端即最后一条消息完整露出;容差约一行字,
+ * 吸收亚像素与回弹误差,但停在距底两三行处不会被判为「回到底部」。
+ */
+export const MOBILE_FOLLOW_REPIN_END_TOLERANCE = 24;
 
 /** 容器「真的可滚」的最小内容富余(px),亚像素圆整内视为不可滚。 */
 const MOBILE_FOLLOW_MIN_SCROLLABLE_PX = 1;
@@ -130,20 +146,21 @@ export interface MobileNearBottomResolveInput {
  *    assistant / 工具卡撑高不得把跟随掐死;
  *  - 阈值带内且原本在跟 → 保持 true(贴底期间程序化 scrollToEnd 产生的
  *    向下增量、以及被动微小位移都不改变状态);
- *  - 阈值带内且已解除 → 仅「明确向下」(增量 > 死区)才恢复跟随。**不能只看
- *    距离**:拖动解除后同一手势内继续到达的上滑 scroll 事件距底仍在阈值带内,
- *    无方向守卫会立即翻回跟随,解除失效(修复核心)。
+ *  - 已解除 → 仅「明确向下」(增量 > 死区)且真正到底(距末端 ≤
+ *    MOBILE_FOLLOW_REPIN_END_TOLERANCE)才恢复跟随。**不能只看距离**:拖动解除后
+ *    同一手势内继续到达的上滑 scroll 事件仍可能贴近末端,无方向守卫会立即翻回
+ *    跟随;**也不能用近底阈值带**:停在距底几行处的手指微调/抬手位移会误恢复。
  */
 export function resolveMobileNearBottomOnScroll(input: MobileNearBottomResolveInput): boolean {
   if (input.programmaticScrollInFlight) return input.wasNearBottom;
-  const { contentHeight, viewportHeight } = input.metrics;
+  const { contentHeight, offsetY, viewportHeight } = input.metrics;
   if (contentHeight <= viewportHeight) return true;
-  if (!isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) {
-    if (!input.wasNearBottom) return false;
-    return input.scrollDelta >= -MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
+  if (!input.wasNearBottom) {
+    return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE
+      && mobileMessageListEndOffset(input.metrics) - offsetY <= MOBILE_FOLLOW_REPIN_END_TOLERANCE;
   }
-  if (input.wasNearBottom) return true;
-  return input.scrollDelta > MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
+  if (isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) return true;
+  return input.scrollDelta >= -MOBILE_FOLLOW_REPIN_DIRECTION_DEAD_ZONE;
 }
 
 export interface MobileHistoryBrowseIntentInput {
@@ -338,30 +355,14 @@ export function mobileMessageListKeysSignature(keys: readonly string[]): string 
   return keys.join('\0');
 }
 
-export interface MobileFollowVerifyStartDelayInput {
-  animatedScrollInFlight: boolean;
-  now: number;
-  settleAt: number;
-}
-
-/**
- * Animated `scrollToEnd` must own the viewport until its bounded settle window closes.
- * Starting the verifier earlier would read an expected in-flight offset and replace the
- * smooth animation with an immediate non-animated retry.
- */
-export function mobileFollowVerifyStartDelayMs(
-  input: MobileFollowVerifyStartDelayInput,
-): number {
-  if (!input.animatedScrollInFlight) return 0;
-  return Math.max(0, input.settleAt - input.now);
-}
-
 export interface MobileAnchorVerifyInput {
   attempts: number;
   listVisible: boolean;
   metrics: MessageScrollMetrics;
   preserveVisibleContentPosition: boolean;
   stickToLatest: boolean;
+  /** Finger drag / native momentum owns the viewport, including iOS overscroll bounce. */
+  userControllingScroll: boolean;
   waitRounds: number;
 }
 
@@ -381,21 +382,21 @@ export type MobileAnchorVerifyAction =
  * 背景:贴底跟随的落底 scrollToOffset 存在两类静默落空——
  * (a) 行坐标或 size 锚定尚在结算的帧里执行,被后续布局调整吸收/抵消;
  * (b) 落底一刻 scrollMetricsRef 里的 contentHeight / viewportHeight 是陈旧值,目标
- *     offset 偏短,且之后再无 contentSize / layout 事件来纠正。
- * 两类的共同结果都是「最新消息停在底部浮层(composer)后面」。verify 环在每次落底后
- * 校验 offset 是否真到内容末端,未到位则带上限补滚,从机制上兜掉所有此类竞态。
+ *     offset 偏短或内容收缩后偏长,且之后再无 contentSize / layout 事件来纠正。
+ * 偏短会把最新消息留在 composer 后面,偏长会把消息顶上去并留下尾部空白。
+ * 用户没有控制滚动时,校验 offset 与真实末端的双向距离,未到位则带上限补滚。
  */
 export function evaluateMobileAnchorVerify(input: MobileAnchorVerifyInput): MobileAnchorVerifyAction {
   if (!input.stickToLatest || !input.listVisible) return 'settled';
   // 行坐标 / size 锚定仍在 settle 窗口:此刻补滚可能被后续布局吸收,下一轮再判。
   // 等待走独立预算,不消耗补滚额度。
   const { contentHeight, offsetY, viewportHeight } = input.metrics;
-  if (input.preserveVisibleContentPosition || contentHeight <= 0 || viewportHeight <= 0) {
+  if (input.userControllingScroll || input.preserveVisibleContentPosition || contentHeight <= 0 || viewportHeight <= 0) {
     return input.waitRounds >= MOBILE_ANCHOR_VERIFY_MAX_WAIT_ROUNDS ? 'give-up' : 'wait';
   }
-  // 内容不足一屏时 end offset 为 0,任何非负 offset 都算贴底(iOS bounce 可为负,同样无遮挡)。
+  // 不足一屏时也必须回到 0;原生测量收缩后残留的正 offset 不是有效的贴底位置。
   const endOffset = mobileMessageListEndOffset(input.metrics);
-  if (offsetY >= endOffset - MOBILE_ANCHOR_VERIFY_TOLERANCE) return 'settled';
+  if (Math.abs(offsetY - endOffset) <= MOBILE_ANCHOR_VERIFY_TOLERANCE) return 'settled';
   if (input.attempts >= MOBILE_ANCHOR_VERIFY_MAX_ATTEMPTS) return 'give-up';
   return 'retry';
 }
@@ -454,8 +455,7 @@ export function mobileTopPaddingCompensationOffset(input: MobileTopPaddingCompen
  * 且有 loadingEarlier 门禁串行化,最坏是多拉一页,不会失控循环。
  */
 export function mobileLoadEarlierPrefetchThreshold(viewportHeight: number): number {
-  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return 96;
-  return Math.max(96, Math.ceil(viewportHeight * 2));
+  return historyPrefetchThreshold(viewportHeight);
 }
 
 export interface MobileAutoLoadEarlierDecisionInput {
@@ -467,12 +467,12 @@ export interface MobileAutoLoadEarlierDecisionInput {
   atEnd: boolean;
   /** 列表当前也贴在内容开头；与 atEnd 同时成立才说明内容未撑满视口。 */
   atStart: boolean;
-  /** 当前首个渲染项 key(prepend 落地后必变,作为「上次尝试有进展」的信号)。 */
-  firstItemKey: string | null;
+  /** 当前最旧的历史游标；调用方没有游标时退回首个渲染项 key。 */
+  progressKey: string | null;
   /** 冷开补齐预算尚有余额；仍需 atStart + atEnd 确认视口未填满。 */
   initialAutoFillAllowed: boolean;
-  /** 上一次自动触发时的首项 key;相同说明上次尝试无进展(失败/重复页),不再自动重试。 */
-  lastAttemptedFirstItemKey: string | null;
+  /** 上一次自动触发时的历史游标;相同说明上次尝试无进展(失败/重复页),不再自动重试。 */
+  lastAttemptedProgressKey: string | null;
   /** 列表处于近顶预取区(LegendList getState().isNearStart,阈值 = onStartReachedThreshold × 视口)。 */
   nearStart: boolean;
   /** 用户产生过真实上翻意图(拖动 / 上跳导航);冷开初始布局不算。 */
@@ -496,7 +496,7 @@ export interface MobileAutoLoadEarlierDecisionInput {
  * 防失控:
  * - 用户浏览态 atEnd 时不触发:贴底跟流不因自动预取被关掉 end-pin；只有冷开有界补齐
  *   允许短窗口同时 nearStart + atEnd 时拉取；
- * - firstItemKey 去重:一次尝试后必须看到首项变化(真有 prepend)才允许下一次,
+ * - progressKey 去重:一次尝试后必须看到历史游标变化(真有 prepend)才允许下一次,
  *   加载失败或拉回重复页(host cursor 未命中返回最新页)不会无限重试;用户重新拖动时清除,
  *   保证手势永远能重新驱动一次尝试。
  */
@@ -511,37 +511,8 @@ export function shouldAutoLoadEarlier(input: MobileAutoLoadEarlierDecisionInput)
   // request the previous page; only suppress user-driven prefetch when a longer list is still
   // pinned at the latest edge without also being at the history edge.
   if (input.atEnd && input.userScrolledForOlder && !input.atStart) return false;
-  if (!input.firstItemKey) return false;
-  return input.lastAttemptedFirstItemKey !== input.firstItemKey;
-}
-
-export interface MobilePreviousUserJumpTarget {
-  clientId: string;
-  index: number;
-  itemKey: string;
-  preview: string;
-}
-
-export function previousUserMessageJumpTarget(
-  items: readonly MobileMessageRenderItem[],
-  firstVisibleIndex: number,
-): MobilePreviousUserJumpTarget | null {
-  if (!Number.isFinite(firstVisibleIndex)) return null;
-  const startIndex = Math.min(items.length - 1, Math.floor(firstVisibleIndex) - 1);
-  if (startIndex < 0) return null;
-  for (let index = startIndex; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.type !== 'message' || item.message.kind !== 'user') continue;
-    const clientId = mobileMessageClientId(item.message);
-    if (!clientId) continue;
-    return {
-      clientId,
-      index,
-      itemKey: item.key,
-      preview: firstNonEmptyMessageLine(item.message.body),
-    };
-  }
-  return null;
+  if (!input.progressKey) return false;
+  return input.lastAttemptedProgressKey !== input.progressKey;
 }
 
 export function findMobileRenderItemKeyByClientId(
@@ -554,10 +525,6 @@ export function findMobileRenderItemKeyByClientId(
     if (key) return key;
   }
   return null;
-}
-
-export function firstNonEmptyMessageLine(raw: string): string {
-  return raw.split('\n').find((line) => line.trim().length > 0)?.trim() ?? '';
 }
 
 function findClientIdInRenderItem(

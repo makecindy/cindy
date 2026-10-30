@@ -26,6 +26,7 @@ function emit(): void {
 function sameActivity(a: AgentIslandSessionActivity, b: AgentIslandSessionActivity): boolean {
   return (
     a.phase === b.phase &&
+    a.workingPhase === b.workingPhase &&
     a.recordStatus === b.recordStatus &&
     a.compactDetail === b.compactDetail &&
     a.currentActionSummary === b.currentActionSummary &&
@@ -78,6 +79,26 @@ function ensureSubscribed(): void {
   }
 }
 
+/** Start mirroring before a non-React reader needs the latest snapshot. */
+export function ensureAgentIslandActivitySubscribed(): void {
+  ensureSubscribed();
+}
+
+/**
+ * Whether Main still keeps this session running after its turn ended.
+ *
+ * Agent Island defers an Orca Lead's completion while Workers still owe it
+ * reports, so the Lead stays `running` here. A paused input queue also holds the
+ * island completion; it keeps its existing renderer completion and is excluded.
+ */
+export function isSessionCompletionHeldByAgentIsland(
+  sessionId: string,
+  hasPausedQueue: boolean,
+): boolean {
+  if (hasPausedQueue) return false;
+  return activityMap.get(sessionId)?.phase === 'running';
+}
+
 function subscribe(cb: () => void): () => void {
   ensureSubscribed();
   listeners.add(cb);
@@ -90,4 +111,26 @@ function subscribe(cb: () => void): () => void {
 export function useAgentIslandActivity(sessionId: string): AgentIslandSessionActivity | null {
   const getSnapshot = useCallback(() => activityMap.get(sessionId) ?? null, [sessionId]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * 整张活动表。给「一次渲染里要看很多会话」的列表用(伙伴侧栏按 canonical 会话
+ * 判断谁在说话),这类地方没法逐行调 useAgentIslandActivity。
+ *
+ * 直接返回内部 Map:它只在内容真的变了时才换引用(见 applyList),所以拿它当
+ * useSyncExternalStore 的快照是安全的 —— 无变化的 publish 不会引发重渲染。
+ * 调用方只读,不要改。
+ */
+export function useAgentIslandActivityMap(): ReadonlyMap<string, AgentIslandSessionActivity> {
+  return useSyncExternalStore(subscribe, getActivityMap, getActivityMap);
+}
+
+function getActivityMap(): ReadonlyMap<string, AgentIslandSessionActivity> {
+  return activityMap;
+}
+
+/** 测试缝:清掉进程内快照,避免用例之间互相看到对方的活动。 */
+export function __resetAgentIslandActivityForTests(): void {
+  activityMap = new Map();
+  emit();
 }

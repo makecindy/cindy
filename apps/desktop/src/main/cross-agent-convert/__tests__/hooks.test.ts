@@ -52,9 +52,11 @@ describe('convertHooks — to-codex', () => {
     expect(await fs.readFile(path.join(wd, '.codex', 'hooks', 'pre.sh'), 'utf8')).toContain('echo hi');
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
     // Codex 用 camelCase 与 Claude 完全一致
-    expect(json.PreToolUse).toBeDefined();
-    expect(JSON.stringify(json.PreToolUse)).toContain('.codex/hooks/pre.sh');
-    expect(JSON.stringify(json.PreToolUse)).not.toContain('.claude/hooks/');
+    // Codex 规范：事件放在顶层 "hooks" 对象内
+    expect(json.PreToolUse).toBeUndefined();
+    expect(json.hooks.PreToolUse).toBeDefined();
+    expect(JSON.stringify(json.hooks.PreToolUse)).toContain('.codex/hooks/pre.sh');
+    expect(JSON.stringify(json.hooks.PreToolUse)).not.toContain('.claude/hooks/');
   });
 
   it('skips events that already exist in target hooks.json (no overwrite)', async () => {
@@ -67,13 +69,52 @@ describe('convertHooks — to-codex', () => {
     }));
     await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
     await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({
-      PreToolUse: 'USER_ORIGINAL',
+      hooks: { PreToolUse: 'USER_ORIGINAL' },
     }));
 
     const r = await convertHooks(toCodexItem());
     expect(r.status).toBe('success'); // still success because script was copied
     const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
-    expect(json.PreToolUse).toBe('USER_ORIGINAL');
+    expect(json.hooks.PreToolUse).toBe('USER_ORIGINAL');
+  });
+
+  it('upgrades a legacy flat hooks.json into the wrapped { hooks: {...} } shape', async () => {
+    await fs.mkdir(path.join(wd, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo stop' }] }] },
+    }));
+    await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ PreToolUse: 'FLAT' }));
+
+    const r = await convertHooks({ ...toCodexItem(), source: path.join(wd, '.claude', 'hooks') });
+    expect(r.status).toBe('success');
+    const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
+    expect(json.PreToolUse).toBeUndefined();
+    expect(json.hooks.PreToolUse).toBe('FLAT');
+    expect(json.hooks.Stop).toBeDefined();
+  });
+
+  it('flattens a mis-nested settings.hooks.hooks when reading Claude hooks', async () => {
+    await fs.mkdir(path.join(wd, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo s' }] }] } },
+    }));
+    const r = await convertHooks(toCodexItem());
+    expect(r.status).toBe('success');
+    const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
+    expect(json.hooks.SessionStart).toBeDefined();
+    expect(json.hooks.hooks).toBeUndefined();
+  });
+  it('upgrades a legacy flat hooks.json even when no event or script is added', async () => {
+    await fs.mkdir(path.join(wd, '.claude'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ a: 1 }] } }));
+    await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({ Stop: [{ a: 1 }] }));
+
+    const r = await convertHooks(toCodexItem());
+    expect(r.status).toBe('success');
+    const json = JSON.parse(await fs.readFile(path.join(wd, '.codex', 'hooks.json'), 'utf8'));
+    expect(json).toEqual({ hooks: { Stop: [{ a: 1 }] } });
   });
 });
 
@@ -84,7 +125,7 @@ describe('convertHooks — to-claude', () => {
     await fs.mkdir(codexHooks, { recursive: true });
     await fs.writeFile(path.join(codexHooks, 'p.sh'), 'echo p');
     await fs.writeFile(codexJson, JSON.stringify({
-      PreToolUse: { command: '.codex/hooks/p.sh' },
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: '.codex/hooks/p.sh' }] }] },
     }));
 
     const r = await convertHooks(toClaudeItem());
@@ -93,6 +134,37 @@ describe('convertHooks — to-claude', () => {
     const settings = JSON.parse(await fs.readFile(path.join(wd, '.claude', 'settings.json'), 'utf8'));
     expect(settings.hooks.PreToolUse).toBeDefined();
     expect(JSON.stringify(settings.hooks.PreToolUse)).toContain('.claude/hooks/p.sh');
+    // 不得把 Codex 的外层 "hooks" 包装当作事件名写进 settings.hooks
+    expect(settings.hooks.hooks).toBeUndefined();
+  });
+
+  it('still accepts a legacy flat hooks.json', async () => {
+    await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({
+      Stop: [{ hooks: [{ type: 'command', command: 'echo x' }] }],
+    }));
+    const r = await convertHooks(toClaudeItem());
+    expect(r.status).toBe('success');
+    const settings = JSON.parse(await fs.readFile(path.join(wd, '.claude', 'settings.json'), 'utf8'));
+    expect(settings.hooks.Stop).toBeDefined();
+  });
+
+  it('repairs a pre-existing settings.hooks.hooks nesting', async () => {
+    const claudeSettings = path.join(wd, '.claude', 'settings.json');
+    await fs.mkdir(path.dirname(claudeSettings), { recursive: true });
+    await fs.writeFile(claudeSettings, JSON.stringify({
+      hooks: { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo s' }] }] } },
+    }));
+    await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
+    await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo x' }] }] },
+    }));
+    const r = await convertHooks(toClaudeItem());
+    expect(r.status).toBe('success');
+    const settings = JSON.parse(await fs.readFile(claudeSettings, 'utf8'));
+    expect(settings.hooks.hooks).toBeUndefined();
+    expect(settings.hooks.SessionStart).toBeDefined();
+    expect(settings.hooks.Stop).toBeDefined();
   });
 
   it('merges into existing settings.json without removing other top-level keys', async () => {
@@ -101,7 +173,7 @@ describe('convertHooks — to-claude', () => {
     await fs.writeFile(claudeSettings, JSON.stringify({ permissions: 'user-keeps' }));
     await fs.mkdir(path.join(wd, '.codex'), { recursive: true });
     await fs.writeFile(path.join(wd, '.codex', 'hooks.json'), JSON.stringify({
-      Stop: { command: '.codex/hooks/done.sh' },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: '.codex/hooks/done.sh' }] }] },
     }));
 
     const r = await convertHooks(toClaudeItem());
@@ -110,4 +182,5 @@ describe('convertHooks — to-claude', () => {
     expect(settings.permissions).toBe('user-keeps');
     expect(settings.hooks.Stop).toBeDefined();
   });
+
 });

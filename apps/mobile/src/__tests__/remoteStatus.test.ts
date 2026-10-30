@@ -9,6 +9,7 @@ import {
   formatRemoteError,
   humanizeRemoteError,
   isAutoRecoveringRemoteError,
+  isSessionRunningRemoteError,
   relayStatusHint,
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
@@ -19,6 +20,21 @@ beforeAll(async () => {
 });
 
 describe('remoteStatus', () => {
+  // A switch refusal reaches mobile inside the device-link IPC_ERROR envelope.
+  // Verify the real alert/toast formatter, which differs from chat rendering.
+  it('localizes nested Harness errors without exposing the technical fallback', async () => {
+    const previousLanguage = i18n.language;
+    try {
+      for (const locale of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+        await i18n.changeLanguage(locale);
+        const error = new DeviceLinkError('IPC_ERROR' as never, '[SSH_HARNESS_SWITCH_UNSUPPORTED] SSH diagnostic');
+        expect(humanizeRemoteError(error)).toBe(i18n.t('session.remoteError.SSH_HARNESS_SWITCH_UNSUPPORTED'));
+        expect(formatRemoteError(error)).toContain('SSH diagnostic');
+      }
+    } finally {
+      await i18n.changeLanguage(previousLanguage);
+    }
+  });
   it('backs repeated connection recovery syncs off and caps the delay', () => {
     expect([0, 1, 2, 3, 4, 5, 6].map(connectionRecoverySyncRetryDelayMs))
       .toEqual([900, 1_800, 3_600, 7_200, 14_400, 28_800, 30_000]);
@@ -41,7 +57,9 @@ describe('remoteStatus', () => {
     expect(describeRemoteError("[CHANNEL_NOT_ALLOWED] channel 'x'")).toContain('版本不支持');
     expect(describeRemoteError('[ACCESS_REVOKED] revoked')).toContain('撤销手机访问权限');
     expect(describeRemoteError('[NOT_CONNECTED] offline')).toBe(i18n.t('session.screen.networkReconnecting'));
-    expect(describeRemoteError('unknown failure')).toBe('unknown failure');
+    expect(describeRemoteError('unknown failure')).toBe(i18n.t('deviceLink.remoteError.unclassified'));
+    expect(describeRemoteError('[NOT_FOUND] Session does not exist')).toBe(i18n.t('deviceLink.remoteError.notFound'));
+    expect(describeRemoteError('REMOTE_WORKDIR_NOT_FOUND missing folder')).not.toBe(i18n.t('deviceLink.remoteError.notFound'));
   });
 
   it('preserves structured remote error codes for banner classification', () => {
@@ -53,6 +71,20 @@ describe('remoteStatus', () => {
       '[REMOTE_DISABLED] remote disabled',
     );
     expect(formatRemoteError(new Error('[NOT_CONNECTED] offline'))).toBe('[NOT_CONNECTED] offline');
+  });
+
+  it('recognizes a host refusal because the task is still running', () => {
+    // 被控端 handler 抛 `[SESSION_RUNNING] ...`,经隧道到手机时外层 code 是 IPC_ERROR。
+    expect(isSessionRunningRemoteError(
+      new DeviceLinkError('IPC_ERROR' as never, '[SESSION_RUNNING] Session s1 is running a turn'),
+    )).toBe(true);
+    expect(isSessionRunningRemoteError(
+      Object.assign(new Error('Session s1 has background activity'), { code: 'SESSION_RUNNING' }),
+    )).toBe(true);
+    expect(isSessionRunningRemoteError(
+      new DeviceLinkError('IPC_ERROR' as never, '[NOT_FOUND] Message 不存在或不可删除'),
+    )).toBe(false);
+    expect(isSessionRunningRemoteError(new DeviceLinkError('NOT_CONNECTED', 'offline'))).toBe(false);
   });
 
   it('keeps the composer writable for automatic recovery, but blocks deterministic failures', () => {
@@ -80,6 +112,9 @@ describe('remoteStatus', () => {
     expect(describeRemoteComposerBlockingError("[CHANNEL_NOT_ALLOWED] channel 'x'"))
       .toContain('版本不支持');
     expect(describeRemoteComposerBlockingError(null)).toBeNull();
+    expect(describeRemoteComposerBlockingError('unknown failure')).toBeNull();
+    expect(describeRemoteComposerBlockingError('OUTBOX_STORAGE_INVALID')).toBeNull();
+    expect(describeRemoteComposerBlockingError('[BAD_REQUEST] nope')).toBeNull();
   });
 
   it('localizes Stop connection recovery errors without dropping their structured classification', async () => {
@@ -110,6 +145,8 @@ describe('remoteStatus', () => {
       expect(connectionIssueTitle('too-many-connections')).toBe('Too many connections');
       expect(connectionIssueHint('version-mismatch')).toContain('Update to the latest version');
       expect(connectionIssueTitle('unstable')).toBe('Connection keeps dropping');
+      expect(connectionIssueTitle('device-removed')).toBe('Device removed');
+      expect(connectionIssueHint('device-removed')).toContain('Sign out');
     } finally {
       await i18n.changeLanguage(previousLanguage);
     }

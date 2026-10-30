@@ -23,8 +23,10 @@ import path from 'node:path';
 
 import {
   MakerMemoryManager,
+  parseBotMemoryScopeKey,
   type AgentKind,
   type BaseAgent,
+  type MakerMemoryManagerDeps,
   type SqliteFactory,
 } from '@cindy/maker-core';
 
@@ -37,6 +39,7 @@ import {
   getActiveAppSession,
   isAppSessionBoundaryPending,
 } from '../appSessionState.js';
+import { botProfileMemoryDir } from '../maker-ipc/botProfileFolder.js';
 
 const sqliteFactory: SqliteFactory = (filePath) => {
   // better-sqlite3 sync open. WAL 让多 session 并发读写更稳, busyTimeout 防小撞锁。
@@ -62,7 +65,9 @@ const sqliteFactory: SqliteFactory = (filePath) => {
  *  - ownerScopeKey 注入脱敏作用域键 (mode + owner hash + generation), 登录/
  *    登出/切账号 (commit 使 generation+1) 后 manager 自动关闭旧 store 重建新根。
  */
-export function createDesktopMakerMemoryManager(): MakerMemoryManager {
+export function createDesktopMakerMemoryManager(
+  options: { reviewOneShot?: MakerMemoryManagerDeps['reviewOneShot'] } = {},
+): MakerMemoryManager {
   // owner 存储根: 有 owner → userData/owners/<hash>; 无 owner → null (fail-closed,
   // 不再退到 %TEMP%\cindy-no-session\<pid>\, 那是 #2341 静默丢失的根源)。
   const resolveBasePath = (): string | null => {
@@ -97,6 +102,14 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     // 问题 (review #2388 Codex 4th P1)。
     reloadEnabled: () =>
       readMemorySettings({ rootPath: resolveBasePath() ?? undefined }).maker,
+    // Bot Memory belongs to the Bot Home. It reuses the battle-tested storage
+    // primitives, but not Maker Memory's physical directory, global toggle or
+    // global reset surface.
+    resolveStorageDir: (scopeKey, ownerRoot) => {
+      const botId = parseBotMemoryScopeKey(scopeKey);
+      return botId ? botProfileMemoryDir(ownerRoot, botId) : null;
+    },
+    isIndependentScope: (scopeKey) => parseBotMemoryScopeKey(scopeKey) !== null,
     sqliteFactory,
     agents: {}, // 占位, attachAgents 补上
     logger: desktopMakerLogger.child('maker-memory'),
@@ -107,6 +120,10 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     // 停用轴:review 的 oneShot 是新的付费调用,默认 one-shot 路由被停用时不派发
     // (PR #744 review 第十六轮)。
     isOneShotRouteDisabled: (agent) => isAgentOneShotRouteDisabled(agent),
+    // memory_review 自定义一次性调用(共享辅助模型链)。缺席 = manager 用
+    // reviewAgent 默认路由(claude haiku) — 该默认模型在部分供应商网关上不在
+    // 账号可用清单内会 403, 所以 desktop 装配时注入(见 maker-host/index.ts)。
+    reviewOneShot: options.reviewOneShot,
   });
 }
 

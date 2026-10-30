@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * KeyboardShortcutsSection — Settings「键盘快捷键」tab 的主区块。
  *
@@ -34,6 +35,7 @@ import {
   getAppShortcutDefinition,
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
+  isGlobalAppShortcutComboUsable,
   type AppShortcutCombo,
   type AppShortcutDefinition,
   type AppShortcutId,
@@ -41,6 +43,7 @@ import {
 import { isSystemReservedShortcut } from '../../../shared/keyboardReserved';
 import {
   getAppShortcutCombos,
+  getAppShortcutGlobalFailures,
   getAppShortcutOverrides,
   getAppShortcutPlatform,
   subscribeAppShortcuts,
@@ -92,7 +95,7 @@ function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
         <Package size={18} aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
+        <span id="settings-search-settings-shortcuts-accessories-title" className="truncate text-13 font-medium text-[var(--text-primary)]">
           {t('settings.shortcuts.accessories.title')}
         </span>
         <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
@@ -113,13 +116,18 @@ export function KeyboardShortcutsSection() {
   const { t } = useTranslation();
   const platform = getAppShortcutPlatform();
   // overrides 快照订阅: 改绑 / reset 后 main 广播 → appShortcutStore 通知 →
-  // 这里重渲染。快照序列化做 useSyncExternalStore 的相等性判定。
-  const overridesJson = useSyncExternalStore(subscribeAppShortcuts, () =>
-    JSON.stringify(getAppShortcutOverrides()),
+  // 这里重渲染。快照序列化做 useSyncExternalStore 的相等性判定; 全局快捷键
+  // 注册失败列表同属一次广播, 一并纳入快照。
+  const snapshotJson = useSyncExternalStore(subscribeAppShortcuts, () =>
+    JSON.stringify({
+      overrides: getAppShortcutOverrides(),
+      globalFailures: getAppShortcutGlobalFailures(),
+    }),
   );
-  const overrides = JSON.parse(overridesJson) as Partial<
-    Record<AppShortcutId, AppShortcutCombo | null>
-  >;
+  const { overrides, globalFailures } = JSON.parse(snapshotJson) as {
+    overrides: Partial<Record<AppShortcutId, AppShortcutCombo | null>>;
+    globalFailures: AppShortcutId[];
+  };
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
   const [hardwarePane, setHardwarePane] = useState<HardwarePane>('list');
   const [hardwareReturnTo, setHardwareReturnTo] = useState<'list' | 'accessories'>('list');
@@ -245,6 +253,11 @@ export function KeyboardShortcutsSection() {
         comboToElectronAccelerator(combo, 'darwin') === null
       ) {
         return t('settings.shortcuts.errors.menuAccelerator');
+      }
+      // 全局快捷键在所有应用里截走按键: 须能注册到系统且不占编辑惯例键
+      // (与 main store 校验一致)。
+      if (selfDef.scope === 'global' && !isGlobalAppShortcutComboUsable(combo, platform)) {
+        return t('settings.shortcuts.errors.globalUnusable');
       }
       // 跨 id 冲突: 与 main store 写入兜底共用 shared 的 findAppShortcutConflict。
       const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform);
@@ -467,7 +480,13 @@ export function KeyboardShortcutsSection() {
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
           const combos = getAppShortcutCombos(def.id);
-          const rowError = error?.id === def.id ? error.message : null;
+          // 写入错误优先; 否则提示全局快捷键当前未能注册 (被其它应用占用)。
+          const rowError =
+            error?.id === def.id
+              ? error.message
+              : combos.length > 0 && globalFailures.includes(def.id)
+                ? t('settings.shortcuts.errors.globalOccupied')
+                : null;
           return (
             <div key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
@@ -487,7 +506,7 @@ export function KeyboardShortcutsSection() {
               {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
               <span
                 className={cn(
-                  'inline-flex min-w-[72px] items-center justify-center rounded-md px-2 py-1',
+                  'inline-flex min-w-[72px] items-center justify-center rounded-[4px] px-2 py-1',
                   // 不用 font-mono: 项目的 mono 映射到 --app-font-code (代码字体),
                   // 普遍缺 ⌘⇧⌥⌃ 字形, 会 fallback 渲染得又小又不协调。系统 UI
                   // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。
@@ -508,13 +527,16 @@ export function KeyboardShortcutsSection() {
               </span>
 
               {isRecording ? (
-                <button
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  compact
+                  tone="quiet"
                   type="button"
                   onClick={() => setRecordingId(null)}
-                  className="shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-chip)] transition-colors"
                 >
                   {t('settings.shortcuts.cancel')}
-                </button>
+                </Button>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
                   <button

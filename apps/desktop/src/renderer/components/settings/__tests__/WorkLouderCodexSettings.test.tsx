@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
+import zhTW from '../../../i18n/locales/zh-TW/common.json';
+import en from '../../../i18n/locales/en/common.json';
+import ja from '../../../i18n/locales/ja/common.json';
+import ko from '../../../i18n/locales/ko/common.json';
+
+beforeAll(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+});
 
 import {
   WORKLOUDER_CODEX_EMPTY_DEVICE_STATE,
@@ -16,7 +26,14 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(),
   setGuardEnabled: vi.fn(),
   recoverGuard: vi.fn(),
-  guardStatus: 'disabled' as 'disabled' | 'protecting' | 'intercepted' | 'recovery-required',
+  guardRestartRequired: false,
+  guardStatus: 'disabled' as
+    | 'disabled'
+    | 'paused'
+    | 'protecting'
+    | 'intercepted'
+    | 'recovery-required',
+  translate: null as ((key: string) => string) | null,
   setLayoutPreviewActive: vi.fn(),
   previewListeners: [] as Array<
     (input: {
@@ -37,7 +54,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => mocks.translate?.(key) ?? key }),
 }));
 
 vi.mock('@/hooks/useCodexMicroGuard', () => ({
@@ -46,6 +63,7 @@ vi.mock('@/hooks/useCodexMicroGuard', () => ({
       supported: true,
       enabled: mocks.guardStatus === 'protecting' || mocks.guardStatus === 'intercepted',
       status: mocks.guardStatus,
+      restartRequired: mocks.guardRestartRequired,
     },
     loading: false,
     saving: false,
@@ -120,6 +138,8 @@ describe('WorkLouderCodexSettings', () => {
     mocks.agentSource = 'sidebar';
     mocks.layout = createWorkLouderCodexDefaultSettings().layout;
     mocks.guardStatus = 'disabled';
+    mocks.translate = null;
+    mocks.guardRestartRequired = false;
     mocks.deviceEnabled = true;
     mocks.connectionStatus = 'connected';
     mocks.connectionReason = null;
@@ -240,8 +260,9 @@ describe('WorkLouderCodexSettings', () => {
     const slider = screen.getByRole('slider', {
       name: 'settings.shortcuts.workLouderCodex.lighting.brightness.aria',
     });
-    fireEvent.change(slider, { target: { value: '40' } });
-    fireEvent.pointerUp(slider);
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingBrightness: 40 });
 
     await chooseSelectOption(
@@ -251,29 +272,124 @@ describe('WorkLouderCodexSettings', () => {
     expect(mocks.setSettings).toHaveBeenCalledWith({ lightingAutoDim: '10-minutes' });
   });
 
-  it('lets Cindy protect the device from Codex and exposes recovery failures', () => {
-    const { unmount } = render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+  it.each(['codex-micro', 'creator-micro-2'] as const)(
+    'shares Codex protection and recovery for %s',
+    (model) => {
+      mocks.deviceType = model;
+      mocks.layout = createWorkLouderCodexDefaultSettings(model).layout;
+      const { unmount } = render(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
 
-    fireEvent.click(
-      screen.getByRole('switch', {
+      fireEvent.click(
+        screen.getByRole('switch', {
+          name: 'settings.shortcuts.workLouderCodex.codexGuard.aria',
+        }),
+      );
+      expect(mocks.setGuardEnabled).toHaveBeenCalledWith(true);
+      expect(
+        screen.queryByText('settings.shortcuts.workLouderCodex.codexGuard.status.disabled'),
+      ).toBeNull();
+      unmount();
+
+      mocks.guardStatus = 'recovery-required';
+      render(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'settings.shortcuts.workLouderCodex.codexGuard.recover',
+        }),
+      );
+      expect(mocks.recoverGuard).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['codex-micro', 'creator-micro-2'] as const)(
+    'places compatibility last and only shows a needed restart for %s',
+    (model) => {
+      mocks.deviceType = model;
+      mocks.layout = createWorkLouderCodexDefaultSettings(model).layout;
+      mocks.guardStatus = 'protecting';
+      const { rerender, container } = render(
+        <WorkLouderCodexSettings model={model} onBack={vi.fn()} />,
+      );
+      const prefix = 'settings.shortcuts.workLouderCodex.codexGuard';
+      expect(container.firstElementChild?.lastElementChild?.textContent).toContain(
+        `${prefix}.label`,
+      );
+      expect(screen.queryByText(`${prefix}.restartRequired`)).toBeNull();
+      expect(screen.queryByText(`${prefix}.descriptions.protecting`)).toBeNull();
+
+      mocks.guardRestartRequired = true;
+      rerender(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      const hint = screen.getByText(`${prefix}.restartRequired`);
+      const toggle = screen.getByRole('switch', { name: `${prefix}.aria` });
+      expect(hint.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+      mocks.guardRestartRequired = false;
+      rerender(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      expect(screen.queryByText(`${prefix}.restartRequired`)).toBeNull();
+      mocks.guardRestartRequired = true;
+      mocks.guardStatus = 'disabled';
+      rerender(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      expect(screen.queryByText(`${prefix}.restartRequired`)).toBeNull();
+    },
+  );
+
+  it.each(['codex-micro', 'creator-micro-2'] as const)(
+    'disables the paused protection switch while retaining recovery for %s',
+    (model) => {
+      mocks.deviceType = model;
+      mocks.layout = createWorkLouderCodexDefaultSettings(model).layout;
+      mocks.guardStatus = 'paused';
+      const { rerender } = render(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      const toggle = screen.getByRole('switch', {
         name: 'settings.shortcuts.workLouderCodex.codexGuard.aria',
-      }),
-    );
-    expect(mocks.setGuardEnabled).toHaveBeenCalledWith(true);
-    expect(
-      screen.getByText('settings.shortcuts.workLouderCodex.codexGuard.status.disabled'),
-    ).toBeTruthy();
-    unmount();
+      });
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(toggle.hasAttribute('disabled')).toBe(true);
+      fireEvent.click(toggle);
+      expect(mocks.setGuardEnabled).not.toHaveBeenCalled();
+      expect(
+        screen.getByText('settings.shortcuts.workLouderCodex.codexGuard.descriptions.paused'),
+      ).toBeTruthy();
+      mocks.guardStatus = 'recovery-required';
+      rerender(<WorkLouderCodexSettings model={model} onBack={vi.fn()} />);
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'settings.shortcuts.workLouderCodex.codexGuard.recover',
+        }),
+      );
+      expect(mocks.recoverGuard).toHaveBeenCalledOnce();
+    },
+  );
 
-    mocks.guardStatus = 'recovery-required';
-    render(<WorkLouderCodexSettings onBack={vi.fn()} />);
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.shortcuts.workLouderCodex.codexGuard.recover',
-      }),
-    );
-    expect(mocks.recoverGuard).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ['zh-CN', zhCN],
+    ['zh-TW', zhTW],
+    ['en', en],
+    ['ja', ja],
+    ['ko', ko],
+  ] as const)(
+    'renders the real %s pause and recovery copy without falling back to a key',
+    async (locale, catalog) => {
+      const i18n = createInstance();
+      await i18n.init({
+        lng: locale,
+        fallbackLng: false,
+        resources: { [locale]: { translation: catalog } },
+      });
+      mocks.translate = (key) => String(i18n.t(key));
+      mocks.guardStatus = 'paused';
+      const copy = catalog.settings.shortcuts.workLouderCodex.codexGuard;
+      const { rerender } = render(<WorkLouderCodexSettings onBack={vi.fn()} />);
+      const text = screen.getByText(copy.descriptions.paused).textContent!;
+      expect(text).not.toContain('?');
+      if (locale === 'zh-CN') expect(text).toContain('已暂停');
+      expect(screen.getByRole('switch', { name: copy.aria }).hasAttribute('disabled')).toBe(true);
+      mocks.guardStatus = 'recovery-required';
+      rerender(<WorkLouderCodexSettings onBack={vi.fn()} />);
+      expect(screen.getByText(copy.descriptions['recovery-required'])).toBeTruthy();
+      expect(screen.getByRole('button', { name: copy.recover })).toBeTruthy();
+    },
+  );
 
   it('sets all six task keys at once, since they follow one shared rule', async () => {
     render(<WorkLouderCodexSettings onBack={vi.fn()} />);

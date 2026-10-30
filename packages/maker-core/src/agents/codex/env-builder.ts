@@ -35,7 +35,7 @@ function prependPath(env: Record<string, string>, prepends: string[]): void {
 export async function buildCodexEnv(
   auth: AuthAdapter,
   runtimeConfig: AgentRuntimeConfig,
-  options: { credentialMode?: AgentCredentialMode } = {},
+  options: { credentialMode?: AgentCredentialMode; providerId?: string } = {},
 ): Promise<Record<string, string>> {
   // Codex 不需要剥 process.env 里的 OAuth token —— 它的鉴权走 CODEX_HOME 文件路径，
   // 不读 process.env 里的 OPENAI_API_KEY（且本项目 D6 决策不补 API key 通道）。
@@ -56,8 +56,8 @@ export async function buildCodexEnv(
     Object.assign(env, behaviorFlags);
   }
   // endpoint 字段：Codex SDK 当前无对应 env，跳过
-  const authOptions = options.credentialMode
-    ? { credentialMode: options.credentialMode }
+  const authOptions = options.credentialMode || options.providerId
+    ? options
     : undefined;
   Object.assign(env, await auth.getAuthEnv(authOptions));
   prependPath(env, runtimeConfig.pathPrepends ?? []);

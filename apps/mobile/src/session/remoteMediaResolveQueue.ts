@@ -24,7 +24,7 @@ import {
 } from '@/session/remoteMedia';
 
 export interface RemoteMediaRequest {
-  kind: 'image' | 'video' | 'audio';
+  kind: 'image' | 'video' | 'audio' | 'file';
   url: string;
   /** 只要缩略图(被控端缩 1024px webp);与原图取件在队列/缓存层按不同键隔离。 */
   thumbnail?: boolean;
@@ -93,6 +93,7 @@ export interface RemoteMediaRequestOptions {
    * true 时只吃本队列的 fresh 缓存:命中即回,未命中直接 reject——绝不排队、不触发
    * 取件、也不写负缓存(lightbox 垫底预取用:缩略图对 gif/老被控端会回落成整张
    * 原图下载,装饰性预取不值得为此付一次全量取件)。
+   * 与 front 同用时仅提升已有排队项,不新建请求或等待者。
    */
   cachedOnly?: boolean;
 }
@@ -319,6 +320,16 @@ export function createRemoteMediaResolveQueue(
     }
   }
 
+  function promoteQueued(key: string): void {
+    const entry = entries.get(key);
+    if (!entry || entry.inFlight) return;
+    const index = pendingOrder.indexOf(key);
+    if (index > 0) {
+      pendingOrder.splice(index, 1);
+      pendingOrder.unshift(key);
+    }
+  }
+
   function request(
     media: RemoteMediaRequest,
     opts: RemoteMediaRequestOptions = {},
@@ -331,6 +342,7 @@ export function createRemoteMediaResolveQueue(
       return Promise.resolve(cached);
     }
     if (opts.cachedOnly) {
+      if (opts.front) promoteQueued(key);
       // 只读缓存模式:未命中直接拒绝,不入队、不碰负缓存(不污染同键的真实取件)。
       return Promise.reject(new Error(i18n.t('composer.attachments.mediaCacheMiss')));
     }
@@ -357,14 +369,7 @@ export function createRemoteMediaResolveQueue(
       } else if (opts.forceRefresh && !entry.inFlight) {
         entry.skipCache = true;
       }
-      if (opts.front && !entry.inFlight) {
-        // 已排队的条目被高优先级请求命中 → 提到队头。
-        const idx = pendingOrder.indexOf(key);
-        if (idx > 0) {
-          pendingOrder.splice(idx, 1);
-          pendingOrder.unshift(key);
-        }
-      }
+      if (opts.front) promoteQueued(key);
 
       const waiter: QueueEntry['waiters'][number] = { resolve, reject, signal: opts.signal };
       if (opts.signal) {

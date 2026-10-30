@@ -1,0 +1,145 @@
+/**
+ * Output formatting: table, JSON, Markdown, CSV, YAML.
+ */
+
+import { emitResult } from './command-output.js';
+import Table from 'cli-table3';
+import yaml from 'js-yaml';
+import { normalizeOutputFormat } from './output-format.js';
+
+export interface RenderOptions {
+  fmt?: string;
+  /** True when the user explicitly passed -f on the command line */
+  fmtExplicit?: boolean;
+  columns?: string[];
+  title?: string;
+  elapsed?: number;
+  source?: string;
+  footerExtra?: string;
+}
+
+function normalizeRows(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') return [data as Record<string, unknown>];
+  return [{ value: data }];
+}
+
+function resolveColumns(rows: Record<string, unknown>[], opts: RenderOptions): string[] {
+  return opts.columns ?? Object.keys(rows[0] ?? {});
+}
+
+export function render(data: unknown, opts: RenderOptions = {}): void {
+  const fmt = normalizeOutputFormat(opts.fmt ?? 'json');
+  if (fmt === 'json') { emitResult(data); return; }
+  switch (fmt) {
+    case 'plain': renderPlain(data); break;
+    case 'md': case 'markdown': renderMarkdown(data, opts); break;
+    case 'csv': renderCsv(data, opts); break;
+    case 'yaml': case 'yml': renderYaml(data); break;
+    default: renderTable(data, opts); break;
+  }
+}
+
+function renderTable(data: unknown, opts: RenderOptions): void {
+  const rows = normalizeRows(data);
+  if (!rows.length) { console.log('(no data)'); return; }
+  const columns = resolveColumns(rows, opts);
+
+  const header = columns.map(c => capitalize(c));
+  const table = new Table({
+    head: [...header],
+    style: { head: [], border: [] },
+    wordWrap: true,
+    wrapOnWordBoundary: true,
+  });
+
+  for (const row of rows) {
+    table.push(columns.map(c => {
+      const v = (row as Record<string, unknown>)[c];
+      return v === null || v === undefined ? '' : String(v);
+    }));
+  }
+
+  console.log();
+  if (opts.title) console.log(`  ${opts.title}`);
+  console.log(table.toString());
+  const footer: string[] = [];
+  footer.push(`${rows.length} items`);
+  if (opts.elapsed !== undefined) footer.push(`${opts.elapsed.toFixed(1)}s`);
+  if (opts.source) footer.push(opts.source);
+  if (opts.footerExtra) footer.push(opts.footerExtra);
+  console.log(footer.join(' · '));
+}
+
+function renderPlain(data: unknown): void {
+  const rows = normalizeRows(data);
+  if (!rows.length) return;
+
+  // Single-row single-field shortcuts for chat-style commands.
+  if (rows.length === 1) {
+    const row = rows[0];
+    const entries = Object.entries(row);
+    if (entries.length === 1) {
+      const [key, value] = entries[0];
+      if (key === 'response' || key === 'content' || key === 'markdown' || key === 'text' || key === 'value') {
+        console.log(String(value ?? ''));
+        return;
+      }
+    }
+  }
+
+  rows.forEach((row, index) => {
+    const entries = Object.entries(row).filter(([, value]) => value !== undefined && value !== null && String(value) !== '');
+    entries.forEach(([key, value]) => {
+      console.log(`${key}: ${value}`);
+    });
+    if (index < rows.length - 1) console.log('');
+  });
+}
+
+
+function renderMarkdown(data: unknown, opts: RenderOptions): void {
+  const rows = normalizeRows(data);
+  if (!rows.length) return;
+  if (rows.length === 1) {
+    const entries = Object.entries(rows[0]);
+    if (entries.length === 1) {
+      const [key, value] = entries[0];
+      if (key === 'content' || key === 'markdown' || key === 'text' || key === 'value') {
+        console.log(String(value ?? ''));
+        return;
+      }
+    }
+  }
+  const columns = resolveColumns(rows, opts);
+  console.log('| ' + columns.join(' | ') + ' |');
+  console.log('| ' + columns.map(() => '---').join(' | ') + ' |');
+  for (const row of rows) {
+    console.log('| ' + columns.map(c => String((row as Record<string, unknown>)[c] ?? '')
+      .replace(/\|/g, '\\|')
+      // Any embedded line break would split the physical table row.
+      .replace(/\r\n?|\n/g, '<br>')).join(' | ') + ' |');
+  }
+}
+
+function renderCsv(data: unknown, opts: RenderOptions): void {
+  const rows = normalizeRows(data);
+  if (!rows.length) return;
+  const columns = resolveColumns(rows, opts);
+  console.log(columns.join(','));
+  for (const row of rows) {
+    console.log(columns.map(c => {
+      const v = String((row as Record<string, unknown>)[c] ?? '');
+      return v.includes(',') || v.includes('"') || v.includes('\n') || v.includes('\r')
+        ? `"${v.replace(/"/g, '""')}"` : v;
+    }).join(','));
+  }
+}
+
+function renderYaml(data: unknown): void {
+  console.log(yaml.dump(data, { sortKeys: false, lineWidth: 120, noRefs: true }));
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

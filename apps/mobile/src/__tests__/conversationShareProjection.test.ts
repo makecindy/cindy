@@ -14,15 +14,22 @@ describe('projectConversationShareMessage', () => {
     expect(JSON.stringify(projected)).not.toContain('隐藏的第三行');
   });
 
-  it('保留自动化来源文案，但不暴露内部调度 ID', () => {
-    const projected = projectConversationShareMessage('automation', {
+  it('分享图不带任何消息来源：自动化、设备、插件与共享任务作者都不进投影', () => {
+    const message = {
       automationOrigin: { scheduleId: 'schedule-secret', scheduleName: '每日摘要' },
       body: '自动化消息',
-      kind: 'user',
-    }, { automationOriginLabel: '由自动化「每日摘要」发送' });
+      kind: 'user' as const,
+      sessionOrigin: { senderSessionId: 'sender-secret', senderSessionTitle: '来源任务' },
+      sourceDevice: { deviceId: 'device-secret', name: '我的 iPhone', platform: 'mobile' as const },
+      sourcePlugin: { pluginId: 'plugin-secret', name: '日报插件' },
+      sharedAuthorName: '访客甲',
+    };
+    const projected = projectConversationShareMessage('automation', message);
 
-    expect(projected?.automationOriginLabel).toBe('由自动化「每日摘要」发送');
-    expect(JSON.stringify(projected)).not.toContain('schedule-secret');
+    expect(projected).toEqual({ body: '自动化消息', clientId: 'automation', kind: 'user' });
+    for (const hidden of ['schedule-secret', '每日摘要', '来源任务', 'device-secret', '我的 iPhone', '日报插件', '访客甲']) {
+      expect(JSON.stringify(projected)).not.toContain(hidden);
+    }
   });
 
   it('把引用投影为紧凑可见 chip，并丢弃隐藏来源字段', () => {
@@ -45,7 +52,7 @@ describe('projectConversationShareMessage', () => {
     );
   });
 
-  it('按气泡顺序保留图片和文件名，不把附件字节或来源带入导出', () => {
+  it('保留图片读取地址和附件顺序，但不带入普通文件的本机路径', () => {
     const projected = projectConversationShareMessage('attachments', {
       attachments: [
         {
@@ -72,12 +79,10 @@ describe('projectConversationShareMessage', () => {
     });
 
     expect(projected?.attachments).toEqual([
-      { kind: 'image', name: 'inline.png' },
-      { kind: 'image', name: 'remote.png' },
+      { kind: 'image', name: 'inline.png', uri: 'data:image/png;base64,AA==' },
+      { kind: 'image', name: 'remote.png', uri: 'https://example.com/private.png' },
       { kind: 'file', name: 'notes.md' },
     ]);
-    expect(JSON.stringify(projected)).not.toContain('example.com');
     expect(JSON.stringify(projected)).not.toContain('/private/project');
-    expect(JSON.stringify(projected)).not.toContain('data:image');
   });
 });

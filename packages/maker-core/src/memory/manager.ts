@@ -23,9 +23,11 @@
  */
 
 import * as path from 'node:path';
+import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { parseBotMemoryScopeKey } from './storage.js';
 import {
   MemoryError,
   type MemoryConfig,
@@ -38,6 +40,9 @@ import type { Logger } from '../interfaces/logger.js';
 
 /** 工厂函数: 给一个绝对文件路径, 返回 better-sqlite3 Database 实例。host 注入。 */
 export type SqliteFactory = (filePath: string) => Database.Database;
+
+/** review 一次性调用预算: 一段 ≤200 词的建议, 给足 60s(LLM 冷启 + 长 dump)。 */
+const REVIEW_ONE_SHOT_OPTS = { maxTokens: 800, timeoutMs: 60_000 } as const;
 
 export interface MakerMemoryManagerDeps {
   /** Maker memory 文件根目录, host 注入 (e.g. <electron userData>/maker-memory) */
@@ -67,6 +72,18 @@ export interface MakerMemoryManagerDeps {
    * 问题（#2388 review Codex 4th P1）。缺席 = 不重绑定（静态宿主）。
    */
   reloadEnabled?: () => boolean;
+  /**
+   * Optional host-owned physical storage resolver. Ordinary scopes keep the
+   * historical `<owner>/maker-memory/<scope>` path; Desktop uses this only for
+   * Bot scopes so their durable records live inside the Bot Home.
+   */
+  resolveStorageDir?: (scopeKey: string, ownerRoot: string) => string | null;
+  /**
+   * Scopes whose lifecycle is independent from the global Maker Memory toggle.
+   * They remain available when Maker Memory is disabled and are excluded from
+   * the global active-workdir projection/reset directory.
+   */
+  isIndependentScope?: (scopeKey: string) => boolean;
   /** SQLite open 工厂, host 注入 (better-sqlite3 是 native module, 不能在 maker-core require) */
   sqliteFactory: SqliteFactory;
   /** Agent 引用 — 强联动 setMemory(false) 关原生时用 */
@@ -80,6 +97,19 @@ export interface MakerMemoryManagerDeps {
    * 缺席 = 不裁决(未接入停用设置的宿主)。
    */
   isOneShotRouteDisabled?: (agent: AgentKind) => Promise<boolean>;
+  /**
+   * memory_review 的一次性文本调用(host 注入)。返回 null / 空串 = 链上没产出,
+   * manager 不再回退 reviewAgent 的默认 oneShot 路由(那是本账号无权模型的死路),
+   * 直接以可读原因 fail-closed。
+   *
+   * desktop 注入的实现走共享辅助模型链: review agent 的默认模型(claude-haiku-4-5)
+   * 在部分供应商网关上不在账号可用清单内(403 user_model_access_denied), 硬编码
+   * 默认路由会让 memory_review 对这些账号 100% 失败(2026-10-14 实测)。
+   */
+  reviewOneShot?: (
+    prompt: string,
+    opts: { maxTokens: number; timeoutMs: number },
+  ) => Promise<string | null>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -106,12 +136,48 @@ export interface SetEnabledResult {
 interface PooledEntry {
   store: MakerMemoryStore;
   db: Database.Database;
+  independent: boolean;
   /** 入池时的池世代 — resetAll 后 +1, getStore 命中旧世代时惰性关闭重建 */
   generation: number;
 }
 
 const MEMORY_SUBDIR = 'maker-memory';
 const FTS_DB_FILENAME = 'fts.db';
+const STORAGE_MIGRATION_RECEIPT = '.cindy-memory-migration-v1.json';
+// This shape is only a candidate: sanitized project paths can match it too.
+const LEGACY_BOT_MEMORY_DIR = /^bot-.{0,24}-[a-f0-9]{16}$/;
+
+async function isLegacyBotMemoryDir(dir: string): Promise<boolean> {
+  const name = path.basename(dir);
+  if (!LEGACY_BOT_MEMORY_DIR.test(name)) return false;
+  try {
+    const meta: unknown = JSON.parse(await fsSync.promises.readFile(path.join(dir, 'meta.json'), 'utf8'));
+    const scope = meta && typeof meta === 'object' && 'absPath' in meta ? meta.absPath : undefined;
+    // Validate both identity and its mapping to this directory. A matching
+    // project scope must be cleared even if its directory looks like a Bot's.
+    if (typeof scope === 'string' && scope && memoryScopeDirName(scope) === name) {
+      return parseBotMemoryScopeKey(scope) !== null;
+    }
+  } catch {
+    // Missing/damaged metadata cannot prove either ownership. Preserve the
+    // ambiguous data, but never report a successful global clear.
+  }
+  throw new MemoryError('not-ready', `cannot determine memory scope for ${name}; reset incomplete, data preserved`);
+}
+
+function copyLegacyMemoryShardsSync(sourceDir: string, targetDir: string): void {
+  fsSync.mkdirSync(targetDir, { recursive: true });
+  for (const entry of fsSync.readdirSync(sourceDir, { withFileTypes: true })) {
+    // Only curated memory shard files are durable source data. MEMORY.md,
+    // meta.json, fts.db and migration receipts are derived/host state and must
+    // be rebuilt in the destination. Never follow a legacy symlink.
+    if (!entry.isFile() || !parseFilename(entry.name)) continue;
+    const source = path.join(sourceDir, entry.name);
+    if (fsSync.lstatSync(source).isSymbolicLink()) continue;
+    const target = path.join(targetDir, entry.name);
+    if (!fsSync.existsSync(target)) fsSync.copyFileSync(source, target);
+  }
+}
 
 export class MakerMemoryManager {
   private enabled: boolean;
@@ -145,7 +211,7 @@ export class MakerMemoryManager {
    * 碰到这个未跟踪的 open fts.db → 跳过该 workdir 且报成功。closeAllStores
    * 同时关闭该集合, 保证 reset 扫描前无任何 open 句柄。
    */
-  private readonly openingStores = new Set<Database.Database>();
+  private readonly openingStores = new Map<Database.Database, boolean>();
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -251,14 +317,18 @@ export class MakerMemoryManager {
    *    都不得访问已关句柄, fail-closed 抛 not-ready 而非裸 database is closed;
    * 3. owner scope 变化 → 抛 not-ready (assertScopeUnchanged)。
    */
-  private assertStoreOperable(scopeAtEntry: string | null, generationAtCreation: number): void {
-    if (this.resetInFlight > 0) {
+  private assertStoreOperable(
+    scopeAtEntry: string | null,
+    generationAtCreation: number,
+    independent: boolean,
+  ): void {
+    if (!independent && this.resetInFlight > 0) {
       throw new MemoryError(
         'not-ready',
         'memory reset in progress; store operation aborted',
       );
     }
-    if (this.poolGeneration !== generationAtCreation) {
+    if (!independent && this.poolGeneration !== generationAtCreation) {
       throw new MemoryError(
         'not-ready',
         'memory was reset after this store was created; retry with a fresh store',
@@ -279,7 +349,7 @@ export class MakerMemoryManager {
     this.stores.clear();
     // 关闭 init 进行中的 db (review #2388 Codex 26th P1): 未入池的 open 句柄
     // 在 Windows 上会阻塞 resetAll 的 fs.rm — reset 扫描前必须全部关掉。
-    for (const db of this.openingStores) {
+    for (const db of this.openingStores.keys()) {
       try {
         db.close();
       } catch (e) {
@@ -287,6 +357,28 @@ export class MakerMemoryManager {
       }
     }
     this.openingStores.clear();
+  }
+
+  /** Global Maker Memory reset must not close or invalidate Bot-owned stores. */
+  private closeResettableStores(): void {
+    for (const [scopeKey, entry] of this.stores) {
+      if (entry.independent) continue;
+      try {
+        entry.db.close();
+      } catch (e) {
+        this.logger.warn('close resettable store db failed', { scopeKey, error: String(e) });
+      }
+      this.stores.delete(scopeKey);
+    }
+    for (const [db, independent] of this.openingStores) {
+      if (independent) continue;
+      try {
+        db.close();
+      } catch (e) {
+        this.logger.warn('close opening resettable db failed', { error: String(e) });
+      }
+      this.openingStores.delete(db);
+    }
   }
 
   /**
@@ -323,18 +415,21 @@ export class MakerMemoryManager {
   getState(): MakerMemoryState {
     return {
       enabled: this.enabled,
-      activeWorkdirs: Array.from(this.stores.keys()),
+      activeWorkdirs: Array.from(this.stores.keys()).filter(
+        (scopeKey) => !this.deps.isIndependentScope?.(scopeKey),
+      ),
     };
   }
 
-  isEnabled(): boolean {
+  /** No scope queries the global switch; host-owned independent scopes opt out. */
+  isEnabled(scopeKey?: string): boolean {
     // 读取前同步 scope (review #2388 Codex 11th P1): rebindEnabled 只在
     // ensureOwnerScope/syncOwnerScope 里跑, 先读 isEnabled() 的路径 (withStore
     // 短路、session/remote option backfills) 会停留在旧 owner 的 flag —
     // owner A false→B true 时不得继续短路, B false→A true 时不得漏暴露。
     // 纯查询语义, 不抛 (owner 缺失由 getStore fail-closed)。
     this.syncOwnerScope();
-    return this.enabled;
+    return this.enabled || (scopeKey !== undefined && this.deps.isIndependentScope?.(scopeKey) === true);
   }
 
   /**
@@ -433,7 +528,13 @@ export class MakerMemoryManager {
     // 可能已持过期 isEnabled()=true 快照 (withStore / session opts) 通过检查,
     // 换根后 enabled=false 不得继续打开新 owner store; 仅 host 提供
     // reloadEnabled 时判定 (静态宿主无 rebind 语义, disabled 由 isEnabled 拦)。
-    if (!opts?.skipDisabledCheck && this.deps.reloadEnabled && !this.enabled) {
+    const independentScope = this.deps.isIndependentScope?.(absWorkdir) === true;
+    if (
+      !opts?.skipDisabledCheck
+      && this.deps.reloadEnabled
+      && !this.enabled
+      && !independentScope
+    ) {
       throw new MemoryError(
         'not-ready',
         'maker memory disabled for current owner scope; refusing to open store',
@@ -441,14 +542,14 @@ export class MakerMemoryManager {
     }
     // resetAll 进行中 (review #2388 Greptile 16th/17th): 删除期间入池会导致目录
     // 被删后残留失效条目 / EBUSY — 并发 getStore 一律拒绝, 调用方重试。
-    if (this.resetInFlight > 0) {
+    if (!independentScope && this.resetInFlight > 0) {
       throw new MemoryError('not-ready', 'memory reset in progress; retry shortly');
     }
     const cached = this.stores.get(absWorkdir);
     if (cached) {
       // 旧世代 (resetAll 后) 的缓存条目惰性失效: close + 移除, 走重建;
       // 不立即关闭已返回给调用方的实例 (review #2388 Greptile 16th)。
-      if (cached.generation === this.poolGeneration) return cached.store;
+      if (cached.independent || cached.generation === this.poolGeneration) return cached.store;
       try {
         cached.db.close();
       } catch {
@@ -469,7 +570,9 @@ export class MakerMemoryManager {
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
     const sanitized = memoryScopeDirName(absWorkdir);
-    const storageDir = path.join(rootAtEntry, MEMORY_SUBDIR, sanitized);
+    const legacyStorageDir = path.join(rootAtEntry, MEMORY_SUBDIR, sanitized);
+    const resolvedStorageDir = this.deps.resolveStorageDir?.(absWorkdir, rootAtEntry);
+    const storageDir = resolvedStorageDir?.trim() || legacyStorageDir;
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
     // mkdir 在 storage.init() 里也会做, 但 db open 时父目录必须存在 — 提前 mkdir
@@ -480,18 +583,44 @@ export class MakerMemoryManager {
     // 挂起于 import 时开始 — resetInFlight 在先前检查之后变正, scope-only 检查
     // 会放行 mkdir/open, Windows 上阻塞并发 fs.rm / POSIX 返回被删目录的 store。
     this.assertScopeUnchanged(scopeAtEntry);
-    if (this.resetInFlight > 0) {
+    if (!independentScope && this.resetInFlight > 0) {
       throw new MemoryError('not-ready', 'memory reset started; retry shortly');
     }
-    if (this.poolGeneration !== generationAtEntry) {
+    if (!independentScope && this.poolGeneration !== generationAtEntry) {
       throw new MemoryError('not-ready', 'memory reset completed; retry against current state');
+    }
+    /*
+     * Custom stores (currently Bot Home memory) migrate only durable shard
+     * files and retain the old directory for rollback. Derived indexes/SQLite
+     * state are rebuilt by store.init(), and existing Home files always win.
+     */
+    if (
+      storageDir !== legacyStorageDir
+      && fs.existsSync(legacyStorageDir)
+      && !fs.existsSync(path.join(storageDir, STORAGE_MIGRATION_RECEIPT))
+    ) {
+      try {
+        fs.mkdirSync(storageDir, { recursive: true });
+        this.assertScopeUnchanged(scopeAtEntry);
+        copyLegacyMemoryShardsSync(legacyStorageDir, storageDir);
+        const receipt = path.join(storageDir, STORAGE_MIGRATION_RECEIPT);
+        const receiptTmp = `${receipt}.tmp-${process.pid}`;
+        fs.writeFileSync(
+          receiptTmp,
+          `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`,
+          'utf8',
+        );
+        fs.renameSync(receiptTmp, receipt);
+      } catch (error) {
+        if (!fs.existsSync(path.join(storageDir, STORAGE_MIGRATION_RECEIPT))) throw error;
+      }
     }
     fs.mkdirSync(storageDir, { recursive: true });
 
     const db = this.deps.sqliteFactory(dbPath);
     // 注册 in-flight 打开的 db (review #2388 Codex 26th P1): init 完成前不在
     // this.stores, resetAll 需能关闭它避免 Windows fs.rm EBUSY 跳过该 workdir。
-    this.openingStores.add(db);
+    this.openingStores.set(db, independentScope);
     const store = new MakerMemoryStore({
       storageDir,
       absWorkdir,
@@ -503,7 +632,7 @@ export class MakerMemoryManager {
       // 后置复核无法撤销已发生的写操作 —— 锚定 store 创建时 scope, 每次
       // write/delete/consolidate 前复核, scope 已变即抛 not-ready。
       ...(this.deps.ownerScopeKey
-        ? { scopeCheck: () => this.assertStoreOperable(scopeAtEntry, generationAtEntry) }
+        ? { scopeCheck: () => this.assertStoreOperable(scopeAtEntry, generationAtEntry, independentScope) }
         : {}),
     });
     try {
@@ -540,7 +669,7 @@ export class MakerMemoryManager {
     // 跨 await 复核: init 等待期间并发 resetAll 已开始 (review #2388 Greptile
     // 18th P1) — 目标目录将被删除, 不得把指向它的 store 入池 (Windows 上 open
     // 的 fts.db 还会阻塞目录删除 / 返回指向已删目录的实例)。
-    if (this.resetInFlight > 0) {
+    if (!independentScope && this.resetInFlight > 0) {
       try {
         db.close();
       } catch {
@@ -555,7 +684,7 @@ export class MakerMemoryManager {
     // P1) — resetInFlight 已回 0, 用 generation 对比识别: 本 store 是重置前
     // 打开的旧世代 (closeAllStores 从未关闭其 db, Windows 上阻塞目录删除 /
     // POSIX 返回指向已删目录的实例), 不得入池。
-    if (this.poolGeneration !== generationAtEntry) {
+    if (!independentScope && this.poolGeneration !== generationAtEntry) {
       try {
         db.close();
       } catch {
@@ -570,7 +699,7 @@ export class MakerMemoryManager {
     // 仅复用同世代的 (resetAll 后旧世代条目先关闭, 由本调用重建覆盖)。
     const existing = this.stores.get(absWorkdir);
     if (existing) {
-      if (existing.generation === this.poolGeneration) {
+      if (existing.independent || existing.generation === this.poolGeneration) {
         try {
           db.close();
         } catch {
@@ -584,7 +713,12 @@ export class MakerMemoryManager {
         /* swallow */
       }
     }
-    this.stores.set(absWorkdir, { store, db, generation: this.poolGeneration });
+    this.stores.set(absWorkdir, {
+      store,
+      db,
+      independent: independentScope,
+      generation: this.poolGeneration,
+    });
     this.logger.debug('memory store opened', { workdir: absWorkdir, sanitized });
     return store;
   }
@@ -621,6 +755,7 @@ export class MakerMemoryManager {
     // 结束; 用快照保证循环体仍按原 owner 的 store 逐项复核+处理 (review #2388)。
     const storeSnapshot = [...this.stores.entries()];
     for (const [workdir, { store }] of storeSnapshot) {
+      if (this.deps.isIndependentScope?.(workdir)) continue;
       // 迭代前复核 (review #2388 第三轮 P1): resetType 自身 await (list/delete),
       // 期间 owner 切换会使本循环持有的 store 被 closeAllStores 关闭 —— 必须先
       // 复核再操作, 不得在切换后继续用已失效的 store。
@@ -651,6 +786,9 @@ export class MakerMemoryManager {
       } catch {
         continue;
       }
+      const botOwned = await isLegacyBotMemoryDir(dir);
+      this.assertScopeUnchanged(scopeAtEntry);
+      if (botOwned) continue;
       for (const filename of filenames) {
         if (parseFilename(filename)?.type !== 'digest') continue;
         try {
@@ -691,9 +829,9 @@ export class MakerMemoryManager {
     // 较早结束的 -1 后仍 >0, 不会提前解除屏障。
     this.resetInFlight += 1;
     try {
-      // 先关闭并清空池 — 池中 db 打开着会占 fts.db 导致 fs.rm EBUSY;
-      // 入口时已存在的 store 在清空语义下关闭合理 (已返回实例在 reset 后本就失效)。
-      this.closeAllStores();
+      // 只关闭全局 Maker Memory store。Bot-owned independent stores live in
+      // Bot Home and are outside this reset's product boundary.
+      this.closeResettableStores();
       const memoryRoot = path.join(this.resolvedBasePath!, MEMORY_SUBDIR);
       let total = 0;
       // 还没 open 的 workdir 文件也要清: 扫 basePath/maker-memory 下所有目录
@@ -709,7 +847,6 @@ export class MakerMemoryManager {
         // 先复核 scope (review #2388 Greptile 23rd P1): readdir await 期间边界
         // 可能发生 — 不得把跨边界的 reset 误判为成功。
         this.assertScopeUnchanged(scopeAtEntry);
-        this.poolGeneration += 1;
         return { removedCount: 0 };
       }
       for (const entry of entries) {
@@ -717,7 +854,9 @@ export class MakerMemoryManager {
         try {
           const stat = await fs.stat(dir);
           if (!stat.isDirectory()) continue;
+          const botOwned = await isLegacyBotMemoryDir(dir);
           this.assertScopeUnchanged(scopeAtEntry);
+          if (botOwned) continue;
           await fs.rm(dir, { recursive: true, force: true });
           total += 1;
         } catch (e) {
@@ -740,11 +879,11 @@ export class MakerMemoryManager {
           'owner scope changed during resetAll; result is partial and must not be trusted',
         );
       }
-      // 池世代兜底失效 (review #2388 Greptile 13th/16th): 即使有漏网旧条目,
-      // getStore 命中旧世代也会 close + 重建, 不残留指向已删目录的条目。
-      this.poolGeneration += 1;
       return { removedCount: total };
     } finally {
+      // closeResettableStores invalidates its handles even if ambiguous
+      // ownership aborts the reset. Retained callers must reopen their store.
+      this.poolGeneration += 1;
       this.resetInFlight -= 1;
     }
   }
@@ -769,10 +908,6 @@ export class MakerMemoryManager {
       return { suggestions: 'No memories in this workdir yet.' };
     }
     const reviewAgentKind = this.deps.reviewAgent ?? 'claude-code';
-    const agent = this.deps.agents[reviewAgentKind];
-    if (!agent) {
-      throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
-    }
     if (await this.deps.isOneShotRouteDisabled?.(reviewAgentKind)) {
       throw new Error(
         `runReview: one-shot route for '${reviewAgentKind}' is disabled in settings`,
@@ -794,7 +929,32 @@ export class MakerMemoryManager {
       summary,
     ].join('\n');
 
-    const suggestions = await agent.oneShot(prompt, { maxTokens: 800, timeoutMs: 60_000 });
+    // host 注入的自定义一次性调用优先(共享辅助模型链); agent 查找推迟到这里: 注入链
+    // 缺席时未注册 review agent 才该把 review 硬拦死。
+    const injectedChain = this.deps.reviewOneShot !== undefined;
+    const custom = injectedChain
+      ? await this.deps.reviewOneShot!(prompt, REVIEW_ONE_SHOT_OPTS)
+      : null;
+    // 辅助链的 await 可能横跨账号边界(链因此中止并返回 null)。此时旧 owner 的
+    // dump 一条都不能再发: 回落默认路由会读新账号凭据, 而末尾复核只能挡住返回,
+    // 撤不回已发出的 prompt。任一分支出发前必须重新复核, fail-closed 抛出。
+    this.assertScopeUnchanged(scopeAtEntry);
+    if (custom && custom.trim().length > 0) {
+      return { suggestions: custom };
+    }
+    // 宿主注入了链 = 用户显式指定了本次审查的路由。链上没产出时再回退 review agent
+    // 默认路由, 只会落到硬编码的 claude-haiku-4-5, 对没有 Anthropic 权限的账号必然
+    // 403, 用户看到的是与真实原因无关的死路(2026-10-14 实测)。改成一句可读原因。
+    if (injectedChain) {
+      throw new Error(
+        'runReview: auxiliary model chain produced no text; configure an available auxiliary model in Settings',
+      );
+    }
+    const agent = this.deps.agents[reviewAgentKind];
+    if (!agent) {
+      throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
+    }
+    const suggestions = await agent.oneShot(prompt, REVIEW_ONE_SHOT_OPTS);
     // oneShot await 后、返回前复核 (review #2388 Codex 21st P1): 边界在 LLM
     // 调用期间发生则建议文本基于旧 owner 数据 — 不得向当前 session 报 ok。
     this.assertScopeUnchanged(scopeAtEntry);

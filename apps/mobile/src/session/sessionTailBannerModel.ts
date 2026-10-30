@@ -26,21 +26,27 @@ import {
   messageContentToPreview,
   sortMessagesByCreatedAt,
 } from '@cindy/maker-shared/message-normalize';
-import { describeAgentAuthError } from '@/device-link/remoteStatus';
-import { i18n } from '@/i18n';
 import type { InputProjection, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 import {
-  localizeToolLoopError,
+  describeNonRetryableAgentError,
+  localizeAgentError,
+  requiresAgentErrorConfigurationChange,
+  localizeUnclassifiedAgentError,
+  unclassifiedAgentErrorI18nKey,
   parseMobileToolLoopErrorDetails,
   type MobileToolLoopErrorDetails,
-} from '@/session/toolLoopErrorI18n';
+} from '@/session/agentErrorI18n';
 
 export interface SessionTailErrorBanner {
   kind: 'error-tail';
   /** 错误行 clientId:忽略(dismiss)与本地隐藏态都按它归属。 */
   clientId: string;
-  /** 展示文案(agent 未鉴权与工具循环错误会本地化,其余保持原文)。 */
+  /** 本地化展示文案；未知错误的技术原文放入 rawError。 */
   text: string;
+  rawError?: string;
+  /** 错误行的稳定 reason key，供诊断提示带上。 */
+  reason?: string | null;
+  summaryKey?: string;
   /** 主按钮语义:中断标记行 →「继续任务」;普通失败行 →「重试」。 */
   continueKind: 'interrupted' | 'error';
   /**
@@ -58,7 +64,7 @@ export type SessionTailBannerState = SessionTailErrorBanner | SessionTailInterru
 
 export interface ResolveSessionTailBannerInput {
   messages: readonly RemoteMessage[];
-  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt'> | null;
+  session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source'> | null;
   projection: Pick<InputProjection, 'error' | 'credentialSwitchWait'>;
   isSessionStreaming: boolean;
   /**
@@ -99,14 +105,17 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
-    const nonRetryableGuidance = describeNonRetryableTailError(tail.text);
-    const toolLoopGuidance = localizeToolLoopError(tail.reason, tail.toolLoop);
+    const nonRetryableGuidance = describeNonRetryableAgentError(tail.text);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
-      text: nonRetryableGuidance ?? toolLoopGuidance ?? tail.text,
+      text: nonRetryableGuidance ?? agentErrorGuidance ?? localizeUnclassifiedAgentError(tail.text, input.session?.source),
+      rawError: tail.text,
+      reason: tail.reason,
+      ...(!nonRetryableGuidance && !agentErrorGuidance ? { summaryKey: unclassifiedAgentErrorI18nKey(tail.text, input.session?.source) } : {}),
       continueKind: tail.reason === APP_EXIT_INTERRUPTED_REASON ? 'interrupted' : 'error',
-      retryable: nonRetryableGuidance === null,
+      retryable: nonRetryableGuidance === null && !requiresAgentErrorConfigurationChange(tail.text),
     };
   }
   // 历史中断行优先;无 error-tail 才轮到 session 双时间戳判定(对齐桌面互斥渲染)。
@@ -122,31 +131,6 @@ export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): 
   const ended = input.session.lastTurnEndedAt ?? 0;
   const cleared = input.session.clearedAt ? Date.parse(input.session.clearedAt) : 0;
   if (started > ended && started > cleared) return { kind: 'interrupted' };
-  return null;
-}
-
-/**
- * 不可重试的持久化尾行错误 → 引导文案(null = 可重试,展示原文)。对齐桌面
- * ErrorBanner hide-Retry 门控的核心子集——这些错误重试只会撞同一个失败循环:
- *  - agent 未鉴权(describeAgentAuthError 模板):凭证在被控电脑上,手机改不了;
- *  - codex thread not found:进程重启 / 鉴权模式切换后旧 thread 已随旧进程销毁;
- *  - invalid_encrypted_content:换供应商后协议加密内容不可用,需回桌面处理
- *    (fork 剥离入口仅桌面本地 codex 会话有)。
- * 桌面还有依赖本地上下文的更细分支(codex 401 区分 oauth-bearer / 网关 key、
- * session-expired 的登录引导等),手机端拿不到对应信号,不搬——这些场景重试
- * 失败后错误会重新浮现,不破坏数据。
- */
-function describeNonRetryableTailError(
-  text: string,
-): string | null {
-  const authGuidance = describeAgentAuthError(text);
-  if (authGuidance) return authGuidance;
-  if (/thread not found/i.test(text)) {
-    return i18n.t('session.tail.codexThreadLost');
-  }
-  if (/invalid_encrypted_content/i.test(text)) {
-    return i18n.t('session.tail.encryptedContentInvalid');
-  }
   return null;
 }
 

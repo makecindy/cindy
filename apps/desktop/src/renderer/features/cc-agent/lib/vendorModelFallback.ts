@@ -26,14 +26,25 @@ import { providerOffersModel, type AgentKind, type ProviderView } from '@cindy/m
  *
  * @param providers   live 供应商视图(useProviders 的结果;含内置 + 自定义,按 agent 挂模型)。
  * @param sessionModel 会话当前存的 model id。
- * @param agent        会话所属 agent(建会话即固定,不可变)。
+ * @param agent        与 sessionModel 同一持久化快照中的 agent，不得传展示意图的 agent。
  * @returns true = 需要回退(model 明确属于另一个 vendor);false = 保持不动。
  */
 export function shouldFallbackVendorModel(
   providers: ProviderView[],
   sessionModel: string,
   agent: AgentKind,
+  context: {
+    providerId?: string | null;
+    hasSwitchIntent?: boolean;
+    isRemote?: boolean;
+  } = {},
 ): boolean {
+  // Only repair unbound legacy rows. A selected route belongs to Main, including
+  // routes selected by mobile/another desktop while this view is open. Catalog
+  // absence is not permission to replace that route with a new-session seed.
+  // Pending intent and persisted model are different generations (and may use
+  // different wire IDs); never compare one generation's model to the other's agent.
+  if (context.providerId || context.hasSwitchIntent || context.isRemote) return false;
   // 本端任一供应商 offer 该模型 → 合法(含自定义供应商、gpt-5.x 等),绝不回退。
   if (providers.some((p) => providerOffersModel(p, sessionModel, agent))) return false;
   // 本端不 offer:仅当对端 agent 明确 offer 它(确定的跨 vendor 错配)才回退;

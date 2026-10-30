@@ -5,8 +5,8 @@
  * （#3179 rollout: "Script running with cell ID 226"）。本模块把那条文案降格为
  * **检测启发式**：只用来铸造有界 continuation claim，不参与产品「是否交付完」判断。
  *
- * 协议级 executionHandle 是跨仓长期项；在那之前，漏判等于今天的假完成，误判只是
- * 多跑一轮有界续段。
+ * 协议级 executionHandle 是跨仓长期项；在那之前，漏判会造成假完成，误判会
+ * 等待不存在的 cell 并把已完成的工作误报为失败。结构化退出码优先于正文启发式。
  */
 
 export interface YieldedExecCell {
@@ -22,8 +22,8 @@ export interface YieldedExecCell {
  * 文案(grep 的 `路径:行号:` 前缀、源码里的缩进+引号、字面 `\n` 转义)都不满足
  * 这两条,不再被当成真实 cell 铸造 continuation claim —— 此前误判会让已成功的
  * 命令等待不存在的 cell,升级成 yield-continuation-lost-handle 终态失败。
- * 残余盲区:纯文本恰好在列 0 完整复刻两行状态头 —— 与真实执行器输出无法区分,
- * 接受(协议级 executionHandle 落地前的启发式边界)。
+ * 单靠文本无法区分列 0 完整复刻的示例。item 层必须先排除有退出码的命令，
+ * 其 aggregatedOutput 是已退出进程的正文，不是 functions.exec 的状态头。
  */
 export const YIELDED_EXEC_CELL_RE =
   /(?:^|\r?\n)Script running with cell ID[ \t]+(\d+)(?:[ \t]+|\r?\n)Wall time[ \t]/gi;
@@ -48,6 +48,11 @@ export function extractYieldedExecCellIds(text: string | null | undefined): stri
 export function extractYieldedExecCellsFromCodexItem(item: unknown): YieldedExecCell[] {
   const record = asRecord(item);
   if (!record || !isApprovedYieldItem(record)) return [];
+  // Native command output can contain verbatim executor examples (including
+  // complete status headers). A numeric exit code is stronger evidence than
+  // that text. Do not use status=completed alone: legacy yield wrappers also
+  // complete their item while the cell keeps running, without an exit code.
+  if (record.type === 'commandExecution' && typeof record.exitCode === 'number') return [];
   const command = commandFromCodexItem(record);
   const ids = extractYieldedExecCellIds(collectItemText(record));
   return ids.map((cellId) => (
@@ -97,9 +102,9 @@ export function formatYieldContinuationPrompt(cells: readonly YieldedExecCell[])
       : `- cell ID ${cell.cellId}`;
   }).join('\n');
   return [
-    'A foreground exec cell is still running after the previous turn completed.',
+    'A foreground exec cell was reported running; its completion has not been confirmed.',
     'Wait for every listed cell and finish the original user request. Do not start a new task.',
-    'If a cell is gone, report that it was lost instead of rerunning the command.',
+    'If waiting fails, report the actual error without assuming the command was lost. Do not rerun the command.',
     unique.length === 1 ? `Wait for cell ID ${unique[0]!.cellId}.` : 'Wait for:',
     ...(unique.length > 1 ? [cellList] : []),
   ].join('\n');

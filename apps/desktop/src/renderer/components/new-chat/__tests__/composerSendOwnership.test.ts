@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { discardDraft, getDraft } from '@/lib/composerDraftStore';
+import { discardDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 
 import {
   applyRefinementToSerializedText,
@@ -191,6 +191,23 @@ describe('detached voice draft persist across unmount', () => {
       content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Asr draft.' }] }],
     });
     expect(hasArmedDetachedVoiceDraft()).toBe(false);
+  });
+
+  // Plugin creation keeps its verified built-in choice while delayed ASR
+  // appends/refines requirements after navigation. Normal silent saves alone
+  // did not cover this notifying save path (PR #6433, unit).
+  it('preserves the built-in creator identity when detached voice text settles', () => {
+    const intent = { name: 'cindy-plugin-creator', commandName: 'cindy-plugin-creator' };
+    saveDraft('__new_maker_draft__', {
+      text: plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin'),
+      attachments: [], builtInSkillIntent: intent,
+    });
+    armDetachedVoiceDraftPersist('__new_maker_draft__', 'asr draft');
+    settleArmedDetachedVoiceDraft('Add a panel.');
+    expect(getDraft('__new_maker_draft__')?.builtInSkillIntent).toEqual(intent);
+    expect(getDraft('__new_maker_draft__')?.text).toEqual(
+      plainTextToTiptapDoc('/cindy-plugin-creator Make a plugin\nAdd a panel.'),
+    );
   });
 
   it('does not let another composer key settle the armed persist', () => {

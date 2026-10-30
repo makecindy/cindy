@@ -8,7 +8,6 @@ import {
   insertRootSplitPane,
   validateLayout,
   type Layout,
-  type SplitNode,
 } from '../../../shared/layoutTree';
 import { LAYOUT_FILE_NAME, LayoutStore } from '../LayoutStore';
 
@@ -153,30 +152,20 @@ describe('LayoutStore · reset 与 ensurePersisted', () => {
     expect(onChanged).toHaveBeenCalledTimes(2);
   });
 
-  it('reset 恢复内置默认排列但保留已停靠的意识面板', () => {
+  it('reset 不保留树里的额外 pane(页签组由 renderer 按需重新插入)', () => {
     const store = makeStore();
-    const withGhost = insertRootSplitPane(
+    const withExtra = insertRootSplitPane(
       createDefaultLayout(),
-      { id: 'custom-ghost', panelKind: 'ghost:calendar', minWidth: 260 },
-      { index: 2, fraction: 0.3 },
+      { id: 'tab-group-left', panelKind: 'tab-group:left' },
+      { index: 0, fraction: 0.3 },
     );
-    expect(withGhost.applied).toBe(true);
-    store.setLayout(withGhost.layout);
+    expect(withExtra.applied).toBe(true);
+    store.setLayout(withExtra.layout);
 
     const result = store.reset();
     expect(result.persisted).toBe(true);
-    const children = (result.layout.content as SplitNode).children;
-    expect(children.map((child) => child.node.type === 'pane' && child.node.panelKind)).toEqual([
-      'ghost:calendar',
-      'chat-main',
-      'right-tabs',
-    ]);
-    expect(children[0].node).toMatchObject({
-      id: 'ghost-calendar',
-      panelKind: 'ghost:calendar',
-      minWidth: 260,
-    });
-    expect(readFileJson()).toEqual(result.layout);
+    expect(result.layout).toEqual(createDefaultLayout());
+    expect(readFileJson()).toEqual(createDefaultLayout());
   });
 
   it('ensurePersisted:缺失时落默认存档;已有合法存档不覆盖', () => {

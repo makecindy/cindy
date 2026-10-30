@@ -7,6 +7,7 @@
  */
 
 import { sql } from 'drizzle-orm';
+import { fastModeFromStorage, fastModeToStorage, type FastMode } from '@cindy/maker-shared';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import {
   index,
@@ -16,9 +17,87 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  customType,
 } from 'drizzle-orm/sqlite-core';
 
 import type { SessionSource } from '../../shared/sessionSource.js';
+
+/** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
+export const chatCacheRooms = sqliteTable('chat_cache_rooms', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  state: text('state').notNull(),
+  version: integer('version').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId] }) }));
+
+export const chatCacheMessages = sqliteTable('chat_cache_messages', {
+  namespace: text('namespace').notNull(),
+  roomId: text('room_id').notNull(),
+  messageId: text('message_id').notNull(),
+  payload: text('payload').notNull(),
+}, t => ({ pk: primaryKey({ columns: [t.namespace, t.roomId, t.messageId] }) }));
+
+const speedSetting = customType<{ data: FastMode; driverData: number }>({
+  dataType: () => 'integer',
+  toDriver: fastModeToStorage,
+  fromDriver: fastModeFromStorage,
+});
+
+/** Historical source identity survives uninstall; revision is only a continuity witness. */
+export const pluginUsageSubjects = sqliteTable('plugin_usage_subjects', {
+  id: text('id').primaryKey(),
+  stableKey: text('stable_key'),
+  sourceKind: text('source_kind').notNull(),
+  pluginId: text('plugin_id'),
+  organizationId: text('organization_id'),
+  sourceKey: text('source_key'),
+  serverRoot: text('server_root'),
+  ghostId: text('ghost_id').notNull(),
+  displayName: text('display_name').notNull(),
+  bindingRevision: text('binding_revision'),
+  recordingStartedAt: integer('recording_started_at').notNull(),
+  historyGeneration: integer('history_generation').notNull().default(0),
+}, (t) => ({
+  bySource: uniqueIndex('plugin_usage_subjects_source_idx').on(t.stableKey),
+  byBinding: index('plugin_usage_subjects_binding_idx').on(t.ghostId, t.bindingRevision),
+}));
+
+/** Host-confirmed invocation facts; no content, credentials or title snapshots. */
+export const pluginUsageEvents = sqliteTable('plugin_usage_events', {
+  callId: text('call_id').primaryKey(),
+  subjectId: text('subject_id').notNull().references(() => pluginUsageSubjects.id),
+  historyGeneration: integer('history_generation').notNull(),
+  occurredAt: integer('occurred_at').notNull(),
+  toolName: text('tool_name').notNull(),
+  entryKind: text('entry_kind').notNull().default('tool'),
+  sessionId: text('session_id'),
+  version: text('version'),
+  releaseId: text('release_id'),
+  outcome: text('outcome').notNull().default('unknown'),
+  reportTarget: text('report_target'),
+  reportState: text('report_state').notNull().default('not-applicable'),
+  nextAttemptAt: integer('next_attempt_at'),
+  attemptCount: integer('attempt_count').notNull().default(0),
+}, (t) => ({
+  byTime: index('plugin_usage_events_time_idx').on(t.subjectId, t.occurredAt),
+  byTask: index('plugin_usage_events_task_idx').on(t.subjectId, t.sessionId, t.occurredAt),
+  pendingReports: index('plugin_usage_events_pending_idx').on(t.nextAttemptAt, t.occurredAt).where(sql`${t.reportState} = 'pending'`),
+}));
+
+/** Per-profile authority journal. Snapshots are recovery/audit data, not offline grants. */
+export const sharedTaskEvents = sqliteTable('shared_task_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  sharedTaskId: text('shared_task_id').notNull(),
+  sessionId: text('session_id').notNull().references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  kind: text('kind', { enum: ['authority', 'local-close'] }).notNull(),
+  terminal: integer('terminal', { mode: 'boolean' }).notNull(),
+  snapshot: text('snapshot'),
+  recordedAt: integer('recorded_at').notNull(),
+}, (table) => ({
+  uniqueRevision: uniqueIndex('shared_task_events_revision_idx').on(table.sharedTaskId, table.kind, table.revision),
+  bySession: index('shared_task_events_session_idx').on(table.sessionId, table.id),
+}));
 
 const SESSION_SOURCES = [
   'desktop',
@@ -33,8 +112,12 @@ const SESSION_SOURCES = [
   'scheduler',
   'learn',
   'review',
+  'side-chat',
   'shared',
   'plugin',
+  'bot',
+  'cindy-make',
+  'cindy-make-merge',
 ] as const satisfies readonly SessionSource[];
 
 export const sessions = sqliteTable(
@@ -52,6 +135,8 @@ export const sessions = sqliteTable(
       .notNull()
       .default('project'),
     model: text('model').notNull().default('claude-sonnet-4-6'),
+    /** Owner's selection while an automation temporarily uses another runtime. */
+    scheduledModelBaseline: text('scheduled_model_baseline'),
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     })
@@ -78,7 +163,10 @@ export const sessions = sqliteTable(
       .default(false),
     contextTokens: integer('context_tokens').notNull().default(0),
     contextWindow: integer('context_window').notNull().default(0),
-    fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
+    /** Last window written by the runtime snapshot writer. Equality with contextWindow
+     * proves provenance; a later legacy/import writer changing the value invalidates it. */
+    contextWindowRuntime: integer('context_window_runtime'),
+    fastMode: speedSetting('fast_mode').notNull().default(false),
     /**
      * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经用户
      * 审批后再执行(Claude 走 SDK plan mode, Codex 走 collaborationMode plan)。
@@ -88,6 +176,21 @@ export const sessions = sqliteTable(
     planModeEnabled: integer('plan_mode_enabled', { mode: 'boolean' }).notNull().default(false),
     clearedAt: integer('cleared_at'), // unix ms
     pinnedAt: integer('pinned_at'), // unix ms
+    /**
+     * 后台隐藏时刻（unix ms）。非 NULL = 插件以 `agent.hiddenTasks` 声明创建或切换为
+     * 隐藏的后台任务：不进入任务列表、搜索、未结束提示与新任务通知；用户仍可在插件
+     * 详情页「后台任务」打开或显示到任务列表。NULL = 普通可见任务（存量行全部为 NULL）。
+     * 用量统计等全量口径不按此列过滤。
+     */
+    hiddenAt: integer('hidden_at'), // unix ms
+    /**
+     * 按任务静音通知。true = 用户在该任务的右键菜单里开了「消息免打扰」：
+     * 不再发系统通知（toast/声音）、不上 Agent 灵动岛、不推手机、不发 IM 消息。
+     * 任务内的未读与角标不受影响；存量行全部为 false。
+     */
+    notificationsMuted: integer('notifications_muted', { mode: 'boolean' })
+      .notNull()
+      .default(false),
     /**
      * 任务现状一句话摘要（仅置顶段卡片模式展示/生成）。
      * 由 main/sessionTaskSummary.ts 在置顶会话 turn 结束或置顶时经 oneShot 生成,
@@ -103,12 +206,10 @@ export const sessions = sqliteTable(
     providerId: text('provider_id'),
     /**
      * 用户最近一次"按下发送"的时刻（unix ms，NULL = 从未发过）。
-     * Sidebar Project / 组内 session 排序唯一时间轴：
-     *   - 首条消息发出时由 renderer 通过 touchUserSend IPC 立刻 bump
-     *   - NULL ⟺ 草稿，由 projectGrouping 直接归到未分类
-     * 不被 model/effort/title 改动等"字段类"修改触发——updatedAt 才是。
+     * 保留真人发送语义及现有写入点；列表排序使用 lastActivityAt，旧数据回落到此列。
      */
     userSendAt: integer('user_send_at'), // unix ms
+    lastActivityAt: integer('last_activity_at'),
     /**
      * Agent 来源标识——session 级别。决定本 session 内 messages.agent_meta 的 JSON 形态。
      * 默认 'cc'（Claude Code）。未来扩展 'codex' 等时新建 session 即可，老 session 不动。
@@ -169,6 +270,12 @@ export const sessions = sqliteTable(
     imBotContextId: text('im_bot_context_id'),
     imUserId: text('im_user_id'),
     /**
+     * 个人 IM 渠道任务「跟随渠道默认」的记录(JSON,见 im/shared/channelDefaultRoute.ts)。
+     * 渠道建任务 / `/new` / 跟随切换成功时写入;当前路由与记录不一致 = 用户单独改过。
+     * NULL = 无记录(非 IM 任务或本列上线前建的任务)。
+     */
+    imDefaultRoute: text('im_default_route'),
+    /**
      * 本 session 创建时是否注入了 project-context 知识（来自 .cindy/project-knowledge/）。
      * 仅在创建瞬间由 main IPC 写入；后续不变。
      * Render 端用此字段决定 sidebar stripe / chat header chip 显示。
@@ -203,6 +310,16 @@ export const sessions = sqliteTable(
      * daemon);两端 in-process MCP 都经 SSH remote-forward 回本机 HTTP bridge。
      */
     remoteHostId: text('remote_host_id'),
+    /**
+     * Agent 在同账号另一台电脑上运行时，那台电脑的设备 id(任务、项目文件与命令仍在本机)。
+     * NULL = Agent 在本机(或 SSH 远端，见 remote_host_id)。与 remote_host_id 互斥。
+     */
+    agentDeviceId: text('agent_device_id'),
+    /**
+     * 本任务是另一台电脑上协同 Lead 派来的 Worker(JSON,见 shared/orcaRemoteWorker.ts)。
+     * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
+     */
+    orcaRemoteLead: text('orca_remote_lead'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -259,6 +376,418 @@ export const sessions = sqliteTable(
   }),
 );
 
+/**
+ * Cindy Bots 的 Profile 权威记录。
+ *
+ * Renderer 只能通过 local-db:bots:* 读取/修改，不能把 Bot 身份或 canonical
+ * Session 关系留在 localStorage。JSON 字段保留 Profile runtime 的版本化扩展空间；
+ * 具体 Skill/MCP/Memory 引用仍由各自能力系统解析，不在这里复制凭证。
+ */
+export const botProfiles = sqliteTable(
+  'bot_profiles',
+  {
+    id: text('id').primaryKey(),
+    displayName: text('display_name').notNull(),
+    description: text('description').notNull().default(''),
+    avatar: text('avatar').notNull().default('🤖'),
+    avatarColor: text('avatar_color').notNull().default('violet'),
+    status: text('status', { enum: ['active', 'paused', 'error', 'archived', 'deleting'] })
+      .notNull()
+      .default('active'),
+    /** Roster display only; hidden Bots continue running and remain addressable. */
+    hiddenAt: integer('hidden_at'),
+    /** Roster ordering only; canonical Session ownership is unchanged. */
+    pinnedAt: integer('pinned_at'),
+    /** Latest durable, user-actionable failure observed for this Bot. */
+    attentionReason: text('attention_reason'),
+    /** Monotonic observation time used to stop stale successes clearing newer failures. */
+    attentionAt: integer('attention_at'),
+    currentVersion: integer('current_version').notNull().default(1),
+    canonicalSessionId: text('canonical_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxStatusUpdated: index('idx_bot_profiles_status_updated').on(t.status, t.updatedAt),
+    idxCanonicalSession: index('idx_bot_profiles_canonical_session').on(t.canonicalSessionId),
+  }),
+);
+
+/** Immutable-ish Profile snapshots used for runtime binding, audit and rollback. */
+export const botProfileVersions = sqliteTable(
+  'bot_profile_versions',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    identitySource: text('identity_source').notNull().default(''),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqBotVersion: uniqueIndex('uniq_bot_profile_versions_bot_version').on(t.botId, t.version),
+    idxBotCreated: index('idx_bot_profile_versions_bot_created').on(t.botId, t.createdAt),
+  }),
+);
+
+/**
+ * Canonical, delegation-linked, group-lane and archived/history Session projections for a Bot.
+ * A `group` link is the Bot's hidden lane in one Bot group (`route_key = group:<groupId>`).
+ */
+export const botSessionLinks = sqliteTable(
+  'bot_session_links',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    /** ProfileVersion pinned when this Session became canonical/delegation-linked. */
+    profileVersion: integer('profile_version').notNull().default(1),
+    // TS-only enum (SQLite `text`, no CHECK): `channel` = 伙伴接管的个人 IM 群 / 话题专线；
+    // `thread` = 主人私聊里的话题（route_key = dm-thread:<根消息 Session>:<根消息 clientId>）。
+    role: text('role', { enum: ['canonical', 'history', 'delegation', 'group', 'channel', 'thread', 'routine'] }).notNull(),
+    routeKey: text('route_key'),
+    createdAt: integer('created_at').notNull(),
+    archivedAt: integer('archived_at'),
+  },
+  (t) => ({
+    uniqSession: uniqueIndex('uniq_bot_session_links_session').on(t.sessionId),
+    uniqCanonicalPerBot: uniqueIndex('uniq_bot_session_links_canonical_per_bot')
+      .on(t.botId)
+      .where(sql`${t.role} = 'canonical'`),
+    idxBotRole: index('idx_bot_session_links_bot_role').on(t.botId, t.role),
+  }),
+);
+
+/** Prepared and terminal native runtime capability snapshot for each Bot Session start. */
+export const botRuntimeSnapshots = sqliteTable(
+  'bot_runtime_snapshots',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    profileVersion: integer('profile_version').notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    workingDir: text('working_dir').notNull(),
+    memoryScopeKey: text('memory_scope_key'),
+    configuredJson: text('configured_json').notNull().default('{}'),
+    resolvedJson: text('resolved_json').notNull().default('{}'),
+    status: text('status', { enum: ['prepared', 'applied', 'degraded', 'failed'] }).notNull(),
+    /** Resolution finished and the exact Profile/runtime bytes were frozen. */
+    preparedAt: integer('prepared_at').notNull().default(0),
+    /** Agent startup returned and Session storage succeeded. */
+    appliedAt: integer('applied_at'),
+    /** Startup failed before the Session became visible. */
+    failedAt: integer('failed_at'),
+    /** Sanitized stage/error metadata only; never stores prompt or user content. */
+    failureJson: text('failure_json'),
+  },
+  (t) => ({
+    idxBotPrepared: index('idx_bot_runtime_snapshots_bot_prepared').on(t.botId, t.preparedAt),
+    idxSessionPrepared: index('idx_bot_runtime_snapshots_session_prepared').on(
+      t.sessionId,
+      t.preparedAt,
+    ),
+  }),
+);
+
+/** Lifecycle audit trail for renew/archive/recovery and future migration events. */
+export const botLifecycleEvents = sqliteTable(
+  'bot_lifecycle_events',
+  {
+    id: text('id').primaryKey(),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    eventType: text('event_type').notNull(),
+    payloadJson: text('payload_json').notNull().default('{}'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    idxBotCreated: index('idx_bot_lifecycle_events_bot_created').on(t.botId, t.createdAt),
+    idxSessionCreated: index('idx_bot_lifecycle_events_session_created').on(
+      t.sessionId,
+      t.createdAt,
+    ),
+  }),
+);
+
+/** Durable Bot-to-Bot handoff lineage using Cindy child Sessions as execution units. */
+export const botDelegations = sqliteTable(
+  'bot_delegations',
+  {
+    id: text('id').primaryKey(),
+    requestingBotId: text('requesting_bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    // null = 委派给一条普通 Cindy 任务（非 Bot），卡片与完成信号同一条链路。
+    targetBotId: text('target_bot_id').references(() => botProfiles.id, {
+      onDelete: 'cascade',
+    }),
+    parentSessionId: text('parent_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    childSessionId: text('child_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    objective: text('objective').notNull(),
+    contextRefsJson: text('context_refs_json').notNull().default('[]'),
+    artifactRefsJson: text('artifact_refs_json').notNull().default('[]'),
+    permissionSnapshotJson: text('permission_snapshot_json').notNull().default('{}'),
+    // Immutable wire payloads per group delivery; independent of mutable execution state.
+    groupTaskPostsJson: text('group_task_posts_json').notNull().default('{}'),
+    lineageJson: text('lineage_json').notNull().default('[]'),
+    targetProfileVersion: integer('target_profile_version'),
+    depth: integer('depth').notNull().default(1),
+    budgetTokens: integer('budget_tokens'),
+    tokensUsed: integer('tokens_used').notNull().default(0),
+    status: text('status', {
+      enum: ['queued', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'timed-out'],
+    })
+      .notNull()
+      .default('queued'),
+    resultSummary: text('result_summary'),
+    /** Output artifacts produced by the child task; never input authorization refs. */
+    outputArtifactsJson: text('output_artifacts_json').notNull().default('[]'),
+    /** User-visible waiting summary; the live resolver remains runtime-owned. */
+    pendingInteractionJson: text('pending_interaction_json'),
+    lastError: text('last_error'),
+    /** Stable task id, incrementing execution run. A terminal task may be continued in a new child Session. */
+    runSequence: integer('run_sequence').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    completedAt: integer('completed_at'),
+    /** Set only after the terminal wake has been accepted by the requesting Bot task. */
+    completionDeliveredAt: integer('completion_delivered_at'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxRequesterStatus: index('idx_bot_delegations_requester_status').on(
+      t.requestingBotId,
+      t.status,
+    ),
+    idxTargetStatus: index('idx_bot_delegations_target_status').on(t.targetBotId, t.status),
+    idxParentSession: index('idx_bot_delegations_parent_session').on(t.parentSessionId),
+    uniqChildSession: uniqueIndex('uniq_bot_delegations_child_session').on(t.childSessionId),
+  }),
+);
+
+/** Hidden, pair-scoped Bot conversation. It is projected into each Bot's canonical timeline. */
+export const botDirectMessageThreads = sqliteTable(
+  'bot_direct_message_threads',
+  {
+    id: text('id').primaryKey(),
+    /** Local Bot ids or deviceId::botId addresses, lexically ordered. Deletion keeps these rows. */
+    botAId: text('bot_a_id').notNull(),
+    botBId: text('bot_b_id').notNull(),
+    status: text('status', { enum: ['active', 'closed'] })
+      .notNull()
+      .default('active'),
+    closeReason: text('close_reason', { enum: ['message-limit', 'idle-timeout'] }),
+    messageCount: integer('message_count').notNull().default(0),
+    maxMessages: integer('max_messages').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    blockedUntil: integer('blocked_until'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    closedAt: integer('closed_at'),
+  },
+  (t) => ({
+    uniqActivePair: uniqueIndex('uniq_bot_dm_threads_active_pair')
+      .on(t.botAId, t.botBId)
+      .where(sql`${t.status} = 'active'`),
+    idxPairUpdated: index('idx_bot_dm_threads_pair_updated').on(t.botAId, t.botBId, t.updatedAt),
+  }),
+);
+
+/** One explicit send_to_agent delivery inside a hidden Bot pair conversation. */
+export const botDirectMessages = sqliteTable(
+  'bot_direct_messages',
+  {
+    id: text('id').primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => botDirectMessageThreads.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    senderBotId: text('sender_bot_id').notNull(),
+    recipientBotId: text('recipient_bot_id').notNull(),
+    senderSessionId: text('sender_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    recipientSessionId: text('recipient_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    deliveryStatus: text('delivery_status', {
+      enum: ['pending', 'delivered', 'failed'],
+    })
+      .notNull()
+      .default('pending'),
+    senderName: text('sender_name'),
+    recipientName: text('recipient_name'),
+    // Remote conversation captured before a legacy send; never a local Session FK.
+    bridgeSessionId: text('bridge_session_id'),
+    content: text('content').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqThreadSequence: uniqueIndex('uniq_bot_direct_messages_thread_sequence').on(
+      t.threadId,
+      t.sequence,
+    ),
+    idxThreadCreated: index('idx_bot_direct_messages_thread_created').on(t.threadId, t.createdAt),
+  }),
+);
+
+/** A user-owned group chat of local Bots (docs/product-rules/bot-group-chat.md). */
+export const botGroups = sqliteTable(
+  'bot_groups',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /** Who answers a user message without @mentions: every member or nobody. */
+    replyMode: text('reply_mode', { enum: ['all', 'mentioned'] })
+      .notNull()
+      .default('all'),
+    /** `auto`: broadcast rounds think in parallel first; `sequential`: always one at a time. */
+    speakingMode: text('speaking_mode', { enum: ['auto', 'sequential'] })
+      .notNull()
+      .default('auto'),
+    /** Chosen 负责人; not a foreign key, an unavailable choice falls back to the first member. */
+    organizerBotId: text('organizer_bot_id'),
+    /** 项目文件夹 for 分工 steps; null uses the group's own folder under userData. */
+    projectDir: text('project_dir'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxUpdated: index('idx_bot_groups_updated').on(t.updatedAt),
+  }),
+);
+
+/** Ordered membership. Deleting a Bot profile removes its memberships. */
+export const botGroupMembers = sqliteTable(
+  'bot_group_members',
+  {
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    botId: text('bot_id')
+      .notNull()
+      .references(() => botProfiles.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Highest group message sequence already delivered to this Bot's group lane. */
+    lastSeenSequence: integer('last_seen_sequence').notNull().default(0),
+    joinedAt: integer('joined_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.groupId, t.botId] }),
+    idxBot: index('idx_bot_group_members_bot').on(t.botId),
+  }),
+);
+
+/** The group's authoritative multi-author timeline. Author names are snapshots. */
+export const botGroupMessages = sqliteTable(
+  'bot_group_messages',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    kind: text('kind', { enum: ['message', 'round-end', 'notice', 'plan', 'plan-end'] })
+      .notNull()
+      .default('message'),
+    authorKind: text('author_kind', { enum: ['user', 'bot', 'system'] }).notNull(),
+    /** Not a foreign key: messages outlive the authoring Bot. */
+    authorBotId: text('author_bot_id'),
+    authorName: text('author_name').notNull().default(''),
+    content: text('content').notNull().default(''),
+    mentionsJson: text('mentions_json').notNull().default('{"all":false,"botIds":[]}'),
+    noticeCode: text('notice_code'),
+    /** Renderer idempotency key for user messages. */
+    clientId: text('client_id'),
+    /** 分工 plan this message belongs to (安排卡, step hand-off, plan end). */
+    planId: text('plan_id'),
+    /** Step hand-off files relative to the plan's work directory. */
+    filesJson: text('files_json').notNull().default('[]'),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    uniqGroupSequence: uniqueIndex('uniq_bot_group_messages_group_sequence').on(
+      t.groupId,
+      t.sequence,
+    ),
+    uniqGroupClient: uniqueIndex('uniq_bot_group_messages_group_client')
+      .on(t.groupId, t.clientId)
+      .where(sql`${t.clientId} IS NOT NULL`),
+  }),
+);
+
+/** A 分工 plan: the organizer's steps and where they run (docs/product-rules/bot-group-chat.md §7). */
+export const botGroupPlans = sqliteTable(
+  'bot_group_plans',
+  {
+    id: text('id').primaryKey(),
+    groupId: text('group_id')
+      .notNull()
+      .references(() => botGroups.id, { onDelete: 'cascade' }),
+    status: text('status', {
+      enum: ['proposed', 'running', 'waiting', 'done', 'stopped', 'dismissed', 'superseded'],
+    }).notNull(),
+    /** The user's request the plan answers; step inputs quote it. */
+    requestText: text('request_text').notNull(),
+    attachmentsJson: text('attachments_json').notNull().default('[]'),
+    organizerBotId: text('organizer_bot_id').notNull(),
+    organizerName: text('organizer_name').notNull(),
+    currentStep: integer('current_step'),
+    /** Resolved at 开始: the group folder, the project folder or the plan's worktree. */
+    workDir: text('work_dir'),
+    branch: text('branch'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    idxGroupCreated: index('idx_bot_group_plans_group_created').on(t.groupId, t.createdAt),
+  }),
+);
+
+export const botGroupPlanSteps = sqliteTable(
+  'bot_group_plan_steps',
+  {
+    planId: text('plan_id')
+      .notNull()
+      .references(() => botGroupPlans.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    /** Not a foreign key: the plan keeps the name snapshot when a Bot is removed. */
+    botId: text('bot_id').notNull(),
+    botName: text('bot_name').notNull(),
+    task: text('task').notNull(),
+    status: text('status', { enum: ['pending', 'running', 'done', 'failed'] })
+      .notNull()
+      .default('pending'),
+    /** Latest hand-off message of this step (a redo replaces it). */
+    resultMessageId: text('result_message_id'),
+    startedAt: integer('started_at'),
+    finishedAt: integer('finished_at'),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.planId, t.position] }),
+  }),
+);
+
 export const orcaTeams = sqliteTable(
   'orca_teams',
   {
@@ -281,6 +810,13 @@ export const orcaTeams = sqliteTable(
   }),
 );
 
+/** 远端创建回执丢失或本机崩溃后的清理身份，成功关联 Worker 后删除。 */
+export const orcaRemoteOpens = sqliteTable('orca_remote_opens', {
+  remoteSessionId: text('remote_session_id').primaryKey(),
+  deviceId: text('device_id').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const orcaWorkers = sqliteTable(
   'orca_workers',
   {
@@ -302,6 +838,20 @@ export const orcaWorkers = sqliteTable(
     focused: integer('focused', { mode: 'boolean' }).notNull().default(false),
     /** multi-worker Phase 1: idle 释放时间戳, NULL = 非 idle */
     idleSince: integer('idle_since'),
+    /**
+     * Worker 在同账号另一台电脑运行时那台的设备 id；NULL = 本机 Worker。
+     * 此时 session_id 指向本机代理任务行，remote_session_id 是那台上的真实任务。
+     */
+    executionDeviceId: text('execution_device_id'),
+    remoteSessionId: text('remote_session_id'),
+    /** 已作为回报送给 Lead 的远端最后一条 assistant 消息 id，用于重连补报去重。 */
+    lastBridgedMessageId: text('last_bridged_message_id'),
+    /** 已通知运行设备结束协同的时刻；NULL 且已归档 = 待重连后补发。 */
+    remoteReleasedAt: integer('remote_released_at'),
+    /** 派活前落盘，重启后按投递回执及历史恢复待回报。 */
+    pendingRemoteReport: text('pending_remote_report'),
+    /** 停止已确认后只补发 release，不能误停用户后续的普通任务。 */
+    remoteStopConfirmedAt: integer('remote_stop_confirmed_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -353,7 +903,8 @@ export const messages = sqliteTable(
       // 的 onTurnErrorEvent)。drizzle 的 text enum 只是 TS 类型约束,SQLite 列
       // 无 CHECK,扩枚举不产生 migration(db:generate 应为 no-op)。
       // 'agent_switch':session 内 agent 引擎切换边界行(session-agent-switch),
-      // content 存 { fromAgentKind, toAgentKind, fromModel, toModel, handoff }。
+      // content 存 { fromAgentKind, toAgentKind, fromModel, toModel,
+      // fromProviderId?, toProviderId?, handoff }。
       // handoff 交接文本只进这里(供 UI 展开查看/debug),不作为可见消息渲染正文,
       // 也不落 user 消息——wire 注入与显示分离。
       // 'context_rebuild':消息内容删除后的内部重建标记。rewind_at 固定非 NULL,
@@ -588,6 +1139,19 @@ export const migrationMeta = sqliteTable('migration_meta', {
   value: text('value'),
 });
 
+/** Host-only bounded authority projections; transcript mutations invalidate their revision. */
+export const autoReviewProjections = sqliteTable('auto_review_projections', {
+  sessionId: text('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  leadId: text('lead_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull().default(0),
+  projectedRevision: integer('projected_revision').notNull().default(-1),
+  version: integer('version').notNull().default(1),
+  payload: text('payload'),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.sessionId, t.leadId] }),
+  byLead: index('auto_review_projections_lead_idx').on(t.leadId),
+}));
+
 /**
  * schema-drift-detection (#37)：每条已 apply 的 migration 的指纹记录。
  *
@@ -615,6 +1179,21 @@ export const accountUsageSnapshots = sqliteTable('account_usage_snapshots', {
   snapshot: text('snapshot').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
+
+/** Provider notification receipts. Retain the source id after session deletion to reject stale replies. */
+export const imNotificationOrigins = sqliteTable(
+  'im_notification_origins',
+  {
+    channel: text('channel').notNull(),
+    botContextId: text('bot_context_id').notNull(),
+    userId: text('user_id').notNull(),
+    messageId: text('message_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.messageId] }) }),
+);
 
 /**
  * IM 身份 → desktop session 的接管绑定表 (feishu /ctr 流程产物)。
@@ -872,6 +1451,10 @@ export const schedules = sqliteTable(
      */
     intervalMs: integer('interval_ms'),
     agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** NULL preserves legacy bound-task Harness inheritance. */
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    /** NULL inherits a bound task; empty string explicitly selects the automation host. */
+    modelAgentDeviceId: text('model_agent_device_id'),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -879,14 +1462,19 @@ export const schedules = sqliteTable(
      * runner fire 时透传给 setSessionProvider；与 sessions.provider_id 同语义。
      */
     providerId: text('provider_id'),
+    /**
+     * 每次新建任务时 Agent 在哪台电脑运行(同账号另一台电脑或分享来的供应商)。
+     * NULL = 本机。provider_id 属于那台电脑的已授权目录。绑定的任务仍存在时不使用:
+     * 运行位置跟随被绑定的任务。与 sessions.agent_device_id 同语义。
+     */
+    agentDeviceId: text('agent_device_id'),
     effort: text('effort', {
       enum: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     }),
     /**
-     * Codex Fast 模式开关。true → runner fire 时透传给 codex agent，落到
-     * app-server ServiceTier.Fast。仅 Codex 有意义，Claude 忽略。默认 false。
+     * 速度档位沿用整数列：0 标准、1 快速、2 超快。超快仅用于获授权的 Codex 模型。
      */
-    fastMode: integer('fast_mode', { mode: 'boolean' }).notNull().default(false),
+    fastMode: speedSetting('fast_mode').notNull().default(false),
     workingDir: text('working_dir'),
     workspaceKind: text('workspace_kind', { enum: ['project', 'dialogue'] })
       .notNull()
@@ -1313,6 +1901,26 @@ export const dailyModelUsage = sqliteTable(
   }),
 );
 
+/**
+ * 每日按任务 token 用量 (daily_session_usage) — 支撑用量历史「最耗 token 的任务」按所选
+ * 时间范围统计。与 daily_model_usage 同一处写入 (每个 turn done 后, 三个 harness 共用),
+ * 只记 token 合计。历史数据不 backfill: 上线后从 0 开始积累。
+ */
+export const dailySessionUsage = sqliteTable(
+  'daily_session_usage',
+  {
+    /** 本地时区 YYYY-MM-DD 字符串 (localDayKey)。 */
+    day: text('day').notNull(),
+    sessionId: text('session_id').notNull(),
+    tokens: integer('tokens').notNull().default(0),
+    /** 最后一次更新的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.day, t.sessionId] }),
+  }),
+);
+
 /** Skill 使用分析的原始 transcript 扫描缓存。 */
 export const skillUsageSources = sqliteTable(
   'skill_usage_sources',
@@ -1384,6 +1992,20 @@ export const skillUsageExposures = sqliteTable(
       t.analyzerVersion,
       t.skillName,
       t.skillDocumentHash,
+    ),
+    bySkillRecent: index('idx_skill_usage_exposures_skill_recent').on(
+      t.skillName,
+      t.analyzerVersion,
+      t.seenAt,
+    ),
+    bySkillRecentAnyVersion: index('idx_skill_usage_exposures_skill_recent_any_version').on(
+      t.skillName,
+      t.seenAt,
+    ),
+    byAnalyzerRecentSource: index('idx_skill_usage_exposures_analyzer_recent_source').on(
+      t.analyzerVersion,
+      t.seenAt,
+      t.rawFilePath,
     ),
     bySession: index('idx_skill_usage_exposures_session').on(t.sessionId),
     byRawFile: index('idx_skill_usage_exposures_raw_file').on(t.rawFilePath),
@@ -1510,6 +2132,9 @@ export const rightSidebarTabs = sqliteTable(
     uniqSubagents: uniqueIndex('right_sidebar_tabs_subagents_singleton_idx')
       .on(t.sessionId)
       .where(sql`${t.kind} = 'subagents'`),
+    uniqBotArtifacts: uniqueIndex('right_sidebar_tabs_bot_artifacts_singleton_idx')
+      .on(t.sessionId)
+      .where(sql`${t.kind} = 'bot-artifacts'`),
   }),
 );
 
@@ -1719,6 +2344,8 @@ export const hookGroupMessages = sqliteTable(
     text: text('text').notNull(),
     /** JSON string[];无附件为空。 */
     fileNames: text('file_names'),
+    /** JSON image locators received with this exact lane/message; no image bytes. */
+    imageRefs: text('image_refs'),
     /** IM 平台侧发送时刻(unix ms)。 */
     sentAt: integer('sent_at').notNull(),
     createdAt: integer('created_at').notNull(),
@@ -1740,6 +2367,7 @@ export const hookGroupMessages = sqliteTable(
 export const hookGroupMessageStats = sqliteTable('hook_group_message_stats', {
   provider: text('provider').primaryKey(),
   rowCount: integer('row_count').notNull(),
+  /** UTF-8 bytes of text + image_refs; retain the existing column/API name. */
   textBytes: integer('text_bytes').notNull(),
 });
 
@@ -1761,3 +2389,50 @@ export const hookGroupContextCursors = sqliteTable(
     byUpdatedAt: index('hook_group_context_cursors_updated_at_idx').on(t.updatedAt),
   }),
 );
+
+/** Finder-style task label directory; scoped by the profile database. */
+export const taskTags = sqliteTable(
+  'task_tags',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    nameCustomized: integer('name_customized', { mode: 'boolean' }).notNull().default(false),
+    color: text('color').notNull(),
+    favoriteOrder: integer('favorite_order'),
+    sortOrder: integer('sort_order'),
+    revision: integer('revision').notNull().default(1),
+  },
+  (t) => ({ nameUnique: uniqueIndex('task_tags_name_idx').on(t.name) }),
+);
+
+export const sessionTaskTags = sqliteTable(
+  'session_task_tags',
+  {
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
+    tagId: text('tag_id')
+      .notNull()
+      .references(() => taskTags.id, { onDelete: 'cascade' }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sessionId, t.tagId] }),
+    byTag: index('session_task_tags_tag_idx').on(t.tagId),
+  }),
+);
+
+/** Plugin attribution/idempotency receipts. Survive Session deletion as tombstones. */
+export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
+  id: text('id').primaryKey(),
+  pluginId: text('plugin_id').notNull(),
+  operation: text('operation', { enum: ['create', 'send', 'target'] }).notNull(),
+  targetId: text('target_id').notNull(),
+  requestKey: text('request_key').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  payload: text('payload').notNull(),
+  revision: integer('revision').notNull().default(0),
+  createdAt: integer('created_at').notNull(),
+}, table => [
+  uniqueIndex('plugin_task_request_key').on(table.pluginId, table.operation, table.targetId, table.requestKey),
+  index('plugin_task_target').on(table.targetId, table.pluginId),
+]);

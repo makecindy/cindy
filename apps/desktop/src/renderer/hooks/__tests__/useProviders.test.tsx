@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   } | null) => void),
   refreshLocalCatalogSnapshot: vi.fn(async () => true),
   getCachedProvidersSnapshot: vi.fn(),
+  hasProvidersSnapshotLoadFailed: vi.fn(() => false),
   subscribeProvidersSnapshot: vi.fn(),
 }));
 
@@ -31,6 +32,7 @@ vi.mock('@/lib/localCatalogSnapshot', () => ({
 
 vi.mock('@/lib/providersSnapshotStore', () => ({
   getCachedProvidersSnapshot: mocks.getCachedProvidersSnapshot,
+  hasProvidersSnapshotLoadFailed: mocks.hasProvidersSnapshotLoadFailed,
   subscribeProvidersSnapshot: mocks.subscribeProvidersSnapshot,
 }));
 
@@ -39,6 +41,7 @@ import { useProviders } from '../useProviders';
 describe('useProviders', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.hasProvidersSnapshotLoadFailed.mockReturnValue(false);
     mocks.authState.dataOwnerId = 'owner-a';
     mocks.cachedOwnerId = 'owner-a';
     mocks.cachedOwnerGeneration = 1;
@@ -65,10 +68,12 @@ describe('useProviders', () => {
     );
   });
 
-  it('refetches the atomic providers and capabilities snapshot', () => {
+  it('awaits the atomic providers and capabilities snapshot refresh', async () => {
     const { result } = renderHook(() => useProviders());
 
-    act(() => result.current.refetch());
+    await act(async () => {
+      expect(await result.current.refetch()).toBe(true);
+    });
 
     expect(mocks.refreshLocalCatalogSnapshot).toHaveBeenCalledOnce();
   });
@@ -107,5 +112,27 @@ describe('useProviders', () => {
     expect(result.current.providerOrder).toEqual(['owner-b-provider']);
     expect(result.current.ownerGeneration).toBe(2);
     expect(result.current.loading).toBe(false);
+  });
+
+  it('updates failure and retry status even when no snapshot has ever loaded', () => {
+    mocks.getCachedProvidersSnapshot.mockReturnValue(null);
+    const { result } = renderHook(() => useProviders());
+    expect(result.current.loading).toBe(true);
+    expect(result.current.loadFailed).toBe(false);
+
+    act(() => {
+      mocks.hasProvidersSnapshotLoadFailed.mockReturnValue(true);
+      mocks.latestListener?.(null);
+    });
+    expect(result.current.loadFailed).toBe(true);
+    // Keep existing readiness guards closed until a usable snapshot arrives.
+    expect(result.current.loading).toBe(true);
+
+    act(() => {
+      mocks.hasProvidersSnapshotLoadFailed.mockReturnValue(false);
+      mocks.latestListener?.(null);
+    });
+    expect(result.current.loadFailed).toBe(false);
+    expect(result.current.loading).toBe(true);
   });
 });

@@ -1,15 +1,21 @@
 /**
  * Full access 确认弹窗的多语文案。
  *
- * 单独成模块是为了**能被术语门禁扫到**:这是不走 i18next 的手写多语 catalog,
- * check-i18n-glossary.mjs 只读 locale JSON 扫不到它。而它恰恰是全 App 风险最高的一处
- * 提示——用户在这里决定是否关掉工作区沙箱、跳过逐条批准,措辞含糊的代价很实在。
+ * 正本在 i18n locale JSON(`interaction.permission.fullAccessConfirm.*`),与权限选择器
+ * `interaction.permission.mode.bypass` 同名(zh「完全访问」/ ja「フルアクセス」/ ko「전체 접근」),
+ * 因此根门禁 check-i18n-glossary.mjs 可直接扫到。本模块只把五语 JSON 投影成按语言取值的
+ * 对象,保留原导出形态:确认弹窗在 Alert 调用时按「手动语言优先、否则系统语言」取值,
+ * 不依赖 i18next 当前语言;且本模块不 import react-native,测试可直接 import。
  *
- * 之所以不能留在 fullAccessConfirmation.ts 里被测试直接 import:那个文件 import 了
- * react-native,vitest 解析不了 RN 的 Flow 源码。
- *
- * 覆盖它的是 src/__tests__/shadowCatalogGlossary.test.ts。
+ * 影子 catalog 门禁 src/__tests__/shadowCatalogGlossary.test.ts 仍覆盖这份投影。
  */
+import { BRAND_NAME } from "@cindy/maker-shared/branding";
+
+import enInteraction from "@/i18n/locales/en/interaction.json";
+import jaInteraction from "@/i18n/locales/ja/interaction.json";
+import koInteraction from "@/i18n/locales/ko/interaction.json";
+import zhCNInteraction from "@/i18n/locales/zh-CN/interaction.json";
+import zhTWInteraction from "@/i18n/locales/zh-TW/interaction.json";
 
 export type FullAccessConfirmationCopy = Readonly<{
   title: string;
@@ -18,43 +24,27 @@ export type FullAccessConfirmationCopy = Readonly<{
   cancel: string;
 }>;
 
+type FullAccessConfirmationSource = { permission: { fullAccessConfirm: FullAccessConfirmationCopy } };
+
+/** locale JSON 里的 {{appName}} 由 i18next defaultVariables 注入;这里不经 i18next,手动替换。 */
+function project(source: FullAccessConfirmationSource): FullAccessConfirmationCopy {
+  const copy = source.permission.fullAccessConfirm;
+  const fill = (value: string) => value.replace(/\{\{appName\}\}/g, BRAND_NAME);
+  return {
+    title: fill(copy.title),
+    description: fill(copy.description),
+    confirm: fill(copy.confirm),
+    cancel: fill(copy.cancel),
+  };
+}
+
 export const FULL_ACCESS_CONFIRMATION_COPY: Record<
   "en" | "ja" | "ko" | "zh-CN" | "zh-TW",
   FullAccessConfirmationCopy
 > = {
-  en: {
-    title: "Enable Full access?",
-    description:
-      "Full access disables the workspace sandbox and skips routine approvals. Cindy can modify files outside the workspace and run network commands without asking; built-in high-risk operations will still require confirmation.",
-    confirm: "Enable Full access",
-    cancel: "Keep current permissions",
-  },
-  ja: {
-    title: "Full access を有効にしますか？",
-    description:
-      "Full access はワークスペースのサンドボックスを無効にし、通常の承認を省略します。Cindy はワークスペース外のファイル変更やネットワークコマンドを確認なしで実行できます。組み込みの高リスク操作では引き続き確認が必要です。",
-    confirm: "Full access を有効にする",
-    cancel: "現在の権限を維持",
-  },
-  ko: {
-    title: "Full access를 활성화할까요?",
-    description:
-      "Full access는 작업 공간 샌드박스를 비활성화하고 일반 승인을 건너뜁니다. Cindy가 작업 공간 밖의 파일을 수정하고 네트워크 명령을 묻지 않고 실행할 수 있습니다. 기본 제공 고위험 작업은 계속 확인을 요청합니다.",
-    confirm: "Full access 활성화",
-    cancel: "현재 권한 유지",
-  },
-  "zh-CN": {
-    title: "开启 Full access？",
-    description:
-      "Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。",
-    confirm: "开启 Full access",
-    cancel: "保留当前权限",
-  },
-  "zh-TW": {
-    title: "開啟 Full access？",
-    description:
-      "Full access 會關閉工作區沙箱並跳過常規審批。Cindy 可以修改工作區外的檔案、執行聯網命令且不再詢問；內建高風險操作仍會要求確認。",
-    confirm: "開啟 Full access",
-    cancel: "保留當前權限",
-  },
+  en: project(enInteraction),
+  ja: project(jaInteraction),
+  ko: project(koInteraction),
+  "zh-CN": project(zhCNInteraction),
+  "zh-TW": project(zhTWInteraction),
 };

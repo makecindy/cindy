@@ -12,6 +12,8 @@ interface TestSession {
 
 const mocks = vi.hoisted(() => ({
   root: '',
+  ownerScopeKey: 'owner-1',
+  boundaryPending: false,
   session: {
     mode: 'signed-out',
     dataOwnerId: null,
@@ -36,6 +38,8 @@ vi.mock('electron', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ ...mocks.session }),
+  activeOwnerScopeKey: () => mocks.ownerScopeKey,
+  isAppSessionBoundaryPending: () => mocks.boundaryPending,
   dataOwnerStorageKey: (ownerId: string) => `key-${ownerId}`,
   ownerScopedUserDataPath: (...parts: string[]) => {
     const owner = mocks.session.dataOwnerId;
@@ -53,7 +57,7 @@ vi.mock('../../ownerNamespaceMigration.js', () => ({
   hasLegacyOwnerNamespaceClaim: () => true,
 }));
 
-import { __testing, claimLegacyImPath, ownerScopedImSecrets } from '../ownerScopedStorage';
+import { __testing, assertOwnerScopeSettledForWrite, claimLegacyImPath, ownerScopedImSecrets } from '../ownerScopedStorage';
 
 function setSession(mode: TestSession['mode'], ownerId: string | null): void {
   mocks.session = { mode, dataOwnerId: ownerId, generation: mocks.session.generation + 1 };
@@ -69,11 +73,27 @@ function writeLegacySecret(name: string, value: string): string {
 describe('IM owner-scoped storage', () => {
   beforeEach(() => {
     mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-im-owner-scope-'));
+    mocks.ownerScopeKey = 'owner-1';
+    mocks.boundaryPending = false;
     setSession('signed-out', null);
   });
 
   afterEach(() => {
     fs.rmSync(mocks.root, { recursive: true, force: true });
+  });
+
+  it('assertOwnerScopeSettledForWrite fail-closes owner switches and in-flight boundaries', () => {
+    // 写设置前的账号边界校验(PR #5155 review P1): scope 未变且无 boundary 在途才
+    // 允许写 owner 域存储 —— 登出/切号过渡期间写入会落进登出命名空间或下一个
+    // 账号; 不满足即抛错让保存失败重试。
+    expect(() => assertOwnerScopeSettledForWrite(mocks.ownerScopeKey)).not.toThrow();
+
+    mocks.boundaryPending = true;
+    expect(() => assertOwnerScopeSettledForWrite(mocks.ownerScopeKey)).toThrow(/retry the save/);
+
+    mocks.boundaryPending = false;
+    mocks.ownerScopeKey = 'owner-2';
+    expect(() => assertOwnerScopeSettledForWrite('owner-1')).toThrow(/retry the save/);
   });
 
   it('isolates credentials by data owner and never lets local claim cloud legacy data', () => {

@@ -6,12 +6,15 @@ import {
   type DtcgColorObject,
   type DtcgFile,
 } from './dtcg.ts';
+import { parseAliasTarget } from './classify.ts';
+import { COMPONENT_ROLES } from './component-roles.ts';
 import { SEMANTIC_ROLES } from './semantic-roles.ts';
 import type { SnapshotColor } from './snapshot.ts';
 
 export interface BuiltLayers {
   reference: DtcgFile;
   semantic: DtcgFile;
+  component: DtcgFile;
 }
 
 function refTokenName(value: string, used: Map<string, string>): string {
@@ -40,7 +43,7 @@ export function buildLayers(byId: Map<string, SnapshotColor>): BuiltLayers {
   const used = new Map<string, string>();
   const referenceTokens: DtcgFile = {
     $description:
-      'DS-3 reference 层：仅收录第一批 semantic 角色实际引用的冻结色值。',
+      'DS-3/DS-4 reference 层：semantic 与 component 角色实际引用的冻结色值。',
   };
   const semantic: DtcgFile = {
     $description:
@@ -87,7 +90,58 @@ export function buildLayers(byId: Map<string, SnapshotColor>): BuiltLayers {
     };
   }
 
-  return { reference: referenceTokens, semantic };
+  const component: DtcgFile = {
+    $description:
+      'DS-4 component 层：只收录能落回 semantic 的 Button 角色。hover / pressed 是 color-mix 运行期派生值，按治理合同 §3.4 只在 classification 登记、不建模。',
+  };
+
+  const semanticById = new Map(SEMANTIC_ROLES.map((role) => [role.id, role]));
+
+  function componentModeAlias(value: string, mode: 'light' | 'dark'): `{${string}}` {
+    const target = parseAliasTarget(value);
+    if (target) {
+      const semanticRole = semanticById.get(target);
+      if (!semanticRole) {
+        throw new Error(`component 角色 alias ${value} 不是 semantic 角色`);
+      }
+      return aliasValue([semanticRole.group, semanticRole.id, mode]);
+    }
+    const literal = toDtcgColorObject(value);
+    const name = refTokenName(value, used);
+    if (!referenceTokens[name]) {
+      referenceTokens[name] = {
+        $type: 'color',
+        $value: literal,
+      };
+    }
+    return aliasValue([name]);
+  }
+
+  for (const role of COMPONENT_ROLES) {
+    const color = byId.get(role.id);
+    if (!color) {
+      throw new Error(`快照缺少 component 角色 ${role.id}`);
+    }
+    if (color.light == null || color.dark == null) {
+      throw new Error(`component 角色 ${role.id} 缺少 light/dark 双模式值`);
+    }
+    if (!component[role.group]) {
+      component[role.group] = {};
+    }
+    const group = component[role.group] as DtcgFile;
+    group[role.id] = {
+      light: {
+        $type: 'color',
+        $value: componentModeAlias(color.light, 'light'),
+      },
+      dark: {
+        $type: 'color',
+        $value: componentModeAlias(color.dark, 'dark'),
+      },
+    };
+  }
+
+  return { reference: referenceTokens, semantic, component };
 }
 
 export function resolvedSemanticValues(

@@ -1,20 +1,40 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: en } = await import('@/i18n/locales/en/common.json');
+  const voice: Record<string, unknown> = en.bots.voiceMode;
+  return {
+    useTranslation: () => ({ t: (key: string) => {
+      const value = key.startsWith('bots.voiceMode.') ? voice[key.slice('bots.voiceMode.'.length)] : null;
+      return typeof value === 'string' ? value : key;
+    } }),
+  };
+});
 
-vi.mock('@/components/ui/tooltip', () => ({
-  Tooltip: {
-    Root: ({ children }: { children: ReactNode }) => <>{children}</>,
-    Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
-    Content: ({ children }: { children: ReactNode }) => <>{children}</>,
-  },
-}));
+vi.mock('@/components/ui/tooltip', async (importOriginal) => {
+  const { createContext, useContext } = await import('react');
+  // 受控 Root 的 open 传给 Content：open=true 渲染成 role=tooltip，false 不渲染；非受控保持直出。
+  const OpenContext = createContext<boolean | undefined>(undefined);
+  return {
+    // Keep Tip's real ref/event forwarding for the composed menu trigger.
+    ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
+    Tooltip: {
+      Root: ({ children, open }: { children: ReactNode; open?: boolean }) => (
+        <OpenContext.Provider value={open}>{children}</OpenContext.Provider>
+      ),
+      Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+      Content: function Content({ children }: { children: ReactNode }) {
+        const open = useContext(OpenContext);
+        if (open === undefined) return <>{children}</>;
+        return open ? <div role="tooltip">{children}</div> : null;
+      },
+    },
+  };
+});
 
 vi.mock('@/hooks/useRelativeTime', () => ({
   useRelativeTime: () => 'just now',
@@ -26,6 +46,60 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
+
+describe('companion message read-aloud', () => {
+  const identity = { sessionId: 'companion-task', messageId: 'reply' };
+  const capability = (patch: Partial<MessageReadAloud> = {}): MessageReadAloud => ({
+    sessionId: identity.sessionId, available: true, disabled: false,
+    messageId: null, phase: 'idle', canRead: () => true, toggle: vi.fn(), ...patch,
+  });
+  const bar = (value: MessageReadAloud | null, companion = true, eligible = true, compact = false) => (
+    <MessageReadAloudContext.Provider value={value}>
+      <MessageActionBar copyText="Saved reply" align="left" hovered={false}
+        simplifiedBotConversation={companion}
+        compact={compact}
+        readAloudMessage={eligible ? identity : undefined} />
+    </MessageReadAloudContext.Provider>
+  );
+
+  it.each([false, true])('shows an accessible action only for eligible configured companion replies (compact=%s)', (compact) => {
+    const value = capability();
+    const { rerender } = render(bar(value, true, true, compact));
+    fireEvent.click(screen.getByRole('button', { name: 'Read aloud' }));
+    expect(value.toggle).toHaveBeenCalledWith('reply', 'Saved reply');
+    for (const unavailable of [null, capability({ available: false }), capability({ sessionId: 'other' }), capability({ canRead: () => false })]) {
+      rerender(bar(unavailable, true, true, compact));
+      expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+    }
+    rerender(bar(value, false, true, compact));
+    expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+    rerender(bar(value, true, false, compact));
+    expect(screen.queryByRole('button', { name: 'Read aloud' })).toBeNull();
+  });
+
+  it.each([
+    { phase: 'preparing', compact: false }, { phase: 'playing', compact: false },
+    { phase: 'preparing', compact: true }, { phase: 'playing', compact: true },
+  ] as const)('keeps the $phase action cancellable (compact=$compact)', ({ phase, compact }) => {
+    const value = capability({ messageId: 'reply', phase });
+    render(bar(value, true, true, compact));
+    const stop = screen.getByRole('button', { name: 'Stop reading' });
+    expect(stop.getAttribute('aria-pressed')).toBe('true');
+    expect(stop.getAttribute('aria-busy')).toBe(String(phase === 'preparing'));
+    fireEvent.click(stop);
+    expect(value.toggle).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('disables concurrent message playback during continuous voice mode (compact=%s)', (compact) => {
+    const value = capability({ disabled: true });
+    render(bar(value, true, true, compact));
+    const button = screen.getByRole('button', { name: 'Read aloud' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(button);
+    expect(value.toggle).not.toHaveBeenCalled();
+  });
+});
 
 describe('MessageActionBar', () => {
   const writeText = vi.fn(async () => undefined);
@@ -125,6 +199,76 @@ describe('MessageActionBar', () => {
     await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
   });
 
+  it.each(['left', 'right'] as const)('preserves edit and rewind callbacks with %s alignment', (align) => {
+    const onEdit = vi.fn();
+    const onRewind = vi.fn();
+    render(<MessageActionBar copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.rewind' }));
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
+    render(<MessageActionBar copyText="body" align={align} hovered />);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
+  });
+
+  it('keeps teammate actions visible, exposes Reply, and hides fork and usage', async () => {
+    const onFork = vi.fn(async () => undefined);
+    const onAddToChat = vi.fn();
+    const onDelete = vi.fn(async () => undefined);
+    const deepLink = 'cindy://session/session-a?message=message-a';
+
+    const { container } = render(
+      <MessageActionBar
+        copyText="message body"
+        copyLinkText={deepLink}
+        align="left"
+        hovered={false}
+        simplifiedBotConversation
+        onFork={onFork}
+        onAddToChat={onAddToChat}
+        onDelete={onDelete}
+        turnMoney={{ amount: 1.5, currency: 'CNY', approximate: false, kind: 'actual-cost' }}
+        turnUsageDetails={{
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 15,
+          cacheHitRate: 0,
+        }}
+      />,
+    );
+
+    const actionBar = container.firstElementChild;
+    expect(actionBar?.classList.contains('opacity-100')).toBe(true);
+    expect(actionBar?.classList.contains('pointer-events-none')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.fork' })).toBeNull();
+    expect(screen.queryByText('¥1.50')).toBeNull();
+    expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
+
+    const reply = screen.getByRole('button', { name: 'chat.messageActionBar.reply' });
+    expect(reply.querySelector('.lucide-chat-reply')).toBeTruthy();
+    fireEvent.click(reply);
+    expect(onAddToChat).toHaveBeenCalledTimes(1);
+
+    const trigger = screen.getByRole('button', {
+      name: 'chat.messageActionBar.moreActions',
+    });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole('menuitem', { name: 'chat.quote.addToChat' })).toBeNull();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.copyLink',
+    })).toBeTruthy();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.delete',
+    })).toBeTruthy();
+  });
+
   it('does not restore pointer focus to the ellipsis trigger after close', async () => {
     render(
       <MessageActionBar
@@ -194,6 +338,53 @@ describe('MessageActionBar', () => {
     });
   });
 
+  it('keeps the fork tooltip and bar visible after hover leaves once the fork is confirmed', async () => {
+    let confirmFork!: () => void;
+    let resolveFork!: () => void;
+    const onFork = vi.fn(async (options?: { onConfirmed?: () => void }) => {
+      await new Promise<void>((resolve) => {
+        confirmFork = resolve;
+      });
+      options?.onConfirmed?.();
+      await new Promise<void>((resolve) => {
+        resolveFork = resolve;
+      });
+    });
+    const bar = (hovered: boolean) => (
+      <MessageActionBar copyText="message body" align="left" hovered={hovered} onFork={onFork} />
+    );
+
+    const { container, rerender } = render(bar(true));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.fork' }));
+    // 确认框打开期间不强制显示提示，否则会压在确认框背后。
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    await act(async () => {
+      confirmFork();
+    });
+    expect(screen.getByRole('tooltip').textContent).toBe('chat.messageActionBar.fork');
+
+    // 鼠标移出整条消息并越过淡出防抖：转圈期间提示与操作栏都不应消失。
+    vi.useFakeTimers();
+    try {
+      rerender(bar(false));
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(screen.getByRole('tooltip')).toBeTruthy();
+      expect((container.firstElementChild as HTMLElement).classList.contains('opacity-100')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await act(async () => {
+      resolveFork();
+    });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect((container.firstElementChild as HTMLElement).classList.contains('opacity-0')).toBe(true);
+  });
+
   it('restores focus to the ellipsis trigger for keyboard users', async () => {
     render(
       <MessageActionBar
@@ -207,7 +398,7 @@ describe('MessageActionBar', () => {
     const trigger = screen.getByRole('button', {
       name: 'chat.messageActionBar.moreActions',
     });
-    trigger.focus();
+    act(() => trigger.focus());
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     const item = await screen.findByRole('menuitem', {
       name: 'chat.quote.addToChat',

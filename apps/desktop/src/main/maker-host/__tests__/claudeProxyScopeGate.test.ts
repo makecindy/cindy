@@ -1,3 +1,5 @@
+import { buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
+import { setCustomProviders } from '../active-catalog';
 /**
  * claudeProxyScopeGate.test.ts
  * ---------------------------------------------------------------------------
@@ -16,6 +18,8 @@
  *  bridge handler 注册,scope 门单测见 providerRoute.test.ts。)
  */
 
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import { createAnthropicCompatProxy, type ProxyHandle } from '@cindy/anthropic-compat-proxy';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../appCapabilities.js', () => ({
@@ -56,7 +60,7 @@ import {
   readClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
-import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
+import { setOAuthTokenReader, setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
   authenticatePiProxySession,
   registerPiProxySession,
@@ -120,9 +124,9 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', () => {
+  it('claude-haiku 分类器请求(oauth-spawn)→ 换网关 key,不去 api.x.ai', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -132,21 +136,21 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('claude-haiku 分类器请求(gateway-spawn 带 x-api-key)→ passthrough 走默认网关', () => {
+  it('claude-haiku 分类器请求(gateway-spawn 带 x-api-key)→ passthrough 走默认网关', async () => {
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }),
     );
     expect(decision).toBeNull();
   });
 
-  it('claude-haiku 分类器请求(provider-oauth spawn 带占位 x-api-key)→ 换网关 key,不 passthrough (#831)', () => {
+  it('claude-haiku 分类器请求(provider-oauth spawn 带占位 x-api-key)→ 换网关 key,不 passthrough (#831)', async () => {
     // codex→cc 切换后的 openai/xai 来源会话:cc 子进程 env 里是占位 key,分类器请求带着它
     // 落到 ② 段。占位 key 不是可用凭证,按「无凭证」处理换网关 key;此前被误判成
     // gateway-spawn passthrough → 网关确定性 401 → 首次权限请求即 auto→ask 降级。
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
     );
@@ -155,39 +159,75 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     });
   });
 
-  it('占位 x-api-key 且无网关 key → 维持 passthrough(与改动前行为一致,上游 401)', () => {
+  it('占位 x-api-key 且无网关 key → 维持 passthrough(与改动前行为一致,上游 401)', async () => {
     gatewayKey = null;
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
     );
     expect(decision).toBeNull();
   });
 
-  it('claude-haiku 分类器请求(无网关 key 的 oauth-spawn)→ 直连 Anthropic 订阅', () => {
+  it('无任何 Cindy 凭证的 claude-* 请求本地拒绝,绝不带着订阅凭证转发到 Anthropic', async () => {
+    // 订阅会话由 CLI 直连、从不经 proxy;走到这里的只可能是 env 不对的请求。
     gatewayKey = null;
     const transform = createModelRoutingTransform();
-    const decision = transform(
+    const decision = await Promise.resolve(transform(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    ));
+    expect(decision).not.toHaveProperty('upstreamOverride');
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'anthropic_subscription_cli_only' },
+    });
+  });
+
+  it('显式 Claude 订阅会话的请求到了 proxy 也本地拒绝(订阅只由 CLI 直连)', async () => {
+    setSessionProvider('sess-grok', 'anthropic');
+    const transform = createModelRoutingTransform();
+    const decision = await Promise.resolve(transform(
+      { model: 'claude-opus-4-8' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    ));
+    expect(decision).not.toHaveProperty('upstreamOverride');
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'anthropic_subscription_cli_only' },
+    });
+  });
+
+  it('网关 key 在时的 claude-* 默认路由不受影响:照常换网关 key', async () => {
+    const transform = createModelRoutingTransform();
+    const decision = await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
-    expect(decision).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
   });
 
-  it('显式选了供应商的会话,② 段回落不写入计费路由观察表(registry 只记默认路由会话)', () => {
+  it('显式选了供应商的会话,② 段回落不写入计费路由观察表(registry 只记默认路由会话)', async () => {
     const transform = createModelRoutingTransform();
-    transform(
+    await transform(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-grok')).toBeNull();
   });
 
-  it('未选供应商的会话行为不变:② 段照常记录默认路由(no-break)', () => {
+  it('未选供应商的会话行为不变:② 段照常记录默认路由(no-break)', async () => {
     clearSessionProvider('sess-grok');
     const transform = createModelRoutingTransform();
-    transform(
+    await transform(
       { model: 'claude-opus-4-8[1m]' },
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
@@ -425,6 +465,8 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
   });
 
   it('finalize 之后、localHandler 调用前才 pending → 503,不读旧 owner OAuth', async () => {
+    // Resolve normally so this exercises dispatch revalidation, not lookup failure.
+    setClaudeProxySessionIdResolver(() => null);
     gatewayKey = null;
     let pending = false;
     setClaudeProxyOwnerBoundaryPendingChecker(() => pending);
@@ -446,6 +488,7 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
   });
 
   it('finalize 之后 owner scope 变了但 pending 仍 false → 503,不读旧 owner OAuth', async () => {
+    setClaudeProxySessionIdResolver(() => null);
     gatewayKey = null;
     let scopeKey = 'cloud:owner-a:1';
     setClaudeProxyOwnerBoundaryPendingChecker(() => false);
@@ -467,16 +510,35 @@ describe('cc routingTransform — owner boundary 不得把占位 key fail-open �
     });
   });
 
-  it('resolver 抛错但有网关 key 时分类器仍换 key(#831),不 passthrough 占位', () => {
+  it('resolver 抛错时即使有网关 key 也本地拒绝,不猜测请求归属 (#3631)', async () => {
     const decision = createModelRoutingTransform()(
       { model: 'claude-haiku-4-5-20251001' },
       ctxWith({ ...SESSION_HEADER, 'x-api-key': PLACEHOLDER }),
     );
-    expect(decision).toEqual({
-      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    const { writeHead, end } = await invokeLocalHandler(await decision);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'routing_temporarily_unavailable' },
     });
   });
 });
+
+/** Claude 订阅已不给 Pi:钉在 anthropic 上的 Pi 请求必须本地拒绝,不读 token、不出网。 */
+async function expectLocalPiRefusal(decision: unknown, tokenReader: ReturnType<typeof vi.fn>): Promise<void> {
+  const resolved = await Promise.resolve(decision) as {
+    localHandler?: (args: { res: unknown }) => Promise<void>;
+    upstreamOverride?: string;
+    headerOverride?: Record<string, string>;
+  } | null;
+  expect(resolved?.localHandler).toEqual(expect.any(Function));
+  expect(resolved?.upstreamOverride).toBeUndefined();
+  expect(JSON.stringify(resolved?.headerOverride ?? {})).not.toContain('pi-claude-token');
+  let status = 0;
+  await resolved?.localHandler?.({ res: { writeHead: (code: number) => { status = code; }, end: () => {} } });
+  expect(status).toBeGreaterThanOrEqual(400);
+  expect(tokenReader).not.toHaveBeenCalledWith('anthropic', 'pi', expect.anything());
+  expect(tokenReader).not.toHaveBeenCalledWith('anthropic', 'pi');
+}
 
 describe('pi routingTransform — xdt session header selects the Pi provider route', () => {
   afterEach(() => {
@@ -496,12 +558,54 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     expect(authenticatePiProxySession('sess-pi', 'stable-secret')).toBe(false);
   });
 
-  it('routes an Anthropic Pi request with host-managed OAuth and strips Pi placeholder auth', async () => {
+  it('never forwards a Pi request pinned to the Claude subscription upstream', async () => {
+    const placeholder = 'sk-ant-oat01';
+    const received: string[] = [];
+    const upstream = createServer(async (req, res) => {
+      received.push(req.url ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+    let proxy: ProxyHandle | undefined;
+    const tokenReader = vi.fn(() => 'pi-claude-token');
+    try {
+      await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+      const address = upstream.address();
+      if (!address || typeof address === 'string') throw new Error('Missing test upstream address');
+      setSessionProvider('sess-pi', 'anthropic');
+      setProviderOAuthTokenReader(tokenReader);
+      registerPiProxySession('sess-pi', 'session-secret', () => 'anthropic');
+      proxy = await createAnthropicCompatProxy({
+        upstream: `http://127.0.0.1:${address.port}`,
+        routingTransform: createModelRoutingTransform(),
+      });
+      const response = await fetch(`${proxy.url}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${placeholder}`,
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'session-secret',
+          'x-cindy-pi-provider-id': 'anthropic',
+        },
+        body: JSON.stringify({ model: 'claude-opus-5', messages: [{ role: 'user', content: 'ping' }], max_tokens: 16 }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      await response.text();
+      expect(received).toEqual([]);
+      expect(tokenReader).not.toHaveBeenCalled();
+    } finally {
+      await proxy?.dispose();
+      await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('refuses an Anthropic Pi request locally instead of injecting host OAuth', async () => {
     setClaudeProxyGatewayKeyReader(() => 'sk-gw');
     setSessionProvider('sess-pi', 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('pi-claude-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('pi-claude-token'));
+    setProviderOAuthTokenReader(tokenReader);
     registerPiProxySession('sess-pi', 'session-secret', () => 'anthropic');
     const decision = createModelRoutingTransform()(
       { model: 'claude-opus-5' },
@@ -512,21 +616,33 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
         'x-api-key': 'cindy-pi-provider-auth-placeholder',
       }),
     );
-    await expect(Promise.resolve(decision)).resolves.toEqual({
-      upstreamOverride: 'https://api.anthropic.com',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-        authorization: 'Bearer pi-claude-token',
-      },
-      headerDelete: [
-        'x-api-key',
-        'x-cindy-pi-session-id',
-        'x-cindy-pi-session-token',
-        'x-cindy-pi-provider-id',
-      ],
-    });
+    await expectLocalPiRefusal(decision, tokenReader);
   });
+
+  it.each([
+    ['sk-gw'],
+    [null],
+  ])(
+    'refuses an Anthropic-pinned Pi request with no explicit session source instead of falling back (gateway key %s)',
+    async (gatewayKey) => {
+      // model-only set_model 与老会话 hydrate 都会让 session store 为空。掉回 ② 段默认路由
+      // = 有网关 key 时静默改走网关计费,无网关 key 时把占位 token 直发上游 —— 都不允许。
+      setClaudeProxyGatewayKeyReader(() => gatewayKey);
+      const tokenReader = vi.fn(() => Promise.resolve('pi-claude-token'));
+      setProviderOAuthTokenReader(tokenReader);
+      registerPiProxySession('sess-pi', 'session-secret', () => 'anthropic');
+      const decision = createModelRoutingTransform()(
+        { model: 'claude-opus-5' },
+        ctxWith({
+          'x-cindy-pi-session-id': 'sess-pi',
+          'x-cindy-pi-session-token': 'session-secret',
+          'x-cindy-pi-provider-id': 'anthropic',
+          authorization: 'Bearer sk-ant-oat01',
+        }),
+      );
+      await expectLocalPiRefusal(decision, tokenReader);
+    },
+  );
 
   it.each([
     ['/v1/messages', { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' }],
@@ -612,12 +728,11 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     });
   });
 
-  it('routes an Anthropic Subagent by its pinned provider instead of the OpenAI parent route', async () => {
+  it('refuses an Anthropic-pinned Subagent instead of using the OpenAI parent route', async () => {
     setClaudeProxyGatewayKeyReader(() => 'sk-gw');
     setSessionProvider('sess-pi', 'openai');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('pi-claude-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('pi-claude-token'));
+    setProviderOAuthTokenReader(tokenReader);
     registerPiProxySession(
       'sess-pi',
       'anthropic-subagent-secret',
@@ -633,31 +748,17 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
         'x-api-key': 'cindy-pi-provider-auth-placeholder',
       }),
     );
-
-    await expect(Promise.resolve(decision)).resolves.toEqual({
-      upstreamOverride: 'https://api.anthropic.com',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-        authorization: 'Bearer pi-claude-token',
-      },
-      headerDelete: [
-        'x-api-key',
-        'x-cindy-pi-session-id',
-        'x-cindy-pi-session-token',
-        'x-cindy-pi-provider-id',
-      ],
-    });
+    await expectLocalPiRefusal(decision, tokenReader);
   });
 
   it.each([
     ['openai', '/codex/responses'],
     ['xai', '/v1/responses'],
     ['xai', '/v1/chat/completions'],
-  ] as const)('routes native %s PI requests to a local raw forwarder at %s', (providerId, url) => {
+  ] as const)('routes native %s PI requests to a local raw forwarder at %s', async (providerId, url) => {
     setSessionProvider('sess-pi', providerId);
     registerPiProxySession('sess-pi', 'session-secret', () => providerId);
-    const decision = createModelRoutingTransform()(
+    const decision = await createModelRoutingTransform()(
       undefined,
       ctxWith({
           'x-cindy-pi-session-id': 'sess-pi',
@@ -679,7 +780,7 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
       { scope: 'subagent-route' },
     );
 
-    const allowed = createModelRoutingTransform()(
+    const allowed = await createModelRoutingTransform()(
       undefined,
       ctxWith({
         'x-cindy-pi-session-id': 'sess-pi',
@@ -711,10 +812,10 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
   it.each([
     ['openai', '/codex/responses'],
     ['xai', '/v1/responses'],
-  ] as const)('trusts the host-resolved implicit %s PI source when persistence is empty', (providerId, url) => {
+  ] as const)('trusts the host-resolved implicit %s PI source when persistence is empty', async (providerId, url) => {
     clearSessionProvider('sess-pi');
     registerPiProxySession('sess-pi', 'session-secret', () => providerId);
-    const decision = createModelRoutingTransform()(
+    const decision = await createModelRoutingTransform()(
       undefined,
       ctxWith({
         'x-cindy-pi-session-id': 'sess-pi',
@@ -827,13 +928,12 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     expect(response.body).toContain('pi_provider_mismatch');
   });
 
-  it('does not send an authenticated Anthropic PI request through the legacy prefix bridge', async () => {
+  it('does not send an Anthropic-pinned PI request through the legacy prefix bridge', async () => {
     setClaudeProxyGatewayKeyReader(() => 'sk-gw');
     setSessionProvider('sess-pi', 'anthropic');
     registerPiProxySession('sess-pi', 'session-secret', () => 'anthropic');
-    setProviderOAuthTokenReader((providerId, agent) =>
-      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('pi-claude-token') : null,
-    );
+    const tokenReader = vi.fn(() => Promise.resolve('pi-claude-token'));
+    setProviderOAuthTokenReader(tokenReader);
     const decision = createModelRoutingTransform()(
       { model: 'chatgpt/gpt-5.6-sol' },
       ctxWith({
@@ -843,10 +943,7 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
         'x-api-key': 'cindy-pi-provider-auth-placeholder',
       }),
     );
-
-    await expect(Promise.resolve(decision)).resolves.toMatchObject({
-      upstreamOverride: 'https://api.anthropic.com',
-    });
+    await expectLocalPiRefusal(decision, tokenReader);
   });
 
   it('rejects a forged session id before provider credentials can be selected', async () => {
@@ -906,4 +1003,57 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     });
     expect(decision?.headerOverride).not.toHaveProperty('x-cindy-pi-session-token');
   });
+});
+
+
+it.each([
+  ['openai-chat', '/chat/completions', '/api/v1', { messages: [{ role: 'user', content: 'fixture' }] }],
+  ['openai-responses', '/responses', '/api/v1', { input: 'fixture', store: false }],
+  ['anthropic-messages', '/v1/messages', '/api', { messages: [{ role: 'user', content: 'fixture' }], max_tokens: 8 }],
+] as const)('forwards OAuth Pi %s with its real supplier prefix and refreshed credentials', async (wireProtocol, requestPath, upstreamPrefix, input) => {
+  const id = 'openrouter-oauth-test';
+  const body = { model: 'google/gemini-test', ...input, stream: false };
+  const received: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
+  const upstream = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    received.push({ url: req.url!, authorization: req.headers.authorization, body: JSON.parse(raw) });
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}');
+  });
+  let proxy: ProxyHandle | undefined;
+  try {
+    setCustomProviders([buildUserProvider({ id, name: 'OpenRouter', auth: { method: 'oauth', oauth: providerPresetOAuth('openrouter')! },
+      runtimes: { pi: { baseUrl: `https://openrouter.ai${upstreamPrefix}`, wireProtocol, models: [{ id: body.model, name: body.model }] } },
+    })]);
+    setSessionProvider('sess-pi', id);
+    registerPiProxySession('sess-pi', 'session-secret', () => id);
+    let token = 'fixture-token-one';
+    setOAuthTokenReader(provider => provider === id ? token : null);
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('missing fixture address');
+    const destination = `http://127.0.0.1:${address.port}`;
+    const route = createModelRoutingTransform();
+    proxy = await createAnthropicCompatProxy({ upstream: destination, routingTransform: async (payload, ctx) => {
+      const decision = await route(payload, ctx);
+      expect(decision?.upstreamOverride).toBe(`https://openrouter.ai${upstreamPrefix}`);
+      expect(decision?.localHandler).toBeUndefined();
+      return { ...decision, upstreamOverride: `${destination}${upstreamPrefix}` };
+    } });
+    for (const next of ['fixture-token-one', 'fixture-token-two']) {
+      token = next;
+      const response = await fetch(`${proxy.url}${requestPath}`, { method: 'POST', headers: {
+        'content-type': 'application/json', authorization: 'Bearer placeholder',
+        'x-cindy-pi-session-id': 'sess-pi', 'x-cindy-pi-session-token': 'session-secret', 'x-cindy-pi-provider-id': id,
+      }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+      expect(response.status).toBe(200); await response.text();
+    }
+    expect(received).toEqual(['fixture-token-one', 'fixture-token-two'].map(token => ({
+      url: `${upstreamPrefix}${requestPath}`, authorization: `Bearer ${token}`, body,
+    })));
+  } finally {
+    await proxy?.dispose();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+    setCustomProviders([]); clearSessionProvider('sess-pi'); resetPiProxySessionsForTest(); setOAuthTokenReader(() => null);
+  }
 });

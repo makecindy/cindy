@@ -1,12 +1,12 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 514,
+  "snapshotCount": 570,
   "categories": {
-    "literal": 248,
-    "alias": 235,
+    "literal": 283,
+    "alias": 249,
     "hsl-triplet": 6,
-    "runtime-derived-or-protected": 25
+    "runtime-derived-or-protected": 32
   },
   "entries": [
     {
@@ -278,8 +278,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -292,8 +292,8 @@
       "darkKind": "hex",
       "protected": {
         "family": "u2-secondary-info",
-        "owner": "DESIGN.md §15.5",
-        "rule": "U2 二级信息色，never darken unilaterally",
+        "owner": "DESIGN.md §15.16",
+        "rule": "文字次要档：改值须用户裁决（2026-10-22 起墨水文字阶梯取代 U2，保护延续到整条阶梯）",
         "mode": "semantic-modeled"
       },
       "modeledAsSemantic": true
@@ -486,6 +486,58 @@
       "modeledAsSemantic": false
     },
     {
+      "id": "usage-heatmap-high",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "process-agent-task-icon",
+        "dark": "process-agent-task-icon"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-1",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-2",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-3",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-4",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "usage-model-5",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
       "id": "shadow-soft-panel",
       "category": "runtime-derived-or-protected",
       "destination": "register-only",
@@ -574,6 +626,18 @@
       "aliasOf": {
         "light": "surface-on-card",
         "dark": "surface-on-card"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "switch-thumb-on",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "background",
+        "dark": "background"
       },
       "modeledAsSemantic": false
     },
@@ -1031,6 +1095,22 @@
       "modeledAsSemantic": false
     },
     {
+      "id": "search-match-active-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "search-match-active-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hsl-triplet",
+      "darkKind": "hsl-triplet",
+      "modeledAsSemantic": false
+    },
+    {
       "id": "update-btn-border",
       "category": "literal",
       "destination": "reference-candidate",
@@ -1114,8 +1194,8 @@
       "id": "login-panel-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1150,8 +1230,8 @@
       "id": "login-link-pressed",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1166,24 +1246,24 @@
       "id": "login-callback-card-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-title",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-callback-body",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1222,80 +1302,80 @@
       "id": "login-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-action-control-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-back-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-active",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-border-disabled",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-control-placeholder",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-title-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1334,16 +1414,16 @@
       "id": "login-disabled-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-disabled-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1358,16 +1438,16 @@
       "id": "login-link-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-link-hover",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1390,24 +1470,24 @@
       "id": "login-deletion-bubble-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-track",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-splash-progress-fill",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1478,16 +1558,16 @@
       "id": "login-consent-radio-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-consent-radio-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1518,24 +1598,24 @@
       "id": "login-secondary-button-bg",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-border",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
       "id": "login-secondary-button-text",
       "category": "literal",
       "destination": "reference-candidate",
-      "lightKind": "hex",
-      "darkKind": "hex",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
       "modeledAsSemantic": false
     },
     {
@@ -1548,6 +1628,22 @@
     },
     {
       "id": "login-overlay-secondary-pressed",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-hover",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "login-overlay-apple-pressed",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "rgb",
@@ -1756,6 +1852,94 @@
     },
     {
       "id": "file-badge-fg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-red-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-orange-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-amber-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-green-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-teal-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-blue-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-violet-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-pink-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-avatar-graphite-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-unread-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "bot-unread-fg",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "hex",
@@ -4817,6 +5001,50 @@
       "modeledAsSemantic": true
     },
     {
+      "id": "text-danger",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-fg",
+        "dark": "error-fg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "danger-bg-soft",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "error-bg",
+        "dark": "error-bg"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-info",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "info-700",
+        "dark": "info-700"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "status-success",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
       "id": "upgrade-banner-bg",
       "category": "literal",
       "destination": "reference-candidate",
@@ -5150,6 +5378,282 @@
         "light": "accent-cta-bg",
         "dark": "accent-cta-bg"
       },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-primary-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-primary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-secondary-hover",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-secondary-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-cta-hover",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "accent-hover",
+        "dark": "accent-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "button-cta-pressed",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "color-mix",
+      "darkKind": "color-mix",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "form-field-hint",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary-mid",
+        "dark": "text-secondary-mid"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-track",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-fill",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-primary",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-thumb",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "text-primary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "slider-thumb-shadow",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-track",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-selected-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-elevated",
+        "dark": "surface-elevated"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-selected-border",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "border-default",
+        "dark": "border-default"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-selected-shadow",
+      "category": "runtime-derived-or-protected",
+      "destination": "register-only",
+      "lightKind": "shadow",
+      "darkKind": "shadow",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-option-fg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "text-secondary",
+        "dark": "text-secondary"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "segmented-hover-bg",
+      "category": "alias",
+      "destination": "semantic-or-component-candidate",
+      "lightKind": "alias",
+      "darkKind": "alias",
+      "aliasOf": {
+        "light": "surface-hover",
+        "dark": "surface-hover"
+      },
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-red",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-orange",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-yellow",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-green",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-blue",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-purple",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-gray",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-pink",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-coral",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-teal",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-indigo",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-white",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "task-tag-white-check",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "hex",
+      "darkKind": "hex",
       "modeledAsSemantic": false
     }
   ]

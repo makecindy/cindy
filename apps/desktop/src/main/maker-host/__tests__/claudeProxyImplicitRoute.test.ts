@@ -19,6 +19,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+
+const outbound = vi.hoisted(() => vi.fn<typeof fetch>());
+vi.mock('../outbound-fetch.js', () => ({ outboundFetch: outbound }));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
@@ -54,11 +60,13 @@ import {
   setCustomProviderKeyReader,
   setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
+  setOAuthTokenReader,
   setProviderViewsReader,
 } from '../provider-route';
 import { getActiveCatalog, setCustomProviders } from '../active-catalog';
-import { buildRegistry, buildUserProvider } from '@cindy/model-providers';
-import { clearSessionProvider } from '../session-provider-store';
+import * as providerRoute from '../provider-route';
+import { buildRegistry, buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
@@ -103,11 +111,102 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
+    setOAuthTokenReader(() => null);
+    outbound.mockReset();
     setProviderViewsReader(async () => []);
     clearSessionProvider('sess-race');
     resetClaudeSessionRouteRegistryForTest();
+  });
+
+  it.each(['openai-chat', 'openai-responses', 'google-generative-ai'] as const)('selects the Claude translation handler for a saved %s connection', wireProtocol => {
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl: 'https://supplier.example/v1', wireProtocol, models: [{ id: 'model', name: 'Model' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const decision = transform({ model: 'model' }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    return Promise.resolve(decision).then(route => expect(route?.localHandler).toBeTypeOf('function'));
+  });
+
+  it.each(['github-copilot', 'cloudflare-ai-gateway'])('keeps %s native authentication for Claude Messages routes', async sourceId => {
+    const row = PROVIDER_MODEL_CATALOG.providers[sourceId].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const baseUrl = row.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway');
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl, catalogPresetId: sourceId, wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const route = await transform({ model: row.id }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    expect(route?.localHandler).toBeTypeOf('function');
+  });
+
+  it.each(['individual', 'business', 'enterprise'])('sends Copilot %s requests with native headers to the assigned host', async account => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { 'claude-code': { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+        wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] } },
+    })]);
+    setOAuthTokenReader(() => token);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'copilot-account');
+    const body = { model: row.id, stream: true, max_tokens: 2048,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }] }] };
+    const ctx = ctxWith({ 'x-claude-code-session-id': 'sdk-race' });
+    const route = await transform(body, ctx);
+    expect(route?.upstreamOverride).toBe(`https://api.${account}.githubcopilot.com`);
+    expect(route?.localHandler).toBeTypeOf('function');
+    let sent: Request | undefined;
+    outbound.mockImplementation(async (url, init) => {
+      sent = new Request(url, init);
+      const events = [
+        { type: 'message_start', message: { id: 'fixture-reply', type: 'message', role: 'assistant', model: row.id, content: [], usage: { input_tokens: 2, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+        { type: 'message_stop' },
+      ];
+      return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } });
+    });
+    const server = createServer((_req, res) => {
+      void Promise.resolve(route!.localHandler!({ parsedBody: body, rawBody: Buffer.from(JSON.stringify(body)), ctx, res }))
+        .catch(() => { res.statusCode = 500; res.end(); });
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    try {
+      const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/messages`);
+      expect(await response.text()).toContain('Hello');
+      const target = new URL(sent!.url);
+      expect(target.origin + target.pathname).toBe(`https://api.${account}.githubcopilot.com/v1/messages`);
+      expect(sent?.headers.get('authorization')).toBe(`Bearer ${token}`);
+      expect(sent?.headers.get('x-api-key')).toBeNull();
+      expect(sent?.headers.get('x-initiator')).toBe('user');
+      expect(sent?.headers.get('copilot-vision-request')).toBe('true');
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+
+  it('implicit Google connection uses the native serializer before session binding', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'google-direct', name: 'Google',
+      runtimes: { 'claude-code': {
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        wireProtocol: 'google-generative-ai',
+        models: [{ id: 'gemini-2.5-flash', name: 'Gemini' }],
+      } },
+    })]);
+    setCustomProviderKeyReader(() => 'goog-key');
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'google-direct': true }));
+    const decision = await Promise.resolve(
+      transform({ model: 'gemini-2.5-flash' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision?.localHandler).toBeTypeOf('function');
   });
 
   it('无会话头的裸 glm-5.3 → 路由到用户智谱上游并换用户 key,不再透传默认网关', async () => {
@@ -193,6 +292,72 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     );
     expect(decision).toBeNull();
   });
+
+  it.each(['missing-provider', 'missing-runtime'] as const)(
+    'bound custom provider fails closed while %s, then recovers on the next request (#3631)',
+    async (missing) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      const headers = { 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' };
+      // The real catalog refresh API can remove a provider or its Claude runtime
+      // while the persisted session still points at that provider.
+      setCustomProviders(missing === 'missing-provider' ? [] : [buildUserProvider({
+        id: 'zhipu-plan', name: 'Zhipu Plan', runtimes: {},
+      })]);
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({ 'retry-after': '1' }));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_route_unavailable' },
+      });
+      expect(readClaudeSessionRoute('sess-race')).toBeNull();
+
+      installZhipuProvider();
+      const retry = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      expect(retry).toMatchObject({ upstreamOverride: ZHIPU_UPSTREAM });
+    },
+  );
+
+  it('session resolver failure is not an unbound request and cannot borrow gateway credentials (#3631)', async () => {
+    setClaudeProxySessionIdResolver(() => { throw new Error('session lookup unavailable'); });
+    const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+      'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+    }));
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'routing_temporarily_unavailable' },
+    });
+  });
+
+  it.each(['async-null', 'sync-throw', 'async-reject'] as const)(
+    'an explicit custom route cannot fall through on %s (#3631)',
+    async (failure) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      vi.spyOn(providerRoute, 'resolveSessionRouteDecision').mockImplementation(() => {
+        if (failure === 'async-null') return Promise.resolve(null);
+        if (failure === 'async-reject') return Promise.reject(new Error('route unavailable'));
+        throw new Error('route unavailable');
+      });
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+        'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+      }));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: failure === 'async-null' ? 'provider_route_unavailable' : 'routing_temporarily_unavailable' },
+      });
+      expect(decision?.upstreamOverride).toBeUndefined();
+      expect(decision?.headerOverride).toBeUndefined();
+    },
+  );
 
   it('目录外未知模型 → ①.5 解析落空,回落 ② 段默认(与修复前一致)', async () => {
     const decision = await Promise.resolve(

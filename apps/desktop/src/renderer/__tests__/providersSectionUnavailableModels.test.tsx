@@ -12,7 +12,7 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderView } from '@cindy/model-providers';
+import type { CustomProviderConfig, ModelRegistry, ProviderView } from '@cindy/model-providers';
 import { createIpcError } from '../../shared/ipc-errors';
 import { toast } from '@/lib/toast';
 
@@ -21,6 +21,7 @@ const {
   requestAutoRefreshSpy,
   setProviderOrderSpy,
   refetchProvidersSpy,
+  confirmSpy,
   authState,
   providerSnapshotState,
   wizardSpy,
@@ -29,17 +30,27 @@ const {
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
   refetchProvidersSpy: vi.fn(),
+  confirmSpy: vi.fn(async () => false),
   authState: { dataOwnerId: 'owner-1' as string | null },
   providerSnapshotState: {
     dataOwnerId: 'owner-1' as string | null,
     ownerGeneration: 1,
     order: ['anthropic', 'xd', 'custom'],
+    customConnected: true,
+    mediaReady: false,
+    customOverride: null as ProviderView | null,
+    loading: false,
+    error: null as { reason: 'storage-quota' } | null,
   },
   wizardSpy: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
+  useTranslation: () => ({
+    t: (key: string, options?: { count?: number }) =>
+      key === 'settings.providers.models.manage.selected' ? `${key}:${options?.count}` : key,
+    i18n: { language: 'zh-CN' },
+  }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
@@ -93,15 +104,19 @@ vi.mock('@/hooks/useProviders', () => ({
             },
           ],
         },
-        connected: true,
+        connected: providerSnapshotState.customConnected,
+        imageModels: [{ id: 'gpt-image-2', name: 'GPT Image 2' }],
+        availableMediaModelIds: providerSnapshotState.mediaReady ? ['gpt-image-2'] : [],
       } satisfies ProviderView,
     ];
-    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const byId = new Map<string, ProviderView>(providers.map((provider) => [provider.id, provider]));
+    if (providerSnapshotState.customOverride) {
+      byId.delete('custom');
+      byId.set(providerSnapshotState.customOverride.id, providerSnapshotState.customOverride);
+    }
     return {
       providers:
-        providerSnapshotState.dataOwnerId === authState.dataOwnerId
-          ? [...byId.values()]
-          : [],
+        providerSnapshotState.dataOwnerId === authState.dataOwnerId && !providerSnapshotState.loading ? [...byId.values()] : [],
       providerOrder:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.order
@@ -110,7 +125,8 @@ vi.mock('@/hooks/useProviders', () => ({
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.ownerGeneration
           : null,
-      loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
+      loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId || providerSnapshotState.loading,
+      error: providerSnapshotState.error,
       refetch: refetchProvidersSpy,
     };
   },
@@ -143,14 +159,15 @@ vi.mock('@/hooks/useModelAccessStatus', () => ({
 }));
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn() }),
+  useConfirmDialog: () => ({ confirm: confirmSpy }),
 }));
 
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() },
 }));
 
-vi.mock('@/lib/customProviders', () => ({
+vi.mock('@/lib/customProviders', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/customProviders')>(),
   deleteCustomProvider: vi.fn(),
   readCustomProviderKey: vi.fn(async () => null),
   updateCustomProvider: vi.fn(),
@@ -172,8 +189,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: () => null,
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({
@@ -182,6 +199,10 @@ vi.mock('@/components/settings/AddProviderWizard', () => ({
     return React.createElement('div', { 'data-testid': 'wizard-stub' });
   },
 }));
+
+import { setModelVisibilities } from '@/state/modelVisibilityPrefs';
+import { readCustomProviderKey, updateCustomProvider } from '@/lib/customProviders';
+import { BUNDLED_CATALOG, buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
 
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
@@ -192,14 +213,22 @@ beforeEach(() => {
   authState.dataOwnerId = 'owner-1';
   providerSnapshotState.dataOwnerId = 'owner-1';
   providerSnapshotState.ownerGeneration = 1;
+  providerSnapshotState.customConnected = true;
+  providerSnapshotState.mediaReady = false;
+  providerSnapshotState.customOverride = null;
+  providerSnapshotState.loading = false;
+  providerSnapshotState.error = null;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
   scanResult = { detections: [] };
+  confirmSpy.mockReset().mockResolvedValue(false);
+  vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
       setProviderOrder: setProviderOrderSpy,
+      onProviderOAuthProgress: vi.fn(() => () => {}),
     },
   };
 });
@@ -210,15 +239,454 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  // Renderer unit: click the real provider refresh/menu, inspect the persisted
+  // config and visible dialog. Earlier refresh cases only used chat-only proxies;
+  // a MiniMax API connection with no speech is the minimal missing-default case.
+  const miniMaxConfig = () => ({
+    id: 'minimax-api', name: 'My MiniMax', runtimes: {
+      codex: { baseUrl: 'https://api.minimax.io/v1', wireProtocol: 'openai-chat' as const,
+        models: [{ id: 'MiniMax-M3', name: 'My chat', defaultEnabled: false }] },
+    },
+  });
+  function selectSpeechProvider(
+    config: CustomProviderConfig = miniMaxConfig(),
+    modelRegistry = BUNDLED_CATALOG.modelRegistry,
+  ) {
+    const provider = buildUserProvider(config, { modelRegistry });
+    providerSnapshotState.customOverride = { ...provider, connected: true,
+      availableMediaModelIds: provider.audioModels?.map(model => model.id) ?? [] };
+    providerSnapshotState.order = [provider.id, 'xd'];
+  }
+  it.each(['missing', 'discovered', 'hidden', 'explicit-other'] as const)(
+    'manual refresh handles %s speech without changing saved switches', async kind => {
+      const config = miniMaxConfig();
+      if (kind === 'hidden') config.runtimes.codex.models.push({
+        id: 'speech-2.8-hd', name: 'My hidden voice', defaultEnabled: false,
+      });
+      selectSpeechProvider(config);
+      const discovered = kind === 'discovered'
+        ? [{ id: 'new-voice', name: 'New voice', discoveredMetadata: { mode: 'audio_speech' as const } }]
+        : kind === 'explicit-other'
+          ? [{ id: 'speech-2.8-turbo', name: 'Not TTS', discoveredMetadata: { mode: 'other' as const } }]
+          : [];
+      window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [
+        { id: 'MiniMax-M3', name: 'Upstream name' }, ...discovered,
+      ] }));
+      // Reference persistence is covered by the real Main handler tests. The
+      // renderer must display Main's result and send only the discovery merge.
+      if (kind === 'missing') vi.mocked(updateCustomProvider).mockResolvedValueOnce({
+        ok: true, speechReferenceAdded: true,
+      });
+      const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      // Opening Settings only schedules discovery, never writes reference models.
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+      expect(saved.name).toBe(config.name);
+      expect(saved.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3')).toMatchObject(config.runtimes.codex.models[0]);
+      const speech = buildUserProvider(saved, { modelRegistry: BUNDLED_CATALOG.modelRegistry }).audioModels?.filter(model => model.mode === 'audio_speech') ?? [];
+      expect(speech.map(model => model.id)).toEqual(kind === 'missing' ? []
+        : kind === 'discovered' ? ['new-voice'] : kind === 'hidden' ? ['speech-2.8-hd'] : []);
+      if (kind === 'hidden') expect(speech[0].defaultEnabled).toBe(false);
+      expect(setModelVisibilities).not.toHaveBeenCalled();
+      expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
+        .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: ['codex'] });
+      if (kind === 'missing') {
+        expect(toast.success).toHaveBeenLastCalledWith('settings.providers.models.refreshSpeechAdded');
+        // A second click sees the saved reference; it does not add HD/other defaults.
+        const persisted = structuredClone(saved);
+        persisted.runtimes.codex!.models.push({ id: 'speech-2.8-turbo', name: 'Speech 2.8 Turbo', defaultEnabled: true });
+        selectSpeechProvider(persisted);
+        view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+        expect(vi.mocked(updateCustomProvider).mock.lastCall![0].runtimes.codex!.models.map(model => model.id))
+          .toEqual(persisted.runtimes.codex!.models.map(model => model.id));
+      }
+    },
+  );
+  // #6928: a newly discovered ID has no pre-refresh projection or reported mode.
+  // The active Registry must classify it before a reference can be persisted.
+  it('does not append a reference beside newly discovered Server-only speech', async () => {
+    const config = miniMaxConfig();
+    const discovered = { id: 'server-only-new-speech', name: 'New speech' };
+    const modelRegistry: ModelRegistry = {
+      ...BUNDLED_CATALOG.modelRegistry!,
+      baseModels: [...BUNDLED_CATALOG.modelRegistry!.baseModels!,
+        { id: discovered.id, aliases: [], defaults: { mode: 'audio_speech' } }],
+    };
+    selectSpeechProvider(config, modelRegistry);
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [discovered] }));
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+    expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
+      .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: ['codex'] });
+    expect(buildUserProvider(saved, { modelRegistry }).audioModels?.map(model => model.id))
+      .toEqual([discovered.id]);
+    expect(saved.runtimes.codex!.models.find(model => model.id === discovered.id)?.mode).toBeUndefined();
+    expect(saved.runtimes.codex!.models.find(model => model.id === 'MiniMax-M3'))
+      .toMatchObject(config.runtimes.codex.models[0]);
+  });
+  // Keep raw saved settings through refresh. Main's real handler regression
+  // separately proves classification and reference persistence for these modes.
+  it.each([
+    ['codex', true, 'audio_speech'],
+    ['codex', false, 'audio_speech'],
+    ['pi', false, 'audio_speech'],
+    ['codex', false, 'audio_transcription'],
+  ] as const)('respects current Registry audio on %s (enabled=%s, mode=%s)', async (agent, defaultEnabled, mode) => {
+    const config: CustomProviderConfig = miniMaxConfig();
+    const savedAudio = { id: 'server-only-audio', name: 'My saved audio', defaultEnabled };
+    const runtime = config.runtimes[agent] ??= { baseUrl: 'https://proxy.example/v1', models: [] };
+    runtime.models.push(savedAudio);
+    const modelRegistry: ModelRegistry = {
+      schemaVersion: 5, updatedAt: '2026-10-23T00:00:00Z', models: [],
+      baseModels: [{ id: savedAudio.id, aliases: [], defaults: { mode } }],
+    };
+    selectSpeechProvider(config, modelRegistry);
+    expect(providerSnapshotState.customOverride!.audioModels).toEqual([
+      expect.objectContaining({ id: savedAudio.id, mode, defaultEnabled, sourceAgent: agent }),
+    ]);
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [] }));
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+    expect(saved.runtimes[agent]!.models.find(model => model.id === savedAudio.id)).toEqual(savedAudio);
+    expect(saved.runtimes.codex!.models.some(model => model.id === 'speech-2.8-turbo'))
+      .toBe(false);
+    expect(buildUserProvider(saved, { modelRegistry }).audioModels)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: savedAudio.id, mode, defaultEnabled })]));
+    expect(setModelVisibilities).not.toHaveBeenCalled();
+  });
+  it.each(['proxy', 'oauth', 'disabled-route'] as const)(
+    'does not offer or auto-add speech for an unconfirmed %s connection', async kind => {
+      const config = miniMaxConfig();
+      if (kind === 'proxy') config.runtimes.codex.baseUrl = 'https://proxy.example/v1';
+      selectSpeechProvider(config);
+      if (kind === 'oauth') providerSnapshotState.customOverride!.auth = { method: 'oauth' };
+      if (kind === 'disabled-route') providerSnapshotState.customOverride!.routing.codex!.disabled = true;
+      window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
+        models: [{ id: 'MiniMax-M3', name: 'Chat' }] }));
+      render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      expect(screen.queryByRole('button', { name: 'settings.providers.speechSetup.add' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+      expect(screen.queryByRole('menuitem', { name: 'settings.providers.speechSetup.add' })).toBeNull();
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+      expect(buildUserProvider(saved).audioModels ?? []).toEqual([]);
+    },
+  );
+  it.each([0, 1])('moves manual speech additions into management with %s saved models', async count => {
+    const config = miniMaxConfig();
+    if (!count) config.runtimes.codex.models = [];
+    selectSpeechProvider(config);
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: false }));
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'settings.providers.speechSetup.add' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.speechSetup.add' }));
+    expect(await screen.findByRole('dialog', { name: 'settings.providers.speechSetup.add' })).toBeTruthy();
+    expect(await screen.findByRole('checkbox', { name: /speech-2.8-turbo/ })).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+  // #6928 P2, renderer unit: the empty-connection case above never suspended
+  // its provider. Exercise the real menu and next snapshot so the enable entry
+  // cannot disappear along with the speech setup action.
+  it('keeps an empty speech connection visible through suspend and resume', async () => {
+    const config = miniMaxConfig();
+    config.runtimes.codex.models = [];
+    selectSpeechProvider(config);
+    const setModelDisable = vi.fn<typeof window.electronAPI.maker.setModelDisable>(async input => {
+      if (input.kind === 'provider')
+        providerSnapshotState.customOverride = { ...providerSnapshotState.customOverride!, suspended: input.disabled };
+      return { ok: true as const };
+    });
+    window.electronAPI.maker.setModelDisable = setModelDisable;
+    const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    await act(async () => { fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.disableProvider' })); });
+    expect(setModelDisable).toHaveBeenLastCalledWith({ kind: 'provider', providerId: config.id, disabled: true });
+    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(await screen.findByText('settings.providers.detail.suspendedBanner')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.refreshAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.models.manage.menu' })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.enableProvider' })); });
+    expect(setModelDisable).toHaveBeenLastCalledWith({ kind: 'provider', providerId: config.id, disabled: false });
+    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(screen.queryByText('settings.providers.detail.suspendedBanner')).toBeNull();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+    expect(await screen.findByRole('menuitem', { name: 'settings.providers.speechSetup.add' })).toBeTruthy();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(setModelVisibilities).not.toHaveBeenCalled();
+  });
+  it.each(['hidden-other-runtime', 'failed-target'] as const)(
+    'does not supplement a reference across runtimes: %s', async kind => {
+      const config: CustomProviderConfig = miniMaxConfig();
+      config.runtimes.pi = { baseUrl: 'https://proxy.example/v1', models: [
+        { id: 'my-speech', name: 'Saved name', mode: 'audio_speech',
+          nativeApi: 'openai-audio-speech', defaultEnabled: false },
+      ] };
+      if (kind === 'failed-target') config.runtimes.pi.models = [{ id: 'my-chat', name: 'My chat' }];
+      selectSpeechProvider(config);
+      window.electronAPI.maker.fetchProviderModels = vi.fn(async request => (
+        kind === 'failed-target' && request.agent === 'codex' ? { ok: false, status: 401 }
+          : { ok: true, models: [{ id: 'another-chat', name: 'Another chat' }] }
+      ));
+      render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+      expect(saved.runtimes.codex!.models.some(model => model.id === 'speech-2.8-turbo')).toBe(false);
+      expect(saved.runtimes.pi!.models).toEqual(expect.arrayContaining(config.runtimes.pi.models));
+      expect(vi.mocked(updateCustomProvider).mock.lastCall![2])
+        .toEqual({ source: 'manual-settings', speechReferenceRefreshAgents: kind === 'failed-target' ? ['pi'] : ['codex', 'pi'] });
+      expect(setModelVisibilities).not.toHaveBeenCalled();
+    },
+  );
+  it('keeps speech additions out of native subscription management', async () => {
+    selectSpeechProvider();
+    providerSnapshotState.customOverride = { ...providerSnapshotState.customOverride!,
+      id: 'openai', source: 'builtin', auth: { method: 'oauth', native: 'codex' }, routing: {} };
+    providerSnapshotState.order = ['openai', 'xd'];
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'settings.providers.speechSetup.add' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.manage.menu' }), { key: 'ArrowDown' });
+    await screen.findByRole('menu');
+    expect(screen.queryByRole('menuitem', { name: 'settings.providers.speechSetup.add' })).toBeNull();
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+  it.each([401, 500])('does not add references when discovery fails with HTTP %s', async status => {
+    selectSpeechProvider();
+    window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: false, status }));
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+    expect(updateCustomProvider).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('settings.providers.models.refreshFailed');
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+  // #6928 P1, renderer unit: real refresh -> existing confirmation -> save/retry.
+  // Earlier chat-only cases did not protect a busy Responses image Host from
+  // a speech-only addition. Cancel must stay silent; retry must retain discovery
+  // options and use the final save result, even if Main no longer adds a model.
+  it.each(['cancel', 'interrupt', 'idle', 'no-add-on-retry'] as const)(
+    'confirms speech refresh Host changes: %s', async action => {
+      const config: CustomProviderConfig = { id: 'openai-api', name: 'My OpenAI', runtimes: {
+        codex: { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'chat-model', name: 'My chat', defaultEnabled: false }] },
+      } };
+      selectSpeechProvider(config);
+      window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
+        models: [{ id: 'chat-model', name: 'Upstream chat' }] }));
+      if (action !== 'idle') vi.mocked(updateCustomProvider).mockResolvedValueOnce({ ok: false,
+        confirmationRequired: 'codex-image-generation-reload', busyCount: 1 });
+      vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true,
+        ...(action !== 'no-add-on-retry' ? { speechReferenceAdded: true } : {}) });
+      confirmSpy.mockResolvedValue(action !== 'cancel');
+      render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' })); });
+      const saved = vi.mocked(updateCustomProvider).mock.calls[0][0];
+      expect(saved.runtimes.codex!.models[0]).toMatchObject(config.runtimes.codex!.models[0]);
+      expect(updateCustomProvider).toHaveBeenNthCalledWith(1, saved, {}, {
+        source: 'manual-settings', speechReferenceRefreshAgents: ['codex'],
+      });
+      expect(confirmSpy).toHaveBeenCalledTimes(action === 'idle' ? 0 : 1);
+      if (action !== 'idle') expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({
+        title: 'settings.providers.custom.imageGenerationReload.title',
+        confirmText: 'settings.providers.custom.imageGenerationReload.interrupt',
+        cancelText: 'settings.providers.custom.imageGenerationReload.cancel',
+      }));
+      expect(updateCustomProvider).toHaveBeenCalledTimes(action === 'cancel' || action === 'idle' ? 1 : 2);
+      if (action === 'interrupt' || action === 'no-add-on-retry') {
+        expect(updateCustomProvider).toHaveBeenNthCalledWith(2, saved, {}, {
+          source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt',
+          speechReferenceRefreshAgents: ['codex'],
+        });
+      }
+      expect(toast.error).not.toHaveBeenCalled();
+      if (action === 'cancel') {
+        expect(toast.success).not.toHaveBeenCalled();
+        expect(refetchProvidersSpy).not.toHaveBeenCalled();
+      } else {
+        expect(toast.success).toHaveBeenCalledWith(action === 'no-add-on-retry'
+          ? 'settings.providers.models.refreshNoNew' : 'settings.providers.models.refreshSpeechAdded');
+        expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+      }
+      expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledOnce();
+      expect(screen.getByRole('button', { name: 'settings.providers.models.refreshAria' }).hasAttribute('disabled')).toBe(false);
+    },
+  );
+  it('keeps a recovery action accessible when the first complete catalog could not be published', async () => {
+    providerSnapshotState.loading = true;
+    providerSnapshotState.error = { reason: 'storage-quota' };
+    refetchProvidersSpy.mockResolvedValue(true);
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    expect(screen.getByRole('status').textContent).toContain('catalogRecovery.quota');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.catalogRecovery.retry' }));
+    });
+    expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('switch', { name: 'Custom model' })).toBeNull();
+  });
+
+  it.each([
+    ['openrouter-existing', 'oauth', true],
+    ['openrouter-new', 'oauth', false],
+    ['openrouter-reconnected', 'oauth', true],
+    ['openrouter-retry', 'oauth', true],
+    ['openrouter-key', 'apiKey', true],
+    ['nous-existing', 'oauth', true],
+  ] as const)('%s can refresh models using its saved %s connection (existing models: %s)', async (id, method, hasModels) => {
+    const isNous = id.startsWith('nous');
+    const oauth = providerPresetOAuth(isNous ? 'nous' : 'openrouter')!;
+    const baseUrl = isNous ? 'https://inference-api.nousresearch.com/v1' : 'https://openrouter.ai/api/v1';
+    providerSnapshotState.customOverride = {
+      id, name: id, source: 'user', agents: ['codex'], connected: true,
+      auth: method === 'oauth' ? { method, oauth } : { method },
+      routing: { codex: { upstream: baseUrl, modelsUrl: `${baseUrl}/models`, authStrategy: method === 'oauth' ? 'oauth-token' : 'api-key-header' } },
+      models: { codex: hasModels ? [{ id: 'old-model', name: 'Old', contextWindow: 64000, efforts: [], defaultEffort: null, defaultEnabled: false }] : [] },
+    };
+    providerSnapshotState.order = [id, 'xd'];
+    const fetchModels = vi.fn(async () => ({ ok: true, models: [
+      { id: 'old-model', name: 'Old' },
+      { id: 'new-model', name: 'New', discoveredMetadata: { nativeApi: 'openai-responses' } },
+      { id: 'chat-model', name: 'Chat', discoveredMetadata: { nativeApi: 'openai-completions' } },
+    ] }));
+    if (id === 'openrouter-retry') fetchModels.mockResolvedValueOnce({ ok: false, models: [] });
+    Object.assign(window.electronAPI.maker, { fetchProviderModels: fetchModels });
+    if (id === 'openrouter-reconnected') providerSnapshotState.customOverride.connected = false;
+    const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    if (id === 'openrouter-reconnected') {
+      providerSnapshotState.customOverride.connected = true;
+      view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    }
+    const refresh = await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' });
+    await act(async () => { fireEvent.click(refresh); });
+    if (id === 'openrouter-retry') {
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+      expect((refresh as HTMLButtonElement).disabled).toBe(false);
+      await act(async () => { fireEvent.click(refresh); });
+      expect(fetchModels).toHaveBeenCalledTimes(2);
+    }
+    expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+      savedProviderId: id, authMethod: method, baseUrl, modelsUrl: `${baseUrl}/models`,
+    }));
+    if (method === 'oauth') expect(readCustomProviderKey).not.toHaveBeenCalled();
+    expect(updateCustomProvider).toHaveBeenCalledWith(expect.objectContaining({ id,
+      ...(method === 'oauth' ? { auth: { method, oauth } } : {}),
+      runtimes: expect.objectContaining({ codex: expect.objectContaining({ models: expect.arrayContaining([
+        expect.objectContaining({ id: 'new-model', discoveredMetadata: { nativeApi: 'openai-responses' } }),
+        ...(hasModels ? [expect.objectContaining({ id: 'old-model', contextWindow: 64000, defaultEnabled: false })] : []),
+      ]) }) }),
+    }), {}, { source: 'manual-settings' });
+    const saved = vi.mocked(updateCustomProvider).mock.calls[0]![0];
+    // Refresh adds membership without freezing a visibility choice. Native
+    // projection decides defaults; compatibility still requires an override.
+    for (const modelId of ['new-model', 'chat-model']) {
+      const model = saved.runtimes.codex?.models.find(model => model.id === modelId);
+      expect(model).toBeDefined();
+      expect(model).not.toHaveProperty('defaultEnabled');
+    }
+    const projected = buildUserProvider(saved).models.codex!;
+    expect(projected.find(model => model.id === 'new-model')?.defaultEnabled).toBe(true);
+    expect(projected.find(model => model.id === 'chat-model')?.defaultEnabled).toBe(false);
+    if (hasModels) expect(projected.find(model => model.id === 'old-model')?.defaultEnabled).toBe(false);
+    expect(refetchProvidersSpy).toHaveBeenCalled();
+  });
+  it('dims GPT Image 2 without a ready image channel, independently of chat connection', async () => {
+    providerSnapshotState.order = ['custom', 'xd'];
+    providerSnapshotState.customConnected = true;
+    const view = render(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('switch', { name: 'Custom model' });
+    fireEvent.click(screen.getByRole('button', { name: 'newChat.modelSelector.category.image1' }));
+    providerSnapshotState.customConnected = false;
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    const imageRow = () => screen.getByText('GPT Image 2').closest('div.group')!;
+    expect(imageRow().classList.contains('opacity-55')).toBe(true);
+    expect(screen.getByText('GPT Image 2').getAttribute('style')).toBe(
+      screen.getByText('Custom model').getAttribute('style'),
+    );
+    providerSnapshotState.mediaReady = true;
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    expect(imageRow().classList.contains('opacity-55')).toBe(false);
+    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe(
+      'false',
+    );
+    providerSnapshotState.mediaReady = false;
+    providerSnapshotState.customConnected = true;
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    expect(imageRow().classList.contains('opacity-55')).toBe(true);
+    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+  });
+
+  it('keeps selections but blocks toggles when a connected source becomes unavailable', async () => {
+    providerSnapshotState.order = ['custom', 'xd'];
+    const view = render(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    let toggle = (await screen.findByRole('switch', { name: 'Custom model' })) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('settings.providers.models.manage.selected:1')).toBeTruthy();
+    providerSnapshotState.customConnected = false;
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    toggle = screen.getByRole('switch', { name: 'Custom model' }) as HTMLButtonElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText('settings.providers.models.manage.selected:0')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(setModelVisibilities).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.models.manage.connectionRequired')).toBeTruthy();
+    providerSnapshotState.customConnected = true;
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
+    expect(
+      (screen.getByRole('switch', { name: 'Custom model' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.queryByText('settings.providers.models.manage.connectionRequired')).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(screen.getByText('settings.providers.models.manage.selected:1')).toBeTruthy();
+    expect(setModelVisibilities).not.toHaveBeenCalled();
+  });
+
   it('首个可见供应商默认选中;未连接内置渠道不占行;零模型仍可手动刷新', async () => {
     // ProvidersSection 内部消费 useSearchParams(深链定位),测试需要 Router 上下文。
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
     expect(requestAutoRefreshSpy).toHaveBeenCalledWith('providers-open');
 
-    // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
+    // 左栏保留品牌翻译，详情头使用连接的实际显示名。
     expect(
       (await screen.findAllByText('settings.providers.xd.title')).length,
-    ).toBeGreaterThanOrEqual(2);
+    ).toBeGreaterThanOrEqual(1);
     // 详情标题的模型数/订阅标签必须在可用宽度内折行，不能溢出覆盖右侧连接操作。
     const identity = screen.getByTestId('provider-detail-identity');
     const metadata = screen.getByTestId('provider-detail-metadata');
@@ -229,7 +697,7 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(screen.queryByText('Anthropic')).toBeNull();
     // xd 实时模型为空 → 详情仍渲染模型工具行与刷新入口，避免用户无从恢复。
     expect(screen.getByText('settings.providers.detail.emptyModels')).not.toBeNull();
-    expect(screen.getByText('settings.providers.models.available')).not.toBeNull();
+    expect(screen.getByText('settings.providers.models.manage.title')).not.toBeNull();
     await act(async () => {
       fireEvent.click(
         screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
@@ -258,8 +726,7 @@ describe('ProvidersSection — 双栏管理', () => {
     const refreshingButton = screen.getByRole('button', {
       name: 'settings.providers.models.refreshingAria',
     });
-    expect(refreshingButton.getAttribute('title'))
-      .toBe('settings.providers.models.refreshingAria');
+    expect(refreshingButton.getAttribute('title')).toBe('settings.providers.models.refreshingAria');
 
     await act(async () => {
       resolveRefresh({ ok: true, providerId: 'xd' });

@@ -19,7 +19,10 @@ import {
   resolveDeviceLinkSubmission,
 } from '@/features/cc-agent/deviceLinkCreateArgs';
 
-function catalogModel(id: string): CatalogModel {
+function catalogModel(
+  id: string,
+  capabilities: Partial<CatalogModel> = {},
+): CatalogModel {
   return {
     id,
     name: id,
@@ -30,19 +33,26 @@ function catalogModel(id: string): CatalogModel {
     defaultEffort: null,
     supportsFastMode: false,
     status: 'active',
+    ...capabilities,
   } as CatalogModel;
 }
 
 /** 被控端供应商目录的最小形态(与 draftModelCalibration.test.ts 同款构造)。 */
-function deviceProvider(id: string, connected: boolean, modelIds: string[]): ProviderView {
+function deviceProvider(
+  id: string,
+  connected: boolean,
+  modelIds: string[],
+  agent: 'claude-code' | 'pi' = 'claude-code',
+  capabilities: Partial<CatalogModel> = {},
+): ProviderView {
   return {
     id,
     name: id,
     source: 'builtin',
-    agents: ['claude-code'],
-    models: { 'claude-code': modelIds.map(catalogModel) },
+    agents: [agent],
+    models: { [agent]: modelIds.map((modelId) => catalogModel(modelId, capabilities)) },
     routing: {
-      'claude-code': { upstream: 'https://provider.test', authStrategy: 'none' },
+      [agent]: { upstream: 'https://provider.test', authStrategy: 'none' },
     },
     auth: { method: 'oauth' },
     connected,
@@ -50,6 +60,17 @@ function deviceProvider(id: string, connected: boolean, modelIds: string[]): Pro
 }
 
 describe('buildDeviceLinkCreateArgs', () => {
+  it.each([undefined, '/remote/project'])('carries initial plan mode through creation and provisional UI (%s)', (workingDir) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'codex', workingDir, capabilityAgentKind: 'codex', deviceProviders: [],
+      candidate: { model: 'gpt-5.4', effort: 'high', permissionMode: 'auto', fastMode: false, planModeEnabled: true },
+    });
+    expect(args.planMode).toBe(true);
+    expect(args).not.toHaveProperty('planModeEnabled');
+    const row = buildProvisionalRemoteSession({ sessionId: 'remote', workDir: workingDir ?? '/dialogue/remote', args, nowIso: '2026-10-08T00:00:00Z' });
+    expect(row.planModeEnabled).toBe(true);
+  });
+
   it('归属一致核心:workspaceKind 恒为 project(被控端据此挂到项目下,不独立)', () => {
     const args = buildDeviceLinkCreateArgs({
       agentKind: 'cc',
@@ -87,6 +108,18 @@ describe('buildDeviceLinkCreateArgs', () => {
       permissionMode: 'auto',
       fastMode: true,
     });
+  });
+
+  it('无 effort 模型用空串交给被控端准入层', () => {
+    const args = buildDeviceLinkCreateArgs({
+      agentKind: 'pi',
+      workingDir: '/host/repo',
+      model: 'qwen3:14b',
+      effort: null,
+      permissionMode: 'auto',
+      fastMode: false,
+    });
+    expect(args.effort).toBe('');
   });
 
   // [12] 远程 create 透传 extraDirs:被控端 bootstrapSession 再按 set-extra-dirs 同款校验,
@@ -284,14 +317,14 @@ describe('buildProvisionalRemoteSession', () => {
     expect(row.title).toBe('New Maker');
   });
 
-  it('userSendAt 置为当下:用户此刻正在发第一条,侧边栏该立刻浮到顶部(与本机路径同口径)', () => {
+  it('userSendAt 与被控端新行一致为空:「正在发第一条」交给投影层的首条发送叠加层', () => {
     const row = buildProvisionalRemoteSession({
       sessionId: 's-4',
       workDir: '/w',
       args: dialogue,
       nowIso: NOW,
     });
-    expect(row.userSendAt).toBe(NOW);
+    expect(row.userSendAt).toBeNull();
     expect(row.createdAt).toBe(NOW);
     expect(row.updatedAt).toBe(NOW);
   });
@@ -305,6 +338,72 @@ describe('buildProvisionalRemoteSession', () => {
     });
     expect(row.providerId).toBeNull();
     expect(row.extraDirs).toEqual([]);
+  });
+});
+
+// 远程控制下新建任务,Agent 在同账号第三台电脑运行(与手机新建任务同一个 create-session 参数)。
+describe('Agent 在另一台电脑运行', () => {
+  const NOW = '2026-10-09T03:00:00.000Z';
+  const candidate = {
+    model: 'c-model',
+    effort: 'high' as const,
+    permissionMode: 'default' as const,
+    fastMode: false,
+  };
+  // 模型目录是运行 Agent 的那台电脑的:来源在那份目录里解析。
+  const agentComputerCatalog = [deviceProvider('c-open', true, ['c-model'])];
+
+  it('agentDeviceId 交给被控电脑,来源按那台电脑的目录解析', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'cc',
+      workingDir: '/peer/proj',
+      candidate,
+      deviceProviders: agentComputerCatalog,
+      capabilityAgentKind: 'claude-code',
+      agentDeviceId: 'device-c',
+    });
+    expect(args.agentDeviceId).toBe('device-c');
+    expect(args.providerId).toBe('c-open');
+    expect(args.model).toBe('c-model');
+  });
+
+  it('Agent 在被控电脑本身时不带这个字段(旧被控电脑与原有调用不变)', () => {
+    for (const agentDeviceId of [undefined, null, '']) {
+      const args = resolveDeviceLinkSubmission({
+        agentKind: 'cc',
+        candidate,
+        deviceProviders: agentComputerCatalog,
+        capabilityAgentKind: 'claude-code',
+        agentDeviceId,
+      });
+      expect('agentDeviceId' in args).toBe(false);
+    }
+  });
+
+  it('临时行就带上 Agent 所在电脑;不带时不出现这个字段', () => {
+    const remote = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'c-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+      agentDeviceId: 'device-c',
+    });
+    expect(
+      buildProvisionalRemoteSession({ sessionId: 's-6', workDir: '/w', args: remote, nowIso: NOW })
+        .agentDeviceId,
+    ).toBe('device-c');
+    const plain = buildDeviceLinkCreateArgs({
+      agentKind: 'cc',
+      model: 'b-model',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+    });
+    expect(
+      'agentDeviceId' in
+        buildProvisionalRemoteSession({ sessionId: 's-7', workDir: '/w', args: plain, nowIso: NOW }),
+    ).toBe(false);
   });
 });
 
@@ -339,19 +438,17 @@ describe('resolveDeviceLinkSubmission', () => {
     expect(args.workingDir).toBe('/peer/proj');
   });
 
-  it('被控端已断开该来源时不得原样透传 —— 回落到该模型的原生默认来源', () => {
+  it('被控端已断开时保留显式连接，交给被控端校验而不改用其他账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'stale-source' },
       deviceProviders: [deviceProvider('anthropic', true, ['claude-sonnet-4-6'])],
       capabilityAgentKind: AGENT,
     });
-    // 关键反向断言:绝不能等于那个已失效的显式选择。
-    expect(args.providerId).not.toBe('stale-source');
-    expect(args.providerId).toBe('anthropic');
+    expect(args.providerId).toBe('stale-source');
   });
 
-  it('来源仍在但已不提供当前模型时同样回落', () => {
+  it('来源仍在但已不提供当前模型时仍保留账号身份', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'other' },
@@ -361,27 +458,155 @@ describe('resolveDeviceLinkSubmission', () => {
       ],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBe('anthropic');
+    expect(args.providerId).toBe('other');
   });
 
-  it('没有任何来源提供该模型 → 不带 providerId(交回被控端默认路由,provider_id 留 NULL)', () => {
+  it('没有任何来源提供模型时也不丢弃显式账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'stale-source' },
       deviceProviders: [deviceProvider('other', true, ['some-other-model'])],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBeUndefined();
+    expect(args.providerId).toBe('stale-source');
   });
 
-  it('目录尚未加载完(空数组)时不带 providerId,而不是把失效值送出去', () => {
+  it('目录尚未加载完时仍保留显式账号', () => {
     const args = resolveDeviceLinkSubmission({
       agentKind: 'cc',
       candidate: { ...candidate, providerId: 'anything' },
       deviceProviders: [],
       capabilityAgentKind: AGENT,
     });
-    expect(args.providerId).toBeUndefined();
+    expect(args.providerId).toBe('anything');
+  });
+
+  it('提交前按选中来源清掉已知无 effort 模型的旧档位', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', { effortsUnknown: false })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe('');
+  });
+
+  it('提交前把选中来源已失效的 effort 校准到该来源默认档位', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', {
+        efforts: ['low', 'high'], defaultEffort: 'high',
+      })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe('high');
+  });
+
+  it('提交前无默认档位时回落到选中来源当前档位列表首项', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', { efforts: ['low', 'high'] })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe('low');
+  });
+
+  it('提交前失效的默认档位也回落到当前列表首项', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', {
+        efforts: ['low', 'high'], defaultEffort: 'medium',
+      })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe('low');
+  });
+
+  it('提交前保留选中来源合法档位，不受同名无档位来源或默认值影响', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'reasoning' },
+      deviceProviders: [
+        deviceProvider('plain', true, ['qwen3:14b'], 'pi'),
+        deviceProvider('reasoning', true, ['qwen3:14b'], 'pi', {
+          efforts: ['medium', 'high'], defaultEffort: 'high',
+        }),
+      ],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.providerId).toBe('reasoning');
+    expect(args.effort).toBe('medium');
+  });
+
+  it('提交前只按选中来源的当前能力校准，不使用其他同名来源支持的旧档位', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'updated' },
+      deviceProviders: [
+        deviceProvider('other', true, ['qwen3:14b'], 'pi', { efforts: ['medium', 'high'] }),
+        deviceProvider('updated', true, ['qwen3:14b'], 'pi', {
+          efforts: ['low', 'high'], defaultEffort: 'high',
+        }),
+      ],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.providerId).toBe('updated');
+    expect(args.effort).toBe('high');
+  });
+
+  it('未指定来源时按解析出的默认来源校准失效档位', () => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: null },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', {
+        efforts: ['low', 'high'], defaultEffort: 'high',
+      })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.providerId).toBe('ollama');
+    expect(args.effort).toBe('high');
+  });
+
+  it.each<{ efforts: CatalogModel['efforts'] }>([
+    { efforts: [] },
+    { efforts: ['low', 'high'] },
+  ])('档位能力未知时保留候选档位 (%j)', ({ efforts }) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi', {
+        efforts, defaultEffort: 'high', effortsUnknown: true,
+      })],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe('medium');
+  });
+
+  it.each(['medium', 'high'])('旧主机空档位表缺少能力标记时保留候选档位 (%s)', (effort) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort, providerId: 'ollama' },
+      deviceProviders: [deviceProvider('ollama', true, ['qwen3:14b'], 'pi')],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.effort).toBe(effort);
+  });
+
+  it.each(['missing-provider', 'missing-model'])('缺少选中来源或模型时不使用其他来源校准 (%s)', (providerId) => {
+    const args = resolveDeviceLinkSubmission({
+      agentKind: 'pi',
+      candidate: { ...candidate, model: 'qwen3:14b', effort: 'medium', providerId },
+      deviceProviders: [
+        deviceProvider('missing-model', true, ['different-model'], 'pi'),
+        deviceProvider('other', true, ['qwen3:14b'], 'pi', { efforts: ['low', 'high'] }),
+      ],
+      capabilityAgentKind: 'pi',
+    });
+    expect(args.providerId).toBe(providerId);
+    expect(args.effort).toBe('medium');
   });
 
   it('无项目目录 → dialogue,且不把 workingDir 塞进 payload(转调派生未被绕过)', () => {
@@ -421,6 +646,6 @@ describe('resolveDeviceLinkSubmission', () => {
     });
     expect(fromGoal).toEqual(fromSend);
     // 且两者都已被校准(不是「一致地都错」)。
-    expect(fromSend.providerId).toBe('anthropic');
+    expect(fromSend.providerId).toBe('stale-source');
   });
 });

@@ -1,11 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import {
+  ensureInvokeLinkReady,
   invokeWithClosedLinkRecovery,
   requiresSessionLink,
 } from '../linkRecovery.js';
 
 describe('device-link closed link recovery', () => {
+  it('waits for the reliable link before sending a new read, while another peer proceeds', async () => {
+    let finish!: () => void;
+    const reopen = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const send = vi.fn();
+    const waiting = ensureInvokeLinkReady(() => true, reopen, () => {}).then(send);
+    const healthySend = vi.fn();
+    await ensureInvokeLinkReady(() => false, reopen, () => {}).then(healthySend);
+    expect(healthySend).toHaveBeenCalledOnce();
+    expect(send).not.toHaveBeenCalled();
+    expect(reopen).toHaveBeenCalledOnce();
+    finish();
+    await waiting;
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('does not send or reopen after cancellation, and rechecks cancellation after a pending handshake', async () => {
+    let cancelled = true;
+    const assertCurrent = () => { if (cancelled) throw new Error('cancelled'); };
+    let finish!: () => void;
+    const reopen = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    await expect(ensureInvokeLinkReady(() => true, reopen, assertCurrent)).rejects.toThrow('cancelled');
+    expect(reopen).not.toHaveBeenCalled();
+    cancelled = false;
+    const send = vi.fn();
+    const waiting = ensureInvokeLinkReady(() => true, reopen, assertCurrent).then(send);
+    cancelled = true;
+    finish();
+    await expect(waiting).rejects.toThrow('cancelled');
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('正常成功或不可重试错误不会触发 reopen', async () => {
     const successInvoke = vi.fn().mockResolvedValue({ ok: true });
     const reopen = vi.fn();
@@ -35,6 +67,37 @@ describe('device-link closed link recovery', () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.invocationCallOrder[0]).toBeLessThan(reopen.mock.invocationCallOrder[0]);
     expect(reopen.mock.invocationCallOrder[0]).toBeLessThan(invoke.mock.invocationCallOrder[1]);
+  });
+
+  it('peer reset 的幂等读请求会 reopen 后只重试一次', async () => {
+    const peerReset = new DeviceLinkError('PEER_RESET', 'peer link reset');
+    peerReset.inFlight = true;
+    let invokeCount = 0;
+    const invoke = vi.fn(async () => {
+      invokeCount += 1;
+      if (invokeCount === 1) throw peerReset;
+      return { ok: true };
+    });
+    const reopen = vi.fn(async () => undefined);
+
+    await expect(invokeWithClosedLinkRecovery(invoke, reopen)).resolves.toEqual({ ok: true });
+    expect(reopen).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('第二次 peer reset 不会开启第二轮自动重试', async () => {
+    const firstReset = new DeviceLinkError('PEER_RESET', 'first peer reset');
+    firstReset.inFlight = true;
+    const secondReset = new DeviceLinkError('PEER_RESET', 'second peer reset');
+    secondReset.inFlight = true;
+    const invoke = vi.fn()
+      .mockRejectedValueOnce(firstReset)
+      .mockRejectedValueOnce(secondReset);
+    const reopen = vi.fn(async () => undefined);
+
+    await expect(invokeWithClosedLinkRecovery(invoke, reopen)).rejects.toBe(secondReset);
+    expect(reopen).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 
   it('已发出的请求即使标成 LINK_NOT_OPEN 也不重试', async () => {

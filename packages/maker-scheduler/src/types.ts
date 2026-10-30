@@ -166,6 +166,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
  * 之前就失败，也可能通过后继续得到正常的 agent 结果。
  */
 export interface PreRunHookRunResult {
+  /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
+  checkSucceeded?: true;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;
@@ -190,7 +192,7 @@ export interface Schedule {
   jobType?: JobType;
   /** Release-compat tombstone：老 issue-triage 的 JSON 配置；新代码不读不写。 */
   jobConfig?: string;
-  source?: 'user' | 'project';
+  source?: 'user' | 'project' | 'bot';
   projectConfigId?: string;
   kind: ScheduleKind;
   cronExpr: string;
@@ -213,6 +215,10 @@ export interface Schedule {
    */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -220,13 +226,19 @@ export interface Schedule {
    * 语义与 desktop `session-provider-store` 的 null 对齐。
    */
   providerId?: string;
+  /**
+   * 新建任务时 Agent 运行在哪台电脑(同账号另一台电脑或分享来的供应商)。undefined = 本机。
+   * 设了时 providerId / model 属于那台电脑的已授权目录。绑定的任务仍存在时不使用:
+   * 运行位置跟随被绑定的任务。
+   */
+  agentDeviceId?: string;
   effort?: string;
   /**
    * Fast 模式：仅 Codex 有意义（agent capability `hasFastMode` 为 true）。
    * true → runner fire 时透传给 codex agent，落到 app-server 的 ServiceTier.Fast，
    * 输出更快。Claude agent 忽略此字段。undefined/false → 标准 tier。
    */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /**
    * New-session workspace semantics.
    * - project: workingDir is a user-selected project directory.
@@ -237,6 +249,7 @@ export interface Schedule {
   workspaceKind: ScheduleWorkspaceKind;
   workingDir?: string;
   useWorktree: boolean;
+  /** Script mode: lifecycle owner and sole dispatch target; no agent turn is started by the runner. */
   targetSessionId?: string;
   /**
    * 持续会话模式：true → runner 在第一次 fire 成功创建 session 后自动把 sessionId
@@ -245,15 +258,16 @@ export interface Schedule {
    *
    * 与 MCP 显式指定 `targetSessionId` 的"手绑 session"模式正交：显式绑定本身已经
    * 达到等效效果，`persistentSession=true` 在那种 schedule 上是 no-op；
-   * 绑定的 session 若被归档/删除：persistentSession=true → runner 自动清空
-   * targetSessionId 并本次 fire 走新建分支（自我续命）；persistentSession=false
-   * → 维持旧行为 pause 整条 schedule。
+   * 绑定的普通任务被归档时，自动输入与用户发送一样恢复原任务，完成后不重新归档。
+   * 仅当任务被删除或不存在时：persistentSession=true → runner 清空
+   * targetSessionId 并走新建分支；persistentSession=false → pause 整条 schedule。
    */
   persistentSession?: boolean;
   /**
    * 静默运行:true → 成功 run 默认不发通知、不产生未读小红点;任务 prompt 可自行说明
    * 哪些业务条件值得提醒,agent 在满足时调用 schedule_notify_current_run 主动上报。
-   * 失败/异常仍然通知。默认 false(每轮成功都按通知渠道提醒,旧行为)。
+   * 失败/异常仍然通知。未明确分类的新任务默认 false；检查入口显式设 true。
+   * 存量已存选择保持不变。
    */
   silentWhenIdle?: boolean;
   /** Execution mode; omitted/legacy schedules run an agent. */
@@ -275,6 +289,17 @@ export interface Schedule {
   nextFireAt?: number;
   expireAt?: number;
 }
+
+/** Complete persisted definition captured when a host approval is shown.
+ *
+ * `effectiveWorkingDir` is runtime-only metadata for a bound pre-run hook. It
+ * is intentionally excluded from the persisted schedule comparison, but is
+ * carried to the runner so the target session directory is checked again at
+ * the execution boundary.
+ */
+export type ScheduleMutationGuard = Readonly<Schedule> & {
+  effectiveWorkingDir?: string;
+};
 
 export interface ScheduleRun {
   id: string;
@@ -345,6 +370,10 @@ export interface CreateScheduleInput {
   /** Interval 语义间隔（毫秒）。详见 Schedule.intervalMs。 */
   intervalMs?: number;
   agentKind: AgentKind;
+  /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
+  modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -352,9 +381,11 @@ export interface CreateScheduleInput {
    * 语义与 desktop `session-provider-store` 的 null 对齐。
    */
   providerId?: string;
+  /** Agent 运行位置。详见 Schedule.agentDeviceId。 */
+  agentDeviceId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   /** Defaults to 'project' for backwards compatibility. */
   workspaceKind?: ScheduleWorkspaceKind;
   workingDir?: string;
@@ -362,7 +393,7 @@ export interface CreateScheduleInput {
   targetSessionId?: string;
   /** 默认 false。详见 Schedule.persistentSession。 */
   persistentSession?: boolean;
-  /** 默认 false。详见 Schedule.silentWhenIdle("静默运行")。 */
+  /** 仅明确判定为检查型的创建入口显式设 true；未分类 agent 与 script 缺省 false。存量与显式选择保持不变。 */
   silentWhenIdle?: boolean;
   /** Execution mode; defaults to agent for legacy schedules. */
   executionMode?: ScheduleExecutionMode;
@@ -487,7 +518,7 @@ export interface ScheduleTemplate {
   providerId?: string;
   effort?: string;
   /** Codex Fast 模式开关，仅 Codex 有意义。详见 Schedule.fastMode。 */
-  fastMode?: boolean;
+  fastMode?: boolean | 'ultrafast';
   useWorktree?: boolean;
   persistentSession?: boolean;
   silentWhenIdle?: boolean;

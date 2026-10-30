@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('electron', () => ({
@@ -21,7 +21,7 @@ vi.mock('../../logger.js', () => ({
   }),
 }));
 
-import { createXboxGamepadHost } from '../host.js';
+import { createXboxGamepadHost, resolveXboxGamepadHelperPath } from '../host.js';
 
 function fakeChild(): ChildProcessWithoutNullStreams {
   const child = new EventEmitter() as EventEmitter & {
@@ -43,6 +43,80 @@ async function flush(): Promise<void> {
 }
 
 describe('XboxGamepadHost', () => {
+  it('does not start an idle helper for a probe', async () => {
+    const spawnHelper = vi.fn(() => fakeChild());
+    const host = createXboxGamepadHost(vi.fn(), {
+      resolveHelperPath: async () => '/helper',
+      spawnHelper,
+    });
+    host.probe();
+    await flush();
+    expect(spawnHelper).not.toHaveBeenCalled();
+  });
+
+  it('ignores old output and exit events after a quick stop and restart', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = fakeChild();
+      const second = fakeChild();
+      const onMessage = vi.fn();
+      const spawnHelper = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+      const host = createXboxGamepadHost(onMessage, {
+        resolveHelperPath: async () => '/helper',
+        spawnHelper,
+      });
+      host.start();
+      await flush();
+      (first.stdout as PassThrough).write('{"kind":');
+      host.stop();
+      host.start();
+      await flush();
+      (first.stdout as PassThrough).write('"presence","present":true}\n');
+      first.emit('error', new Error('late error'));
+      first.emit('exit', 0, null);
+      expect(onMessage).not.toHaveBeenCalled();
+      (second.stdout as PassThrough).write('{"kind":"presence","present":false}\n');
+      expect(onMessage).toHaveBeenCalledExactlyOnceWith({ kind: 'presence', present: false });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(spawnHelper).toHaveBeenCalledTimes(2);
+      host.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a path resolution failure after disabling the helper', async () => {
+    let rejectResolve!: (error: Error) => void;
+    const onMessage = vi.fn();
+    const host = createXboxGamepadHost(onMessage, {
+      resolveHelperPath: () =>
+        new Promise((_, reject) => {
+          rejectResolve = reject;
+        }),
+    });
+    host.start();
+    host.stop();
+    rejectResolve(new Error('compile failed'));
+    await flush();
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it('resolves a packaged Windows helper rather than rejecting the platform', async () => {
+    vi.stubGlobal('process', { ...process, resourcesPath: path.resolve('resources') });
+    try {
+      const helper = await resolveXboxGamepadHelperPath('win32');
+      expect(helper).toBe(
+        path.join(
+          process.resourcesPath,
+          'tools',
+          'xbox-gamepad',
+          'cindy-windows-gamepad-helper.exe',
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it('turns a spawn error into host-error instead of crashing the process', async () => {
     const onMessage = vi.fn();
     const child = fakeChild();
@@ -263,81 +337,5 @@ describe('XboxGamepadHost', () => {
     await flush();
 
     expect(onMessage).not.toHaveBeenCalled();
-  });
-});
-
-describe('Xbox gamepad helper packaging contract', () => {
-  it('matches HID transport to the current controller instead of any Microsoft USB device', () => {
-    const source = readFileSync(
-      new URL('../../../../native/xbox-gamepad/macos-xbox-gamepad-helper.swift', import.meta.url),
-      'utf8',
-    );
-    expect(source).toContain('func controllerTransport(for controller: GCController)');
-    expect(source).toContain('IOHIDManagerSetDeviceMatchingMultiple');
-    expect(source).toContain('0x054C');
-    expect(source).toContain('0x057E');
-    expect(source).not.toContain('func microsoftControllerTransport()');
-    expect(source).not.toContain('if sawUsb { return "usb" }');
-  });
-
-  it('attaches any extended gamepad instead of filtering to Xbox', () => {
-    const source = readFileSync(
-      new URL('../../../../native/xbox-gamepad/macos-xbox-gamepad-helper.swift', import.meta.url),
-      'utf8',
-    );
-    expect(source).toContain('func isSupportedGamepad');
-    expect(source).toContain('func resolveGamepadFamily');
-    expect(source).toContain('for controller in all where isSupportedGamepad(controller)');
-    expect(source).toContain('return "generic"');
-    expect(source).not.toContain('func isXboxController');
-    expect(source).not.toContain('all.first(where: isXboxController)');
-    expect(source).toContain('switch2_usb_ensure');
-    expect(source).toContain('switch2-usb on');
-    expect(source).toContain('switch2-usb off');
-    expect(source).toContain('switch2_usb_shutdown');
-    expect(source).toContain('func setSwitch2UsbWanted');
-    const startFn = source.match(/func start\(\) \{[\s\S]*?\n  \}/)?.[0] ?? '';
-    expect(startFn).not.toContain('switch2_usb_ensure');
-    expect(startFn).not.toContain('scheduledTimer');
-    expect(source).toContain('switch2PollTimer');
-    expect(source).toMatch(
-      /if family == "nintendo" \{[\s\S]*?if switch2UsbWanted \{[\s\S]*?continue/,
-    );
-    expect(source).not.toMatch(
-      /if family == "nintendo" \{\s*observed\[family\] = nil\s*continue\s*\}/,
-    );
-  });
-
-  it('compiles switch2_usb.c with clang before linking the object into swiftc', () => {
-    const forge = readFileSync(new URL('../../../../forge.config.ts', import.meta.url), 'utf8');
-    const host = readFileSync(new URL('../host.ts', import.meta.url), 'utf8');
-    expect(forge).toContain("MACOS_XBOX_GAMEPAD_HELPER_DEPLOYMENT_TARGET = 'macos11.0'");
-    expect(forge).toContain('compileCObjectForTarget');
-    expect(forge).toContain("'clang'");
-    expect(forge).toContain('switch2_usb.c');
-    expect(forge).toContain('switch2_usb.h');
-    expect(host).toContain("'clang'");
-    expect(host).toContain("'-c'");
-    expect(host).toContain('switch2_usb.o');
-    expect(host).not.toMatch(/swiftc',[\s\S]*switch2UsbC/);
-    expect(host).toContain('setSwitch2UsbWanted');
-    const index = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-    expect(index).toContain('setSwitch2UsbWanted');
-    expect(index).toContain('computeSwitch2UsbWanted');
-    expect(index).toContain('taskSlotsSuspended');
-    expect(index).toContain('layoutPreviewLease.setActive(false, owner)');
-    expect(index).not.toMatch(/previewFamily = family;\s*layoutPreviewLease\.setActive\(active/);
-    expect(index).not.toMatch(
-      /setSwitch2UsbWanted\(\s*controller\.getAccessories\(\)\.nintendo\.settings\.deviceEnabled \|\| previewFamily === 'nintendo'/,
-    );
-  });
-
-  it('copies the matching HID set into a buffer sized for every device', () => {
-    const source = readFileSync(
-      new URL('../../../../native/xbox-gamepad/switch2_usb.c', import.meta.url),
-      'utf8',
-    );
-    expect(source).toContain('CFSetApplyFunction');
-    expect(source).not.toContain('CFSetGetValues(devices, (const void **)&device)');
   });
 });

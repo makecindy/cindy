@@ -100,6 +100,37 @@ describe('serveSshRemoteMedia', () => {
     };
   }
 
+  it('versions remote identity independently of the materialized cache location', async () => {
+    let cachePath = '/cache/generation-1/a.png';
+    let size = 4;
+    let mtimeMs = 1;
+    const deps = makeDeps({
+      request: vi.fn(async () => ({ type: 'file', size, mtimeMs })) as unknown as SshMediaDeps['request'],
+      fetchToCache: vi.fn(async () => cachePath),
+    });
+    const version = async (host = 'host-1', workdir = '/home/u/proj', rel = 'a.png') => {
+      const result = await materializeSshRemoteMedia(
+        { remoteHostId: host, workdir },
+        `xdt-file://local/?path=${encodeURIComponent(`${workdir}/${rel}`)}`,
+        deps,
+      );
+      if (!result.ok) throw new Error(result.message);
+      expect(result.sourceVersion).toMatch(/^[a-f0-9]{64}$/);
+      return result.sourceVersion;
+    };
+    const first = await version();
+    cachePath = '/cache/generation-2/a.png';
+    expect(await version()).toBe(first);
+    expect(await version('host-2')).not.toBe(first);
+    expect(await version('host-1', '/other')).not.toBe(first);
+    expect(await version('host-1', '/home/u/proj', 'b.png')).not.toBe(first);
+    mtimeMs++;
+    expect(await version()).not.toBe(first);
+    mtimeMs--;
+    size++;
+    expect(await version()).not.toBe(first);
+  });
+
   it('无路径语义(cache-id / 非 path scheme)→ 400,不触上游', async () => {
     const deps = makeDeps();
     const r = await serveSshRemoteMedia(origin, 'xdt-image://sess/a.png', null, deps);
@@ -170,6 +201,7 @@ describe('serveSshRemoteMedia', () => {
     expect(result).toEqual({
       ok: true,
       cachePath: path.join(tmpDir, 'cached.png'),
+      sourceVersion: expect.stringMatching(/^[a-f0-9]{64}$/),
       size: 4,
       mime: 'image/png',
       relPath: 'out/a.png',
@@ -279,6 +311,23 @@ describe('materializeSshRemoteMedia — baseDir / maxBytes 约束', () => {
     expect(r.ok === false && r.status).toBe(403);
     expect(r.ok === false && r.message).toMatch(/超出取件大小上限/);
     expect(fetchToCache).not.toHaveBeenCalled();
+  });
+
+  it('on-demand HTML 入口文档允许 .html', async () => {
+    const fetchToCache = vi.fn(async () => {
+      const p = path.join(tmpDir, 'cached.html');
+      await writeFile(p, '<h1>ok</h1>');
+      return p;
+    });
+    const deps: SshMediaDeps = {
+      request: vi.fn(async () => ({ type: 'file', size: 9, mtimeMs: 1 })) as unknown as SshMediaDeps['request'],
+      fetchToCache: fetchToCache as unknown as SshMediaDeps['fetchToCache'],
+    };
+    const r = await materializeSshRemoteMedia(origin, urlFor('/home/u/proj/out/index.html'), deps, {
+      baseDir: '/home/u/proj/out',
+    });
+    expect(r.ok).toBe(true);
+    expect(fetchToCache).toHaveBeenCalledTimes(1);
   });
 
   it('maxBytes 内 → 正常拉取', async () => {

@@ -15,6 +15,16 @@ identifier = "allow-quit-now"
 description = "Allow the UI to terminate the updater process."
 commands.allow = ["quit_now"]
 
+[[permission]]
+identifier = "allow-retry-update"
+description = "Allow the UI to start a user-requested update retry."
+commands.allow = ["retry_update"]
+
 [default]
 description = "All commands the cindy-updater UI needs."
-permissions = ["allow-get-status", "allow-open-log-dir", "allow-quit-now"]
+permissions = [
+  "allow-get-status",
+  "allow-open-log-dir",
+  "allow-quit-now",
+  "allow-retry-update",
+]

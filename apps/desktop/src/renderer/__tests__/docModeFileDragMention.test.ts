@@ -165,7 +165,7 @@ describe('doc mode file and folder drag to mention', () => {
     expect(consumed).toBe(true);
     expect(addFileMention).not.toHaveBeenCalled();
     expect(addFolderPath).toHaveBeenCalledOnce();
-    expect(addFolderPath).toHaveBeenCalledWith('src/features');
+    expect(addFolderPath).toHaveBeenCalledWith('src/features', 'task');
   });
 
   it('ignores invalid drag payloads so native file drop handling can continue', () => {

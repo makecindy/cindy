@@ -146,6 +146,34 @@ describe('scheduleToCamel', () => {
 });
 
 describe('scheduleCreateToRow', () => {
+  // Unit: preserve the three location states across storage and partial edits.
+  it.each([undefined, '', 'shared:owner'])('round-trips Agent location %j without changing prior fields', (modelAgentDeviceId) => {
+    const original = baseSchedule({ modelAgentDeviceId, modelAgentKind: 'codex', model: 'remote-model', providerId: 'remote-provider' });
+    const row = scheduleCreateToRow(original);
+    const renamed = scheduleToCamel({ ...row, ...schedulePatchToRow({ name: 'renamed' }) } as ScheduleRowLike);
+    expect(renamed).toMatchObject({ ...original, name: 'renamed' });
+    const cleared = scheduleToCamel({ ...row, ...schedulePatchToRow({ modelAgentDeviceId: undefined }) } as ScheduleRowLike);
+    expect(cleared.modelAgentDeviceId).toBeUndefined();
+  });
+  it('round-trips an explicit model Harness and clears it without changing the legacy agent', () => {
+    const original = baseSchedule({ agentKind: 'codex', modelAgentKind: 'pi', model: 'test-model', providerId: 'custom', fastMode: true });
+    const row = scheduleCreateToRow(original);
+    expect(row.modelAgentKind).toBe('pi');
+    expect(scheduleToCamel(row as ScheduleRowLike)).toEqual(original);
+    expect(scheduleCreateToRow(baseSchedule()).modelAgentKind).toBeNull();
+    expect(schedulePatchToRow({ modelAgentKind: undefined })).toEqual({ modelAgentKind: null });
+    expect(schedulePatchToRow({ name: 'renamed' })).not.toHaveProperty('modelAgentKind');
+    const followed = scheduleToCamel({ ...row, ...schedulePatchToRow({
+      modelAgentKind: undefined, model: undefined, providerId: undefined,
+      effort: undefined, fastMode: undefined,
+    }) } as ScheduleRowLike);
+    expect(followed).toMatchObject({ agentKind: 'codex', fastMode: false });
+    expect(followed.modelAgentKind).toBeUndefined();
+    expect(followed.model).toBeUndefined();
+    expect(followed.providerId).toBeUndefined();
+    expect(followed.effort).toBeUndefined();
+  });
+
   it('拆 notify 为两列', () => {
     const row = scheduleCreateToRow(baseSchedule({ notify: { desktop: false, feishu: true } }));
     expect(row.notifyDesktop).toBe(false);

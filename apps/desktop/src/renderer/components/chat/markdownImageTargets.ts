@@ -6,10 +6,24 @@ import {
   normalizeMarkdownRendererContent,
   REMARK_PLUGINS_PRIVILEGED,
 } from './MarkdownRenderer';
+import { isManagedMarkdownVideoUrl } from './markdownMedia';
 
 const markdownImageParser = unified()
   .use(remarkParse)
   .use(REMARK_PLUGINS_PRIVILEGED);
+
+/**
+ * Per-session cache for image targets extracted from completed assistant
+ * messages. The content is checked as well as the client id because a live
+ * message is updated in place while it streams; stale targets must never
+ * leak into the next turn.
+ */
+export interface MarkdownImageTargetCacheEntry {
+  content: string;
+  targets: string[];
+}
+
+export type MarkdownImageTargetCache = Map<string, MarkdownImageTargetCacheEntry>;
 
 /** 与 MarkdownRenderer 同源解析，只返回实际会进入 img renderer 的图片地址。 */
 export function extractRenderedMarkdownImageTargets(markdown: string): string[] {
@@ -20,9 +34,30 @@ export function extractRenderedMarkdownImageTargets(markdown: string): string[] 
   const urls: string[] = [];
   const seen = new Set<string>();
   visit(tree, 'image', (node: Image) => {
-    if (!node.url || seen.has(node.url)) return;
+    // Markdown image syntax can carry generated videos. Those targets are
+    // rendered by ChatVideoView and must not be counted as images for inline
+    // image fallback / delivery decisions.
+    if (!node.url || isManagedMarkdownVideoUrl(node.url) || seen.has(node.url)) return;
     seen.add(node.url);
     urls.push(node.url);
   });
   return urls;
+}
+
+/**
+ * Read or populate the completed-message cache used by MessageStream.
+ * Empty results are cached too: most assistant messages contain no images,
+ * and treating that as a cacheable result avoids repeatedly parsing prose.
+ */
+export function extractCachedRenderedMarkdownImageTargets(
+  markdown: string,
+  cache: MarkdownImageTargetCache,
+  cacheKey: string,
+): string[] {
+  const cached = cache.get(cacheKey);
+  if (cached?.content === markdown) return cached.targets;
+
+  const targets = extractRenderedMarkdownImageTargets(markdown);
+  cache.set(cacheKey, { content: markdown, targets });
+  return targets;
 }

@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough, Readable, addAbortSignal } from 'node:stream';
 
 /** Electron net.fetch(Chromium 网络栈):OSS GET / range,以及 PUT 的回退跳。 */
 const netFetchMock = vi.hoisted(() => vi.fn());
@@ -33,8 +33,9 @@ vi.mock('../../appCapabilities.js', () => ({
   requireAppCapability: vi.fn(),
 }));
 
-vi.mock('../index.js', () => ({
-  deviceLinkApiBase: () => 'http://relay.test:3335',
+// presign 经 deviceLinkApi 发往当前中转;未启用自建中转时即官方清单里的 device-link 地址。
+vi.mock('../../clientEndpointsService.js', () => ({
+  getClientEndpoint: () => 'http://relay.test:3335',
 }));
 
 vi.mock('../../logger.js', () => ({
@@ -167,6 +168,78 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
     expect(netFetchMock).not.toHaveBeenCalled();
   });
 
+  it.each(['stat', 'presign', 'read', 'put'])('stops a stale attachment after %s and cleans any staged object', async stage => {
+    let current = true;
+    const assertCurrent = () => { if (!current) throw new Error('stale attachment'); };
+    if (stage === 'stat') statMock.mockImplementationOnce(async () => { current = false; return { isFile: () => true, size: 100 }; });
+    if (stage === 'presign') apiFetch.mockImplementationOnce(async () => { current = false; return { putUrl: 'https://oss.example/put', key: KEY }; });
+    if (stage === 'read') readFileMock.mockImplementationOnce(async () => { current = false; return Buffer.alloc(100); });
+    if (stage === 'put') undiciFetchMock.mockImplementationOnce(async () => { current = false; return { ok: true, status: 200 }; });
+    await expect(uploadLocalFile('/tmp/a.png', { assertCurrent })).rejects.toThrow('stale attachment');
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual(stage === 'stat' ? [] : [PUT_PATH, DEL_PATH]);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(stage === 'put' ? 1 : 0);
+    expect(netFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('取消上传 → 立刻中止 PUT,不换传输栈重试,并删除已签发的对象', async () => {
+    const abort = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    await expect(uploadLocalFile('/tmp/a.png', { signal: abort.signal })).rejects.toThrow(
+      'UPLOAD_CANCELLED',
+    );
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    expect(netFetchMock).not.toHaveBeenCalled();
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual([PUT_PATH, DEL_PATH]);
+    // Already cancelled: nothing is presigned or sent.
+    apiFetch.mockClear();
+    undiciFetchMock.mockClear();
+    await expect(uploadLocalFile('/tmp/a.png', { signal: abort.signal })).rejects.toThrow();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('预签名无响应时取消 → 立即中止,不发 PUT;清理删除有期限且取消不等它', async () => {
+    const abort = new AbortController();
+    apiFetch.mockImplementation((path: string) =>
+      path === PUT_PATH ? new Promise(() => {}) : Promise.resolve({ deleted: true }),
+    );
+    const upload = uploadLocalFile('/tmp/a.png', { signal: abort.signal });
+    await vi.waitFor(() => expect(apiFetch).toHaveBeenCalled());
+    abort.abort();
+    await expect(upload).rejects.toThrow('UPLOAD_CANCELLED');
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    // A cancelled PUT does not wait for the (possibly hanging) delete; the delete itself is bounded.
+    apiFetch.mockClear();
+    apiFetch.mockImplementation((path: string) =>
+      path === PUT_PATH
+        ? Promise.resolve({ putUrl: 'https://oss.example/put', key: KEY, expiresAt: 'x' })
+        : new Promise(() => {}),
+    );
+    const second = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          second.abort();
+        }),
+    );
+    await expect(uploadLocalFile('/tmp/a.png', { signal: second.signal })).rejects.toThrow(
+      'UPLOAD_CANCELLED',
+    );
+    const deleteCall = apiFetch.mock.calls.find(([path]) => path === DEL_PATH);
+    expect(deleteCall?.[1]).toMatchObject({ method: 'DELETE', timeoutMs: 15_000 });
+  });
+
   it('路径不是文件 → 抛错', async () => {
     statMock.mockResolvedValue({ isFile: () => false, size: 0 });
     await expect(uploadLocalFile('/tmp/dir')).rejects.toThrow();
@@ -178,6 +251,207 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
     expect(apiFetch).not.toHaveBeenCalled();
     expect(undiciFetchMock).not.toHaveBeenCalled();
     expect(netFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('uploadLocalFile — bounded snapshots', () => {
+  // #6530 / r4322420399, unit: the OSS entry must classify pathless local fd denials,
+  // unlike fetch failures. Existing source-error tests cover EIO, not permission recovery.
+  it.each(['buffer', 'bounded-stream', 'large-stream'] as const)(
+    'returns a safe access error for a pathless %s source denial', async mode => {
+      const size = mode === 'large-stream' ? __testing.STREAM_THRESHOLD + 1 : 100;
+      statMock.mockResolvedValue({ isFile: () => true, size });
+      const denial = Object.assign(new Error('read denied'), {
+        code: 'EACCES', syscall: mode === 'buffer' ? 'fstat' : 'read',
+      });
+      if (mode === 'buffer') readFileMock.mockRejectedValueOnce(denial);
+      createReadStreamMock.mockImplementation(() => new Readable({
+        read() { this.destroy(denial); },
+      }));
+      undiciFetchMock.mockImplementation(drainingPut);
+      const failure = await uploadLocalFile('/private/source.xlsx',
+        mode === 'bounded-stream' ? { maxBytes: size } : undefined).catch(error => error);
+      expect(failure).toMatchObject({ code: 'DEVICE_LINK_MEDIA_ACCESS_DENIED' });
+      expect(String(failure)).not.toContain('/private/');
+      expect(failure).not.toHaveProperty('path');
+      expect(failure).not.toHaveProperty('cause');
+      expect(netFetchMock).not.toHaveBeenCalled();
+      if (mode !== 'large-stream') expect(undiciFetchMock).not.toHaveBeenCalled();
+      expect(apiFetch).toHaveBeenCalledWith(
+        DEL_PATH, expect.objectContaining({ method: 'DELETE', body: { key: KEY } }),
+      );
+    },
+  );
+
+  it.each(['network', 'other-source'] as const)(
+    'does not label %s permission errors as attachment access denial', async kind => {
+      statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+      const denial = Object.assign(new Error('permission failure'), kind === 'network'
+        ? { code: 'EACCES', syscall: 'connect' }
+        : { code: 'EPERM', syscall: 'read', path: '/other/source' });
+      readFileMock.mockResolvedValue(Buffer.alloc(100));
+      if (kind === 'other-source') readFileMock.mockRejectedValueOnce(denial);
+      undiciFetchMock.mockRejectedValue(denial);
+      netFetchMock.mockRejectedValue(denial);
+      const failure = await uploadLocalFile('/private/source.xlsx').catch(error => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.code).not.toBe('DEVICE_LINK_MEDIA_ACCESS_DENIED');
+      if (kind === 'other-source') expect(failure).toBe(denial);
+    },
+  );
+
+  it.each([NaN, Infinity, -1, 1.5, 99])(
+    'rejects invalid or exceeded budget %s before presign',
+    async (maxBytes) => {
+      statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+      await expect(uploadLocalFile('/tmp/a.bin', { maxBytes })).rejects.toThrow();
+      expect(apiFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, 100])(
+    'uploads bounded small files of %s bytes without an unbounded read',
+    async (size) => {
+      statMock.mockResolvedValue({ isFile: () => true, size });
+      createReadStreamMock.mockImplementation(() =>
+        Readable.from(size ? [Buffer.alloc(size)] : []),
+      );
+      okPut();
+      await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: size })).resolves.toMatchObject({
+        size,
+      });
+      expect(createReadStreamMock).toHaveBeenCalledWith('/tmp/a.bin', { end: size });
+      expect(readFileMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects small-file growth before PUT and removes the presigned object', async () => {
+    statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+    createReadStreamMock.mockImplementation(() => Readable.from([Buffer.alloc(101)]));
+    await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: 100 })).rejects.toThrow(
+      'REMOTE_FILE_TOO_LARGE',
+    );
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('rejects streaming growth before forwarding excess bytes without retrying the source failure', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    createReadStreamMock.mockImplementation(() =>
+      Readable.from([Buffer.alloc(size), Buffer.alloc(1)]),
+    );
+    let received = 0;
+    undiciFetchMock.mockImplementation(async (_url, init) => {
+      for await (const chunk of init.body) received += chunk.length;
+      return { ok: true, status: 200 };
+    });
+    await expect(uploadLocalFile('/tmp/a.bin', { maxBytes: size })).rejects.toThrow();
+    expect(received).toBeLessThanOrEqual(size);
+    expect(createReadStreamMock).toHaveBeenCalledWith('/tmp/a.bin', { end: size });
+    expect(netFetchMock).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith(DEL_PATH, expect.objectContaining({ method: 'DELETE' }));
+  });
+});
+
+describe('uploadLocalFile — 流式上传取消', () => {
+  it('取消时等源文件流真正关闭后才返回(Windows 删除暂存目录前文件必须已关闭)', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    // Slow close, like a busy disk: a caller that settles early would observe `closed === false`.
+    const source = new Readable({
+      read() {
+        this.push(Buffer.alloc(1024, 1));
+      },
+      destroy(error, callback) {
+        setTimeout(() => callback(error), 30);
+      },
+    });
+    createReadStreamMock.mockImplementation(() => source);
+    const abort = new AbortController();
+    undiciFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    const settled = await uploadLocalFile('/tmp/big.mp4', { signal: abort.signal }).then(
+      () => ({ error: '', closed: source.closed }),
+      (error: Error) => ({ error: error.message, closed: source.closed }),
+    );
+    expect(settled).toEqual({ error: 'UPLOAD_CANCELLED', closed: true });
+  });
+});
+
+describe('uploadLocalFile — 小文件预读取消', () => {
+  it('预读卡在慢盘时取消 → 立即停止读取,等读流关闭后返回,不发 PUT', async () => {
+    statMock.mockResolvedValue({ isFile: () => true, size: 100 });
+    let source!: Readable;
+    // A read that never completes, honouring the signal the way fs streams do.
+    createReadStreamMock.mockImplementation((_path: string, options: { signal?: AbortSignal }) => {
+      source = new Readable({
+        read() {},
+        destroy(error, callback) {
+          setTimeout(() => callback(error), 30);
+        },
+      });
+      return options.signal ? addAbortSignal(options.signal, source) : source;
+    });
+    const abort = new AbortController();
+    const upload = uploadLocalFile('/tmp/a.png', { maxBytes: 100, signal: abort.signal });
+    await vi.waitFor(() => expect(createReadStreamMock).toHaveBeenCalled());
+    abort.abort();
+    const settled = await upload.then(
+      () => ({ failed: false, closed: source.closed }),
+      () => ({ failed: true, closed: source.closed }),
+    );
+    expect(settled).toEqual({ failed: true, closed: true });
+    expect(undiciFetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('uploadLocalFile — 换栈重试后取消', () => {
+  it('等所有尝试打开过的源文件流都关闭后才返回', async () => {
+    const size = __testing.STREAM_THRESHOLD + 1;
+    statMock.mockResolvedValue({ isFile: () => true, size });
+    // The first attempt's stream closes more slowly than the retry's.
+    const slowSource = (closeMs: number) =>
+      new Readable({
+        read() {
+          this.push(Buffer.alloc(1024, 1));
+        },
+        destroy(error, callback) {
+          setTimeout(() => callback(error), closeMs);
+        },
+      });
+    const sources = [slowSource(60), slowSource(10)];
+    const opened: Readable[] = [];
+    createReadStreamMock.mockImplementation(() => {
+      const source = sources.shift()!;
+      opened.push(source);
+      return source;
+    });
+    // undici fails at the network layer → retry via Electron net, which the user cancels.
+    undiciFetchMock.mockRejectedValue(new TypeError('fetch failed'));
+    const abort = new AbortController();
+    netFetchMock.mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          abort.abort();
+        }),
+    );
+    const settled = await uploadLocalFile('/tmp/big.mp4', { signal: abort.signal }).then(
+      () => ({ error: '', closed: opened.map((source) => source.closed) }),
+      (error: Error) => ({ error: error.message, closed: opened.map((source) => source.closed) }),
+    );
+    expect(settled).toEqual({ error: 'UPLOAD_CANCELLED', closed: [true, true] });
   });
 });
 
@@ -459,6 +733,15 @@ describe('putBytesToOss — 传输栈回退', () => {
 });
 
 describe('uploadBuffer — 内存字节(base64 附件)', () => {
+  it.each(['presign', 'put'])('discards a stale in-memory attachment after %s', async stage => {
+    let current = true;
+    if (stage === 'presign') apiFetch.mockImplementationOnce(async () => { current = false; return { putUrl: 'https://oss.example/put', key: KEY }; });
+    else undiciFetchMock.mockImplementationOnce(async () => { current = false; return { ok: true, status: 200 }; });
+    await expect(uploadBuffer(Buffer.from([1]), { ext: 'png', assertCurrent: () => { if (!current) throw new Error('stale'); } })).rejects.toThrow('stale');
+    expect(apiFetch.mock.calls.map(([path]) => path)).toEqual([PUT_PATH, DEL_PATH]);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(stage === 'put' ? 1 : 0);
+  });
+
   it('presign-put 带 size/ext/contentType,整体 PUT,返回 key', async () => {
     okPut();
     const r = await uploadBuffer(Buffer.from([1, 2, 3, 4, 5]), {
@@ -490,6 +773,20 @@ describe('uploadBuffer — 内存字节(base64 附件)', () => {
 });
 
 describe('downloadToFile — 原子完整性校验', () => {
+  it.each([403, 500])('preserves a safe code and HTTP %s without publishing a file', async (status) => {
+    netFetchMock.mockResolvedValue({ ok: false, status });
+    await expect(downloadToFile(KEY, '/tmp/final.bin')).rejects.toMatchObject({ code: 'OSS_DOWNLOAD_FAILED', status });
+    expect(createWriteStreamMock).not.toHaveBeenCalled();
+    expect(renameMock).not.toHaveBeenCalled();
+  });
+
+  it('拒绝超出声明大小的流，不发布目标文件', async () => {
+    netFetchMock.mockResolvedValue({ ok: true, status: 200, body: webBody(Uint8Array.from([1, 2, 3])) });
+    await expect(downloadToFile(KEY, '/tmp/final.bin', { size: 1, sha256: 'a'.repeat(64) }))
+      .rejects.toThrow('附件下载超出声明大小');
+    expect(renameMock).not.toHaveBeenCalled();
+    expect(rmMock).toHaveBeenCalledWith(expect.stringMatching(/\.part$/), { force: true });
+  });
   it('大小和 SHA-256 都匹配后才发布目标文件', async () => {
     const bytes = Uint8Array.from([1, 2, 3]);
     netFetchMock.mockResolvedValue({ ok: true, status: 200, body: webBody(bytes) });

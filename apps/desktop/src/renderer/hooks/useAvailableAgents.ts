@@ -145,6 +145,10 @@ function remoteRosterKeys(): Set<string> {
 }
 
 function notifyRosterChanged(deviceId?: string): void {
+  // Presence includes controller-only phones. Query only devices whose agent
+  // roster has actually been used; probing phones can reject the reverse link
+  // and interrupt their incoming remote-control connection.
+  if (deviceId && !remoteRosterKeys().has(deviceId)) return;
   const key = cacheKeyOf(deviceId);
   if (!invalidateAgentsCache(key)) return;
   if (deviceId) refreshRemoteCapabilitiesOnce(deviceId);
@@ -262,7 +266,14 @@ export function useAvailableAgents(deviceId?: string | null): UseAvailableAgents
         });
     };
     run();
-    const offRosterChanged = subscribeRosterChanges(key, run);
+    const offRosterChanged = subscribeRosterChanges(key, () => {
+      // A change push revokes the old roster immediately, including while the
+      // replacement request is pending or fails. Consumers can disable writes
+      // until a current-generation response makes the roster authoritative again.
+      setAvailableVendors(new Set());
+      setLoaded(false);
+      run();
+    });
     // 会话期间 Pi 二进制可能被按需下载补齐:窗口重新聚焦时再拉一次,让入口及时出现。
     // 节流:补齐是分钟级的事,秒级来回切窗口不必反复打 IPC(远程还要过隧道)。
     const onFocus = (): void => {
@@ -293,4 +304,18 @@ export function __resetAvailableAgentsCacheForTest(): void {
   agentsCache.clear();
   inFlight.clear();
   agentsCacheInvalidationScheduled.clear();
+}
+
+/** Model pickers keep the current Harness visible while excluding unregistered runtimes. */
+export function useModelPickerAgents(current: RuntimeAgentKind, deviceId?: string | null): readonly RuntimeAgentKind[] | undefined {
+  const { availableVendors, loaded } = useAvailableAgents(deviceId);
+  if (!loaded) return undefined;
+  return (['claude-code', 'codex', 'pi'] as const).filter(
+    (agent) => agent === current || availableVendors.has(toVendor(agent)),
+  );
+}
+
+/** Synchronous projection of the same runtime roster used by the client picker. */
+export function getCachedAvailableVendors(): ReadonlySet<MakerVendor> | null {
+  return agentsCache.get('')?.vendors ?? null;
 }

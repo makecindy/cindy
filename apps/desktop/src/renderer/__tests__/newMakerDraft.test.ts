@@ -98,6 +98,79 @@ describe('newMakerDraft store', () => {
     expect(reloaded.getDraft().defaultTupleCustomized).toBe(false);
   });
 
+  it.each([false, true])('Gateway 后到不抢订阅，Codex 后到只更新未自定义草稿（手动选择=%s）', async (customized) => {
+    const { resolveNewMakerDefaultTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
+    const sources: import('@cindy/model-providers').ProviderView[] = [
+      {
+        id: 'anthropic',
+        name: 'Claude',
+        source: 'builtin',
+        connected: true,
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        access: { kind: 'subscription', product: 'Claude' },
+        routing: {},
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-opus-5-5',
+              name: 'Opus',
+              contextWindow: 272000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    const resolve = () =>
+      resolveNewMakerDefaultTuple({
+        providers: sources,
+        providersLoading: false,
+        availableAgents: new Set(['cc', 'codex', 'pi']),
+        availableAgentsLoaded: true,
+      })!;
+    expect(applySuggestedDefaultTuple(resolve())).toBe(true);
+    expect(getDraft().vendor).toBe('cc');
+    if (customized) markDefaultTupleCustomized();
+    sources.push({
+      id: 'xd',
+      name: 'Cindy AI',
+      source: 'builtin',
+      connected: true,
+      agents: ['pi'],
+      auth: { method: 'managed' },
+      access: { kind: 'managed' },
+      routing: {},
+      models: {
+        pi: [
+          {
+            id: 'auto',
+            name: 'Auto',
+            contextWindow: 200000,
+            efforts: ['high'],
+            defaultEffort: 'high',
+            newSessionDefault: ['pi'],
+            modalities: { input: ['text', 'image'], output: ['text'] },
+          },
+        ],
+      },
+    });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+    expect(getDraft().vendor).toBe('cc');
+    sources.push({ ...sources[0]!, id: 'openai', agents: ['codex'],
+      access: { kind: 'subscription', product: 'ChatGPT' },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'Sol', contextWindow: 272000, efforts: ['high'], defaultEffort: 'high' }] },
+    });
+    expect(applySuggestedDefaultTuple(resolve())).toBe(!customized);
+    const draft = getDraft();
+    expect(draft.vendor).toBe(customized ? 'cc' : 'codex');
+    expect(draft.lastByVendor[draft.vendor].providerId).toBe(customized ? 'anthropic' : 'openai');
+    expect(draft.defaultTupleCustomized).toBe(customized);
+    expect(applySuggestedDefaultTuple(resolve())).toBe(false);
+  });
+
   it('用户明确改过组合后，登录态变化不再覆盖', async () => {
     const { applySuggestedDefaultTuple, getDraft, markDefaultTupleCustomized } = await loadModule();
     markDefaultTupleCustomized();
@@ -736,6 +809,219 @@ describe('newMakerDraft store', () => {
     const m2 = await loadModule();
     expect(m2.getDraft().modelChosenByVendor).toEqual({ cc: true });
     expect(m2.getPersistedVendorModel('cc')).toBe('claude-opus-4-8');
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:新建默认在另一个来源上时,任务内只换模型不改写', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic', effort: 'high' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd', effort: 'medium' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+      effort: 'high',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:来源一致时照常写回并打标', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: 'anthropic', effort: 'xhigh' },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+      effort: 'xhigh',
+    });
+    expect(m1.getDraft().modelChosenByVendor).toEqual({ cc: true });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:存着的来源已被搬走时按实际路由比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // 服务端把该 Auto 搬到了 xd:实际来源是 xd，不是存着的 org-pool。
+    const moved = () => 'xd';
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        moved,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('org-pool');
+    // 解析不出来时回退用存着的来源比较。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'auto/pool', providerId: 'org-pool' },
+        'org-pool',
+        () => null,
+      ),
+    ).toBe(true);
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:保留的草稿来源对新模型已失效时改写入任务实际来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：旧 org-pool 对任何模型都解析不到，实际落点是 xd。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool'
+        ? 'xd'
+        : prefs.providerId === 'org-pool'
+          ? null
+          : (prefs.providerId ?? null);
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'plain-model', providerId: null },
+      'xd',
+      resolve,
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:旧来源搬走后即使仍能提供新模型也不复活', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    // Auto 已搬到 xd：存着的 org-pool 实际落点是 xd；org-pool 对普通模型仍然能提供。
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: null },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'plain-model',
+      providerId: 'xd',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:patch 里带着过期来源时仍写入已确认的任务来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'auto/pool', providerId: 'org-pool' });
+    const resolve = (prefs: { model: string; providerId?: string | null }) =>
+      prefs.model === 'auto/pool' ? 'xd' : (prefs.providerId ?? null);
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'plain-model', providerId: 'org-pool' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('xd');
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:草稿本来跟随默认路由时保持跟随', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'claude-sonnet-5-5', providerId: 'anthropic' },
+        'anthropic',
+        () => 'anthropic',
+      ),
+    ).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: null,
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:任务跟随默认路由时保留草稿显式选过的同一来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'anthropic' });
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'claude-sonnet-5-5', providerId: null },
+      'anthropic',
+    );
+
+    expect(written).toBe(true);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({
+      model: 'claude-sonnet-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:跟随默认路由的新建默认按解析出的来源比较', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: null });
+    const resolve = (prefs: { model: string }) =>
+      prefs.model === 'claude-opus-5-5' ? 'anthropic' : null;
+
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        resolve,
+      ),
+    ).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+
+    // 新建默认的来源解析不出来(目录未就绪等)时不能放行，否则会绕过保护把默认搬到任务的来源。
+    expect(
+      m1.patchVendorPrefsFromTaskModelSwitch(
+        'cc',
+        { model: 'anthropic/claude-opus-5-5', providerId: 'xd' },
+        'xd',
+        () => null,
+      ),
+    ).toBe(false);
+    expect(m1.patchVendorPrefsFromTaskModelSwitch('cc', { model: 'x', providerId: 'xd' }, 'xd')).toBe(
+      false,
+    );
+    expect(m1.getDraft().lastByVendor.cc).toMatchObject({ model: 'claude-opus-5-5', providerId: null });
+  });
+
+  it('patchVendorPrefsFromTaskModelSwitch:先吸收另一窗口刚保存的默认再比较来源', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('cc', { model: 'claude-opus-5-5', providerId: 'xd' });
+    // 另一窗口把新建默认改成 anthropic，本窗口的 storage 事件还没送达。
+    const stored = JSON.parse(memStorage.getItem([...(memStorage as any).store.keys()][0]) as string);
+    stored.lastByVendor.cc = { ...stored.lastByVendor.cc, model: 'claude-opus-5-5', providerId: 'anthropic' };
+    stored.modelChosenByVendor = { cc: true };
+    stored.defaultTupleCustomized = true;
+    stored.defaultTupleSelectionCustomized = true;
+    memStorage.setItem([...(memStorage as any).store.keys()][0], JSON.stringify(stored));
+
+    const written = m1.patchVendorPrefsFromTaskModelSwitch(
+      'cc',
+      { model: 'anthropic/claude-sonnet-5-5', providerId: 'xd' },
+      'xd',
+    );
+
+    expect(written).toBe(false);
+    expect(m1.getDraft().lastByVendor.cc.providerId).toBe('anthropic');
   });
 
   it('patchVendorPrefsPreservingModelChoice:只改思考档不打显式选择标记', async () => {
@@ -1742,4 +2028,123 @@ describe('newMakerDraft store', () => {
       expect(getDraft().collab.workerConfig?.model).toBe('claude-opus-4-7');
     });
   });
+});
+
+
+it('does not stamp a prior owner draft during the synchronous auth handoff', async () => {
+  const { setNewMakerDraftOwner, getDraftForOwnerPreferenceSync, patchCurrentVendorPrefs } = await loadModule();
+  setNewMakerDraftOwner('A');
+  patchCurrentVendorPrefs({ model: 'owner-a-model' });
+  expect(getDraftForOwnerPreferenceSync('B')).toBeNull();
+  setNewMakerDraftOwner('B');
+  expect(getDraftForOwnerPreferenceSync('B')?.lastByVendor.cc.model).not.toBe('owner-a-model');
+  expect(getDraftForOwnerPreferenceSync('A')).toBeNull();
+});
+
+describe('Bot default model write-through', () => {
+  async function setup() {
+    const store = await loadModule();
+    const owner = await import('@/contexts/dataOwnerGeneration');
+    owner.setDataOwnerGeneration('bot-owner', 8);
+    store.setNewMakerDraftOwner('bot-owner');
+    store.patchVendorPrefs('codex', { model: 'luna', providerId: 'openai', effort: 'medium' });
+    store.switchVendor('codex');
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
+    return { store, selection: { requestId: "test-default-selection", route: { ...route, effort: 'low' }, expectedRoute: route,
+      ownerStamp: { dataOwnerId: 'bot-owner', ownerGeneration: 8 }, expiresAt: Date.now() + 5000 } };
+  }
+  it('persists the same default used by new tasks and survives reloading', async () => {
+    const { store, selection } = await setup();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    vi.resetModules();
+    const reloaded = await loadModule();
+    reloaded.setNewMakerDraftOwner('bot-owner');
+    expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
+    expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+  it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
+    const { store, selection } = await setup();
+    if (reason === 'owner') selection.ownerStamp.ownerGeneration = 7;
+    if (reason === 'expiry') selection.expiresAt = Date.now() - 1;
+    if (reason === 'selection') store.patchVendorPrefs('codex', { model: 'a-new-user-choice' });
+    if (reason === 'disk') vi.spyOn(memStorage, 'setItem').mockImplementation(() => { throw new Error('full'); });
+    const before = store.getDraft();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(false);
+    expect(store.getDraft()).toEqual(before);
+  });
+});
+
+// Agent 在同账号另一台电脑运行:任务、项目与命令仍在本机,只记下运行 Agent 的电脑。
+describe('newMakerDraft agent computer', () => {
+  it('keeps the agent computer across local folder changes and clears it for remote tasks', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ agentDeviceId: ' dev-b ', agentDeviceName: 'Office Mac' });
+    expect(getDraft().agentDeviceId).toBe('dev-b');
+    // 换本机项目:Agent 仍在那台。
+    patchDraft({ workingDir: '/local/proj' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac', workingDir: '/local/proj' });
+    // 任务改建到远程设备或 SSH 主机时不成立。
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+    patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });
+    patchDraft({ workingDir: '/remote/proj', remoteHostId: 'ssh-1' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, remoteHostId: 'ssh-1' });
+  });
+
+  // 远程控制下新建任务:任务建到被控电脑 dev-a,Agent 在第三台电脑 dev-c。
+  it('keeps the agent computer for a task on a controlled computer until that computer changes', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: 'dev-c' });
+    // 同一台被控电脑上换项目(设备字段照样显式带上):Agent 仍在那台。
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: '/a/proj' });
+    expect(getDraft()).toMatchObject({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    // 换到另一台被控电脑 / 回到本机:上一台的选择不再适用。
+    patchDraft({ deviceLinkDeviceId: 'dev-d', deviceLinkDeviceName: 'Lab', workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-c', agentDeviceName: 'Office Mac' });
+    patchDraft({ deviceLinkDeviceId: null, deviceLinkDeviceName: null, workingDir: null });
+    expect(getDraft()).toMatchObject({ agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('never lets the agent computer be the computer the task is on', async () => {
+    const { getDraft, patchDraft } = await loadModule();
+    patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio', workingDir: null });
+    patchDraft({ agentDeviceId: 'dev-a', agentDeviceName: 'Studio' });
+    expect(getDraft()).toMatchObject({ deviceLinkDeviceId: 'dev-a', agentDeviceId: null, agentDeviceName: null });
+  });
+
+  it('does not restore the agent computer after a restart', async () => {
+    let mod = await loadModule();
+    mod.patchDraft({ workingDir: '/local/proj', agentDeviceId: 'dev-b', agentDeviceName: 'Office Mac' });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    vi.resetModules();
+    mod = await loadModule();
+    expect(mod.getDraft()).toMatchObject({ workingDir: '/local/proj', agentDeviceId: null, agentDeviceName: null });
+  });
+});
+
+// Standard: the new-task preference must survive owner reload without becoming a picker override.
+it('persists the default, preserves explicit permissions, isolates owners and restores auto', async () => {
+  const m = await loadModule();
+  m.setNewMakerDraftOwner('permission-owner');
+  m.patchVendorPrefs('cc', { permissionMode: 'acceptEdits' });
+  m.setNewChatDefaultPermissionMode('bypassPermissions');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('bypassPermissions');
+  m.setNewMakerDraftOwner('another-owner');
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBe('bypassPermissions');
+  m.setNewChatDefaultPermissionMode(null);
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
+  expect(m.getDraft().lastByVendor.cc.permissionMode).toBe('acceptEdits');
+  m.setNewMakerDraftOwner('another-owner');
+  m.setNewMakerDraftOwner('permission-owner');
+  expect(m.getDraft().newChatDefaultPermissionMode).toBeNull();
+  expect(m.getDraft().lastByVendor.pi.permissionMode).toBe('auto');
 });

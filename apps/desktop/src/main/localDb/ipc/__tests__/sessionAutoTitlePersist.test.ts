@@ -6,6 +6,7 @@
  * 如实反映"库里现在是不是目标标题"——不能凭期望值想当然报成功(PR #510 review)。
  */
 import Database from 'better-sqlite3';
+import os from 'node:os';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,6 +18,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  // 导入链会静态引到 WorktreeManager → workdir-probe-host,后者在模块顶层读 app.once。
+  app: { getPath: () => os.tmpdir(), once: vi.fn() },
   ipcMain: { handle: vi.fn() },
   BrowserWindow: { getAllWindows: () => [] },
 }));
@@ -55,11 +58,26 @@ const SESSION_ID = 's1';
 function createDb(initialTitle: string): void {
   const sqlite = new Database(':memory:');
   sqlite.exec(`
+    CREATE TABLE task_tags (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      name_customized INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL,
+      favorite_order INTEGER,
+      sort_order INTEGER,
+      revision INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE session_task_tags (
+      session_id TEXT NOT NULL,
+      tag_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, tag_id)
+    );
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Maker',
       working_dir TEXT,
       model TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+      scheduled_model_baseline TEXT,
       effort TEXT NOT NULL DEFAULT 'high',
       permission_mode TEXT NOT NULL DEFAULT 'ask',
       status TEXT NOT NULL DEFAULT 'active',
@@ -71,13 +89,17 @@ function createDb(initialTitle: string): void {
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
+      context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       agent_kind TEXT NOT NULL DEFAULT 'cc',
       user_send_at INTEGER,
+      last_activity_at INTEGER,
       parent_session_id TEXT,
       forked_at_message_id TEXT,
       worktree_path TEXT,
@@ -86,14 +108,18 @@ function createDb(initialTitle: string): void {
       feishu_bot_app_id TEXT,
       used_project_context INTEGER NOT NULL DEFAULT 0,
       extra_dirs TEXT NOT NULL DEFAULT '[]',
+      writable_dirs TEXT NOT NULL DEFAULT '[]',
       one_m INTEGER NOT NULL DEFAULT 0,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       orca_role TEXT,
       remote_host_id TEXT,
+      agent_device_id TEXT,
+      orca_remote_lead TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
       im_user_id TEXT,
+      im_default_route TEXT,
       summary TEXT,
       provider_id TEXT,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,

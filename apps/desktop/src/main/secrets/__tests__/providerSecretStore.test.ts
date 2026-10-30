@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const sessionState = vi.hoisted(() => ({
@@ -8,12 +12,19 @@ const sessionState = vi.hoisted(() => ({
 // providerSecretStore 顶层 `import { app, safeStorage } from 'electron'` —— 这些测试
 // 注入自己的 SecretStorageIo,不会走默认 electronSecretIo,因此 electron mock 只为
 // 让 import 链在 node 测试环境下可加载(app.getPath 给个 tmp 目录即可)。
+// 严格快照用例走真实 fs + safeStorage 分支,通过 electronState 切换目录与解密结果。
+const electronState = vi.hoisted(() => ({
+  userData: '/tmp/xdt-provider-secret-test',
+  encryptionAvailable: false,
+  decryptString: (): string => '',
+}));
+
 vi.mock('electron', () => ({
-  app: { getPath: () => '/tmp/xdt-provider-secret-test' },
+  app: { getPath: () => electronState.userData },
   safeStorage: {
-    isEncryptionAvailable: () => false,
+    isEncryptionAvailable: () => electronState.encryptionAvailable,
     encryptString: () => Buffer.from(''),
-    decryptString: () => '',
+    decryptString: () => electronState.decryptString(),
   },
 }));
 
@@ -28,16 +39,23 @@ vi.mock('../../logger', () => ({
 
 vi.mock('../../appSessionState', () => ({
   getActiveAppSession: () => ({ ...sessionState, generation: 0 }),
+  isAppSessionBoundaryPending: () => false,
   dataOwnerStorageKey: (ownerId: string) => ownerId,
   LOCAL_DATA_OWNER_ID: 'local-v1',
 }));
 
 import {
   createProviderSecretStore,
+  botEnvironmentSecretIo,
+  readCustomProviderHeadersForMutation,
   readCustomProviderKeyForMutation,
   readGhostSecretStrict,
   readGhostSecretTailFromIo,
+  migrateGhostSecrets,
+  setMivoSecretAliasVerifier,
+  resolveOwnerScopedSecretStorageKey,
   setProviderSecretsClearedListener,
+  UNRECOVERABLE_PROVIDER_CREDENTIAL,
   type SecretStorageIo,
 } from '../providerSecretStore';
 import {
@@ -74,6 +92,47 @@ function createMemoryIo(): SecretStorageIo & { store: Map<string, string> } {
     list: () => [...store.keys()],
   };
 }
+
+describe('ghost secret relocation rollback', () => {
+  const source = ghostSecretStorageKey('helper', 'one');
+  const destination = ghostSecretStorageKey('_ns__acme__helper', 'one');
+  const secondSource = ghostSecretStorageKey('helper', 'two');
+  const secondDestination = ghostSecretStorageKey('_ns__acme__helper', 'two');
+
+  it('keeps the destination when restoring the only old copy fails', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.store.set(secondSource, 'fake-two');
+    const write = io.write;
+    const remove = io.remove;
+    io.write = (key, value) => key === source ? false : write(key, value);
+    io.remove = (key) => key === secondSource ? { success: false } : remove(key);
+    expect(() => migrateGhostSecrets('helper', '_ns__acme__helper', io)).toThrow();
+    expect(io.store.get(destination)).toBe('fake-one');
+    expect(io.store.has(source)).toBe(false);
+    expect(io.store.get(secondSource)).toBe('fake-two');
+    expect(io.store.has(secondDestination)).toBe(false);
+  });
+
+  it('rolls back the current write if removing its source fails', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.remove = (key) => key === source ? { success: false } : (io.store.delete(key), { success: true });
+    expect(() => migrateGhostSecrets('helper', '_ns__acme__helper', io)).toThrow();
+    expect(io.store.get(source)).toBe('fake-one');
+    expect(io.store.has(destination)).toBe(false);
+  });
+
+  it('does not delete a same-valued destination that predates a later rollback', () => {
+    const io = createMemoryIo();
+    io.store.set(source, 'fake-one');
+    io.store.set(destination, 'fake-one');
+    const undo = migrateGhostSecrets('helper', '_ns__acme__helper', io);
+    undo();
+    expect(io.store.get(source)).toBe('fake-one');
+    expect(io.store.get(destination)).toBe('fake-one');
+  });
+});
 
 describe('providerSecrets registry', () => {
   it('maps known providers to their stable storage keys', () => {
@@ -119,6 +178,10 @@ describe('providerSecrets registry', () => {
     expect(() => customProviderHeaderStorageKey('bad/path', 'pi')).toThrow(/illegal characters/);
   });
 
+  it.each(['bot_environment_', `bot_environment_${'a'.repeat(64)}`, 'BOT_ENVIRONMENT_future'])('reserves companion environment key %s for Main', key => {
+    expect(isRendererAccessibleSafeStorageKey(key)).toBe(false);
+  });
+
   it('动态键名构造前校验片段字符集,路径逃逸类 id 直接抛错', () => {
     expect(providerOAuthStorageKey('acme-1')).toBe('provider_oauth_acme-1');
     expect(customProviderSecretStorageKey('my_or', 'claude-code')).toBe('provider_key_my_or_claude-code');
@@ -133,6 +196,28 @@ describe('providerSecrets registry', () => {
     expect(() => ghostSecretStorageKey('ok', 'k.ey')).toThrow(/illegal characters/);
   });
 
+  it('企业实例 storage part 与 root 凭证键隔离,且不继承官方别名', () => {
+    expect(ghostSecretStorageKey('helper', 'token')).toBe('ghost_secret_helper_token');
+    expect(ghostSecretStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_secret__ns__acme__helper_token',
+    );
+    expect(ghostSecretHintStorageKey('_ns__acme__helper', 'token')).toBe(
+      'ghost_hint__ns__acme__helper_token',
+    );
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).toBe(
+      'ghost_secret__ns__xd__xd-mivo_mivo_api_key',
+    );
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key', true)).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    );
+    expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).toBe(
+      'ghost_secret__ns__acme__xd-mivo_mivo_api_key',
+    );
+    expect(ghostSecretStorageKey('_ns__acme__xd-mivo', 'mivo_api_key')).not.toBe(
+      ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true),
+    );
+  });
+
   it('官方别名:cindy-web-search 的凭证映射到历史 brave/tavily 存储键(老用户零迁移)', () => {
     // 与「工具密钥」时代同一 .enc 文件:老用户已填 key 对意识立即生效,
     // lizi_web_search MCP 也照读同一份。
@@ -144,7 +229,9 @@ describe('providerSecrets registry', () => {
   });
 
   it('官方别名:xd-mivo 的 mivo_api_key 映射到历史 mivo 存储键(老用户零迁移)', () => {
-    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true)).toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
+    expect(ghostSecretStorageKey('_ns__xd__xd-mivo', 'mivo_api_key')).not.toBe(providerSecretStorageKey('mivo'));
     expect(ghostSecretStorageKey('xd-mivo', 'other_key')).toBe('ghost_secret_xd-mivo_other_key');
     expect(ghostSecretStorageKey('third-party', 'mivo_api_key')).toBe('ghost_secret_third-party_mivo_api_key');
   });
@@ -181,6 +268,61 @@ describe('providerSecrets registry', () => {
     } finally {
       sessionState.mode = previousMode;
       sessionState.dataOwnerId = previousOwnerId;
+    }
+  });
+
+  it('strict custom-provider snapshot reports ciphertext that exists but cannot be decrypted', () => {
+    const previousMode = sessionState.mode;
+    const previousOwnerId = sessionState.dataOwnerId;
+    const previousElectron = { ...electronState };
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-provider-secret-'));
+    const ownerId = 'undecryptable-owner';
+    const providerId = 'undecryptable-provider';
+    sessionState.mode = 'cloud';
+    sessionState.dataOwnerId = ownerId;
+    electronState.userData = userData;
+    electronState.encryptionAvailable = true;
+    electronState.decryptString = () => {
+      throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.');
+    };
+    try {
+      const secretDir = path.join(userData, 'safe-storage');
+      fs.mkdirSync(secretDir, { recursive: true });
+      const garbage = Buffer.from('not-a-safe-storage-blob').toString('base64');
+      for (const logicalKey of [
+        customProviderSecretStorageKey(providerId, 'codex'),
+        customProviderHeaderStorageKey(providerId, 'codex'),
+      ]) {
+        const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+        if (!scopedKey) throw new Error('test owner session is not scoped');
+        fs.writeFileSync(path.join(secretDir, `${scopedKey}.enc`), garbage, 'utf-8');
+      }
+
+      // 密文存在但解不开:第三态,而不是抛错(#3821)。
+      expect(readCustomProviderKeyForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      expect(readCustomProviderHeadersForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      // 解得开但不是合法头 map:同样是内容层面的永久损坏。
+      electronState.decryptString = () => '["not","an","object"]';
+      expect(readCustomProviderHeadersForMutation(providerId, 'codex')).toBe(
+        UNRECOVERABLE_PROVIDER_CREDENTIAL,
+      );
+      // 文件在、但 safeStorage 暂时不可用:仍然抛错,不能当成可覆盖。
+      electronState.encryptionAvailable = false;
+      expect(() => readCustomProviderKeyForMutation(providerId, 'codex')).toThrow(
+        /encryption is unavailable/,
+      );
+      expect(() => readCustomProviderHeadersForMutation(providerId, 'codex')).toThrow(
+        /encryption is unavailable/,
+      );
+    } finally {
+      sessionState.mode = previousMode;
+      sessionState.dataOwnerId = previousOwnerId;
+      Object.assign(electronState, previousElectron);
+      fs.rmSync(userData, { recursive: true, force: true });
     }
   });
 
@@ -283,10 +425,53 @@ describe('readGhostSecretTailFromIo(尾指纹读取 + 老键懒回填)', () => {
     expect(io.store.get(ghostSecretHintStorageKey('my-ghost', 'api_key'))).toBe('5678');
   });
 
+  it.each([
+    ['helper', 'api_key'],
+    ['xd-feishu', 'oauth_accounts'],
+    ['_ns__xd__xd-feishu', 'oauth_accounts'],
+    ['_ns__xd__xd-mivo', 'mivo_api_key'],
+    ['xd-mivo', 'oauth_accounts'],
+  ])('reads %s/%s without loading unrelated Mivo install facts', (instanceKey, secretKey) => {
+    const verifier = vi.fn(() => { throw new Error('Mivo install facts unavailable'); });
+    setMivoSecretAliasVerifier(verifier);
+    io.store.set(ghostSecretStorageKey(instanceKey, secretKey), 'fake-secret-value-1234');
+    try {
+      expect(readGhostSecretTailFromIo(io, instanceKey, secretKey)).toBe('1234');
+      expect(verifier).not.toHaveBeenCalled();
+    } finally {
+      setMivoSecretAliasVerifier(null);
+    }
+  });
+
+  it('rechecks Mivo alias eligibility after a successful historical-key read', () => {
+    const verifier = vi.fn(() => true);
+    setMivoSecretAliasVerifier(verifier);
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'fake-mivo-legacy-9999');
+    try {
+      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
+      verifier.mockReturnValue(false);
+      expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
+    } finally {
+      setMivoSecretAliasVerifier(null);
+    }
+  });
+
   it('官方别名键(xd-mivo 老用户)同样能懒回填', () => {
-    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key'), 'mivo_legacy_key_9999');
+    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
     expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
     expect(io.store.get(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'))).toBe('9999');
+    setMivoSecretAliasVerifier(null);
+  });
+
+  it('a name-only Mivo cannot read the historical secret or its cached hint', () => {
+    io.store.set(ghostSecretStorageKey('xd-mivo', 'mivo_api_key', true), 'mivo_legacy_key_9999');
+    io.store.set(ghostSecretHintStorageKey('xd-mivo', 'mivo_api_key'), '9999');
+    setMivoSecretAliasVerifier(null);
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBeNull();
+    setMivoSecretAliasVerifier((id) => id === 'xd-mivo');
+    expect(readGhostSecretTailFromIo(io, 'xd-mivo', 'mivo_api_key')).toBe('9999');
+    setMivoSecretAliasVerifier(null);
   });
 
   it('没存过 / 值太短不产指纹 → null 且不落回填键', () => {
@@ -431,4 +616,37 @@ describe('providerSecretStore account boundary (clearAll + reconcileOwner)', () 
     expect(io.store.get('owner_user-A_provider_oauth_acme')).toBe('token-A');
     expect(io.store.get('owner_user-B_provider_oauth_acme')).toBe('token-B');
   });
+});
+
+
+it('checks companion environment presence without decrypting or unlocking the vault', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-bot-secret-presence-'));
+  const previous = { ...electronState };
+  const previousSession = { ...sessionState };
+  try {
+    electronState.userData = root; electronState.encryptionAvailable = false;
+    electronState.decryptString = () => { throw new Error('must not decrypt'); };
+    sessionState.mode = 'cloud'; sessionState.dataOwnerId = 'presence-owner';
+    const key = `bot_environment_${'a'.repeat(64)}`;
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+    const directory = path.join(root, 'safe-storage');
+    fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(directory, `${resolveOwnerScopedSecretStorageKey(key)}.enc`), 'encrypted fixture');
+    expect(botEnvironmentSecretIo.has(key)).toBe(true);
+    sessionState.dataOwnerId = 'different-owner';
+    expect(botEnvironmentSecretIo.has(key)).toBe(false);
+    expect(() => botEnvironmentSecretIo.has('../unexpected')).toThrow('Invalid companion secret key');
+    sessionState.dataOwnerId = 'presence-owner';
+    const scoped = resolveOwnerScopedSecretStorageKey(key)!;
+    fs.unlinkSync(path.join(directory, `${scoped}.enc`));
+    const temporary = `${scoped}.enc.aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp`;
+    fs.writeFileSync(path.join(directory, temporary), 'encrypted interrupted fixture');
+    fs.writeFileSync(path.join(directory, 'unrelated.enc'), 'unrelated fixture');
+    expect(botEnvironmentSecretIo.has(key)).toBe(true);
+    expect(botEnvironmentSecretIo.remove(key)).toBe(true);
+    expect(fs.readdirSync(directory)).toEqual(['unrelated.enc']);
+  } finally {
+    Object.assign(electronState, previous); Object.assign(sessionState, previousSession);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

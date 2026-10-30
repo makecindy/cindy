@@ -8,6 +8,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BotGroupLaneTerminal } from '../botGroupChatService.js';
+import { createProviderGroupHeldWorkerTerminals } from '../../provider-group/heldWorkerTerminals.js';
 
 import {
   AutoResumeBookkeeping,
@@ -35,24 +37,30 @@ function createHarness() {
   const abandons: Array<{ sessionId: string; message?: string }> = [];
   const surfaced: Array<{ sessionId: string; detail: SuppressedTurnError }> = [];
   const orcaFinalized: Array<{ sessionId: string; payload: OrcaSuppressedTerminal }> = [];
+  const autoResumeFailed: Array<{ sessionId: string; attemptToken?: number }> = [];
+  const groupFinalized: BotGroupLaneTerminal[] = [];
   const deps: AutoResumeBookkeepingDeps = {
     persistSuppressedError: (sessionId, detail) => persisted.push({ sessionId, detail }),
     surfaceSuppressedError: (sessionId, detail) => surfaced.push({ sessionId, detail }),
     finalizeOrcaSuppressedTerminal: (sessionId, payload) =>
       orcaFinalized.push({ sessionId, payload }),
+    finalizeBotGroupSuppressedTerminal: terminal => groupFinalized.push(terminal),
     markOutcome: (sessionId, clientId, outcome) => outcomes.push({ sessionId, clientId, outcome }),
     rollbackGuardPendingResume: (sessionId) => guardRollbacks.push(sessionId),
     abandonTakeover: (sessionId, message) =>
       abandons.push({ sessionId, ...(message !== undefined ? { message } : {}) }),
+    onAutoResumeFailed: (sessionId, attemptToken) => autoResumeFailed.push({ sessionId, attemptToken }),
   };
   return {
     book: new AutoResumeBookkeeping(deps),
     persisted,
     surfaced,
     orcaFinalized,
+    groupFinalized,
     outcomes,
     guardRollbacks,
     abandons,
+    autoResumeFailed,
   };
 }
 
@@ -65,6 +73,22 @@ afterEach(() => {
 });
 
 describe('被压住的错误详情:必有人补落', () => {
+  it.each(['surface', 'exhausted', 'rejected', 'success', 'stop'] as const)('settles the captured group execution only on final recovery failure: %s', outcome => {
+    const h = createHarness();
+    const terminal: BotGroupLaneTerminal = { sessionId: 's1', activeInputClientId: 'bot-group:g1:turn:b1',
+      outcome: 'error', resultText: '', failureCode: 'NETWORK_ERROR' };
+    h.book.beginAttempt('s1', 1);
+    h.book.stashSuppressedError('s1', { message: 'disconnected' }, 1);
+    h.book.stashBotGroupSuppressedTerminal('s1', terminal);
+    h.book.bindSuppressedErrorToClient('s1', 1, 'retry-1');
+    if (outcome === 'surface') h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1');
+    else if (outcome === 'exhausted') h.book.finalizeSuppressedError('s1', 1, { surfaceBanner: true });
+    else if (outcome === 'rejected') h.book.abandonUnconfirmedPersistedResume('s1', 1, 'retry-1');
+    else if (outcome === 'success') h.book.discardSuppressedErrorForRetry('s1', 'retry-1');
+    else h.book.teardown('s1');
+    h.book.finalizeSuppressedError('s1', 1, { surfaceBanner: true });
+    expect(h.groupFinalized).toEqual(['success', 'stop'].includes(outcome) ? [] : [terminal]);
+  });
   it('flush 把详情落库并清空(重复 flush 是 no-op)', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', {
@@ -245,6 +269,48 @@ describe('待确认的重连记录:必有一次结算', () => {
     expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'c-1', outcome: 'failed' }]);
     expect(h.book.isPendingOutcomeClientId('s2', 'c-2')).toBe(true);
   });
+
+  it('unconfirmed persisted resume 一次结清 failed，不补落旧错误', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'idle timeout' }, 7);
+    h.book.bindSuppressedErrorToClient('s1', 7, 'continue-1');
+    h.book.registerPendingOutcome('s1', 7, 'continue-1');
+
+    const payload = createOrcaTerminal();
+    expect(h.book.stashOrcaSuppressedTerminal('s1', payload)).toBe(true);
+
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-1')).toBe(true);
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-1')).toBe(false);
+    expect(h.orcaFinalized).toEqual([{ sessionId: 's1', payload }]);
+    expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'continue-1', outcome: 'failed' }]);
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.abandons).toEqual([]);
+    expect(h.guardRollbacks).toEqual(['s1']);
+    expect(h.autoResumeFailed).toEqual([{ sessionId: 's1', attemptToken: 7 }]);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+    expect(h.book.isPendingOutcomeClientId('s1', 'continue-1')).toBe(false);
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(false);
+  });
+
+  it('unconfirmed persisted resume 过期 token 或别人的 clientId 是 no-op', () => {
+    const h = createHarness();
+    h.book.beginAttempt('s1', 7);
+    h.book.stashSuppressedError('s1', { message: 'idle timeout' }, 7);
+    h.book.bindSuppressedErrorToClient('s1', 7, 'continue-1');
+    h.book.registerPendingOutcome('s1', 7, 'continue-1');
+
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 8, 'continue-1')).toBe(false);
+    expect(h.book.abandonUnconfirmedPersistedResume('s1', 7, 'continue-other')).toBe(false);
+    expect(h.outcomes).toEqual([]);
+    expect(h.persisted).toEqual([]);
+    expect(h.guardRollbacks).toEqual([]);
+    expect(h.autoResumeFailed).toEqual([]);
+    expect(h.book.hasSuppressedError('s1')).toBe(true);
+    expect(h.book.isPendingOutcomeClientId('s1', 'continue-1')).toBe(true);
+    expect(h.book.isCurrentAttempt('s1', 7)).toBe(true);
+  });
 });
 
 describe('退避排期:必可撤销、必只认自己那次', () => {
@@ -392,13 +458,15 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     });
 
     expect(h.book.hasWaitingSchedule('s1', 7)).toBe(true);
+    expect(h.book.hasLiveSchedule('s1', 7)).toBe(true);
     expect(h.book.hasWaitingSchedule('s1', 8)).toBe(false);
     vi.advanceTimersByTime(1_000);
     await Promise.resolve();
     expect(h.book.hasSchedule('s1')).toBe(true);
+    expect(h.book.hasLiveSchedule('s1', 7)).toBe(true);
     expect(
       h.book.hasWaitingSchedule('s1', 7),
-      'timer 已触发、async callback 在跑时不再属于 provider rebuild 交棒窗口',
+      'timer 已触发、async callback 在跑时 waiting 为 false，但 live schedule 仍在',
     ).toBe(false);
     expect(callbackAttempt.isCurrent()).toBe(true);
 
@@ -437,6 +505,71 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     expect(h.book.hasSuppressedError('s1')).toBe(true);
     expect(h.book.flushSuppressedError('s1', { deferredOwner: oldOwner })).toBe(true);
     expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'deferred error' } }]);
+  });
+
+  // Unit regression: a capacity terminal before the user row persists changes
+  // owner from generic recovery to the group. The group lane terminal must travel
+  // with its error/Worker capture or a rejected handoff leaves the lane running
+  // forever (PR #6671 review; bot-group-chat.md §4.4). Unit: use real bookkeeping
+  // and hold release; earlier coverage only transferred the Worker terminal.
+  it.each(['continued', 'rejected', 'declined'] as const)('transfers all deferred terminals and settles only final failure: %s', outcome => {
+    const h = createHarness();
+    const owner = { generation: 3, clientId: 'capacity-turn' };
+    const detail = { reason: 'upstream-overload', message: 'model at capacity' };
+    const orcaTerminal = createOrcaTerminal();
+    const groupTerminal: BotGroupLaneTerminal = {
+      sessionId: 's1', activeInputClientId: owner.clientId,
+      outcome: 'error', resultText: '', failureCode: 'UPSTREAM_OVERLOADED',
+    };
+    h.book.stashSuppressedError('s1', detail, null, owner);
+    h.book.stashOrcaSuppressedTerminal('s1', orcaTerminal);
+    h.book.stashBotGroupSuppressedTerminal('s1', groupTerminal);
+    expect(h.book.takeDeferredError('s1', { ...owner, generation: 4 })).toBeNull();
+    const deferred = h.book.takeDeferredError('s1', owner)!;
+    expect(deferred).toEqual({ detail, orcaTerminal, groupTerminal });
+    expect(h.book.takeDeferredError('s1', owner)).toBeNull();
+    h.book.teardown('s1');
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.orcaFinalized).toEqual([]);
+    expect(h.groupFinalized).toEqual([]);
+
+    const held = createProviderGroupHeldWorkerTerminals<typeof deferred>({
+      ownerKey: () => 'account',
+      deliver: (sessionId, terminal) => {
+        if (terminal.orcaTerminal) h.orcaFinalized.push({ sessionId, payload: terminal.orcaTerminal });
+        if (terminal.groupTerminal) h.groupFinalized.push(terminal.groupTerminal);
+      },
+    });
+    held.stash('s1', 1, deferred);
+    if (outcome === 'continued') held.discard('s1', 1);
+    if (outcome === 'declined') {
+      const returned = held.takeForRecovery('s1', 1)!;
+      h.book.beginAttempt('s1', 2);
+      h.book.stashSuppressedError('s1', returned.detail, 2);
+      h.book.stashOrcaSuppressedTerminal('s1', returned.orcaTerminal!);
+      h.book.stashBotGroupSuppressedTerminal('s1', returned.groupTerminal!);
+    }
+    held.release('s1', 1);
+    held.release('s1', 1);
+    expect(h.orcaFinalized).toEqual(outcome === 'rejected' ? [{ sessionId: 's1', payload: orcaTerminal }] : []);
+    expect(h.groupFinalized).toEqual(outcome === 'rejected' ? [groupTerminal] : []);
+    if (outcome === 'declined') {
+      h.book.surfaceSuppressedError('s1', { attemptToken: 2 });
+      h.book.surfaceSuppressedError('s1', { attemptToken: 2 });
+      expect(h.orcaFinalized).toEqual([{ sessionId: 's1', payload: orcaTerminal }]);
+      expect(h.groupFinalized).toEqual([groupTerminal]);
+    }
+  });
+
+  it('does not transfer a deferred error that a retry attempt already owns', () => {
+    const h = createHarness();
+    const owner = { generation: 3, clientId: 'capacity-turn' };
+    h.book.stashSuppressedError('s1', { message: 'model at capacity' }, null, owner);
+    h.book.beginAttempt('s1', 9);
+    expect(h.book.takeDeferredError('s1', owner)).toBeNull();
+    expect(h.book.surfaceSuppressedError('s1', { attemptToken: 9 })).toBe(true);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'model at capacity' } }]);
   });
 
   it('释放 suppressed error 后回收无其它 owner 的 current attempt', () => {

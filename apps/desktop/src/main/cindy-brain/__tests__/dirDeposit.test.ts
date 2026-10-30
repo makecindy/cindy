@@ -317,3 +317,19 @@ describe('DirDepositVault userGranted 旁路(workdir 外确认卡通过后)', ()
     }
   });
 });
+
+// Unit: the private upload must not consume a ticket from another call of the same plugin.
+it('binds private uploads to the originating call without changing legacy ticket reads', async () => {
+  const dir = await makeSite('upload', {'proof.txt':'proof'});
+  const vault = new DirDepositVault();
+  const issue = (callId?: string) => vault.deposit({ghostId:'plugin',dirAbs:dir,workdirAbs:workdir,callId});
+  const ticket = issue('call-a'); if(!ticket.ok) throw Error(ticket.message);
+  expect(vault.take('other',ticket.receipt.token,'call-a')).toBeNull();
+  expect(vault.take('plugin',ticket.receipt.token,'call-b')).toBeNull();
+  const taken=vault.take('plugin',ticket.receipt.token,'call-a');
+  expect(new TextDecoder().decode(await taken!.files[0].read())).toBe('proof');
+  expect(vault.take('plugin',ticket.receipt.token,'call-a')).toBeNull();
+  const legacy=issue(); if(!legacy.ok) throw Error(legacy.message);
+  expect(vault.take('plugin',legacy.receipt.token,'call-a')).toBeNull();
+  expect(vault.take('plugin',legacy.receipt.token)).not.toBeNull();
+});

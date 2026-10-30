@@ -5,6 +5,11 @@ vi.mock('../../maker-host/outbound-fetch.js', () => ({
   outboundFetch: (...args: unknown[]) => outboundFetchMock(...args),
 }));
 
+const reportKeyRejectedMock = vi.hoisted(() => vi.fn());
+vi.mock('../../model-access/gatewayKeyRejection.js', () => ({
+  reportCindyGatewayKeyRejected: reportKeyRejectedMock,
+}));
+
 import {
   LiteLlmTranscriptionProvider,
   transcribeLiteLlmAudioFile,
@@ -14,6 +19,40 @@ import type { AsrEvent } from '@cindy/voice-input-core';
 describe('LiteLlmTranscriptionProvider', () => {
   afterEach(() => {
     outboundFetchMock.mockReset();
+    reportKeyRejectedMock.mockReset();
+  });
+
+  it('reports a 401 even when reading the response body fails', async () => {
+    outboundFetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => {
+        throw new TypeError('terminated');
+      },
+    });
+
+    await expect(transcribeLiteLlmAudioFile({
+      proxyApiKey: 'sk-sent',
+      baseUrl: 'https://gateway.example',
+      bytes: Buffer.from([1, 2, 3]),
+    })).rejects.toThrow('terminated');
+    expect(reportKeyRejectedMock).toHaveBeenCalledTimes(1);
+    expect(reportKeyRejectedMock).toHaveBeenCalledWith('sk-sent');
+  });
+
+  it.each([
+    [401, 1],
+    [403, 0],
+  ] as const)('reports the sent Cindy AI key on HTTP %s only when unauthorized', async (status, reports) => {
+    outboundFetchMock.mockResolvedValue(new Response(JSON.stringify({ detail: 'rejected' }), { status }));
+
+    await expect(transcribeLiteLlmAudioFile({
+      proxyApiKey: 'sk-sent',
+      baseUrl: 'https://gateway.example',
+      bytes: Buffer.from([1, 2, 3]),
+    })).rejects.toThrow('rejected');
+    expect(reportKeyRejectedMock).toHaveBeenCalledTimes(reports);
+    if (reports > 0) expect(reportKeyRejectedMock).toHaveBeenCalledWith('sk-sent');
   });
 
   it('posts captured audio to LiteLLM using ElevenLabs Scribe v2', async () => {

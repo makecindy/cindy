@@ -1,0 +1,58 @@
+.skill-catalog-source-tabs.cindy-segmented {
+  flex-shrink: 1;
+  gap: var(--space-6);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: none;
+}
+
+.skill-catalog-source-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-plate {
+  display: none;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-option {
+  font-weight: 400;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-option:enabled:hover {
+  background: transparent;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-option[data-selected='true'] {
+  font-weight: 500;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-option[data-selected='true']::before {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--text-primary);
+  content: '';
+}
+
+.skill-category-tags.cindy-segmented {
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+}
+
+.skill-category-tags > .cindy-segmented-plate {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.skill-category-tags > .cindy-segmented-option {
+  font-weight: 400;
+}
+
+.skill-catalog-source-tabs > .cindy-segmented-option:focus-visible,
+.skill-category-tags > .cindy-segmented-option:focus-visible {
+  outline-offset: -2px;
+}

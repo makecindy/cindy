@@ -15,8 +15,9 @@
  *
  * 错误模型:
  *   - writeLine() reject = "这一行没写出去" (caller 自行决定怎么处理)
- *   - onClose 触发 = "transport 已经断了" (重连由上层 / 不在 transport 责任内)
- *   - transport 内部任何异步错误都最终走 onClose(reason)
+ *   - 本地 onClose = 已确认进程退出;远端仍沿用其 channel 关闭语义
+ *   - 本地 onDisconnect = RPC 管道失联但进程退出未确认,不能提前清理 runtime
+ *   - RPC 失联后仍须 close() 确认终止;不靠静默时长推断管道失联
  *
  * 生命周期语义 (SSH remote 关键差异):
  *   - 本地 stdio: close() = SIGTERM → 宽限期 → SIGKILL 子进程
@@ -40,6 +41,8 @@ export interface PiTransportCloseInfo {
 
 export type PiLineHandler = (line: string) => void;
 export type PiCloseHandler = (info: PiTransportCloseInfo) => void;
+export type PiOversizedFrameHandler = () => void;
+export type PiDisconnectReason = 'stdout-ended' | 'stdout-closed' | 'stdout-error' | 'stdin-error';
 
 /**
  * 双向 transport。一个实例只服务一个 PiRpcProcess (1:1)。
@@ -57,13 +60,22 @@ export interface PiTransport {
   /** 注册关闭回调。触发后此 transport 不再可用, writeLine 一律 reject。 */
   onClose(handler: PiCloseHandler): () => void;
 
+  /** RPC pipes are unusable; this is NOT proof that the executor exited. */
+  onDisconnect?(handler: (reason: PiDisconnectReason) => void): () => void;
+
+  /**
+   * (可选) 丢掉超限 JSONL 帧时通知协议层。合法 get_entries 带图历史可以超过
+   * 16 MiB；transport 必须保持存活，但对应 pending RPC 不能再空等超时。
+   */
+  onOversizedFrame?(handler: PiOversizedFrameHandler): () => void;
+
   /** 主动关闭。幂等; resolve 后内部资源已释放。 */
   close(reason?: string): Promise<void>;
 
   /** 本地进程 pid (ssh 场景无意义, undefined)。 */
   readonly pid: number | undefined;
 
-  /** 已关闭 (进程退出 / channel 断开 / close() 之后)。 */
+  /** RPC 已不可用 (进程退出 / 管道失联 / channel 断开 / close() 之后)。 */
   isClosed(): boolean;
 
   /**
@@ -109,15 +121,23 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     cwd: opts.cwd,
     env: opts.env as NodeJS.ProcessEnv,
     stdio: ['pipe', 'pipe', 'pipe'],
+    // #5173:pi.exe 是 Bun 编译的控制台子系统可执行文件,Windows 上不隐藏窗口会为每个
+    // 本机会话派生一个 conhost.exe;与仓库内其它 agent 子进程 spawn 保持一致。
+    windowsHide: true,
   });
   const logger = opts.logger;
 
   let closed = false;
+  let disconnected: PiDisconnectReason | undefined;
+  let disconnectNotified = false;
+  let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
   // First close permanently fences writes. Individual termination attempts are
   // shared while in flight, then cleared after failure so a later owner can
   // run a fresh SIGTERM -> SIGKILL sequence.
   let closing = false;
   let closeAttempt: Promise<void> | null = null;
+  let exitInfo: PiTransportCloseInfo | null = null;
+  let exitDrainTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeProcessRegistration: (() => void) | undefined;
   if (child.pid != null && child.pid > 0) {
     try {
@@ -130,7 +150,9 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   }
 
   const lineHandlers = new Set<PiLineHandler>();
+  const oversizedHandlers = new Set<PiOversizedFrameHandler>();
   const closeHandlers = new Set<PiCloseHandler>();
+  const disconnectHandlers = new Set<(reason: PiDisconnectReason) => void>();
   const stderrHandlers = new Set<(line: string) => void>();
   const stderrBuffer: string[] = [];
 
@@ -143,6 +165,10 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
   const fireClose = (info: PiTransportCloseInfo): void => {
     if (closed) return;
     closed = true;
+    if (exitDrainTimer) clearTimeout(exitDrainTimer);
+    exitDrainTimer = undefined;
+    if (disconnectTimer) clearTimeout(disconnectTimer);
+    disconnectTimer = undefined;
     disposeRegistration();
     for (const handler of closeHandlers) {
       try { handler(info); } catch { /* handler should not throw */ }
@@ -167,8 +193,40 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     return () => { stderrHandlers.delete(handler); };
   };
 
+  // Fence writes before the JSONL reader's EOF flush invokes tail callbacks.
+  // Keep reads open through the confirmation window so settled/results survive;
+  // only confirmed executor exit/close may release the process lease.
+  const disconnect = (reason: PiDisconnectReason): void => {
+    if (closed || closing || exitInfo || disconnected) return;
+    disconnected = reason;
+    // A normal process exit often closes stdout before Node emits `exit`.
+    // Fence writes now, but allow a bounded confirmation window so startup
+    // failures retain their exit code and drained stderr instead of becoming
+    // an unconfirmed RPC-loss error. This is not a long-tool timeout.
+    disconnectTimer = setTimeout(() => {
+      disconnectTimer = undefined;
+      if (closed || closing || exitInfo) return;
+      disconnectNotified = true;
+      for (const handler of disconnectHandlers) {
+        try { handler(reason); } catch { /* owner handles its own cleanup */ }
+      }
+    }, 250);
+    disconnectTimer.unref?.();
+  };
+  child.stdout.on('end', () => disconnect('stdout-ended'));
+  child.stdout.on('close', () => disconnect('stdout-closed'));
+  child.stdout.on('error', () => disconnect('stdout-error'));
+  child.stdin.on('error', () => disconnect('stdin-error'));
+
   attachJsonlReader(child.stdout, (line) => {
+    // A broken stdin fences new commands immediately, but stdout can still
+    // carry already-written results/settled during the confirmation window.
+    // Freeze reads only once loss is reported (or executor close is final).
+    if (closed || disconnectNotified) return;
     for (const handler of lineHandlers) handler(line);
+  }, () => {
+    if (closed || disconnectNotified) return;
+    for (const handler of oversizedHandlers) handler();
   });
   attachJsonlReader(child.stderr, (line) => {
     if (line.trim().length === 0) return;
@@ -182,10 +240,34 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
 
   child.on('error', (err) => {
     logger.error('pi process error', { message: err.message });
+    // kill() may synchronously emit error (e.g. EPERM). An error while
+    // terminating is not exit evidence: retain registration and the attempt's
+    // escalation/confirmation timers until exit or close actually arrives.
+    if (closing) return;
     fireClose({ code: null, signal: null, reason: `pi process error: ${err.message}` });
   });
   child.on('close', (code, signal) => {
     fireClose({ code, signal, reason: `pi process exited (code=${code}, signal=${signal})` });
+  });
+  child.on('exit', (code, signal) => {
+    // A shell/build descendant can inherit the pipes after Pi itself exits.
+    // Node's `close` then waits for that descendant, potentially indefinitely.
+    // Exit is authoritative executor loss, but allow already-written RPC tail
+    // frames to drain before notifying owners. This is NOT a tool timeout:
+    // a quiet, live Pi process never enters this path.
+    closing = true;
+    const info = { code, signal, reason: `pi process exited (code=${code}, signal=${signal})` };
+    exitInfo = info;
+    if (closed) return;
+    exitDrainTimer = setTimeout(() => {
+      fireClose(info);
+      // Release only our pipe endpoints after the confirmed executor exit.
+      // No process-tree kill or automatic command replay is performed.
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.stdin.destroy();
+    }, 250);
+    exitDrainTimer.unref?.();
   });
 
   const KILL_GRACE_MS = 3_000;
@@ -203,15 +285,20 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
       const finish = (): void => {
         if (done) return;
         done = true;
-        clearTimeout(killTimer);
+        if (killTimer) clearTimeout(killTimer);
         if (confirmTimer) clearTimeout(confirmTimer);
         child.removeListener('close', onClose);
+        closeHandlers.delete(onConfirmedExit);
         resolve();
       };
       const onClose = (): void => finish();
-      const killTimer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      const onConfirmedExit = (): void => { if (exitInfo) finish(); };
+      const killTimer = exitInfo ? undefined : setTimeout(() => {
+        if (exitInfo) return; // Confirmed exit is still draining its tail frames.
+        try { child.kill('SIGKILL'); } catch { /* still require exit confirmation */ }
+        if (done) return;
         confirmTimer = setTimeout(() => {
+          if (exitInfo) return;
           survived = true;
           logger.error('pi process did not confirm exit after SIGKILL', {
             pid: child.pid,
@@ -220,12 +307,16 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
         }, KILL_CONFIRM_MS);
         confirmTimer.unref?.();
       }, KILL_GRACE_MS);
-      killTimer.unref?.();
+      killTimer?.unref?.();
+      // The same close notification also completes an explicit Stop/close
+      // racing an exit whose inherited pipes have not reached EOF yet.
+      closeHandlers.add(onConfirmedExit);
       child.once('close', onClose);
+      if (exitInfo) return;
       try {
         child.kill('SIGTERM');
       } catch {
-        finish();
+        // A thrown kill failure is not proof of exit either. Keep escalation.
       }
     });
 
@@ -243,7 +334,7 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
 
   return {
     writeLine(line: string): Promise<void> {
-      if (closed || closing) return Promise.reject(new Error('pi transport already closed'));
+      if (closed || closing || disconnected) return Promise.reject(new Error('pi transport already closed'));
       return new Promise<void>((resolve, reject) => {
         child.stdin.write(line + '\n', (err) => {
           if (err) reject(err);
@@ -264,6 +355,17 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     onClose(handler: PiCloseHandler): () => void {
       closeHandlers.add(handler);
       return () => { closeHandlers.delete(handler); };
+    },
+
+    onDisconnect(handler): () => void {
+      disconnectHandlers.add(handler);
+      if (disconnectNotified && disconnected) handler(disconnected);
+      return () => { disconnectHandlers.delete(handler); };
+    },
+
+    onOversizedFrame(handler: PiOversizedFrameHandler): () => void {
+      oversizedHandlers.add(handler);
+      return () => { oversizedHandlers.delete(handler); };
     },
 
     close(reason = 'pi transport close()'): Promise<void> {
@@ -292,8 +394,9 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
     },
 
     isClosed(): boolean {
-      // closing 期间也算关闭:close() 已开始, 不应再接受新写入(轮 40-w1 M-2)。
-      return closed || closing;
+      // Unavailable RPC does not imply confirmed executor termination. close()
+      // still retries termination until the process exit is observed.
+      return closed || closing || disconnected !== undefined;
     },
 
     get remoteBinaryPath(): undefined {
@@ -307,45 +410,83 @@ export function createPiStdioTransport(opts: PiStdioTransportOptions): PiTranspo
  * (pi docs/rpc.md 明确警告 Node readline 不合规。)
  *
  * 轮 21 H-3:缓冲无界增长防护 —— 损坏/恶意 pi 进程持续输出无 \n 的字节流时
- * buffer 无限累积会 OOM 整个进程。超过上限丢弃缓冲并告警(单条 JSONL 帧
- * 远超任何合法负载;pi 协议帧都是小 JSON)。
+ * buffer 无限累积会 OOM 整个进程。超过上限必须丢掉**当前这一行**并告警。
+ *
+ * 合法 `get_entries` 在带图长任务里可以超过 16 Mi 字符。超限不能把行边界重置成
+ * “从此开始是新帧”:那会把同一行的残余 base64 当下一行 JSON。正确做法是继续丢到
+ * 下一个 `\n`,再恢复分帧。
  */
-const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
+export const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
 
 export function attachJsonlReader(
   stream: NodeJS.ReadableStream,
   onLine: (line: string) => void,
+  onOversizedFrame?: () => void,
 ): void {
   let decoder = new StringDecoder('utf8');
   let buffer = '';
+  let skippingOversizedLine = false;
 
-  stream.on('data', (chunk: Buffer | string) => {
-    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
-    // OOM 守卫:超限丢弃缓冲(与 pi-manager 的 NDJSONDecoder 同策略)。
+  const resetDecoder = (): void => {
     // 轮 40-w4-t9 HIGH:丢弃时**必须重建 StringDecoder** —— 否则被丢帧末尾
-    // 残留的半个多字节字符会留在 decoder 内, 污染后续合法帧(JSONL 内容
-    // 损坏或解析失败)。
-    if (buffer.length > MAX_JSONL_BUFFER_CHARS) {
-      console.warn(
-        `[pi] JSONL line buffer exceeded ${MAX_JSONL_BUFFER_CHARS} chars without newline — discarding (corrupt stream?)`,
-      );
+    // 残留的半个多字节字符会留在 decoder 内, 污染后续合法帧。
+    decoder = new StringDecoder('utf8');
+  };
+
+  const dropThroughNewline = (): boolean => {
+    const newlineIndex = buffer.indexOf('\n');
+    if (newlineIndex === -1) {
       buffer = '';
-      decoder = new StringDecoder('utf8');
-      return;
+      resetDecoder();
+      return false;
     }
+    buffer = buffer.slice(newlineIndex + 1);
+    skippingOversizedLine = false;
+    return true;
+  };
+
+  const emitCompleteLines = (): void => {
     while (true) {
+      if (skippingOversizedLine) {
+        if (!dropThroughNewline()) return;
+        continue;
+      }
       const newlineIndex = buffer.indexOf('\n');
-      if (newlineIndex === -1) break;
+      if (newlineIndex === -1) {
+        if (buffer.length > MAX_JSONL_BUFFER_CHARS) {
+          console.warn(
+            `[pi] JSONL line buffer exceeded ${MAX_JSONL_BUFFER_CHARS} chars without newline — discarding until next newline`,
+          );
+          skippingOversizedLine = true;
+          onOversizedFrame?.();
+          dropThroughNewline();
+        }
+        return;
+      }
+      if (newlineIndex > MAX_JSONL_BUFFER_CHARS) {
+        console.warn(
+          `[pi] JSONL line exceeded ${MAX_JSONL_BUFFER_CHARS} chars — discarding oversized frame`,
+        );
+        onOversizedFrame?.();
+        buffer = buffer.slice(newlineIndex + 1);
+        continue;
+      }
       let line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
       if (line.endsWith('\r')) line = line.slice(0, -1);
       onLine(line);
     }
+  };
+
+  stream.on('data', (chunk: Buffer | string) => {
+    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    emitCompleteLines();
   });
 
   stream.on('end', () => {
     buffer += decoder.end();
-    if (buffer.length > 0) {
+    emitCompleteLines();
+    if (!skippingOversizedLine && buffer.length > 0 && buffer.length <= MAX_JSONL_BUFFER_CHARS) {
       onLine(buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer);
     }
   });

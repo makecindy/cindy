@@ -7,8 +7,10 @@ const mocks = vi.hoisted(() => ({
   resetSessionToDefaults: vi.fn(),
   listProviders: vi.fn(),
   getModelVisibilityOverride: vi.fn(),
+  waitForModelVisibilityMirror: vi.fn(async (): Promise<void> => undefined),
   getSessionProvider: vi.fn(),
   getMaker: vi.fn(),
+  executeDetach: vi.fn(),
 }));
 
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
@@ -18,6 +20,7 @@ vi.mock('../../../maker-host/createDesktopProviderService', () => ({
 }));
 vi.mock('../../../maker-host/model-visibility-mirror', () => ({
   getModelVisibilityOverride: mocks.getModelVisibilityOverride,
+  waitForModelVisibilityMirror: mocks.waitForModelVisibilityMirror,
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   getSessionProvider: mocks.getSessionProvider,
@@ -30,9 +33,10 @@ vi.mock('../../binding', () => ({
   bindingStore: {
     get: vi.fn(),
     detach: vi.fn(),
+    applyPersistedDetach: vi.fn(),
     listByIdentity: vi.fn(() => []),
   },
-  executeDetach: vi.fn(),
+  executeDetach: mocks.executeDetach,
 }));
 vi.mock('../controlProjects', () => ({
   listProjectsForControl: vi.fn(async () => []),
@@ -49,6 +53,8 @@ import type { ChannelIM, TextChannelIM } from '@cindy/im';
 
 import { ui } from '../../feishu/uiText';
 import { ui as telegramUi } from '../../telegram/uiText';
+import { ui as wecomUi } from '../../wecom/uiText';
+import { COMPANION_MANAGED_COMMAND_FALLBACK } from '../botCommands';
 import { createSlashHandlers } from '../slashCommands';
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImSessionRepo, ImSessionRow } from '../sessionRepo';
@@ -75,6 +81,7 @@ function makeRepo(overrides: Partial<ImSessionRepo> = {}): ImSessionRepo {
     peekSessionById: vi.fn(async () => null),
     prepareNewSession: vi.fn(async () => defaultRow),
     createSession: vi.fn(async () => defaultRow),
+    createFreshSession: vi.fn(async () => ({ current: defaultRow, previous: defaultRow })),
     getDefaultEffortFor: vi.fn(() => 'high' as const),
     ...overrides,
   };
@@ -158,6 +165,7 @@ describe('IM slash commands', () => {
         permissionModes: [{ id: 'auto', displayName: 'Auto', description: 'Safe default' }],
       }),
     });
+    mocks.executeDetach.mockResolvedValue({ wasAttached: false, targetSessionId: null });
   });
 
   it('does not create or reset a session when /new defaults are unauthenticated', async () => {
@@ -195,85 +203,6 @@ describe('IM slash commands', () => {
     expect(handled).toBe(true);
     expect(withMarkdown).toHaveBeenCalledWith('ou_user', ui.slash.help);
     expect(mocks.sendMarkdownText).not.toHaveBeenCalled();
-  });
-
-  it('slash 回复发送失败时仍镜像到群主流以释放保留', async () => {
-    const { handlers } = makeHarness();
-    mocks.sendMarkdownText.mockRejectedValueOnce(new Error('send failed'));
-    const mirrorTerminalReply = vi.fn(async () => undefined);
-
-    const handled = await handlers.handleSlashCommand('/help', {
-      botContextId: 'bot',
-      userId: 'ou_user',
-      mirrorTerminalReply,
-    });
-
-    expect(handled).toBe(true);
-    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
-    expect(mirrorTerminalReply).toHaveBeenCalledWith(ui.slash.help);
-  });
-
-  it('已确认双投时把首个 markdown 终态镜像到群主流', async () => {
-    const { handlers } = makeHarness();
-    const mirrorTerminalReply = vi.fn(async () => undefined);
-
-    const handled = await handlers.handleSlashCommand('/help', {
-      botContextId: 'bot',
-      userId: 'ou_user',
-      mirrorTerminalReply,
-    });
-
-    expect(handled).toBe(true);
-    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.help);
-    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
-    expect(mirrorTerminalReply).toHaveBeenCalledWith(ui.slash.help);
-  });
-
-  it('已确认双投时把卡片型 slash 的正文镜像到群主流', async () => {
-    const spec = {
-      title: '选择模型',
-      body: '当前 **claude-opus-4-8**',
-      buttons: [{ id: 'pick', label: '切换' }],
-    };
-    const { handlers, cards } = makeHarness();
-    vi.mocked(cards.buildModelPickerCard).mockReturnValue(spec);
-    const mirrorTerminalReply = vi.fn(async () => undefined);
-
-    const handled = await handlers.handleSlashCommand('/model', {
-      botContextId: 'bot',
-      userId: 'ou_user',
-      mirrorTerminalReply,
-    });
-
-    expect(handled).toBe(true);
-    expect(mocks.sendInteractiveCard).toHaveBeenCalled();
-    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
-    expect(mirrorTerminalReply).toHaveBeenCalledWith(spec.body);
-  });
-
-  it('卡片型 slash 消费开场白卡后仍镜像正文到群主流', async () => {
-    const spec = {
-      title: '接管',
-      body: '选择一个工作区',
-      buttons: [{ id: 'pick', label: '选择' }],
-    };
-    const { handlers, cards } = makeHarness();
-    vi.mocked(cards.buildControlPickerCard).mockReturnValue(spec);
-    const withCard = vi.fn(async () => true);
-    const mirrorTerminalReply = vi.fn(async () => undefined);
-
-    const handled = await handlers.handleSlashCommand('/ctr', {
-      botContextId: 'bot',
-      userId: 'ou_user',
-      consumePendingOpener: { withMarkdown: vi.fn(async () => false), withCard },
-      mirrorTerminalReply,
-    });
-
-    expect(handled).toBe(true);
-    expect(withCard).toHaveBeenCalledWith('ou_user', spec);
-    expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
-    expect(mirrorTerminalReply).toHaveBeenCalledTimes(1);
-    expect(mirrorTerminalReply).toHaveBeenCalledWith(spec.body);
   });
 
   it('首条 slash 消费失败时回落正常发送', async () => {
@@ -373,20 +302,87 @@ describe('IM slash commands', () => {
     expect(mocks.resetSessionToDefaults).not.toHaveBeenCalled();
   });
 
-  it('resets an existing session to the current defaults after /new', async () => {
-    const prepared = { ...defaultRow, agentKind: 'codex' as const, model: 'gpt-5.5' };
-    const repo = makeRepo({ prepareNewSession: vi.fn(async () => prepared) });
-    const { handlers } = makeHarness({ repo });
+  it('creates a distinct Telegram task from the current Pi, Grok, provider, and Full access defaults after /new', async () => {
+    const { bindingStore } = await import('../../binding');
+    vi.mocked(bindingStore.get).mockReturnValueOnce('attached-desktop-task');
+    vi.mocked(bindingStore.applyPersistedDetach).mockResolvedValueOnce(true);
+    const prepared = {
+      ...defaultRow,
+      agentKind: 'pi' as const,
+      model: 'grok-4.6',
+      providerId: 'xai',
+      permissionMode: 'bypassPermissions' as const,
+    };
+    const fresh = { ...prepared, id: 'telegram-new-task' };
+    const createFreshSession = vi.fn(async () => ({ current: fresh, previous: defaultRow }));
+    const repo = makeRepo({
+      prepareNewSession: vi.fn(async () => prepared),
+      createFreshSession,
+    });
+    const { handlers, turnRunner } = makeHarness({
+      repo,
+      adapterOverrides: {
+        channel: 'telegram',
+        sessions: {
+          source: 'telegram',
+          sessionIdFor: () => 'telegram-legacy-task',
+          createTaskOnNew: true,
+          defaultTitle: () => 'Telegram',
+          ensureWorkingDir: () => '/tmp/telegram',
+          extraInsertColumns: () => ({}),
+        },
+      },
+    });
 
     await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' });
 
-    expect(mocks.resetSessionToDefaults).toHaveBeenCalledWith(
-      'feishu-session',
-      expect.anything(),
+    const identity = { channel: 'telegram', botContextId: 'bot', userId: 'ou_user' };
+    expect(createFreshSession).toHaveBeenCalledWith(
+      'bot',
+      'ou_user',
+      undefined,
       prepared,
-      'feishu',
+      { identity, targetSessionId: 'attached-desktop-task' },
     );
+    expect(createFreshSession.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(bindingStore.applyPersistedDetach).mock.invocationCallOrder[0]!,
+    );
+    expect(bindingStore.applyPersistedDetach).toHaveBeenCalledWith(
+      identity,
+      'attached-desktop-task',
+    );
+    expect(mocks.executeDetach).not.toHaveBeenCalled();
+    expect(mocks.resetSessionToDefaults).not.toHaveBeenCalled();
+    expect(turnRunner.disposeOneSession).toHaveBeenCalledWith(defaultRow.id);
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
+  });
+
+  it('keeps /ctr attached when Telegram task rotation fails', async () => {
+    const createFreshSession = vi.fn(async () => {
+      throw new Error('db unavailable');
+    });
+    const repo = makeRepo({ createFreshSession });
+    const { handlers } = makeHarness({
+      repo,
+      adapterOverrides: {
+        channel: 'telegram',
+        sessions: {
+          source: 'telegram',
+          sessionIdFor: () => 'telegram-legacy-task',
+          createTaskOnNew: true,
+          defaultTitle: () => 'Telegram',
+          ensureWorkingDir: () => '/tmp/telegram',
+          extraInsertColumns: () => ({}),
+        },
+      },
+    });
+
+    await expect(
+      handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' }),
+    ).rejects.toThrow('db unavailable');
+    expect(mocks.executeDetach).not.toHaveBeenCalled();
+    const { bindingStore } = await import('../../binding');
+    expect(bindingStore.applyPersistedDetach).not.toHaveBeenCalled();
   });
 
   it('does not send /model picker when creating the target session would fail auth', async () => {
@@ -405,6 +401,18 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  it('waits for model preferences before constructing the IM picker', async () => {
+    let release!: () => void;
+    mocks.waitForModelVisibilityMirror.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const { handlers, cards } = makeHarness();
+    const pending = handlers.handleSlashCommand('/model', { botContextId: 'bot', userId: 'ou_user' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    expect(cards.buildModelPickerCard).not.toHaveBeenCalled();
+    release();
+    await pending;
+    expect(cards.buildModelPickerCard).toHaveBeenCalledOnce();
+  });
+
   it('does not send /permission picker when creating the target session would fail auth', async () => {
     const turnRunner = makeTurnRunner({
       resolveRouteTarget: vi.fn(async () => null),
@@ -419,6 +427,63 @@ describe('IM slash commands', () => {
     expect(cards.buildPermissionModePickerCard).not.toHaveBeenCalled();
     expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
+  });
+
+  describe('connection handed to a companion bot', () => {
+    it('/new in a group rotates the bot lane instead of creating a channel task', async () => {
+      const repo = makeRepo();
+      const rotateCompanionLane = vi.fn(async () => 'rotated' as const);
+      const turnRunner = makeTurnRunner({ rotateCompanionLane } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner });
+
+      await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'g/oc_chat' });
+
+      expect(rotateCompanionLane).toHaveBeenCalledWith('bot', 'g/oc_chat');
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(repo.createSession).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('g/oc_chat', ui.slash.companionLaneNew);
+    });
+
+    it('/new in the owner DM keeps the bot’s main conversation and explains why', async () => {
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner({
+        rotateCompanionLane: vi.fn(async () => 'owner-dm' as const),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner });
+
+      await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' });
+
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+      expect(mocks.resetSessionToDefaults).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.companionDmNew);
+    });
+
+    it('/new falls back to the channel’s own behaviour when the connection is not handed over', async () => {
+      const repo = makeRepo();
+      const turnRunner = makeTurnRunner({
+        rotateCompanionLane: vi.fn(async () => 'unbound' as const),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner });
+
+      await handlers.handleSlashCommand('/new', { botContextId: 'bot', userId: 'ou_user' });
+
+      expect(repo.prepareNewSession).toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.new);
+    });
+
+    it.each(['/model', '/permission', '/project'])('%s points to the bot settings instead of changing the bot task', async (cmd) => {
+      const turnRunner = makeTurnRunner({
+        companionBotIdFor: vi.fn(() => 'bot-mimi'),
+      } as Partial<ImTurnRunner>);
+      const { handlers, cards } = makeHarness({ turnRunner, adapterOverrides: { projectSwitching: true } });
+
+      await handlers.handleSlashCommand(cmd, { botContextId: 'bot', userId: 'ou_user' });
+
+      expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+      expect(cards.buildModelPickerCard).not.toHaveBeenCalled();
+      expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.slash.companionManagedCommand);
+    });
   });
 
   it('/stop 与 !stop 同语义 — 中止当前 turn 并回执', async () => {
@@ -498,6 +563,36 @@ describe('IM slash commands', () => {
       ['/model', '/ctr', '/session'].map((command) => ui.slash.unknownCommand(command)),
     );
     expect(mocks.sendMarkdownText.mock.calls[3]?.[1]).toContain('/permission auto');
+  });
+
+  // 回归(PR #6289 review): 拦截之前要求文案包定义了 companionManagedCommand, 企业微信 / Discord 没定义,
+  // 伙伴连接上主人的 /permission 会直接改伙伴主任务的权限模式。
+  it.each([
+    ['WeCom pack', wecomUi, wecomUi.slash.companionManagedCommand],
+    ['a pack without the hint', { ...wecomUi, slash: { ...wecomUi.slash, companionManagedCommand: undefined } }, COMPANION_MANAGED_COMMAND_FALLBACK],
+  ])('intercepts /permission on a WeCom companion lane (%s)', async (_label, packUi, expected) => {
+    const textIm = { sendMarkdownText: mocks.sendMarkdownText } as unknown as TextChannelIM;
+    const changePermissionMode = vi.fn();
+    const turnRunner = makeTurnRunner({
+      changePermissionMode,
+      companionBotIdFor: vi.fn(() => 'bot-mimi'),
+    } as Partial<ImTurnRunner>);
+    const { handlers } = makeHarness({
+      turnRunner,
+      adapterOverrides: {
+        channel: 'wecom',
+        ui: packUi,
+        im: textIm,
+        output: { kind: 'chunked-text', im: textIm, commitFinal: vi.fn() },
+      },
+    });
+
+    expect(await handlers.handleSlashCommand('/permission bypass', { botContextId: 'bot', userId: 'owner' })).toBe(true);
+
+    expect(expected).toBeTruthy();
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('owner', expected);
+    expect(changePermissionMode).not.toHaveBeenCalled();
+    expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
   });
 
   it('requires text-channel Full Access to pass through the shared confirmation flow', async () => {
@@ -623,6 +718,45 @@ describe('IM slash commands', () => {
       expect(repo.prepareNewSession).not.toHaveBeenCalled();
       expect(repo.findActiveSession).not.toHaveBeenCalled();
       expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
+    });
+
+    it('连接交给伙伴后报伙伴那条任务实际在用的模型, 不报渠道自己的默认值', async () => {
+      // 渠道自己的确定性会话行(或 IM 新会话默认)可能写着 Opus, 但这条连接上消息
+      // 实际跑在伙伴主任务里(这里是 Codex)。/settings 报前者会让用户以为配置错了。
+      const repo = makeRepo({ peekSession: vi.fn(async () => ({ ...defaultRow })) });
+      const turnRunner = makeTurnRunner({
+        companionBotIdFor: vi.fn(() => 'bot-mimi'),
+        peekCompanionRouteTarget: vi.fn(async () => ({
+          ...defaultRow,
+          id: 'companion-canonical',
+          agentKind: 'codex',
+          model: 'gpt-6.1-sol',
+          effort: 'medium',
+        })),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner, adapterOverrides: { ui: telegramUi } });
+      expect(await handlers.handleSlashCommand('/settings', SLASH_CTX)).toBe(true);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toContain('Agent：codex');
+      expect(text).toContain('模型：gpt-6.1-sol');
+      expect(text).not.toContain('claude-opus-4-8');
+      expect(text).toContain('伙伴设置');
+      expect(text).not.toContain('/model');
+      expect(repo.peekSession).not.toHaveBeenCalled();
+      expect(repo.prepareNewSession).not.toHaveBeenCalled();
+    });
+
+    it('连接交给伙伴但任务还没建起来时指回伙伴设置, 不报一份跑不到的默认值', async () => {
+      const repo = makeRepo({ peekSession: vi.fn(async () => ({ ...defaultRow })) });
+      const turnRunner = makeTurnRunner({
+        companionBotIdFor: vi.fn(() => 'bot-mimi'),
+        peekCompanionRouteTarget: vi.fn(async () => null),
+      } as Partial<ImTurnRunner>);
+      const { handlers } = makeHarness({ repo, turnRunner, adapterOverrides: { ui: telegramUi } });
+      await handlers.handleSlashCommand('/settings', SLASH_CTX);
+      const [, text] = mocks.sendMarkdownText.mock.calls.at(-1)!;
+      expect(text).toBe(telegramUi.slash.companionManagedCommand);
+      expect(repo.peekSession).not.toHaveBeenCalled();
     });
 
     it('还没有会话行时报渠道默认值, 项目名不是空串', async () => {

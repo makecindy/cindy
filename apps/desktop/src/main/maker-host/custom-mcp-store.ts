@@ -14,6 +14,7 @@
 
 import { asc, eq, sql } from 'drizzle-orm';
 
+import { HARNESS_MCP_SERVER_NAMES } from './harnessMcpCatalog.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { customMcpServers } from '../localDb/schema.js';
 import {
@@ -75,7 +76,8 @@ function invalid(message: string): ValidationResult {
  *
  * `reservedIds` 传内置 MCP server 名（生产由 getBuiltinMcpServerNames() 派生）。撞名的
  * 自定义 MCP 会在装配层按 key 顶替内置 server，还顺带继承审批策略里对该 server 名的
- * 信任，所以这里直接拒收；装配层另有一道纵深防御会跳过它。
+ * 信任，所以这里直接拒收；引擎保留名也在这里统一检查，不依赖 provider 注册时机。
+ * 装配层复用校验隔离历史撞名配置，保留原有数据。
  */
 export function validateCustomMcpConfig(
   config: unknown,
@@ -90,8 +92,8 @@ export function validateCustomMcpConfig(
   if (UNSAFE_OBJECT_KEYS.has(c.id)) {
     return invalid(`id '${c.id}' is not allowed`);
   }
-  if (reservedIds.includes(c.id)) {
-    return invalid(`id '${c.id}' is reserved by a builtin MCP server; pick another id`);
+  if (reservedIds.includes(c.id) || HARNESS_MCP_SERVER_NAMES.includes(c.id)) {
+    return invalid(`id '${c.id}' is reserved by a builtin or engine MCP server; pick another id`);
   }
 
   if (typeof c.name !== 'string' || c.name.trim().length === 0) return invalid('name required');
@@ -183,6 +185,29 @@ export async function listCustomMcpServers(): Promise<CustomMcpConfig[]> {
     .from(customMcpServers)
     .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
   return rows.map(rowToConfig);
+}
+
+/** Secret-free generation markers for freezing a Bot task's MCP capability set. */
+export async function listCustomMcpRuntimeGenerations(): Promise<Array<{
+  id: string;
+  transport: McpTransport;
+  updatedAt: number;
+}>> {
+  const rows = await getDbClient().drizzle
+    .select({
+      id: customMcpServers.id,
+      transport: customMcpServers.transport,
+      updatedAt: customMcpServers.updatedAt,
+    })
+    .from(customMcpServers)
+    .orderBy(asc(customMcpServers.sortOrder), asc(customMcpServers.createdAt));
+  return rows.map((row) => ({
+    id: row.id,
+    transport: (MCP_TRANSPORTS.includes(row.transport as McpTransport)
+      ? row.transport
+      : 'http') as McpTransport,
+    updatedAt: row.updatedAt,
+  }));
 }
 
 /** 取单个；不存在返回 null。 */

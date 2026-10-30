@@ -13,5 +13,28 @@
   "upToDateBody": "You already have the latest app package.",
   "checkFailedTitle": "Check Failed",
   "checkFailedBody": "Couldn't reach the update server. Try again later.",
-  "latestRequestFailed": "latest request failed: HTTP {{status}}"
+  "latestRequestFailed": "latest request failed: HTTP {{status}}",
+  "android": {
+    "versionChange": "{{current}} → {{version}}",
+    "version": "Version {{version}}",
+    "notesLabel": "What's New",
+    "updateNow": "Update Now",
+    "permissionTitle": "Allow Cindy to install apps",
+    "permissionBody": "Turn it on in system settings and come back. The update continues automatically.",
+    "grantAndUpdate": "Allow & Update",
+    "deniedTitle": "Installation isn't allowed yet",
+    "deniedBody": "Allow it again, or download in your browser instead.",
+    "grantAgain": "Allow Installation Again",
+    "downloading": "Downloading…",
+    "percent": "{{percent}}%",
+    "installing": "Opening Installer…",
+    "ready": "Downloaded and ready to install",
+    "install": "Install Update",
+    "failedTitle": "Update didn't finish",
+    "failedBody": "Something went wrong while downloading or opening the installer.",
+    "retry": "Retry Update",
+    "cancel": "Cancel Update",
+    "browser": "Download in Browser Instead",
+    "browserFailed": "Could not open the download link. Try again later."
+  }
 }

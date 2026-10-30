@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, providerMediaField } from '@cindy/model-providers';
 
 import {
   commitModelPlaneFromCatalog,
+  clearDiscoveredProviderModels,
   getActiveCatalog,
   getActiveCatalogRevision,
   setActiveCatalog,
+  setManagedProviders,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
   setCustomProviderConfigs,
   setDiscoveredCodexModels,
+  setDiscoveredProviderMediaModels,
+  setDiscoveredProviderModels,
   setXaiDiscoveredModels,
 } from '../active-catalog.js';
 
@@ -20,8 +24,11 @@ describe('active catalog revision', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([]);
     setDiscoveredCodexModels([]);
+    clearDiscoveredProviderModels();
+    setDiscoveredProviderMediaModels('byok-collision', null);
     setXaiDiscoveredModels(null);
     setCustomProviderConfigs([]);
+    setManagedProviders([]);
   });
 
   it('invalidates the merged catalog before notifying one monotonic revision', () => {
@@ -76,6 +83,101 @@ describe('active catalog revision', () => {
       false,
     );
     expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
+  });
+
+  it('refreshes custom media defaults without losing discovered or explicit fields', () => {
+    const current = structuredClone(BUNDLED_CATALOG);
+    const base = current.modelRegistry!.baseModels!.find((m) => m.id === 'openai/gpt-4o-mini-tts')!;
+    setActiveCatalog(current);
+    setCustomProviderConfigs([
+      {
+        id: 'private-audio',
+        name: 'Private',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private.example/v1',
+            models: [
+              {
+                id: 'gpt-4o-mini-tts',
+                name: 'Live',
+                nameExplicit: false,
+                mode: 'audio_speech',
+                modalities: { input: [], output: [] },
+                discoveredMetadata: { name: 'Live', officialDocs: 'https://private.example/docs' },
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    const read = () => getActiveCatalog().providers.find((p) => p.id === 'private-audio')!;
+    expect(read().audioModels![0]).toMatchObject({
+      name: 'Live',
+      mode: 'audio_speech',
+      officialDocs: 'https://private.example/docs',
+      modalities: { input: [], output: [] },
+    });
+    base.defaults.description = 'Updated public description';
+    current.modelRegistry!.updatedAt = '2099-09-09T00:00:00.000Z';
+    setActiveCatalog(current);
+    expect(read().audioModels![0]).toMatchObject({
+      name: 'Live',
+      description: 'Updated public description',
+      officialDocs: 'https://private.example/docs',
+      modalities: { input: [], output: [] },
+    });
+    expect(read().routing.codex?.upstream).toBe('https://private.example/v1');
+  });
+
+  it.each([1, 2, 3, 5] as const)('publishes Gemini defaults before notifying and retains native declarations across sparse V%s refresh', schemaVersion => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = { schemaVersion, updatedAt: '2099-09-13T00:00:00Z', models: [] };
+    setActiveCatalog(catalog);
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const id = 'google/gemini-3.8-flash';
+    const read = () => getActiveCatalog().providers.find(p => p.id === 'openrouter-test')!;
+    const listener = vi.fn(() => read());
+    setActiveCatalogChangedListener(listener);
+    setCustomProviderConfigs([{ id: 'openrouter-test', name: 'OpenRouter', runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { ...preset.runtimes[agent]!, catalogPresetId: preset.id, models: [{ id, name: 'Gemini' }] }]),
+    ) }]);
+    const check = (provider: ReturnType<typeof read>) => {
+      for (const agent of agents) expect(provider.models[agent]![0]).toMatchObject({
+        id, nativeApi: 'google-generative-ai', defaultEnabled: agent === 'pi',
+        contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true,
+      });
+    };
+    expect(listener).toHaveBeenCalledOnce();
+    check(listener.mock.results[0].value);
+    setActiveCatalog(structuredClone(catalog));
+    check(read());
+  });
+
+  it.each([
+    ['chat', 'image_generation'],
+    ['image_generation', 'chat'],
+    ['image_generation', 'video_generation'],
+    ['video_generation', 'image_generation'],
+  ])('keeps duplicate IDs scoped to their producing runtime: %s / %s', (claudeMode, codexMode) => {
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    setCustomProviderConfigs([{
+      id: 'duplicate-media', name: 'Duplicate', runtimes: {
+        'claude-code': { baseUrl: 'https://claude.example/v1', models: [{ id: 'shared', name: 'Claude Row', mode: claudeMode }] },
+        codex: { baseUrl: 'https://codex.example/v1', models: [{ id: 'shared', name: 'Codex Row', mode: codexMode }] },
+      },
+    }]);
+    const check = () => {
+      const provider = getActiveCatalog().providers.find((p) => p.id === 'duplicate-media')!;
+      for (const [agent, mode, name] of [['claude-code', claudeMode, 'Claude Row'], ['codex', codexMode, 'Codex Row']] as const) {
+        const field = providerMediaField(mode);
+        expect(provider.models[agent]?.[0].mode).toBe(mode);
+        if (field) expect(provider[field]).toContainEqual(expect.objectContaining({ id: 'shared', mode, name, sourceAgent: agent }));
+      }
+    };
+    check();
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    check();
   });
 
   it('routes Anthropic discovery through the same revision listener', () => {
@@ -158,4 +260,52 @@ describe('active catalog revision', () => {
       currentOpenAi.models.codex,
     );
   });
+  it('retains a pending enterprise Provider without inventing a runnable route', () => {
+    setManagedProviders([{ id: 'byok-pending', name: 'Enterprise',
+      source: 'organization', auth: { method: 'managed' }, access: { kind: 'managed' }, agents: [], models: {}, routing: {},
+    }]);
+    expect(getActiveCatalog().providers.find((provider) => provider.id === 'byok-pending')).toMatchObject({
+      agents: [], models: {}, routing: {}, source: 'organization',
+    });
+    setManagedProviders([]);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'byok-pending')).toBe(false);
+  });
+
+  it('temporarily gives a managed Provider precedence over a legacy personal id collision', () => {
+    setCustomProviderConfigs([{
+      id: 'byok-collision', name: 'Legacy personal', runtimes: {
+        pi: { baseUrl: 'https://personal.example/v1', models: [{ id: 'chat', name: 'Chat' }] },
+      },
+    }]);
+    setDiscoveredProviderModels('byok-collision', 'pi', [{
+      id: 'personal-discovered', name: 'Personal discovered', contextWindow: 8_000,
+      efforts: [], defaultEffort: null,
+    }]);
+    setDiscoveredProviderMediaModels('byok-collision', {
+      imageModels: [{ id: 'personal-image', name: 'Personal image' }],
+    });
+    setManagedProviders([{
+      id: 'byok-collision', name: 'Enterprise', source: 'organization',
+      auth: { method: 'managed' }, access: { kind: 'managed' }, agents: ['pi'],
+      models: { pi: [{ id: 'enterprise-chat', name: 'Enterprise chat', contextWindow: 8_000,
+        efforts: [], defaultEffort: null }] }, routing: {},
+      imageModels: [{ id: 'enterprise-image', name: 'Enterprise image' }],
+    }]);
+    const enterprise = getActiveCatalog().providers.filter(
+      (provider) => provider.id === 'byok-collision',
+    );
+    expect(enterprise).toHaveLength(1);
+    expect(enterprise[0]).toMatchObject({
+      name: 'Enterprise', source: 'organization',
+      models: { pi: [{ id: 'enterprise-chat' }] },
+      imageModels: [{ id: 'enterprise-image' }],
+    });
+
+    setManagedProviders([]);
+    expect(getActiveCatalog().providers.find((provider) => provider.id === 'byok-collision')).toMatchObject({
+      name: 'Legacy personal', source: 'user',
+      models: { pi: expect.arrayContaining([expect.objectContaining({ id: 'personal-discovered' })]) },
+    });
+  });
+
 });

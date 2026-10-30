@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { subscriptionDirectPriceQuote } from '../../../shared/modelPriceQuote';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';
 import { __resetActiveLedgerCurrencyForTesting, setActiveLedgerCurrency } from '../ledgerCurrency';
@@ -43,6 +45,43 @@ const SUBSCRIPTION: TurnPricingContext = {
   billingRoute: 'subscription',
   region: 'global',
 };
+
+describe('Astra subscription reference estimates', () => {
+  const astra = subscriptionDirectPriceQuote(
+    'chatgpt/gpt-6-astra', BUNDLED_CATALOG.modelRegistry, 'codex', '2026-09-04',
+  );
+  const tokens = { inputTokens: 50_000, outputTokens: 100, cacheReadTokens: 200_000, cacheCreateTokens: 22_000 };
+
+  it('uses the declared Fast tariff for native priority segments, including cache writes', () => {
+    expect(astra?.source).toBe('subscription-reference');
+    expect(computeGatewayTurnCost(tokens, astra)).toBeCloseTo(0.98);
+    expect(computeGatewayTurnCost(tokens, astra, 'priority')).toBeCloseTo(1.96);
+    expect(computeGatewayTurnCost(tokens, astra, 'fast')).toBeCloseTo(1.96);
+    expect(computeGatewaySegmentedTurnCost([
+      { ...tokens, priceVariant: 'standard' },
+      { ...tokens, priceVariant: 'priority' },
+    ], astra)).toBeCloseTo(2.94);
+  });
+
+  it('does not price Ultrafast usage using the Standard or Fast tariff', () => {
+    const segments = normalizeTurnUsageSegments([{ ...tokens, priceVariant: 'ultrafast' }]);
+    expect(segments?.[0]?.priceVariant).toBe('ultrafast');
+    expect(computeGatewayTurnCost(tokens, astra, 'ultrafast')).toBeNull();
+    expect(computeGatewaySegmentedTurnCost(segments, astra)).toBeNull();
+  });
+
+  it('keeps the subscription reference window bound for both tariffs', () => {
+    const expanded = { ...tokens, inputTokens: tokens.inputTokens + 1 };
+    expect(computeGatewayTurnCost(expanded, astra)).toBeNull();
+    expect(computeGatewayTurnCost(expanded, astra, 'priority')).toBeNull();
+  });
+
+  it('does not borrow standard cache-write prices for an incomplete reference Fast tariff', () => {
+    expect(astra?.priority).toBeDefined();
+    const incomplete = { ...astra!, priority: { ...astra!.priority, cacheCreatePerMtok: undefined, inputTokenPriceBands: undefined } };
+    expect(computeGatewayTurnCost(tokens, incomplete, 'priority')).toBeNull();
+  });
+});
 
 function quote(
   modelId: string,
@@ -1058,5 +1097,23 @@ describe('subscription value and usage details', () => {
       8_500,
     );
     expect(details).toMatchObject({ durationMs: 1_250, turnDurationMs: 8_500 });
+  });
+});
+describe('enterprise BYOK reported SDK costs', () => {
+  it('keeps a captured managed turn out of actual spend after logout clears the catalog', () => {
+    expect(
+      resolveTurnCost({
+        rawModel: 'deepseek-flash',
+        tokens: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreateTokens: 0 },
+        sdkCostDelta: 0.23,
+        pricing: {},
+        context: {
+          providerId: 'byok-removed-provider',
+          billingRoute: 'provider-api',
+          region: 'global',
+          accessKind: 'managed',
+        },
+      }),
+    ).toEqual({ model: 'deepseek-flash', money: null, source: 'reference' });
   });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { buildUserProvider, type ModelRegistry, type ProviderRuntimeModelConfig } from '@cindy/model-providers';
+import { customProviderModelConfigFromCatalogModel } from '../customProviders';
 
 import {
+  firstProviderChatModel,
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
@@ -22,6 +25,62 @@ const fields = {
     { name: 'X-Tenant', value: 'acme' },
   ],
 };
+
+it('excludes exact public speech identities from chat probes without guessing unknown names', () => {
+  const speech = { id: 'gpt-4o-mini-tts' };
+  const unknown = { id: 'private-tts-service' };
+  expect(firstProviderChatModel([speech])).toBeUndefined();
+  expect(firstProviderChatModel([speech, unknown])).toBe(unknown);
+  expect(firstProviderChatModel([{ ...unknown, mode: 'audio_speech' }])).toBeUndefined();
+  expect(firstProviderChatModel([{ ...speech, mode: 'chat' }])?.id).toBe(speech.id);
+});
+
+describe('active catalog modes in connection probes', () => {
+  const registry: ModelRegistry = { schemaVersion: 5, updatedAt: '2026-10-12T06:00:00.000Z',
+    baseModels: [{ id: 'new-server-voice', aliases: [], defaults: { mode: 'audio_speech' } }], models: [],
+  };
+  function project(models: ProviderRuntimeModelConfig[]) {
+    return buildUserProvider({ id: 'speech', name: 'Speech', runtimes: { codex: {
+      baseUrl: fields.baseUrl.trim(), models,
+    } } }, { modelRegistry: registry }).models.codex!;
+  }
+
+  it('uses the effective mode after restoring an ID-only saved config without materializing it', () => {
+    const catalogModels = project([{ id: 'new-server-voice', name: 'Voice' }]);
+    const models = catalogModels.map(model => customProviderModelConfigFromCatalogModel(model, 'codex'));
+    expect(catalogModels[0].mode).toBe('audio_speech');
+    expect(models[0].mode).toBeUndefined();
+    expect(firstProviderChatModel(models, catalogModels)).toBeUndefined();
+    expect(firstProviderChatModel([{ ...models[0], mode: 'chat' }], catalogModels)?.id).toBe(models[0].id);
+    expect(firstProviderChatModel([{ ...models[0], discoveredMetadata: { mode: 'chat' } }], catalogModels)?.id).toBe(models[0].id);
+    expect(models).toEqual([{ id: 'new-server-voice', name: 'Voice' }]);
+  });
+
+  it('does not restore a saved explicit type after the user resets it to automatic', () => {
+    const catalogModels = project([{ id: 'private-model', name: 'Private', mode: 'audio_speech' }]);
+    const automatic = { id: 'private-model', name: 'Private' };
+    expect(firstProviderChatModel([automatic], catalogModels)).toBe(automatic);
+  });
+
+  it('uses the same active classification for route, saved-probe eligibility and request signatures', () => {
+    const models: ProviderRuntimeModelConfig[] = [
+      { id: 'new-server-voice', name: 'Voice', route: { baseUrl: 'https://speech.example.test/v1', wireProtocol: 'openai-chat' } },
+      { id: 'chat-model', name: 'Chat', route: { baseUrl: 'https://chat.example.test/v1', wireProtocol: 'openai-chat' } },
+    ];
+    const catalogModels = project(models);
+    const probe = { ...fields, wireProtocol: 'openai-responses' as const, models, catalogModels };
+    expect(firstProviderChatModel(models, catalogModels)?.id).toBe('chat-model');
+    expect(resolveProviderConnectionProbeRoute('codex', probe)).toMatchObject({
+      baseUrl: 'https://chat.example.test/v1', wireProtocol: 'openai-chat',
+    });
+    expect(connectionTestCanUseSaved(probe, { ...fields, wireProtocol: 'openai-responses',
+      authMode: 'apiKey', modelRoute: models[1].route }, 'apiKey')).toBe(true);
+    expect(JSON.parse(providerConnectionTestRequestSignature(probe, 'apiKey')).modelId).toBe('chat-model');
+    expect(providerConnectionTestRequestSignature(probe, 'apiKey')).not.toBe(
+      providerConnectionTestRequestSignature({ ...probe, catalogModels: [] }, 'apiKey'),
+    );
+  });
+});
 
 describe('providerModelFetchRequestSignature', () => {
   it('invalidates an in-flight result when the auth mode changes', () => {
@@ -480,4 +539,47 @@ describe('connectionTestCanUseSaved', () => {
       ),
     ).toBe(true);
   });
+});
+
+it('uses the same eligible chat model for probe ID, route and request signature', () => {
+  const media = { id: 'image', mode: 'image_generation', route: { baseUrl: 'https://image.example', wireProtocol: 'openai-chat' as const } };
+  const chat = { id: 'flux-image-x', route: { baseUrl: 'https://chat.example', wireProtocol: 'openai-chat' as const } };
+  const input = { ...fields, wireProtocol: 'openai-chat' as const, models: [media, chat] };
+  expect(firstProviderChatModel(input.models)).toBe(chat);
+  expect(resolveProviderConnectionProbeRoute('codex', input)?.baseUrl).toBe('https://chat.example');
+  expect(providerConnectionTestRequestSignature(input, 'apiKey')).toBe(providerConnectionTestRequestSignature({ ...input, models: [chat] }, 'apiKey'));
+  expect(firstProviderChatModel([media])).toBeUndefined();
+});
+
+
+it.each(['pi', 'codex', 'claude-code'] as const)('retains Vertex SDK identity for the %s connection test', agent => {
+  expect(resolveProviderConnectionProbeRoute(agent, { baseUrl: 'https://us-central1-aiplatform.googleapis.com',
+    requestPath: '', wireProtocol: 'google-generative-ai',
+    models: [{ id: 'gemini-fixture', piApi: 'google-vertex' }] })).toEqual({
+      baseUrl: 'https://us-central1-aiplatform.googleapis.com', wireProtocol: 'google-generative-ai', api: 'google-vertex',
+    });
+});
+
+
+it('invalidates a connection test when the actual SDK changes under the same display protocol', () => {
+  const fields = { baseUrl: 'https://example.test', requestPath: '', modelsUrl: '', apiKey: 'fixture', headers: [],
+    wireProtocol: 'google-generative-ai' as const, models: [{ id: 'gemini', api: 'google-generative-ai' as const }] };
+  const changed = { ...fields, models: [{ id: 'gemini', api: 'google-vertex' as const }] };
+  expect(providerConnectionTestRequestSignature(fields, 'apiKey'))
+    .not.toBe(providerConnectionTestRequestSignature(changed, 'apiKey'));
+});
+
+it.each(['claude-code', 'codex', 'pi'] as const)('projects ID-only template models before an edited %s probe', async agent => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  const runtime = preset.runtimes[agent]!;
+  for (const id of [runtime.models[0].id, 'gemini-future-deployment']) {
+    expect(resolveProviderConnectionProbeRoute(agent, {
+      catalogPresetId: preset.id, baseUrl: runtime.baseUrl,
+      wireProtocol: runtime.wireProtocol!, requestPath: runtime.requestPath ?? '', models: [{ id }],
+    }, BUNDLED_CATALOG.presets)).toMatchObject({
+      api: 'google-generative-ai', wireProtocol: 'google-generative-ai',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    });
+  }
 });

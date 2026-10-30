@@ -8,6 +8,7 @@ import {
   isOrcaQueueItem,
   normalizeInputProjection,
   queuedMessageHasEncodedQuotes,
+  queuedMessageReplyQuote,
   queueMoveTargetIndex,
   resolveQueueEditTextSubmission,
   stopOptionsForProjection,
@@ -15,8 +16,12 @@ import {
 import { buildMobileUploadedAttachment } from '@/session/attachments';
 import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
-import { localizeToolLoopError } from '@/session/toolLoopErrorI18n';
-import type { RemoteSession } from '@/session/types';
+import { localizeAgentError } from '@/session/agentErrorI18n';
+import type { RemoteMessage, RemoteSession } from '@/session/types';
+import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { buildOutboxItem } from '@/session/sessionOutbox';
+import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import { CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -41,8 +46,46 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  it.each([CONTINUE_AFTER_ERROR_PROMPT, CONTINUE_AFTER_APP_EXIT_PROMPT])('folds interrupted work using the actual queued continuation envelope: %s', (prompt) => {
+    const queued = buildQueuedTextMessage(session(), prompt, new Date('2026-01-01T00:00:03Z'), 'resume');
+    for (const content of [queued.chatMessage.content, queued.persistedContent]) {
+      const rows = [
+        { id: 'user', role: 'user' as const, content: 'Work' },
+        { id: 'progress', role: 'assistant' as const, content: 'Checking' },
+        { id: 'error', role: 'error' as const, content: 'Interrupted' },
+        { id: 'resume', role: 'user' as const, content },
+      ].map((row, index) => ({ ...row, clientId: row.id, sessionId: 's1', toolUseId: null, agentMeta: null,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString() }));
+      const items = buildMobileMessageRenderItems(rows, { isSessionStreaming: true });
+      expect(items.map(item => item.type)).toEqual(['message', 'work_group', 'message']);
+      expect(items[1]).toMatchObject({ isStreaming: false, children: [
+        { type: 'message', message: { body: 'Checking' } },
+      ] });
+    }
+  });
+
+  it.each([true, false, undefined])('keeps the stored Plan snapshot %s across a later host toggle and serialization', (planModeAtSend) => {
+    const original = buildOutboxItem({ clientId: 'plan-id', sessionId: 's1', text: 'plan snapshot',
+      permissionModeAtSend: 'ask', planModeAtSend, readyAttachments: [], claimedUploads: [] });
+    const recovered = JSON.parse(JSON.stringify(original));
+    const queued = buildQueuedTextMessage(session({ planModeEnabled: !planModeAtSend }), recovered.text,
+      new Date(), recovered.clientId, { planMode: recovered.planModeAtSend });
+    expect(queued.createOpts.planMode).toBe(planModeAtSend);
+    expect(queued.permissionMode).toBe('ask');
+    if (planModeAtSend === undefined) expect(queued.createOpts).not.toHaveProperty('planMode');
+  });
+
   beforeAll(async () => {
     await i18n.changeLanguage('zh-CN');
+  });
+
+  // #7119: only the host may identify a failed input as continuable. Older or
+  // malformed projections must not restart a completed historical task.
+  it('normalizes explicit continuation eligibility without inferring legacy errors', () => {
+    for (const flag of [undefined, false, 'true', 1, true]) {
+      const projection = normalizeInputProjection({ error: 'capacity', errorCanContinue: flag });
+      expect(projection.errorCanContinue).toBe(flag === true);
+    }
   });
 
   it('builds a text-only queued message that matches the desktop coordinator payload shape', () => {
@@ -124,6 +167,25 @@ describe('inputProjection', () => {
     expect(queued.chatMessage.quotesEncoded).toBe(true);
     expect(queuedMessageHasEncodedQuotes(queued)).toBe(true);
     expect(queuedMessageHasEncodedQuotes({ persistedContent: '{broken' })).toBe(false);
+  });
+
+  it('carries a companion reply quote from the queued envelope to the rendered message', () => {
+    const replyQuote = { clientId: 'reply-1', role: 'assistant' as const, excerpt: 'Ship it on Friday.' };
+    const queued = buildQueuedTextMessage(session(), 'Why Friday?', new Date('2026-01-01T00:00:05.000Z'), 'q-reply', { replyQuote });
+
+    // Desktop reads this envelope field to give the companion the quoted original.
+    expect(JSON.parse(queued.persistedContent).replyQuote).toEqual(replyQuote);
+    // A queue edit rebuilds the message and must keep the quote that belongs to it.
+    expect(queuedMessageReplyQuote(queued)).toEqual(replyQuote);
+    expect(queuedMessageReplyQuote({ persistedContent: '{broken' })).toBeUndefined();
+    const [rendered] = normalizeRemoteMessages([{ id: 'm-1', clientId: 'q-reply', sessionId: 'session-1', role: 'user',
+      content: queued.persistedContent, createdAt: '2026-01-01T00:00:05.000Z' } as RemoteMessage]);
+    expect(rendered.replyQuote).toEqual(replyQuote);
+    // Anything malformed is no quote, not a broken block.
+    const [malformed] = normalizeRemoteMessages([{ id: 'm-2', clientId: 'q-bad', sessionId: 'session-1', role: 'user',
+      content: JSON.stringify({ text: 'x', images: [], files: [], replyQuote: { clientId: 'reply-1', role: 'system', excerpt: '' } }),
+      createdAt: '2026-01-01T00:00:06.000Z' } as RemoteMessage]);
+    expect(malformed.replyQuote).toBeUndefined();
   });
 
   it('hides private markers in queue edits and only preserves encoding while text is unchanged', () => {
@@ -396,8 +458,23 @@ describe('inputProjection', () => {
     }).toolLoop).toBeNull();
   });
 
+  it('localizes the output-limit reason carried by the live projection', () => {
+    const projection = normalizeInputProjection({
+      sessionId: 'output-limit', error: 'Pi reached the model output limit.', errorReason: 'output-limit',
+    });
+    expect(localizeAgentError(projection.errorReason, projection.toolLoop ?? null)).toBe(
+      i18n.t('session.tail.outputLimit'),
+    );
+  });
+
+  it('localizes incomplete execution without exposing the host cell diagnostic', () => {
+    expect(localizeAgentError('yield-continuation-incomplete', null)).toBe(
+      i18n.t('session.tail.executionResultUnavailable'),
+    );
+  });
+
   it('localizes live tool-loop errors instead of rendering the host message', () => {
-    const localized = localizeToolLoopError(
+    const localized = localizeAgentError(
       'tool_use_loop_detected',
       { kind: 'contract', count: 3 },
     );
@@ -456,7 +533,7 @@ describe('inputProjection', () => {
       queueExpanded: false,
       queuePaused: false,
     })).toMatchObject({
-      detail: '4 条消息 · 按桌面端顺序发送',
+      detail: '4 条消息 · 按电脑端顺序发送',
       hiddenCount: 1,
       hint: '可调整顺序、插话、编辑或删除普通队列消息。',
       title: '待发送队列',
@@ -472,7 +549,7 @@ describe('inputProjection', () => {
       queuePaused: true,
     })).toMatchObject({
       detail: '2 条消息等待恢复',
-      hint: '点“继续”后会按当前顺序继续发送到桌面端。',
+      hint: '点「继续」后会按当前顺序继续发送到电脑端。',
       title: '队列已暂停',
     });
 
@@ -484,7 +561,7 @@ describe('inputProjection', () => {
       queueExpanded: false,
       queuePaused: false,
     })).toMatchObject({
-      detail: '等待桌面端确认停止',
+      detail: '等待电脑端确认停止',
       title: '停止处理中',
       visibleCount: 0,
     });
@@ -562,7 +639,7 @@ describe('inputProjection', () => {
       },
       queueLength: projection.pendingQueue.length,
     });
-    expect(locked.hint).toBe('这条消息正在编辑中，桌面端会暂停自动发送。');
+    expect(locked.hint).toBe('这条消息正在编辑中，电脑端会暂停自动发送。');
     expect(locked.actions.edit.disabledReason).toBe('这条队列消息正在编辑中，完成后再操作。');
   });
 
@@ -618,5 +695,15 @@ describe('normalizeInputProjection — credentialSwitchWait', () => {
         credentialSwitchWait: { clientId: 'c1', blockedBySessionIds: [] },
       }).credentialSwitchWait,
     ).toBeNull();
+  });
+});
+
+describe('normalizeInputProjection usageLimitWait', () => {
+  it('reads the wait and treats legacy or malformed values as no wait', () => {
+    expect(normalizeInputProjection({ sessionId: 's1', usageLimitWait: { resumeAt: 123 } }).usageLimitWait)
+      .toEqual({ resumeAt: 123 });
+    expect(normalizeInputProjection({ sessionId: 's1' }).usageLimitWait).toBeNull();
+    expect(normalizeInputProjection({ sessionId: 's1', usageLimitWait: { resumeAt: 'soon' } }).usageLimitWait)
+      .toBeNull();
   });
 });

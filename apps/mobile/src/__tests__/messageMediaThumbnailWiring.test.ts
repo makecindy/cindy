@@ -15,6 +15,36 @@ describe('mobile message media thumbnail wiring', () => {
   const rendererSource = readTextLf(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
   const screenSource = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
+  it('seeds restored outbox identities before visible rows and authoritative queue captures', () => {
+    const pendingItems = screenSource.slice(
+      screenSource.indexOf('const pendingSendItems = useMemo('),
+      screenSource.indexOf('const messageListItems = useMemo('),
+    );
+    const seed = pendingItems.indexOf('rememberOutboxImagePreviews(');
+    expect(seed).toBeGreaterThan(-1);
+    expect(pendingItems).toContain('for (const item of outboxItems)');
+    expect(seed).toBeLessThan(pendingItems.indexOf('rememberSentAttachmentPreviews(item.clientId'));
+    expect(seed).toBeLessThan(pendingItems.indexOf('return buildPendingSendItems('));
+  });
+
+  it('captures remote and settling queue identities before building their visible rows, without requesting pixels', () => {
+    const pendingItems = screenSource.slice(
+      screenSource.indexOf('const livePendingSendClientIds = useMemo('),
+      screenSource.indexOf('const messageListItems = useMemo('),
+    );
+    expect(pendingItems).toContain('for (const item of [...settlingItemsForRender, ...inputProjection.pendingQueue])');
+    const capture = pendingItems.indexOf('rememberSentAttachmentPreviews(item.clientId, item.files ?? [], () => null)');
+    expect(capture).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(pendingItems.indexOf('return buildPendingSendItems('));
+    expect(pendingItems).toContain('...settlingItemsForRender, ...inputProjection.pendingQueue, ...outboxDisplayItems,');
+    const pruning = pendingItems.indexOf('pruneSentMessageImagePreviews(sentImagePreviewsRef.current, sessionId, livePendingSendClientIds, liveImagePreviewClientIdsRef.current)');
+    expect(pruning).toBeGreaterThan(-1);
+    expect(pruning).toBeLessThan(capture);
+    expect(screenSource).toContain('previewOf, galleryKeyOf, liveImagePreviewClientIdsRef.current)');
+    expect(pendingItems).toContain('new Set([...livePendingSendClientIds].map(pendingSendItemKey))');
+    expect(screenSource).toContain('pendingSendGroupKeys={pendingSendGroupKeys}');
+  });
+
   it('threads onResolveRemoteMedia from actions through both media blocks into MediaPreview', () => {
     expect(rendererSource).toContain('onResolveRemoteMedia={actions.onResolveRemoteMedia}');
     const attachmentStrip = rendererSource.slice(
@@ -36,7 +66,7 @@ describe('mobile message media thumbnail wiring', () => {
     );
     expect(mediaPreview).toContain('shouldAutoResolveMediaThumbnail');
     expect(mediaPreview).toContain('mediaThumbnailPhase');
-    expect(mediaPreview).toContain('message.mediaThumbLoading');
+    expect(mediaPreview).toContain('<MessageImagePlaceholder');
     expect(mediaPreview).toContain('message.mediaThumbFallback');
     // 查看器插队 + 缩略图可取消
     expect(mediaPreview).toContain('signal, forceRefresh');
@@ -45,8 +75,9 @@ describe('mobile message media thumbnail wiring', () => {
   it('renders image attachments desktop-style: outside the bubble, aspect-contained, no filename', () => {
     // 附件条渲染在气泡外(文字气泡上方),纯图片消息不渲染空气泡
     expect(rendererSource).toContain('{attachmentStripNode}');
+    // 普通消息仍按原判据省略空气泡；外层现在先分流独立错误卡片。
     expect(rendererSource).toContain(
-      '{hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}',
+      '&& (hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0));',
     );
     const attachmentStrip = rendererSource.slice(
       rendererSource.indexOf('function AttachmentStrip'),
@@ -64,6 +95,49 @@ describe('mobile message media thumbnail wiring', () => {
     expect(mediaPreview).toContain('attachmentImageFallback');
     // 图片缩略图不再带文件名 caption(对齐桌面版 user-attached / tool-output)
     expect(mediaPreview).not.toContain('mediaCaption');
+  });
+
+  it('uses delivered media and file renderers above the pending text bubble', () => {
+    const pending = readTextLf(resolve(process.cwd(), 'src/session/PendingSendBubble.tsx'), 'utf8');
+    const pendingBranch = rendererSource.slice(
+      rendererSource.indexOf("case 'pending_send':"),
+      rendererSource.indexOf('const RenderListItemView'),
+    );
+    expect(pendingBranch).toContain('<PendingAttachmentImage');
+    expect(pendingBranch).not.toContain('previewable: true');
+    const pendingImage = rendererSource.slice(
+      rendererSource.indexOf('function PendingAttachmentImage'),
+      rendererSource.indexOf('function MediaPreview'),
+    );
+    // iOS ph:// 必须沿用相册托盘的 Expo 解码器，并从加载结果量尺寸。
+    expect(readTextLf(resolve(process.cwd(), 'src/session/MessageLoadingImage.tsx'), 'utf8')).toContain("Image as ExpoImage");
+    expect(pendingImage).toContain('<MessageLoadingImage');
+    expect(pendingImage).toContain('contentFit="contain"');
+    expect(pendingImage).toContain('source: { width, height }');
+    expect(pendingImage).toContain('attachmentImageDisplaySize');
+    expect(pendingImage).toContain('styles.attachmentImageWrap');
+    expect(pendingImage).not.toContain('Image.getSize');
+    expect(pendingBranch).toContain('<FileChip');
+    expect(pendingBranch).toContain('<MarkdownBody');
+    expect(pendingBranch).not.toContain('onOpenPayload=');
+    expect(pending.indexOf('<AttachmentThumbStrip')).toBeLessThan(pending.indexOf('{hasBody || (item.replyQuote && renderReplyQuote) ?'));
+    expect(pending).toContain('item.fileNames.map(renderFile)');
+    expect(pending).not.toContain('height: 72');
+    expect(pending).not.toContain('contentFit="cover"');
+  });
+
+  it('does not expose a managed-media press handler without a payload viewer', () => {
+    const markdownBody = rendererSource.slice(
+      rendererSource.indexOf('function MarkdownBody'),
+      rendererSource.indexOf('function renderInline'),
+    );
+    expect(markdownBody).toContain('const openMarkdownMedia = useMemo(() => onOpenPayload');
+    expect(markdownBody).toContain(': undefined, [onOpenPayload]);');
+    const mediaCallback = markdownBody.slice(
+      markdownBody.indexOf('const openMarkdownMedia'),
+      markdownBody.indexOf('// Preserve the inline renderer'),
+    );
+    expect(mediaCallback).not.toContain('if (!onOpenPayload) return;');
   });
 
   it('exempts images from close-time release in the payload viewer', () => {
@@ -87,11 +161,16 @@ describe('mobile message media thumbnail wiring', () => {
     expect(releaseBlock).not.toContain("method: 'DELETE'");
   });
 
-  it('routes image payloads to the fullscreen ImageLightbox instead of the generic modal', () => {
-    expect(rendererSource).toContain("payload?.kind === 'media' && payload.media.kind === 'image'");
+  it('routes image and video payloads to the fullscreen ImageLightbox instead of the generic modal', () => {
     expect(rendererSource).toContain('<ImageLightbox');
-    expect(rendererSource).toContain('lightboxImagesForPayload(galleryImages, payload)');
-    expect(rendererSource).toContain("const imageLightboxOpen = payload?.kind === 'media' && payload.media.kind === 'image';");
+    expect(rendererSource).toContain('lightboxImages[galleryImageIndexForPayload(lightboxImages, payload)]');
+    expect(rendererSource).toContain('initialImageKey={initialLightboxImage?.key ?? payload.galleryImageKey}');
+    expect(rendererSource).toContain('initialUrl={initialLightboxImage?.url ?? payload.media.url}');
+    expect(rendererSource).toContain('const sourceGroupPresent = listData.some((item) => item.key === payloadSourceGroupKey);');
+    expect(rendererSource).toContain('pendingSendGroupKeys?.has(payloadSourceGroupKey) === true');
+    expect(rendererSource).toContain('lightboxImagesForPayload(galleryImages, payload, payloadSourceGroupKey, prev, sourceGroupPresent, retainPendingSnapshot)');
+    expect(rendererSource).toContain("const imageLightboxOpen = historyActive && payload?.kind === 'media' && isLightboxMediaKind(payload.media.kind);");
+    expect(rendererSource).toContain('payload={historyActive ? payload : null}');
     expect(rendererSource).toContain('() => (imageLightboxOpen');
     expect(rendererSource).toContain(': null),');
     // 旧的内嵌缩放查看器与图库箭头已退役
@@ -101,9 +180,9 @@ describe('mobile message media thumbnail wiring', () => {
     const lightboxSource = readTextLf(resolve(process.cwd(), 'src/session/ImageLightbox.tsx'), 'utf8');
     expect(lightboxSource).toContain('message.imageLightbox');
     expect(lightboxSource).toContain('shouldDismissLightbox');
-    expect(lightboxSource).toContain('shouldCloseLightboxOnTap');
+    expect(lightboxSource).toContain('runOnJS(onToggleChrome)()');
     expect(lightboxSource).toContain('Gesture.Pinch()');
-    // 单击关闭必须限制位移:RNGH Tap 默认 maxDist 无限,短拖松手会关 lightbox
+    // 单击切换 chrome 必须限制位移:RNGH Tap 默认 maxDist 无限,短拖松手会被当成单击
     expect(lightboxSource).toContain('maxDistance(LIGHTBOX_TAP_MAX_DISTANCE)');
     // 自然尺寸到达后按新 contain 边界立刻重钳位移,不把 letterbox 估算的旧平移留到下次拖动
     expect(lightboxSource).toContain('reclampLightboxPan(');
@@ -118,8 +197,9 @@ describe('mobile message media thumbnail wiring', () => {
     expect(lightboxSource).toContain('if (!finished || !doubleTapBusy.value) return');
     // 二次捏合:已有缩放时先补偿 origin,不把 origin*(1-scale) 立刻叠进画面
     expect(lightboxSource).toContain('compensateLightboxOrigin(');
-    // origin≠0 时平移钳的是 bake 后的画面,浏览捏合与标注双指 pan 共用
-    expect(lightboxSource).toContain('clampLightboxVisualPan(');
+    // 越界阻尼按 bake 后的画面与当前倍率边界计算:捏合锚点跟手,标注双指 pan 共用画面阻尼
+    expect(lightboxSource).toContain('lightboxPinchTranslation(');
+    expect(lightboxSource).toContain('dragLightboxVisualPan(');
     // chrome 显隐走共享 motion token,不在组件里写死毫秒
     expect(lightboxSource).toContain('duration: motionDuration.instant');
     expect(lightboxSource).toContain('duration: motionDuration.fast');
@@ -151,10 +231,12 @@ describe('mobile message media thumbnail wiring', () => {
     expect(screenSource).toContain('onOrphanResolved');
     // 取件成功但 mime 非图片 → 视为失败给重试按钮,不停留在永久 spinner
     expect(lightboxSource).toContain('resolvedUnsupported');
-    // 取件中 / 失败分支必须可单击关闭(无关闭按钮,不能困在全屏 Modal)
-    expect(lightboxSource).toContain('onPress={onRequestClose}');
+    // 取件中 / 失败分支单击同样切换 chrome(关闭按钮在 chrome 里,不能困在全屏 Modal)
+    expect(lightboxSource).toContain('onPress={onToggleChrome}');
     // lightbox images 引用稳定,父层流式重渲染不空转取件 effect / FlatList
     expect(rendererSource).toContain('const lightboxImages = useMemo');
+    // Removing an unreadable thumbnail changes the slot even if visible keys/URLs do not change.
+    expect(rendererSource.includes('p.payload.galleryImageSlot === n.payload.galleryImageSlot')).toBe(true);
     // 语义未变时复用上一份数组;关闭回调稳定化,流式期间不重建手势图
     expect(rendererSource).toContain('lightboxImagesRef');
     expect(rendererSource).toContain('onClose={closePayload}');

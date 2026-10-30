@@ -62,6 +62,18 @@ afterAll(() => {
 });
 
 describe('legacy managed binary migration', () => {
+  it('allows an older verified private runtime only when startup upgrade checks are disabled', () => {
+    const binaryPath = fallback.privateBinaryPath(tempDir, 'claude-code');
+    fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
+    fs.writeFileSync(binaryPath, 'local runtime', { mode: 0o755 });
+    const versionMarker = path.join(fallback.runtimeInstallRoot(tempDir, 'claude-code'), '.version');
+    fs.writeFileSync(versionMarker, olderStableVersion(PINNED_CLAUDE_VERSION));
+    expect(fallback.findCachedLinuxRuntimeFallbackBinary('claude-code')).toBeNull();
+    expect(fallback.findCachedLinuxRuntimeFallbackBinary('claude-code', false)).toBe(binaryPath);
+    fs.unlinkSync(versionMarker);
+    expect(fallback.findCachedLinuxRuntimeFallbackBinary('claude-code', false)).toBeNull();
+  });
+
   it('reuses and atomically migrates the exact pinned Claude cache without network access', async () => {
     const legacyPath = fallback.legacyManagedBinaryPath(tempDir, 'claude-code');
     fs.mkdirSync(path.dirname(legacyPath), { recursive: true });

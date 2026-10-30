@@ -1,3 +1,5 @@
+import { Button } from '@/components/ui/button';
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * SchedulerPage — /schedules 主路由（master-detail 改版）
  * ---------------------------------------------------------------------------
@@ -29,6 +31,7 @@ import { Plus, Timer } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { scheduleToUserCreateInput } from './lib/scheduleFormLogic';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { toast } from '@/lib/toast';
@@ -60,38 +63,10 @@ import {
 } from './lib/projectAutomationConfig';
 import type { ScheduleFormState } from './lib/scheduleFormLogic';
 import {
-  buildUsageLimitScheduleFormOverrides,
-  readUsageLimitScheduleCreateIntent,
-} from './lib/usageLimitScheduleCreateIntent';
-import {
   buildPluginScheduleFormOverrides,
   readPluginScheduleCreateIntent,
 } from './lib/pluginScheduleCreateIntent';
 
-function scheduleToUserCreateInput(
-  schedule: Schedule,
-  overrides: Partial<CreateScheduleInput> = {},
-): CreateScheduleInput {
-  return {
-    name: schedule.name,
-    prompt: schedule.prompt,
-    kind: schedule.kind,
-    cronExpr: schedule.cronExpr,
-    timezone: schedule.timezone,
-    recurring: schedule.recurring,
-    manual: schedule.manual,
-    intervalMs: schedule.intervalMs,
-    agentKind: schedule.agentKind,
-    model: schedule.model,
-    effort: schedule.effort,
-    workspaceKind: schedule.workspaceKind,
-    workingDir: schedule.workingDir,
-    useWorktree: schedule.useWorktree,
-    persistentSession: schedule.persistentSession,
-    notify: schedule.notify,
-    ...overrides,
-  };
-}
 
 /**
  * 排序：active 与 expired 同 rank（一次性已跑完的任务不再单独沉底，
@@ -228,29 +203,8 @@ export function SchedulerPage() {
     setFormOpen(true);
   }, [editToken, focusId, schedules]);
 
-  useEffect(() => {
-    const intent = readUsageLimitScheduleCreateIntent(location.state);
-    if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
-    handledScheduleCreateRequestRef.current = intent.requestId;
-    setCreatePrefillWorkingDir(null);
-    setCreateInitialTemplate(null);
-    setEditing(null);
-    setCreateInitialValues(
-      buildUsageLimitScheduleFormOverrides(intent, {
-        name: t('scheduler.usageLimitRecovery.name'),
-        prompt: t('scheduler.usageLimitRecovery.prompt'),
-      }),
-    );
-    setFormOpen(true);
-    // Consume the one-shot navigation intent so revisiting Automations does not
-    // reopen the modal. Creation still happens only after the user submits.
-    const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
-    navigate(path, { replace: true, state: null });
-  }, [location.pathname, location.search, location.state, navigate, t]);
-
-  // 插件请求新建自动化(agent 槽 schedule 加档):形态与上面 usage-limit 那条
-  // 完全一致 —— 一次性导航意图 → 预填打开面板 → 用完立刻清掉 state。
-  // 与它共用 handledScheduleCreateRequestRef:两种意图不该叠开两个面板。
+  // 插件请求新建自动化(agent 槽 schedule 加档):一次性导航意图 → 预填打开面板 →
+  // 用完立刻清掉 state。handledScheduleCreateRequestRef 防同一意图重复开面板。
   // ⚠️ 这里只 setCreateInitialValues + 打开面板,**不创建任务**。落库仍然只发生在
   // 用户点保存后走 handleSubmit —— 插件全程没有直接建任务的通道。
   useEffect(() => {
@@ -479,7 +433,7 @@ export function SchedulerPage() {
       const filePath = projectAutomationConfigPath(workingDir);
       try {
         const result = await window.electronAPI.openPath(filePath);
-        if (!result.success)
+        if (shouldShowOpenPathError(result))
           toast.error(result.error || t('scheduler.list.section.openConfigFailed'));
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));
@@ -578,6 +532,9 @@ export function SchedulerPage() {
 
   const handleDelete = useCallback(
     (s: Schedule) => {
+      // Bot automation has a dedicated lifecycle/API. Keep this defensive
+      // guard even though the generic list filters bot-owned schedules.
+      if (s.source === 'bot') return;
       requestDeleteSchedule({
         id: s.id,
         name: s.name,
@@ -594,7 +551,7 @@ export function SchedulerPage() {
   const isEmpty = !loading && !error && schedules.length === 0;
 
   return (
-    <div className="flex h-full w-full flex-col bg-[hsl(var(--content-area))]">
+    <div className="app-wallpaper-surface flex h-full w-full flex-col bg-[hsl(var(--content-area))]">
       {/* Header — 无 loading 守卫（CLAUDE.md §12：避免 loading→loaded 那一帧
           count / New 按钮突然出现导致整行抖动）。空数据时 New 按钮藏起来留给 EmptyState
           的主 CTA 接盘，避免双 CTA。 */}
@@ -713,19 +670,10 @@ export function SchedulerPage() {
 function NewAutomationButton({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation();
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'inline-flex h-9 items-center gap-1.5 rounded-full px-5 text-sm font-medium',
-        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)] hover:bg-[var(--lightbox-cta-hover)]',
-        'transition-colors',
-        '[&>svg]:-translate-y-px',
-      )}
-    >
+    <Button variant="cta" size="lg" type="button" onClick={onClick}>
       <Plus size={14} strokeWidth={2.5} />
       {t('scheduler.button.newAutomation')}
-    </button>
+    </Button>
   );
 }
 

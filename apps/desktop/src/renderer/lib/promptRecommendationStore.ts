@@ -8,6 +8,8 @@ import {
   syncPromptRecommendationPreferenceFromStorageValue,
 } from '@/hooks/usePromptRecommendationPreference';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 
 /**
  * 输入框推荐提示词的 session 级运行期状态。
@@ -73,7 +75,7 @@ function handlePreferenceChanged(enabled: boolean): void {
     entries.clear();
     pendingCompletionRevisions.clear();
     sawRunningSessionIds.clear();
-      runStartedAtBySession.clear();
+    runStartedAtBySession.clear();
     for (const timer of settleTimers.values()) clearTimeout(timer);
     settleTimers.clear();
     for (const sessionId of changedSessionIds) emitSession(sessionId);
@@ -102,8 +104,8 @@ function settleCompletion(sessionId: string): void {
   if (revision == null || !sawRunningSessionIds.has(sessionId)) return;
 
   pendingCompletionRevisions.delete(sessionId);
-  sawRunningSessionIds.delete(sessionId);
-  runStartedAtBySession.delete(sessionId);
+  // status:false 与最终 done 都可能写 ended revision。500ms 只是合并窗口，
+  // 不是终末证明：保留本轮观察资格，Main 暂时返回 null 后仍能接住迟到的 done。
   const previousHandled = handledCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= previousHandled) return;
   handledCompletionRevisions.set(sessionId, revision);
@@ -119,6 +121,8 @@ function settleCompletion(sessionId: string): void {
     !status.hasAutoDrainingQueue;
 
   if (!eligible) {
+    sawRunningSessionIds.delete(sessionId);
+    runStartedAtBySession.delete(sessionId);
     deleteEntry(sessionId);
     return;
   }
@@ -161,6 +165,10 @@ function applyRunningSnapshot(snapshot: ReadonlyMap<string, { isRunning: boolean
     }
     runningSessionIds.add(sessionId);
     sawRunningSessionIds.add(sessionId);
+    // A new running edge is a new completion generation. Do not let the
+    // previous generation's revision fence suppress a later completion that
+    // happens to reuse the same millisecond timestamp.
+    handledCompletionRevisions.delete(sessionId);
     if (startedAt != null) runStartedAtBySession.set(sessionId, startedAt);
     else runStartedAtBySession.delete(sessionId);
     // 新 turn 开始：旧完成 patch / 推荐 / 在途 renderer Promise 全部作废。
@@ -188,6 +196,8 @@ function noteTurnEnded(sessionId: string, revision: number): void {
   const pending = pendingCompletionRevisions.get(sessionId) ?? 0;
   if (revision <= handled || revision <= pending) return;
   pendingCompletionRevisions.set(sessionId, revision);
+  // 新 revision 已到达时立即隔离旧 Promise，不能等 settle timer 才作废。
+  deleteEntry(sessionId);
   scheduleCompletionSettle(sessionId);
 }
 
@@ -220,6 +230,20 @@ export function initializePromptRecommendationStore(): void {
   }
 
   globalUnsubscribers.push(subscribePromptRecommendationPreference(handlePreferenceChanged));
+  const remotePush = window.electronAPI?.deviceLink?.onRemotePush;
+  if (remotePush) {
+    globalUnsubscribers.push(remotePush((push, ownerStamp) => {
+      if (push.channel !== 'local-db:sessions:patched' ||
+          !isDeviceLinkRemotePushCurrent(push, ownerStamp)) return;
+      const payload = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
+      if (!payload?.sessionId || getStickySessionDeviceId(payload.sessionId) !== push.deviceId) return;
+      if (payload.patch?.status === 'deleted') {
+        clearPromptRecommendationSession(payload.sessionId);
+      } else if (typeof payload.patch?.lastTurnEndedAt === 'number') {
+        noteTurnEnded(payload.sessionId, payload.patch.lastTurnEndedAt);
+      }
+    }));
+  }
   const onStorage = (event: StorageEvent) => {
     if (event.key !== PROMPT_RECOMMENDATION_KEY) return;
     // 先同步偏好模块的 memoryValue，再由 lifecycle subscription 清理 Store；
@@ -305,6 +329,8 @@ export function resolvePromptRecommendationPrediction(
     deleteEntry(sessionId);
     return;
   }
+  sawRunningSessionIds.delete(sessionId);
+  runStartedAtBySession.delete(sessionId);
   entries.set(sessionId, {
     ...current,
     phase: 'ready',
@@ -313,10 +339,18 @@ export function resolvePromptRecommendationPrediction(
   emitSession(sessionId);
 }
 
-/** Tab / 发送 / workingDir / 附件等消费路径同步作废当前推荐。 */
+/** Tab / 发送 / workingDir 等显式消费路径同步作废当前推荐和迟到的完成通知。 */
 export function dismissPromptRecommendation(sessionId: string, revision?: number): void {
   const current = entries.get(sessionId);
-  if (!current || (revision != null && current.revision !== revision)) return;
+  if (revision != null && current?.revision !== revision) return;
+  // 无 entry 也可能仍在等待最终 done；显式发送/换目录应取消这份等待。
+  // 新 running 的 layout effect 也会调用本函数，不能清掉刚开始的新轮资格。
+  if (!runningSessionIds.has(sessionId)) {
+    clearSettleTimer(sessionId);
+    pendingCompletionRevisions.delete(sessionId);
+    sawRunningSessionIds.delete(sessionId);
+    runStartedAtBySession.delete(sessionId);
+  }
   deleteEntry(sessionId);
 }
 

@@ -4,9 +4,8 @@
 // 后台的 App 永远吃不到新版本;这里在 background → active 时补一次检查,但表现必须无感:
 // - JS OTA:静默 check → fetch,**绝不 reload**(reload 会闪屏断状态);下载好的 bundle
 //   由 expo-updates 在下次冷启动自动生效。
-// - 整包(runtimeVersion 变化):静默拉 /latest 比对;唯一允许出 UI 的情况是命中
-//   minVersion 强更(强更本身无法无感),此时上报给 onForcedUpdate 进入阻断态;
-//   非强更完全静默(启动路径已有一次性提示,不在每次切回时骚扰)。
+// - 整包(runtimeVersion 变化):静默拉 /latest 比对，强更上报 onForcedUpdate 进入阻断态；
+//   普通更新交给 onAvailableUpdate，Android 在 Wi-Fi 下备好 APK 后才提示安装。
 // - 节流:只认真正的 background → active(iOS 通知中心/来电导致的 inactive 抖动不算),
 //   两次检查最小间隔 minIntervalMs;创建时间视为"刚检查过"(冷启动路径刚跑完,首次
 //   切回不重复查)。
@@ -27,15 +26,19 @@ export interface ResumeUpdateOutcome {
   bundle: ResumeBundleOutcome;
 }
 
+export interface ResumeOtaClient {
+  checkForUpdateAsync: () => Promise<{ isAvailable: boolean }>;
+  fetchUpdateAsync: () => Promise<{ isNew: boolean }>;
+}
+
 export interface ResumeUpdateCheckDeps {
   /** JS OTA 是否启用(自建变体 + 非 dev + expo-updates 可用),与启动热更门同一 gate。 */
   otaEnabled: boolean;
   /**
-   * 隐私同意闸门(运行时动态判定,非挂载期快照):用户同意《隐私政策》前不得发起
-   * 带 eas-client-id 的 manifest / OTA 资源请求。缺省视为「未同意」与否由调用方决定;
-   * 这里只在调用方提供了判定函数时生效,纯逻辑层不引入 analytics 依赖。
+   * 自建 OTA 注入事务式请求头协调器；缺省时直接使用下面两个方法，便于纯逻辑单测。
+   * 包装必须覆盖完整 check → fetch，不能拆成两个锁，否则并发路径可能改写中间配置。
    */
-  isConsented?: () => boolean;
+  withOtaClient?: <T>(operation: (client: ResumeOtaClient) => Promise<T>) => Promise<T>;
   checkForUpdateAsync: () => Promise<{ isAvailable: boolean }>;
   fetchUpdateAsync: () => Promise<{ isNew: boolean }>;
   /** 整包检查是否启用(自建变体),与 useBundleUpdatePrompt 同一 gate。 */
@@ -50,6 +53,7 @@ export interface ResumeUpdateCheckDeps {
    * 实现因故无法给出出口(如拿不到安装地址)时应自行 no-op,不要留下无出口的阻断屏。
    */
   onForcedUpdate: (evaluation: BundleUpdateEvaluation) => void;
+  onAvailableUpdate?: (evaluation: BundleUpdateEvaluation) => void;
   now: () => number;
   /** hook 卸载/账号切换后使旧检查失效，避免迟到结果给新账号弹窗。 */
   isCurrent?: () => boolean;
@@ -100,20 +104,24 @@ export function createResumeUpdateChecker(
   let inFlight = false;
 
   async function runOtaCheck(): Promise<ResumeOtaOutcome> {
-    // 整包 /latest 是匿名请求(无稳定标识),不在此列;只有 OTA 的 manifest/资源
-    // 会携带 eas-client-id,必须经隐私同意闸门。
-    if (!deps.otaEnabled || (deps.isConsented && !deps.isConsented())) return 'skipped';
+    if (!deps.otaEnabled) return 'skipped';
     try {
-      const check = await withTimeout(deps.checkForUpdateAsync(), checkTimeoutMs);
-      if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
-      if (!check.isAvailable) return 'up-to-date';
-      // check 期间用户可能已登出撤销同意(clearAnalyticsConsent 把 consent 翻 false):
-      // 下载前再问一次,避免同意被撤回后仍发起带 eas-client-id 的资源请求。
-      if (deps.isConsented && !deps.isConsented()) return 'skipped';
-      const fetched = await withTimeout(deps.fetchUpdateAsync(), fetchTimeoutMs);
-      if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
-      // 静默路径到此为止:不 reload,新 bundle 下次冷启动生效。
-      return fetched.isNew ? 'fetched' : 'up-to-date';
+      const operation = async (client: ResumeOtaClient): Promise<ResumeOtaOutcome> => {
+        // withOtaClient 可能正在等启动/手动检查释放串行队列。轮到本次事务时账号或
+        // channel 可能已经变化，必须在真正发 manifest 请求前再次判旧，不能只检查
+        // 入队时快照或迟到结果。
+        if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
+        const check = await withTimeout(client.checkForUpdateAsync(), checkTimeoutMs);
+        if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
+        if (!check.isAvailable) return 'up-to-date';
+        const fetched = await withTimeout(client.fetchUpdateAsync(), fetchTimeoutMs);
+        if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
+        // 静默路径到此为止:不 reload,新 bundle 下次冷启动生效。
+        return fetched.isNew ? 'fetched' : 'up-to-date';
+      };
+      return deps.withOtaClient
+        ? await deps.withOtaClient(operation)
+        : await operation(deps);
     } catch {
       return 'error'; // fail-open:离线/超时静默放过,下次 resume 或冷启动再试
     }
@@ -130,7 +138,10 @@ export function createResumeUpdateChecker(
         latest,
       });
       if (!evaluation.needsUpdate || !evaluation.target) return 'up-to-date';
-      if (!evaluation.forced) return 'update-available'; // 非强更静默:启动路径已负责提示
+      if (!evaluation.forced) {
+        deps.onAvailableUpdate?.(evaluation);
+        return 'update-available';
+      }
       if (deps.isCurrent && !deps.isCurrent()) return 'skipped';
       deps.onForcedUpdate(evaluation); // 幂等,不去重:阻断态重复上报无副作用
       return 'forced';

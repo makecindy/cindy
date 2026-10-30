@@ -5,6 +5,8 @@
  * but adapted for <video>:
  *
  *   - Overlay: rgba(0,0,0,0.85), 200ms fade, scroll lock on data-scroll-container
+ *   - Focus: FocusScope moves focus to <video> on open, traps Tab inside the
+ *     overlay, and returns focus to the pre-open element on unmount.
  *   - Esc key closes (same gesture suppression as ImageLightbox for menu close)
  *   - Background click closes; click ON the <video controls> region does NOT
  *     close (users need to drag the seek bar / hit pause without dismissing).
@@ -16,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Copy, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -26,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
+import { useVideoContextMenu } from './useVideoContextMenu';
 
 interface VideoLightboxProps {
   src: string;
@@ -37,7 +41,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
   const [isVisible, setIsVisible] = useState(false);
   const isClosingRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(videoRef, src);
   const lastMenuCloseAt = useRef(0);
 
   const handleClose = useCallback(() => {
@@ -101,6 +105,21 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
   }
 
   const overlay = (
+    // FocusScope(trapped+loop):键盘打开后焦点必须进入弹窗并圈禁在内——
+    // 否则焦点留在 z-index 9999 遮罩背后的预览触发器上,Tab 会穿过被遮挡
+    // 的聊天控件,视频 controls 也够不着。挂载时焦点直接给 <video>(Space
+    // 暂停 / 方向键 seek 立即可用);卸载时 FocusScope 默认把焦点还给打开
+    // 前的元素(ChatVideoView 键盘路径 = 预览触发器,与 onClose 里的显式
+    // 恢复指向同一元素)。
+    <FocusScope
+      asChild
+      trapped
+      loop
+      onMountAutoFocus={(event) => {
+        event.preventDefault();
+        videoRef.current?.focus();
+      }}
+    >
     <div
       style={{
         position: 'fixed',
@@ -139,6 +158,9 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
         autoPlay
         loop
         preload="auto"
+        // controls 视频在 Chromium 本就在 Tab 序里;显式写出是为了 jsdom 单测
+        // (jsdom 只认带 tabindex 的元素可聚焦,焦点进入 lightbox 的断言依赖它)。
+        tabIndex={0}
         style={{
           maxWidth: 'calc(100vw - 80px)',
           maxHeight: 'calc(100vh - 80px)',
@@ -158,12 +180,15 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
           setMenuPos({ x: e.clientX, y: e.clientY });
         }}
         onError={() => {
-          toast.warning(t('chat.media.videoMissing'));
+          // Playback errors also include blocked sources, offline devices and
+          // unsupported codecs; they do not prove that a file was deleted.
+          toast.warning(t('chat.media.videoUnavailable'));
           handleClose();
         }}
       />
       {canRevealInFolder ? (
         <DropdownMenu
+          modal={!portalContainer}
           open={menuPos !== null}
           onOpenChange={(open) => {
             if (!open) {
@@ -185,7 +210,12 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
               }}
             />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2} className="z-[10000]">
+          <DropdownMenuContent
+            align="start" sideOffset={2} className="z-[10000]"
+            portalContainer={portalContainer}
+            style={portalContainer ? { pointerEvents: 'auto' } : undefined}
+            onCloseAutoFocus={restoreVideoFocus}
+          >
             <DropdownMenuItem onClick={handleCopyVideo}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyVideo')}
@@ -198,6 +228,7 @@ export function VideoLightbox({ src, onClose }: VideoLightboxProps) {
         </DropdownMenu>
       ) : null}
     </div>
+    </FocusScope>
   );
 
   return createPortal(overlay, document.body);

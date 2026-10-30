@@ -12,6 +12,17 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// These fixtures render other SystemCard variants; companion synchronization is tested separately.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+// Partner task cards have their own integration suite; isolate this sibling variant.
+vi.mock('@/features/bots/BotCollaborationCard', () => ({
+  BotSessionTaskCard: () => null,
+  BotSessionTaskMessageTrace: () => null,
+}));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({
+  BotSessionTaskResultCard: () => null,
+}));
+
 vi.mock('@/features/learn/LearnStatusCard', () => ({
   LearnStatusCard: () => null,
 }));
@@ -75,6 +86,18 @@ describe('SystemCard Review', () => {
 
     fireEvent.click(screen.getByText('chat.systemCard.review.openTask'));
     expect(screen.getByTestId('location').textContent).toBe('/cc-agent/review-task');
+  });
+
+  it('keeps an unverified conclusion visible and resolves its directory from the persisted Review target', () => {
+    renderCard({
+      status: 'failed', failureCode: 'artifact-unavailable', reviewerSessionId: 'review-task',
+      result: 'P1: src/auth.ts:42 needs attention',
+      workspace: { workingDir: '/repo/actual', baseRef: 'main', hasUncommittedChanges: true },
+    }, '/repo/main');
+    expect(screen.getByText('chat.systemCard.review.unverifiedResult')).toBeTruthy();
+    expect(screen.getByTestId('review-markdown').getAttribute('data-working-dir')).toBe('/repo/actual');
+    expect(screen.getByTestId('review-markdown').getAttribute('data-allow-privileged-links')).toBe('false');
+    expect(screen.getByText(/\/repo\/actual/)).toBeTruthy();
   });
 
   it('renders a completed stale result with its rerun reason', () => {

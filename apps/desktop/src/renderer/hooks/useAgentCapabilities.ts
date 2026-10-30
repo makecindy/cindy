@@ -40,9 +40,12 @@ export interface ModelDescriptor {
   description?: string;
   contextWindow: number;
   efforts: readonly Effort[];
+  /** true = the catalog has not declared this model's effort capability yet. */
+  effortsUnknown?: boolean;
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;
   supportsFastMode?: boolean;
+  supportsUltrafastMode?: boolean;
   /** 目录展示排序权重;缺省排末尾。 */
   sortOrder?: number;
   /**
@@ -120,8 +123,18 @@ export interface AgentCapabilities {
    * device-link 老被控端无此字段 → undefined，控制端必须阻止开启协同并提示升级。
    */
   supportsOrcaWorkerPermissionMode?: boolean;
+  /**
+   * 被控端是否支持创建后修改 Worker 的角色名/标识(maker:worker:update)。
+   * device-link 老被控端无此字段 → undefined,控制端对远程 Worker 隐藏编辑入口。
+   */
+  supportsOrcaWorkerUpdate?: boolean;
   /** 被控端支持把 UI initial_task 延后到 Lead 首条输入 accepted 后派发。 */
   supportsDeferredOrcaUiAssignment?: boolean;
+  /**
+   * 被控端支持给协同 Worker 单独指定 Agent 所在电脑(远程供应商，`agentDeviceId`)。
+   * 老被控端无此字段 → undefined：Worker 面板不列远程供应商、不发这个字段(老端会静默丢掉)。
+   */
+  supportsOrcaWorkerAgentDevice?: boolean;
   /**
    * 手动压缩会话上下文能力(pi 原生 compact)。与 maker-core Capabilities.manualCompact
    * 同形；device-link 老被控端序列化的 capabilities 无此字段 → undefined = 不支持。
@@ -244,6 +257,7 @@ function isModelDescriptor(value: unknown): value is ModelDescriptor {
     isStringArray(efforts) &&
     (defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
+    isOptionalBoolean(value.effortsUnknown) &&
     isOptionalString(value.group) &&
     isOptionalString(value.mode) &&
     isOptionalString(value.description) &&
@@ -287,7 +301,9 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsSessionAgentSwitch) ||
     !isOptionalBoolean(value.supportsSessionAgentSwitchCas) ||
     !isOptionalBoolean(value.supportsOrcaWorkerPermissionMode) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
     !isOptionalCapabilityStatus(value.manualCompact)
   ) {
@@ -340,7 +356,7 @@ let localSnapshotRevision = 0;
 const localListeners = new Set<(agent: AgentKind, caps: AgentCapabilities | null) => void>();
 /** 远程能力缓存事件；驱逐时先标 stale，成功 / 失败后再结束这一轮刷新。 */
 export type DeviceCapabilitiesEvent =
-  | { status: 'loading' }
+  | { status: 'loading'; retainDisplaySnapshot?: boolean }
   | { status: 'ready'; capabilities: AgentCapabilities }
   | { status: 'error'; error: string };
 /** 已挂载的远程能力订阅者；key 同缓存，provider revision 后可原子换入新快照。 */
@@ -473,7 +489,8 @@ export function useAgentCapabilities(
     const key = cacheKey(agentKind, deviceId);
     const applyRemoteEvent = (event: DeviceCapabilitiesEvent): void => {
       if (event.status === 'loading') {
-        // 保留上一份完整快照以避免空白帧，但显式标记为 stale，调用方不得据此改写选择。
+        // 仅同账号配置刷新保留显示快照，账号边界不能展示上一账号的模型。
+        if (!event.retainDisplaySnapshot) setCapabilities(null);
         setOwnerKey(key);
         setLoading(true);
         setError(null);
@@ -588,7 +605,10 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
-export function evictDeviceCapabilities(deviceId: string): void {
+export function evictDeviceCapabilities(
+  deviceId: string,
+  options?: { retainDisplaySnapshot?: boolean },
+): void {
   const prefix = `${deviceId}:`;
   for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
   for (const k of [...inflight.keys()]) if (k.startsWith(prefix)) inflight.delete(k);
@@ -597,8 +617,21 @@ export function evictDeviceCapabilities(deviceId: string): void {
   // 已挂载 hook 必须同步知道旧快照已失效；否则 provider 新快照先到时会拿旧 capabilities
   // 计算 fallback，并永久覆盖用户原本保存的模型偏好。
   for (const agentKind of ALL_AGENT_KINDS) {
-    notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });
+    notifyRemoteCapabilities(deviceId, agentKind, {
+      status: 'loading',
+      ...(options?.retainDisplaySnapshot ? { retainDisplaySnapshot: true } : {}),
+    });
   }
+}
+
+/** 只清远程能力，本机目录仍由本地刷新代际管理。 */
+export function evictAllRemoteCapabilities(): void {
+  const devices = new Set(deviceGen.keys());
+  for (const key of [...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]) {
+    const deviceId = key.slice(0, key.lastIndexOf(':'));
+    if (deviceId !== 'local') devices.add(deviceId);
+  }
+  for (const deviceId of devices) evictDeviceCapabilities(deviceId);
 }
 
 export type LocalCapabilitiesSnapshot = ReadonlyArray<readonly [AgentKind, AgentCapabilities]>;
@@ -623,7 +656,7 @@ export function beginLocalCapabilitiesRefresh(): number {
 export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilitiesSnapshot> {
   const api = getMakerApi();
   if (!api) throw new Error('maker IPC not available');
-  const entries = await Promise.all(
+  const results = await Promise.allSettled(
     ALL_AGENT_KINDS.map(async (agent): Promise<readonly [AgentKind, AgentCapabilities] | null> => {
       try {
         return [agent, await api.getCapabilities(agent)] as const;
@@ -640,6 +673,10 @@ export async function loadLocalCapabilitiesSnapshot(): Promise<LocalCapabilities
       }
     }),
   );
+  const entries = results.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
   return entries.filter(
     (entry): entry is readonly [AgentKind, AgentCapabilities] => entry !== null,
   );

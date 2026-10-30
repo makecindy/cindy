@@ -128,7 +128,7 @@ export interface ResponsesRequest {
   include?: string[];
   prompt_cache_key?: string;
   max_output_tokens?: number;
-  reasoning?: { effort?: 'low' | 'medium' | 'high' | 'xhigh'; summary?: 'auto' | 'concise' | 'detailed' | 'none' };
+  reasoning?: { effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; summary?: 'auto' | 'concise' | 'detailed' | 'none' };
   /** Fast 模式:codex 后端的 'priority' tier(models_cache service_tiers 声明,UI 名 "Fast")。 */
   service_tier?: string;
 }
@@ -172,6 +172,10 @@ export interface BridgeUpstreamErrorInfo {
 export interface BridgeProviderConfig {
   /** model id 前缀,如 'chatgpt/' | 'xai/';bridge 收到后 strip 掉再发上游(chatgpt/gpt-5.5 → gpt-5.5)。 */
   prefix: string;
+  /** Opaque reasoning history namespace for connections whose model IDs have no prefix. */
+  reasoningNamespace?: string;
+  /** Native transport state may contain tool signatures required even with thinking disabled. */
+  preserveReasoningState?: boolean;
   /** 上游 wire 协议;省略 = 'openai-responses'(当前唯一实现)。 */
   wireProtocol?: BridgeWireProtocol;
   /** 上游 Responses base(不含 /responses),如 codex 后端 / https://api.x.ai/v1。 */
@@ -198,6 +202,8 @@ export interface BridgeProviderConfig {
    * 对 reasoningEffort 报 400)bridge 将**完全不发** reasoning 字段。省略 = 全部支持。
    */
   supportsReasoning?: (model: string) => boolean;
+  /** Final per-model route capabilities. Omitted providers retain the legacy xhigh ceiling. */
+  supportedReasoningEfforts?: (model: string) => readonly string[] | undefined;
   /**
    * 该(去前缀后的)model 是否启用 strict function-tool 约束解码。这是生产唯一控制面
    * (不走环境变量)。开启后 translate 层仍**逐工具**做 strict 子集兼容检查
@@ -217,14 +223,16 @@ export interface BridgeProviderConfig {
   /**
    * Fast 模式(host 经 prefs.fast 闭包传入)映射到的 Responses `service_tier` 值。codex 后端为
    * 'priority'(models_cache 的 service_tiers 声明,UI 名 "Fast")。省略 = 该 provider 不支持
-   * Fast,handler 忽略 fast 偏好(如 api.x.ai 未声明 priority tier)。
+   * Fast service tier。独立模型方式由 fastModel 声明；两者都缺省时忽略 Fast 偏好。
    */
   fastServiceTier?: string;
+  /** Fast via a distinct upstream model. Takes precedence over fastServiceTier (never charge both). */
+  fastModel?: (model: string) => string | undefined;
   /**
    * 上游响应头里的 `x-ratelimit-*` 限流信息(标准 OpenAI 风格,api.x.ai 返回;codex 后端不返)。
    * 每个成功上游响应解析后回调一次;缺头 → 不回调。回调抛错被吞(不影响流转发)。
    */
-  onRateLimit?: (info: UpstreamRateLimitInfo) => void;
+  onRateLimit?: (info: UpstreamRateLimitInfo, requestHeaders: Readonly<Record<string, string>>) => void;
 }
 
 /** 上游 `x-ratelimit-*` 响应头解析结果(仅数值可解析的字段;全 undefined 时不回调)。 */

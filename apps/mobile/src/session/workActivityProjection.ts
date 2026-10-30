@@ -22,6 +22,22 @@ export type MobileProjectedThinkingActivity = ProjectedThinkingActivity;
 export type MobileProjectedWorkActivity = ProjectedWorkActivity<MobileWorkActivityMessage>;
 export type MobileWorkActivityProjection = WorkActivityProjection<MobileWorkActivityMessage>;
 
+/** Compare the data consumed by WorkToolActivityRow, not projection wrappers. */
+export function sameMobileWorkToolActivity(
+  previous: MobileProjectedToolActivity,
+  next: MobileProjectedToolActivity,
+): boolean {
+  return previous === next || (
+    previous.key === next.key
+    && previous.message.normalized === next.message.normalized
+    && previous.status === next.status
+    && previous.toolResult === next.toolResult
+    && previous.intentOverride?.action === next.intentOverride?.action
+    && previous.intentOverride?.target === next.intentOverride?.target
+    && previous.intentOverride?.path === next.intentOverride?.path
+  );
+}
+
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>

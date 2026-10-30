@@ -1,132 +1,101 @@
+// @vitest-environment jsdom
 /**
- * thumbnailClickPreview.test.ts
- * ---------------------------------------------------------------------------
- * Regression test for: attachment-thumb-click (2026-04-19)
- *
- * The ChatInput attachment thumbnails (image + file) must:
- *   1) advertise a hand cursor (`cursor-pointer`) on hover, and
- *   2) open the same overlay used in the message stream on click —
- *        image  → ImageLightbox
- *        other  → TextLightbox
- *
- * Previously the thumbnail only showed a hover preview tooltip and had no
- * click-to-open affordance. This test pins the wiring at the source level so
- * a future refactor can't silently regress to "hover-only" behaviour.
+ * attachment-thumb-click (2026-04-19), PR #6196 thread PRRT_kwDOTgdRUs6tKu23.
+ * Production entry: mount ComposerAttachments.ThumbnailStrip and click its real
+ * preview/remove buttons; observe the selected lightbox's source/path/name or
+ * the removal callback without a preview or bubbled click.
+ * The removed source guard and existing file-card/lightbox tests never exercised
+ * this tray. Minimal inputs: one cached image, one .txt file and their remove
+ * buttons. tier: unit (jsdom); no disk, Electron or editor runtime is needed.
+ * Restore this module's original path because no existing component harness
+ * mounts ThumbnailStrip; do not add these cases to the source-only guard files.
+ * Standalone: pnpm exec vitest run src/renderer/__tests__/thumbnailClickPreview.test.ts
+ * --maxWorkers=1: 3 passed, 2.04 s wall (Vitest 1.14 s; tests 122 ms), 2026-10-16.
  */
-
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { createElement } from 'react';
 import { resolve } from 'node:path';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { ThumbnailStrip } from '../components/new-chat/ComposerAttachments';
+import type { AttachedFile } from '../lib/fileTypes';
 
-// 归一化 CRLF → LF：Windows autocrlf=true 检出下工作树是 CRLF，
-// 而下面的 indexOf 子串里内嵌裸 \n，不归一化会在 Windows 上误报失败。
-const chatInput = readFileSync(
-  resolve(
-    __dirname,
-    '..',
-    'components',
-    'new-chat',
-    'ChatInput.tsx',
-  ),
-  'utf8',
-).replace(/\r\n/g, '\n');
+// These adapters expose the lightbox boundary's actual props as DOM. Routing,
+// preview state and click handling all remain in the real ThumbnailStrip.
+vi.mock('@/components/chat/ImageLightbox', () => ({
+  ImageLightbox: ({ src, onClose }: { src: string; onClose: () => void }) =>
+    createElement('div', { role: 'dialog', 'aria-label': 'image preview' },
+      createElement('img', { src, alt: 'preview image' }),
+      createElement('button', { onClick: onClose }, 'Close preview')),
+}));
+vi.mock('@/components/chat/TextLightbox', () => ({
+  TextLightbox: ({ filePath, fileName, onClose }: {
+    filePath: string; fileName: string; onClose: () => void;
+  }) => createElement('div', { role: 'dialog', 'aria-label': fileName },
+    createElement('output', null, filePath),
+    createElement('button', { onClick: onClose }, 'Close preview')),
+  // Size formatting is outside this preview-routing regression.
+  formatBytes: vi.fn(() => 'fixture size'),
+}));
+vi.mock('@/components/chat/ImageHoverPreview', () => ({ ImageHoverPreview: () => null }));
+vi.mock('../components/new-chat/AttachmentTypeThumb', () => ({ AttachmentTypeThumb: () => null }));
+vi.mock('@/hooks/useStableTranslation', () => ({
+  useStableTranslation: () => ({ t: (key: string) => key }),
+}));
+// Keep the real shouldOpenTextLightbox extension decision, replacing only its
+// external error/remote-opening dependencies (unused for the .txt fixture).
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@/lib/remoteFileOpen', () => ({ openRemoteChatFile: vi.fn() }));
 
-describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)', () => {
-  it('imports the same lightboxes UserMessage uses', () => {
-    expect(chatInput).toMatch(
-      /import\s+\{\s*ImageLightbox\s*\}\s+from\s+'@\/components\/chat\/ImageLightbox'/,
-    );
-    // 该模块还导出 formatBytes(文件卡的大小副行复用它),所以这里只钉
-    // TextLightbox 在具名导入列表里,不锁死整条 import 的成员组成。
-    expect(chatInput).toMatch(
-      /import\s+\{[^}]*\bTextLightbox\b[^}]*\}\s+from\s+'@\/components\/chat\/TextLightbox'/,
-    );
-  });
+const image: AttachedFile = {
+  id: 'image', name: 'shot.png', path: 'clipboard://shot.png', ext: '.png',
+  size: 20, category: 'image', mimeType: 'image/png', url: 'cindy-media://blobs/shot.png',
+};
+const text: AttachedFile = {
+  id: 'text', name: 'notes.txt', path: resolve('preview-fixture', 'notes.txt'), ext: '.txt',
+  size: 10, category: 'text', mimeType: 'text/plain',
+};
 
-  it('uses the shared image hover preview so composer and message chips stay identical', () => {
-    expect(chatInput).toContain(
-      "import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';",
-    );
-    const startIdx = chatInput.indexOf('function ThumbnailItem');
-    const block = chatInput.slice(startIdx);
-    expect(block).toContain('<ImageHoverPreview');
-    expect(block).toContain('open={isHovered}');
-    expect(block).toContain('anchorRef={thumbRef}');
-  });
+afterEach(cleanup);
 
-  it('ThumbnailItem preview button uses cursor-pointer (hand) and an onClick handler', () => {
-    // Slice the ThumbnailItem function body so we don't accidentally match
-    // some other unrelated `cursor-pointer` token elsewhere in the file.
-    const startMarker = 'function ThumbnailItem';
-    const startIdx = chatInput.indexOf(startMarker);
-    expect(startIdx).toBeGreaterThan(-1);
-    // ThumbnailItem is the last component in the file; slice to EOF.
-    const block = chatInput.slice(startIdx);
+it('opens the clicked image in ImageLightbox with its original source', () => {
+  render(createElement(ThumbnailStrip, {
+    attachments: [image, text], onRemove: vi.fn(), onUpdate: vi.fn(),
+  }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Preview shot.png' }));
+  const preview = screen.getByRole('dialog', { name: 'image preview' });
+  expect(within(preview).getByAltText('preview image').getAttribute('src')).toBe(image.url);
+  expect(screen.queryByRole('dialog', { name: text.name })).toBeNull();
+  fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
-    // The preview button carries the hand cursor; the outer wrapper owns the
-    // hover boundary so moving onto the remove button does not hide the preview.
-    expect(block).toContain("isDownloadOnly ? 'cursor-default' : 'cursor-pointer'");
-    expect(block).toContain('disabled={isDownloadOnly}');
+it('opens the clicked text file in TextLightbox with the matching path and name', async () => {
+  render(createElement(ThumbnailStrip, {
+    attachments: [image, text], onRemove: vi.fn(), onUpdate: vi.fn(),
+  }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Preview notes.txt' }));
+  const preview = await screen.findByRole('dialog', { name: text.name });
+  expect(within(preview).getByRole('status').textContent).toBe(text.path);
+  expect(screen.queryByRole('dialog', { name: 'image preview' })).toBeNull();
+  fireEvent.click(within(preview).getByRole('button', { name: 'Close preview' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
 
-    // A click handler that delegates to handleOpenPreview must exist.
-    expect(block).toMatch(/onClick=\{handleOpenPreview\}/);
-
-    // The preview branch must distinguish image vs. other and mount the
-    // matching lightbox (the assertion that locks the parity with
-    // UserMessage's behaviour).
-    expect(block).toMatch(/file\.category === 'image'/);
-    expect(block).toMatch(/<ImageLightbox\s+src=\{lightboxSrc\}/);
-    expect(block).toMatch(/<TextLightbox[\s\S]+filePath=\{file\.path\}/);
-    expect(block).toMatch(
-      /if \(isDownloadOnly\) return;[\s\S]+shouldOpenTextLightbox\(file\.path\)/,
-    );
-  });
-
-  it('keeps thumbnail hover state on the outer wrapper so the remove button does not dismiss preview', () => {
-    const startIdx = chatInput.indexOf('function ThumbnailItem');
-    const block = chatInput.slice(startIdx);
-    const wrapperStart = block.indexOf('<div\n      ref={thumbRef}');
-    expect(wrapperStart).toBeGreaterThan(-1);
-    const wrapperOpenTag = block.slice(wrapperStart, block.indexOf('{/* Thumbnail content */}', wrapperStart));
-    const previewButtonStart = block.indexOf('<button', wrapperStart);
-    expect(previewButtonStart).toBeGreaterThan(wrapperStart);
-    const previewButtonOpenTag = block.slice(previewButtonStart, block.indexOf('{file.category', previewButtonStart));
-
-    expect(wrapperOpenTag).toContain('onPointerEnter={() => setIsHovered(true)}');
-    expect(wrapperOpenTag).toContain('onPointerLeave={() => setIsHovered(false)}');
-    expect(previewButtonOpenTag).not.toContain('onPointerEnter={() => setIsHovered(true)}');
-    expect(previewButtonOpenTag).not.toContain('onPointerLeave={() => setIsHovered(false)}');
-  });
-
-  it('Opening the lightbox dismisses the hover preview/tooltip (no leftover popover)', () => {
-    // Bug repro: clicking a thumbnail opens the lightbox but the hover
-    // popover (image preview portal) and the file-path tooltip stay visible
-    // behind it — the moment the lightbox fades out they pop back into view
-    // because the cursor never left the thumbnail. The fix resets isHovered
-    // inside handleOpenPreview so the popover unmounts immediately.
-    const startIdx = chatInput.indexOf('function ThumbnailItem');
-    const block = chatInput.slice(startIdx);
-    // handleOpenPreview must call setIsHovered(false) BEFORE choosing which
-    // lightbox to mount — otherwise the popover lingers for at least one
-    // render after the lightbox closes.
-    const openIdx = block.indexOf('const handleOpenPreview');
-    expect(openIdx).toBeGreaterThan(-1);
-    const openBody = block.slice(openIdx, block.indexOf('}, [file]);', openIdx));
-    expect(openBody).toMatch(/setIsHovered\(false\)/);
-    // And the call must precede the image / file branches so it always runs.
-    const resetAt = openBody.indexOf('setIsHovered(false)');
-    const branchAt = openBody.indexOf("file.category === 'image'");
-    expect(resetAt).toBeGreaterThan(-1);
-    expect(branchAt).toBeGreaterThan(resetAt);
-  });
-
-  it('Remove (×) button still stops propagation so it does not open the lightbox', () => {
-    // The × button stopPropagation contract was already in place; pin it so
-    // future edits don't accidentally let the parent onClick fire and open
-    // a lightbox right after the user removed the file.
-    const startIdx = chatInput.indexOf('function ThumbnailItem');
-    const block = chatInput.slice(startIdx);
-    // The remove button's onClick must call stopPropagation BEFORE onRemove.
-    expect(block).toMatch(/e\.stopPropagation\(\);\s*onRemove\(file\.id\)/);
-  });
+it('removes image and text attachments without bubbling or opening a preview', async () => {
+  const onRemove = vi.fn();
+  const onTrayClick = vi.fn();
+  render(createElement('div', { onClick: onTrayClick },
+    createElement(ThumbnailStrip, { attachments: [image, text], onRemove, onUpdate: vi.fn() })));
+  for (const file of [image, text]) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: `Remove ${file.name}` }));
+    });
+    expect(onRemove).toHaveBeenLastCalledWith(file.id);
+    expect(onTrayClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  }
+  expect(onRemove).toHaveBeenCalledTimes(2);
 });

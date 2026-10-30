@@ -5,6 +5,8 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readStructuredUsageResetAt,
+  readTurnUsageResetAt,
 } from '../usageLimit';
 
 describe('classifyTurnUsageLimit', () => {
@@ -121,5 +123,49 @@ describe('classifyTurnOverload', () => {
     // null，noProgressStreak 又不被过载轮推进，三道预算护栏一道都拦不住。
     // 调大直接等比放大容量故障期的请求量与额度消耗。
     expect(MAX_CONSECUTIVE_OVERLOAD_TURNS).toBe(3);
+  });
+});
+
+describe('classifyTurnUsageLimit (billing depletion)', () => {
+  it('never treats billing depletion as a periodic limit, even with quota wording', () => {
+    expect(classifyTurnUsageLimit({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);
+    expect(classifyTurnUsageLimit({ errorStatus: 429, message: 'insufficient_quota: quota exceeded' })).toBe(false);
+    expect(classifyTurnUsageLimit({ message: 'Credit balance too low; usage limit reached' })).toBe(false);
+  });
+});
+
+describe('classifyTurnUsageLimit (Codex structured tag)', () => {
+  it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
+    expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
+  });
+});
+
+describe('readTurnUsageResetAt', () => {
+  it('falls back to the reset time written in the error text', () => {
+    const now = Date.parse('2026-01-24T10:00:00.000Z');
+    expect(
+      readTurnUsageResetAt(
+        { message: 'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.' },
+        now,
+      ),
+    ).toBe(now + 12 * 60_000);
+  });
+
+  it('reads the reset time carried by the error', () => {
+    expect(readTurnUsageResetAt({ sdkError: 'rate_limit', usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
+  });
+
+  it('returns null when absent or malformed', () => {
+    expect(readTurnUsageResetAt({ sdkError: 'rate_limit' })).toBeNull();
+    expect(readTurnUsageResetAt({ usageResetAt: '1791202800000' })).toBeNull();
+    expect(readTurnUsageResetAt({ usageResetAt: 0 })).toBeNull();
+    expect(readTurnUsageResetAt(null)).toBeNull();
+  });
+});
+
+describe('readStructuredUsageResetAt', () => {
+  it('only reads the structured field, never the error text', () => {
+    expect(readStructuredUsageResetAt({ usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
+    expect(readStructuredUsageResetAt({ errorStatus: 429, message: 'Try again in ~2 min.' })).toBeNull();
   });
 });

@@ -15,6 +15,9 @@ export const REFERENCE_RELATIVE_PATH =
 export const SEMANTIC_RELATIVE_PATH =
   'packages/design-tokens/src/semantic/color.json';
 
+export const COMPONENT_RELATIVE_PATH =
+  'packages/design-tokens/src/component/color.json';
+
 export function findRepoRoot(startDir = dirname(fileURLToPath(import.meta.url))): string {
   let dir = startDir;
   while (true) {
@@ -41,4 +44,8 @@ export function referencePath(repoRoot = findRepoRoot()): string {
 
 export function semanticPath(repoRoot = findRepoRoot()): string {
   return join(repoRoot, SEMANTIC_RELATIVE_PATH);
+}
+
+export function componentPath(repoRoot = findRepoRoot()): string {
+  return join(repoRoot, COMPONENT_RELATIVE_PATH);
 }

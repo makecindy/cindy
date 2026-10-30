@@ -13,8 +13,10 @@
  */
 
 import Store from 'electron-store';
+import { assertGhostPrefsWritable, relocateGhostPreferenceMaps } from './ghostPreferenceRelocation.js';
 
-import { GHOST_BADGE_SUMMARY_MAX_CHARS, isValidGhostId } from '../../shared/ghost.js';
+import { GHOST_BADGE_SUMMARY_MAX_CHARS } from '../../shared/ghost.js';
+import { isGhostInstanceId } from '../../shared/pluginIdentity.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 /** 一条未读记录(ghostId → 最近一次点亮的摘要与时刻)。 */
@@ -35,6 +37,13 @@ const MAX_UNREAD_ENTRIES = 200;
 
 let storeInstance: Store<GhostUnreadShape> | null = null;
 let storePath: string | null = null;
+
+export async function relocateGhostUnread(from: string, to: string): Promise<void> {
+  await relocateGhostPreferenceMaps('ghost-unread.json', ['entries'], from, to, () => {
+    storeInstance = null;
+    storePath = null;
+  });
+}
 
 function getStore(): Store<GhostUnreadShape> {
   const currentPath = ownerScopedUserDataPath();
@@ -60,7 +69,7 @@ export function normalizeGhostUnreadEntries(value: unknown): GhostUnreadEntry[] 
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
   const entries: GhostUnreadEntry[] = [];
   for (const [ghostId, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (!isValidGhostId(ghostId)) continue;
+    if (!isGhostInstanceId(ghostId)) continue;
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
     const at = (raw as { at?: unknown }).at;
     if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) continue;
@@ -114,6 +123,7 @@ export function markGhostUnread(
   summary: string | undefined,
   at: number,
 ): { entries: GhostUnreadEntry[]; evicted: string[] } {
+  assertGhostPrefsWritable('ghost-unread.json');
   const result = applyGhostUnreadMark(loadGhostUnread(), {
     ghostId,
     ...(summary ? { summary } : {}),
@@ -153,6 +163,7 @@ export function applyGhostUnreadMark(
  * "看见了哪一条"可言。
  */
 export function clearGhostUnread(ghostId: string, seenAt?: number): GhostUnreadEntry[] | null {
+  assertGhostPrefsWritable('ghost-unread.json');
   const current = loadGhostUnread();
   const entry = current.find((candidate) => candidate.ghostId === ghostId);
   if (!entry) return null;

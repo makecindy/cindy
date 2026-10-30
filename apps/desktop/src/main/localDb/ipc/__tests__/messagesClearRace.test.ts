@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { messages, sessions } from '../../schema';
+import { tx as runInprocTx } from '../../worker/opHandlers/tx';
 
 const h = vi.hoisted(() => ({
   db: null as ReturnType<typeof drizzle> | null,
@@ -10,6 +11,7 @@ const h = vi.hoisted(() => ({
   client: null as any,
   broadcast: vi.fn(),
   raceOnInsert: false,
+  userOnInsert: false,
 }));
 
 vi.mock('electron', () => ({
@@ -62,6 +64,9 @@ function createDb(): Database.Database {
   sqlite.exec(`
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
+      list_preview TEXT,
+      list_preview_role TEXT,
+      list_message_count INTEGER,
       cleared_at INTEGER,
       status TEXT NOT NULL DEFAULT 'active'
     );
@@ -85,17 +90,24 @@ function createDb(): Database.Database {
   h.db = db;
   h.client = {
     drizzle: db,
-    exec: vi.fn(async (sql: string, params: unknown[] = []) => {
-      // Model /clear winning between the preflight SELECT and the guarded
-      // INSERT. The single SQL statement must then insert zero rows.
-      if (h.raceOnInsert && sql.startsWith('INSERT INTO messages')) {
+    tx: vi.fn(async (name: string, args: unknown) => {
+      if (h.raceOnInsert && name === 'message.insert') {
         sqlite.prepare('UPDATE sessions SET cleared_at = ? WHERE id = ?').run(200, 's1');
       }
+      if (h.userOnInsert && name === 'message.insert') {
+        sqlite.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('user-row', 'user-first', 's1', 'user', 'hello', 100)").run();
+        h.userOnInsert = false;
+      }
+      return runInprocTx(sqlite, { name, args });
+    }),
+    exec: vi.fn(async (sql: string, params: unknown[] = []) => {
       return sqlite.prepare(sql).run(...params);
     }),
   };
   return sqlite;
 }
+
+afterEach(() => { h.sqlite?.close(); });
 
 describe('message persistence clear boundary', () => {
   let sqlite: Database.Database;
@@ -103,6 +115,7 @@ describe('message persistence clear boundary', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.raceOnInsert = false;
+    h.userOnInsert = false;
     sqlite = createDb();
   });
 
@@ -129,6 +142,24 @@ describe('message persistence clear boundary', () => {
         .prepare('SELECT 1 FROM messages WHERE session_id = ? AND client_id = ?')
         .get('s1', 'client-raced'),
     ).toBeUndefined();
+  });
+
+  // PR #6425: unit coverage through createMessage + the real SQLite transaction.
+  // Existing clear-token tests do not cover a user write after the idempotency read.
+  it('omits an opening when a user message wins the insert race, without broadcasting it', async () => {
+    h.userOnInsert = true;
+    await expect(createMessage('s1', {
+      clientId: 'opening', role: 'assistant', content: 'Welcome',
+    }, { requireNoUserMessage: true })).rejects.toMatchObject({ code: 'MESSAGE_USER_ALREADY_SPOKE' });
+    expect(sqlite.prepare('SELECT client_id FROM messages').all()).toEqual([{ client_id: 'user-first' }]);
+    expect(h.broadcast).not.toHaveBeenCalled();
+
+    // The same guard admits an empty chat and retains clientId idempotency.
+    sqlite.prepare('DELETE FROM messages').run();
+    const body = { clientId: 'opening', role: 'assistant' as const, content: 'Welcome' };
+    const first = await createMessage('s1', body, { requireNoUserMessage: true });
+    expect(await createMessage('s1', body, { requireNoUserMessage: true })).toEqual(first);
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM messages').get()).toEqual({ count: 1 });
   });
 
   it('rewinds a row that lost the clear race and is idempotent', async () => {

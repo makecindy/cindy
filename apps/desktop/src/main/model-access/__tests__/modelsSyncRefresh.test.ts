@@ -3,6 +3,7 @@ import type { ModelAccessStatus } from '../../../shared/modelAccess.js';
 
 import {
   buildModelsSyncRequest,
+  cindyAutoModelIdsChanged,
   ensureCredentialsReadyForModelsRefresh,
   modelsWithoutStalePaymentUpsell,
   parseModelsSyncPayload,
@@ -14,6 +15,39 @@ import {
 } from '../modelsSyncRefresh.js';
 
 describe('parseModelsSyncPayload', () => {
+  it.each(['available', 'requires_payment'] as const)(
+    'accepts standalone speech from the opted-in v5 catalog (%s)',
+    (availability) => {
+      const model = {
+        id: 'speech-from-gateway', name: 'Gateway Speech', mode: 'audio_speech',
+        currency: 'USD', agents: [], availability,
+        inputCostPerCharacter: 0.00001, outputCostPerAudioToken: 0.00002,
+        modalities: { input: ['text'], output: ['audio'] },
+      };
+      expect(parseModelsSyncPayload({ schemaVersion: 5, accountTier: 'free', models: [model] }))
+        .toEqual({ ok: true, accountTier: 'free', models: [model] });
+    },
+  );
+
+  it('accepts quote removal or an unsupported quote as a successful replacement', () => {
+    const model = {
+      id: 'example-video', name: 'Example Video', mode: 'video_generation',
+      currency: 'USD', agents: [], availability: 'available',
+    };
+    // Unit contract: refresh must preserve an optional summary, not only the existing table.
+    const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }], summary: {
+      output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P', component: 'video' }],
+    } };
+    const response = { schemaVersion: 5, accountTier: 'paid', models: [{ ...model, displayPricing: quote }] };
+    expect(parseModelsSyncPayload(response)).toMatchObject({ ok: true, models: [{ displayPricing: quote }] });
+    expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing: { ...quote, summary: { output: [] } } }] }))
+      .toMatchObject({ ok: true, models: [{ displayPricing: { items: quote.items } }] });
+    for (const displayPricing of [undefined, null, { items: [] }, { items: [{ ...quote.items[0], priceType: 'future' }] }]) {
+      expect(parseModelsSyncPayload({ ...response, models: [{ ...model, displayPricing }] }))
+        .toEqual({ ok: true, accountTier: 'paid', models: [model] });
+    }
+  });
+
   const baseModel = {
     id: 'deepseek/deepseek-v4-pro',
     name: 'DeepSeek V4 Pro',
@@ -108,6 +142,29 @@ describe('parseModelsSyncPayload', () => {
     },
   );
 
+  it('accepts a new vendor and icon within v5 but rejects unversioned new fields', () => {
+    const futureModel = {
+      ...baseModel,
+      id: 'new-labs/new-family-9',
+      name: 'New Family 9',
+      icon: 'future-brand',
+      availability: 'available',
+      perAgent: {
+        'claude-code': { wireProtocol: 'anthropic-messages' },
+        codex: { wireProtocol: 'openai-responses' },
+      },
+    };
+    const envelope = { schemaVersion: 5, accountTier: 'paid', models: [futureModel] };
+    expect(parseModelsSyncPayload(envelope)).toMatchObject({ ok: true, models: [futureModel] });
+    const changedContract = parseModelsSyncPayload({
+      ...envelope,
+      models: [{ ...futureModel, createdAt: '2026-09-05T00:00:00Z' }],
+    });
+    expect(changedContract.ok).toBe(false);
+    if (!changedContract.ok) expect(changedContract.error).toContain('createdAt');
+    expect(envelope.models).toEqual([futureModel]);
+  });
+
   it('leaves the caller-owned last-known-good snapshot untouched on rejection', () => {
     const lastKnownGood = [{ id: 'last-known-model' }];
     const parsed = parseModelsSyncPayload({ schemaVersion: 99, models: [] });
@@ -200,6 +257,7 @@ describe('waitForModelsSyncRefresh', () => {
         baseUrl: 'https://model-access.example.com',
         timeoutMs: 20_000,
         cache: 'no-store',
+        headers: { 'X-Cindy-Model-Capabilities': 'audio_speech,display_pricing' },
       },
     });
     expect(Number.isFinite(XD_MODELS_SYNC_TIMEOUT_MS)).toBe(true);
@@ -386,5 +444,27 @@ describe('waitForModelsSyncRefresh', () => {
         lastSuccessfulAttempt: () => 8,
       }),
     ).resolves.toBe('failed');
+  });
+});
+
+describe('cindyAutoModelIdsChanged', () => {
+  const ids = (...values: string[]) => values.map((id) => ({ id }));
+
+  it('号池 → 平台：Cindy AI 列表新增 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('p1'), ids('p1', 'auto/group-a'))).toBe(true);
+  });
+
+  it('平台 → 号池：Cindy AI 列表移除 Auto 算变化', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p1'))).toBe(true);
+  });
+
+  it('负向：只有普通模型变化、顺序变化或形似 auto 的 ID 不算', () => {
+    expect(cindyAutoModelIdsChanged(ids('auto/group-a', 'p1'), ids('p2', 'auto/group-a'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged(ids('autopilot', 'vendor/auto'), ids('automation'))).toBe(
+      false,
+    );
+    expect(cindyAutoModelIdsChanged([], [])).toBe(false);
   });
 });

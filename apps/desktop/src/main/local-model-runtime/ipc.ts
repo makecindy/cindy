@@ -1,3 +1,4 @@
+import { getActiveLocalModelCatalog } from '../maker-host/active-catalog.js';
 import {
   normalizeOllamaPullName,
   type LocalInstalledModel,
@@ -20,6 +21,7 @@ import {
 import { onQuit } from '../lifecycle.js';
 import { markManagedOllamaRemoved, type ManagedEnsureResult } from './managedOllamaProvider.js';
 import { registerManagedSidecarQuitHook } from './ollamaSidecar.js';
+import { registerLlamaCppHandlers } from './llamaCppIpc.js';
 
 function requirePullName(name: unknown): string {
   const pullName = typeof name === 'string' ? normalizeOllamaPullName(name) : null;
@@ -56,9 +58,17 @@ export function registerLocalModelHandlers(
   registry: IpcHandlerRegistry,
   deps: LocalModelHandlerDeps,
 ): LocalModelService {
+  if (deps.userDataDir) registerLlamaCppHandlers(registry, {
+    userDataDir: deps.userDataDir,
+    assertTrustedSender: deps.assertTrustedSender,
+    refreshCatalog: deps.refreshCatalog,
+    broadcastChanged: deps.broadcastChanged,
+    currentOwnerSession: deps.currentOwnerSession,
+  });
   const service =
     deps.service ??
     createLocalModelService({
+      getLocalCatalog: getActiveLocalModelCatalog,
       onStatus: deps.broadcastStatus,
       onPullProgress: deps.broadcastPullProgress,
       onInstallProgress: deps.broadcastInstallProgress,

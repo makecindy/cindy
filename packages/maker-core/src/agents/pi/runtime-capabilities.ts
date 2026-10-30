@@ -1,4 +1,5 @@
 import type { PiRpcResponse } from './rpc-client.js';
+import fs from 'node:fs';
 import path from 'node:path';
 import type {
   PiRuntimeCapabilityError,
@@ -159,6 +160,60 @@ function managedSkillCommandMatchesSource(command: PiRuntimeCommand, sourcePath:
     && typeof commandBaseDir === 'string'
     && path.isAbsolute(commandBaseDir)
     && canonicalRuntimePath(commandBaseDir) === canonicalRuntimePath(path.dirname(sourcePath));
+}
+
+function canonicalExistingRuntimePath(value: string): string {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync.native(value);
+  } catch {
+    resolved = path.resolve(value);
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function piSkillCommandMatchesPinnedPath(command: PiRuntimeCommand, skillFile: string): boolean {
+  if (command.source !== 'skill' || !path.isAbsolute(skillFile)) return false;
+  const expected = canonicalExistingRuntimePath(skillFile);
+  const candidates = [
+    command.sourceInfo.path,
+    typeof command.sourceInfo.baseDir === 'string'
+      ? path.join(command.sourceInfo.baseDir, 'SKILL.md')
+      : undefined,
+  ];
+  return candidates.some((candidate) => (
+    typeof candidate === 'string'
+    && path.isAbsolute(candidate)
+    && canonicalExistingRuntimePath(candidate) === expected
+  ));
+}
+
+/**
+ * Bind one Host-attested invocation to Pi's frozen runtime catalog. Pi only
+ * executes Skills through /skill:name, so normalize Cindy's /name alias after
+ * proving that the sole runtime winner has the same physical SKILL.md path.
+ */
+export function preparePinnedPiSkillInvocation(
+  text: string,
+  pinnedSkill: { readonly name: string; readonly path: string },
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): string {
+  const invocation = /^\/(?:skill:)?([^\s/]+)([\s\S]*)$/i.exec(text.trim());
+  if (!invocation?.[1] || invocation[1].toLowerCase() !== pinnedSkill.name.toLowerCase()) {
+    throw new Error('The pinned Skill does not match the Pi command');
+  }
+  if (manifest?.status !== 'loaded') {
+    throw new Error('Pi runtime Skill provenance is unavailable');
+  }
+  const runtimeName = `skill:${pinnedSkill.name}`.toLowerCase();
+  const winners = manifest.commands.filter((command) => command.name.toLowerCase() === runtimeName);
+  if (
+    winners.length !== 1
+    || !piSkillCommandMatchesPinnedPath(winners[0]!, pinnedSkill.path)
+  ) {
+    throw new Error('The pinned Skill does not match the Pi runtime winner');
+  }
+  return `/${winners[0]!.name}${invocation[2] ?? ''}`;
 }
 
 /**

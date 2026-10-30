@@ -44,13 +44,16 @@ export function buildSessionNativeShellLayout(
     screenWidth: input.screenWidth,
   });
   const { contentMaxWidth, contentWidth, landscape, shortViewport, wideViewport } = viewportLayout;
-  const keyboardHeight = input.keyboardVisible
-    ? Math.min(normalizeDimension(input.keyboardHeight, 0), Math.round(screenHeight * 0.62))
+  const keyboardOcclusion = input.keyboardVisible
+    ? normalizeDimension(input.keyboardHeight, 0)
     : 0;
+  const keyboardHeight = Math.min(keyboardOcclusion, Math.round(screenHeight * 0.62));
   const keyboardVisible = input.keyboardVisible && keyboardHeight >= MIN_KEYBOARD_VISIBLE_HEIGHT;
   const safeAreaBottomInset = normalizeDimension(input.safeAreaBottomInset, 0);
-  const keyboardBottomInset = input.platform === 'ios' && keyboardVisible
-    ? Math.max(0, keyboardHeight - safeAreaBottomInset)
+  // 80pt 阈值与 62% 上限只用于内容密度策略。绝对定位的输入区必须一直
+  // 跟随实际遮挡，否则交互式收起跨过 80pt 时会突然落到仍未收完的键盘下面。
+  const keyboardBottomInset = input.platform === 'ios'
+    ? Math.max(0, keyboardOcclusion - safeAreaBottomInset)
     : 0;
   const availableHeight = Math.max(320, screenHeight - keyboardHeight);
   const compactByKeyboard = keyboardVisible && availableHeight < screenHeight * 0.72;

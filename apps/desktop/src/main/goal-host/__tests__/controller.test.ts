@@ -1,4 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { ScriptTarget, transpileModule } from 'typescript';
 
 import { TurnDispatchUnconfirmedError } from '@cindy/maker-core';
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
@@ -15,6 +17,8 @@ import {
 } from '../controller';
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
+import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
+import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -25,6 +29,61 @@ import type {
   GoalStorageLike,
   SessionLike,
 } from '../types';
+
+// Execute the shared production steer closure with in-memory host dependencies.
+// This covers INPUT_STEER and the legacy STEER path without booting Electron.
+const registerSource = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
+const steerSource = registerSource.slice(
+  registerSource.indexOf('  const steerToAgentAccepted = async ('),
+  registerSource.indexOf('  const trustedDesktopSteerText ='),
+);
+const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccepted;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+
+function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery = false) {
+  const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
+  const deps = {
+    maker: {
+      getSession: () => ({
+        ...session,
+        capabilities: { sameTurnSteer: { supported: true } },
+        isTurnRunning: () => session.running,
+        getTurnGeneration: () => session.generation,
+        steer: deliver,
+      }),
+      getSessionMeta: async () => null,
+    },
+    getDbClient: () => ({ drizzle: { select: () => query } }),
+    sessions: {}, botSessionLinks: {}, botProfiles: {}, eq: () => undefined,
+    assertReviewExternalInputAllowed: async () => {},
+    botSessionInputBlockReason: () => null,
+    prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
+    restoreAutoReviewSteerIntent: async () => undefined,
+    shouldPrependMobileClientPromptNote: () => false,
+    readWireSourceDevice: () => null,
+    isDeviceLinkInvoke: () => false,
+    assertRemoteInputClearNotInFlight: () => {},
+    readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
+    readExpectedInputGeneration: () => undefined,
+    assertCurrentInputGeneration: () => {
+      if (rejectBeforeDelivery) throw new Error('stale input generation');
+    },
+    MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
+    AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
+    MCP_APP_MESSAGE_GUARD,
+    publishUiSessionIntervention,
+    noteInteractionRouteSteer: () => {},
+    summarizeIpcUserMessage: () => ({}),
+    log: { info: () => {}, warn: () => {}, debug: () => {} },
+    throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
+  };
+  // Keep Session identity stable across the production preflight checks.
+  const live = deps.maker.getSession();
+  deps.maker.getSession = () => live;
+  return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
+    (sessionId: string, message: string) => Promise<void>;
+}
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
 
@@ -50,11 +109,19 @@ function outcome(partial: Partial<TurnOutcome>): TurnOutcome {
 }
 
 describe('decideNextGoalState', () => {
-  it('pauses when a non-goal (user) turn finishes', () => {
-    const d = decideNextGoalState(BASE, outcome({ origin: 'other' }));
-    expect(d.status).toBe('paused');
-    expect(d.shouldFire).toBe(false);
-    expect(d.turnsUsed).toBe(0); // user turn does not count toward goal turns
+  it('continues after ordinary input without consuming Goal counters', () => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', tokensThisTurn: 999,
+      verdict: { status: 'complete', reason: 'unrelated' } }));
+    expect(d).toMatchObject({ status: 'active', shouldFire: true, turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0 });
+  });
+
+  it.each([
+    { errorMessage: 'boom', status: 'blocked' },
+    { errorMessage: 'AbortError: aborted', status: 'paused' },
+    { errorKind: 'usage_limit', status: 'usageLimited' },
+  ] as const)('keeps errors of ordinary turns on the existing stop path: $status', (error) => {
+    const d = decideNextGoalState(BASE, outcome({ origin: 'other', errored: true, ...error }));
+    expect(d).toMatchObject({ status: error.status, shouldFire: false, turnsUsed: 0, tokensUsed: 0 });
   });
 
   it('blocks on a terminal error', () => {
@@ -228,6 +295,11 @@ class FakeSession implements SessionLike {
   readonly sends: Array<{ content: string; originKind?: string }> = [];
   private listener: ((event: AgentEvent) => void) | null = null;
   running = false;
+  generation = 0;
+
+  getTurnGeneration(): number {
+    return this.generation;
+  }
 
   constructor(id: string, agentKind: SessionLike['agentKind'] = 'claude-code') {
     this.id = id;
@@ -236,11 +308,13 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string }; onDispatching?: () => void; signal?: AbortSignal },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void; onAccepted?: () => void | Promise<void>; signal?: AbortSignal },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
     opts?.onDispatching?.();
+    const accepted = opts?.onAccepted?.();
+    if (accepted) await accepted;
     return { accepted: true };
   }
 
@@ -340,6 +414,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
   const persistedLimits: GoalLimits[] = [];
   const notices: Array<{ sessionId: string; kind: string }> = [];
   const userMessages: Array<{ sessionId: string; content: string; updated?: boolean }> = [];
+  const stopped = vi.fn();
+  const userDispatched = vi.fn();
   // 可变:测试按需设置"账号是否受限 + resetAt"。
   let accountLimit: AccountLimitInfo | null = null;
   // 可变:模拟"会话已关闭 / 此刻 hydrate 不出来"(ensureSession 返回 undefined)。
@@ -351,6 +427,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     isSessionInTurn: () => false,
     stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
+    onGoalStopped: stopped,
+    onGoalUserDispatched: userDispatched,
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
     logger: { info: () => {}, warn: () => {}, error: () => {} },
@@ -378,6 +456,8 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     persistedLimits,
     notices,
     userMessages,
+    stopped,
+    userDispatched,
     setAccountLimit: (v: AccountLimitInfo | null) => {
       accountLimit = v;
     },
@@ -414,7 +494,34 @@ function startGoal(h: ReturnType<typeof makeController>, objective = 'make tests
 describe('GoalController', () => {
   let h: ReturnType<typeof makeController>;
   beforeEach(() => {
+    resetUiContinuationListenersForTest();
     h = makeController();
+  });
+
+  it('reports one handoff when a goal is cleared, not on its intermediate turns', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+    await tick();
+    expect(h.stopped).not.toHaveBeenCalled();
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    await h.controller.clearGoal('s1');
+    expect(h.stopped).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports accepted manual starts and resumes, but not intermediate goal rounds', async () => {
+    try {
+      await startGoal(h);
+      expect(h.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+      h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```' });
+      await tick();
+      expect(h.session.sends).toHaveLength(2);
+      expect(h.userDispatched).toHaveBeenCalledTimes(1);
+      await h.controller.pauseGoal('s1');
+      await h.controller.resumeGoal('s1');
+      expect(h.session.sends).toHaveLength(3);
+      expect(h.userDispatched).toHaveBeenCalledTimes(2);
+    } finally { await h.controller.dispose(); }
   });
 
   // ── setGoal / updateGoal ──
@@ -431,6 +538,7 @@ describe('GoalController', () => {
     await local.controller.setGoal({ sessionId: 's1', objective: 'finish the work' });
 
     expect(local.session.send).toHaveBeenCalledTimes(1);
+    expect(local.userDispatched).not.toHaveBeenCalled();
     expect(await local.storage.get('s1')).toMatchObject({
       status: 'blocked',
       turnsUsed: 0,
@@ -690,6 +798,7 @@ describe('GoalController', () => {
       local.session.sends.push({ content, originKind: opts?.origin?.kind });
       order.push('send');
       attempts += 1;
+      await opts?.onAccepted?.();
       opts?.onDispatching?.();
       return attempts === 1
         ? { accepted: false, reason: 'provider-rejected-before-dispatch' }
@@ -700,6 +809,7 @@ describe('GoalController', () => {
       await local.controller.setGoal({ sessionId: 's1', objective: 'ship the feature' });
 
       expect(order).toEqual(['baseline', 'send', 'abort']);
+      expect(local.userDispatched).not.toHaveBeenCalled();
       expect(onUndispatchedUserTurn).toHaveBeenCalledWith('s1');
       expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
 
@@ -713,6 +823,7 @@ describe('GoalController', () => {
       expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(2);
       expect(onUndispatchedUserTurn).toHaveBeenCalledTimes(1);
       expect(local.session.sends).toHaveLength(2);
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1_500);
       expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
     } finally {
       local.controller.dispose();
@@ -1951,6 +2062,208 @@ describe('GoalController', () => {
     expect(h.userMessages.filter((m) => m.content === 'think about it').length).toBe(1);
   });
 
+  it.each([false, true])('waits for the pre-existing user turn without counting its output (previous Stop: %s)', async (previousStop) => {
+    if (previousStop) await h.controller.pauseGoal('s1');
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const oldEvent = (event: AgentEvent) => h.session.emit({ ...event, sessionTurnGeneration: 7 });
+    oldEvent({ type: 'tool_use', data: { name: 'Bash' } });
+    oldEvent({ type: 'text', data: { text: '```json\n{"goal_status":"complete"}\n```', isFinal: true } });
+    oldEvent({ type: 'status', data: { isRunning: false, tokenUsage: 900 } });
+    // An SDK continuation boundary is not the end of the old product turn.
+    oldEvent({ type: 'done', data: {}, turnContinuationId: 1 });
+    await tick();
+    expect(h.session.sends).toHaveLength(0);
+
+    h.session.running = false;
+    oldEvent({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+    expect(h.session.sends[0].content).toContain('[Goal] Work autonomously');
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'active', turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0, lastReason: null,
+    });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+
+    // A late duplicate cannot pause the newly dispatched Goal turn either.
+    oldEvent({ type: 'done', data: {} });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    h.session.emitGoalTurn({ tokens: 12, verdictJson: '{"goal_status":"continue"}' });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ turnsUsed: 1, tokensUsed: 12, noProgressStreak: 1 });
+    await h.controller.dispose();
+  });
+
+  it.each([false, true])('preserves pending clear before creating a Goal (Stop again: %s)', async (stopAgain) => {
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => { releaseClear = resolve; });
+    const clear = h.storage.clear.bind(h.storage);
+    const clearSpy = vi.spyOn(h.storage, 'clear').mockImplementation(async (sessionId) => {
+      await blockedClear;
+      await clear(sessionId);
+    });
+    const clearing = h.controller.clearGoal('s1');
+    await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledOnce());
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsertSpy = vi.spyOn(h.storage, 'upsert');
+    const creating = startGoal(h);
+    await tick();
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const stopping = stopAgain ? h.controller.pauseGoal('s1') : Promise.resolve();
+    releaseClear();
+    await Promise.all([clearing, creating, stopping]);
+    h.session.running = false;
+    h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    if (stopAgain) {
+      await tick();
+      expect(upsertSpy).not.toHaveBeenCalled();
+      expect(await h.storage.get('s1')).toBeNull();
+      expect(h.session.sends).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    }
+    await h.controller.dispose();
+  });
+
+  it.each(['pause', 'clear', 'dispose'] as const)(
+    'does not start a Goal after %s while the pre-existing turn is running', async (action) => {
+      await h.controller.pauseGoal('s1');
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (action === 'pause') await h.controller.pauseGoal('s1');
+      else if (action === 'clear') await h.controller.clearGoal('s1');
+      else await h.controller.dispose();
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(h.session.sends).toHaveLength(0);
+      if (action === 'pause') expect((await h.storage.get('s1'))?.status).toBe('paused');
+      if (action === 'clear') expect(await h.storage.get('s1')).toBeNull();
+      await h.controller.dispose();
+    },
+  );
+
+  it.each(['same-turn steer', 'new turn'] as const)(
+    'continues after a new user message after Goal creation (%s)', async (delivery) => {
+      await h.controller.pauseGoal('s1');
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (delivery === 'same-turn steer') publishUiSessionIntervention('s1');
+      else h.session.generation = 8;
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+      await h.controller.dispose();
+    },
+  );
+
+  it.each([false, true])('uses the production steer boundary before a pre-existing turn ends (rejected: %s)', async (rejected) => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const finishOldTurn = () => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    };
+    const deliver = vi.fn(async () => {
+      // The vendor can emit done before acknowledging the steer RPC.
+      finishOldTurn();
+      await tick();
+    });
+    const steer = productionSteer(h.session, deliver, rejected);
+    if (rejected) {
+      await expect(steer('s1', 'new direction')).rejects.toThrow('stale input generation');
+      expect(deliver).not.toHaveBeenCalled();
+      finishOldTurn();
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect((await h.storage.get('s1'))?.status).toBe('active');
+    } else {
+      await steer('s1', 'new direction');
+      expect(deliver).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+    }
+    await h.controller.dispose();
+  });
+
+  it.each(['new turn', 'same-turn steer'] as const)(
+    'does not exempt input that arrives during Goal persistence (%s)', async (delivery) => {
+      h.session.generation = 7;
+      h.session.running = true;
+      const upsert = h.storage.upsert.bind(h.storage);
+      vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+        if (delivery === 'new turn') h.session.generation = 8;
+        else publishUiSessionIntervention('s1');
+        await upsert(state);
+      });
+      await startGoal(h);
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+      expect(h.session.sends).toHaveLength(1);
+      await h.controller.dispose();
+    },
+  );
+
+  it('does not confuse a replacement Session with the same generation for the pre-existing turn', async () => {
+    const replacement = new FakeSession('s1');
+    replacement.generation = 7;
+    replacement.running = true;
+    let live: FakeSession;
+    const local = makeController({
+      getSession: () => live,
+      ensureSession: async () => (live = replacement),
+    });
+    live = local.session;
+    live.generation = 7;
+    live.running = true;
+    await startGoal(local);
+    replacement.running = false;
+    replacement.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    await vi.waitFor(() => expect(replacement.sends).toHaveLength(1));
+    expect((await local.storage.get('s1'))?.status).toBe('active');
+    await local.controller.dispose();
+  });
+
+  it('starts the first Goal turn if the pre-existing turn ends before the listener is attached', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsert = h.storage.upsert.bind(h.storage);
+    vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await upsert(state);
+    });
+    await startGoal(h);
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.storage.get('s1'))?.status).toBe('active');
+    await h.controller.dispose();
+  });
+
+  it('keeps terminal errors of the pre-existing turn on the existing stop path', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    h.session.running = false;
+    h.session.emit({
+      type: 'error', data: { isTerminal: true, message: 'AbortError: aborted' },
+      sessionTurnGeneration: 7,
+    });
+    await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+    expect(h.session.sends).toHaveLength(0);
+    await h.controller.dispose();
+  });
+
   it('continues to a second turn when the verdict is continue', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"wip"}\n```', tokens: 100 });
@@ -2113,6 +2426,7 @@ describe('GoalController', () => {
     expect(h.completions[0].summary.reason).toBe('green');
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
     expect(h.session.sends).toHaveLength(1); // no continuation
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('pauseGoal pauses an active goal, preserves counters, and stops continuation', async () => {
@@ -2128,6 +2442,7 @@ describe('GoalController', () => {
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"continue","reason":"x"}\n```' });
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
+    expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
@@ -2615,7 +2930,14 @@ describe('GoalController', () => {
     expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
-  it('waits for an old completion clear before creating a replacement Goal', async () => {
+  it.each([
+    { previousStop: false, intervention: 'none' },
+    { previousStop: true, intervention: 'none' },
+    { previousStop: false, intervention: 'same-turn steer' },
+    { previousStop: false, intervention: 'new turn' },
+    { previousStop: false, intervention: 'pause' },
+    { previousStop: false, intervention: 'clear' },
+  ] as const)('waits for an old completion clear before creating a replacement Goal ($previousStop, $intervention)', async ({ previousStop, intervention }) => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
     let clearCalls = 0;
@@ -2635,7 +2957,9 @@ describe('GoalController', () => {
       verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
     });
     await vi.waitFor(() => expect(clearCalls).toBe(1));
-    await local.controller.pauseGoal('s1');
+    if (previousStop) await local.controller.pauseGoal('s1');
+    local.session.generation = 7;
+    local.session.running = true;
 
     let replacementSettled = false;
     const replacement = local.controller.setGoal({
@@ -2645,9 +2969,24 @@ describe('GoalController', () => {
     void replacement.then(() => { replacementSettled = true; });
     await tick();
     expect(replacementSettled).toBe(false);
-    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect((await local.storage.get('s1'))?.status).toBe(previousStop ? 'paused' : 'active');
 
+    if (intervention === 'same-turn steer') publishUiSessionIntervention('s1');
+    if (intervention === 'new turn') local.session.generation = 8;
+    const stopping = intervention === 'pause' ? local.controller.pauseGoal('s1')
+      : intervention === 'clear' ? local.controller.clearGoal('s1') : Promise.resolve();
     releaseClear();
+    await stopping;
+    if (intervention === 'pause' || intervention === 'clear') {
+      await expect(replacement).resolves.toBeNull();
+      local.session.running = false;
+      local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(local.session.sends).toHaveLength(1);
+      expect(await local.storage.get('s1')).toBeNull();
+      await local.controller.dispose();
+      return;
+    }
     await expect(replacement).resolves.toMatchObject({
       status: 'active',
       objective: 'replacement objective',
@@ -2660,6 +2999,12 @@ describe('GoalController', () => {
       status: 'active',
       objective: 'replacement objective',
     });
+    expect(local.session.sends).toHaveLength(1);
+    local.session.running = false;
+    local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: local.session.generation });
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0, tokensUsed: 0 });
+    await local.controller.dispose();
   });
 
   it('resumeGoal resumes a paused goal: preserves counters, fires a continuation', async () => {
@@ -3364,12 +3709,80 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(afterPause);
   });
 
-  it('pauses when a user-origin turn finishes mid-goal', async () => {
-    await startGoal(h);
-    h.session.emitGoalTurn({ origin: 'user', toolUse: true, verdictJson: '' });
+  it('reports an input restoration failure without sending or silently staying active', async () => {
+    const local = makeController({ ensureInputReady: async () => { throw new Error('queue read failed'); } });
+    await expect(startGoal(local)).rejects.toThrow('queue read failed');
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'blocked', lastReason: 'turn dispatch failed: unable to restore input queue' });
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('yields to input arriving during the final pre-dispatch await, then sends once', async () => {
+    let inputBlocked = false;
+    let yielded = false;
+    const rollback = vi.fn();
+    const local = makeController({
+      ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked,
+      beforeDispatchUserTurn: async () => { if (!yielded) { inputBlocked = true; yielded = true; } }, onUndispatchedUserTurn: rollback,
+    });
+    await startGoal(local);
+    expect(local.session.sends).toHaveLength(0);
+    expect(rollback).toHaveBeenCalledOnce();
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.dispose();
+  });
+
+  it('continues after queued ordinary input and counts only the Goal turn', async () => {
+    let inputBlocked = false;
+    const local = makeController({ ensureInputReady: async () => !inputBlocked, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    inputBlocked = true;
+    local.session.emitGoalTurn({ toolUse: true, tokens: 10 });
     await tick();
-    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(1);
+    local.session.emitGoalTurn({ origin: 'user', toolUse: true, tokens: 900 });
+    await tick();
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 10 });
+    expect(local.session.sends).toHaveLength(1);
+    inputBlocked = false;
+    await Promise.all([local.controller.maybeContinueActiveGoal('s1'), local.controller.maybeContinueActiveGoal('s1')]);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    await tick();
+    expect(local.session.sends).toHaveLength(2);
+    await local.controller.dispose();
+  });
+
+  it.each(['pause', 'clear'] as const)('does not resume from a late queue release after %s', async action => {
+    let inputBlocked = true;
+    const ensureInputReady = vi.fn(async () => !inputBlocked);
+    const local = makeController({ ensureInputReady, isInputBlocked: () => inputBlocked });
+    await startGoal(local);
+    const attempts = ensureInputReady.mock.calls.length;
+    await tick();
+    expect(ensureInputReady).toHaveBeenCalledTimes(attempts); // no blocked-boundary polling
+    expect(local.session.sends).toHaveLength(0);
+    if (action === 'pause') await local.controller.pauseGoal('s1');
+    else await local.controller.clearGoal('s1');
+    inputBlocked = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    local.session.emit({ type: 'done', data: {}, turnOrigin: { kind: 'user' } });
+    await tick();
+    expect(local.session.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('ignores background output and terminal tails instead of treating them as input or Goal work', async () => {
+    await startGoal(h);
+    h.session.emit({ type: 'text', turnScope: 'background', data: { text: '{"goal_status":"complete"}', isFinal: true } });
+    h.session.emit({ type: 'done', turnScope: 'background', data: {} });
+    await tick();
     expect(h.session.sends).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+    h.session.emitGoalTurn({ toolUse: true, tokens: 15 });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 1, tokensUsed: 15 });
   });
 
   // ── applyClarificationAnswer(Option B:答完卡片即时改写目标)──
@@ -4053,6 +4466,27 @@ describe('GoalController', () => {
   });
 
   // ── usageLimited(账号用量受限)──
+  it('a confirmed reset resumes an existing quota wait once before the natural reset time', async () => {
+    h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+    await tick();
+    h.setAccountLimit({ limited: false, resetAtMs: null });
+    await h.controller.resumeRestoredQuota(async () => true);
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(2);
+  });
+
+  it('a quota refresh does not shorten an overload wait', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 529, message: 'overloaded_error' });
+    await tick();
+    await h.controller.resumeRestoredQuota(async () => true);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
   it('reactive: a usage-limit turn error → usageLimited with resetAt, no continuation', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 }); // 远未来 → 不在测试窗口自动续
     await startGoal(h);
@@ -4062,6 +4496,101 @@ describe('GoalController', () => {
     expect(st?.status).toBe('usageLimited');
     expect(st?.usageResetAt).toBe(3_601_000);
     expect(h.session.sends).toHaveLength(1); // 无续轮
+  });
+
+  it('reactive: prefers the reset time carried by the error over the account snapshot', async () => {
+    // Claude 订阅:账号快照(LiteLLM 预算)读不到 5h 窗口,只有错误带的重置时刻可用。
+    h.setAccountLimit(null);
+    await startGoal(h);
+    h.session.emitErrorTurn({ sdkError: 'rate_limit', message: "You've hit your session limit", usageResetAt: 7_201_000 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(7_201_000);
+    expect(h.session.sends).toHaveLength(1);
+  });
+
+  it('reads the account limit of the goal session so the subscription provider is respected', async () => {
+    const getAccountLimit = vi.fn(async () => ({ limited: true, resetAtMs: 3_601_000 }));
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(
+        expect.any(String),
+        's1',
+        expect.objectContaining({ sdkError: 'rate_limit' }),
+      );
+      expect((await local.storage.get('s1'))?.usageResetAt).toBe(3_601_000);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('reactive: ignores the snapshot reset time when the snapshot does not show the limit', async () => {
+    // 未用满窗口的重置时刻与这次限流无关:不排期,留待手动 resume。
+    h.setAccountLimit({ limited: false, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 429, message: 'Too many requests' });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBeNull();
+  });
+
+  it('leaves the reset time written in the error text to the host (only trusted for subscriptions)', async () => {
+    // 报错原文里的时刻要由注入端按会话订阅家族判定;非订阅来源的 Retry-After 不能直接排期。
+    const getAccountLimit = vi.fn(async () => null);
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      const error = { errorStatus: 429, message: 'Too many requests. Try again in ~2 min.' };
+      local.session.emitErrorTurn(error);
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(expect.any(String), 's1', expect.objectContaining(error));
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a usage limit stays usageLimited without scheduling an auto resume', async () => {
+    const local = makeController({ isSessionShared: () => true });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', usageResetAt: 1000 });
+      await tick();
+      await tick();
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+      expect(local.notices).toEqual([]);
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a wait that becomes shared does not auto resume at the reset time', async () => {
+    // 报错时尚未共享(排了恢复),到点时已在共享。
+    const isSessionShared = vi.fn(() => isSessionShared.mock.calls.length > 1);
+    const local = makeController({ isSessionShared });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+      await vi.waitFor(() => expect(isSessionShared).toHaveBeenCalledTimes(2));
+      await tick();
+      expect(local.notices).toEqual([]);
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
   });
 
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
@@ -4074,16 +4603,50 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 本应续跑,但被改判,不续
   });
 
-  it('auto-resumes at resetAt: posts a usage-resumed notice and continues', async () => {
-    h.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → delay 0,tick 内触发
-    await startGoal(h);
-    h.session.emitErrorTurn({ sdkError: 'rate_limit' });
-    await tick(); // usageLimited → schedule(delay 0) → autoResume → resumeGoal
-    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
-    const st = await h.storage.get('s1');
-    expect(st?.status).toBe('active');
-    expect(st?.usageResetAt).toBeNull(); // resume 清掉
-    expect(h.session.sends.length).toBeGreaterThanOrEqual(2); // 自动续了一轮
+  it.each([false, true])('auto-resumes at resetAt: posts a usage-resumed notice and continues (deferred hydration: %s)', async (deferHydration) => {
+    let releaseEnsure!: () => void;
+    const blockedEnsure = new Promise<void>((resolve) => { releaseEnsure = resolve; });
+    let restoring = false;
+    let ensurePending = false;
+    const local = makeController({
+      ensureSession: async () => {
+        if (restoring && deferHydration) {
+          ensurePending = true;
+          await blockedEnsure;
+        }
+        return local.session;
+      },
+    });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → real timer, delay 0
+      await startGoal(local);
+      restoring = true;
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+
+      if (deferHydration) {
+        await vi.waitFor(() => expect(ensurePending).toBe(true));
+        // Even after the old 10ms wait, hydration can still be pending legitimately.
+        await tick();
+        expect(local.notices).toEqual([]);
+        expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+        expect(local.session.sends).toHaveLength(1);
+      }
+
+      // Observe the entire chain, not just the first notice or elapsed wall time.
+      const resumed = vi.waitFor(async () => {
+        expect(local.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
+        const st = await local.storage.get('s1');
+        expect(st?.status).toBe('active');
+        expect(st?.usageResetAt).toBeNull();
+        expect(local.session.sends.length).toBeGreaterThanOrEqual(2);
+      });
+      releaseEnsure();
+      await resumed;
+      expect(local.userDispatched).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+    } finally {
+      releaseEnsure();
+      await local.controller.dispose();
+    }
   });
 
   it('Stop cancels auto-resume while session hydration is pending without persisting a recovery notice', async () => {

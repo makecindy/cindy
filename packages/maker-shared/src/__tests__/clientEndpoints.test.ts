@@ -12,6 +12,7 @@ const VALID_MANIFEST = {
   apiBaseUrl: 'https://api.example.com',
   authApiBaseUrl: 'https://auth.example.com',
   authDesktopCallbackUrl: 'https://auth.example.com/api/auth/desktop/callback',
+  chatApiBaseUrl: 'https://chat.example.com',
   deviceLinkApiBaseUrl: 'https://device-link.example.com',
   oauthBrokerApiBaseUrl: 'https://oauth.example.com',
   ossApiBaseUrl: 'https://oss.example.com',
@@ -26,6 +27,7 @@ const VALID_MANIFEST = {
   skillhubApiBaseUrl: 'https://skillhub.example.com',
   cindySkillHubApiBaseUrl: 'https://cindy-skillhub.example.com',
   pluginApiBaseUrl: 'https://plugin.example.com',
+  shareBaseUrl: 'https://share.example.com',
   cdnBaseUrl: 'https://cdn.example.com/app',
   mobileUpdateBaseUrl: 'https://mobile-update.example.com',
 };

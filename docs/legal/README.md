@@ -38,6 +38,8 @@
 | [`apps/android-platform-tools-bin/win32-x64/NOTICE.txt`](../../apps/android-platform-tools-bin/win32-x64/NOTICE.txt) | 上游 Android Platform Tools | 必须与随仓库分发的原生二进制保持相邻。 |
 | [`apps/desktop/native/sqlite-vec/LICENSE`](../../apps/desktop/native/sqlite-vec/LICENSE) | 上游 sqlite-vec | vendored 原生组件的上游许可证，随组件源码保留。 |
 | [`apps/desktop/src/renderer/vendor/drawio/LICENSE`](../../apps/desktop/src/renderer/vendor/drawio/LICENSE)、[`tapdb/LICENSE`](../../apps/desktop/src/renderer/vendor/tapdb/LICENSE) | 各自上游项目 | vendored 前端资源的上游许可证，随资源分发。 |
+| [`apps/desktop/resources/system-skills/cindy-skill-creator/license.txt`](../../apps/desktop/resources/system-skills/cindy-skill-creator/license.txt) | OpenAI Codex `skill-creator` | 改编为 `cindy-skill-creator` 并随 Desktop 分发的内置 Skill，上游许可证必须与资源相邻保留。 |
+| [`apps/desktop/resources/system-skills/cindy-skill-creator/scripts/_vendor/PyYAML-LICENSE.txt`](../../apps/desktop/resources/system-skills/cindy-skill-creator/scripts/_vendor/PyYAML-LICENSE.txt) | PyYAML 6.0.3 | 内置 Skill 的 Python 工具随包携带纯 Python YAML 解析器，确保无需额外安装依赖。 |
 | [`packages/browser-control-runtime/src/_generated/vendor/fs-safe/LICENSE`](../../packages/browser-control-runtime/src/_generated/vendor/fs-safe/LICENSE) | 上游 fs-safe | 生成或 vendored 代码旁的上游许可证，不能与代码拆开。 |
 
 固定路径文件如有变化，应在对应的 `docs/legal/` 说明或生成器中同步登记，而不是

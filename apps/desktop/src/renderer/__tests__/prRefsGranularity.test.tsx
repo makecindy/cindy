@@ -84,6 +84,30 @@ const wrapper = ({ children }: { children: ReactNode }) =>
   createElement(PrRefsProvider, null, children);
 
 describe('PrRefsProvider 订阅粒度(真实 Provider)', () => {
+  it('coalesces repeated focus and registration while remote PR reads are queued or running', async () => {
+    const api = installElectronApi();
+    let finishRefs!: (refs: SessionPrRef[]) => void;
+    let finishStatuses!: (statuses: unknown[]) => void;
+    api.invoke.mockImplementation((_device, channel) => new Promise((resolve) => {
+      if (channel === 'git-context:pr-refs:list') finishRefs = resolve as typeof finishRefs;
+      else finishStatuses = resolve as typeof finishStatuses;
+    }));
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const { result, unmount } = renderHook(() => usePrActions(), { wrapper });
+    try {
+      act(() => { result.current.registerPrConsumer('session-r', 'device-1'); });
+      for (let n = 0; n < 5; n++) act(() => {
+        result.current.registerPrConsumer('session-r', 'device-1');
+        window.dispatchEvent(new Event('focus'));
+      });
+      expect(api.invoke).toHaveBeenCalledTimes(1);
+      await act(async () => { finishRefs([makeRef('session-r', 42)]); });
+      expect(api.invoke).toHaveBeenCalledTimes(2);
+      for (let n = 0; n < 5; n++) act(() => { window.dispatchEvent(new Event('focus')); });
+      expect(api.invoke).toHaveBeenCalledTimes(2);
+      await act(async () => { finishStatuses([]); });
+    } finally { unmount(); focus.mockRestore(); }
+  });
   it('某会话 refs 更新只重渲染该会话的订阅行,其它行不醒', async () => {
     const api = installElectronApi();
     api.gitContext.listPrRefs.mockImplementation(async (sessionId: string) =>
@@ -181,7 +205,7 @@ describe('PrRefsProvider owner 切换的在飞隔离', () => {
     const { result, rerender } = renderHook(
       () => {
         const { registerPrConsumer } = usePrActions();
-        const status = usePrStatus('octo/repo#9');
+        const status = usePrStatus('session-s', 'octo/repo#9');
         return { registerPrConsumer, status };
       },
       { wrapper },

@@ -22,6 +22,41 @@ export function assertCjkSegRegistered(db: Database.Database): void {
   }
 }
 
+const CJK_TEMP_TRIGGER_NAMES = ['messages_fts_insert_cjk', 'messages_fts_update_cjk'] as const;
+
+/** TEMP 触发器当前是否都挂在连接上（temp schema 里两个名字都在）。 */
+export function cjkFtsTempTriggersInstalled(db: Database.Database): boolean {
+  const rows = db
+    .prepare(
+      `SELECT name FROM temp.sqlite_master WHERE type='trigger' AND name IN (${CJK_TEMP_TRIGGER_NAMES.map(() => '?').join(',')})`,
+    )
+    .all(...CJK_TEMP_TRIGGER_NAMES) as Array<{ name: string }>;
+  return rows.length === CJK_TEMP_TRIGGER_NAMES.length;
+}
+
+/**
+ * 挂载链收口：确保 TEMP 触发器真的在连接上并存活。
+ *
+ * 背景（#3841）：`PRAGMA temp_store` 一旦在挂载之后执行，SQLite 会按文档化语义
+ * "immediately delete all existing temporary tables, indices, triggers, and views"，
+ * 刚挂的 TEMP 触发器会被原地清空且无任何报错（持久触发器因函数守卫同时跳过 →
+ * 增量写入静默漏 FTS）。所以调用方必须保证：任何 `temp_store` 相关 pragma 都在
+ * `registerCjkSeg` 之前执行；本函数作为最后一道防线再验一次，不在就重挂一次，
+ * 仍不在则抛错拒绝带病启动——宁可 init 失败也不能静默漏写聊天索引。
+ */
+export function ensureCjkFtsTempTriggersInstalled(db: Database.Database): void {
+  if (!tableExists(db, 'messages') || !tableExists(db, 'messages_fts') || !tableExists(db, 'messages_fts_rows')) {
+    return;
+  }
+  if (cjkFtsTempTriggersInstalled(db)) return;
+  installCjkSegTempTriggers(db);
+  if (!cjkFtsTempTriggersInstalled(db)) {
+    throw new Error(
+      'cjk_seg temp triggers failed to install after retry; refusing to start with a silently-unindexed messages table (#3841)',
+    );
+  }
+}
+
 function tableExists(db: Database.Database, name: string): boolean {
   return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
 }

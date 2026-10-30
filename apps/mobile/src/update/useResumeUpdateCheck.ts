@@ -15,11 +15,12 @@ import {
   REVIEW_MODE,
 } from '@/config/env';
 import { shouldCheckBundleUpdate } from './bundleUpdate';
+import { isGooglePlayInstallation } from './androidInstallSource';
 import { fetchLatestRelease } from './fetchLatestRelease';
 import { createResumeUpdateChecker } from './resumeUpdateCheck';
-import { promptBundleUpdate } from './useBundleUpdatePrompt';
+import { downloadAndroidBundleUpdate, promptBundleUpdate } from './useBundleUpdatePrompt';
 import { resolveUpdateChannelForDevice } from './canaryChannelStore';
-import { hasPrivacyConsent } from './updateConsentGate';
+import { runSelfHostedOtaRequest } from './otaRequestCoordinator';
 import type { UpdateChannel } from '@cindy/maker-shared/update-channel';
 
 export function useResumeUpdateCheck(
@@ -29,6 +30,7 @@ export function useResumeUpdateCheck(
     isSelfHosted: IS_OTA_SELFHOST,
     isReviewMode: REVIEW_MODE,
     isTestFlightBuild: IS_TESTFLIGHT_BUILD,
+    isGooglePlayInstallation: isGooglePlayInstallation(),
   });
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function useResumeUpdateCheck(
     let current = true;
     const checker = createResumeUpdateChecker({
       otaEnabled: IS_OTA_SELFHOST && !__DEV__ && Updates.isEnabled,
-      isConsented: hasPrivacyConsent,
+      withOtaClient: (operation) => runSelfHostedOtaRequest(channel, operation),
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
       fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
       bundleCheckEnabled,
@@ -52,6 +54,7 @@ export function useResumeUpdateCheck(
       // 与 useBundleUpdatePrompt / useForcedUpdateRecheck 同口径:强更比较按原生真值,热更后不漂移。
       getCurrentVersion: () => APP_BINARY_VERSION || null,
       onForcedUpdate: promptBundleUpdate,
+      onAvailableUpdate: downloadAndroidBundleUpdate,
       now: () => Date.now(),
       isCurrent: () => current,
     });

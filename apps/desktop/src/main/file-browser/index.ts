@@ -1,3 +1,4 @@
+import { readRemoteDeviceFile } from '../device-link/fileAccess';
 /**
  * registerFileBrowserIpc — main-side handlers for the workdir file-browser.
  *
@@ -19,7 +20,7 @@
  * watcherManager;远程 watch 桥接见 remote-watch.ts。
  */
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow, type WebContents } from 'electron';
 import {
   createFile,
   createFolder,
@@ -35,23 +36,55 @@ import {
 } from '@cindy/file-browser-core';
 
 import { promises as fsPromises } from 'node:fs';
+import { PassThrough } from 'node:stream';
 
-import { DL_MEDIA_FETCH_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL } from '@cindy/device-link';
+import { FILE_BROWSER_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 
 import { createLogger } from '../logger.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
-import { fetchRemoteFileToCache, findStaleCached, isInsideCacheDir, putCachedContent, sweepCacheOnStartup } from './remote-file-cache.js';
-import { fetchChatFile, statChatFile, type ChatFileDeps, type ChatFileFetchArgs } from './chat-file.js';
+import { discardPeerAttachment, takePeerAttachment } from '../device-link/peerAttachmentStore.js';
+import { parseRemoteAttachmentRef } from '../device-link/remoteAttachment.js';
+import { getRemoteSshPool } from '../remote-ssh/index.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import {
+  fetchRemoteFileToCache,
+  findStaleCached,
+  isInsideCacheDir,
+  putCachedContent,
+  sweepCacheOnStartup,
+  stageLocalFileToCache,
+  cleanupOwnedUnpersistedStagedChatAttachments,
+} from './remote-file-cache.js';
+import {
+  fetchChatFile,
+  statChatFile,
+  type ChatFileDeps,
+  type ChatFileFetchArgs,
+  buildDevicePathUrl,
+} from './chat-file.js';
+import { createFileTransferProgressReporter, fileTransferRequestId } from './transfer-progress.js';
+import { downloadChatEntry, type ChatDownloadDeps } from './chat-download.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { getRemoteWatchRegistry } from './remote-watch.js';
 import { throwRemoteFsIpcError } from './remote.js';
 import { watcherManager, type FileTreeEvent } from './watcher.js';
+import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
+import { statSshPreviewMetadata } from './html-preview-read.js';
+import { toWorkdirRel } from '../../shared/workdirPath.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { uploadChatFolder, type ChatFolderUploadArgs } from './chat-folder-transfer.js';
+import { parseSharedTaskPeer } from '@cindy/device-link';
 
 const log = createLogger('file-browser/ipc');
+
+/** POSIX 单引号 shell quote(与 remote.ts 同实现)。 */
+function shq(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 export const FILE_BROWSER_INVOKE = {
   /** 大文件取回:>2MiB inline 上限的远程文件拉到本地缓存(SSH 分片 / device OSS)。 */
@@ -77,11 +110,16 @@ export const FILE_BROWSER_INVOKE = {
   CHAT_FILE_FETCH: 'maker:chat-file:fetch',
   /** 聊天流文件 chip 点亮预检(远端精确 stat,见 chat-file.ts statChatFile)。 */
   CHAT_FILE_STAT: 'maker:chat-file:stat',
+  /** 远程文件 / 文件夹下载到系统「下载」文件夹(见 chat-download.ts)。 */
+  CHAT_FILE_DOWNLOAD: 'maker:chat-file:download',
+  /** 取消进行中的聊天文件取回 / 下载(按发起时的 requestId)。 */
+  CHAT_FILE_CANCEL: 'maker:chat-file:cancel',
+  CHAT_FOLDER_UPLOAD: 'maker:chat-folder:upload',
 } as const;
 
 export const FILE_BROWSER_PUSH = {
   EVENT: 'maker:file-browser:event',
-  /** 大文件取回进度(仅发给发起窗口):{ workdir, relPath, received, total }。 */
+  /** 文件取回进度(仅发给发起窗口),订阅按 requestId 区分设备与并发请求。 */
   TRANSFER: 'maker:file-browser:transfer',
 } as const;
 
@@ -97,6 +135,8 @@ interface RemoteRoutedArgs {
 }
 
 interface ListDirArgs extends RemoteRoutedArgs {
+  /** Bypass presentation filters; does not bypass filesystem access checks. */
+  includeIgnored?: boolean;
   workdir: string;
   /** workdir-relative POSIX path; '' for root */
   relPath?: string;
@@ -104,6 +144,8 @@ interface ListDirArgs extends RemoteRoutedArgs {
   hideMetaFiles?: boolean;
   /** Doc mode: only `.md` files + dirs that contain `.md` descendants. */
   docMode?: boolean;
+  /** 用户开关「显示被忽略的目录」——列出依赖 / 构建产物 / 缓存目录。默认 false。 */
+  showIgnoredDirs?: boolean;
 }
 
 interface ReadFileArgs extends RemoteRoutedArgs {
@@ -136,6 +178,8 @@ interface StatArgs extends RemoteRoutedArgs {
 interface WatchArgs extends RemoteRoutedArgs {
   workdir: string;
   hideMetaFiles?: boolean;
+  /** 与 listDir 同源:开关变了要带新 matcher 重建 watcher。 */
+  showIgnoredDirs?: boolean;
 }
 
 /**
@@ -143,8 +187,11 @@ interface WatchArgs extends RemoteRoutedArgs {
  * ({ok,result}|{ok:false,error}),handler 的真实返回值在 result 里——renderer
  * 通路由 ipc.ts 解包,main 直调必须自己解,否则读信封字段恒错(真机实踩)。
  */
-async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>): Promise<T> {
-  const payload = await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
+async function deviceOpInvoke<T>(deviceId: string, opArgs: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  const options = signal ? { preSend: () => signal.throwIfAborted() } : undefined;
+  const payload = options
+    ? await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs], options)
+    : await remoteInvoke(deviceId, FILE_BROWSER_REMOTE_OP_CHANNEL, [opArgs]);
   if (!payload.ok) {
     throw new Error(`[${payload.error.code}] ${payload.error.message}`);
   }
@@ -163,8 +210,11 @@ async function fetchRemoteBigFile(
     mtimeMs: number;
     remoteHostId?: string | null;
     deviceId?: string | null;
+    /** HTML background reads must validate beyond the outer size/mtime cache key. */
+    revalidate?: boolean;
   },
   onProgress: (received: number, total: number, phase?: 'upload' | 'download') => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!args.workdir || !args.relPath || !Number.isFinite(args.size)) {
     throw new Error('bad fetch-remote args');
@@ -180,68 +230,127 @@ async function fetchRemoteBigFile(
         size: args.size,
         mtimeMs: args.mtimeMs,
       },
-      async (destPath, progress) => {
-        // 两段式:Start 立即回 transferId(上传在被控端后台跑,2GB 分钟级,
-        // 单次 invoke 的 30s 超时罩不住),轮询 Status 到终态再下载。
-        progress(0, args.size);
-        const start = await deviceOpInvoke<{ ok: boolean; transferId?: string; message?: string }>(
+      async (destPath, progress, transferSignal) => {
+        const source = args.workdir.replace(/[\\/]$/, '') + '/' + args.relPath;
+        const fetched = await readRemoteDeviceFile(
           deviceId,
-          { op: 'exportFileStart', workdir: args.workdir, relPath: args.relPath },
+          buildDevicePathUrl(source) +
+            '&baseDir=' +
+            encodeURIComponent(args.workdir) +
+            '&maxBytes=' +
+            Math.max(1, args.size),
+          remoteInvoke,
+          {
+            // Cache fills are shared: closing one preview must not cancel another consumer.
+            // This fill is keyed by the caller's stat; never relabel stale bytes as that version.
+            cacheFirst: false,
+            workdir: args.workdir,
+            relPath: args.relPath,
+            maxBytes: Math.max(1, args.size),
+            fallback: async () => {
+              // 两段式:Start 立即回 transferId(上传在被控端后台跑,2GB 分钟级,
+              // 单次 invoke 的 30s 超时罩不住),轮询 Status 到终态再下载。
+              progress(0, args.size);
+              const start = await deviceOpInvoke<{
+                ok: boolean;
+                transferId?: string;
+                message?: string;
+              }>(deviceId, {
+                op: 'exportFileStart',
+                workdir: args.workdir,
+                relPath: args.relPath,
+                maxBytes: Math.max(1, args.size),
+              });
+              if (!start?.ok || !start.transferId) {
+                throw new Error(start?.message ?? 'exportFileStart failed on remote device');
+              }
+              const deadline = Date.now() + 30 * 60_000;
+              let key: string | null = null;
+              // relay 瞬断容忍:被控端的上传不依赖 relay(直连 OSS),断的只是"问进度"
+              // 这条线。瞬态错误(断链/超时/重连中)继续轮询,连续 20 次(约 40s)才
+              // 放弃——双实例测试环境的 relay 抢占和生产网络抖动都盖得住。
+              let transientFails = 0;
+              for (;;) {
+                await new Promise((r) => setTimeout(r, 1500));
+                if (transferSignal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+                if (Date.now() > deadline) throw new Error('remote upload timed out (30min)');
+                let st: {
+                  ok: boolean;
+                  state?: string;
+                  key?: string;
+                  message?: string;
+                  uploaded?: number;
+                };
+                try {
+                  st = await deviceOpInvoke<{
+                    ok: boolean;
+                    state?: string;
+                    key?: string;
+                    message?: string;
+                    uploaded?: number;
+                  }>(deviceId, {
+                    op: 'exportFileStatus',
+                    workdir: args.workdir,
+                    transferId: start.transferId,
+                  });
+                  transientFails = 0;
+                } catch (err) {
+                  const msg = String(err);
+                  if (isTransientDeviceExportStatusError(err) && ++transientFails <= 20) {
+                    log.debug('exportFileStatus transient failure, retrying', {
+                      fails: transientFails,
+                      msg,
+                    });
+                    continue;
+                  }
+                  throw err;
+                }
+                if (!st?.ok) throw new Error(st?.message ?? 'exportFileStatus failed');
+                if (st.state === 'error') throw new Error(st.message ?? 'remote upload failed');
+                if (st.state === 'done' && st.key) {
+                  key = st.key;
+                  break;
+                }
+                // 上传阶段:被控端回报真实已上传字节(phase=upload,renderer 分相显示)。
+                progress(Math.min(st.uploaded ?? 0, args.size), args.size, 'upload');
+              }
+              return { ossKey: key, size: args.size, mimeType: 'application/octet-stream' };
+            },
+            signal: transferSignal,
+            onProgress: progress,
+          },
         );
-        if (!start?.ok || !start.transferId) {
-          throw new Error(start?.message ?? 'exportFileStart failed on remote device');
-        }
-        const deadline = Date.now() + 30 * 60_000;
-        let key: string | null = null;
-        // relay 瞬断容忍:被控端的上传不依赖 relay(直连 OSS),断的只是"问进度"
-        // 这条线。瞬态错误(断链/超时/重连中)继续轮询,连续 20 次(约 40s)才
-        // 放弃——双实例测试环境的 relay 抢占和生产网络抖动都盖得住。
-        let transientFails = 0;
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 1500));
-          if (Date.now() > deadline) throw new Error('remote upload timed out (30min)');
-          let st: { ok: boolean; state?: string; key?: string; message?: string; uploaded?: number };
+        if ('path' in fetched) {
           try {
-            st = await deviceOpInvoke<{
-              ok: boolean;
-              state?: string;
-              key?: string;
-              message?: string;
-              uploaded?: number;
-            }>(
-              deviceId,
-              { op: 'exportFileStatus', workdir: args.workdir, transferId: start.transferId },
-            );
-            transientFails = 0;
-          } catch (err) {
-            const msg = String(err);
-            if (isTransientDeviceExportStatusError(err) && ++transientFails <= 20) {
-              log.debug('exportFileStatus transient failure, retrying', { fails: transientFails, msg });
-              continue;
-            }
-            throw err;
+            if (fetched.size !== args.size) throw new Error('REMOTE_FILE_CHANGED');
+            await fsPromises.copyFile(fetched.path, destPath);
+            progress(args.size, args.size, 'download');
+            return;
+          } finally {
+            await fetched.dispose();
           }
-          if (!st?.ok) throw new Error(st?.message ?? 'exportFileStatus failed');
-          if (st.state === 'error') throw new Error(st.message ?? 'remote upload failed');
-          if (st.state === 'done' && st.key) {
-            key = st.key;
-            break;
-          }
-          // 上传阶段:被控端回报真实已上传字节(phase=upload,renderer 分相显示)。
-          progress(Math.min(st.uploaded ?? 0, args.size), args.size, 'upload');
         }
-        const res = { key };
+        if (fetched.inlineBase64 !== undefined) {
+          const bytes = Buffer.from(fetched.inlineBase64, 'base64');
+          if (bytes.length !== args.size) throw new Error('REMOTE_FILE_CHANGED');
+          await fsPromises.writeFile(destPath, bytes);
+          progress(args.size, args.size, 'download');
+          return;
+        }
+        const res = { key: fetched.ossKey };
         // …再流式直下到随机 part 文件，并由字节计数回调持续上报下载进度。
         try {
           await downloadToFile(res.key, destPath, undefined, (downloaded) => {
             progress(Math.min(downloaded, args.size), args.size, 'download');
-          });
+          }, transferSignal);
           progress(args.size, args.size, 'download');
         } finally {
           void removeRemote(res.key);
         }
       },
       onProgress,
+      signal,
+      { revalidate: args.revalidate },
     );
   }
   if (args.remoteHostId) {
@@ -264,6 +373,8 @@ async function fetchRemoteBigFile(
         args.relPath,
       ),
       onProgress,
+      signal,
+      { revalidate: args.revalidate },
     );
   }
   throw new Error('fetch-remote requires remoteHostId or deviceId');
@@ -274,10 +385,75 @@ async function fetchRemoteBigFile(
  * during bootstrap. The handlers themselves are stateless beyond the
  * watcherManager singleton.
  */
+/** 进行中的聊天文件取回 / 下载:发起窗口 + requestId → 中止器(供提示条上的「取消」)。 */
+const chatTransfers = new Map<string, AbortController>();
+
+/** requestId 与进度事件同一判据(非空且 ≤64 字符),不合格时不登记、不可取消。 */
+function chatTransferKey(wc: WebContents, requestId: unknown): string | null {
+  const id = fileTransferRequestId(requestId);
+  return id ? `${wc.id}:${id}` : null;
+}
+
+/** 用户取消、发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。 */
+function beginChatTransfer(wc: WebContents, requestId: unknown) {
+  const abort = new AbortController();
+  const key = chatTransferKey(wc, requestId);
+  if (key) chatTransfers.set(key, abort);
+  const onGone = () => abort.abort();
+  wc.once('destroyed', onGone);
+  wc.once('render-process-gone', onGone);
+  return {
+    signal: abort.signal,
+    end: () => {
+      if (key && chatTransfers.get(key) === abort) chatTransfers.delete(key);
+      wc.removeListener('destroyed', onGone);
+      wc.removeListener('render-process-gone', onGone);
+    },
+  };
+}
+
 export function registerFileBrowserIpc(): void {
   // file-browser-core 是宿主无关的共享包(也跑在远端 file-service daemon 里),
   // 日志设施由宿主注入——desktop 侧接统一 logger(规则 12),scope 与抽包前一致。
   setFileBrowserCoreLoggerFactory(createLogger);
+  registerHtmlPreviewIpc({
+    cached: (args, root, relPath) => {
+      if (args.origin.kind === 'local') return Promise.resolve(null);
+      return findStaleCached({
+        transport: args.origin.kind,
+        endpointId: args.origin.kind === 'device' ? args.origin.deviceId : args.origin.remoteHostId,
+        workdir: root,
+        relPath,
+      });
+    },
+    stat: async (args, root, relPath, signal) => {
+      signal?.throwIfAborted();
+      if (args.origin.kind === 'device') {
+        return deviceOpInvoke<import('@cindy/file-browser-core').FileStat>(args.origin.deviceId, {
+          op: 'stat', workdir: root, relPath,
+        }, signal);
+      }
+      return statSshPreviewMetadata(getRemoteFileBrowser(), args, root, relPath, signal);
+    },
+    read: async (args, root, entry, signal) => {
+      if (signal?.aborted) throw new Error('PREVIEW_CANCELLED');
+      const result = await fetchRemoteBigFile(
+        {
+          workdir: root,
+          relPath: entry.relPath,
+          size: entry.size,
+          mtimeMs: entry.mtimeMs,
+          revalidate: true,
+          deviceId: args.origin.kind === 'device' ? args.origin.deviceId : undefined,
+          remoteHostId: args.origin.kind === 'ssh' ? args.origin.remoteHostId : undefined,
+        },
+        () => {},
+        signal,
+      );
+      if (signal?.aborted) throw new Error('PREVIEW_CANCELLED');
+      return result;
+    },
+  });
 
   // 缓存启动清扫(残留 .part + 超容量 LRU),异步不阻塞注册。
   void sweepCacheOnStartup();
@@ -297,28 +473,19 @@ export function registerFileBrowserIpc(): void {
         mtimeMs: number;
         remoteHostId?: string | null;
         deviceId?: string | null;
+        requestId?: string;
       },
     ) => {
       const wc = event.sender;
-      let lastPush = 0;
-      const onProgress = (received: number, total: number, phase?: 'upload' | 'download') => {
-        const now = Date.now();
-        if (now - lastPush < 100 && received < total) return;
-        lastPush = now;
-        if (!wc.isDestroyed()) {
-          wc.send(FILE_BROWSER_PUSH.TRANSFER, {
-            workdir: args.workdir,
-            relPath: args.relPath,
-            received,
-            total,
-            phase: phase ?? 'download',
-          });
-        }
-      };
+      const onProgress = createFileTransferProgressReporter(args, (progress) => {
+        if (!wc.isDestroyed()) wc.send(FILE_BROWSER_PUSH.TRANSFER, progress);
+      });
       try {
         const cachePath = await fetchRemoteBigFile(args, onProgress);
         return { ok: true as const, cachePath, stale: false };
       } catch (err) {
+        if (String(err).includes('FILE_PEER_CANCELLED'))
+          return { ok: false as const, message: String(err) };
         // 断线兜底:取回失败但本地有该路径的历史副本 → 降级展示(可能非最新)。
         const transport = args.deviceId ? ('device' as const) : ('ssh' as const);
         const endpointId = args.deviceId ?? args.remoteHostId ?? '';
@@ -341,8 +508,8 @@ export function registerFileBrowserIpc(): void {
   );
 
   // ── 聊天流文件取回:远端绝对路径 → 本地缓存副本(chat-file.ts 编排)────
-  // 进度沿用 FILE_BROWSER_PUSH.TRANSFER,relPath 键固定用原始 absPath(renderer
-  // 不做 abs→rel,单一实现点在 main;订阅方按 absPath 过滤)。
+  // 进度沿用 FILE_BROWSER_PUSH.TRANSFER,relPath 保留原始 absPath;
+  // 订阅以 requestId 关联,同路径跨设备与并发操作不串线。
   const chatFileDeps: ChatFileDeps = {
     sshStat: (hostId, workdir, relPath) =>
       getRemoteFileBrowser().request(hostId, 'stat', { workdir, relPath }) as Promise<{
@@ -357,12 +524,8 @@ export function registerFileBrowserIpc(): void {
         relPath,
       }),
     fetchBigFile: fetchRemoteBigFile,
-    deviceMediaFetch: async (deviceId, url) => {
-      const res = await remoteInvoke(deviceId, DL_MEDIA_FETCH_CHANNEL, [{ url }]);
-      if (!res.ok) {
-        throw new Error(`media:fetch ${res.error?.code ?? 'FAIL'}: ${res.error?.message ?? ''}`);
-      }
-      return res.result as { ossKey: string; size: number };
+    deviceMediaFetch: async (deviceId, url, signal, onProgress) => {
+      return readRemoteDeviceFile(deviceId, url, remoteInvoke, { signal, onProgress });
     },
     downloadToFile,
     removeRemote: (key) => void removeRemote(key),
@@ -371,26 +534,161 @@ export function registerFileBrowserIpc(): void {
   };
   ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_FETCH, async (event, args: ChatFileFetchArgs) => {
     const wc = event.sender;
-    let lastPush = 0;
-    const onProgress = (received: number, total: number, phase?: 'upload' | 'download') => {
-      const now = Date.now();
-      if (now - lastPush < 100 && received < total) return;
-      lastPush = now;
-      if (!wc.isDestroyed()) {
-        wc.send(FILE_BROWSER_PUSH.TRANSFER, {
-          workdir: args?.workdir ?? '',
-          relPath: args?.absPath ?? '',
-          received,
-          total,
-          phase: phase ?? 'download',
-        });
-      }
-    };
-    const result = await fetchChatFile(args, onProgress, chatFileDeps);
+    const transfer = beginChatTransfer(wc, args?.requestId);
+    const onProgress = createFileTransferProgressReporter(
+      { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
+      (progress) => {
+        if (!wc.isDestroyed()) wc.send(FILE_BROWSER_PUSH.TRANSFER, progress);
+      },
+    );
+    const result = await fetchChatFile(args, onProgress, chatFileDeps, transfer.signal).finally(
+      transfer.end,
+    );
     if (!result.ok) {
-      log.warn('chat-file fetch failed', { code: result.code, absPath: args?.absPath, message: result.message });
+      log.warn('chat-file fetch failed', {
+        code: result.code,
+        absPath: args?.absPath,
+        message: result.message,
+      });
     }
     return result;
+  });
+
+  const chatDownloadDeps: ChatDownloadDeps = {
+    sshStat: chatFileDeps.sshStat,
+    deviceStat: chatFileDeps.deviceStat,
+    downloadsDir: () => app.getPath('downloads'),
+    fetchFile: (args, onProgress, signal) => fetchChatFile(args, onProgress, chatFileDeps, signal),
+    deviceOp: deviceOpInvoke,
+    receivePart: async (deviceId, part, destination, onProgress, signal) => {
+      const ref = parseRemoteAttachmentRef(part.ref);
+      if (!ref || ref.size !== part.size || ref.sha256 !== part.sha256) {
+        throw new Error('invalid exported part');
+      }
+      if (ref.peer) {
+        await takePeerAttachment(deviceId, ref.peer, destination);
+        onProgress(part.size);
+        return;
+      }
+      try {
+        await downloadToFile(
+          ref.ossKey,
+          destination,
+          { size: part.size, sha256: part.sha256 },
+          onProgress,
+          signal,
+        );
+      } finally {
+        void removeRemote(ref.ossKey);
+      }
+    },
+    discardPart: async (deviceId, part) => {
+      const ref = parseRemoteAttachmentRef(part.ref);
+      if (!ref) return;
+      if (ref.peer) await discardPeerAttachment(deviceId, ref.peer);
+      else await removeRemote(ref.ossKey);
+    },
+    sshTar: async (hostId, absDir) => {
+      const host = getRemoteSshPool().get(hostId);
+      if (!host) throw new Error(`remote host not found in pool: ${hostId}`);
+      // sh -c 包一层:不依赖远端登录 shell 的语法;COPYFILE_DISABLE 让 macOS 的 tar
+      // 不额外写出 `._*` 元数据文件。
+      const script = 'cd -- "$1" && COPYFILE_DISABLE=1 exec tar -cf - .';
+      const handle = await host.execStream(`sh -c ${shq(script)} sh ${shq(absDir)}`, {
+        timeoutMs: 30_000,
+      });
+      const stream = new PassThrough();
+      let stderr = '';
+      // 背压:解包写盘跟不上时停读 SSH 通道,避免整个归档积压在主进程内存里。
+      handle.onStdoutBytes((bytes) => {
+        if (!stream.write(bytes)) handle.pause?.();
+      });
+      stream.on('drain', () => handle.resume?.());
+      handle.onStderr((text) => {
+        stderr = (stderr + text).slice(-2000);
+      });
+      const done = new Promise<number | null>((resolve) => {
+        handle.onError((err) => {
+          stream.destroy(err);
+          resolve(null);
+        });
+        handle.onClose(({ code }) => {
+          stream.end();
+          resolve(code);
+        });
+      });
+      return { stream, done, stderr: () => stderr, kill: () => handle.kill() };
+    },
+  };
+  ipcMain.handle(
+    FILE_BROWSER_INVOKE.CHAT_FILE_DOWNLOAD,
+    async (event, args: ChatFileFetchArgs & { requestId?: unknown }) => {
+      // 会把远端内容写进用户的下载文件夹:只接受 Cindy 自有页面发起(与 HTML 预览同一判据)。
+      assertTrustedAppRendererEvent(event);
+      const wc = event.sender;
+      const transfer = beginChatTransfer(wc, args?.requestId);
+      // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
+      const onProgress = createFileTransferProgressReporter(
+        { workdir: args?.workdir ?? '', relPath: args?.absPath ?? '', requestId: args?.requestId },
+        (progress) => {
+          if (!wc.isDestroyed()) wc.send(FILE_BROWSER_PUSH.TRANSFER, progress);
+        },
+      );
+      const result = await downloadChatEntry(
+        args,
+        onProgress,
+        chatDownloadDeps,
+        transfer.signal,
+      ).finally(transfer.end);
+      if (!result.ok) {
+        log.warn('chat-file download failed', {
+          code: result.code,
+          absPath: args?.absPath,
+          message: result.message,
+        });
+      }
+      return result;
+    },
+  );
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_CANCEL, (event, requestId: unknown) => {
+    // 会中止主进程里的传输:与下载同一来源判据,只接受 Cindy 自有页面发起。
+    assertTrustedAppRendererEvent(event);
+    const key = chatTransferKey(event.sender, requestId);
+    if (key) chatTransfers.get(key)?.abort();
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FOLDER_UPLOAD, async (event, args: ChatFolderUploadArgs) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = activeOwnerScopeKey();
+    const ownerId = getActiveAppSession().dataOwnerId;
+    const transfer = beginChatTransfer(event.sender, args?.requestId);
+    const assertCurrent = () => {
+      assertTrustedAppRendererEvent(event);
+      if (event.sender.isDestroyed() || isAppSessionBoundaryPending() ||
+          owner !== activeOwnerScopeKey()) throw new Error('CANCELLED');
+    };
+    const progress = createFileTransferProgressReporter({
+      workdir: '', relPath: args?.sourcePath ?? '', requestId: args?.requestId,
+    }, value => {
+      if (!event.sender.isDestroyed()) event.sender.send(FILE_BROWSER_PUSH.TRANSFER, value);
+    });
+    try {
+      if (!ownerId || !fileTransferRequestId(args?.requestId) || !args?.deviceId ||
+          parseSharedTaskPeer(args.deviceId)) throw new Error('REMOTE_UNSUPPORTED');
+      const prepared = await uploadChatFolder(args, {
+        tempRoot: () => app.getPath('temp'), assertCurrent,
+        stage: params => stageLocalFileToCache({ ...params, ownerId }),
+        discard: filePath => cleanupOwnedUnpersistedStagedChatAttachments({ ownerId, filePaths: [filePath] }),
+        op: (deviceId, request) => deviceOpInvoke(deviceId, request),
+      }, progress, transfer.signal);
+      return { ok: true as const, ...prepared };
+    } catch (error) {
+      return { ok: false as const, code: String(error).includes('REMOTE_UNSUPPORTED')
+        ? 'REMOTE_UNSUPPORTED' as const : 'TRANSFER_FAILED' as const };
+    } finally {
+      transfer.end();
+    }
   });
 
   // chip 点亮预检:远端精确 stat,verdict 见 statChatFile 注释。查询型接口,
@@ -440,70 +738,72 @@ export function registerFileBrowserIpc(): void {
   );
 
   // 读缓存副本内容(cached 态的应用内文本预览)。路径必须在缓存目录内。
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.READ_CACHED,
-    async (_event, args: { cachePath: string }) => {
-      if (!args?.cachePath || !isInsideCacheDir(args.cachePath)) {
-        return { ok: false as const, message: 'path outside cache dir' };
-      }
+  ipcMain.handle(FILE_BROWSER_INVOKE.READ_CACHED, async (_event, args: { cachePath: string }) => {
+    if (!args?.cachePath || !isInsideCacheDir(args.cachePath)) {
+      return { ok: false as const, message: 'path outside cache dir' };
+    }
+    try {
+      const st = await fsPromises.stat(args.cachePath);
+      const CAP = 32 * 1024 * 1024;
+      const handle = await fsPromises.open(args.cachePath, 'r');
       try {
-        const st = await fsPromises.stat(args.cachePath);
-        const CAP = 32 * 1024 * 1024;
-        const handle = await fsPromises.open(args.cachePath, 'r');
-        try {
-          const buf = Buffer.alloc(Math.min(st.size, CAP));
-          // fs.read 可能短读,循环读满(同 file-browser-core readFileChunk 教训:
-          // 单次 read 短读会让尾部残留 0x00,这里还会被误判成二进制)。
-          let filled = 0;
-          while (filled < buf.length) {
-            const { bytesRead } = await handle.read(buf, filled, buf.length - filled, filled);
-            if (bytesRead === 0) break;
-            filled += bytesRead;
-          }
-          if (buf.subarray(0, Math.min(filled, 4096)).includes(0)) {
-            return { ok: true as const, kind: 'binary' as const };
-          }
-          return {
-            ok: true as const,
-            kind: 'text' as const,
-            content: buf.subarray(0, filled).toString('utf8'),
-            truncated: st.size > CAP,
-          };
-        } finally {
-          await handle.close();
+        const buf = Buffer.alloc(Math.min(st.size, CAP));
+        // fs.read 可能短读,循环读满(同 file-browser-core readFileChunk 教训:
+        // 单次 read 短读会让尾部残留 0x00,这里还会被误判成二进制)。
+        let filled = 0;
+        while (filled < buf.length) {
+          const { bytesRead } = await handle.read(buf, filled, buf.length - filled, filled);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
         }
-      } catch (err) {
-        return { ok: false as const, message: String(err) };
+        if (buf.subarray(0, Math.min(filled, 4096)).includes(0)) {
+          return { ok: true as const, kind: 'binary' as const };
+        }
+        return {
+          ok: true as const,
+          kind: 'text' as const,
+          content: buf.subarray(0, filled).toString('utf8'),
+          truncated: st.size > CAP,
+        };
+      } finally {
+        await handle.close();
       }
-    },
-  );
+    } catch (err) {
+      return { ok: false as const, message: String(err) };
+    }
+  });
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.LIST_DIR,
-    async (_event, args: ListDirArgs) => {
-      if (args.remoteHostId) {
-        try {
-          const { entries } = await getRemoteFileBrowser().request(args.remoteHostId, 'listDir', {
-            workdir: args.workdir,
-            relPath: args.relPath ?? '',
-            hideMetaFiles: args.hideMetaFiles ?? true,
-            docMode: args.docMode,
-          });
-          return entries;
-        } catch (err) {
-          log.warn('remote list-dir failed', { hostId: args.remoteHostId, error: String(err) });
-          throwRemoteFsIpcError(err);
-        }
+  ipcMain.handle(FILE_BROWSER_INVOKE.LIST_DIR, async (_event, args: ListDirArgs) => {
+    if (args.remoteHostId) {
+      try {
+        const { entries } = await getRemoteFileBrowser().request(args.remoteHostId, 'listDir', {
+          workdir: args.workdir,
+          relPath: args.relPath ?? '',
+          hideMetaFiles: args.hideMetaFiles ?? true,
+          docMode: args.docMode,
+          includeIgnored: args.includeIgnored,
+          showIgnoredDirs: args.showIgnoredDirs === true,
+        });
+        return entries;
+      } catch (err) {
+        log.warn('remote list-dir failed', { hostId: args.remoteHostId, error: String(err) });
+        throwRemoteFsIpcError(err);
       }
-      const matcher = await loadIgnoreMatcher(args.workdir, {
-        hideMetaFiles: args.hideMetaFiles ?? true,
-        honorVcsIgnore: false,
-      });
-      return listDir(args.workdir, args.relPath ?? '', matcher, {
-        docMode: args.docMode,
-      });
-    },
-  );
+    }
+    // includeIgnored 是完全绕过展示过滤（手机 HTML 快照枚举用）；showIgnoredDirs
+    // 只放行可放行层（依赖 / 构建产物 / 缓存），VCS / OS 垃圾仍隐藏。前者优先。
+    const matcher =
+      args.includeIgnored === true
+        ? null
+        : await loadIgnoreMatcher(args.workdir, {
+            hideMetaFiles: args.hideMetaFiles ?? true,
+            honorVcsIgnore: false,
+            showIgnoredDirs: args.showIgnoredDirs === true,
+          });
+    return listDir(args.workdir, args.relPath ?? '', matcher, {
+      docMode: args.includeIgnored === true ? false : args.docMode,
+    });
+  });
 
   ipcMain.handle(
     FILE_BROWSER_INVOKE.LIST_ALL,
@@ -547,205 +847,178 @@ export function registerFileBrowserIpc(): void {
     },
   );
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.READ_FILE,
-    async (_event, args: ReadFileArgs) => {
-      try {
-        const data = args.remoteHostId
-          ? await getRemoteFileBrowser().request(args.remoteHostId, 'readFile', {
-              workdir: args.workdir,
-              relPath: args.relPath,
-            })
-          : await readFile(args.workdir, args.relPath);
-        return { ok: true as const, data };
-      } catch (err) {
-        const code = (err as Error & { code?: string }).code;
-        // BINARY_FILE is the expected "not previewable" path — surface it
-        // explicitly so the renderer can show the unrenderable placeholder
-        // without log spam. 远程侧 daemon 透传同一 code(FileServiceRpcError)。
-        if (code === 'BINARY_FILE') {
-          return { ok: false as const, code: 'BINARY_FILE' as const };
-        }
-        log.warn('read-file failed', { args, error: String(err) });
-        return {
-          ok: false as const,
-          code: 'READ_FAILED' as const,
-          message: String(err),
-        };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.STAT,
-    async (_event, args: StatArgs) => {
-      if (args.remoteHostId) {
-        try {
-          return await getRemoteFileBrowser().request(args.remoteHostId, 'stat', {
+  ipcMain.handle(FILE_BROWSER_INVOKE.READ_FILE, async (_event, args: ReadFileArgs) => {
+    try {
+      const data = args.remoteHostId
+        ? await getRemoteFileBrowser().request(args.remoteHostId, 'readFile', {
             workdir: args.workdir,
             relPath: args.relPath,
-          });
-        } catch (err) {
-          throwRemoteFsIpcError(err);
-        }
+          })
+        : await readFile(args.workdir, args.relPath);
+      return { ok: true as const, data };
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      // BINARY_FILE is the expected "not previewable" path — surface it
+      // explicitly so the renderer can show the unrenderable placeholder
+      // without log spam. 远程侧 daemon 透传同一 code(FileServiceRpcError)。
+      if (code === 'BINARY_FILE') {
+        return { ok: false as const, code: 'BINARY_FILE' as const };
       }
-      return statEntry(args.workdir, args.relPath);
-    },
-  );
+      log.warn('read-file failed', { args, error: String(err) });
+      return {
+        ok: false as const,
+        code: 'READ_FAILED' as const,
+        message: String(err),
+      };
+    }
+  });
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.WRITE_FILE,
-    async (_event, args: WriteFileArgs) => {
+  ipcMain.handle(FILE_BROWSER_INVOKE.STAT, async (_event, args: StatArgs) => {
+    if (args.remoteHostId) {
       try {
-        const result = args.remoteHostId
-          ? await getRemoteFileBrowser().request(args.remoteHostId, 'writeFile', {
-              workdir: args.workdir,
-              relPath: args.relPath,
-              content: args.content,
-            })
-          : await writeFile(args.workdir, args.relPath, args.content);
-        return { ok: true as const, ...result };
-      } catch (err) {
-        log.warn('write-file failed', { relPath: args.relPath, error: String(err) });
-        return { ok: false as const, message: String(err) };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.CREATE_FILE,
-    async (_event, args: MutateEntryArgs) => {
-      try {
-        const stat = args.remoteHostId
-          ? await getRemoteFileBrowser().request(args.remoteHostId, 'createFile', {
-              workdir: args.workdir,
-              relPath: args.relPath,
-            })
-          : await createFile(args.workdir, args.relPath);
-        return { ok: true as const, stat };
-      } catch (err) {
-        log.warn('create-file failed', { relPath: args.relPath, error: String(err) });
-        return { ok: false as const, message: String(err) };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.CREATE_FOLDER,
-    async (_event, args: MutateEntryArgs) => {
-      try {
-        const stat = args.remoteHostId
-          ? await getRemoteFileBrowser().request(args.remoteHostId, 'createFolder', {
-              workdir: args.workdir,
-              relPath: args.relPath,
-            })
-          : await createFolder(args.workdir, args.relPath);
-        return { ok: true as const, stat };
-      } catch (err) {
-        log.warn('create-folder failed', { relPath: args.relPath, error: String(err) });
-        return { ok: false as const, message: String(err) };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.RENAME_ENTRY,
-    async (_event, args: RenameEntryArgs) => {
-      try {
-        const stat = args.remoteHostId
-          ? await getRemoteFileBrowser().request(args.remoteHostId, 'renameEntry', {
-              workdir: args.workdir,
-              fromRel: args.fromRel,
-              toRel: args.toRel,
-            })
-          : await renameEntry(args.workdir, args.fromRel, args.toRel);
-        return { ok: true as const, stat };
-      } catch (err) {
-        log.warn('rename-entry failed', {
-          fromRel: args.fromRel,
-          toRel: args.toRel,
-          error: String(err),
+        return await getRemoteFileBrowser().request(args.remoteHostId, 'stat', {
+          workdir: args.workdir,
+          relPath: args.relPath,
         });
-        return { ok: false as const, message: String(err) };
+      } catch (err) {
+        throwRemoteFsIpcError(err);
       }
-    },
-  );
+    }
+    return statEntry(args.workdir, args.relPath);
+  });
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.DELETE_ENTRY,
-    async (_event, args: MutateEntryArgs) => {
-      try {
-        if (args.remoteHostId) {
-          await getRemoteFileBrowser().request(args.remoteHostId, 'deleteEntry', {
+  ipcMain.handle(FILE_BROWSER_INVOKE.WRITE_FILE, async (_event, args: WriteFileArgs) => {
+    try {
+      const result = args.remoteHostId
+        ? await getRemoteFileBrowser().request(args.remoteHostId, 'writeFile', {
             workdir: args.workdir,
             relPath: args.relPath,
-          });
-        } else {
-          await deleteEntry(args.workdir, args.relPath);
-        }
-        return { ok: true as const };
-      } catch (err) {
-        log.warn('delete-entry failed', { relPath: args.relPath, error: String(err) });
-        return { ok: false as const, message: String(err) };
-      }
-    },
-  );
+            content: args.content,
+          })
+        : await writeFile(args.workdir, args.relPath, args.content);
+      return { ok: true as const, ...result };
+    } catch (err) {
+      log.warn('write-file failed', { relPath: args.relPath, error: String(err) });
+      return { ok: false as const, message: String(err) };
+    }
+  });
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.START_WATCH,
-    async (event, args: WatchArgs) => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (!window) throw new Error('no window for sender');
-      if (args.remoteHostId) {
-        // 远程:daemon 内 fs.watch(recursive),fileTree 事件帧经注册表转发成
-        // 与本地完全同形的 FILE_BROWSER_PUSH.EVENT;失败不 throw(renderer 靠
-        // 聚焦刷新兜底,watch 是增强不是硬依赖)。
-        try {
-          await getRemoteWatchRegistry(getRemoteFileBrowser()).start(
-            window,
-            args.remoteHostId,
-            args.workdir,
-            { hideMetaFiles: args.hideMetaFiles ?? true },
-            (fsEvent) => {
-              if (window.isDestroyed()) return;
-              window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
-            },
-          );
-        } catch (err) {
-          log.warn('remote start-watch failed', { hostId: args.remoteHostId, error: String(err) });
-        }
-        return { ok: true };
-      }
-      await watcherManager.start(
-        window,
-        args.workdir,
-        { hideMetaFiles: args.hideMetaFiles ?? true },
-        (fsEvent: FileTreeEvent) => {
-          if (window.isDestroyed()) return;
-          window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
-        },
-      );
-      return { ok: true };
-    },
-  );
+  ipcMain.handle(FILE_BROWSER_INVOKE.CREATE_FILE, async (_event, args: MutateEntryArgs) => {
+    try {
+      const stat = args.remoteHostId
+        ? await getRemoteFileBrowser().request(args.remoteHostId, 'createFile', {
+            workdir: args.workdir,
+            relPath: args.relPath,
+          })
+        : await createFile(args.workdir, args.relPath);
+      return { ok: true as const, stat };
+    } catch (err) {
+      log.warn('create-file failed', { relPath: args.relPath, error: String(err) });
+      return { ok: false as const, message: String(err) };
+    }
+  });
 
-  ipcMain.handle(
-    FILE_BROWSER_INVOKE.STOP_WATCH,
-    async (event, args: WatchArgs) => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (!window) return { ok: true };
+  ipcMain.handle(FILE_BROWSER_INVOKE.CREATE_FOLDER, async (_event, args: MutateEntryArgs) => {
+    try {
+      const stat = args.remoteHostId
+        ? await getRemoteFileBrowser().request(args.remoteHostId, 'createFolder', {
+            workdir: args.workdir,
+            relPath: args.relPath,
+          })
+        : await createFolder(args.workdir, args.relPath);
+      return { ok: true as const, stat };
+    } catch (err) {
+      log.warn('create-folder failed', { relPath: args.relPath, error: String(err) });
+      return { ok: false as const, message: String(err) };
+    }
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.RENAME_ENTRY, async (_event, args: RenameEntryArgs) => {
+    try {
+      const stat = args.remoteHostId
+        ? await getRemoteFileBrowser().request(args.remoteHostId, 'renameEntry', {
+            workdir: args.workdir,
+            fromRel: args.fromRel,
+            toRel: args.toRel,
+          })
+        : await renameEntry(args.workdir, args.fromRel, args.toRel);
+      return { ok: true as const, stat };
+    } catch (err) {
+      log.warn('rename-entry failed', {
+        fromRel: args.fromRel,
+        toRel: args.toRel,
+        error: String(err),
+      });
+      return { ok: false as const, message: String(err) };
+    }
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.DELETE_ENTRY, async (_event, args: MutateEntryArgs) => {
+    try {
       if (args.remoteHostId) {
-        await getRemoteWatchRegistry(getRemoteFileBrowser()).stop(
-          window.id,
+        await getRemoteFileBrowser().request(args.remoteHostId, 'deleteEntry', {
+          workdir: args.workdir,
+          relPath: args.relPath,
+        });
+      } else {
+        await deleteEntry(args.workdir, args.relPath);
+      }
+      return { ok: true as const };
+    } catch (err) {
+      log.warn('delete-entry failed', { relPath: args.relPath, error: String(err) });
+      return { ok: false as const, message: String(err) };
+    }
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.START_WATCH, async (event, args: WatchArgs) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) throw new Error('no window for sender');
+    if (args.remoteHostId) {
+      // 远程:daemon 内 fs.watch(recursive),fileTree 事件帧经注册表转发成
+      // 与本地完全同形的 FILE_BROWSER_PUSH.EVENT;失败不 throw(renderer 靠
+      // 聚焦刷新兜底,watch 是增强不是硬依赖)。
+      try {
+        await getRemoteWatchRegistry(getRemoteFileBrowser()).start(
+          window,
           args.remoteHostId,
           args.workdir,
+          { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
+          (fsEvent) => {
+            if (window.isDestroyed()) return;
+            window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
+          },
         );
-        return { ok: true };
+      } catch (err) {
+        log.warn('remote start-watch failed', { hostId: args.remoteHostId, error: String(err) });
       }
-      await watcherManager.stop(window.id, args.workdir);
       return { ok: true };
-    },
-  );
+    }
+    await watcherManager.start(
+      window,
+      args.workdir,
+      { hideMetaFiles: args.hideMetaFiles ?? true, showIgnoredDirs: args.showIgnoredDirs === true },
+      (fsEvent: FileTreeEvent) => {
+        if (window.isDestroyed()) return;
+        window.webContents.send(FILE_BROWSER_PUSH.EVENT, fsEvent);
+      },
+    );
+    return { ok: true };
+  });
+
+  ipcMain.handle(FILE_BROWSER_INVOKE.STOP_WATCH, async (event, args: WatchArgs) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return { ok: true };
+    if (args.remoteHostId) {
+      await getRemoteWatchRegistry(getRemoteFileBrowser()).stop(
+        window.id,
+        args.remoteHostId,
+        args.workdir,
+      );
+      return { ok: true };
+    }
+    await watcherManager.stop(window.id, args.workdir);
+    return { ok: true };
+  });
 
   log.info('file-browser IPC registered');
 }

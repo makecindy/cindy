@@ -515,9 +515,20 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
-    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
-    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
+  it('xai 未声明原生协议和专属底座时默认 Pi', () => {
+    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('pi');
+    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('pi');
+  });
+
+  it.each(['xai', 'xd', 'custom-gateway'])('Grok Responses on %s recommends Pi without changing other candidates', (id) => {
+    const grok = view({ id, models: {
+      codex: [m('x-ai/grok-future', { group: 'grok', nativeApi: 'openai-responses', api: 'openai-responses' })],
+      pi: [m('x-ai/grok-future', { group: 'grok', nativeApi: 'openai-responses', piApi: 'openai-responses' })],
+    } });
+    expect(pickRecommendedAgent(grok, 'x-ai/grok-future', ['codex', 'pi'])).toBe('pi');
+    expect(pickRecommendedAgent(grok, 'x-ai/grok-future', ['codex'])).toBe('codex');
+    expect(nativeAgentForProviderModel(grok, 'x-ai/grok-future')).toBeNull();
+    expect(candidateAgentsForModel([grok], id, 'x-ai/grok-future')).toEqual(['codex', 'pi']);
   });
 
   it('xd 网关:按家族推荐 —— gpt 系(含 codex/ 折扣)→ codex,claude 系 → claude-code', () => {
@@ -558,7 +569,7 @@ describe('recommendedAgentForModel', () => {
     );
   });
 
-  it('user provider:按配置的 runtime 取,多个时 cc > codex > pi', () => {
+  it('user provider:缺少推荐依据时默认 Pi，仍受可用 runtime 限制', () => {
     const byom = (agents: AgentKind[]): ProviderView[] => [
       view({
         id: 'byom',
@@ -570,17 +581,39 @@ describe('recommendedAgentForModel', () => {
       }),
     ];
     expect(recommendedAgentForModel(byom(['claude-code', 'codex', 'pi']), 'byom', 'my-model')).toBe(
+      'pi',
+    );
+    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('pi');
+    expect(recommendedAgentForModel(byom(['claude-code', 'codex']), 'byom', 'my-model')).toBe(
       'claude-code',
     );
-    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('codex');
     expect(recommendedAgentForModel(byom(['pi']), 'byom', 'my-model')).toBe('pi');
   });
 
-  it('pi 永不作为推荐(除非唯一候选)', () => {
+  it.each([
+    ['openai-responses', 'codex'],
+    ['anthropic-messages', 'claude-code'],
+  ] as const)('本地模型声明 %s 时保留 %s 推荐', (nativeApi, expected) => {
+    const local = view({
+      id: 'cindy-local-ollama',
+      source: 'user',
+      models: {
+        'claude-code': [m('local-model', { nativeApi })],
+        codex: [m('local-model', { nativeApi })],
+        pi: [m('local-model', { nativeApi, piApi: nativeApi })],
+      },
+    });
+    expect(recommendedAgentForModel([local], local.id, 'local-model')).toBe(expected);
+  });
+
+  it('未配置推荐依据的模型默认 Pi', () => {
     const codexAndPi = [
-      view({ id: 'unknown-vendor', models: { codex: [m('vendor-x')], pi: [m('vendor-x')] } }),
+      view({
+        id: 'unknown-vendor',
+        models: { codex: [m('vendor-x')], pi: [m('vendor-x')] },
+      }),
     ];
-    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('codex');
+    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('pi');
   });
 
   it('无候选时返回 null,不编一个不可路由的推荐', () => {
@@ -602,10 +635,14 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
       supportsFastMode: true,
+      supportsUltrafastMode: false,
       contextWindow: 200_000,
       contextWindowVerified: false,
     });
@@ -808,7 +845,7 @@ describe('unifiedModelEntries', () => {
     const entries = unifiedModelEntries({ providers: [byom], isVisible: alwaysVisible });
     expect(entries).toHaveLength(1);
     expect(entries[0].candidates).toEqual(['codex', 'pi']);
-    expect(entries[0].recommended).toBe('codex');
+    expect(entries[0].recommended).toBe('pi');
     // BYOM 没有 root 概念 → 无主场(null),在任何引擎视图都不降级。
     expect(entries[0].nativeAgent).toBeNull();
   });
@@ -1197,6 +1234,16 @@ describe('unifiedModelEntries', () => {
     expect(entries[0].group).toBe('anthropic');
     expect(entries[0].sortOrder).toBe(3);
   });
+
+  it('模型组 Auto 按服务端给的名称显示，行身份不剥 auto/', () => {
+    const named = { name: 'Auto (研发组)', mode: 'chat' as const };
+    const gateway = view({ id: 'xd', authStrategy: 'gateway-key', models: { pi: [m('auto/grp_123', named)] } });
+    const pool = view({ id: 'org-pool', source: 'organization', models: { pi: [m('auto/grp_456', { ...named, name: 'Auto (销售组)' })] } });
+    const entries = unifiedModelEntries({ providers: [gateway, pool], isVisible: alwaysVisible });
+    expect(find(entries, 'xd', 'auto/grp_123')?.displayName).toBe('Auto (研发组)');
+    expect(find(entries, 'org-pool', 'auto/grp_456')?.displayName).toBe('Auto (销售组)');
+    expect(unifiedModelKeyId('auto/grp_123')).toBe('auto/grp_123');
+  });
 });
 
 // ── 原生底座排序 ──────────────────────────────────────────────────────────────
@@ -1263,4 +1310,17 @@ describe('sortEntriesForAgent(原生底座优先,无主场不降级)', () => {
     });
     expect(codexOnly.every((e) => e.candidates.includes('codex'))).toBe(true);
   });
+});
+
+
+it('keeps display pricing attached to the selected provider and engine', () => {
+  const quote = { items: [{ label: 'Usage', price: 0.5, unit: 'second', quantity: 1 }] };
+  const providers = [
+    view({ id: 'xd', models: { codex: [m('same-model', { displayPricing: quote, currency: 'CNY', costDiscount: 0.2 })] } }),
+    view({ id: 'openai', models: { codex: [m('same-model')] } }),
+  ];
+  expect(resolveAgentCapability(providers, 'xd', 'same-model', 'codex')).toMatchObject({
+    displayPricing: quote, currency: 'CNY', costDiscount: 0.2,
+  });
+  expect(resolveAgentCapability(providers, 'openai', 'same-model', 'codex')).not.toHaveProperty('displayPricing');
 });

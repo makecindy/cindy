@@ -29,9 +29,12 @@ import {
   zeroUsageMoney,
   type RegionalMoney,
 } from '../../shared/regionalMoney';
+import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import type { Session } from '@/lib/ccAgent.types';
+import { onPatch as onSessionPatch } from '@/lib/sessionsBus';
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   money: RegionalMoney;
   estimatedMoney: RegionalMoney | null;
@@ -44,13 +47,37 @@ export interface UsageHistoryModel {
 /** 每日 × 模型明细 — 右栏堆叠柱状图分段。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'media';
   model: string;
   money: RegionalMoney;
   apiMoney: RegionalMoney;
   subscriptionEstimateMoney: RegionalMoney;
   tokens: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
 }
+
+/** 参与用量合并的电脑 (main 侧 peerUsageSync 的 UsageDeviceSummary 投影)。 */
+export interface UsageHistoryDevice {
+  deviceId: string;
+  name: string;
+  platform: string | null;
+  isSelf: boolean;
+  /** 最近一次成功读取该设备的时间; 本机与从未读到的设备为 null。 */
+  syncedAt: number | null;
+  status: 'ok' | 'syncing' | 'offline' | 'remote-disabled' | 'unsupported' | 'error';
+}
+
+const DEVICE_STATUSES = new Set<UsageHistoryDevice['status']>([
+  'ok',
+  'syncing',
+  'offline',
+  'remote-disabled',
+  'unsupported',
+  'error',
+]);
 
 export interface UsageHistoryPayload {
   generatedAt: number;
@@ -59,7 +86,7 @@ export interface UsageHistoryPayload {
   estimatesPending?: boolean;
   /** tokens: 当日合计 (旧快照可能缺该字段, 消费端用 ?? 0 兜底)。 */
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
-  /** 近 30 天每日 × 模型明细 (旧快照缺该字段时补 [])。 */
+  /** 按请求的 modelDays 窗口返回每日 × 模型明细 (旧快照缺该字段时补 [])。 */
   modelDaily: UsageHistoryModelDay[];
   models: UsageHistoryModel[];
   streak: { current: number; longest: number };
@@ -72,11 +99,39 @@ export interface UsageHistoryPayload {
     last30DaysTokens: number;
   };
   anomaly: { isAnomalous: boolean; trailing7DayAvg: RegionalMoney | null };
+  /** 多设备范围才有: 参与合并的电脑 (含本机)。 */
+  devices?: UsageHistoryDevice[];
+  /** true = main 正在从其它电脑读取。 */
+  devicesSyncing?: boolean;
+  /** 每日 × 任务 token(「最耗 token 的任务」按范围统计)。taskKey = `${deviceId}:${sessionId}`。 */
+  taskDaily?: Array<{ day: string; taskKey: string; tokens: number }>;
+  /** taskDaily 涉及任务的元数据;deviceId 为 'local' 表示本机任务。 */
+  tasks?: UsageHistoryTask[];
+}
+
+export interface UsageHistoryTask {
+  taskKey: string;
+  deviceId: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  providerId: string | null;
+  source?: string | null;
+  contextTokens: number;
+  contextWindow: number;
+  /** unix ms */
+  lastActiveAt: number;
 }
 
 /** 热力图窗口: 20 周 = 140 天。 */
 const HISTORY_WINDOW_DAYS = 140;
+const MODEL_WINDOW_DAYS = 30;
 const REFRESH_DEBOUNCE_MS = 2000;
+/**
+ * 多设备范围的定时重读间隔。其它电脑产生的用量没有推送到本机, 页面开着时靠它定期
+ * 触发 main 侧 (同样按 60s 节流的) 跨设备同步; 只看本机时不启用。
+ */
+const PEER_REFRESH_INTERVAL_MS = 60_000;
 /** 价格表冷启动未就绪时的补拉延迟 (对齐 main 侧 5s fetch 超时 + 余量)。 */
 const PRICING_RETRY_DELAY_MS = 6000;
 /** main 返回 stale 磁盘快照时的补拉延迟: 让后台聚合先完成, 同时保持更新感知。 */
@@ -109,6 +164,10 @@ interface StoredUsageHistoryModelDay {
   subscriptionEstimateMoney?: unknown;
   subscriptionEstimateUsd?: unknown;
   tokens?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  cacheReadTokens?: unknown;
+  cacheCreateTokens?: unknown;
 }
 
 interface StoredUsageHistoryModel {
@@ -135,6 +194,7 @@ interface StoredUsageHistoryPayload {
   streak?: unknown;
   totals?: unknown;
   anomaly?: unknown;
+  devices?: unknown;
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -142,7 +202,33 @@ function finiteNumber(value: unknown, fallback = 0): number {
 }
 
 function isAgentKind(value: unknown): value is UsageHistoryModel['agentKind'] {
-  return value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'media';
+}
+
+function parseDevices(value: unknown): UsageHistoryDevice[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const devices: UsageHistoryDevice[] = [];
+  for (const raw of value as Array<Record<string, unknown> | null>) {
+    if (!raw || typeof raw.deviceId !== 'string' || typeof raw.name !== 'string') continue;
+    const status = raw.status as UsageHistoryDevice['status'];
+    devices.push({
+      deviceId: raw.deviceId,
+      name: raw.name,
+      platform: typeof raw.platform === 'string' ? raw.platform : null,
+      isSelf: raw.isSelf === true,
+      // 快照可能损坏:超出 Date 范围的时间格式化时会抛错,按未同步处理。
+      syncedAt:
+        typeof raw.syncedAt === 'number' &&
+        Number.isFinite(raw.syncedAt) &&
+        raw.syncedAt > 0 &&
+        raw.syncedAt <= 8.64e15
+          ? raw.syncedAt
+          : null,
+      // 快照里的「读取中」没有意义: 下次打开会重新同步, 先按离线展示缓存时间。
+      status: DEVICE_STATUSES.has(status) && status !== 'syncing' ? status : 'offline',
+    });
+  }
+  return devices;
 }
 
 function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
@@ -209,6 +295,18 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
           normalizeRegionalMoney(row.subscriptionEstimateMoney) ??
           legacyEstimate(row.subscriptionEstimateUsd),
         tokens: finiteNumber(row.tokens),
+        ...(typeof row.inputTokens === 'number' && Number.isFinite(row.inputTokens)
+          ? { inputTokens: row.inputTokens }
+          : {}),
+        ...(typeof row.outputTokens === 'number' && Number.isFinite(row.outputTokens)
+          ? { outputTokens: row.outputTokens }
+          : {}),
+        ...(typeof row.cacheReadTokens === 'number' && Number.isFinite(row.cacheReadTokens)
+          ? { cacheReadTokens: row.cacheReadTokens }
+          : {}),
+        ...(typeof row.cacheCreateTokens === 'number' && Number.isFinite(row.cacheCreateTokens)
+          ? { cacheCreateTokens: row.cacheCreateTokens }
+          : {}),
       }));
     const models = (parsed.models as StoredUsageHistoryModel[])
       .filter(
@@ -249,7 +347,9 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
         : normalizeRegionalMoney(anomaly.trailing7DayAvg) ??
           legacyActual(anomaly.trailing7DayAvg);
 
+    const devices = parseDevices(parsed.devices);
     return {
+      ...(devices ? { devices } : {}),
       generatedAt: finiteNumber(parsed.generatedAt, Date.now()),
       todayKey: typeof parsed.todayKey === 'string' ? parsed.todayKey : '',
       stale: parsed.stale === true,
@@ -303,6 +403,17 @@ interface UsageHistoryScopeState {
   listeners: Set<(p: UsageHistoryPayload | null) => void>;
   statusListeners: Set<(refreshing: boolean) => void>;
   refreshing: boolean;
+  request: UsageHistoryRequest;
+}
+
+interface UsageHistoryRequest {
+  days: number | 'all';
+  modelDays: number | 'all';
+  allowPendingEstimates: boolean;
+  /** 'local' / 'all' / 其它电脑的 deviceId。 */
+  device: string;
+  /** 附带「最耗 token 的任务」数据。 */
+  includeTasks: boolean;
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -311,7 +422,16 @@ function normalizeScopeKey(userId?: string | null): string {
   return userId || DEFAULT_SCOPE_KEY;
 }
 
-function getScope(scopeKey: string): UsageHistoryScopeState {
+function getScope(
+  scopeKey: string,
+  request: UsageHistoryRequest = {
+    days: HISTORY_WINDOW_DAYS,
+    modelDays: MODEL_WINDOW_DAYS,
+    allowPendingEstimates: false,
+    device: 'local',
+    includeTasks: false,
+  },
+): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
   if (!state) {
     const snapshot = readSnapshot(scopeKey);
@@ -326,6 +446,7 @@ function getScope(scopeKey: string): UsageHistoryScopeState {
       listeners: new Set<(p: UsageHistoryPayload | null) => void>(),
       statusListeners: new Set<(refreshing: boolean) => void>(),
       refreshing: false,
+      request,
     };
     scopes.set(scopeKey, state);
   }
@@ -365,7 +486,13 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   const seq = ++scope.loadSeq;
   setRefreshing(scope, true);
   scope.inflight = window.electronAPI.maker.usage
-    .getHistory({ days: HISTORY_WINDOW_DAYS, ...(opts?.forceRefresh ? { forceRefresh: true } : {}) })
+    .getHistory({
+      days: scope.request.days,
+      modelDays: scope.request.modelDays,
+      ...(scope.request.device === 'local' ? {} : { device: scope.request.device }),
+      ...(scope.request.includeTasks ? { includeTasks: true } : {}),
+      ...(opts?.forceRefresh ? { forceRefresh: true } : {}),
+    })
     .then((res) => {
       if (seq === scope.loadSeq) scope.inflight = null;
       if (!res || typeof res !== 'object') return null;
@@ -398,9 +525,14 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
             void load(scopeKey, { forceRefresh: true });
           }, PRICING_RETRY_DELAY_MS);
         }
-        return scope.cache;
+        // Amount-bearing consumers wait for pricing so they never present a
+        // misleading value. Token-only consumers can render this payload now;
+        // the delayed force-refresh above still replaces it once estimates are
+        // available.
+        if (!scope.request.allowPendingEstimates) return scope.cache;
+      } else {
+        scope.pricingRetryDone = false;
       }
-      scope.pricingRetryDone = false;
       // dirty-check: 数据未变 (仅 generatedAt 不同) → 不换 cache 引用、不写快照、
       // 不通知监听 — 等价数据不触发重渲染与 JSON 落盘
       const nextSerialized = serializeForCompare(nextForCache);
@@ -422,23 +554,71 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   return scope.inflight;
 }
 
-export function useUsageHistory(opts?: { paused?: boolean; userId?: string | null }): {
+/** 影响「最耗 token 的任务」展示的任务字段。 */
+const TASK_META_KEYS = ['title', 'status', 'model', 'providerId', 'source'] as const;
+
+export type UsageHistoryWindow = number | 'all';
+
+function normalizeWindow(value: UsageHistoryWindow | undefined, fallback: number): number | 'all' {
+  if (value === 'all') return 'all';
+  return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
+}
+
+function scopeKeyForRequest(scopeKey: string, request: UsageHistoryRequest): string {
+  if (
+    request.days === HISTORY_WINDOW_DAYS &&
+    request.modelDays === MODEL_WINDOW_DAYS &&
+    !request.allowPendingEstimates &&
+    request.device === 'local' &&
+    !request.includeTasks
+  ) {
+    return scopeKey;
+  }
+  // 'local' 沿用旧 key, 升级后已有的本机快照照常 hydrate。
+  const deviceSuffix = request.device === 'local' ? '' : `|device=${encodeURIComponent(request.device)}`;
+  const taskSuffix = request.includeTasks ? '|tasks=1' : '';
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}${deviceSuffix}${taskSuffix}`;
+}
+
+export function useUsageHistory(opts?: {
+  paused?: boolean;
+  userId?: string | null;
+  days?: UsageHistoryWindow;
+  modelDays?: UsageHistoryWindow;
+  /** Token-only consumers may render the payload while prices finish loading. */
+  allowPendingEstimates?: boolean;
+  /** 'local' (默认, 只看本机) / 'all' (所有设备合并) / 其它电脑的 deviceId。 */
+  device?: string;
+  /** 附带「最耗 token 的任务」数据;只有设置 → 用量历史需要(首页看板不读)。 */
+  includeTasks?: boolean;
+}): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
 } {
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
-  const scope = getScope(scopeKey);
+  const request: UsageHistoryRequest = {
+    days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
+    modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
+    allowPendingEstimates: opts?.allowPendingEstimates ?? false,
+    device: opts?.device || 'local',
+    includeTasks: opts?.includeTasks ?? false,
+  };
+  const scopedKey = scopeKeyForRequest(scopeKey, request);
+  const scope = getScope(scopedKey, request);
   const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>(() => ({
-    scopeKey,
+    scopeKey: scopedKey,
     value: scope.cache,
   }));
-  const [isRefreshing, setIsRefreshing] = useState(scope.refreshing);
+  // A null payload is pending until the first request settles. Keeping that
+  // invariant in the hook lets consumers distinguish initial loading from a
+  // settled load failure without adding a second lifecycle state owner.
+  const [isRefreshing, setIsRefreshing] = useState(scope.cache === null || scope.refreshing);
 
   useEffect(() => {
-    const activeScope = getScope(scopeKey);
+    const activeScope = getScope(scopedKey, request);
     const setScopedHistory = (value: UsageHistoryPayload | null) => {
-      setHistoryState({ scopeKey, value });
+      setHistoryState({ scopeKey: scopedKey, value });
     };
     activeScope.listeners.add(setScopedHistory);
     activeScope.statusListeners.add(setIsRefreshing);
@@ -446,10 +626,10 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
     // load() 在 render 与本 effect 之间更新了 cache, 且后续 load 都命中 dirty-check
     // (不再广播), 本实例会停在旧值。引用相同时 React 自动 bail out, 无重渲染成本。
     setScopedHistory(activeScope.cache);
-    setIsRefreshing(activeScope.refreshing);
     // mount 与 paused→false (展开瞬间) 都拉一次 — 折叠摘要 / 图表数据都保持新鲜。
     // 收起时跳过后续 push 订阅, 避免每个 turn 触发后台重拉。
-    void load(scopeKey);
+    void load(scopedKey);
+    setIsRefreshing(activeScope.refreshing);
 
     // paused (卡片收起): 不订阅消费推送, 收起用户的 per-turn 重拉成本归零
     if (paused) {
@@ -466,26 +646,51 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });
+        void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });
       }, REFRESH_DEBOUNCE_MS);
     };
     const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
     const offTokens = window.electronAPI.maker.usage.onTodayTokensChanged(scheduleRefresh);
     const offPricing = window.electronAPI.maker.usage.onModelPricingChanged(scheduleRefresh);
+    // 任务的标题 / 删除等元数据变化不产生用量:只需重读,Main 在出口按当前库覆盖本机任务
+    // 元数据,不强制重聚合。
+    let metaTimer: ReturnType<typeof setTimeout> | null = null;
+    const onTaskMetaPatch = (_sessionId: string, patch: Partial<Session>) => {
+      if (!TASK_META_KEYS.some((key) => key in patch)) return;
+      if (metaTimer) clearTimeout(metaTimer);
+      metaTimer = setTimeout(() => {
+        metaTimer = null;
+        void load(scopedKey);
+      }, REFRESH_DEBOUNCE_MS);
+    };
+    const offLocalPatch = onSessionPatch(onTaskMetaPatch);
+    const offPushPatch = window.electronAPI.localDb?.sessionsPush?.onPatched(
+      ({ sessionId, patch }, stamp) => {
+        if (isDataOwnerPushCurrent(stamp)) onTaskMetaPatch(sessionId, patch);
+      },
+    );
+    const peerTimer =
+      request.device === 'local'
+        ? null
+        : setInterval(() => void load(scopedKey), PEER_REFRESH_INTERVAL_MS);
 
     return () => {
       activeScope.listeners.delete(setScopedHistory);
       activeScope.statusListeners.delete(setIsRefreshing);
       deactivateScopeIfUnused(activeScope);
       if (timer) clearTimeout(timer);
+      if (metaTimer) clearTimeout(metaTimer);
+      offLocalPatch();
+      offPushPatch?.();
       offSpend();
       offTokens();
       offPricing();
+      if (peerTimer) clearInterval(peerTimer);
     };
-  }, [paused, scopeKey]);
+  }, [paused, scopedKey]);
 
-  return {
-    history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,
-    refreshing: isRefreshing,
-  };
+  const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;
+  const refreshing =
+    historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;
+  return { history, refreshing };
 }

@@ -14,53 +14,24 @@
  * 接收者,旧账号快照在模块缓存里存活、chip 重挂载时被复活 —— 全局订阅保证清空必达。
  */
 
-import { useEffect, useState } from 'react';
-
 import type { XaiRateLimitSnapshot } from '../../shared/xaiRateLimit';
-
+import { createSubscriptionUsageCache } from './subscriptionUsageCache';
 export type { XaiRateLimitSnapshot };
 
-let lastXaiRateLimit: XaiRateLimitSnapshot | null = null;
-const listeners = new Set<() => void>();
-let globalBound = false;
-
-/** 幂等绑定进程级订阅:无论有无 chip 挂载,快照更新/清空都落进模块缓存。 */
-function ensureGlobalSubscription(): void {
-  if (globalBound) return;
-  const onChanged = window.electronAPI?.maker?.usage?.onXaiRateLimitChanged;
-  if (!onChanged) return;
-  globalBound = true;
-  onChanged((payload) => {
-    if (payload === null) {
-      lastXaiRateLimit = null;
-    } else if (payload && typeof payload === 'object') {
-      lastXaiRateLimit = payload;
-    } else {
-      return;
-    }
-    for (const notify of listeners) notify();
-  });
-}
-
-export function useXaiRateLimit(enabled: boolean): XaiRateLimitSnapshot | null {
-  const [snapshot, setSnapshot] = useState<XaiRateLimitSnapshot | null>(() => {
-    ensureGlobalSubscription();
-    return enabled ? lastXaiRateLimit : null;
-  });
-
-  useEffect(() => {
-    ensureGlobalSubscription();
-    if (!enabled) {
-      setSnapshot(null);
-      return;
-    }
-    setSnapshot(lastXaiRateLimit);
-    const notify = () => setSnapshot(lastXaiRateLimit);
-    listeners.add(notify);
-    return () => {
-      listeners.delete(notify);
-    };
-  }, [enabled]);
-
-  return snapshot;
+// Push-only, scoped exactly like the subscription quota cache; no polling or persistence.
+const caches = new Map<
+  string,
+  ReturnType<typeof createSubscriptionUsageCache<XaiRateLimitSnapshot>>
+>();
+export function useXaiRateLimit(enabled: boolean, providerId = 'xai'): XaiRateLimitSnapshot | null {
+  let cache = caches.get(providerId);
+  if (!cache) {
+    cache = createSubscriptionUsageCache<XaiRateLimitSnapshot>(() => ({
+      subscribe: window.electronAPI?.maker?.usage?.onXaiRateLimitChanged
+        ? (cb) => window.electronAPI.maker.usage.onXaiRateLimitChanged(cb, providerId)
+        : undefined,
+    }));
+    caches.set(providerId, cache);
+  }
+  return cache.useSnapshot(enabled);
 }

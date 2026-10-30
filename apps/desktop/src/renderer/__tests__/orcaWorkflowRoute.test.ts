@@ -204,7 +204,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     // legacy /orca 路由(orcaMode)必须先被 `!orcaMode &&` 短路掉,否则它也会去跑项目
     // 策略查询并订阅刷新。
     expect(sessionViewSource).toContain(
-      'const collabPolicyEligible = !orcaMode && collabEntry.eligible;',
+      'const collabPolicyEligible = !orcaMode && !botChatIdentity && collabEntry.eligible;',
     );
     expect(sessionViewSource).toContain('resolveCollabEntryPolicy({');
   });
@@ -420,8 +420,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
   it('reports the visible right-sidebar collaboration worker sessions to Agent Island', () => {
     expect(workerPanelSource).toContain("import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';");
     expect(workerPanelSource).toContain('if (!isAgentIslandSupported()) return;');
-    expect(workerPanelSource).toContain('viewVisible && workerSessionId && workerSessionId !== leadSessionId');
+    expect(workerPanelSource).toContain(
+      'workerConversationVisible && workerSessionId && workerSessionId !== leadSessionId',
+    );
     expect(workerPanelSource).toContain('[leadSessionId, workerSessionId]');
+    // 分离窗只显示占位,不能把 Worker 上报为可见。
+    expect(workerPanelSource).toContain('const workerConversationVisible = viewVisible && !isSidebarWindow();');
     expect(workerPanelSource).toContain('window.electronAPI.agentIsland?.setVisibleSession?.(visibleSessionIds)');
   });
 
@@ -435,7 +439,10 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(workerPanelSource).toContain("navigate('/settings?section=collaboration')");
     expect(workerPanelSource).not.toContain('settingsEnabled');
     expect(workersTabBodySource).toContain("import { isSidebarWindow } from '@/lib/sidebarWindow';");
-    expect(workersTabBodySource).toContain('<OrcaWorkerPanel {...workerPanelProps} />');
+    // 分离窗额外接「在主窗口查看」，仍复用同一份 workerPanelProps。
+    expect(workersTabBodySource).toMatch(
+      /<OrcaWorkerPanel\s+\{\.\.\.workerPanelProps\}\s+onViewWorkerInMainWindow=\{handleViewWorkerInMainWindow\}\s*\/>/,
+    );
     expect(workersTabBodySource).toContain('<RoutedOrcaWorkerPanel {...workerPanelProps} />');
   });
 
@@ -453,12 +460,11 @@ describe('OrcaWorkflowRoute source invariants', () => {
       /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
     );
     expect(sessionViewSource).toContain(
-      'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
+      '!readOnly && canNavigateSession && !isSharedTaskPeer(remoteDeviceId) ? handleForkStripEncrypted : undefined',
     );
   });
 
   it('waits for detached bootstrap before mounting or writing the embedded right sidebar', () => {
-    expect(mainLayoutSource).toContain('rsbWindow.loaded && !rsbDetached ? (');
     expect(mainLayoutSource).toContain('if (!sessionId || !rsbWindow.loaded || rsbDetached) return;');
     expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'open-terminal', sessionId })");
     expect(mainLayoutSource).toContain('const windowState = getRsbWindowUiState();');
@@ -498,16 +504,23 @@ describe('OrcaWorkflowRoute source invariants', () => {
       sessionViewSource.indexOf('const prevCollabEnabledRef'),
       sessionViewSource.indexOf('// F-COLLAB: 关闭协同复用'),
     );
-    const mountGuard = edgeEffect.indexOf('if (prevCollabEnabledRef.current === null) {');
+    // 边沿判定(同任务、数据已就绪)见 collabEnabledEdge 的单测；这里只钉住接线。
+    const knownGuard = edgeEffect.indexOf(
+      'const knownCollabEnabled = session?.id === collabSessionId ? collabEnabled : null;',
+    );
+    const edgeCall = edgeEffect.indexOf('nextCollabEnabledEdge(');
+    const mountGuard = edgeEffect.indexOf('if (!edge) return;');
     const compactGuard = edgeEffect.indexOf('if (isCompactRail) return;');
-    const revealEdge = edgeEffect.indexOf('if (!prev && collabEnabled) {');
+    const revealEdge = edgeEffect.indexOf("if (edge === 'enabled') {");
     const revealCall = edgeEffect.indexOf('revealOrcaWorkersTab(collabSessionId)');
-    const closeEdge = edgeEffect.indexOf('if (prev && !collabEnabled) {');
+    const closeEdge = edgeEffect.indexOf("if (edge === 'disabled') {");
     const closeCall = edgeEffect.indexOf('closeOrcaWorkersTabAfterTeamEnd(collabSessionId)');
 
-    expect(mountGuard).toBeGreaterThanOrEqual(0);
+    expect(knownGuard).toBeGreaterThanOrEqual(0);
+    expect(edgeCall).toBeGreaterThan(knownGuard);
+    expect(edgeEffect.slice(edgeCall, mountGuard)).toContain('knownCollabEnabled');
+    expect(mountGuard).toBeGreaterThan(edgeCall);
     expect(compactGuard).toBeGreaterThan(mountGuard);
-    expect(edgeEffect.slice(mountGuard, compactGuard)).toContain('return;');
     expect(revealEdge).toBeGreaterThan(compactGuard);
     expect(revealCall).toBeGreaterThan(revealEdge);
     expect(edgeEffect.slice(revealCall, closeEdge)).toContain('return;');

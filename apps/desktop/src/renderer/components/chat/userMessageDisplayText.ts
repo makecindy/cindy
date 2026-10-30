@@ -1,3 +1,5 @@
+import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
+import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
  * userMessageDisplayText
  * ---------------------------------------------------------------------------
@@ -16,6 +18,10 @@
 export interface OrcaCommunicationContent {
   orcaSource: 'lead' | 'worker';
   content: string;
+}
+
+export function hasEmbeddedImPrompt(source?: ImMessageSource): boolean {
+  return Boolean(source && source.contentFormat !== 'user-text');
 }
 
 export function parseOrcaCommunicationContent(content: string): OrcaCommunicationContent | null {
@@ -44,6 +50,27 @@ const THREAD_CONTEXT_PREFIX_RE =
   /^<thread_context>[\s\S]*?<\/thread_context>\s*(?:\(thread 历史中的.*?\)\s*)?/;
 
 /**
+ * Display-only projection of the groupWindowCore snapshot saved with this message.
+ * Only recognize its complete, anchored envelope on attributed IM messages;
+ * never scan user text for arbitrary tags or fetch today's group history.
+ * Preserve multiline messages and the omission marker verbatim. The legacy
+ * snapshot has no structured entries, so line counts are not message counts.
+ */
+export function resolveHookGroupContext(source: {
+  content: string;
+  hookSource?: ImMessageSource | null;
+}): string | null {
+  // TaskSource.im is an open set. The saved shape, not the platform name,
+  // determines whether there is context to show (including future channels).
+  if (typeof source.hookSource?.im !== 'string' || !source.hookSource.im.trim()) return null;
+  if (source.hookSource.contextSnapshot) {
+    const context = source.hookSource.contextSnapshot.groupContext;
+    return typeof context === 'string' ? context : null;
+  }
+  return captureImContext({ groupPrefix: source.content }).groupContext ?? null;
+}
+
+/**
  * 输入按结构收敛到两个字段,不 import ChatMessage / props 类型:
  * UserMessage 传的是 props(content + hookSource),导航条传的是 ChatMessage,
  * 两者都结构性满足;也让本模块保持零依赖可单测。
@@ -51,6 +78,7 @@ const THREAD_CONTEXT_PREFIX_RE =
 export interface UserDisplayTextSource {
   content: string;
   hookSource?: { userText?: string } | null;
+  automationOrigin?: { kind: string };
 }
 
 export function resolveUserDisplayText(
@@ -63,7 +91,8 @@ export function resolveUserDisplayText(
   ),
 ): string {
   const rawDisplayContent = orcaCommunication?.content ?? source.content;
-  if (!source.hookSource) return rawDisplayContent;
+  if (!source.hookSource) return source.automationOrigin?.kind === 'session'
+    ? forwardedRequestDisplayText(rawDisplayContent) : rawDisplayContent;
   return (
     source.hookSource.userText ?? rawDisplayContent.replace(THREAD_CONTEXT_PREFIX_RE, '').trim()
   );

@@ -6,6 +6,8 @@ const authState = vi.hoisted(() => ({
   ownerId: 'user-1' as string | null,
   membershipKind: 'personal' as 'personal' | 'org',
   orgSlug: null as string | null,
+  generation: 1,
+  boundaryPending: false,
 }));
 const serverPolicy = vi.hoisted(() => ({
   canWrite: true,
@@ -92,6 +94,11 @@ vi.mock('../../authManager', () => ({
   })),
 }));
 
+vi.mock('../../appSessionState', () => ({
+  activeOwnerScopeKey: () => `signed-in:${authState.ownerId}:${authState.generation}`,
+  isAppSessionBoundaryPending: () => authState.boundaryPending,
+}));
+
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseSkillHubCloud: true }),
   requireAppCapability: vi.fn(),
@@ -115,6 +122,8 @@ describe('SkillPublishService', () => {
     authState.ownerId = 'user-1';
     authState.membershipKind = 'personal';
     authState.orgSlug = null;
+    authState.generation = 1;
+    authState.boundaryPending = false;
     serverPolicy.canWrite = true;
     serverPolicy.ownerType = 'personal';
     serverPolicy.allowedVisibilities = ['PUBLIC', 'PRIVATE'];
@@ -139,7 +148,7 @@ describe('SkillPublishService', () => {
       name: 'read-only',
       isFirstPublish: true,
       visibility: 'PUBLIC',
-    })).resolves.toEqual({ success: false, errorCode: 'CANCELLED' });
+    })).resolves.toEqual({ success: false, errorCode: 'AUTH_REQUIRED' });
   });
 
   it('rejects private organization publishing before packing or network access', async () => {
@@ -149,13 +158,17 @@ describe('SkillPublishService', () => {
     serverPolicy.allowedVisibilities = ['PUBLIC', 'DEPARTMENT_SCOPED'];
     const { SkillPublishService } = await import('../publishService');
     const service = new SkillPublishService();
+    const onProgress = vi.fn();
 
     await expect(service.publish({
       absolutePath: '/tmp/skill',
       name: 'org-private',
       isFirstPublish: true,
       visibility: 'PRIVATE',
-    })).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
+    }, onProgress)).resolves.toEqual({ success: false, errorCode: 'INVALID_VISIBILITY' });
+    expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'failed', errorCode: 'INVALID_VISIBILITY', message: '',
+    }));
   });
 
   it('allows version publishes without category metadata and omits category fields from commit', async () => {
@@ -241,7 +254,7 @@ describe('SkillPublishService', () => {
     });
     expect(commitCall?.[1]?.body).not.toHaveProperty('tags');
     expect(commitCall?.[1]?.body).not.toHaveProperty('visibility');
-    expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0');
+    expect(scanPollSpy).toHaveBeenCalledWith('lark-task', '1.1.0', 'signed-in:user-1:1');
   });
 
   it('publishes through Hub without requiring a local LLM API key file', async () => {
@@ -328,7 +341,7 @@ describe('SkillPublishService', () => {
     );
   });
 
-  it('sends the hand-filled 280-char text to Hub commit as summary', async () => {
+  it('sends the hand-filled description to Hub commit as summary', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -394,7 +407,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -407,7 +420,7 @@ describe('SkillPublishService', () => {
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       }),
     });
     const commitCall = vi
@@ -416,7 +429,7 @@ describe('SkillPublishService', () => {
     expect(commitCall?.[1]?.body).not.toHaveProperty('description');
   });
 
-  it('allows a first publish without author tags', async () => {
+  it('allows a first publish without Platform tags', async () => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -565,7 +578,7 @@ describe('SkillPublishService', () => {
         summary: 'Publish summary',
         visibility: 'PUBLIC',
         visibleSlugs: [],
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -650,7 +663,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       () => {},
     );
@@ -744,7 +757,7 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
@@ -763,9 +776,26 @@ describe('SkillPublishService', () => {
   });
 
   it.each([
-    ['NAME_TAKEN', 409, '名字已被占用'],
-    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布'],
-  ])('maps preserved Hub business error %s to an actionable publish error', async (errorCode, statusCode, message) => {
+    ['NAME_TAKEN', 409, '名字已被占用', 'NAME_TAKEN'],
+    ['SKILL_DELETED', 409, '同名 Skill 已删除，但名称仍被占用', 'SKILL_DELETED'],
+    ['FORBIDDEN', 403, '已删除的 Skill 不能继续发布', 'SKILL_DELETED'],
+    ['FORBIDDEN', 403, '当前账号无权发布', 'PERMISSION_DENIED', ''],
+    ['HTTP_403', 403, 'private diagnostic', 'PERMISSION_DENIED', ''],
+    ['HTTP_400', 400, 'private diagnostic', 'REQUEST_REJECTED', ''],
+    ['NOT_AUTHOR', 403, 'private diagnostic', 'NOT_AUTHOR', ''],
+    ['UNAUTHORIZED', 401, 'private diagnostic', 'AUTH_REQUIRED', ''],
+    ['STORAGE_UNAVAILABLE', 503, 'private diagnostic', 'SERVICE_UNAVAILABLE', ''],
+    ['RATE_LIMITED', 429, 'private diagnostic', 'RATE_LIMITED', ''],
+    ['MANIFEST_INVALID', 400, '缺少 description', 'MANIFEST_INVALID'],
+    ['INVALID_PARAMS', 400, '包含不存在的平台标签', 'INVALID_PARAMS'],
+    ['SKILL_FILE_TOO_LARGE', 413, 'SKILL.md 超过 2 MiB', 'SKILL_FILE_TOO_LARGE'],
+    ['SKILL_HUB_READ_ONLY', 403, '当前组织仅支持读取', 'SKILL_HUB_READ_ONLY', ''],
+    ['INVALID_VISIBILITY', 400, '当前组织暂不支持组织或私有可见性，请选择公开发布', 'INVALID_VISIBILITY'],
+    ['FUTURE_BUSINESS_ERROR', 422, '需要修改某个字段', 'REQUEST_REJECTED'],
+  ].flatMap(([wireCode, statusCode, message, expectedCode, expectedMessage]) => ['init', 'commit'].map((stage) => ({
+    wireCode: String(wireCode), statusCode: Number(statusCode), message: String(message), expectedCode: String(expectedCode), stage,
+    expectedMessage: expectedMessage === undefined ? String(message) : String(expectedMessage),
+  }))))('preserves $wireCode and only its public reason during $stage', async ({ wireCode, statusCode, message, expectedCode, expectedMessage, stage }) => {
     writeApiKeyFile();
     fs.mkdirSync('/tmp/xdt-publish-service-test/skill', { recursive: true });
     fs.writeFileSync(
@@ -796,6 +826,9 @@ describe('SkillPublishService', () => {
     });
     vi.mocked(net.fetch).mockResolvedValue({ ok: true, status: 200 } as Response);
     vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
+      if (apiPath === `/api/skills-hub/skills/publish/${stage}`) {
+        throw new ServerApiError(wireCode, statusCode, message);
+      }
       if (apiPath === '/api/skills-hub/skills/publish/init') {
         return {
           nextVersion: '1.0.0',
@@ -803,9 +836,7 @@ describe('SkillPublishService', () => {
           uploadUrl: 'https://oss.example.com/skills/lark-task.zip',
         };
       }
-      if (apiPath === '/api/skills-hub/skills/publish/commit') {
-        throw new ServerApiError(errorCode, statusCode, message);
-      }
+
       throw new Error(`unexpected api path ${apiPath}`);
     });
 
@@ -820,13 +851,13 @@ describe('SkillPublishService', () => {
         displayName: 'Lark Task',
         summary: 'Publish summary',
         visibility: 'PUBLIC',
-        tags: ['Productivity'],
+        tags: ['productivity'],
       },
       (event) => events.push(event),
     );
 
-    expect(result).toEqual({ success: false, errorCode });
-    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode });
+    expect(result).toEqual({ success: false, errorCode: expectedCode, error: expectedMessage });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', errorCode: expectedCode, message: expectedMessage });
   });
 
   it('emits a failed progress event when packing throws unexpectedly', async () => {
@@ -1044,6 +1075,30 @@ describe('SkillPublishService', () => {
     }
   });
 
+  it('delivers manual rejection feedback when review finishes during the publish poll', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      vi.mocked(serverApiFetch).mockResolvedValue({
+        status: 'rejected', rejectionReason: 'Remove private notes',
+        gates: [{ name: 'security-scan', status: 'passed' }],
+      });
+      const onProgress = vi.fn();
+      const service = new SkillPublishService({ scanPollIntervalMs: 10, onProgress });
+      service.startScanPoll('review-helper', '1.0.1');
+      await vi.advanceTimersByTimeAsync(30);
+      expect(onProgress).toHaveBeenCalledWith({
+        phase: 'scan-result', name: 'review-helper', version: '1.0.1',
+        status: 'rejected', rejectionReason: 'Remove private notes',
+        gates: [{ name: 'security-scan', status: 'passed' }],
+      });
+      expect(serverApiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('finishes the publish-scoped poll when machine review hands off to manual review', async () => {
     vi.useFakeTimers();
     try {
@@ -1107,6 +1162,67 @@ describe('SkillPublishService', () => {
         ['scan-result', 'pending'],
       ]);
       expect(serverApiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['different-owner', 'same-owner-new-generation', 'boundary-pending'] as const)(
+    'drops private feedback and stops polling across %s', async (transition) => {
+      vi.useFakeTimers();
+      try {
+        const { serverApiFetch } = await import('../../serverApiClient');
+        const { SkillPublishService } = await import('../publishService');
+        let resolvePoll!: (value: unknown) => void;
+        vi.mocked(serverApiFetch).mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+        const onProgress = vi.fn();
+        const service = new SkillPublishService({ scanPollIntervalMs: 10, onProgress });
+        service.startScanPoll('review-helper', '1.0.1');
+        await vi.advanceTimersByTimeAsync(10);
+        expect(serverApiFetch).toHaveBeenCalledTimes(1);
+
+        if (transition === 'different-owner') authState.ownerId = 'user-2';
+        if (transition === 'same-owner-new-generation') authState.generation += 1;
+        if (transition === 'boundary-pending') authState.boundaryPending = true;
+        resolvePoll({ status: 'rejected', gates: [], rejectionReason: 'Private owner feedback' });
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(onProgress).not.toHaveBeenCalled();
+        expect(serverApiFetch).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('does not send a scheduled scan request with the next account credentials', async () => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      const service = new SkillPublishService({ scanPollIntervalMs: 10 });
+      service.startScanPoll('review-helper', '1.0.1');
+      authState.ownerId = 'user-2';
+      await vi.advanceTimersByTimeAsync(100);
+      expect(serverApiFetch).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['signed-out', 'boundary-pending'] as const)('does not start a poll while %s', async (state) => {
+    vi.useFakeTimers();
+    try {
+      const { serverApiFetch } = await import('../../serverApiClient');
+      const { SkillPublishService } = await import('../publishService');
+      if (state === 'signed-out') authState.ownerId = null;
+      if (state === 'boundary-pending') authState.boundaryPending = true;
+      const service = new SkillPublishService({ scanPollIntervalMs: 10 });
+      service.startScanPoll('review-helper', '1.0.1');
+      expect(vi.getTimerCount()).toBe(0);
+      expect(serverApiFetch).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

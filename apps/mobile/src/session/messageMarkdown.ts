@@ -1,3 +1,4 @@
+import { richAnswerText } from '@cindy/maker-shared/rich-answer';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
 import {
   BARE_HTTP_URL_RE_SOURCE,
@@ -8,18 +9,28 @@ import {
   classifyChatPathLinkTarget,
   findBareFilePathMatch,
   resolveChatAbsPath,
+  toWorkdirRel,
 } from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
-import { i18n } from '@/i18n';
+// App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
+import i18n from 'i18next';
+import { createMarkdownRegexSearch } from './markdownRegexSearch';
 
-export type MobileMarkdownInline =
+// 加粗 / 斜体 / 删除线里的内容会继续按行内语法解析(`**https://…**` 的链接照样可点,
+// 与桌面 remark 同口径),结果拍平进同一层 inline 列表:里面的纯文本就是该强调类型本身,
+// 其余 token(链接、路径、代码、公式;图片除外,见 parseMarkedInlines)带 marks 标出外层
+// 强调,由渲染层叠加样式。拍平而不是做成树,分段、图集收集、长度估算等按单层列表遍历的
+// 逻辑都不用改。
+export type MobileMarkdownInlineMark = 'strong' | 'emphasis' | 'strikethrough';
+
+export type MobileMarkdownInline = (
   | { type: 'text'; text: string }
   // bare:这条 link 是从正文纯文本里切出来的裸路径(matchBareFilePathLink),不是作者
   // 手写的 `[label](url)`。渲染层据此决定点亮后是否套等宽 chip —— 裸路径的未点亮态是
   // 普通正文,套等宽会让同一句里点亮/未点亮的路径在字体、底色、下划线三处齐变;作者
   // 手写且 label 像文件名的仍保留 chip(那是作者的排版意图)。见 DESIGN.md §14.5。
   // 与桌面 remarkLocalPathLinks 打的 data-bare-path 标记是同一件事的两端实现。
-  | { type: 'link'; text: string; url: string; bare?: true }
+  | { type: 'link'; text: string; url: string; bare?: true; managedMediaKind?: 'video' }
   | { type: 'strong'; text: string }
   | { type: 'emphasis'; text: string }
   | { type: 'code'; text: string }
@@ -28,7 +39,8 @@ export type MobileMarkdownInline =
   // 原生 Text 流渲染时经 latexToUnicodeApproximation 近似;WebView 面(文件
   // 阅读器)可用 KaTeX 精确渲染。
   | { type: 'math'; text: string }
-  | MobileMarkdownImageInline;
+  | MobileMarkdownImageInline
+) & { marks?: MobileMarkdownInlineMark[] };
 
 // 正文图片:来自 ![alt](url) 或模型常用的 raw HTML <img src="..." width="150">(见桌面端 remarkHtmlImages)。
 // Markdown 图片还可保留桌面本地/相对路径;会话渲染时再结合被控端 workdir
@@ -57,6 +69,16 @@ export type MobileMarkdownBlock =
   // (仿 mermaid 块的形态),失败/离线降级显示源码。
   | { type: 'math'; key: string; srcLine?: number; text: string }
   | { type: 'code'; key: string; srcLine?: number; language?: string; text: string };
+
+/** Plain summaries share the message parser, keeping labels and omitting link destinations. */
+export function mobileMarkdownPreviewText(markdown: string): string {
+  const inlineText = (inlines: MobileMarkdownInline[]) => inlines.map(inline => inline.type === 'image' ? inline.alt : inline.text).join('');
+  return parseMobileMarkdown(richAnswerText(markdown)).map(block => {
+    if ('inlines' in block) return inlineText(block.inlines);
+    if (block.type === 'table') return [...block.header, ...block.rows.flatMap(row => row.cells)].map(inlineText).join(' ');
+    return block.text;
+  }).join(' ').replace(/\s+/gu, ' ').trim();
+}
 
 export interface ParseMobileMarkdownOptions {
   /**
@@ -628,6 +650,24 @@ export function mobileMarkdownImageUrlForWorkdir(
   return `${base}${sshContext}${version}`;
 }
 
+/** Automatic previews must not upload arbitrary model-named files. Explicit
+ * clicks keep the existing viewer path; the Host enforces baseDir after realpath. */
+export function mobileMarkdownManagedImagePreviewUrl(
+  url: string, workdir?: string, cacheKey?: string, remoteHostId?: string, sessionId?: string,
+): string | null {
+  const resolved = mobileMarkdownImageUrlForWorkdir(url, workdir, cacheKey, remoteHostId, sessionId);
+  if (!resolved || isMobileMarkdownImageDirectUrl(resolved)) return null;
+  if (!resolved.startsWith('xdt-file://')) return resolved;
+  if (!workdir) return null;
+  const parsed = new URL(resolved);
+  const file = parsed.searchParams.get('path');
+  if (!file || toWorkdirRel(workdir, file) === null) return null;
+  // Do not trust baseDir supplied in Markdown (including duplicate parameters).
+  parsed.searchParams.delete('baseDir');
+  parsed.searchParams.set('baseDir', workdir);
+  return parsed.toString();
+}
+
 // 流式(native)路径下正文图片的缩略图尺寸:默认宽 150,宽高都封顶 220。有声明宽高时按比例
 // 换算,但换算结果同样封顶——width/height 只过了「1-4 位纯数字」白名单,height="9999" 这类
 // 极端比例若不封顶会在流式阶段渲染出近万像素高的图,撑爆气泡(review P2)。
@@ -646,6 +686,8 @@ export type MobileMarkdownBlockGroup =
   | { type: 'single'; key: string; block: MobileMarkdownBlock };
 
 export interface MobileMarkdownTextRunGroupingOptions {
+  /** Only actual native image previews break text selection; text chips do not. */
+  imageRendersPreview?: (image: MobileMarkdownImageInline) => boolean;
   /**
    * Upper bound for one selectable native text view. Undefined keeps the
    * historical "merge until a non-text block" behavior.
@@ -684,7 +726,7 @@ export function groupMobileMarkdownSelectableBlocks(
     runInlineFragmentCount = 0;
   };
   for (const block of blocks) {
-    if (isTextRunBlock(block)) {
+    if (isTextRunBlock(block, options?.imageRendersPreview)) {
       for (const chunk of splitOversizedTextRunBlock(
         block,
         maxTextRunUtf16Length,
@@ -721,13 +763,16 @@ export function groupMobileMarkdownSelectableBlocks(
   return groups;
 }
 
-function isTextRunBlock(block: MobileMarkdownBlock): block is MobileMarkdownTextRunBlock {
+function isTextRunBlock(
+  block: MobileMarkdownBlock,
+  imageRendersPreview: (image: MobileMarkdownImageInline) => boolean = (image) => isMobileMarkdownImageDirectUrl(image.url),
+): block is MobileMarkdownTextRunBlock {
   if (block.type !== 'paragraph' && block.type !== 'heading' && block.type !== 'list_item') {
     return false;
   }
-  // 直连内联图渲染为 Text 内嵌 View,不能进合并文本树(Android selectable+内嵌 View 行为未定义)。
+  // Only image previews embed Views; fallback text chips remain selectable.
   return !block.inlines.some(
-    (inline) => inline.type === 'image' && isMobileMarkdownImageDirectUrl(inline.url),
+    (inline) => inline.type === 'image' && imageRendersPreview(inline),
   );
 }
 
@@ -1047,19 +1092,64 @@ export function parseMobileMarkdownInlines(
   input: string,
   startsInsideHtmlComment = false,
 ): MobileMarkdownInline[] {
+  return parseInlines(input, startsInsideHtmlComment, false);
+}
+
+function parseInlines(
+  input: string,
+  startsInsideHtmlComment: boolean,
+  imagesAsText: boolean,
+): MobileMarkdownInline[] {
   const out: MobileMarkdownInline[] = [];
+  const context = createInlineParseContext(input, startsInsideHtmlComment);
   let cursor = 0;
   while (cursor < input.length) {
-    const token = findNextInlineToken(input, cursor, startsInsideHtmlComment);
+    const token = findNextInlineToken(input, cursor, context);
     if (!token) {
       pushText(out, input.slice(cursor));
       break;
     }
     if (token.index > cursor) pushText(out, input.slice(cursor, token.index));
-    out.push(token.inline);
+    if (isMarkedInline(token.inline)) {
+      out.push(...parseMarkedInlines(token.inline.type, token.inline.text, token.index, context));
+    } else if (imagesAsText && token.inline.type === 'image') {
+      pushText(out, input.slice(token.index, token.end));
+    } else {
+      out.push(token.inline);
+    }
     cursor = token.end;
   }
   return out.length > 0 ? out : [{ type: 'text', text: input }];
+}
+
+/** 该 inline 是否呈现为某种强调:自身就是该类型,或被外层同类强调包裹(marks)。样式消费方统一用它判断。 */
+export function mobileMarkdownInlineHasMark(inline: MobileMarkdownInline, mark: MobileMarkdownInlineMark): boolean {
+  return inline.type === mark || inline.marks?.includes(mark) === true;
+}
+
+function isMarkedInline(
+  inline: MobileMarkdownInline,
+): inline is Extract<MobileMarkdownInline, { type: MobileMarkdownInlineMark }> {
+  return inline.type === 'strong' || inline.type === 'emphasis' || inline.type === 'strikethrough';
+}
+
+// 强调内容再解析一遍并拍平(见 MobileMarkdownInlineMark 的说明)。内层文本严格短于外层,
+// 递归必然收敛;强调起点在 HTML 注释里时内层也按注释内处理,注释里的裸路径不会被点亮。
+// 强调里的图片保持原文:GitHub review 常见 `**<sub>![P2 Badge](…)</sub> 标题**`,渲染成
+// 图片预览会把小徽章撑成大图并打断可选中的正文;原文仍整段占位,`[alt](url)` 不会被当成链接。
+function parseMarkedInlines(
+  mark: MobileMarkdownInlineMark,
+  text: string,
+  index: number,
+  context: InlineParseContext,
+): MobileMarkdownInline[] {
+  const innerStartsInsideHtmlComment = context.needsCommentCheck
+    && isInsideHtmlComment(context.commentProbe(), index, context.startsInsideHtmlComment);
+  return parseInlines(text, innerStartsInsideHtmlComment, true).map((inline) => (
+    inline.type === 'text'
+      ? { type: mark, text: inline.text }
+      : { ...inline, marks: [mark, ...(inline.marks ?? [])] }
+  ));
 }
 
 /** Mobile 只把 `~~` 当删除线，单个 `~` 是普通字符，不能当 URL 包裹标记。 */
@@ -1068,44 +1158,88 @@ function mobileMarkdownWrapMarker(prefix: string): string | null {
   return marker === '~' ? null : marker;
 }
 
+// A context lives only for this immutable paragraph/recursive emphasis body.
+// Image guards inspect the whole paragraph, not the remaining suffix: a later
+// disallowed HTML tag must still suppress an earlier image. Prepare those masks
+// lazily once rather than copying/scanning the paragraph for every inline token.
+function createInlineParseContext(input: string, startsInsideHtmlComment: boolean) {
+  let probe: string | undefined;
+  let imagesAllowed: boolean | undefined;
+  let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
+  const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
+  return {
+    startsInsideHtmlComment,
+    search: createMarkdownRegexSearch(input),
+    needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
+    hasMarkdownImage: input.includes('!['),
+    hasHtmlImage: HTML_IMG_HINT_RE.test(input),
+    commentProbe,
+    nextBareUrl: (from: number) => {
+      // parseInlines advances monotonically. Reuse only this paragraph's pending
+      // candidate (including a miss), never a token whose start was consumed.
+      if (bareUrl === undefined || (bareUrl !== null && bareUrl.index < from)) {
+        bareUrl = matchBareUrl(input, from);
+      }
+      return bareUrl;
+    },
+    allowsImages: () => {
+      if (imagesAllowed === undefined) {
+        const guarded = blankBenignInlineTags(blankHtmlComments(commentProbe(), startsInsideHtmlComment));
+        imagesAllowed = !NON_IMG_HTML_TAG_RE.test(guarded) && !NON_COMMENT_MARKUP_RE.test(guarded);
+      }
+      return imagesAllowed;
+    },
+  };
+}
+type InlineParseContext = ReturnType<typeof createInlineParseContext>;
+
 function findNextInlineToken(
   input: string,
   from: number,
-  startsInsideHtmlComment: boolean,
+  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
+  context.search.begin();
   const candidates = [
     // 图片要放在 link / 裸 URL 之前:![alt](url) 的 "[alt](url)" 子串会被 link 规则命中,
     // 靠 image 的起点(`!`)更靠前在排序里胜出,这里的顺序只是可读性上的强调。
-    matchMarkdownImage(input, from, startsInsideHtmlComment),
-    matchHtmlImage(input, from, startsInsideHtmlComment),
+    matchMarkdownImage(input, from, context),
+    matchHtmlImage(input, from, context),
     // 链接语法:http(s) 之外放行 Cindy 深链(双 scheme:cindy 主 + xdt-maker
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
     // chip 化后会按 [标题](深链) 发送,不 tokenize 会把整段渲染成原始
-    // markdown 源码,review P1)。
+    // markdown 源码,review P1)。cindy-media 只收字节仓严格地址中的视频
+    // 后缀;由 managedMediaKind 让渲染层走既有媒体查看器/远端取件,绝不把
+    // 私有 scheme 交给 Linking.openURL。
     matchRegex(
       input,
       from,
       new RegExp(
-        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+)\\)`,
+        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`,
         'g',
       ),
-      (match) => ({
-        type: 'link' as const,
-        text: match[1],
-        url: trimUrlPunctuation(match[2]),
-      }),
+      (match) => {
+        const url = trimUrlPunctuation(match[2]);
+        return {
+          type: 'link' as const,
+          text: match[1],
+          url,
+          ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
+        };
+      },
+      undefined,
+      context.search.exec,
     ),
     // 本地路径链接:[README.md](/abs/path/README.md:17) 这类模型高频输出形态。
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
-    matchLocalPathLink(input, from),
+    matchLocalPathLink(input, from, context),
     // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
     // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
     // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
     // 点亮 chip / 保持纯文本。
-    matchBareFilePathLink(input, from, startsInsideHtmlComment),
-    matchRegex(input, from, /`([^`]+)`/g, (match) => ({ type: 'code' as const, text: match[1] })),
+    matchBareFilePathLink(input, from, context),
+    matchRegex(input, from, /`([^`]+)`/g, (match) => ({ type: 'code' as const, text: match[1] }), undefined, context.search.exec),
     // inline math:$$x$$(双 dollar 行内形态)与 $x$。候选按起点排序,公式起点
     // 的 $ 早于公式体内的 * / _,强调规则不会拆走公式内容。单 dollar 采用
     // Pandoc 风格紧贴规则:内容首尾必须非空白、闭合 $ 后不能紧跟数字——
@@ -1116,22 +1250,22 @@ function findNextInlineToken(
     matchRegex(input, from, /\$\$([^$`\n]+?)\$\$/g, (match) => ({
       type: 'math' as const,
       text: match[1].trim(),
-    })),
+    }), undefined, context.search.exec),
     matchRegex(input, from, /(^|[^\\$])\$([^$`\n\s](?:[^$`\n]*[^$`\n\s])?)\$(?!\d)/g, (match) => ({
       type: 'math' as const,
       text: match[2],
-    }), 1),
-    matchRegex(input, from, /\*\*([^*\n]+)\*\*/g, (match) => ({ type: 'strong' as const, text: match[1] })),
-    matchRegex(input, from, /__([^_\n]+)__/g, (match) => ({ type: 'strong' as const, text: match[1] })),
-    matchRegex(input, from, /~~([^~\n]+)~~/g, (match) => ({ type: 'strikethrough' as const, text: match[1] })),
+    }), 1, context.search.exec),
+    matchRegex(input, from, /\*\*([^*\n]+)\*\*/g, (match) => ({ type: 'strong' as const, text: match[1] }), undefined, context.search.exec),
+    matchRegex(input, from, /__([^_\n]+)__/g, (match) => ({ type: 'strong' as const, text: match[1] }), undefined, context.search.exec),
+    matchRegex(input, from, /~~([^~\n]+)~~/g, (match) => ({ type: 'strikethrough' as const, text: match[1] }), undefined, context.search.exec),
     matchRegex(input, from, /(^|[^\w*])\*([^*\n]+)\*/g, (match) => ({
       type: 'emphasis' as const,
       text: match[2],
-    }), 1),
+    }), 1, context.search.exec),
     matchRegex(input, from, /(^|[^\w_])_([^_\n]+)_/g, (match) => ({
       type: 'emphasis' as const,
       text: match[2],
-    }), 1),
+    }), 1, context.search.exec),
     // 裸链接:http(s) 走共享 BARE_HTTP_URL_RE_SOURCE + clipBareHttpAutolink
     // （CJK/全角标点/包裹括号/尾部句读同一套）；会话/项目深链仍是。project
     // 白名单与桌面 PROJECT_DEEP_LINK_RE_SOURCE 同口径,含尾部负向前瞻
@@ -1139,40 +1273,44 @@ function findNextInlineToken(
     // 会得到指错项目的前缀匹配——匹配终止处紧跟 `'` / `(` 时整段拒绝;
     // 前瞻并入白名单字符本身,回溯出的短前缀必败,等效原子组(与桌面注释
     // 同一推导,review P2)。
-    (() => {
-      const raw = matchRegex(
-        input,
-        from,
-        new RegExp(
-          `(?:${BARE_HTTP_URL_RE_SOURCE}|(?:${DEEP_LINK_SCHEME_GROUP})://session/[A-Za-z0-9%~_-]+(?:\\?[A-Za-z0-9%&=~._-]*[A-Za-z0-9%~_-])?|(?:${DEEP_LINK_SCHEME_GROUP})://project/[A-Za-z0-9%~._!*-]+(?![A-Za-z0-9%~._!*('-]))`,
-          'g',
-        ),
-        (match) => {
-          const rawHref = match[0];
-          const href = /^https?:\/\//i.test(rawHref)
-            ? clipBareHttpAutolinkText(rawHref, {
-                prefix: input.slice(0, match.index),
-                markdownWrapMarker: mobileMarkdownWrapMarker(
-                  input.slice(0, match.index),
-                ),
-                cutPathBrackets: false,
-              })
-            : trimUrlPunctuation(rawHref);
-          return { type: 'link' as const, text: href, url: href };
-        },
-      );
-      // 剥掉的尾部句读要留在正文里:matchRegex 的 end 按未剥原文推进,而
-      // project 白名单含 `.`(`!` 同理),`…%2Frepo.` 的句号会被吞掉不再
-      // 渲染(review P2;session / http 形态靠正则末字符排除句读,此处
-      // 天然 no-op)。end 收缩到剥后长度,句读作为 text 回流。
-      if (raw && raw.inline.type === 'link') {
-        return { ...raw, end: raw.index + raw.inline.url.length };
-      }
-      return raw;
-    })(),
+    context.nextBareUrl(from),
   ].filter((item): item is { index: number; end: number; inline: MobileMarkdownInline } => !!item);
   if (candidates.length === 0) return null;
   return candidates.sort((a, b) => a.index - b.index || a.end - b.end)[0];
+}
+
+// This regex has no consumed prefix group: starting anywhere before its next
+// match yields the same URL and normalization against the immutable full input.
+function matchBareUrl(input: string, from: number) {
+  const raw = matchRegex(
+    input,
+    from,
+    new RegExp(
+      `(?:${BARE_HTTP_URL_RE_SOURCE}|(?:${DEEP_LINK_SCHEME_GROUP})://session/[A-Za-z0-9%~_-]+(?:\\?[A-Za-z0-9%&=~._-]*[A-Za-z0-9%~_-])?|(?:${DEEP_LINK_SCHEME_GROUP})://project/[A-Za-z0-9%~._!*-]+(?![A-Za-z0-9%~._!*('-]))`,
+      'g',
+    ),
+    (match) => {
+      const rawHref = match[0];
+      const href = /^https?:\/\//i.test(rawHref)
+        ? clipBareHttpAutolinkText(rawHref, {
+            prefix: input.slice(0, match.index),
+            markdownWrapMarker: mobileMarkdownWrapMarker(
+              input.slice(0, match.index),
+            ),
+            cutPathBrackets: false,
+          })
+        : trimUrlPunctuation(rawHref);
+      return { type: 'link' as const, text: href, url: href };
+    },
+  );
+  // 剥掉的尾部句读要留在正文里:matchRegex 的 end 按未剥原文推进,而
+  // project 白名单含 `.`(`!` 同理),`…%2Frepo.` 的句号会被吞掉不再
+  // 渲染(review P2;session / http 形态靠正则末字符排除句读,此处
+  // 天然 no-op)。end 收缩到剥后长度,句读作为 text 回流。
+  if (raw && raw.inline.type === 'link') {
+    return { ...raw, end: raw.index + raw.inline.url.length };
+  }
+  return raw;
 }
 
 // 本地路径链接 matcher:通用 [text](url) 形态逐个 exec,URL 过
@@ -1189,6 +1327,7 @@ function findNextInlineToken(
 function matchLocalPathLink(
   input: string,
   from: number,
+  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
   if (!input.includes('](')) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
@@ -1196,7 +1335,7 @@ function matchLocalPathLink(
   const re = /\[([^\]]+)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
   re.lastIndex = from;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(input)) !== null) {
+  while ((match = context.search.exec(re)) !== null) {
     if (match.index > 0 && input[match.index - 1] === '!') continue;
     const url = parseLocalMarkdownDestination(match[2]);
     if (!url || !classifyChatPathLinkTarget(url)) continue;
@@ -1221,24 +1360,22 @@ function matchLocalPathLink(
 function matchBareFilePathLink(
   input: string,
   from: number,
-  startsInsideHtmlComment = false,
+  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
   // 廉价短路:绝大多数消息段既不含 `<!--`、也不在跨块注释里,不为它们付
   // blankCodeSpans + blankEscapedAngles 两趟整串拷贝的开销(本函数在渲染热路径上
   // 逐 token 调用;同 HTML_IMG_HINT_RE / MARKDOWN_IMAGE_HINT_RE 的套路)。
-  const needsCommentCheck = startsInsideHtmlComment || input.includes('<!--');
+  const { needsCommentCheck, startsInsideHtmlComment } = context;
   let cursor = from;
   // 注释 span 定位与 matchHtmlImage / matchMarkdownImage 同口径:在 code-span 与转义
   // `<` 空白填充(偏移保持)的副本上判定,行内代码里的字面 `<!--` 不把后文毒化成
   // 「注释内」。命中在注释里的跳过(桌面侧注释是 html 节点、插件根本看不到,压制
   // 才是同口径),注释外的照常识别。
-  let commentProbe: string | null = null;
   for (;;) {
-    const match = findBareFilePathMatch(input, cursor);
+    const match = findBareFilePathMatch(input, cursor, context.search.exec);
     if (!match) return null;
     if (needsCommentCheck) {
-      if (commentProbe === null) commentProbe = blankEscapedAngles(blankCodeSpans(input));
-      if (isInsideHtmlComment(commentProbe, match.index, startsInsideHtmlComment)) {
+      if (isInsideHtmlComment(context.commentProbe(), match.index, startsInsideHtmlComment)) {
         cursor = match.end;
         continue;
       }
@@ -1265,9 +1402,10 @@ function matchRegex(
   regex: RegExp,
   build: (match: RegExpExecArray) => MobileMarkdownInline,
   prefixGroupIndex?: number,
+  search?: ReturnType<typeof createMarkdownRegexSearch>['exec'],
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
   regex.lastIndex = from;
-  const match = regex.exec(input);
+  const match = search ? search(regex) : regex.exec(input);
   if (!match || match.index < from) return null;
   const prefixLength = prefixGroupIndex === undefined ? 0 : (match[prefixGroupIndex]?.length ?? 0);
   return {
@@ -1401,18 +1539,17 @@ const NON_COMMENT_MARKUP_RE = /<!(?!--)|<\?/;
 function matchHtmlImage(
   input: string,
   from: number,
-  startsInsideHtmlComment = false,
+  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
-  if (!HTML_IMG_HINT_RE.test(input)) return null;
+  if (!context.hasHtmlImage || !context.allowsImages()) return null;
   // codeBlanked 保留注释原文供 span 定位;guarded 再把注释也填充掉,拒转判定只看注释外的标记。
   // startsInsideHtmlComment: 段起点仍在上一块开启的注释里(<!-- 与 --> 之间隔空行被拆块),
   // 开头到首个 --> 同样按注释处理。
-  const codeBlanked = blankEscapedAngles(blankCodeSpans(input));
-  const guarded = blankBenignInlineTags(blankHtmlComments(codeBlanked, startsInsideHtmlComment));
-  if (NON_IMG_HTML_TAG_RE.test(guarded) || NON_COMMENT_MARKUP_RE.test(guarded)) return null;
+  const codeBlanked = context.commentProbe();
+  const { startsInsideHtmlComment } = context;
   HTML_IMG_TAG_RE.lastIndex = from;
   let match: RegExpExecArray | null;
-  while ((match = HTML_IMG_TAG_RE.exec(input)) !== null) {
+  while ((match = context.search.exec(HTML_IMG_TAG_RE)) !== null) {
     // 注释里的 <img> 是被注释掉的内容,跳过;注释外的照常转换。
     if (isInsideHtmlComment(codeBlanked, match.index, startsInsideHtmlComment)) continue;
     // \<img ...> 转义的 < 使标签保持字面(与 Markdown 图片路径同口径,review 实捉)。
@@ -1544,18 +1681,17 @@ function isInsideHtmlComment(input: string, index: number, startsInsideHtmlComme
 function matchMarkdownImage(
   input: string,
   from: number,
-  startsInsideHtmlComment = false,
+  context: InlineParseContext,
 ): { index: number; end: number; inline: MobileMarkdownInline } | null {
-  if (!input.includes('![')) return null;
+  if (!context.hasMarkdownImage || !context.allowsImages()) return null;
   // 拒转判定统一在 code-span 空白填充(偏移保持)的副本上做,行内代码里的字面 <div> / <!--
   // 不参与判定(review 实捉:字面 <!-- 会把段尾全部毒化成"注释内"、误杀合法图片)。
-  const guarded = blankEscapedAngles(blankCodeSpans(input));
+  const guarded = context.commentProbe();
+  const { startsInsideHtmlComment } = context;
   // 与 raw <img> 同口径:段内出现任何非 img HTML 标签(<div>...![图]...</div> 的块级包裹)
   // 或 doctype / 处理指令,Markdown 图片同样整段拒转——桌面端 skipHtml 会把这类 raw HTML
   // 块整体丢弃,其中的图片不该在移动端被渲染出来。注释按 span 压制(其内容先空白填充再喂给
   // 标签守卫,注释里的 <div> 不触发整段拒转),注释外合法图不受影响。
-  const guardedNoComments = blankBenignInlineTags(blankHtmlComments(guarded, startsInsideHtmlComment));
-  if (NON_IMG_HTML_TAG_RE.test(guardedNoComments) || NON_COMMENT_MARKUP_RE.test(guardedNoComments)) return null;
   const matchers: Array<{ re: RegExp; local: boolean }> = [
     { re: MARKDOWN_IMAGE_RE, local: false },
     { re: LOCAL_MARKDOWN_IMAGE_RE, local: true },
@@ -1564,9 +1700,12 @@ function matchMarkdownImage(
   for (const matcher of matchers) {
     matcher.re.lastIndex = from;
     let candidate: RegExpExecArray | null;
-    while ((candidate = matcher.re.exec(input)) !== null) {
+    while ((candidate = context.search.exec(matcher.re)) !== null) {
       const rawUrl = matcher.local ? parseLocalMarkdownDestination(candidate[2]) : candidate[2];
-      if (matcher.local && !classifyChatPathLinkTarget(rawUrl)) continue;
+      // The destination parser also handles standard titles and angle brackets
+      // for remote images, just as it does for local image paths.
+      if (matcher.local && !classifyChatPathLinkTarget(rawUrl)
+        && !(SAFE_IMAGE_SRC_RE.test(rawUrl) && !/\s/.test(rawUrl))) continue;
       // 当前 matcher 的第一个正则命中可能只是注释/转义里的示例;必须继续 exec,
       // 否则同段后面的合法图片会被丢掉(review P2)。
       if (isInsideHtmlComment(guarded, candidate.index, startsInsideHtmlComment)) continue;

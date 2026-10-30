@@ -32,6 +32,8 @@ vi.mock('electron', () => ({
 vi.mock('@cindy/maker-core', () => ({}));
 
 describe('auth-adapters import purity', () => {
+  // Keep the side-effect assertions intact while allowing the full auth graph's
+  // cold transform on Linux under the eight-worker desktop unit pool.
   it('importing the module (and its singletons) must not write to the filesystem', async () => {
     h.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auth-import-purity-'));
     const cwdCodexHome = path.join(process.cwd(), 'codex-home');
@@ -59,5 +61,5 @@ describe('auth-adapters import purity', () => {
     } finally {
       fs.rmSync(h.userDataDir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 });

@@ -18,6 +18,21 @@ describe('persisted Orca session start options', () => {
     knownNonOrcaSessionIds.clear();
   });
 
+  // The execution device has no local team/role row. Its persisted origin must enable
+  // the bridge across fresh/resumed starts without turning it into a nested local Worker.
+  it.each(['codex', 'claude-code', 'pi'] as const)('enables the remote bridge for %s without a local role', async agentKind => {
+    const lead = { leadDeviceId: 'pc', leadDeviceName: 'PC', leadSessionId: 'lead-1', leadTitle: 'Lead', workerLabel: 'tester' };
+    const opts = { ...baseOpts('remote-session'), agentKind };
+    await preparePersistedOrcaSessionStart('remote-session', opts, {
+      getSessionRole: async () => null, getWorkerLink: vi.fn(),
+      getRemoteLead: async () => lead, warn: vi.fn(),
+    });
+    expect(opts.vendorOptions).toMatchObject({ orcaRemoteWorker: true, orcaRemoteLead: lead });
+    expect(opts.orcaRole).toBeUndefined();
+    expect(opts.userPrompt).toBeUndefined();
+    expect(knownNonOrcaSessionIds.has('remote-session')).toBe(false);
+  });
+
   it('reconstructs persisted Lead vendor options and instructions', async () => {
     const opts = baseOpts('lead-session');
     const getWorkerLink = vi.fn();

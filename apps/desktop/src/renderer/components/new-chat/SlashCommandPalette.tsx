@@ -15,13 +15,28 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { ArrowUpRight } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
+import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
+import {
+  COMPOSER_MENU_ROW,
+  MenuHighlightLayer,
+  menuPanelAttrs,
+  menuRowAttrs,
+  useMenuPanel,
+  withMenuLabels,
+} from '@/components/ui/menu-row';
 
 import { cn } from '@/lib/utils';
 import {
   filterSlashCommands,
+  isCindyOfficialSlashCommand,
   isSlashCommandUnavailable,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
+import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
+import { OfficialSkillBadge } from '@/features/skillhub/components/OfficialSkillBadge';
 
 const TOOLTIP_W = 280;
 const TOOLTIP_GAP = 8;
@@ -45,6 +60,10 @@ interface SlashCommandPaletteProps {
   onSelect: (command: UnifiedCommand) => void;
   /** Called when user presses Esc or clicks outside. ChatInput owns close. */
   onClose: () => void;
+  /** Opens the backing local Skill from the hover information panel. */
+  onOpenSkillDetails?: (command: UnifiedCommand) => void;
+  /** Draft projects are not yet in SkillHub's Main-owned project scan. */
+  allowProjectSkillDetails?: boolean;
   /** Reports hover state for the portaled tooltip so ChatInput's blur guard treats it as part of the palette. */
   onTooltipHoverChange?: (hovered: boolean) => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
@@ -56,7 +75,16 @@ interface SlashCommandPaletteProps {
 function metaLabel(cmd: UnifiedCommand): string | null {
   if (cmd.kind === 'agent-skill') return cmd.source; // 'user' | 'skill'
   if (cmd.kind === 'agent-builtin') return 'agent-cmd';
-  return null; // 'desktop' 不显示标签 (内置默认)
+  return cmd.meta ?? null; // 'desktop' 默认不显示标签,插件同名时显示来源
+}
+
+function displayName(cmd: UnifiedCommand): string {
+  return cmd.kind === 'desktop' && cmd.label ? cmd.label : cmd.name;
+}
+
+/** 同名插件的两行显示名相同,读屏要连同「团队共享」标签一起报出才能区分。 */
+function accessibleName(cmd: UnifiedCommand): string {
+  return cmd.kind === 'desktop' && cmd.meta ? `${displayName(cmd)} ${cmd.meta}` : displayName(cmd);
 }
 
 export function SlashCommandPalette({
@@ -66,13 +94,24 @@ export function SlashCommandPalette({
   onFocusedIndexChange,
   onSelect,
   onClose,
+  onOpenSkillDetails,
+  allowProjectSkillDetails = true,
   onTooltipHoverChange,
   maxHeight = 400,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
   const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
   const rootRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  // Glide highlight on the focused index; arrow keys are pressed in the editor.
+  const highlightPanelRef = useMenuPanel(panelRef, {
+    lockWidth: false,
+    options: {
+      current: currentMarkedRow,
+      currentAttributes: [MENU_CURRENT_ROW_ATTR],
+      keyboardSource: document,
+    },
+  });
   const tooltipRef = useRef<HTMLDivElement>(null);
   // Track panel scroll so the tooltip follows the focused row's visual position.
   const [panelScroll, setPanelScroll] = useState(0);
@@ -117,8 +156,14 @@ export function SlashCommandPalette({
   }, [focusedIndex]);
 
   const focusedCmd = filtered[focusedIndex];
+  const focusedDescriptionKey = focusedCmd?.kind === 'agent-skill'
+    ? builtInSkillDescriptionKey(focusedCmd)
+    : undefined;
+  const focusedDescription = focusedDescriptionKey
+    ? t(focusedDescriptionKey)
+    : focusedCmd?.description;
   const tooltipKey = focusedCmd
-    ? `${focusedCmd.kind}:${focusedCmd.name}:${focusedCmd.description ?? ''}`
+    ? `${focusedCmd.kind}:${focusedCmd.name}:${focusedDescription ?? ''}`
     : null;
   const tooltipHeight = tooltipMeasure.key === tooltipKey
     ? tooltipMeasure.height
@@ -204,10 +249,11 @@ export function SlashCommandPalette({
     >
       {/* Panel */}
       <div
-        ref={panelRef}
+        ref={highlightPanelRef}
         onScroll={(e) => setPanelScroll(e.currentTarget.scrollTop)}
+        {...menuPanelAttrs}
         className={cn(
-          'w-[320px] overflow-y-auto',
+          'relative w-[320px] overflow-y-auto',
           'rounded-[12px] border p-[6px]',
           'bg-[var(--cmd-palette-bg)]',
           'border-[var(--cmd-palette-border)]',
@@ -215,8 +261,10 @@ export function SlashCommandPalette({
           // §14.4 轻浮层原型);输入过滤只重渲不重挂,动画不会重放。
           'origin-bottom-left animate-float-in',
         )}
-        style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
+        // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
+        style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
+        <MenuHighlightLayer />
         {filtered.length === 0 ? (
           <div
             className={cn(
@@ -231,13 +279,14 @@ export function SlashCommandPalette({
           filtered.map((cmd, idx) => {
             const focused = idx === focusedIndex;
             const unavailable = isSlashCommandUnavailable(cmd);
+            const official = isCindyOfficialSlashCommand(cmd);
             return (
               <button
                 key={cmd.name}
                 ref={focused ? focusedRef : undefined}
                 type="button"
                 aria-disabled={unavailable}
-                aria-label={unavailable ? `${cmd.name}: ${t('commandPalette.projectSkillNotLoaded')}` : cmd.name}
+                aria-label={unavailable ? `${accessibleName(cmd)}: ${t('commandPalette.projectSkillNotLoaded')}` : accessibleName(cmd)}
                 title={unavailable ? t('commandPalette.projectSkillNotLoaded') : undefined}
                 // `onMouseDown` instead of `onClick` so the textarea
                 // keeps focus — click would fire after blur.
@@ -247,18 +296,20 @@ export function SlashCommandPalette({
                   onSelect(cmd);
                 }}
                 onMouseEnter={() => onFocusedIndexChange(idx)}
+                // Shared menu row: the panel's glide highlight follows the focused index
+                // (focus stays in the editor), no own fill.
+                {...menuRowAttrs({ current: focused, disabled: unavailable })}
                 className={cn(
+                  COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between',
-                  'h-[36px] px-[10px] rounded-[6px]',
-                  'text-left text-14 font-medium',
-                  'text-[var(--cmd-palette-item-text)]',
-                  'outline-none transition-colors',
-                  focused && 'bg-[var(--cmd-palette-item-hover)]',
+                  'h-[36px] px-[10px] text-left',
                   unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
-                <span className="truncate">{cmd.name}</span>
-                {metaLabel(cmd) && (
+                {withMenuLabels(<span className="truncate">{displayName(cmd)}</span>)}
+                {official ? (
+                  <OfficialSkillBadge />
+                ) : metaLabel(cmd) && (
                   <span className="shrink-0 text-12 font-normal text-[var(--cmd-palette-item-meta)]">
                     {metaLabel(cmd)}
                   </span>
@@ -290,13 +341,30 @@ export function SlashCommandPalette({
             maxHeight: tooltipPos.maxHeight,
           }}
         >
-          <div className="text-14 font-medium text-[var(--cmd-palette-item-text)]">
-            {focusedCmd.name}
+          <div className="flex items-center gap-1 text-14 font-medium text-[var(--cmd-palette-item-text)]">
+            <span className="min-w-0 truncate">{displayName(focusedCmd)}</span>
+            {onOpenSkillDetails && focusedCmd.kind === 'agent-skill'
+              && focusedCmd.source === 'skill' && focusedCmd.path && focusedCmd.origin !== 'package'
+              && (allowProjectSkillDetails || focusedCmd.scope === 'global' || focusedCmd.scope === 'user') && (
+              <Tip text={t('commandPalette.viewSkillDetails')}>
+                <Button variant="secondary" pressFeedback={false}
+                  className="w-8 [--button-face-border:transparent] [--button-face-bg:transparent] p-0 text-[var(--cmd-palette-item-meta)]"
+                  aria-label={t('commandPalette.viewSkillDetails')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenSkillDetails(focusedCmd);
+                    onClose();
+                  }}>
+                  <ArrowUpRight size={14} aria-hidden />
+                </Button>
+              </Tip>
+            )}
           </div>
           <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {isSlashCommandUnavailable(focusedCmd)
               ? t('commandPalette.projectSkillNotLoaded')
-              : focusedCmd.description}
+              : focusedDescription}
           </div>
         </div>,
         document.body,

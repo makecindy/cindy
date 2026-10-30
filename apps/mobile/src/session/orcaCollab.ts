@@ -7,16 +7,23 @@
  *  - **回报**:worker 的 `send_to_lead` 落库成一条 `role==='user'` 消息,content 是
  *    `{"orcaSource":"worker","content":"…"}` 的 JSON(DB 持久化格式)。
  *
+ * Worker 会话里还有 Lead 发来的消息(`send_to_worker` / 建 worker 的初始任务),落库同样是
+ * `{"orcaSource":"lead","content":"…"}`;两种互发消息都建模成卡片,原始 JSON 绝不展示。
+ *
  * 这里只做"识别 + 抽取展示文案",真正渲染在 MessageRenderer 的 OrcaCollabCard。匹配 tool 名沿用
  * 共享层 `isOrcaCommunicationTool` 的归一化约定(`mcp__X__Y` → `mcp:X:Y`),兼容裸名与 MCP 前缀名。
  */
 
 import { i18n } from '@/i18n';
+import { orcaMessageTitle } from '@/session/messageSourceLabels';
 
 export interface OrcaCollabCard {
-  /** dispatch = Lead 派活;report = worker 回报。用于卡片视觉/标题区分。 */
-  variant: 'dispatch' | 'report';
-  /** 卡片标题,如 "派活给 worker frontend" / "worker 回报"。 */
+  /**
+   * dispatch = Lead 会话里的派活 tool;report = worker 发给 Lead 的消息;
+   * lead = Lead 发给 worker 的消息(在 worker 会话里)。用于卡片视觉/标题区分。
+   */
+  variant: 'dispatch' | 'report' | 'lead';
+  /** 卡片标题,如 "派活给 Worker frontend" / "来自 Worker「frontend」的消息"。 */
   title: string;
   /** 卡片正文:派活的任务摘要 / 回报的正文内容。 */
   body: string;
@@ -83,19 +90,28 @@ export function buildOrcaDispatchCard(toolName: string, input: unknown): OrcaCol
 }
 
 /**
- * 解析 worker 回报消息(user 消息 content = `{orcaSource:'worker',content}`)。
- * 命中则建模成 report 卡片;**解析失败 / 非该格式一律返回 null**,由调用方回退普通文本,绝不把原始
- * JSON 糊给用户看。
+ * 解析落库的 Orca 互发消息(user 消息 content = `{orcaSource:'lead'|'worker',content}`)。
+ * worker → report 卡片(标题带主机盖章的 worker 角色 `origin.senderLabel`),lead → lead 卡片。
+ * **解析失败 / 非该格式一律返回 null**,由调用方回退普通文本,绝不把原始 JSON 糊给用户看。
  */
-export function parseOrcaWorkerReport(content: unknown): OrcaCollabCard | null {
+export function parseOrcaPersistedMessage(
+  content: unknown,
+  senderLabel?: string,
+): OrcaCollabCard | null {
   const record = parseMaybeJsonObject(content);
-  if (!record || record.orcaSource !== 'worker') return null;
+  if (!record || (record.orcaSource !== 'worker' && record.orcaSource !== 'lead')) return null;
   const body = readString(record.content);
   return {
-    variant: 'report',
-    title: i18n.t('interaction.collab.reportTitle'),
-    body: body ?? i18n.t('interaction.collab.reportBodyFallback'),
+    variant: record.orcaSource === 'lead' ? 'lead' : 'report',
+    title: orcaMessageTitle(record.orcaSource, senderLabel),
+    body: body ?? i18n.t('interaction.collab.emptyMessageBody'),
   };
+}
+
+/** 落库 Orca 消息的来源方向;非 Orca 格式返回 null。排队气泡据此选择标题。 */
+export function readOrcaPersistedSource(content: unknown): 'lead' | 'worker' | null {
+  const record = parseMaybeJsonObject(content);
+  return record?.orcaSource === 'lead' || record?.orcaSource === 'worker' ? record.orcaSource : null;
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

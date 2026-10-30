@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "features": {
+    "projectContext": { "type": "boolean", "control": "profile", "default": false, "label": "Project Context", "description": "Inject the current project context" },
+    "makerMemory": { "type": "boolean", "control": "profile", "default": false, "label": "Maker Memory", "description": "Use Cindy workdir-scoped memory shared across harnesses" },
+    "nativeMemory": { "type": "boolean", "control": "profile", "default": false, "label": "Native Memory", "description": "Use Claude Auto Memory, Codex experimental memories, or Pi Auto Memory" },
+    "attachments": { "type": "boolean", "control": "profile", "default": false, "label": "Attachments", "description": "Allow attachment input" },
+    "piProjectSkills": { "type": "boolean", "control": "profile", "default": false, "label": "Pi Project Skills", "description": "Approve project Skills from the profile's roots; unapproved in-repo Skills stay denied and other in-repo Pi resources are recorded as evidence" }
+  },
+  "controls": {
+    "permissionMode": { "type": "enum", "control": "profile", "default": "bypassPermissions", "values": ["bypassPermissions", "acceptEdits", "default", "ask", "auto", "plan"] },
+    "remoteHttpMcp": { "type": "array", "control": "profile", "credentialSafe": true, "description": "Remote HTTP MCP configuration supplied separately from feature switches" },
+    "nativeProviders": { "type": "array", "control": "profile-route", "credentialSafe": true, "description": "Pi native provider configuration derived from the selected model route" },
+    "toolSurface": { "type": "object", "control": "profile-harness", "digest": "toolSurfaceDigest" },
+    "mcpProviders": { "type": "array", "control": "profile", "credentialSafe": true },
+    "subagents": { "type": "object", "control": "profile-route", "properties": { "enabled": "boolean", "strategy": ["native", "disabled"], "modelSource": ["same-as-parent", "explicit-route"] } },
+    "contextLimit": { "type": "integer", "control": "model-route", "enforcement": "client-request", "minimum": 1 },
+    "effort": { "type": "enum", "control": "model-route", "values": ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] },
+    "maxOutputTokens": { "type": "integer", "control": "model-route", "enforcement": "client-request", "minimum": 1 },
+    "compatibilityProxy": { "type": "object", "control": "route-profile", "credentialSafe": true },
+    "containerSandbox": { "type": "boolean", "control": "execution", "default": true, "requiredForFormalRun": true, "userEditable": false },
+    "throughputCap": { "type": "object", "control": "external-proxy", "requiresExternalEnforcement": true, "requiresEvidence": true }
+  },
+  "harnesses": {
+    "claude-code": { "id": "cindy-claude", "features": ["projectContext", "makerMemory", "nativeMemory", "attachments"], "supportedModelIds": ["claude-sonnet-4-6"], "defaultModel": { "provider": "anthropic", "requestedId": "claude-sonnet-4-6", "effort": "high" } },
+    "codex": { "id": "cindy-codex", "features": ["projectContext", "makerMemory", "nativeMemory", "attachments"], "supportedModelIds": ["gpt-5.4-mini"], "defaultModel": { "provider": "openai", "requestedId": "gpt-5.4-mini", "effort": "high" } },
+    "pi": { "id": "cindy-pi", "features": ["projectContext", "makerMemory", "nativeMemory", "attachments", "piProjectSkills"], "supportedModelIds": ["claude-sonnet-4-6"], "defaultModel": { "provider": "cindy", "requestedId": "claude-sonnet-4-6", "contextLimit": 200000, "maxOutputTokens": 32000, "effort": "high" } }
+  },
+  "constraints": [{ "type": "mutuallyExclusive", "features": ["makerMemory", "nativeMemory"], "harnesses": ["claude-code", "codex"], "offLabel": "关闭所有自动记忆" }]
+}

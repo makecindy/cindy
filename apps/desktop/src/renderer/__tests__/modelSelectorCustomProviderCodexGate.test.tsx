@@ -8,9 +8,12 @@
  * 不得因缺少 Cindy AI 网关 key 被置灰。
  */
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The shared-quota rail observes auth; this component fixture has no auth host.
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -142,7 +145,7 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
 
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
-  isChatBridgedCodexProvider: () => false,
+  isLocalOnlyProviderForAgent: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: string | null }) =>
     agentKind ?? 'codex',
@@ -154,7 +157,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/state/providerModelMemory', () => ({
+vi.mock('@/state/providerModelMemory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/state/providerModelMemory')>()),
   useProviderModelMemoryVersion: () => 0,
 }));
 
@@ -163,6 +167,7 @@ vi.mock('@/state/deviceLinkModelMirror', () => ({
 }));
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -174,18 +179,22 @@ beforeEach(() => {
   };
 });
 
-function renderSelector(props: Partial<React.ComponentProps<typeof ModelSelector>> = {}) {
+function renderSelector(
+  props: Partial<React.ComponentProps<typeof ModelSelector>> = {},
+  withConfirmDialog = false,
+) {
+  const selector = React.createElement(ModelSelector, {
+    modelId: 'codex/gpt-5.5',
+    effort: 'high',
+    onModelChange: vi.fn(),
+    onEffortChange: vi.fn(),
+    vendorKey: 'codex',
+    currentProviderId: 'xd',
+    onProviderChange: vi.fn(),
+    ...props,
+  });
   return render(
-    React.createElement(ModelSelector, {
-      modelId: 'codex/gpt-5.5',
-      effort: 'high',
-      onModelChange: vi.fn(),
-      onEffortChange: vi.fn(),
-      vendorKey: 'codex',
-      currentProviderId: 'xd',
-      onProviderChange: vi.fn(),
-      ...props,
-    }),
+    withConfirmDialog ? <ConfirmDialogProvider>{selector}</ConfirmDialogProvider> : selector,
   );
 }
 
@@ -217,4 +226,72 @@ describe('ModelSelector codex/ key gate scope (#1568)', () => {
     expect(gatewayRow).toBeTruthy();
     expect(gatewayRow?.getAttribute('aria-disabled')).toBe('true');
   });
+});
+
+// Production entry/result: a real ModelSelector and ConfirmDialogProvider route
+// a requires_payment row to billing only after the user's confirmation.
+// Historical bug: modelSelectorPaymentNavigation used to guard the HashRouter
+// boundary: pushState(pathname) does not make the Desktop hash router navigate.
+// Coverage gap: UnifiedModelPanel tests stop at onPaymentRequired; the removed
+// source test never clicked the confirmation or observed the resulting URL.
+// Minimal input: one paid model, cancel once, then accept; tier: unit (jsdom).
+// Reuse this file's real selector harness; no new environment or real waits.
+// Standalone (2026-10-16): 3 passed; pnpm exec vitest run <this file>
+// --maxWorkers=1: 5.93s process wall, 4.92s Vitest (3.64s collect, 474ms tests).
+// This existing selector harness's module collection dominates the 5s target;
+// the new case shares those imports and uses fake time for the provider queue.
+it('keeps a paid-model cancellation on the current route, then confirms the billing hash route', async () => {
+  const originalHref = window.location.href;
+  const originalHistoryState = window.history.state;
+  vi.useFakeTimers();
+  window.location.hash = '#/model-selector';
+  const onModelChange = vi.fn();
+  const onProviderChange = vi.fn();
+  providersRef.providers = [{
+    ...(providersRef.DEFAULT_PROVIDERS[1] as Record<string, unknown>),
+    models: {
+      codex: [{
+        id: 'codex/gpt-paid',
+        name: 'Paid model',
+        contextWindow: 200000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        availability: 'requires_payment',
+      }],
+    },
+  }];
+
+  try {
+    renderSelector({ onModelChange, onProviderChange }, true);
+    await openDropdown();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: /Paid model/ }));
+    });
+    expect(window.location.hash).toBe('#/model-selector');
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'commonUi.confirmDialog.cancel',
+      }));
+    });
+    expect(window.location.hash).toBe('#/model-selector');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    // The real provider drains its dismissed-dialog queue after 200ms.
+    await act(async () => { vi.advanceTimersByTime(200); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: /Paid model/ }));
+    });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'newChat.modelSelector.paymentRequired.action',
+      }));
+    });
+    expect(window.location.hash).toBe('#/settings?tab=billing');
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(onProviderChange).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+    window.history.replaceState(originalHistoryState, '', originalHref);
+  }
 });

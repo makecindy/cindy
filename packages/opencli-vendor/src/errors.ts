@@ -1,0 +1,301 @@
+/**
+ * Unified error types for opencli.
+ *
+ * All errors thrown by the framework should extend CliError so that
+ * the top-level handler in commanderAdapter.ts can render consistent,
+ * helpful output with emoji-coded severity and actionable hints.
+ *
+ * ## Exit codes
+ *
+ * opencli follows Unix conventions (sysexits.h) for process exit codes:
+ *
+ *   0   Success
+ *   1   Generic / unexpected error
+ *   2   Argument / usage error          (ArgumentError)
+ *  66   No input / empty result         (EmptyResultError)
+ *  69   Service unavailable             (BrowserConnectError, adapter load failures)
+ *  75   Temporary failure, retry later  (TimeoutError)   EX_TEMPFAIL
+ *  77   Permission denied / auth needed (AuthRequiredError)
+ *  78   Configuration error             (ConfigError)
+ * 130   Interrupted by Ctrl-C
+ */
+import type { ObservationTraceReceipt } from './observation/events.js';
+
+// ── Exit code table ──────────────────────────────────────────────────────────
+
+export const EXIT_CODES = {
+  SUCCESS:         0,
+  GENERIC_ERROR:   1,
+  USAGE_ERROR:     2,   // Bad arguments / command misuse
+  EMPTY_RESULT:   66,   // No data / not found           (EX_NOINPUT)
+  SERVICE_UNAVAIL:69,   // Daemon / browser unavailable  (EX_UNAVAILABLE)
+  TEMPFAIL:       75,   // Timeout — try again later     (EX_TEMPFAIL)
+  NOPERM:         77,   // Auth required / permission    (EX_NOPERM)
+  CONFIG_ERROR:   78,   // Missing / invalid config      (EX_CONFIG)
+  INTERRUPTED:   130,   // Ctrl-C / SIGINT
+} as const;
+
+export type ExitCode = typeof EXIT_CODES[keyof typeof EXIT_CODES];
+
+// ── Base class ───────────────────────────────────────────────────────────────
+
+export class CliError extends Error {
+  /** Machine-readable error code (e.g. 'BROWSER_CONNECT', 'AUTH_REQUIRED') */
+  readonly code: string;
+  /** Human-readable hint on how to fix the problem */
+  readonly hint?: string;
+  /** Unix process exit code — defaults to 1 (generic error) */
+  readonly exitCode: ExitCode;
+
+  constructor(code: string, message: string, hint?: string, exitCode: ExitCode = EXIT_CODES.GENERIC_ERROR) {
+    super(message);
+    this.name = new.target.name;
+    this.code = code;
+    this.hint = hint;
+    this.exitCode = exitCode;
+  }
+}
+
+const TRACE_RECEIPT_SYMBOL = Symbol.for('opencli.traceReceipt');
+
+export function attachTraceReceipt(err: unknown, receipt: ObservationTraceReceipt): void {
+  if (!err || (typeof err !== 'object' && typeof err !== 'function')) return;
+  try {
+    Object.defineProperty(err, TRACE_RECEIPT_SYMBOL, {
+      value: receipt,
+      enumerable: false,
+      configurable: true,
+    });
+  } catch {
+    // Non-extensible thrown objects are rare; trace export should never mask the
+    // original adapter error just because metadata attachment failed.
+  }
+}
+
+export function getTraceReceipt(err: unknown): ObservationTraceReceipt | undefined {
+  if (!err || (typeof err !== 'object' && typeof err !== 'function')) return undefined;
+  return (err as Record<PropertyKey, unknown>)[TRACE_RECEIPT_SYMBOL] as ObservationTraceReceipt | undefined;
+}
+
+// ── Typed subclasses ─────────────────────────────────────────────────────────
+
+export type BrowserConnectKind = 'daemon-not-running' | 'extension-not-connected' | 'profile-required' | 'profile-disconnected' | 'command-failed' | 'unknown';
+
+export class BrowserConnectError extends CliError {
+  readonly kind: BrowserConnectKind;
+  constructor(message: string, hint?: string, kind: BrowserConnectKind = 'unknown') {
+    super('BROWSER_CONNECT', message, hint, EXIT_CODES.SERVICE_UNAVAIL);
+    this.kind = kind;
+  }
+}
+
+export class CommandExecutionError extends CliError {
+  constructor(message: string, hint?: string) {
+    super('COMMAND_EXEC', message, hint, EXIT_CODES.GENERIC_ERROR);
+  }
+}
+
+export class ConfigError extends CliError {
+  constructor(message: string, hint?: string) {
+    super('CONFIG', message, hint, EXIT_CODES.CONFIG_ERROR);
+  }
+}
+
+export class AuthRequiredError extends CliError {
+  readonly domain: string;
+  constructor(domain: string, message?: string, hint?: string) {
+    super(
+      'AUTH_REQUIRED',
+      message ?? `Not logged in to ${domain}`,
+      hint ?? `Please open Chrome or Chromium and log in to https://${domain}`,
+      EXIT_CODES.NOPERM,
+    );
+    this.domain = domain;
+  }
+}
+
+export class TimeoutError extends CliError {
+  constructor(label: string, seconds: number, hint?: string) {
+    super(
+      'TIMEOUT',
+      `${label} timed out after ${seconds}s`,
+      hint ?? 'Try again, or increase the global browser command timeout with OPENCLI_BROWSER_COMMAND_TIMEOUT (seconds)',
+      EXIT_CODES.TEMPFAIL,
+    );
+  }
+}
+
+export class ArgumentError extends CliError {
+  constructor(message: string, hint?: string) {
+    super('ARGUMENT', message, hint, EXIT_CODES.USAGE_ERROR);
+  }
+}
+
+/**
+ * Thrown when a write command cannot run because another write command already
+ * holds the same persistent site session (see session-lease.ts). Uses TEMPFAIL
+ * so callers/scripts treat it as "retry later" rather than a permanent failure.
+ */
+export class SessionBusyError extends CliError {
+  constructor(message: string, hint?: string) {
+    super('SESSION_BUSY', message, hint, EXIT_CODES.TEMPFAIL);
+  }
+}
+
+export class EmptyResultError extends CliError {
+  constructor(command: string, hint?: string) {
+    super(
+      'EMPTY_RESULT',
+      `${command} returned no data`,
+      hint ?? 'The page structure may have changed, or you may need to log in',
+      EXIT_CODES.EMPTY_RESULT,
+    );
+  }
+}
+
+export function adapterLoadError(message: string, hint?: string): CliError {
+  return new CliError('ADAPTER_LOAD', message, hint, EXIT_CODES.SERVICE_UNAVAIL);
+}
+
+export function selectorError(selector: string, hint?: string): CliError {
+  return new CliError(
+    'SELECTOR',
+    `Could not find element: ${selector}`,
+    hint ?? 'The page UI may have changed. Please report this issue.',
+    EXIT_CODES.GENERIC_ERROR,
+  );
+}
+
+export class PluginError extends CliError {
+  constructor(message: string, hint?: string) {
+    super('PLUGIN', message, hint, EXIT_CODES.GENERIC_ERROR);
+  }
+}
+
+/**
+ * Thrown when a JSON endpoint returns HTML instead of JSON — typically a login
+ * wall, rate-limit page, or WAF challenge. Surfaced as a structured error so
+ * callers can show "re-login or wait out the rate limit" guidance instead of
+ * the cryptic `SyntaxError: Unexpected token '<', "<!DOCTYPE "...` that a naive
+ * JSON.parse on an HTML body produces.
+ *
+ * `bodyPreview` is the first 100 chars of the response body (after trimming
+ * leading whitespace) — useful for logs / debugging without dumping the full
+ * page.
+ */
+export class LoginWallError extends CliError {
+  readonly status: number;
+  readonly url: string;
+  readonly bodyPreview: string;
+  constructor(
+    message: string,
+    status: number,
+    url: string,
+    bodyPreview: string,
+    hint?: string,
+  ) {
+    super(
+      'LOGIN_WALL',
+      message,
+      hint ?? 'The server returned an HTML page instead of JSON — likely a login wall, rate limit, or WAF challenge. Try re-logging in via your browser, or wait a few minutes before retrying.',
+      EXIT_CODES.NOPERM,
+    );
+    this.status = status;
+    this.url = url;
+    this.bodyPreview = bodyPreview;
+  }
+}
+
+// ── Error Envelope ──────────────────────────────────────────────────────────
+
+/** Structured error output — unified contract for all consumers (AI agents, scripts, humans). */
+export interface ErrorEnvelope {
+  ok: false;
+  error: {
+    code: string;
+    message: string;
+    help?: string;
+    exitCode: number;
+    stack?: string;
+    cause?: string;
+  };
+  trace?: {
+    traceId: string;
+    dir: string;
+    summaryPath: string;
+    receiptPath: string;
+    status: ObservationTraceReceipt['status'];
+  };
+}
+
+// ── Utilities ───────────────────────────────────────────────────────────────
+
+/** Extract a human-readable message from an unknown caught value. */
+export function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Serialize an error cause chain into a readable string. */
+function serializeCause(cause: unknown, depth: number = 0): string {
+  if (depth > 10) return '(cause chain truncated)';
+  if (cause instanceof Error) {
+    const parts = [cause.message];
+    if (cause.cause) parts.push(`  caused by: ${serializeCause(cause.cause, depth + 1)}`);
+    return parts.join('\n');
+  }
+  return String(cause);
+}
+
+/** Build an ErrorEnvelope from any caught value. */
+export function toEnvelope(err: unknown): ErrorEnvelope {
+  const cause = err instanceof Error && err.cause ? serializeCause(err.cause) : undefined;
+  const traceReceipt = getTraceReceipt(err);
+  const trace = traceReceipt ? {
+    traceId: traceReceipt.traceId,
+    dir: traceReceipt.traceDir,
+    summaryPath: traceReceipt.summaryPath,
+    receiptPath: traceReceipt.receiptPath,
+    status: traceReceipt.status,
+  } : undefined;
+  // Duck typing: accept own CliError instances AND cross-package copies that
+  // carry the same shape. `instanceof` fails when the throwing module resolves
+  // a different copy of @jackwener/opencli (e.g. a plugin with its own
+  // node_modules) — those errors used to degrade to UNKNOWN and lose `hint`.
+  //
+  // `exitCode` is the discriminator: CliError's constructor always assigns it
+  // (defaulting to GENERIC_ERROR), while Node system errors carry a string
+  // `code` (ENOENT, ECONNREFUSED, EACCES) and a string `message` but never an
+  // `exitCode`. Without this check those would be reported with their errno as
+  // the envelope `code`, silently widening the contract that callers switch on.
+  const isCliErrorLike =
+    err !== null &&
+    typeof err === 'object' &&
+    typeof (err as any).code === 'string' &&
+    typeof (err as any).message === 'string' &&
+    typeof (err as any).exitCode === 'number';
+  if (err instanceof CliError || isCliErrorLike) {
+    const e = err as any;
+    return {
+      ok: false,
+      error: {
+        code: e.code,
+        message: e.message,
+        ...(typeof e.hint === 'string' && e.hint ? { help: e.hint } : {}),
+        exitCode: e.exitCode ?? EXIT_CODES.GENERIC_ERROR,
+        ...(cause ? { cause } : {}),
+      },
+      ...(trace ? { trace } : {}),
+    };
+  }
+  const msg = getErrorMessage(err);
+  return {
+    ok: false,
+    error: {
+      code: 'UNKNOWN',
+      message: msg,
+      exitCode: EXIT_CODES.GENERIC_ERROR,
+      ...(cause ? { cause } : {}),
+    },
+    ...(trace ? { trace } : {}),
+  };
+}

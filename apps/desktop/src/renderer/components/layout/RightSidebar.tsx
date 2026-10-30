@@ -76,9 +76,9 @@ interface RightSidebarProps {
   reserveLeftChromeActions?: boolean;
   /** 工具面板位于最左且左侧栏为 rail 时，顶栏承接 ChromeActions 的 no-drag 命中区。 */
   railChromeActionsHitHole?: boolean;
-  /** 「在新窗口中打开侧边栏」:开偏好 + 弹出子窗口。Win 端 TabBar 内渲染按钮
-   *  (Mac 走 MainLayout 浮层,不经此 prop)。 */
-  onDetach?: () => void;
+  /** 「在独立窗口中打开」某个页签:主窗侧栏继续存在,只把该页签弹出到自己的窗口。
+   *  Shell 的顶栏按钮作用于当前页签,页签右键菜单作用于被点的页签。 */
+  onDetachTab?: (tabId: string, targetWindowId?: string) => void;
   /** M2(mac 交换态):面板当前贴哪条边。透传给 Shell —— 'left' 时 Shell 顶栏
    *  右端渲染 detach / maximize 真按钮(折叠 toggle 恒在 MainLayout 窗口右上浮层)。 */
   panelSide?: 'left' | 'right';
@@ -102,7 +102,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     remoteHostId,
     deviceLinkDeviceId,
     subagentsAvailable,
-    onDetach,
+    onDetachTab,
     panelSide,
     onAllTabsClosed,
   },
@@ -275,7 +275,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           isMaximized={isMaximized}
           reserveLeftChromeActions={reserveLeftChromeActions}
           railChromeActionsHitHole={railChromeActionsHitHole}
-          onDetach={onDetach}
+          onDetachTab={onDetachTab}
           // B3:主窗口内嵌形态 Tab 条空白处 = 拖面板手势面(窗口拖动走左栏顶行)。
           chromeWindowDrag={false}
           panelSide={panelSide}

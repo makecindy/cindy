@@ -96,6 +96,13 @@ export interface RelinkOutcome {
   error?: Error;
 }
 
+export type CodexAuthSnapshotKind = 'copied' | 'copy-unsupported' | 'swap-failed-intact' | 'lost';
+
+export interface CodexAuthSnapshotOutcome {
+  kind: CodexAuthSnapshotKind;
+  error?: Error;
+}
+
 export interface CodexAuthLinkDiagnostics {
   linkType: 'symlink' | 'hardlink' | 'file' | 'missing' | 'dangling-symlink' | 'unknown';
   healthy: boolean;
@@ -182,6 +189,53 @@ export async function recoverCodexAuth(
   } catch {
     // 不再 copy token 兜底：可写副本会变成 refresh-token 孤岛。
     return false;
+  }
+}
+
+/**
+ * Publish a read-only Dev snapshot without sharing the source inode.
+ *
+ * A symlink/hardlink is intentionally not used here: the Codex child may
+ * refresh auth.json in place, and a shared inode would let that write mutate
+ * the Release/native credential. The source is copied to a sibling staging
+ * file and then atomically published as the local auth.json.
+ */
+export async function copyCodexAuthSnapshot(
+  systemAuth: string,
+  myAuth: string,
+  platform: NodeJS.Platform = process.platform,
+  execFileImpl: typeof execFileP = execFileP,
+): Promise<CodexAuthSnapshotOutcome> {
+  const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
+  try {
+    const sourceStat = await fsp.stat(systemAuth);
+    await fsp.copyFile(systemAuth, sidecar);
+    await fsp.chmod(sidecar, Number(sourceStat.mode & 0o777)).catch(() => undefined);
+  } catch (error) {
+    await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    return { kind: 'copy-unsupported', error: error as Error };
+  }
+
+  try {
+    if (platform === 'win32') {
+      try {
+        await fsp.rm(myAuth, { force: true });
+      } catch (rmError) {
+        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
+          throw rmError;
+        }
+        await fsp.rm(myAuth, { force: true });
+      }
+    }
+    await fsp.rename(sidecar, myAuth);
+    await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    return { kind: 'copied' };
+  } catch (error) {
+    await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    if (await pathEntryExists(myAuth)) {
+      return { kind: 'swap-failed-intact', error: error as Error };
+    }
+    return { kind: 'lost', error: error as Error };
   }
 }
 

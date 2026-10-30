@@ -136,4 +136,48 @@ describe('ImageHoverPreview', () => {
     expect(parseFloat(image.style.width)).toBeCloseTo(176);
     expect(parseFloat(image.style.height)).toBeCloseTo(117.33);
   });
+
+  it('overlays tray annotation strokes at the displayed image size (outline layer first)', () => {
+    const anchor = document.createElement('span');
+    anchor.getBoundingClientRect = () =>
+      ({
+        top: 400,
+        left: 100,
+        width: 56,
+        height: 56,
+        right: 156,
+        bottom: 456,
+        x: 100,
+        y: 400,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const anchorRef = { current: anchor } as RefObject<HTMLElement | null>;
+    render(
+      <ImageHoverPreview
+        open
+        anchorRef={anchorRef}
+        src="cindy-media://blobs/tray.png"
+        alt="tray.png"
+        annotationStrokes={[{ points: [{ x: 0.1, y: 0.1 }, { x: 0.9, y: 0.9 }] }]}
+      />,
+    );
+    const image = screen.getByRole('img', { name: 'tray.png' });
+    // 尺寸未知前不画叠加层(避免错位的一帧)。
+    expect(document.body.querySelector('[data-annotation-layer]')).toBeNull();
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 400 },
+      naturalHeight: { configurable: true, value: 200 },
+    });
+    fireEvent.load(image);
+
+    const svg = document.body.querySelector('svg');
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 400 200');
+    expect(parseFloat(svg?.style.width ?? '')).toBeCloseTo(parseFloat(image.style.width));
+    expect(parseFloat(svg?.style.height ?? '')).toBeCloseTo(parseFloat(image.style.height));
+    const layers = Array.from(svg?.querySelectorAll('[data-annotation-layer]') ?? []).map((el) =>
+      el.getAttribute('data-annotation-layer'),
+    );
+    expect(layers).toEqual(['outline', 'stroke']);
+  });
 });
+

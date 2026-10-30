@@ -92,6 +92,21 @@ afterEach(() => {
 });
 
 describe('createResponsesHandler', () => {
+  it.each(['max', 'ultra'])('honors declared %s capability without changing legacy providers', async (effort) => {
+    const seen: Array<{ reasoning: { effort: string } }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return new Response(sse(OK_SSE), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const capabilities = vi.fn((model: string) => model === 'gpt-6-astra'
+      ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : ['low', 'high', 'xhigh']);
+    const handler = createResponsesHandler({ providers: [providerConfig({ supportedReasoningEfforts: capabilities })] });
+    await invoke(handler, { model: 'chatgpt/gpt-6-astra', messages: [] }, { prefs: { reasoningEffort: effort } });
+    await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [] }, { prefs: { reasoningEffort: effort } });
+    expect(capabilities).toHaveBeenCalledWith('gpt-6-astra');
+    expect(seen.map((body) => body.reasoning.effort)).toEqual([effort, 'xhigh']);
+  });
+
   it('prefs.fast + effort → 上游请求体 service_tier / reasoning.effort;SSE 翻译写回', async () => {
     const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
@@ -117,6 +132,25 @@ describe('createResponsesHandler', () => {
     const standard = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: true }, { prefs: { fast: false } });
     expect(seen[0].body.service_tier).toBeUndefined();
     expect(standard.text).toContain('"service_tier":"default"');
+  });
+
+  it.each([true, false])('Fast model mapping changes wire model only, preserves billing identity (stream=%s)', async stream => {
+    const seen: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seen.push(JSON.parse(String(init.body)));
+      return new Response(sse(OK_SSE), { headers: { 'content-type': 'text/event-stream' } });
+    }));
+    const handler = createResponsesHandler({ providers: [providerConfig({ prefix: 'xai/',
+      fastModel: model => model === 'grok-4.7' ? 'grok-4.7-build-fast' : undefined,
+    })] });
+    const result = await invoke(handler, { model: 'xai/grok-4.7', messages: [], stream }, { prefs: { fast: true } });
+    expect(seen[0].model).toBe('grok-4.7-build-fast');
+    expect(seen[0].service_tier).toBeUndefined();
+    expect(result.text).toContain('"model":"xai/grok-4.7"');
+    expect(result.text).toContain('"service_tier":"priority"');
+    await invoke(handler, { model: 'xai/grok-4.7', messages: [], stream }, { prefs: { fast: false } });
+    expect(seen[1].model).toBe('grok-4.7');
+    expect(seen[1].service_tier).toBeUndefined();
   });
 
   it('provider.strictFunctionTools 是生产控制面:启用 provider 逐工具 strict,未启用 provider 全 false', async () => {
@@ -385,6 +419,38 @@ describe('createResponsesHandler', () => {
       content: [{ type: 'text', text: 'hi' }],
       stop_reason: 'end_turn',
     });
+  });
+
+  it.each([false, undefined])('缺少 Content-Type 的 SSE 在非流式 fallback 中仍收集完整 Message (stream=%s)', async stream => {
+    const fetchMock = vi.fn(async () => new Response(sse(OK_SSE), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+
+    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], ...(stream === undefined ? {} : { stream }) });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.text)).toMatchObject({
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hi' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+  });
+
+  it('缺少 Content-Type 的 Responses JSON 不被误认作 SSE', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(rawStream(JSON.stringify({
+      id: 'resp_1',
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'json' }] }],
+      usage: { input_tokens: 2, output_tokens: 1 },
+    })), { status: 200 })));
+    const handler = createResponsesHandler({ providers: [providerConfig()] });
+
+    const result = await invoke(handler, { model: 'chatgpt/gpt-5.5', messages: [], stream: false });
+
+    expect(result.status).toBe(200);
+    expect(JSON.parse(result.text)).toMatchObject({ content: [{ type: 'text', text: 'json' }] });
   });
 
   it('stream:false 上游 SSE 事件跨多行 data: → 按空行合并后解析,不误判成坏帧(review 反馈)', async () => {

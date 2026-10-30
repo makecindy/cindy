@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { BUNDLED_CATALOG, buildRegistry, type Catalog } from '@cindy/model-providers';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
+import { localAvailableModels, readOrcaWorkerProviderRoutingContext } from '../orcaProviderRoutingContext.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -27,7 +27,24 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(wiring).toContain('providerService: getDesktopProviderService()');
     expect(wiring).toContain('getCatalog: getActiveCatalog');
     expect(routingSource).toContain('waitForDiscovery: true');
-    expect(registerSource).toContain('getProviderRoutingContext,');
+    expect(registerSource).toContain('getProviderRoutingContext: async (agent, remoteHostId, agentDeviceId) => agentDeviceId && !remoteHostId');
+    // lead 的 Agent 在另一台电脑运行时按那台的目录；其余与原来一致。
+    expect(registerSource).toContain("deviceWorkerRoutingContext(await readDeviceProviderViews(remoteBackgroundInvoke, agentDeviceId), agent ?? 'claude-code')");
+    expect(registerSource).toContain('sshCodexWorkerRoutingContext(await readSshCodexModelList({ id: remoteHostId }, listSshCodexProviders))');
+  });
+
+  it('resumes an idle parent with the stored provider so Bot completions can wake it', () => {
+    const start = registerSource.indexOf('async function sendToSessionInternal(params: {');
+    const resume = registerSource.indexOf('const createOpts = buildCreateOptsWithStderr({',
+      registerSource.indexOf('const persistUserMessage = async (): Promise<void> => {', start),
+    );
+    const end = registerSource.indexOf('await synthesizeOrcaVendorOptionsFromDb(targetSessionId, createOpts);', resume);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(resume).toBeGreaterThan(start);
+    expect(end).toBeGreaterThan(resume);
+    const lazyResume = registerSource.slice(resume, end);
+    expect(lazyResume).toContain('resumeSessionId: meta.sdkSessionId');
+    expect(lazyResume).toContain('...(dbRow.providerId ? { providerId: dbRow.providerId } : {})');
   });
 
   it('validates explicit execution config before allocating a handoff worktree', () => {
@@ -44,6 +61,47 @@ describe('Orca provider routing snapshot wiring', () => {
     );
     expect(validation).toBeGreaterThanOrEqual(0);
     expect(worktreeAllocation).toBeGreaterThan(validation);
+  });
+
+  it.each([['openai', 'codex']] as const)('marks %s accounts local-only for Pi before SSH worker creation', async (brand, native) => {
+    const builtin = BUNDLED_CATALOG.providers.find((provider) => provider.id === brand)!;
+    const account = { ...builtin, id: 'user-account', auth: { method: 'oauth' as const, native } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [account, builtin] };
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: {
+        listProviders: vi.fn(async () => buildRegistry(catalog, { [account.id]: true, [brand]: true })),
+      },
+      getCatalog: () => catalog,
+    });
+    expect(routing.availability.pi.find((provider) => provider.id === account.id)?.localOnlyForSsh).toBe(true);
+    const nativeAgent = brand === 'openai' ? 'codex' : 'claude-code';
+    expect(routing.availability[nativeAgent].find((provider) => provider.id === brand)?.localOnlyForSsh).toBe(false);
+  });
+
+  it('never offers the Claude subscription (builtin or retired account) to Pi Orca workers', async () => {
+    const builtin = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'anthropic')!;
+    const account = { ...builtin, id: 'user-account', agents: [], auth: { method: 'oauth' as const, native: 'claude' as const } };
+    const catalog = { ...BUNDLED_CATALOG, providers: [account, builtin] };
+    const routing = await readOrcaWorkerProviderRoutingContext({
+      providerService: {
+        listProviders: vi.fn(async () => buildRegistry(catalog, { [account.id]: true, anthropic: true })),
+      },
+      getCatalog: () => catalog,
+    });
+    for (const agent of ['pi', 'codex'] as const) {
+      expect(routing.availability[agent].some((provider) => provider.id === 'anthropic' || provider.id === account.id)).toBe(false);
+    }
+    // 远端任务不能用 Claude 订阅(它只在本机 Claude Code 的登录里),SSH worker 不选它。
+    expect(routing.availability['claude-code'].find((provider) => provider.id === 'anthropic')?.localOnlyForSsh).toBe(true);
+  });
+
+  it('rejects SSH account switching before deferring or replacing the running route', () => {
+    const guard = registerSource.indexOf("throwIpcError('INVALID_PARAMS', 'This provider requires local execution')");
+    expect(guard).toBeGreaterThan(-1);
+    expect(registerSource.slice(guard - 450, guard)).toContain('runtimeStatus.remoteHostId');
+    expect(registerSource.slice(guard - 300, guard)).toContain('isLocalOnlyProviderForAgent');
+    expect(registerSource.indexOf('const deferLockedSelection =', guard)).toBeGreaterThan(guard);
+    expect(registerSource.indexOf('const previousRuntime =', guard)).toBeGreaterThan(guard);
   });
 
   it('waits for the first Anthropic claim and routes the discovered model from the same full snapshot', async () => {
@@ -109,5 +167,28 @@ describe('Orca provider routing snapshot wiring', () => {
     expect(routing.resolveDefaultProviderIdForModel('claude-code', 'claude-first-fire')).toBe(
       'anthropic',
     );
+  });
+});
+
+describe('localAvailableModels (#6970)', () => {
+  it('drops catalog models that no enabled provider offers', () => {
+    const models = localAvailableModels(
+      [
+        { id: 'codex/gpt-6.1-sol', displayName: 'GPT 6.1 Sol' },
+        { id: 'anthropic/claude-opus-5-5', displayName: 'Opus 5.5' },
+      ],
+      [{ id: 'chatgpt', name: 'ChatGPT', models: ['codex/gpt-6.1-sol'] }],
+      (_agent, model) => (model === 'codex/gpt-6.1-sol' ? 'chatgpt' : null),
+      'claude-code',
+    );
+    // 提供商被关后只剩目录骨架的模型(providers 会是空)不能再暴露给 Lead。
+    expect(models).toEqual([
+      {
+        id: 'codex/gpt-6.1-sol',
+        label: 'GPT 6.1 Sol',
+        providers: [{ id: 'chatgpt', name: 'ChatGPT' }],
+        defaultProviderId: 'chatgpt',
+      },
+    ]);
   });
 });

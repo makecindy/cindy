@@ -22,6 +22,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { withAccountDataAccess } from './account-data-access.js';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { MemoryToolRegistry } from './cindy_memoryToolRegistry.js';
@@ -56,14 +57,14 @@ const D_CALL_TOOL =
 
 const CATEGORY_ENUM = ['read', 'write', 'maintain', 'search'] as const;
 
-function registerListToolsEntry(server: McpServer, registry: MemoryToolRegistry): void {
+function registerListToolsEntry(server: McpServer, registry: MemoryToolRegistry, deps: MemoryMcpDeps): void {
   server.tool(
     'list_tools',
     D_LIST_TOOLS,
     {
       category: z.enum(CATEGORY_ENUM).optional().describe('工具类目, 不传时返回所有类目概览'),
     },
-    async ({ category }) => {
+    async ({ category }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => {
       if (category) {
         const tools = registry.list(category);
         return {
@@ -99,11 +100,11 @@ function registerListToolsEntry(server: McpServer, registry: MemoryToolRegistry)
           },
         ],
       };
-    },
+    }),
   );
 }
 
-function registerCallToolEntry(server: McpServer, registry: MemoryToolRegistry): void {
+function registerCallToolEntry(server: McpServer, registry: MemoryToolRegistry, deps: MemoryMcpDeps): void {
   server.tool(
     'call_tool',
     D_CALL_TOOL,
@@ -111,7 +112,7 @@ function registerCallToolEntry(server: McpServer, registry: MemoryToolRegistry):
       name: z.string().describe('工具名, 从 list_tools 获取 (e.g. memory_write / memory_search)'),
       args: jsonObjectArg('工具参数 JSON; 不确定 schema 可先传 {} 触发反馈'),
     },
-    async ({ name, args }) => registry.call(name, args),
+    async ({ name, args }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async () => registry.call(name, args)),
   );
 }
 
@@ -136,8 +137,8 @@ export function createCindyMemoryMcpServer(deps: MemoryMcpDeps): McpServer {
   registerMemoryConsolidateTool(registry, deps);
   registerMemoryReviewTool(registry, deps);
 
-  registerListToolsEntry(server, registry);
-  registerCallToolEntry(server, registry);
+  registerListToolsEntry(server, registry, deps);
+  registerCallToolEntry(server, registry, deps);
 
   return server;
 }

@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { RotateCcw, TriangleAlert } from 'lucide-react';
 import type { TFunction } from 'i18next';
@@ -65,23 +66,19 @@ export class TabBodyErrorBoundary extends Component<Props, State> {
                 {t('rightSidebar.panelError.description')}
               </p>
             </div>
-            <button
+            <Button variant="cta" size="sm" compact
               type="button"
               onClick={this.retry}
-              className="inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-12 font-medium transition-opacity hover:opacity-90"
-              style={{
-                backgroundColor: 'var(--accent-cta-bg)',
-                color: 'var(--accent-pure-cta-fg)',
-              }}
             >
               <RotateCcw size={13} aria-hidden="true" />
               {t('rightSidebar.panelError.reload')}
-            </button>
+            </Button>
           </div>
         </div>
       );
     }
 
-    return <div key={this.state.retryKey} className="flex min-h-0 flex-1 flex-col">{this.props.children}</div>;
+    return ( <div key={this.state.retryKey} className="flex min-h-0 flex-1 flex-col">{this.props.children}</div>
+    );
   }
 }

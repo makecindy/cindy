@@ -32,6 +32,8 @@ export interface CredentialStoreHealth {
    * 已处于 unavailable 时继续失败不再返回 true,避免重复广播。
    */
   noteReadFailure(): boolean;
+  /** Startup cannot restore a saved login: surface recovery immediately, without a live session. */
+  noteStartupFailure(): void;
   /**
    * 记一次成功的持久凭证读取,连续失败计数清零。
    * 返回 true 表示此前处于 unavailable、状态刚恢复(调用方应广播)。
@@ -55,6 +57,10 @@ export function createCredentialStoreHealth(
       if (unavailable || consecutiveFailures < threshold) return false;
       unavailable = true;
       return true;
+    },
+    noteStartupFailure(): void {
+      consecutiveFailures = threshold;
+      unavailable = true;
     },
     noteRecovered(): boolean {
       consecutiveFailures = 0;

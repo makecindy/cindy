@@ -6,10 +6,10 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import manifest from './test-workspaces.config.mjs';
-import { resolvePnpmInvocation } from './shared/pnpm-invocation.mjs';
 import {
   buildPnpmArgs,
   normalizeRelPath,
+  resolveTestInvocation,
   runCommand,
 } from './test-workspaces.mjs';
 
@@ -182,7 +182,7 @@ async function runSample({ workers, iteration, top }) {
     `cindy-desktop-worker-benchmark-${process.pid}-${workers}-${iteration}.json`,
   );
   const { cwd, pnpmArgs } = desktopUnitCommand(workers, outputFile);
-  const invocation = resolvePnpmInvocation(pnpmArgs);
+  const invocation = resolveTestInvocation(pnpmArgs);
   const startedAt = performance.now();
   try {
     const result = await runCommand(invocation.command, invocation.args, {

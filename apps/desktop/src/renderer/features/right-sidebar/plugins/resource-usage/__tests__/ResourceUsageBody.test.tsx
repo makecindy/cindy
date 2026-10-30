@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TabKindHostContext } from '../../../types';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  // 插值参数拼进返回值,让断言能区分「带了 title」与「裸 key」两种调用。
+  useTranslation: () => ({
+    t: (key: string, opts?: { title?: string }) =>
+      opts?.title != null ? `${key}:${opts.title}` : key,
+  }),
 }));
 
 vi.mock('@/components/ui/confirm-dialog', () => ({
@@ -208,5 +212,51 @@ describe('ResourceUsageBody local-only gate', () => {
 
     expect(onSample).toHaveBeenCalledOnce();
     expect(subscribe).toHaveBeenCalledOnce();
+  });
+
+  it('agent 行显示归属任务标题,并与进程树规模并列;无归属行不带标题', () => {
+    render(
+      <ResourceUsageBody
+        state={{}}
+        ctx={makeContext({ deviceLinkDeviceId: null })}
+        active
+        shellVisible
+      />,
+    );
+    act(() => {
+      sampleListener?.({
+        capturedAtMs: 1,
+        entries: [
+          {
+            pid: 11,
+            kind: 'agent-pi',
+            label: null,
+            cpuPercent: 1,
+            memoryKb: 2,
+            processCount: 2,
+            terminable: true,
+            sessionLabel: '修复登录页',
+          },
+          {
+            pid: 12,
+            kind: 'agent-pi',
+            label: null,
+            cpuPercent: 1,
+            memoryKb: 2,
+            processCount: 1,
+            terminable: false,
+          },
+        ],
+      });
+    });
+    expect(
+      screen.getByText(
+        'rightSidebar.resourceUsage.sessionDetail:修复登录页 · rightSidebar.resourceUsage.processCount',
+      ),
+    ).toBeTruthy();
+    // 只有带归属的行出现标题槽位（第 12 行无 sessionLabel）。
+    expect(
+      screen.getAllByText(/^rightSidebar\.resourceUsage\.sessionDetail:/),
+    ).toHaveLength(1);
   });
 });

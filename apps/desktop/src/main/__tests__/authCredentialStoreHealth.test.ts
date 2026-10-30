@@ -15,6 +15,16 @@ import {
  * 强制登出」的历史问题)。连续 N 次失败才升级、任何一次成功读取立即复位。
  */
 describe('authCredentialStoreHealth', () => {
+  it('startup read failure surfaces immediately and a later successful read clears it', () => {
+    const health = createCredentialStoreHealth();
+    health.noteStartupFailure();
+    expect(health.unavailable).toBe(true);
+    expect(health.noteReadFailure()).toBe(false);
+    expect(health.noteRecovered()).toBe(true);
+    expect(health.unavailable).toBe(false);
+    expect(health.noteReadFailure()).toBe(false);
+  });
+
   it('阈值之前保持瞬时语义,不升级', () => {
     const health = createCredentialStoreHealth(5);
     for (let i = 0; i < 4; i++) {
@@ -82,58 +92,74 @@ describe('authCredentialStoreHealth', () => {
  * authSessionExpiredDetection.test.ts 的源码守卫模式)。
  */
 describe('authManager credential-store escalation wiring', () => {
-  const authSource = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
-    /\r\n/g,
-    '\n',
-  );
+  const authSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authManager.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
-  it('transient-unreadable 分支喂失败计数并在翻转时广播,但仍保持瞬时语义', () => {
-    const start = authSource.indexOf('export async function refresh(): Promise<boolean> {');
-    const end = authSource.indexOf('const diskTokenChangedBeforeRefresh', start);
-    const body = authSource.slice(start, end);
-
-    // 升级钩子必须在 transient 分支内、且仍然 return false + 重排重试
-    // (升级不改变「不强踢用户」的语义,只是多了状态广播)。
-    expect(body).toContain('credentialStoreHealth.noteReadFailure()');
-    const noteIdx = body.indexOf('credentialStoreHealth.noteReadFailure()');
-    expect(noteIdx).toBeGreaterThan(body.indexOf('treating as transient'));
-    // 注意 refresh body 更早处(realm manifest 分支)也调用了同名重排函数,
-    // 必须取 noteReadFailure 之后的那一次。
-    const retryAfterNote = body.indexOf('scheduleRefreshRetryAfterTransientFailure();', noteIdx);
-    expect(retryAfterNote).toBeGreaterThan(noteIdx);
-    // 升级不改变瞬时语义:transient 分支内不得出现实际的过期 / 清态调用
-    // (匹配调用形态,避免误中提及函数名的注释)。
-    const transientBranch = body.slice(body.indexOf('treating as transient'), retryAfterNote);
-    expect(transientBranch).not.toContain('await expireRuntimeAuth(');
-    expect(transientBranch).not.toContain('clearAuth(');
+  it('keeps explicit login available for corrupt vaults when encryption is healthy', () => {
+    const expression = authSource.match(
+      /'cold-start-credential-reconcile-unavailable',\s*([\s\S]*?),\s*\);/,
+    )?.[1];
+    if (!expression) throw new Error('Credential reconciliation classifier was not found');
+    class AuthApiError extends Error {
+      constructor(public code: string) {
+        super(code);
+      }
+    }
+    const classify = new Function(
+      'credentialEncryptionUnavailable',
+      'error',
+      'AuthApiError',
+      'hasPotentiallyPersistedAuthCredentials',
+      `return (${expression});`,
+    );
+    const unavailable = new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(classify(false, unavailable, AuthApiError, () => true)).toBe(false);
+    expect(classify(true, unavailable, AuthApiError, () => true)).toBe(true);
+    expect(classify(true, unavailable, AuthApiError, () => false)).toBe(false);
+    expect(classify(true, new Error('unrelated'), AuthApiError, () => true)).toBe(false);
   });
 
-  it('成功读到持久会话时喂恢复并在翻转时广播', () => {
-    const start = authSource.indexOf('export async function refresh(): Promise<boolean> {');
-    const end = authSource.indexOf('const diskTokenChangedBeforeRefresh', start);
-    const body = authSource.slice(start, end);
-    expect(body).toContain(
-      'if (persistedSession !== null && credentialStoreHealth.noteRecovered())',
+  it('distinguishes an empty profile from records, backups, tombstones and access errors without decryption', () => {
+    const body = authSource.match(
+      /function hasPotentiallyPersistedAuthCredentials\(\): boolean \{([\s\S]*?)\n\}/,
+    )?.[1];
+    if (!body) throw new Error('Persisted credential probe was not found');
+    const keys = [
+      'AUTH_SESSION_KEY',
+      'AUTH_ACCOUNT_VAULT_KEY',
+      'AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY',
+      'LEGACY_RESOURCE_REFRESH_TOKEN_KEY',
+      'LEGACY_ACCOUNT_REFRESH_TOKEN_KEY',
+      'LEGACY_REFRESH_TOKEN_KEY',
+    ];
+    const check = new Function(
+      'fs',
+      'path',
+      'SAFE_STORAGE_DIR',
+      ...keys,
+      body!.replace(' as NodeJS.ErrnoException', ''),
     );
-  });
-
-  it('clearAuth 整体清态时复位状态机', () => {
-    const start = authSource.indexOf('function clearAuth(');
-    const end = authSource.indexOf('commitActiveAppSession', start);
-    const body = authSource.slice(start, end);
-    expect(body).toContain('credentialStoreHealth.reset();');
-  });
-
-  it('AuthState 快照携带 credentialStoreUnavailable,登出投影恒为 false', () => {
-    const snapStart = authSource.indexOf('function snapshotAuthState(): AuthState {');
-    const snapEnd = authSource.indexOf('function snapshotLoggedOutAuthState', snapStart);
-    expect(authSource.slice(snapStart, snapEnd)).toContain(
-      'credentialStoreUnavailable: credentialStoreHealth.unavailable',
-    );
-    const loggedOutStart = snapEnd;
-    const loggedOutEnd = authSource.indexOf('function notifyRenderer', loggedOutStart);
-    expect(authSource.slice(loggedOutStart, loggedOutEnd)).toContain(
-      'credentialStoreUnavailable: false',
-    );
+    const probe = (exists: string | null, errorCode = 'ENOENT') =>
+      check(
+        {
+          constants: { F_OK: 0 },
+          accessSync: (file: string) => {
+            if (file !== exists) throw Object.assign(new Error(), { code: errorCode });
+          },
+        },
+        { join: (...parts: string[]) => parts.join('/') },
+        () => '/fake',
+        ...keys,
+      );
+    expect(probe(null)).toBe(false);
+    for (const key of keys) {
+      expect(probe(`/fake/${key}.enc`)).toBe(true);
+      expect(probe(`/fake/${key}.enc.bak`)).toBe(true);
+    }
+    expect(probe(null, 'EACCES')).toBe(true);
+    expect(probe(null, 'EPERM')).toBe(true);
+    expect(probe(null, 'EIO')).toBe(true);
   });
 });

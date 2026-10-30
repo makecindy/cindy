@@ -3,15 +3,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   parseInstalledGhostManifest,
   readInstalledGhostManifest,
   readInstalledGhostManifestDigestFormats,
   readInstalledGhostManifestSnapshot,
+  readInstalledGhostManifestSnapshotAsync,
 } from '../installedGhostManifest.js';
 import { ghostManifestDigest } from '../plugin-market/ledger.js';
+import { GhostInstallReceiptStore } from '../cindy-brain/ghostInstallReceipt.js';
 
 const roots: string[] = [];
 
@@ -135,13 +137,15 @@ describe('installed ghost manifest compatibility', () => {
     expect(parsed.manifest).not.toHaveProperty('manual');
   });
 
-  it('hashes the exact bytes read instead of a normalized serialization', () => {
+  // Background discovery must retain the exact-byte update identity contract;
+  // run the existing minimal fixture through both production readers (unit).
+  it.each([readInstalledGhostManifestSnapshot, readInstalledGhostManifestSnapshotAsync])('hashes the exact bytes read instead of a normalized serialization (%#)', async (read) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-manifest-sha-'));
     roots.push(root);
     const bytes = Buffer.from(`${JSON.stringify(manifest(), null, 2)}\n`);
     fs.writeFileSync(path.join(root, 'ghost.json'), bytes);
 
-    const result = readInstalledGhostManifestSnapshot(root, 64 * 1024);
+    const result = await read(root, 64 * 1024);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -151,6 +155,49 @@ describe('installed ghost manifest compatibility', () => {
     expect(result.snapshot.rawManifestSha256).not.toBe(
       crypto.createHash('sha256').update(JSON.stringify(result.snapshot.manifest)).digest('hex'),
     );
+  });
+
+  // Review regression: background receipt/manifest readers lost the sync path's
+  // non-blocking open, so an unwritten POSIX FIFO stalled market refresh forever.
+  // Unit: model that open at the fs boundary (also on Windows); existing regular
+  // file tests cannot expose it. Both public readers must finish and reject it.
+  it.each(['manifest', 'receipt'] as const)('rejects a FIFO %s without waiting for a writer', async (kind) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-installed-fifo-'));
+    roots.push(root);
+    const nativeFlag = fs.constants.O_NONBLOCK;
+    const nonBlockingFlag = nativeFlag ?? 0x800;
+    if (nativeFlag === undefined) {
+      Object.defineProperty(fs.constants, 'O_NONBLOCK', { value: nonBlockingFlag, configurable: true });
+    }
+    const handle = {
+      stat: async () => ({ isFile: () => false, size: 0n }),
+      close: async () => {},
+    } as unknown as fs.promises.FileHandle;
+    let release!: (value: fs.promises.FileHandle) => void;
+    const writer = new Promise<fs.promises.FileHandle>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const opening = new Promise<void>((resolve) => { entered = resolve; });
+    const open = vi.spyOn(fs.promises, 'open').mockImplementation(async (_file, flags) => {
+      entered();
+      return Number(flags) & nonBlockingFlag ? handle : writer;
+    });
+    let reading: Promise<unknown> | undefined;
+    try {
+      reading = kind === 'manifest'
+        ? readInstalledGhostManifestSnapshotAsync(root, 64 * 1024)
+        : new GhostInstallReceiptStore(() => root).readAsync('hello');
+      await opening;
+      const result = await Promise.race([
+        reading,
+        new Promise<'waiting for writer'>((resolve) => setImmediate(() => resolve('waiting for writer'))),
+      ]);
+      expect(result).toMatchObject(kind === 'manifest' ? { ok: false } : { state: 'invalid' });
+    } finally {
+      release(handle);
+      await reading;
+      open.mockRestore();
+      if (nativeFlag === undefined) Reflect.deleteProperty(fs.constants, 'O_NONBLOCK');
+    }
   });
 
   it('keeps semantic equality separate from raw-byte identity', () => {
@@ -247,4 +294,9 @@ describe('installed ghost manifest compatibility', () => {
       (result.snapshot.releasedLegacyDigestFormat as { agent: Record<string, unknown> }).agent,
     ).not.toHaveProperty('errand');
   });
+});
+
+it.each(['future', { future: true }, null, false])('preserves installed unknown tasks %j alongside legacy manual metadata', (tasks) => {
+  const result = parseInstalledGhostManifest({...manifest(),slots:['tool','agent'],agent:{tasks},manual:'old metadata'});
+  expect(result).toMatchObject({ok:true,legacyManualIgnored:true,manifest:{agent:{tasks}}});
 });

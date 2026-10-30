@@ -2,16 +2,30 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInstance } from 'i18next';
 import type {
   BillingPaymentOrder,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
 
-const i18n = {
-  language: 'en',
-  resolvedLanguage: 'en' as string | undefined,
-};
+import en from '../../../i18n/locales/en/common.json';
+import ja from '../../../i18n/locales/ja/common.json';
+import ko from '../../../i18n/locales/ko/common.json';
+import zhCN from '../../../i18n/locales/zh-CN/common.json';
+import zhTW from '../../../i18n/locales/zh-TW/common.json';
+
+const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+
+const i18n = createInstance();
+void i18n.init({
+  lng: 'en',
+  initAsync: false,
+  interpolation: { escapeValue: false },
+  resources: Object.fromEntries(
+    Object.entries(invoiceLocales).map(([locale, resource]) => [locale, { translation: resource }]),
+  ),
+});
 
 const uiMocks = vi.hoisted(() => ({
   clipboardWriteText: vi.fn(),
@@ -53,7 +67,8 @@ const checkout = {
   close: vi.fn(),
 };
 
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
     i18n,
     t: (key: string, params?: Record<string, string>) => {
@@ -62,6 +77,16 @@ vi.mock('react-i18next', () => ({
         'billing.providers.stripe': 'stripe',
       };
       if (providerLabels[key]) return providerLabels[key];
+      if (
+        [
+          'billing.orders.invoice.personalInvoicePolicy',
+          'billing.orders.invoice.invoiceTitleHint',
+          'billing.orders.invoice.emailSubject',
+          'billing.orders.invoice.emailBody',
+        ].includes(key)
+      ) {
+        return i18n.t(key, params);
+      }
       return params ? `${key}:${JSON.stringify(params)}` : key;
     },
   }),
@@ -110,7 +135,8 @@ vi.mock('qrcode', () => ({
 import { BillingPage } from '../BillingPage';
 import * as QRCode from 'qrcode';
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('en');
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText: uiMocks.clipboardWriteText },
@@ -122,6 +148,8 @@ beforeEach(() => {
   modelCatalogMocks.refreshBuiltinProviderModels.mockClear();
   authState.dataOwnerId = 'account-fixture';
   routerState.search = '';
+  checkout.startSubscription.mockClear();
+  checkout.startTopup.mockClear();
 });
 
 async function openSubscriptionManagementMenu() {
@@ -137,8 +165,6 @@ async function selectSubscriptionManagementAction(action: string) {
 
 describe('BillingPage remote catalog rendering', () => {
   beforeEach(() => {
-    i18n.language = 'en';
-    i18n.resolvedLanguage = 'en';
     Object.assign(checkout.state, {
       open: false,
       kind: null,
@@ -1008,7 +1034,11 @@ describe('BillingPage remote catalog rendering', () => {
     await waitFor(() => expect(screen.queryByText('Configured top-up')).toBeNull());
 
     fireEvent.click(screen.getByText('billing.settings.subscriptionCard.action'));
-    fireEvent.click((await screen.findByText('Configured subscription')).closest('button')!);
+    fireEvent.click(
+      (await screen.findByText('Configured subscription'))
+        .closest('section')!
+        .querySelector('button')!,
+    );
     expect(screen.getByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
     fireEvent.click(screen.getByText('stripe').closest('button')!);
@@ -1017,6 +1047,151 @@ describe('BillingPage remote catalog rendering', () => {
       offerCode: 'plus_month',
       purchaseOptionId: 'listing_stripe',
     });
+  });
+
+  it('keeps the subscription empty state instead of showing a misleading FREE-only catalog', async () => {
+    window.electronAPI.billing.getCatalog = vi.fn(async () => ({ products: [] }));
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('billing.catalog.emptyTitle')).toBeTruthy();
+    expect(within(dialog).queryByText('billing.comparison.free')).toBeNull();
+    expect(within(dialog).queryByText('billing.actions.pay')).toBeNull();
+  });
+
+  it.each(['OFFER_COMING_SOON', 'NO_AVAILABLE_PAYMENT_CHANNEL'] as const)(
+    'keeps subscription reason %s visible and prevents purchase',
+    async (reason) => {
+      const catalog = await window.electronAPI.billing.getCatalog();
+      const product = catalog.products.find((entry) => entry.kind === 'SUBSCRIPTION')!;
+      window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+        products: [
+          {
+            ...product,
+            offers: product.offers.map((offer) => ({
+              ...offer,
+              salesState:
+                reason === 'OFFER_COMING_SOON' ? ('COMING_SOON' as const) : ('AVAILABLE' as const),
+              purchasable: false,
+              unavailableReason: reason,
+              purchaseOptions: [],
+            })),
+          },
+        ],
+      }));
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+      const dialog = await screen.findByRole('dialog');
+      expect(
+        await within(dialog).findByText(`billing.catalog.unavailableReasons.${reason}`),
+      ).toBeTruthy();
+      const button = within(dialog).getByRole('button', {
+        name: `billing.catalog.unavailableReasons.${reason}`,
+      });
+      expect(button).toHaveProperty('disabled', true);
+      fireEvent.click(button);
+      expect(within(dialog).queryByText('billing.steps.channel.title')).toBeNull();
+      expect(checkout.startSubscription).not.toHaveBeenCalled();
+    },
+  );
+
+  it('uses identical action buttons, restores keyboard focus on back, and opens top-up from FREE', async () => {
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    const dialog = await screen.findByRole('dialog');
+    const purchase = await within(dialog).findByRole('button', { name: /Configured subscription/ });
+    const free = within(dialog).getByRole('button', { name: 'billing.comparison.topup' });
+    expect(purchase.className).toBe(free.className);
+    expect(purchase.hasAttribute('aria-pressed')).toBe(false);
+    expect(purchase.className).not.toContain('accent-cta');
+    expect(document.activeElement).toBe(purchase);
+    fireEvent.click(purchase);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'billing.planChange.back' }));
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole('button', { name: /Configured subscription/ }),
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'billing.comparison.topup' }));
+    expect(await screen.findByRole('dialog', { name: 'billing.dialogs.topup.title' })).toBeTruthy();
+    expect(checkout.startTopup).not.toHaveBeenCalled();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
+  });
+
+  it('disables stale checkout while catalog refresh is pending or failed and allows retry', async () => {
+    const catalog = await window.electronAPI.billing.getCatalog();
+    let rejectRefresh!: (error: Error) => void;
+    window.electronAPI.billing.getCatalog = vi
+      .fn()
+      .mockResolvedValueOnce(catalog)
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectRefresh = reject;
+          }),
+      )
+      .mockResolvedValueOnce(catalog);
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Configured subscription/ }));
+    expect(within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ })).toHaveProperty(
+      'disabled',
+      false,
+    );
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    expect(within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    await act(async () => rejectRefresh(new Error('offline')));
+    expect(within(dialog).getByText('billing.catalog.errorTitle')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^billing\.actions\.pay/ })).toBeNull();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'billing.actions.retry' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Configured subscription/ }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ })).toHaveProperty(
+        'disabled',
+        false,
+      ),
+    );
+  });
+
+  it('returns to comparison if the selected offer becomes unavailable after refresh', async () => {
+    const catalog = await window.electronAPI.billing.getCatalog();
+    const unavailableCatalog = {
+      products: catalog.products.map((product) =>
+        product.kind === 'SUBSCRIPTION'
+          ? {
+              ...product,
+              offers: product.offers.map((offer) => ({
+                ...offer,
+                salesState: 'COMING_SOON' as const,
+                purchasable: false,
+                unavailableReason: 'OFFER_COMING_SOON' as const,
+                purchaseOptions: [],
+              })),
+            }
+          : product,
+      ),
+    };
+    window.electronAPI.billing.getCatalog = vi
+      .fn()
+      .mockResolvedValueOnce(catalog)
+      .mockResolvedValueOnce(unavailableCatalog);
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Configured subscription/ }));
+    fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
+    const action = await within(dialog).findByRole('button', {
+      name: 'billing.catalog.unavailableReasons.OFFER_COMING_SOON',
+    });
+    expect(action).toHaveProperty('disabled', true);
+    expect(
+      within(dialog).getByText('billing.catalog.unavailableReasons.OFFER_COMING_SOON'),
+    ).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: /^billing\.actions\.pay/ })).toBeNull();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
   it('does not expose plan change when an active subscription has no effective plan', async () => {
@@ -1046,7 +1221,7 @@ describe('BillingPage remote catalog rendering', () => {
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
-  it('keeps a Product enterable when its current Offer has another Offer', async () => {
+  it('keeps the current product labeled and blocks duplicate purchase even with another Offer', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: [
         {
@@ -1078,7 +1253,7 @@ describe('BillingPage remote catalog rendering', () => {
               code: 'plus_month_more',
               interval: 'MONTH' as const,
               currency: 'usd',
-              amount: '20',
+              amount: '1',
               minAmount: null,
               maxAmount: null,
               creditAmount: '250',
@@ -1125,27 +1300,13 @@ describe('BillingPage remote catalog rendering', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
 
     const dialog = await screen.findByRole('dialog');
-    const product = within(dialog).getByRole('button', { name: /Configured subscription/ });
-    expect(product).toHaveProperty('disabled', false);
-    const currentPlan = within(dialog).getByText('billing.catalog.currentPlan').closest('button')!;
-    const alternativeOffer = within(dialog).getByText('$20.00').closest('button')!;
-    const alternativeCredits = new Intl.NumberFormat('en', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(250);
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
     expect(
-      within(alternativeOffer).getByText(`billing.credits:{"amount":"${alternativeCredits}"}`)
-        .className,
-    ).toContain('text-12');
-    expect(within(dialog).queryByText('plus_month_more')).toBeNull();
-    expect(currentPlan).toHaveProperty('disabled', true);
-    expect(currentPlan.getAttribute('aria-current')).toBe('true');
-    expect(alternativeOffer).toHaveProperty('disabled', false);
-    expect(alternativeOffer.getAttribute('aria-pressed')).toBe('true');
-    expect(alternativeOffer.className).not.toContain('shadow-[inset');
-    expect(within(dialog).getByText('billing.steps.channel.title')).toBeTruthy();
-    expect(within(dialog).getByText('stripe')).toBeTruthy();
-
+      within(dialog).getByRole('button', { name: 'billing.catalog.currentPlan' }),
+    ).toHaveProperty('disabled', true);
+    expect(
+      within(dialog).getByText('billing.comparison.credits.MONTH:{"amount":"$250.00"}'),
+    ).toBeTruthy();
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
@@ -1228,93 +1389,215 @@ describe('BillingPage remote catalog rendering', () => {
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
     const dialog = await screen.findByRole('dialog');
-    const defaultOffer = within(dialog).getByText('$9.00').closest('button')!;
-    await waitFor(() => expect(document.activeElement).toBe(defaultOffer));
-    const proProduct = within(dialog).getByRole('button', { name: /Pro/ });
-    const futureProduct = within(dialog).getByRole('button', { name: /Coming Soon/ });
-    expect(proProduct).toHaveProperty('disabled', false);
-    expect(proProduct.closest('section')?.parentElement?.className).toContain('rounded-xl');
-    expect(proProduct.closest('section')?.className).not.toContain('border-[var(--text-primary)]');
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
+    const futureProduct = within(dialog).getByRole('button', {
+      name: 'billing.catalog.unavailableReasons.OFFER_COMING_SOON',
+    });
     expect(futureProduct).toHaveProperty('disabled', true);
     expect(
-      within(futureProduct).getByText('billing.catalog.unavailableReasons.OFFER_COMING_SOON'),
+      within(dialog).getByText('billing.catalog.unavailableReasons.OFFER_COMING_SOON'),
     ).toBeTruthy();
-
-    const secondOffer = within(dialog).getByText('$20.00').closest('button')!;
-    const defaultCredits = new Intl.NumberFormat('en', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(100);
-    expect(
-      within(defaultOffer).getByText(`billing.credits:{"amount":"${defaultCredits}"}`),
-    ).toBeTruthy();
-    expect(within(dialog).queryByText('pro_month_current')).toBeNull();
+    expect(within(dialog).getByText('billing.comparison.free')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Pro/ }));
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
+    const more = within(dialog).getByRole('button', { name: /stripe.*\$20\.00/ });
+    fireEvent.click(more);
+    expect(more.getAttribute('aria-pressed')).toBe('true');
     expect(within(dialog).queryByText('pro_month_more')).toBeNull();
-    expect(defaultOffer).toHaveProperty('disabled', false);
-    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
-    expect(defaultOffer.firstElementChild?.querySelector('svg')).toBeNull();
-    expect(defaultOffer.lastElementChild?.querySelector('svg')).toBeTruthy();
-    expect(secondOffer.getAttribute('aria-pressed')).toBe('false');
-
-    fireEvent.click(secondOffer);
-    expect(secondOffer.getAttribute('aria-pressed')).toBe('true');
-    expect(secondOffer.className).not.toContain('shadow-[inset');
+    expect(within(dialog).getAllByText('stripe')).toHaveLength(2);
+    fireEvent.click(within(dialog).getByText('billing.actions.pay'));
+    expect(checkout.startSubscription).toHaveBeenCalledWith({
+      offerCode: 'pro_month_more',
+      purchaseOptionId: 'pro_more_stripe',
+    });
   });
 
-  it('shows the server-default Offer price when a Product is collapsed', async () => {
-    const offer = (code: string, amount: string) => ({
-      code,
-      interval: 'MONTH' as const,
-      currency: 'usd',
-      amount,
-      minAmount: null,
-      maxAmount: null,
-      creditAmount: amount,
-      rolloverCap: '0',
-      purchaseOptions: [
-        {
-          id: `${code}_stripe`,
-          provider: 'stripe',
-          capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
-          paymentAction: 'REDIRECT' as const,
-        },
-      ],
-    });
+  it('shows every channel price and submits the selected offer and channel together', async () => {
+    const catalog = await window.electronAPI.billing.getCatalog();
+    const product = catalog.products.find((entry) => entry.kind === 'SUBSCRIPTION')!;
+    const base = product.offers[0];
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: [
         {
-          code: 'pro',
-          name: 'Pro',
-          kind: 'SUBSCRIPTION' as const,
-          level: 1,
-          sortOrder: 1,
-          offers: [offer('pro_default', '20'), offer('pro_cheaper', '9')],
-        },
-        {
-          code: 'basic',
-          name: 'Basic',
-          kind: 'SUBSCRIPTION' as const,
-          level: 0,
-          sortOrder: 2,
-          offers: [offer('basic_default', '5')],
+          ...product,
+          offers: [
+            {
+              ...base,
+              code: 'monthly_alipay',
+              currency: 'cny',
+              amount: '80',
+              creditAmount: '100',
+              purchaseOptions: [
+                {
+                  id: 'ali',
+                  provider: 'alipay',
+                  capability: 'MERCHANT_INITIATED_MANDATE' as const,
+                  paymentAction: 'QR_CODE' as const,
+                },
+              ],
+            },
+            {
+              ...base,
+              code: 'monthly_stripe',
+              currency: 'usd',
+              amount: '12',
+              creditAmount: '15',
+              purchaseOptions: [
+                {
+                  id: 'card',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+            {
+              ...base,
+              code: 'future',
+              name: 'Future price',
+              amount: '20',
+              salesState: 'COMING_SOON' as const,
+              purchasable: false,
+              unavailableReason: 'OFFER_COMING_SOON' as const,
+              purchaseOptions: [
+                {
+                  id: 'future_card',
+                  provider: 'stripe',
+                  capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+                  paymentAction: 'REDIRECT' as const,
+                },
+              ],
+            },
+          ],
         },
       ],
     }));
-    window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({ subscription: null }));
-
     render(<BillingPage />);
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
-
     const dialog = await screen.findByRole('dialog');
-    const defaultOffer = within(dialog).getByText('$20.00').closest('button')!;
-    expect(defaultOffer.getAttribute('aria-pressed')).toBe('true');
-
-    fireEvent.click(within(dialog).getByRole('button', { name: /Basic/ }));
-    const collapsedProduct = within(dialog).getByRole('button', { name: /Pro/ });
-    expect(within(collapsedProduct).getByText('$20.00')).toBeTruthy();
-    expect(within(collapsedProduct).queryByText('$9.00')).toBeNull();
-    expect(within(collapsedProduct).queryByText(/billing\.amount\.startingAt/)).toBeNull();
+    const column = within(dialog)
+      .getByRole('button', { name: /Configured subscription/ })
+      .closest('section')!;
+    expect(within(column).getByText(/billing\.comparison\.credits\.MONTH.*100/)).toBeTruthy();
+    expect(
+      within(column).getByText('billing.comparison.credits.MONTH:{"amount":"$15.00"}'),
+    ).toBeTruthy();
+    expect(within(column).queryByText('billing.comparison.priceFromSuffix')).toBeNull();
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Configured subscription/ }));
+    expect(within(dialog).getByText('billing.dialogs.subscription.confirmTitle')).toBeTruthy();
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
+    expect(within(dialog).queryByText('billing.comparison.renewal')).toBeNull();
+    const alipay = within(dialog).getByRole('button', { name: /alipay.*80/ });
+    const stripe = within(dialog).getByRole('button', { name: /stripe.*\$12\.00/ });
+    const unavailable = within(dialog).getByRole('button', { name: /stripe.*OFFER_COMING_SOON/ });
+    expect(unavailable).toHaveProperty('disabled', true);
+    fireEvent.click(stripe);
+    expect(stripe.getAttribute('aria-pressed')).toBe('true');
+    expect(alipay.getAttribute('aria-pressed')).toBe('false');
+    expect(
+      within(dialog).getByText('billing.comparison.credits.MONTH:{"amount":"$15.00"}'),
+    ).toBeTruthy();
+    const pay = within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ });
+    expect(pay.textContent).toContain('$12.00');
+    fireEvent.click(unavailable);
+    expect(pay.textContent).toContain('$12.00');
+    fireEvent.click(pay);
+    expect(checkout.startSubscription).toHaveBeenCalledWith({
+      offerCode: 'monthly_stripe',
+      purchaseOptionId: 'card',
+    });
   });
+
+  it.each([
+    { otherAmount: '9', expectedAmount: '9', expectedCode: 'pro_cheaper', from: true },
+    { otherAmount: '20', expectedAmount: '20', expectedCode: 'pro_default', from: false },
+  ])(
+    'keeps comparison price, terms and checkout aligned ($otherAmount)',
+    async ({ otherAmount, expectedAmount, expectedCode, from }) => {
+      const offer = (code: string, amount: string) => ({
+        code,
+        interval: 'MONTH' as const,
+        currency: 'usd',
+        amount,
+        minAmount: null,
+        maxAmount: null,
+        creditAmount: String(Number(amount) * 10),
+        rolloverCap: String(Number(amount) * 5),
+        purchaseOptions: [
+          {
+            id: `${code}_stripe`,
+            provider: 'stripe',
+            capability: 'PROVIDER_MANAGED_SUBSCRIPTION' as const,
+            paymentAction: 'REDIRECT' as const,
+          },
+        ],
+      });
+      window.electronAPI.billing.getCatalog = vi.fn(async () => ({
+        products: [
+          {
+            code: 'pro',
+            name: 'Pro',
+            kind: 'SUBSCRIPTION' as const,
+            level: 1,
+            sortOrder: 1,
+            offers: [offer('pro_default', '20'), offer('pro_cheaper', otherAmount)],
+          },
+          {
+            code: 'basic',
+            name: 'Basic',
+            kind: 'SUBSCRIPTION' as const,
+            level: 0,
+            sortOrder: 2,
+            offers: [offer('basic_default', '5')],
+          },
+        ],
+      }));
+      window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
+        subscription: null,
+      }));
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).queryByRole('combobox')).toBeNull();
+      const column = within(dialog).getByRole('button', { name: /Pro/ }).closest('section')!;
+      const assertComparison = () => {
+        const currentColumn = within(dialog)
+          .getByRole('button', { name: /Pro/ })
+          .closest('section')!;
+        expect(currentColumn.textContent).toContain(`$${Number(expectedAmount).toFixed(2)}`);
+        expect(
+          Boolean(within(currentColumn).queryByText('billing.comparison.priceFromSuffix')),
+        ).toBe(from);
+        expect(
+          within(currentColumn).getByText(
+            `billing.comparison.credits.MONTH:{"amount":"$${(Number(expectedAmount) * 10).toFixed(2)}"}`,
+          ),
+        ).toBeTruthy();
+        expect(
+          within(currentColumn).getByText(
+            `billing.comparison.rollover:{"amount":"$${(Number(expectedAmount) * 5).toFixed(2)}","period":"billing.comparison.nextPeriod.MONTH"}`,
+          ),
+        ).toBeTruthy();
+      };
+      assertComparison();
+      fireEvent.click(within(column).getByRole('button', { name: /Pro/ }));
+      const channels = within(dialog).getAllByRole('button', { name: /stripe.*\$20\.00/ });
+      fireEvent.click(channels[0]);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'billing.planChange.back' }));
+      assertComparison();
+      fireEvent.click(within(dialog).getByRole('button', { name: /Pro/ }));
+      expect(
+        within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ }).textContent,
+      ).toContain(`$${Number(expectedAmount).toFixed(2)}`);
+      fireEvent.click(within(dialog).getByRole('button', { name: /^billing\.actions\.pay/ }));
+      expect(checkout.startSubscription).toHaveBeenCalledWith({
+        offerCode: expectedCode,
+        purchaseOptionId: `${expectedCode}_stripe`,
+      });
+    },
+  );
 
   it('reselects the first valid Offer in the same Product after a catalog refresh', async () => {
     const firstOffer = {
@@ -1387,24 +1670,19 @@ describe('BillingPage remote catalog rendering', () => {
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
     const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: /Pro/ }));
-    const secondOfferButton = within(dialog).getByText('$20.00').closest('button')!;
-    fireEvent.click(secondOfferButton);
-    expect(secondOfferButton.getAttribute('aria-pressed')).toBe('true');
-
+    const more = within(dialog).getByRole('button', { name: /stripe.*\$20\.00/ });
+    fireEvent.click(more);
+    expect(more.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
-    await waitFor(() =>
-      expect(
-        within(dialog).getByText('$9.00').closest('button')?.getAttribute('aria-pressed'),
-      ).toBe('true'),
-    );
-    expect(within(dialog).queryByText('pro_month')).toBeNull();
+    await within(dialog).findByRole('button', { name: /Pro/ });
+    expect(within(dialog).getByText('$9.00')).toBeTruthy();
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
     expect(within(dialog).queryByText('$20.00')).toBeNull();
-
     fireEvent.click(screen.getByText('billing.actions.refreshCatalog'));
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: /Basic/ })).toBeTruthy());
-    expect(within(dialog).queryByLabelText('settings.back')).toBeNull();
-    expect(within(dialog).queryByText('$9.00')).toBeNull();
+    await within(dialog).findByRole('button', { name: /Basic/ });
+    expect(within(dialog).queryByRole('button', { name: /Pro/ })).toBeNull();
   });
 
   it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
@@ -1429,7 +1707,11 @@ describe('BillingPage remote catalog rendering', () => {
       expect(screen.queryByText(`billing.subscriptionStatus.${status}`)).toBeNull();
       fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
 
-      fireEvent.click((await screen.findByText('Configured subscription')).closest('button')!);
+      fireEvent.click(
+        (await screen.findByText('Configured subscription'))
+          .closest('section')!
+          .querySelector('button')!,
+      );
       fireEvent.click(screen.getByText('stripe').closest('button')!);
       fireEvent.click(screen.getByText('billing.actions.pay'));
 
@@ -1506,7 +1788,7 @@ describe('BillingPage remote catalog rendering', () => {
     ).toHaveProperty('disabled', true);
   });
 
-  it('renders single-Offer subscription Products as direct rows', async () => {
+  it('renders subscription Products side by side and chooses their payment channels', async () => {
     window.electronAPI.billing.getCatalog = vi.fn(async () => ({
       products: (['alipay', 'stripe', 'alipay'] as const).map((provider, index) => ({
         code: `plan_${index + 1}`,
@@ -1546,44 +1828,16 @@ describe('BillingPage remote catalog rendering', () => {
 
     const planButtons = await screen.findAllByRole('button', { name: /Remote plan/ });
     expect(planButtons).toHaveLength(3);
-    expect(planButtons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
-      'true',
-      'false',
-      'false',
-    ]);
-    expect(planButtons.map((button) => button.getAttribute('aria-expanded'))).toEqual([
-      null,
-      null,
-      null,
-    ]);
-    expect(within(planButtons[0]).getByText(/1\.00/)).toBeTruthy();
-    expect(within(planButtons[0]).queryByText(/billing\.amount\.startingAt/)).toBeNull();
-    const firstPlanCredits = new Intl.NumberFormat('en', {
-      style: 'currency',
-      currency: 'CNY',
-    }).format(100);
-    expect(
-      within(planButtons[0]).getByText(`billing.credits:{"amount":"${firstPlanCredits}"}`),
-    ).toBeTruthy();
-    expect(screen.queryByText('plan_1_month')).toBeNull();
-    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.getByText('billing.comparison.free')).toBeTruthy();
     expect(screen.queryByText('stripe')).toBeNull();
-
+    expect(screen.queryByText('alipay')).toBeNull();
     fireEvent.click(planButtons[1]);
-    expect(screen.queryByText('plan_1_month')).toBeNull();
-    expect(
-      (await screen.findAllByRole('button', { name: /Remote plan/ })).map((button) =>
-        button.getAttribute('aria-pressed'),
-      ),
-    ).toEqual(['false', 'true', 'false']);
-    expect(
-      screen
-        .getAllByRole('button', { name: /Remote plan/ })
-        .map((button) => button.getAttribute('aria-expanded')),
-    ).toEqual([null, null, null]);
-    expect(screen.queryByText('plan_2_month')).toBeNull();
     expect(await screen.findByText('stripe')).toBeTruthy();
     expect(screen.queryByText('alipay')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'billing.planChange.back' }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Remote plan/ })[0]);
+    expect(screen.getByText('alipay')).toBeTruthy();
+    expect(screen.queryByText('stripe')).toBeNull();
   });
 
   it('allows an uncertain failed checkout to be dismissed for later recovery', async () => {
@@ -2063,8 +2317,13 @@ describe('BillingPage plan change', () => {
 
     await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
-    expect(await screen.findByText('Alipay-only Max')).toBeTruthy();
+    const alipayTarget = await screen.findByText('Alipay-only Max');
+    expect(alipayTarget.closest('section')!.querySelector('button')).toHaveProperty(
+      'disabled',
+      false,
+    );
     expect(screen.queryByText('Max plan')).toBeNull();
+    expect(billing.quotePlanChange).not.toHaveBeenCalled();
   });
 
   it('keeps the completed checkout subscription when the canonical reload temporarily fails', async () => {
@@ -2214,7 +2473,7 @@ describe('BillingPage plan change', () => {
     ).toBeTruthy();
   });
 
-  it('offers same-provider monthly Products in Catalog order', async () => {
+  it('orders comparison Products by server sortOrder and hides unavailable offers and other providers', async () => {
     const billing = install(billingMocks());
     billing.quotePlanChange.mockResolvedValue({
       planChangeId: 'plan_change_1',
@@ -2232,20 +2491,31 @@ describe('BillingPage plan change', () => {
 
     await screen.findByText('billing.planChange.targetTitle');
     const dialog = screen.getByRole('dialog');
-    const maxButton = screen.getByText('Max plan').closest('button')!;
-    const sameLevelButton = screen.getByText('Same-level plan').closest('button')!;
-    const starterButton = screen.getByText('Starter plan').closest('button')!;
+    const maxButton = screen.getByText('Max plan').closest('section')!.querySelector('button')!;
+    const sameLevelButton = screen
+      .getByText('Same-level plan')
+      .closest('section')!
+      .querySelector('button')!;
+    const starterButton = screen
+      .getByText('Starter plan')
+      .closest('section')!
+      .querySelector('button')!;
     expect(
-      maxButton.compareDocumentPosition(sameLevelButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      starterButton.compareDocumentPosition(maxButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(
       sameLevelButton.compareDocumentPosition(starterButton) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(within(maxButton).getByText('billing.planChange.upgradeBadge')).toBeTruthy();
-    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
-    expect(within(maxButton).getByText('stripe')).toBeTruthy();
-    expect(within(sameLevelButton).getByText('billing.planChange.sameLevelBadge')).toBeTruthy();
-    expect(within(starterButton).getByText('billing.planChange.downgradeBadge')).toBeTruthy();
+    expect(maxButton.textContent).toContain('billing.comparison.upgrade');
+    expect(
+      within(dialog).getByRole('button', { name: 'billing.catalog.currentPlan' }),
+    ).toBeTruthy();
+    expect(
+      within(maxButton.closest('section')!).queryByText('billing.comparison.upgradeHint'),
+    ).toBeNull();
+    expect(sameLevelButton.textContent).toBe('billing.comparison.changeUnavailable');
+    expect(sameLevelButton).toHaveProperty('disabled', true);
+    expect(starterButton.textContent).toContain('billing.comparison.downgrade');
     expect(screen.queryByText('Alipay-only Max')).toBeNull();
     expect(screen.queryByText('Coming soon Max')).toBeNull();
 
@@ -2276,6 +2546,36 @@ describe('BillingPage plan change', () => {
     await waitFor(() => expect(billing.getBalance).toHaveBeenCalledTimes(2));
     expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2);
     expect(modelCatalogMocks.refreshBuiltinProviderModels).toHaveBeenCalledWith('xd');
+  });
+
+  it('opens change plans for a canceled Alipay subscription still in its paid period', async () => {
+    routerState.search = 'tab=billing&intent=subscribe';
+    const billing = billingMocks();
+    const base = activeSubscription(null, 'MONTH', 'ACTIVE', true);
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: {
+        ...base,
+        provider: 'alipay',
+        currentPeriodEndAt: '2099-08-01T00:00:00Z',
+        effectivePlan: {
+          ...base.effectivePlan!,
+          terms: { ...base.effectivePlan!.terms, currency: 'cny' },
+        },
+      },
+    }));
+    install(billing);
+    render(<BillingPage />);
+    await screen.findByText('billing.planChange.targetTitle');
+    expect(screen.getByRole('button', { name: 'billing.catalog.currentPlan' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(
+      screen.getByText('Alipay-only Max').closest('section')!.querySelector('button'),
+    ).toHaveProperty('disabled', false);
+    expect(screen.queryByText('billing.comparison.resignUpgradeHint')).toBeNull();
+    expect(screen.queryByText('billing.comparison.cancelHint')).toBeNull();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
   it('深链 ?intent=plan-change 在有更改入口时打开目标弹窗并摘掉参数', async () => {
@@ -2332,7 +2632,7 @@ describe('BillingPage plan change', () => {
     expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
   });
 
-  it('quotes the selected same-Product monthly Offer', async () => {
+  it('keeps the current plan disabled when another Offer belongs to the same Product', async () => {
     const billing = billingMocks();
     billing.getCatalog = vi.fn(async () => ({
       products: [
@@ -2398,19 +2698,20 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
-    const productButton = screen
-      .getAllByText('Plus plan')
-      .map((element) => element.closest('button'))
-      .find((button): button is HTMLButtonElement => button !== null)!;
-    expect(productButton).toHaveProperty('disabled', false);
-    fireEvent.click(productButton);
-
-    await waitFor(() =>
-      expect(billing.quotePlanChange).toHaveBeenCalledWith({
-        targetOfferCode: 'plus_month_more',
-        idempotencyKey: 'desktop:plan-change:00000000-0000-4000-8000-000000000042',
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('combobox')).toBeNull();
+    const currentButton = within(dialog).getByRole('button', {
+      name: 'billing.catalog.currentPlan',
+    });
+    expect(currentButton).toHaveProperty('disabled', true);
+    fireEvent.click(currentButton);
+    expect(billing.quotePlanChange).not.toHaveBeenCalled();
+    expect(
+      within(dialog).queryByRole('button', {
+        name: 'billing.settings.subscriptionCard.changeAction',
       }),
-    );
+    ).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /\$20\.00/ })).toBeNull();
   });
 
   it('opens a Stripe plan-change redirect automatically once and keeps the manual fallback', async () => {
@@ -2443,7 +2744,9 @@ describe('BillingPage plan change', () => {
 
     render(<BillingPage />);
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
-    fireEvent.click((await screen.findByText('Max plan')).closest('button')!);
+    fireEvent.click(
+      (await screen.findByText('Max plan')).closest('section')!.querySelector('button')!,
+    );
     fireEvent.click(await screen.findByText('billing.planChange.confirm'));
 
     await waitFor(() => expect(billing.openPaymentRedirect).toHaveBeenCalledWith({ url }));
@@ -2473,9 +2776,13 @@ describe('BillingPage plan change', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('billing.catalog.currentPlan')).toBeTruthy();
+    expect(
+      within(dialog).getByRole('button', { name: 'billing.catalog.currentPlan' }),
+    ).toHaveProperty('disabled', true);
     expect(within(dialog).getByText('$7.00')).toBeTruthy();
-    expect(within(dialog).getByText('billing.credits:{"amount":"$80.00"}')).toBeTruthy();
+    expect(
+      within(dialog).getByText('billing.comparison.credits.MONTH:{"amount":"$80.00"}'),
+    ).toBeTruthy();
   });
 
   it('does not expose plan change for yearly subscriptions while server v1 is monthly-only', async () => {
@@ -2508,7 +2815,9 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
-    expect(await screen.findByText('billing.planChange.emptyTitle')).toBeTruthy();
+    expect(
+      await screen.findByRole('button', { name: 'billing.catalog.currentPlan' }),
+    ).toHaveProperty('disabled', true);
     expect(screen.queryByText('Max plan')).toBeNull();
     expect(billing.quotePlanChange).not.toHaveBeenCalled();
   });
@@ -2565,8 +2874,10 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
-    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
-    fireEvent.click(screen.getByText('stripe').closest('button')!);
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
+    );
+    fireEvent.click(screen.getAllByText('stripe')[0].closest('button')!);
     const pay = screen.getByText('billing.actions.pay').closest('button')!;
     expect(pay).toHaveProperty('disabled', false);
     fireEvent.click(pay);
@@ -2611,8 +2922,10 @@ describe('BillingPage plan change', () => {
       expect(billing.getCurrentSubscription.mock.calls.length).toBeGreaterThan(1),
     );
     fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
-    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
-    fireEvent.click(screen.getByText('stripe').closest('button')!);
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
+    );
+    fireEvent.click(screen.getAllByText('stripe')[0].closest('button')!);
     expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
       'disabled',
       false,
@@ -2629,12 +2942,11 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
-    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
-    fireEvent.click(screen.getByText('stripe').closest('button')!);
-    expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
-      'disabled',
-      true,
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
     );
+    expect(screen.queryByText('billing.actions.pay')).toBeNull();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
     expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
   });
 
@@ -2648,12 +2960,11 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
-    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
-    fireEvent.click(screen.getByText('stripe').closest('button')!);
-    expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
-      'disabled',
-      true,
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
     );
+    expect(screen.queryByText('billing.actions.pay')).toBeNull();
+    expect(checkout.startSubscription).not.toHaveBeenCalled();
     expect(
       screen.getByText(/billing\.currentSubscription\.purchaseBlockedUntilPeriodEnd/),
     ).toBeTruthy();
@@ -2674,8 +2985,9 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
-    fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
-    fireEvent.click(screen.getByText('stripe').closest('button')!);
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: /Plus plan/ }),
+    );
     expect(screen.getByText('billing.currentSubscription.purchaseBlocked')).toBeTruthy();
     expect(screen.queryByText(/purchaseBlockedUntilPeriodEnd/)).toBeNull();
   });
@@ -2775,7 +3087,9 @@ describe('BillingPage plan change', () => {
 
     render(<BillingPage />);
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
-    fireEvent.click(await screen.findByText('Max plan'));
+    fireEvent.click(
+      (await screen.findByText('Max plan')).closest('section')!.querySelector('button')!,
+    );
 
     expect(await screen.findByText('billing.planChange.quoteRejected')).toBeTruthy();
     fireEvent.click(screen.getByText('billing.planChange.chooseAnotherPlan'));
@@ -2919,7 +3233,7 @@ describe('BillingPage order history', () => {
         maker: {
           refreshBuiltinProviderModels: modelCatalogMocks.refreshBuiltinProviderModels,
         },
-        openExternal: vi.fn(),
+        openExternal: vi.fn(async () => ({ success: true })),
       },
     });
     return listOrders;
@@ -2950,6 +3264,234 @@ describe('BillingPage order history', () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('opens a static invoice request prompt with the order details and support email', async () => {
+    const fullOrderId = 'c2309a98-d776-4ad9-99b3-418951f13c7f';
+    install([
+      order({
+        orderId: fullOrderId,
+        paymentAction: {
+          type: 'QR_CODE',
+          value: 'https://example.invalid/qr',
+          expiresAt: '2026-08-01T14:07:00.000Z',
+        },
+      }),
+    ]);
+
+    render(<BillingPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    const sendButton = screen.getByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    await waitFor(() => expect(document.activeElement).toBe(sendButton));
+    expect(screen.getByText('billing.orders.invoice.title')).toBeTruthy();
+    const supportEmailButton = screen.getByRole('button', { name: 'xd-billing@xd.com' });
+    expect(supportEmailButton.getAttribute('href')).toBeNull();
+    expect(screen.getByText(fullOrderId)).toBeTruthy();
+    expect(
+      within(await screen.findByRole('alertdialog')).getByText(
+        'billing.orders.invoice.notAvailable',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.invoiceTitle')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.contact')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.phone')).toBeTruthy();
+    expect(screen.getByText('billing.orders.invoice.fields.email')).toBeTruthy();
+
+    fireEvent.click(supportEmailButton);
+    await waitFor(() =>
+      expect(uiMocks.clipboardWriteText).toHaveBeenCalledWith('xd-billing@xd.com'),
+    );
+    expect(uiMocks.toastSuccess).toHaveBeenCalledWith('billing.orders.invoice.emailCopied');
+
+    fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+    await waitFor(() => expect(window.electronAPI.openExternal).toHaveBeenCalledTimes(1));
+    const mailto = vi.mocked(window.electronAPI.openExternal).mock.calls[0][0] as string;
+    expect(mailto).toMatch(/^mailto:xd-billing@xd\.com\?/);
+    expect(mailto).toContain('%20');
+    expect(mailto).toContain('body=');
+    const mailBody = new URLSearchParams(mailto.split('?')[1]).get('body');
+    expect(mailBody).toContain('I would like to request an invoice for the following order:');
+    expect(mailBody).toContain('────────────────────');
+    expect(mailBody).toContain('\n\n');
+    expect(mailBody).toContain('Invoice title: ');
+  });
+
+  it.each(Object.entries(invoiceLocales))(
+    'shows the policy in the dialog and places title instructions beside the email field for %s',
+    async (locale, resources) => {
+      await i18n.changeLanguage(locale);
+      install([order({ orderId: 'o-company-reimbursement' })]);
+      const openExternal = vi.mocked(window.electronAPI.openExternal);
+      openExternal
+        .mockResolvedValueOnce({ success: false })
+        .mockResolvedValueOnce({ success: true });
+      uiMocks.confirm.mockResolvedValueOnce(true);
+      const policy = resources.billing.orders.invoice.personalInvoicePolicy.replace(
+        /<\/?strong>/g,
+        '',
+      );
+      if (locale === 'zh-CN') {
+        expect(policy).toBe(
+          'Cindy 个人版充值默认开具个人抬头发票，抬头可填写姓名或“个人”。如需开具企业抬头发票用于公司报销，请提供加盖公司公章的报销说明，并在说明中注明开票抬头。',
+        );
+      }
+
+      render(<BillingPage />);
+      fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+      const dialog = await screen.findByRole('alertdialog');
+      const policyParagraph = within(dialog).getByText(
+        (_, element) => element?.tagName === 'P' && element.textContent === policy,
+      );
+      expect(policyParagraph.querySelectorAll('strong')).toHaveLength(2);
+      if (locale === 'zh-CN') {
+        expect(
+          Array.from(policyParagraph.querySelectorAll('strong'), (node) => node.textContent),
+        ).toEqual(['个人抬头发票', '加盖公司公章的报销说明']);
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'billing.orders.invoice.sendAction' }));
+
+      await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+      const mailto = new URL(openExternal.mock.calls[0][0] as string);
+      const gmail = new URL(openExternal.mock.calls[1][0] as string);
+      const body = mailto.searchParams.get('body');
+      const { fields, invoiceTitleHint } = resources.billing.orders.invoice;
+      expect(body).toContain(`\n${invoiceTitleHint}\n\n`);
+      expect(body).not.toContain(policy);
+      const titlePosition = body!.indexOf(fields.invoiceTitle);
+      const hintPosition = body!.indexOf(invoiceTitleHint);
+      expect(titlePosition).toBeGreaterThan(body!.indexOf('o-company-reimbursement'));
+      expect(hintPosition).toBeGreaterThan(titlePosition);
+      expect(hintPosition).toBeLessThan(body!.indexOf(fields.contact));
+      if (locale === 'zh-CN') {
+        expect(body).toContain(
+          '发票抬头：\n填写说明：个人抬头请填写姓名或“个人”；如需企业抬头用于公司报销，请随邮件附上加盖公司公章、注明开票抬头的报销说明。',
+        );
+      }
+      expect(body).toContain('o-company-reimbursement');
+      expect(body).not.toContain('{{');
+      expect(body).not.toContain('<strong>');
+      expect(gmail.searchParams.get('body')).toBe(body);
+      const subject = mailto.searchParams.get('subject');
+      expect(subject).toContain('o-company-reimbursement');
+      expect(subject).not.toContain('{{');
+      expect(gmail.searchParams.get('su')).toBe(subject);
+    },
+  );
+
+  it('opens a prefilled Gmail compose page when the mail app cannot be opened', async () => {
+    install([order({ orderId: 'o-gmail-fallback' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal.mockResolvedValueOnce({ success: false }).mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    const gmailUrl = new URL(openExternal.mock.calls[1][0] as string);
+    expect(gmailUrl.origin + gmailUrl.pathname).toBe('https://mail.google.com/mail/');
+    expect(gmailUrl.searchParams.get('view')).toBe('cm');
+    expect(gmailUrl.searchParams.get('fs')).toBe('1');
+    expect(gmailUrl.searchParams.get('to')).toBe('xd-billing@xd.com');
+    expect(gmailUrl.searchParams.get('su')).toContain('o-gmail-fallback');
+    expect(gmailUrl.searchParams.get('body')).toContain('o-gmail-fallback');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(uiMocks.confirm).toHaveBeenCalledWith({
+      title: 'billing.orders.invoice.gmailFallbackTitle',
+      description: 'billing.orders.invoice.gmailFallbackDescription',
+      confirmText: 'billing.orders.invoice.gmailFallbackConfirm',
+      cancelText: 'billing.actions.close',
+      autoFocusConfirm: true,
+    });
+  });
+
+  it('also tries Gmail when opening the mail app rejects', async () => {
+    install([order({ orderId: 'o-gmail-rejected' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal
+      .mockRejectedValueOnce(new Error('no mail handler'))
+      .mockResolvedValueOnce({ success: true });
+    uiMocks.confirm.mockResolvedValueOnce(true);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(2));
+    expect(openExternal.mock.calls[1][0]).toContain('https://mail.google.com/mail/?view=cm&fs=1');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('does not open Gmail without explicit consent after the mail app fails', async () => {
+    install([order({ orderId: 'o-gmail-no-consent' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    openExternal.mockResolvedValueOnce({ success: false });
+    uiMocks.confirm.mockResolvedValueOnce(false);
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'billing.orders.invoice.sendAction' }),
+    );
+
+    await waitFor(() => expect(uiMocks.confirm).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    expect(uiMocks.toastError).toHaveBeenCalledWith(
+      'billing.orders.invoice.sendFailed:{"email":"xd-billing@xd.com"}',
+    );
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.getByText('o-gmail-no-consent')).toBeTruthy();
+  });
+
+  it('ignores repeated send activations while the mail request is pending', async () => {
+    install([order({ orderId: 'o-gmail-double-click' })]);
+    const openExternal = vi.mocked(window.electronAPI.openExternal);
+    let resolveOpenExternal: ((result: { success: boolean }) => void) | undefined;
+    openExternal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOpenExternal = resolve;
+        }),
+    );
+
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'billing.orders.invoice.action' }));
+    const sendButton = await screen.findByRole('button', {
+      name: 'billing.orders.invoice.sendAction',
+    });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    resolveOpenExternal?.({ success: true });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it('only offers invoice requests for completed orders', async () => {
+    install([
+      order({ orderId: 'o-completed', status: 'SUCCEEDED' }),
+      order({ orderId: 'o-pending', status: 'PENDING' }),
+      order({ orderId: 'o-failed', status: 'FAILED' }),
+    ]);
+
+    render(<BillingPage />);
+
+    await screen.findByText('billing.orders.title');
+    const invoiceButtons = screen.getAllByRole('button', {
+      name: 'billing.orders.invoice.action',
+    });
+    expect(invoiceButtons).toHaveLength(1);
+    expect(invoiceButtons[0].closest('[role="listitem"]')?.textContent).toContain('o-com****leted');
   });
 
   it('copies the complete order id from both the id text and copy icon', async () => {

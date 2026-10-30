@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * LearnReviewPanel —— /learn 蒸馏提案的 diff 审查面板。
  *
@@ -182,22 +183,29 @@ export function LearnReviewPanel({ open, onClose, run, contextSessionId }: Learn
             {t('learn.review.reviseHint')}
           </span>
           <div className="flex shrink-0 items-center gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              tone="quiet"
+              loading={acting === 'discard'}
               type="button"
               disabled={acting !== null}
               onClick={() => void handleDiscard()}
-              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted/50 disabled:opacity-50"
             >
               {acting === 'discard' ? t('learn.review.discarding') : t('learn.review.discard')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="cta"
+              size="md"
+              compact
+              loading={acting === 'apply'}
               type="button"
               disabled={acting !== null || state.kind !== 'ready'}
               onClick={() => void handleApply()}
-              className="rounded-md bg-[var(--accent-cta-bg)] px-3 py-1.5 text-sm text-[var(--accent-pure-cta-fg)] hover:opacity-90 disabled:opacity-50"
             >
               {acting === 'apply' ? t('learn.review.applying') : t('learn.review.apply')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

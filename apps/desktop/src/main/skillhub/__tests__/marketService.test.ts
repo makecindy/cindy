@@ -52,6 +52,23 @@ function makeHubSkill(slug: string, overrides: Partial<HubSkillInfoForDesktop> =
 }
 
 describe('SkillhubMarketService', () => {
+  it('preserves manual feedback for the requested rejected version, including legacy responses without a reason', async () => {
+    const rejected = {
+      status: 'rejected', rejectionReason: 'Remove private notes',
+      gates: [{ name: 'security-scan', status: 'passed' }],
+    };
+    const { fetch, calls } = makeFetch([rejected, { status: 'rejected', gates: [] }]);
+    const service = new SkillhubMarketService({ fetch });
+    expect(await service.getScanStatus({ slug: 'review-helper', version: '1.0.1' }))
+      .toEqual({ success: true, ...rejected });
+    expect(calls[0]).toMatchObject({
+      path: '/api/skills-hub/skills/review-helper/scan?version=1.0.1',
+      opts: { cache: 'no-store' },
+    });
+    expect(await service.getScanStatus({ slug: 'review-helper', version: '1.0.0' }))
+      .toEqual({ success: true, status: 'rejected', gates: [] });
+  });
+
   it('normalizes and deduplicates sync slugs before batch-detail lookup', async () => {
     const { fetch, calls } = makeFetch([
       { items: [makeHubSkill('alpha')], availableCount: 4 },
@@ -305,13 +322,13 @@ describe('SkillhubMarketService', () => {
       updateRegistryCatalogScope,
     });
 
-    await service.setPublishedVisibility({ name: 'demo', visibility: 'shared' });
-    await service.setPublishedVisibility({ name: 'demo', visibility: 'private' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'shared', previousCatalogScope: 'market' });
+    await service.setPublishedVisibility({ name: 'demo', visibility: 'private', previousCatalogScope: 'team' });
     await service.setPublishedVisibility({ name: 'demo', visibility: 'public' });
 
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(1, 'demo', 'team');
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(2, 'demo', undefined);
-    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(3, 'demo', undefined);
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(1, 'demo', 'team', 'market');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(2, 'demo', undefined, 'team');
+    expect(updateRegistryCatalogScope).toHaveBeenNthCalledWith(3, 'demo', undefined, undefined);
   });
 
   it('maps categories and user departments into renderer result shapes', async () => {
@@ -364,6 +381,59 @@ describe('SkillhubMarketService', () => {
       success: true,
       teams: [{ slug: 'team-a', name: 'Team A', type: 'team' }],
     });
+  });
+
+  it('requests category lists from the selected catalog scope', async () => {
+    const { fetch, calls } = makeFetch([[]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories('team')).resolves.toMatchObject({
+      success: true,
+      categories: [],
+    });
+    expect(calls).toEqual([{
+      path: '/api/skills-hub/categories?scope=team',
+      opts: undefined,
+    }]);
+  });
+
+  it.each(['market', 'team'] as const)('delegates %s browse filtering to the server without dropping legacy tags', async (scope) => {
+    const { fetch, calls } = makeFetch([[
+      { slug: 'empty', name: 'Empty', skillCount: 0, mySkillCount: 2,
+        children: [{ slug: 'used', name: 'Used', skillCount: 3, mySkillCount: 1 }] },
+      { slug: 'missing-count', name: 'Missing' },
+    ]]);
+    const service = new SkillhubMarketService({ fetch });
+
+    await expect(service.listCategories(scope, false)).resolves.toEqual({
+      success: true,
+      categories: [
+        { slug: 'empty', name: 'Empty', count: 0, myCount: 2 },
+        { slug: 'used', name: 'Used', count: 3, myCount: 1 },
+        { slug: 'missing-count', name: 'Missing', count: 0, myCount: 0 },
+      ],
+      totalCount: 3,
+      myTotalCount: 3,
+    });
+    expect(calls[0]?.path).toBe(`/api/skills-hub/categories?scope=${scope}&includeEmpty=false`);
+  });
+
+  it.each(['market', 'team'] as const)('preserves the filtered category result from updated %s servers', async (scope) => {
+    const { fetch } = makeFetch([[{ slug: 'used', name: 'Used', skillCount: 3 }], []]);
+    const service = new SkillhubMarketService({ fetch });
+    await expect(service.listCategories(scope, false)).resolves.toMatchObject({
+      categories: [{ slug: 'used', count: 3 }],
+    });
+    await expect(service.listCategories(scope, false)).resolves.toMatchObject({ categories: [] });
+  });
+
+  it('keeps unused tags selectable in explicit full-list mode', async () => {
+    const { fetch, calls } = makeFetch([[{ slug: 'empty', name: 'Empty', skillCount: 0 }]]);
+    const service = new SkillhubMarketService({ fetch });
+    await expect(service.listCategories('market', true)).resolves.toMatchObject({
+      categories: [{ slug: 'empty', count: 0 }],
+    });
+    expect(calls[0]?.path).toBe('/api/skills-hub/categories?scope=market');
   });
 });
 

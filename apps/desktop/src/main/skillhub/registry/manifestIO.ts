@@ -8,7 +8,6 @@ import path from 'node:path';
 import { app } from 'electron';
 import { RegistryError, type StoredManifest } from './types.js';
 import { sanitizeSkillName } from './derivations.js';
-import { migrateStoredManifest } from './migrations.js';
 
 import { createLogger, maskPath } from '../../logger';
 
@@ -44,9 +43,7 @@ export async function readFile(skillName: string): Promise<StoredManifest | null
         `manifest 文件 skillName 字段 "${parsed.skillName}" 与传入参数 "${skillName}" 不符`,
       );
     }
-    const migrated = migrateStoredManifest(parsed);
-    if (migrated.changed) await writeFileAtomic(skillName, migrated.manifest);
-    return migrated.manifest;
+    return parsed;
   } catch (err) {
     if (err instanceof RegistryError) throw err;
     const code = (err as NodeJS.ErrnoException).code;

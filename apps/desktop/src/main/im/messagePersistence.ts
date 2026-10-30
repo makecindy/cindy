@@ -24,13 +24,19 @@ import { createId } from '@paralleldrive/cuid2';
 
 import type { IMAttachment } from '@cindy/im';
 
-import { createMessage } from '../localDb/ipc/messages';
+import {
+  createMessage,
+  patchMessageAgentMeta,
+  broadcastMessageAgentMetaUpdate,
+} from '../localDb/ipc/messages';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster';
+import type { ImMessageSource } from '../../shared/imMessageSource';
 import { createLogger } from '../logger';
 
 const log = createLogger('im:msg-persist');
 
 /**
- * Persist a feishu (or future IM) user message to the local messages table.
+ * Persist any local IM user message, or enrich its already-visible early row.
  *
  * content shape 对齐 desktop renderer 写 user 的方式:
  *   - 纯文本: content = string
@@ -43,24 +49,48 @@ export async function persistUserMessage(args: {
   sessionId: string;
   text: string;
   attachments?: readonly IMAttachment[];
+  source?: ImMessageSource;
+  /** Only use a pre-persisted row belonging to this session. Never reinsert it. */
+  existingClientId?: string;
 }): Promise<{ clientId: string } | null> {
   const { sessionId, text, attachments = [] } = args;
-  const clientId = createId();
+  const clientId = args.existingClientId ?? createId();
   const content = buildPersistedUserContent(text, attachments);
 
   try {
+    if (args.existingClientId) {
+      if (args.source) {
+        return await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
+          const patched = await patchMessageAgentMeta(sessionId, clientId, {
+            imSource: args.source,
+          });
+          // A confirmed deletion is different from a failed enrichment: never
+          // recreate the row or start a turn change set against a missing row.
+          if (!patched) return null;
+          await broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
+          return { clientId };
+        });
+      }
+      return { clientId };
+    }
     await createMessage(sessionId, {
       clientId,
       role: 'user',
       content,
+      ...(args.source ? { agentMeta: { imSource: args.source } } : {}),
     });
     return { clientId };
   } catch (err) {
+    // The queue cancels old-owner work at an account boundary. Unlike an
+    // enrichment failure, cancellation must not resume old-owner side effects.
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'OWNER_SCOPE_SUPERSEDED') {
+      return null;
+    }
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(
-      `persistUserMessage failed (non-fatal) sessionId=...${sessionId.slice(-8)}: ${msg}`,
-    );
-    return null;
+    log.warn(`persistUserMessage failed (non-fatal) sessionId=...${sessionId.slice(-8)}: ${msg}`);
+    // Enrichment (including its broadcast) cannot undo an earlier durable
+    // insert. Keep its identity for attachment promotion and the turn anchor.
+    return args.existingClientId ? { clientId } : null;
   }
 }
 

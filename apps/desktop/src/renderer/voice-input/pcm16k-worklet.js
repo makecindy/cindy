@@ -8,10 +8,20 @@ class PCM16kWorklet extends AudioWorkletProcessor {
     this.timeOriginMs = 0;
     this.pending = [];
     this.carry = 0;
+    this.previousSample = 0;
     this.chunkIndex = 0;
+    this.firstFramePending = true;
     this.active = true;
+    this.disposed = false;
 
     this.port.onmessage = (event) => {
+      if (this.disposed) return;
+      if (event.data?.type === 'dispose') {
+        this.disposed = true;
+        this.active = false;
+        this.pending = [];
+        return;
+      }
       if (event.data?.type === 'config') {
         this.targetSampleRate = event.data.targetSampleRate || 16000;
         this.chunkSamples = Math.max(
@@ -35,12 +45,18 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       if (event.data.reset) {
         this.pending = [];
         this.carry = 0;
+        this.previousSample = 0;
+        this.firstFramePending = true;
       }
       this.active = event.data.active;
     };
   }
 
   process(inputs) {
+    // Disconnecting the node does not stop a processor that keeps returning
+    // true. The shared context outlives recordings, so permanent disposal must
+    // explicitly release the processor's active-source lifetime.
+    if (this.disposed) return false;
     const input = inputs[0]?.[0];
     if (!input || input.length === 0) return true;
     if (!this.active) return true;
@@ -51,8 +67,14 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       this.pending.push(sample);
     }
 
-    while (this.pending.length >= this.chunkSamples) {
-      const frame = this.pending.splice(0, this.chunkSamples);
+    // Deliver the first 10 ms promptly, then return to normal-sized packets.
+    // This changes packet boundaries only, never the retained samples.
+    while (true) {
+      const count = this.firstFramePending
+        ? Math.min(this.chunkSamples, Math.max(1, Math.round(this.targetSampleRate * 0.01)))
+        : this.chunkSamples;
+      if (this.pending.length < count) break;
+      const frame = this.pending.splice(0, count);
       this.postFrameFromSamples(frame, capturedAt);
     }
 
@@ -76,6 +98,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       },
     });
     this.chunkIndex += 1;
+    this.firstFramePending = false;
   }
 
   postFrame(frame) {
@@ -90,7 +113,10 @@ class PCM16kWorklet extends AudioWorkletProcessor {
   }
 
   resample(input, fromRate, toRate) {
-    if (fromRate === toRate) return Array.from(input);
+    if (input.length === 0) return [];
+    // The caller immediately copies sample values into pending; it does not
+    // retain or mutate the browser's input buffer. No intermediate array needed.
+    if (fromRate === toRate) return input;
 
     const ratio = fromRate / toRate;
     const output = [];
@@ -100,11 +126,15 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       const left = Math.floor(sourceIndex);
       const right = Math.min(left + 1, input.length - 1);
       const fraction = sourceIndex - left;
-      output.push(input[left] + (input[right] - input[left]) * fraction);
+      // carry can be in [-1, 0): this interpolation straddles two input blocks.
+      // Keep the previous block's last sample instead of reading input[-1].
+      const leftSample = left < 0 ? this.previousSample : input[left];
+      output.push(leftSample + (input[right] - leftSample) * fraction);
       sourceIndex += ratio;
     }
 
     this.carry = sourceIndex - input.length;
+    this.previousSample = input[input.length - 1];
     return output;
   }
 

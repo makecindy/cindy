@@ -9,53 +9,108 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
   <a href="https://github.com/makecindy/cindy/actions/workflows/ci.yml"><img src="https://github.com/makecindy/cindy/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-22.x-brightgreen.svg" alt="Node.js 22.x" /></a>
-  <a href="https://pnpm.io"><img src="https://img.shields.io/badge/pnpm-10-orange.svg" alt="pnpm" /></a>
 </p>
 
 <p align="center">
-  🌐 <a href="https://cindy.app">cindy.app</a> &nbsp;·&nbsp; ⬇️ <a href="https://cindy.app/download/">Download</a>
+  <strong><a href="https://cindy.app/download">Download Cindy</a></strong> &nbsp;·&nbsp; <a href="https://cindy.app">Website</a> &nbsp;·&nbsp; <a href="CONTRIBUTING.en.md">Build with us</a> &nbsp;·&nbsp; <a href="SUPPORT.en.md">Get help</a>
 </p>
 
+Cindy is an **open-source AI agent, ready out of the box and yours to shape**.
+Connect your computers and phone, bring the models and subscriptions you already
+use, and build a companion that knows how you like to work.
 
-Cindy is an open-source AI agent that works out of the box. She brings multiple
-harnesses, models and tools into one agent that finishes real work in your
-projects and apps. Ready from day one, yours to shape over time.
+## All your devices. One Cindy.
 
-Cindy runs locally on your own machine, using your real files and logged-in
-apps. The first supported harnesses are **Claude Code** and **Codex** — more are
-being added, and a native harness is in the works. Models and harnesses mix
-freely and can switch mid-task while your workspace, memory, skills and tools
-stay continuous; one task can even be planned, executed in parallel, and
-reviewed by agents on different harness × model combos. She can drive your
-browser, computer and phone, and take work from IM and schedules.
+Your work computer, home desktop, laptop and phone belong together.
 
-This repository is the open-source **client** for Cindy — the desktop and mobile
-apps plus their shared packages, organized as a pnpm monorepo.
+- **Pick up the same work.** Open a session from another device, continue the
+  conversation, and access its files without copying everything into a new chat.
+- **Share more than a screen.** Use model providers configured on another
+  computer — including supported subscriptions, API providers and local models.
+- **Reach your whole desktop.** Built-in remote desktop on your phone lets you
+  open apps, type and operate a connected computer when a chat isn't enough.
 
-The client is free to use, and its source code is open under Apache-2.0. Bring
-models your way: sign in to the official Cindy service (usage deducted
-transparently), authorize the **Claude Code / Codex Coding Plan** you already
-pay for and keep using it inside Cindy — no duplicate bill — connect your own
-API keys, or use local models.
-See [cindy.app](https://cindy.app) for service details,
-[pricing](https://cindy.app/#pricing), and [downloads](https://cindy.app/download/).
+Your computer becomes your server: **no server rental or self-hosting setup**.
 
-## Yours to shape
+<details>
+<summary>How connections and data work</summary>
 
-Open source means more than visible — it means changeable:
+For remote access to your computers, keep them online, sign in with the same
+account and enable the relevant permissions. Model sharing requires allowing
+remote access to that provider; remote desktop also needs its own permissions.
+Project files stay on their computer — remote access is not whole-disk sync.
+Cloud companions sync their conversations, memory, skills and shared attachments
+through Cindy's services; model providers process the requests sent to them.
+Provider and service billing still apply.
 
-- **Memory** — correct her once and she does it right from then on, shared across harnesses.
-- **Skills** — teach a way of working once and reuse it everywhere; handing them to your team is in the making.
-- **Automation** — recurring work schedules itself, runs itself, reports back.
-- **MCP** — wire your internal tools and business systems into her reach.
-- **Plugins** — reshape features, UI and interactions, shared through an open marketplace *(in the making)*.
-- **Source** — audit, fork, extend, and contribute improvements back under Apache-2.0.
+</details>
 
-Ready out of the box, never boxed in — start with
-[`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) and build Cindy with us.
+## Keep your favorite agents. Get a better way to work.
 
-## What's in this repo
+Already using Claude Code or Codex? Cindy brings them together with **Pi**,
+then adds a shared interface, multi-device access, tools and a companion of
+your own.
+
+| Harness | What it brings |
+| --- | --- |
+| **Claude Code** | Claude Code's agent workflow, with Cindy's interface and connected tools. |
+| **Codex** | Codex's coding workflow, available alongside your other agents. |
+| **Pi** | A lean, open-source, extensible agent with support for multiple model providers. |
+
+Choose a supported harness and model combination, and change it as the work
+evolves. Your session stays in Cindy; switching harnesses hands off or rebuilds
+the engine context rather than making their internal states identical.
+
+**One agent not enough? Let her lead a team.** Use different agents for planning,
+parallel implementation and independent review, with a shared goal and clear
+acceptance criteria.
+
+## Real work, in your actual tools
+
+Work with your files, browser and apps. Ask for a change, inspect what happened,
+and keep working from the result. Answers can include **charts, interactive
+controls and rich HTML**, not just a wall of text.
+
+Build a recurring routine with **automations**, or hand over work through
+connected chat channels such as Slack and Telegram. Connect more tools through
+**Skills, plugins and MCP**.
+
+## Ready from day one. Yours to shape over time.
+
+- **Create your own companions.** Give them a role, instructions, skills and
+  recurring work — a reviewer, researcher, project partner, or something of your own.
+- **Make experience reusable.** Keep useful preferences and knowledge in memory;
+  turn a good way of working into a Skill you can reuse and share.
+- **Extend the product.** Discover Skills and plugins in SkillHub, connect your
+  own tools, or build on the [official plugins](https://github.com/makecindy/cindy-official-plugins).
+- **Help shape Cindy.** Audit the code, fork it, improve an interaction, fix a bug,
+  or contribute a useful integration. The client is Apache-2.0 licensed.
+
+Open source means more than visible — it means changeable.
+[Build Cindy with us →](CONTRIBUTING.en.md)
+
+## Start with what you already have
+
+The **client is free**. Authorize a supported subscription you already pay for,
+including Claude Code or Codex plans, connect your own API keys, or use a local
+model. You can also use Cindy's managed model service. Provider limits and
+billing still apply; the free client does not mean unlimited model usage.
+
+**macOS · Windows · Linux · iOS · Android**
+
+[Download Cindy](https://cindy.app/download) · [Service pricing](https://cindy.app/pricing)
+
+Linux users: see the [Ubuntu, Arch Linux and Omarchy installation guide](docs/linux.md)
+for installation, updates, keyring setup and migration from a manual install.
+
+---
+
+## For developers
+
+This repository contains Cindy's open-source **desktop and mobile clients** and
+their shared packages, organized as a pnpm monorepo.
+
+### What's in this repo
 
 | Path | Description |
 | --- | --- |
@@ -69,16 +124,16 @@ repository and is not part of this monorepo.
 
 | Mode | Account requirement | Availability |
 | --- | --- | --- |
-| Hosted service | Cindy cloud account | Use Cindy's full hosted service. See [pricing](https://cindy.app/#pricing). |
+| Hosted service | Cindy cloud account | Use Cindy's full hosted service. See [pricing](https://cindy.app/pricing). |
 | Skip Sign-In | No Cindy sign-in required | Choose “Skip Sign-In” on the login screen to use local agents; the app then shows the account state as “Not signed in”. Server-backed capabilities are unavailable in this state. |
 
-## Prerequisites
+### Prerequisites
 
 - **Node.js** 22.x
 - **pnpm** 10.x (v11 is not yet supported)
 - **Git LFS**
 
-## Getting started
+### Getting started
 
 Contributor setup, Git LFS, dependency updates, and access requirements are maintained in
 [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md).
@@ -93,7 +148,7 @@ git lfs pull
 pnpm install
 ```
 
-## Development entry points
+### Development entry points
 
 ```bash
 # Mainland China Cindy account
@@ -127,7 +182,7 @@ using `skillhubApiBaseUrl` (the deprecated XD proxy), while current clients use
 `cindySkillHubApiBaseUrl`. The current client deliberately does not fall back to
 the legacy field when the new endpoint is absent.
 
-## Architecture
+### Architecture
 
 - [`DESIGN.md`](DESIGN.md) — visual design system, color tokens, and UI conventions
 - [`docs/README.md`](docs/README.md) — complete documentation and rules index
@@ -157,21 +212,56 @@ privately rather than opening a public issue.
 ## Privacy & telemetry
 
 **Official distribution builds** include [TapDB](https://www.taptap.io/tapdb)
-usage analytics for product-level aggregate statistics (device / OS / app-version
-metadata; associated with your account ID after sign-in). It does **not** collect
-chat content, file content, or working-directory data. In addition, while signed
-in to a cloud account the client sends an online heartbeat to Cindy services
-(account ID, platform, and version only). Crash dumps stay on the local machine
-and are never uploaded automatically.
+usage analytics for product-level aggregate statistics, including device identifiers,
+OS / app version, startup and activity events. Events are associated with your account
+ID after sign-in, so this is not fully anonymous. TapDB does **not** collect chat
+content, file content, or working-directory data.
+
+**You can disable usage analytics without editing code**: on Desktop, use
+Settings → About → Usage statistics; on Mobile, use Usage statistics in Settings.
+The SDK checks the stored privacy-consent state and the statistics preference,
+which defaults to on. Accepting the Privacy Policy records consent; a one-time
+migration also records consent for eligible existing signed-in users.
+
+**Known Mobile exception:** enterprise SSO skips the policy-acceptance step. If no
+analytics consent record exists and that sign-in is restored after restarting the
+app, the current migration can mark even a new installation as consented. With
+TapDB configured and statistics enabled, reporting can then start without explicit
+policy acceptance. See [Mobile sign-in restoration](apps/mobile/src/auth/AuthContext.tsx)
+and the [consent migration](apps/mobile/src/analytics/analyticsConsentStore.ts).
+Turning off Usage statistics prevents reporting from being enabled by this migration.
+
+- Desktop stops subsequent analytics reporting immediately when disabled. Local
+  mode (Skip sign-in) does not report to TapDB.
+- Mobile immediately unlinks the account and stops reports explicitly triggered
+  by Cindy. An already initialized native SDK cannot be uninitialized; fully quit
+  and relaunch the app to keep the SDK uninitialized.
+
+Implementation: [Desktop consent and settings](apps/desktop/src/main/analyticsSettingsService.ts),
+[Desktop SDK](apps/desktop/src/renderer/analytics/tapdbClient.ts),
+[Mobile consent](apps/mobile/src/analytics/analyticsConsentStore.ts), and
+[Mobile SDK](apps/mobile/src/analytics/mobileTapdb.ts).
+
+Online heartbeats and diagnostic logs are separate mechanisms, unaffected by the
+usage statistics switch. Desktop sends heartbeats to Cindy services only during a
+verified cloud sign-in (account ID, platform, and version); local mode sends none.
+Desktop native crash dumps stay local and are never uploaded automatically.
+Diagnostic logs can be uploaded manually; a separate, default-off automatic crash
+log upload option is also available. Log uploads require privacy consent. See the
+[heartbeat implementation](apps/desktop/src/main/heartbeatService.ts) and
+[log upload rules](docs/dev-rules/log-upload-and-redaction.md).
 
 **Building from source?** You are not required to keep analytics:
 
-- Mobile is off by default — without TapDB credentials (`clientId` /
-  `clientToken`) injected at build time, `apps/mobile/src/analytics/mobileTapdb.ts`
-  is a no-op;
-- Desktop can be fully stripped by removing the `initTapdb()` call in
-  `apps/desktop/src/renderer/index.tsx` (implementation lives in
-  `apps/desktop/src/renderer/analytics/`).
+- Desktop development builds do not initialize TapDB by default. Explicitly setting
+  `XDT_TAPDB_DEV=1` lifts the build gate but still requires consent and the statistics
+  preference. Self-packaged Desktop builds use the same analytics gates as official
+  builds; you can disable analytics in Settings.
+- Mobile does not initialize the SDK without injected TapDB configuration
+  (`clientId` / `clientToken`). This does not mean all source builds default to off:
+  the self-hosted release pipeline requires nonempty configuration, while local
+  development permits empty values. See the
+  [Mobile build guide](apps/mobile/docs/simulator-debugging.md).
 
 ## License / 许可证
 

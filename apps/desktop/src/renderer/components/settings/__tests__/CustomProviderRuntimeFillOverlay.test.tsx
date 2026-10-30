@@ -75,6 +75,16 @@ function renderOverlay(value: RuntimeFillDialogState, onClose = vi.fn()) {
 }
 
 describe('CustomProviderRuntimeFillOverlay', () => {
+  it('keeps the dialog open after an outside pointer press', () => {
+    const onClose = vi.fn();
+    renderOverlay(state(), onClose);
+
+    fireEvent.pointerDown(document.body);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.providers.custom.runtimeFill.reviewTitle')).not.toBeNull();
+  });
+
   it('never reflects request-path query credentials into text or title attributes', () => {
     renderOverlay(
       state({

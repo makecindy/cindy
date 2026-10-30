@@ -1,10 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const navigation = vi.hoisted(() => ({ focused: false, push: vi.fn() }));
+vi.mock('react', () => ({
+  useCallback: (callback: unknown) => callback,
+  useEffect: () => {},
+  useMemo: (factory: () => unknown) => factory(),
+}));
+vi.mock('expo-router', () => ({
+  useRouter: () => ({ push: navigation.push }),
+  useNavigation: () => ({ isFocused: () => navigation.focused }),
+  useFocusEffect: () => {},
+}));
+import { useGuardedPush } from '../utils/useGuardedPush';
 
 import {
   SAME_TARGET_WINDOW_MS,
   TRANSITION_WINDOW_MS,
   createNavigationLock,
   createRefocusReset,
+  forwardNavigationLock,
   navigationTargetKey,
 } from '../utils/navigationLock';
 
@@ -134,14 +148,15 @@ describe('useGuardedPush 焦点门(source 契约)', () => {
   it('push 前必须过 isFocused 门:失焦(导航已在路上)的补点一律丢弃', async () => {
     // JS 长停摆会把补点分散到多个恢复间隙,墙钟窗口对「跨停摆补点」失效
     // (2026-07-18 同一会话被连开 N 层实锤);焦点门是时间窗之外的确定性防线。
-    const { readFileSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const source = readFileSync(resolve(process.cwd(), 'src/utils/useGuardedPush.ts'), 'utf8');
-    const focusGate = source.indexOf('navigation.isFocused() === false');
-    const lockGate = source.indexOf('forwardNavigationLock.shouldAllow');
-    const pushCall = source.indexOf('router.push(href)');
-    expect(focusGate).toBeGreaterThan(-1);
-    expect(lockGate).toBeGreaterThan(focusGate);
-    expect(pushCall).toBeGreaterThan(lockGate);
+    forwardNavigationLock.reset();
+    navigation.push.mockClear();
+    navigation.focused = false;
+    const push = useGuardedPush();
+    push('/sessions/a');
+    expect(navigation.push).not.toHaveBeenCalled();
+    navigation.focused = true;
+    push('/sessions/a');
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith('/sessions/a');
+    forwardNavigationLock.reset();
   });
 });

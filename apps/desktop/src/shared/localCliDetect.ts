@@ -10,10 +10,10 @@
  *
  * 登录态判据只做**存在性判断**,绝不落盘 / 不进日志(CLAUDE.md 规则 23):
  *   - `file` 探测:stat 凭证文件是否存在(Codex 的 ~/.codex/auth.json)。
- *   - `claude-oauth` 探测:Claude Code 登录态跨平台存两处——macOS 在系统 Keychain
- *     (service `Claude Code-credentials`),其它平台才是 ~/.claude/.credentials.json。
- *     只 stat 文件会漏掉 Mac 上正常登录(且可能连 ~/.claude 目录都没有)的用户,
- *     故改用 host 侧现成的 `hasClaudeAiOAuth()`(只返 boolean,不暴露凭证内容)。
+ *   - `claude-oauth` 探测:Claude Code 登录态由 CLI 自己保存(macOS 在系统钥匙串,
+ *     其它平台在 ~/.claude),只 stat 文件会漏掉 Mac 上正常登录(且可能连 ~/.claude
+ *     目录都没有)的用户。故改用 host 侧的 `hasClaudeNativeLogin()`:读内置 CLI 的
+ *     `claude auth status` 结果,只返 boolean,Cindy 不读凭证。
  */
 
 /** 可检测的本机 CLI 标识。 */

@@ -10,6 +10,7 @@ import type {
   ReviewFileDiffRequest,
 } from '@/lib/gitReview.types';
 import { extractIpcError } from '@/utils/ipcError';
+import { turnChangeReadApiFor } from '@/lib/gitReviewTransport';
 import { buildCappedDiffData } from '../../../../../shared/gitReviewCapped';
 import type { ReviewSourceDescriptor } from '../../../../../shared/reviewSource';
 import type { TurnChangeSetDetail } from '../../../../../shared/turnChangeSet';
@@ -208,7 +209,7 @@ export function useReviewSource(
     descriptor.kind === 'turn-set' ? descriptor.changeSetIds.join('\0') : '';
   const turnKey =
     descriptor.kind === 'turn-set'
-      ? `${turnTargetSessionId ?? sessionId ?? ''}\0${turnChangeSetIdsKey}`
+      ? `${deviceLinkDeviceId ?? ''}\0${remoteHostId ?? ''}\0${turnTargetSessionId ?? sessionId ?? ''}\0${turnChangeSetIdsKey}`
       : null;
   const [turnReloadToken, setTurnReloadToken] = useState(0);
   const [turnState, setTurnState] = useState<TurnLoadState>({
@@ -220,7 +221,7 @@ export function useReviewSource(
   useEffect(() => {
     if (descriptor.kind !== 'turn-set' || !turnKey) return;
     let cancelled = false;
-    if (!sessionId || remoteHostId !== null || deviceLinkDeviceId !== null) {
+    if (!sessionId || remoteHostId !== null || deviceLinkDeviceId === undefined) {
       setTurnState({
         key: turnKey,
         changeSets: [],
@@ -236,7 +237,7 @@ export function useReviewSource(
       error: null,
     }));
     const reviewSessionId = turnTargetSessionId ?? sessionId;
-    void window.electronAPI.maker
+    void turnChangeReadApiFor(deviceLinkDeviceId)
       .getTurnChangeSets(reviewSessionId, turnChangeSetIdsKey.split('\0'))
       .then((changeSets) => {
         if (!cancelled) setTurnState({ key: turnKey, changeSets, loading: false, error: null });

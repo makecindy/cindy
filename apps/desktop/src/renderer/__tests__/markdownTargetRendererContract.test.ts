@@ -25,12 +25,9 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).toContain('<InlineCodeWithTarget');
   });
 
-  it('only renders a chip for uniquely-resolved local files — everything else is plain text', () => {
-    // Design (chosen 2026-05-29 after follow-up review): the chip visual is
-    // ONLY a confirmation that the path resolved to a single existing file
-    // in workingDir. Unresolved / ambiguous / not-found / directory /
-    // unsupported-scheme cases render as plain <span> or vanilla <code>, not
-    // as a non-interactive chip. The chip is always interactive when shown.
+  it('only upgrades verified references to file chips, while authored links retain their action', () => {
+    // Auto-detected references need a uniquely resolved target. Explicit
+    // unresolved links keep an ordinary anchor, never a non-interactive chip.
     expect(markdownRenderer).toContain('FileTargetChip');
     expect(markdownRenderer).toContain("target.kind === 'resolved-local'");
     expect(markdownRenderer).toContain('shouldRenderCodeReferenceLabel');
@@ -42,10 +39,10 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).not.toContain('cursor-default');
     expect(markdownRenderer).not.toContain('interactive: boolean');
     expect(markdownRenderer).not.toContain('interactive={interactive}');
-    // Non-resolved local kinds fall through to plain text — assert MarkdownTargetLink
-    // explicitly handles code-reference / local-candidate as <span>.
+    // Auto-detected unresolved paths remain plain text; authored links retain
+    // their click action (the UI fixture covers missing-file feedback/retry).
     expect(markdownRenderer).toContain(
-      "if (target.kind === 'code-reference' || target.kind === 'local-candidate')",
+      "if (target.kind === 'code-reference' || (target.kind === 'local-candidate' && fromBarePath))",
     );
     // InlineCodeWithTarget only chips on resolved-local; everything else is a
     // vanilla <code>. The guard must use !== 'resolved-local'.
@@ -96,7 +93,13 @@ describe('Markdown target rendering contract', () => {
     // misses through the de-duped cached wrapper — not call the raw resolver.
     expect(markdownRenderer).toContain('peekResolveLocalPathSmart');
     expect(markdownRenderer).toContain('resolveLocalPathSmartCached');
-    expect(markdownRenderer).not.toContain('resolveLocalPathSmart(');
+    // Explicit clicks intentionally retry uncached resolution after a move or
+    // restoration; only render-time resolution must use the cache.
+    const hook = markdownRenderer.slice(
+      markdownRenderer.indexOf('function useResolvedMarkdownTarget('),
+      markdownRenderer.indexOf('async function activateResolvedLocalTarget('),
+    );
+    expect(hook).not.toContain('resolveLocalPathSmart(');
   });
 
   it('allows file:// through urlTransform so local file links can be classified safely', () => {
@@ -147,5 +150,28 @@ describe('Markdown target rendering contract', () => {
     expect(textLightbox).toContain(
       'scroller.scrollTop = targetRect.top - scrollerRect.top + scroller.scrollTop',
     );
+  });
+
+  it('has the session bubbles honour the boundary they are handed', () => {
+    // SubagentsBody component tests verify the boundary at the panel seam.
+    // This guard retains propagation through the real session bubble sources.
+    const chatDir = resolve(__dirname, '../components/chat');
+    const assistant = readFileSync(resolve(chatDir, 'AssistantMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    // Defaulting to true is what keeps every local caller unchanged, and is
+    // also what made the omission invisible.
+    expect(assistant).toContain('allowPrivilegedLinks = true');
+    // Both bodies: the streamed one and the settled one.
+    expect([...assistant.matchAll(/allowPrivilegedLinks=\{allowPrivilegedLinks\}/g)].length)
+      .toBeGreaterThanOrEqual(3);
+
+    const user = readFileSync(resolve(chatDir, 'UserMessage.tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
+    expect(user).toContain('allowPrivilegedLinks = true');
+    // A remote author's @-chip must not resolve against this filesystem: the
+    // click handler is withheld, which is the inert chip shape the component
+    // already uses for a collapsed long message.
+    expect(user).toContain('longMessageCollapsed || !allowPrivilegedLinks');
+    expect(user).toContain('allowPrivilegedLinks\n                                ? async (abs, name, chip)');
   });
 });

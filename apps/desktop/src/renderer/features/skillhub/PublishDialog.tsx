@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/button';
 /**
  * PublishDialog — 发布到市场的统一入口,合并了 Empty/Working/Failure 三种 state。
  *
@@ -18,13 +19,13 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import * as Select from '@radix-ui/react-select';
+import { SelectParts as Select } from '@/components/ui/select';
 import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { pickDefaultVersion } from './versionUtils';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
@@ -36,12 +37,13 @@ import { buildPublishFailureEvent, shouldDispatchPublishResultFallback } from '.
 import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import {
   buildSkillhubPublishParams,
-  validateRequiredCategory,
+  validatePlatformTagSelection,
   validateVisibilityScope,
   type PublishFormValues,
   type PublishVisibility,
 } from './lib/publishForm';
 import type { MarketCategory } from '../../../shared/skillhubCategory';
+import { PlatformTagSelector } from './components/PlatformTagSelector';
 
 // ── State machine types ───────────────────────────────────────────────────────
 
@@ -61,6 +63,7 @@ interface FailurePayload {
 
 export interface ScanResultPayload {
   status: string;
+  rejectionReason?: string;
   gates?: Array<{ name: string; label?: Record<string, string>; status: string; issues?: unknown[] }>;
 }
 
@@ -148,8 +151,8 @@ const INITIAL_STATE: PublishState = {
   scanGates: [],
 };
 
-const AUTO_CATEGORY_VALUE = '__auto_category__';
-const PUBLISH_TEXT_LIMIT = 280;
+const DESCRIPTION_LIMIT = 2_000;
+const CHANGELOG_LIMIT = 280;
 
 /** working = 5 种 active phase 的合并语义,UI 上统一处理 */
 function isWorkingPhase(phase: PublishPhase): boolean {
@@ -199,19 +202,12 @@ function WhitePillButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button variant="secondary" size="md" compact
       type="button"
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center justify-center rounded-full px-4',
-        'text-sm font-normal border bg-[var(--cmd-palette-bg)]',
-        'border-[var(--confirm-btn-secondary-border)] text-[var(--settings-btn-secondary-text)]',
-        'hover:bg-[var(--surface-hover)]',
-        'transition-colors',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -219,29 +215,25 @@ function BlackPillButton({
   children,
   onClick,
   disabled,
+  loading,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  loading?: boolean;
 }) {
   return (
-    <button
+    <Button
+      variant="cta"
+      size="md"
+      compact
       type="button"
       onClick={onClick}
+      loading={loading}
       disabled={disabled}
-      className={cn(
-        'inline-flex h-8 items-center justify-center gap-1.5 rounded-full px-4',
-        'text-sm font-medium leading-none',
-        // 视觉对齐:lucide icon 视觉重心偏上,把 icon 抬 0.5px 让它和文字 baseline 看齐
-        '[&>svg]:-translate-y-px',
-        'bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]',
-        'hover:bg-[var(--lightbox-cta-hover)]',
-        'transition-colors',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-      )}
     >
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -347,7 +339,7 @@ export function SelectInput({
           'flex h-10 w-full items-center justify-between gap-2 rounded-full border px-3 text-sm',
           'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
           'border-[var(--settings-input-border)]',
-          'focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)] focus:border-transparent',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
           'transition-colors data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
           'data-[placeholder]:text-[var(--settings-input-placeholder)]',
         )}
@@ -366,10 +358,9 @@ export function SelectInput({
           align="start"
           sideOffset={4}
           className={cn(
-            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1',
+            'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
             'max-h-[min(15rem,var(--radix-select-content-available-height))]',
             'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-            '[box-shadow:var(--cmd-palette-shadow)]',
           )}
         >
           <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
@@ -384,7 +375,6 @@ export function SelectInput({
                 className={cn(
                   'flex w-full cursor-pointer select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none',
                   'text-[var(--msg-assistant-text)] transition-colors',
-                  'data-[highlighted]:bg-[var(--surface-hover)]',
                   'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
                 )}
               >
@@ -516,9 +506,16 @@ export function PublishDialog({
   const navigate = useNavigate();
   const { user } = useAuth();
   const identityPolicy = useSkillhubIdentityPolicy(user);
+  // A same-membership auth realm change preserves this route, but must not
+  // preserve a dialog opened for the previous identity or its continuations.
+  const dialogOwner = useMemo(() => getDataOwnerGeneration(), [open]);
+  const isDialogOwnerCurrent = isDataOwnerGenerationCurrent(dialogOwner);
 
-  // refresh/sync 延迟到 dialog 关闭后才触发，isFirstPublish 在 dialog 生命周期内不会翻转
-  const effectiveFirstPublish = isFirstPublish;
+  // A name conflict can turn an update into a new publication under another name.
+  const [renameAfterFailure, setRenameAfterFailure] = useState(false);
+  const effectiveFirstPublish = isFirstPublish || renameAfterFailure;
+  const canRename = autoCleanName || renameAfterFailure;
+  useEffect(() => { if (!open) setRenameAfterFailure(false); }, [open]);
   const { t } = useTranslation();
 
   // 本地改名后保存新 absolutePath / name。Publish 链路里所有引用 skill.absolutePath
@@ -527,6 +524,11 @@ export function PublishDialog({
   const renamedToRef = useRef<{ absolutePath: string; name: string } | null>(null);
   const activePublishNameRef = useRef<string | null>(null);
   const failedProgressNameRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   /** 拿当前应使用的 (absolutePath, name) — rename 之后是新值,否则用 prop。 */
   const effectiveSkill = useCallback(
     (): { absolutePath: string; name: string } => ({
@@ -549,6 +551,21 @@ export function PublishDialog({
     }
   }, [onLocalRenamed]);
 
+  const reconcileCommittedRename = useCallback(() => {
+    // A committed filesystem rename remains real across auth realms sharing
+    // this local owner. Repair its mounted route without resuming publication.
+    if (mountedRef.current && isDataOwnerIdCurrent(dialogOwner)) notifyRenameAndReset();
+    else renamedToRef.current = null;
+  }, [dialogOwner, notifyRenameAndReset]);
+
+  useEffect(() => {
+    if (!open || isDialogOwnerCurrent) return;
+    activePublishNameRef.current = null;
+    failedProgressNameRef.current = null;
+    reconcileCommittedRename();
+    dispatch({ type: 'CLOSE' });
+    onOpenChange(false);
+  }, [open, isDialogOwnerCurrent, onOpenChange, reconcileCommittedRename]);
 
   // ── Hub categories (required for first publish only) ─────────────────────
   const [categoryState, setCategoryState] = useState<CategoryState>({
@@ -556,15 +573,13 @@ export function PublishDialog({
     categories: [],
     error: null,
   });
-  const editableCategories = useMemo(
-    () => categoryState.categories.filter((category) => category.source === 'author'),
-    [categoryState.categories],
-  );
+  const platformCategories = useMemo(() => categoryState.categories, [categoryState.categories]);
 
   const loadCategories = useCallback(async () => {
     setCategoryState({ loading: true, categories: [], error: null });
     try {
       const res = await window.electronAPI.skillhub.listCategories();
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       if (res.success) {
         setCategoryState({
           loading: false,
@@ -579,13 +594,14 @@ export function PublishDialog({
         error: res.error ?? 'Failed to load categories',
       });
     } catch (err) {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       setCategoryState({
         loading: false,
         categories: [],
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }, []);
+  }, [dialogOwner]);
 
   useEffect(() => {
     if (!open || !effectiveFirstPublish) return;
@@ -614,8 +630,7 @@ export function PublishDialog({
     visibleDeptIds: [],
     sharedTeamSlugs: [],
     changelog: '',
-    categoryMode: 'auto',
-    categorySlug: '',
+    categorySlugs: [],
   }));
 
   // Reset form when dialog opens or latestVersion loads (info API async)
@@ -633,8 +648,7 @@ export function PublishDialog({
         visibleDeptIds: [],
         sharedTeamSlugs: [],
         changelog: '',
-        categoryMode: 'auto',
-        categorySlug: '',
+        categorySlugs: [],
       });
     }
   }, [open, latestVersion, latestVersionStatus, pendingVersion, identityPolicy.ownerType]);
@@ -643,6 +657,7 @@ export function PublishDialog({
   useEffect(() => {
     if (!open) return;
     const unsubscribe = window.electronAPI.skillhub.onPublishProgress((event) => {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       const activeName = activePublishNameRef.current;
       if (!shouldHandlePublishProgressEvent(event, activeName)) return;
       if (event.phase === 'done') {
@@ -656,11 +671,13 @@ export function PublishDialog({
         return;
       }
       if (event.phase === 'scan-result') {
+        const owner = getDataOwnerGeneration();
         const eff = effectiveSkill();
         if (event.name !== eff.name) return;
         void (async () => {
           invalidateHash(eff.absolutePath);
           await refreshSkillhub();
+          if (!isDataOwnerGenerationCurrent(owner)) return;
           void triggerIncrementalSync([event.name]);
           dispatch({ type: 'CLOSE' });
           onOpenChange(false);
@@ -670,7 +687,9 @@ export function PublishDialog({
           }
           activePublishNameRef.current = null;
           failedProgressNameRef.current = null;
-          onScanResult?.({ status: event.status, gates: event.gates });
+          if (isDataOwnerGenerationCurrent(owner)) {
+            onScanResult?.({ status: event.status, gates: event.gates, rejectionReason: event.rejectionReason });
+          }
         })();
         return;
       }
@@ -680,15 +699,16 @@ export function PublishDialog({
       dispatch({ type: 'PROGRESS', event });
     });
     return unsubscribe;
-  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill]);
+  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill, dialogOwner]);
 
   // ── Form validation ───────────────────────────────────────────────────────
   const nameMissing = effectiveFirstPublish && form.name.length === 0;
   const nameError = form.name.length > 0 && !isValidName(form.name);
   const displayNameError = form.displayName.length > 64;
-  const summaryError = form.summary.length > PUBLISH_TEXT_LIMIT;
+  const descriptionLength = Array.from(form.summary).length;
+  const descriptionError = descriptionLength > DESCRIPTION_LIMIT;
   const changelogRequired = !effectiveFirstPublish && form.changelog.trim().length === 0;
-  const changelogError = !effectiveFirstPublish && form.changelog.length > PUBLISH_TEXT_LIMIT;
+  const changelogError = !effectiveFirstPublish && form.changelog.length > CHANGELOG_LIMIT;
   const versionError = form.version.length > 0 && !isValidVersion(form.version);
 
   const visibilityScopeValidation = identityPolicy.ownerType
@@ -696,12 +716,11 @@ export function PublishDialog({
     : validateVisibilityScope(form);
   const visibilityAllowed = identityPolicy.allowedVisibilities.includes(form.visibility);
   const categoryValidation = effectiveFirstPublish
-    ? validateRequiredCategory({
+    ? validatePlatformTagSelection({
       loading: categoryState.loading,
       error: categoryState.error,
-      categories: editableCategories,
-      categoryMode: form.categoryMode,
-      selectedSlug: form.categorySlug,
+      categories: platformCategories,
+      selectedSlugs: form.categorySlugs,
     })
     : { ok: true as const };
 
@@ -710,7 +729,7 @@ export function PublishDialog({
     isValidVersion(form.version) &&
     categoryValidation.ok &&
     (effectiveFirstPublish ? !displayNameError : true) &&
-    (effectiveFirstPublish ? !summaryError : true) &&
+    (effectiveFirstPublish ? !descriptionError : true) &&
     !changelogRequired &&
     !changelogError &&
     visibilityAllowed &&
@@ -723,16 +742,18 @@ export function PublishDialog({
       submitName,
       isFirstPublish: effectiveFirstPublish,
       ownerType: identityPolicy.ownerType,
-      categories: editableCategories,
+      categories: platformCategories,
     }),
-    [form, effectiveFirstPublish, identityPolicy.ownerType, editableCategories],
+    [form, effectiveFirstPublish, identityPolicy.ownerType, platformCategories],
   );
 
   const runPublish = useCallback((params: SkillhubPublishParams) => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     activePublishNameRef.current = params.name;
     failedProgressNameRef.current = null;
     void window.electronAPI.skillhub.publish(params)
       .then((res) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (res.success) {
           if (activePublishNameRef.current !== params.name) return;
           if (res.result) {
@@ -747,17 +768,18 @@ export function PublishDialog({
         });
       })
       .catch((err) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (!shouldDispatchPublishResultFallback(params.name, activePublishNameRef.current, failedProgressNameRef.current)) return;
         dispatch({
           type: 'PROGRESS',
           event: buildPublishFailureEvent(params.name, 'INTERNAL', err),
         });
       });
-  }, []);
+  }, [dialogOwner]);
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
     const eff = effectiveSkill();
     const submitName = effectiveFirstPublish
@@ -774,22 +796,22 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.confirmPublish'),
       cancelText: t('skillhub.publishDialog.confirmReconsider'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
-    // ── autoCleanName(撞名后改名)流程:先在本地改名,再走 publish ──────────
-    // 不改名(autoCleanName=false 或新旧名一致)时跳过这一步。
+    // Rename the local folder and manifest together before publishing the new name.
     // 一旦本地改名成功,renamedToRef 就被填上新的 path/name,后续整个 publish
     // 链路(失败重试、cancel 关闭、done 回调)都从 effectiveSkill() 读,
     // 永远不会再回到旧路径。
     let publishAbsolutePath = eff.absolutePath;
-    if (autoCleanName && !renamedToRef.current && submitName !== eff.name) {
+    if (canRename && submitName !== eff.name) {
       const renameRes = await window.electronAPI.skillhub.renameLocal({
         // Keep the lexical discovery path for lstat: canonical absolutePath may
         // point at a symlink target and would bypass the rename safety gate.
-        absolutePath: skill.discoveredPath ?? eff.absolutePath,
+        absolutePath: renamedToRef.current ? eff.absolutePath : skill.discoveredPath ?? eff.absolutePath,
         newName: submitName,
       });
       if (!renameRes.success) {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         toast.error(t('skillhub.publishDialog.renameFailed', { error: renameRes.error }));
         return;
       }
@@ -797,6 +819,10 @@ export function PublishDialog({
       publishAbsolutePath = renameRes.newAbsolutePath;
       // 旧路径的 hash 缓存清掉(它指向已不存在的目录)
       invalidateHash(eff.absolutePath);
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) {
+        reconcileCommittedRename();
+        return;
+      }
     }
 
     dispatch({ type: 'SUBMIT' });
@@ -812,16 +838,19 @@ export function PublishDialog({
     form,
     effectiveSkill,
     effectiveFirstPublish,
-    autoCleanName,
+    canRename,
     confirm,
     t,
     buildCurrentPublishParams,
     runPublish,
     skill.discoveredPath,
+    dialogOwner,
+    reconcileCommittedRename,
   ]);
 
   // ── Cancel publish in progress (working / failure 都可调) ────────────────
   const handleCancelWorking = useCallback(async () => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     if (pubState.phase === 'scanning') {
       activePublishNameRef.current = null;
       failedProgressNameRef.current = null;
@@ -836,14 +865,14 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.cancelDialog.confirm'),
       cancelText: t('skillhub.publishDialog.cancelDialog.cancel'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
     void window.electronAPI.skillhub.cancelPublish();
     activePublishNameRef.current = null;
     failedProgressNameRef.current = null;
     dispatch({ type: 'CLOSE' });
     notifyRenameAndReset();
     onOpenChange(false);
-  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t]);
+  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t, dialogOwner]);
 
   // ── 关闭整个 dialog (X / Esc / backdrop) ────────────────────────────────
   const handleClose = useCallback(() => {
@@ -894,6 +923,7 @@ export function PublishDialog({
         case 'rename':
           activePublishNameRef.current = null;
           failedProgressNameRef.current = null;
+          setRenameAfterFailure(true);
           dispatch({ type: 'REPUBLISH' });
           break;
         case 'close':
@@ -931,7 +961,7 @@ export function PublishDialog({
   // Failure 文案
   const errorCopy =
     isFailure && pubState.failurePayload
-      ? getPublishErrorCopy(pubState.failurePayload.errorCode)
+      ? getPublishErrorCopy(pubState.failurePayload.errorCode, pubState.failurePayload.message)
       : null;
 
   // dlg-head subtitle — 优先 frontmatter displayName，fallback 到目录名
@@ -948,29 +978,24 @@ export function PublishDialog({
     <>
       {/* ── Main PublishDialog (Empty / Working / Failure 共用) ───────────── */}
       <Dialog.Root
-        open={open}
+        open={open && isDialogOwnerCurrent}
         onOpenChange={(v) => {
           if (!v) handleClose();
         }}
       >
         <Dialog.Portal>
           <Dialog.Overlay
-            className="fixed inset-0 z-[10000] bg-[var(--overlay-modal)]"
+            className="modal-scrim fixed inset-0 z-[10000]"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           />
           <Dialog.Content
-            // working 时禁止 outside-click / Escape 直接关——走 cancel confirm 流程
-            onPointerDownOutside={(e) => {
-              if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
-            }}
+            onPointerDownOutside={(event) => event.preventDefault()}
             onEscapeKeyDown={(e) => {
               if (isWorking && pubState.phase !== 'scanning') e.preventDefault();
             }}
             className={cn(
-              'fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
-              'w-full max-w-[480px] rounded-xl',
-              'border bg-[var(--cmd-palette-bg)]',
-              'border-[var(--cmd-palette-border)]',
+              'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+              'w-full max-w-[480px]',
               'max-h-[90vh] overflow-y-auto',
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -1004,8 +1029,8 @@ export function PublishDialog({
             <div
               className={cn('flex flex-col gap-4 px-5 pt-5 pb-1', isWorking && 'pointer-events-none opacity-50')}
             >
-              {/* SkillName — only shown in rename flow (after NAME_TAKEN) */}
-              {autoCleanName && (
+              {/* SkillName — available after a name conflict, including a deleted Skill. */}
+              {canRename && (
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.skillNameLabel')}</FieldLabel>
                   <TextInput
@@ -1063,45 +1088,33 @@ export function PublishDialog({
                     <span
                       className={cn(
                         'px-0.5 text-xs tabular-nums',
-                        summaryError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
+                        descriptionError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.summary.length}/{PUBLISH_TEXT_LIMIT}
+                      {descriptionLength}/{DESCRIPTION_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
                     value={form.summary}
                     onChange={(v) => setForm((f) => ({ ...f, summary: v, description: v }))}
                     placeholder={t('skillhub.publishDialog.descriptionPlaceholder')}
-                    maxLength={PUBLISH_TEXT_LIMIT}
                   />
                 </div>
               )}
 
-              {/* Category — first publish only, sourced from XD Skill Hub */}
+              {/* Platform tags — first publish only, sourced from Skill Hub */}
               {effectiveFirstPublish && (
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.categoryLabel')}</FieldLabel>
-                  <SelectInput
-                    value={form.categoryMode === 'auto' ? AUTO_CATEGORY_VALUE : form.categorySlug}
-                    disabled={isLocked}
-                    onChange={(v) => setForm((f) => (
-                      v === AUTO_CATEGORY_VALUE
-                        ? { ...f, categoryMode: 'auto', categorySlug: '' }
-                        : { ...f, categoryMode: 'manual', categorySlug: v }
-                    ))}
-                    options={[
-                      {
-                        value: AUTO_CATEGORY_VALUE,
-                        label: t('skillhub.publishDialog.categoryAuto'),
-                      },
-                      ...editableCategories.map((category) => ({
-                        value: category.slug,
-                        label: category.name,
-                      })),
-                    ]}
+                  <PlatformTagSelector
+                    categories={platformCategories}
+                    value={form.categorySlugs}
+                    onChange={(categorySlugs) => setForm((f) => ({ ...f, categorySlugs }))}
+                    disabled={isLocked || categoryState.loading || platformCategories.length === 0}
+                    ariaLabel={t('skillhub.publishDialog.categoryLabel')}
+                    placeholder={t('skillhub.publishDialog.categoryPlaceholder')}
                   />
-                  {!categoryValidation.ok && categoryValidation.reason !== 'required' && (
+                  {!categoryValidation.ok && (
                     <div className="flex items-center justify-between gap-3 px-0.5">
                       <p className="min-w-0 text-xs text-[var(--cmd-palette-item-meta)]">
                         {categoryValidation.reason === 'loading'
@@ -1125,11 +1138,6 @@ export function PublishDialog({
                         </button>
                       )}
                     </div>
-                  )}
-                  {!categoryValidation.ok && categoryValidation.reason === 'required' && (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
-                    </p>
                   )}
                 </div>
               )}
@@ -1194,7 +1202,7 @@ export function PublishDialog({
                         changelogError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.changelog.length}/{PUBLISH_TEXT_LIMIT}
+                      {form.changelog.length}/{CHANGELOG_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
@@ -1203,7 +1211,7 @@ export function PublishDialog({
                     placeholder={t('skillhub.publishDialog.changelogPlaceholder')}
                     rows={3}
                     readOnly={isLocked}
-                    maxLength={PUBLISH_TEXT_LIMIT}
+                    maxLength={CHANGELOG_LIMIT}
                   />
                 </div>
               )}
@@ -1231,22 +1239,11 @@ export function PublishDialog({
                         {errorCopy.message}
                       </span>
                     )}
-                    {/*
-                     * 只在 failurePayload.message 含有明显额外信息时才展示原文
-                     * (多行,或者比静态文案长很多)
-                     */}
-                    {(() => {
-                      const detail = pubState.failurePayload?.message?.trim();
-                      if (!detail || detail === errorCopy.message) return null;
-                      const hasMultiline = detail.includes('\n');
-                      const isMuchLonger = detail.length > (errorCopy.message?.length ?? 0) + 40;
-                      if (!hasMultiline && !isMuchLonger) return null;
-                      return (
-                        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-[hsl(var(--content-area))] p-2 font-mono text-[length:calc(var(--app-code-font-size)_-_3px)] leading-[1.4] text-[var(--settings-section-desc)] select-text">
-                          {detail}
-                        </pre>
-                      );
-                    })()}
+                    {errorCopy.detail && errorCopy.detail !== errorCopy.message && (
+                      <span className="whitespace-pre-wrap break-words text-xs leading-[1.5] text-[var(--cmd-palette-item-meta)] select-text">
+                        {errorCopy.detail}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1261,10 +1258,7 @@ export function PublishDialog({
                       {t('skillhub.publishDialog.cancelReview')}
                     </WhitePillButton>
                   )}
-                  <BlackPillButton disabled>
-                    <span className="inline-flex -translate-y-px">
-                      <Spinner size={14} strokeWidth={1.75} />
-                    </span>
+                  <BlackPillButton loading={true} disabled>
                     {workingLabel}
                   </BlackPillButton>
                 </>

@@ -1,0 +1,346 @@
+import { FILE_BROWSER_EVENT_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL, fsWatchTopic, isSharedTaskPeer, parseFsWatchTopic, parseSharedTaskPeer, isSharedTaskAttachment, type InvokePayload, type InvokeResultPayload, type SharedTaskQueueItem } from '@cindy/device-link';
+import type { SharedTaskHost } from './sharedTaskHost.js';
+import * as subscriptions from './subscriptions.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES } from '../agent-app-update/constants.js';
+
+export type SharedTaskPeerCapture = NonNullable<ReturnType<SharedTaskHost['capturePeer']>>;
+export interface SharedTaskInteractionCapture {
+  sessionId: string;
+  kind: 'permission' | 'ask_user_question' | 'plan_review';
+  toolName?: string;
+  suggestions?: unknown[];
+}
+let host: SharedTaskHost | null = null;
+let readQueueItem: ((sessionId: string, clientId: string) => (SharedTaskQueueItem & { attachments?: unknown }) | undefined) | null = null;
+let readInteractionSession: ((requestId: string) => SharedTaskInteractionCapture | undefined) | null = null;
+export function setSharedTaskQueueReader(value: typeof readQueueItem): void { readQueueItem = value; }
+export function setSharedTaskInteractionReader(value: typeof readInteractionSession): void { readInteractionSession = value; }
+export function setSharedTaskDispatchHost(value: SharedTaskHost | null): void { host = value; }
+/** 本机当前是否在共享这个任务(共享未关闭)。宿主不可用时访客本就无法操作,按未共享处理。 */
+export function isSessionSharedTaskActive(sessionId: string): boolean {
+  const current = host;
+  if (!current) return false;
+  try {
+    return current.activeSharedTaskIds().some((id) => current.detail(id)?.sessionId === sessionId);
+  } catch {
+    return false;
+  }
+}
+export function captureSharedTaskPeer(source: string): SharedTaskPeerCapture | null {
+  return host?.capturePeer(source) ?? null;
+}
+
+/** Only confirmed membership loss may evict a guest's shared task on the client. */
+export function sharedTaskAccessFailure(source: string, capture?: SharedTaskPeerCapture | null): InvokeResultPayload {
+  const status = host?.peerStatus(source) ?? 'unavailable';
+  if (status === 'revoked') return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'Shared task access revoked' } };
+  if (status === 'unavailable' || !capture?.isCurrent()) {
+    return { ok: false, error: { code: 'NOT_CONNECTED', message: 'Shared task authority changed or is temporarily unavailable' } };
+  }
+  return { ok: false, error: { code: 'IPC_ERROR', message: '[PERMISSION_DENIED] Shared task request denied' } };
+}
+
+// These existing list events also carry single-task state. Shared peers receive
+// only this explicit subset through their task subscription, never `sessions`.
+const sessionMetadataChannels = new Set([
+  'local-db:sessions:created', 'local-db:sessions:patched', 'local-db:sessions:activity',
+  'local-db:session:error-persisted', 'usage:session-spend-changed', 'usage:session-tokens-changed',
+]);
+export function sharedTaskMetadataTopic(channel: string, payload: unknown): `session:${string}` | null {
+  const sessionId = record(payload)?.sessionId;
+  return sessionMetadataChannels.has(channel) && typeof sessionId === 'string' && sessionId.length > 0
+    ? `session:${sessionId}` : null;
+}
+
+/** A newly invited device can arrive before the periodic authority refresh. */
+export async function refreshSharedTaskPeer(source: string): Promise<void> {
+  const peer = parseSharedTaskPeer(source);
+  const capturedHost = host;
+  if (!peer || peer.role !== 'guest' || !capturedHost) throw new Error('Shared task host unavailable');
+  await capturedHost.refresh(peer.sharedTaskId);
+  if (host !== capturedHost) throw new Error('Shared task host changed');
+}
+
+// Deliberately separate from the same-account allowlist: adding a full-device
+// channel must never implicitly grant that capability to sharedTask guests.
+const sessionReads = new Set([
+  'local-db:sessions:get', 'local-db:messages:list', 'local-db:messages:view',
+  'local-db:messages:view-intent', 'local-db:messages:work-details',
+  'local-db:messages:around', 'local-db:messages:around-client-id',
+  'local-db:messages:estimatedSessionValue', 'maker:input:get-projection',
+  'maker:session-in-turn', 'maker:session-background-activity',
+  'maker:session-background-tasks:list', 'maker:background-task:output-tail', 'maker:get-context-usage',
+  'maker:get-pending-interactions', 'maker:get-session-agent-switch-intent',
+]);
+const inputEdits = new Set(['maker:input:update-text', 'maker:input:update-content', 'maker:input:set-edit-lock']);
+// Model, Agent and reasoning changes belong to the owner, including result replay.
+const interactionDecisionKinds = new Set(['permission', 'ask_user_question', 'plan_review']);
+// Guests browse and edit the task workdir like the owner. Export jobs stay
+// same-account only: they stage bytes under the owner's transfer paths.
+const fileReadOps = new Set(['caps', 'listDir', 'listAllFiles', 'readFile', 'stat', 'searchCollect', 'thumbnail', 'fileUrl']);
+const fileWriteOps = new Set(['writeFile', 'createFile', 'createFolder', 'renameEntry', 'deleteEntry']);
+/** A frame carries at most the task stream plus its workdir watch (reconnect replay merges them). */
+export const MAX_SHARED_TASK_TOPICS = 4;
+
+export function sharedTaskFileOperation(op: unknown): 'file.read' | 'file.write' | null {
+  if (typeof op !== 'string') return null;
+  return fileReadOps.has(op) ? 'file.read' : fileWriteOps.has(op) ? 'file.write' : null;
+}
+
+// Bumped synchronously on every workdir patch. Watch admission captures it
+// before its DB read and re-checks it at install time, so a move that lands
+// during the lookup cannot install a watch on the former directory.
+const workdirGenerations = new Map<string, number>();
+export function sharedTaskWorkdirGeneration(sessionId: string): number {
+  return workdirGenerations.get(sessionId) ?? 0;
+}
+
+/**
+ * A watch was admitted for the task workdir at subscribe time. When the owner
+ * moves the task, release guest watches on any other directory so they stop
+ * streaming the old one; the guest client re-subscribes to the new workdir
+ * through the normal admission. (`remoteHostId` never changes after creation.)
+ */
+export function releaseSharedTaskWatchesOnWorkdirChange(channel: string, payload: unknown): void {
+  if (channel !== 'local-db:sessions:patched') return;
+  const row = record(payload);
+  const patch = record(row?.patch);
+  if (typeof row?.sessionId !== 'string' || !patch || !Object.prototype.hasOwnProperty.call(patch, 'workingDir')) return;
+  workdirGenerations.set(row.sessionId, sharedTaskWorkdirGeneration(row.sessionId) + 1);
+  const next = normalizeWorkingDirForStorage(typeof patch.workingDir === 'string' ? patch.workingDir : null);
+  const peers = new Set([...subscriptions.getControllerIds(), ...subscriptions.getKnownControllerIds()]);
+  for (const peer of peers) {
+    if (!isSharedTaskPeer(peer) || captureSharedTaskPeer(peer)?.author.sessionId !== row.sessionId) continue;
+    const stale = subscriptions.getControllerTopics(peer).filter((topic) => {
+      const watched = parseFsWatchTopic(topic);
+      return watched !== null && normalizeWorkingDirForStorage(watched) !== next;
+    });
+    if (stale.length > 0) subscriptions.unsubscribe(peer, stale);
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+function deny(): never { throw new Error('[PERMISSION_DENIED] SharedTask task access denied'); }
+
+function sameJson(left: unknown, right: unknown): boolean {
+  try { return JSON.stringify(left) === JSON.stringify(right); } catch { return false; }
+}
+
+function isSafeSessionPermissionUpdate(value: unknown, toolName: string): boolean {
+  const update = record(value);
+  if (!update || update.destination !== 'session') return false;
+  if (update.type === 'codexSessionApproval') {
+    return Object.keys(update).every((key) => key === 'type' || key === 'destination');
+  }
+  if (update.type !== 'addRules' || update.behavior !== 'allow' ||
+      Object.keys(update).some((key) => !['type', 'behavior', 'destination', 'rules'].includes(key)) ||
+      !Array.isArray(update.rules) || update.rules.length === 0) return false;
+  return update.rules.every((rawRule) => {
+    const rule = record(rawRule);
+    return !!rule && typeof rule.toolName === 'string' && rule.toolName === toolName &&
+      Object.keys(rule).every((key) => key === 'toolName' || key === 'ruleContent') &&
+      (rule.ruleContent === undefined || typeof rule.ruleContent === 'string');
+  });
+}
+
+function assertSharedTaskPermissionUpdates(
+  decision: Record<string, unknown>, interaction: SharedTaskInteractionCapture,
+): void {
+  if (decision.permissionUpdates === undefined) return;
+  if (interaction.kind !== 'permission' || !interaction.toolName ||
+      !Array.isArray(decision.permissionUpdates) || decision.permissionUpdates.length === 0 ||
+      !Array.isArray(interaction.suggestions)) deny();
+  for (const update of decision.permissionUpdates) {
+    if (!isSafeSessionPermissionUpdate(update, interaction.toolName) ||
+        !interaction.suggestions.some((suggestion) => sameJson(update, suggestion))) deny();
+  }
+}
+
+/** Shared-task guests may answer the generic Agent interaction cards. Host-only
+ * confirmations (plugin setup, issue review, grants, and rename prompts) never
+ * enter this branch and remain protected by the normal origin gate. Owner-only
+ * Host cards that do use the generic channel (app update) are refused by name. */
+function assertSharedTaskInteractionResolve(
+  capture: SharedTaskPeerCapture, args: unknown[], sessionId: string,
+  phase: 'invoke' | 'result',
+): void {
+  if (args.length !== 2 || typeof args[0] !== 'string' || !args[0]) deny();
+  const interaction = phase === 'invoke' ? readInteractionSession?.(args[0]) : undefined;
+  if (phase === 'invoke' && (!interaction || interaction.sessionId !== sessionId)) deny();
+  if (interaction?.toolName && (OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES.has(interaction.toolName) || ['ghost_contribution_submit', 'ghost_cancel_plugin_review'].includes(interaction.toolName))) deny();
+  const decision = record(args[1]);
+  if (!decision || typeof decision.kind !== 'string' || !interactionDecisionKinds.has(decision.kind)) deny();
+  // Guests approve the host-displayed input, never substitute executable input.
+  if (decision.updatedInput !== undefined) deny();
+  if (phase === 'invoke' && interaction?.kind !== decision.kind) deny();
+  if (decision.kind === 'permission' || decision.kind === 'plan_review') {
+    if (decision.behavior !== 'allow' && decision.behavior !== 'deny') deny();
+  } else if (!record(decision.answers)) {
+    deny();
+  }
+  if (phase === 'invoke' && interaction) assertSharedTaskPermissionUpdates(decision, interaction);
+  if (!capture.authorize('approval.resolve')) deny();
+}
+
+/** Re-run the shared-task gate immediately before a pending decision is consumed. */
+export function assertSharedTaskInteractionResolveCurrent(
+  capture: SharedTaskPeerCapture, args: unknown[],
+): void {
+  assertSharedTaskInteractionResolve(capture, args, capture.author.sessionId, 'invoke');
+}
+
+/** Existing attachments can survive a text edit without being re-uploaded. The
+ * set comes exclusively from this member's current host-owned pending row. */
+export function sharedTaskOwnedQueueReferences(capture: SharedTaskPeerCapture, clientId: unknown): ReadonlySet<string> {
+  const result = new Set<string>();
+  const item = typeof clientId === 'string' ? readQueueItem?.(capture.author.sessionId, clientId) : undefined;
+  if (!item || !capture.authorize('input.edit', item)) return result;
+  if (Array.isArray(item.attachments)) for (const file of item.attachments) {
+    const row = record(file);
+    for (const key of ['path', 'url']) if (typeof row?.[key] === 'string') result.add(row[key] as string);
+  }
+  return result;
+}
+
+/** Input reference metadata is consumed before Agent execution, under host authority. */
+export function assertSharedTaskReferences(value: unknown, sessionId: string, depth = 0, sharedTaskId?: string, existing: ReadonlySet<string> = new Set()): void {
+  if (depth > 32) deny();
+  if (Array.isArray(value)) {
+    for (const child of value) assertSharedTaskReferences(child, sessionId, depth + 1, sharedTaskId, existing);
+    return;
+  }
+  const row = record(value);
+  if (!row) return;
+  for (const [key, child] of Object.entries(row)) {
+    if (['sessionId', 'parentSessionId', 'sourceSessionId', 'targetSessionId'].includes(key) && child !== sessionId) deny();
+    if (key === 'botId' || key === 'hostSnapshot') deny();
+    // Native Agent tools retain normal task permissions; client references are
+    // direct host reads and must come from this task's authorized upload area.
+    if ((key === 'path' || key === 'url') && child !== undefined && child !== null && child !== '' &&
+        !(typeof child === 'string' && (existing.has(child) || sharedTaskId && isSharedTaskAttachment(child, sharedTaskId)))) deny();
+    // Persisted reference chips are another input to host-side hydration.
+    if (key === 'persistedContent' && typeof child === 'string') {
+      let parsed: unknown;
+      try { parsed = JSON.parse(child); } catch { continue; }
+      assertSharedTaskReferences(parsed, sessionId, depth + 1, sharedTaskId, existing);
+    } else if (child && typeof child === 'object') assertSharedTaskReferences(child, sessionId, depth + 1, sharedTaskId, existing);
+  }
+}
+
+/**
+ * Validate the actual channel shape; unknown channels fail closed.
+ * `verifiedFsWatchTopics` comes from the async workdir admission in
+ * sharedTaskFileAccess; a new fs-watch subscription is rejected without it.
+ */
+export function assertSharedTaskInvoke(
+  capture: SharedTaskPeerCapture, payload: InvokePayload, queueItem?: SharedTaskQueueItem,
+  phase: 'invoke' | 'result' = 'invoke', verifiedFsWatchTopics: ReadonlySet<string> = new Set(),
+): void {
+  if (!capture.isCurrent()) deny();
+  const { channel } = payload;
+  const args = payload.args ?? [];
+  if (!Array.isArray(args)) deny();
+  const sessionId = capture.author.sessionId;
+  if (['local-db:subagent-runs:list', 'local-db:subagent-runs:detail', 'local-db:subagent-runs:transcript'].includes(channel)) {
+    const request = record(args[0]);
+    if (args.length !== 1 || !request || request.sessionId !== sessionId ||
+        Object.keys(request).some((key) => !['sessionId', 'provider', 'runIdOrAlias', 'cursor', 'limit'].includes(key)) ||
+        !capture.authorize('history.read')) deny();
+    assertSharedTaskReferences(request, sessionId);
+    return;
+  }
+  if (channel === 'device-link:media:fetch') {
+    const request = record(args[0]);
+    if (args.length !== 1 || !request || typeof request.url !== 'string' ||
+          Object.keys(request).some((key) => !['url', 'skipCache', 'thumbnail', 'prepareOnly', 'metadataOnly'].includes(key)) ||
+        (request.metadataOnly !== undefined && typeof request.metadataOnly !== 'boolean') ||
+        !capture.authorize('attachment.read')) deny();
+    // The media handler validates ledger/workdir ownership before reading bytes.
+    return;
+  }
+  // Display-only catalogs used by the existing remote composer. The provider
+  // response goes through dispatch's normal credential-free projection.
+  if (channel === 'maker:get-capabilities' || channel === 'maker:provider:list') {
+    if (args.length > 1 || !capture.authorize('history.read')) deny();
+    if (channel === 'maker:get-capabilities' && !['claude-code', 'codex', 'pi'].includes(String(args[0]))) deny();
+    if (channel === 'maker:provider:list' && args[0] !== undefined) {
+      const options = record(args[0]);
+      if (!options || Object.keys(options).some((key) => key !== 'capabilities') ||
+          !Array.isArray(options.capabilities) || options.capabilities.some((item) => typeof item !== 'string')) deny();
+    }
+    return;
+  }
+  if (channel === 'device-link:subscribe' || channel === 'device-link:unsubscribe') {
+    const topics = record(args[0])?.topics;
+    if (!Array.isArray(topics) || topics.length > MAX_SHARED_TASK_TOPICS) deny();
+    if (topics.length === 0 && !capture.authorize('events.subscribe')) deny();
+    for (const topic of topics) {
+      if (topic === `session:${sessionId}`) {
+        if (!capture.authorize('events.subscribe')) deny();
+        continue;
+      }
+      if (typeof topic !== 'string' || parseFsWatchTopic(topic) === null || !capture.authorize('file.read')) deny();
+      // Results and unsubscribes carry no file data; only new watches need the workdir binding.
+      if (phase === 'invoke' && channel === 'device-link:subscribe' && !verifiedFsWatchTopics.has(topic)) deny();
+    }
+    return;
+  }
+  if (channel === FILE_BROWSER_REMOTE_OP_CHANNEL) {
+    // Workdir ownership needs the host DB; device-op binds it before any file access.
+    const request = record(args[0]);
+    const operation = sharedTaskFileOperation(request?.op);
+    if (args.length !== 1 || !request || !operation || typeof request.workdir !== 'string' ||
+        !request.workdir || !capture.authorize(operation)) deny();
+    return;
+  }
+  if (channel === 'maker:resolve-interaction') {
+    assertSharedTaskInteractionResolve(capture, args, sessionId, phase);
+    return;
+  }
+  if (args[0] !== sessionId) deny();
+  const operation = sessionReads.has(channel) ? 'history.read'
+    : ['maker:input:enqueue', 'maker:input:steer', 'maker:input:resume', 'maker:input:set-expanded'].includes(channel) ? 'input.send'
+    : channel === 'maker:input:stop' ? 'agent.stop'
+    : channel === 'maker:input:remove' ? 'input.withdraw'
+    : inputEdits.has(channel) ? 'input.edit' : null;
+  if (!operation) deny();
+  if (phase === 'result') {
+    if (!capture.authorize('history.read')) deny();
+  } else {
+    if (!capture.authorize(operation, queueItem ?? (typeof args[1] === 'string'
+      ? readQueueItem?.(sessionId, args[1]) : undefined))) deny();
+    const existing = sharedTaskOwnedQueueReferences(capture, typeof args[1] === 'string' ? args[1] : record(args[1])?.clientId);
+    assertSharedTaskReferences(args.slice(1), sessionId, 0, capture.author.sharedTaskId, existing);
+  }
+}
+
+/** Synchronous last-mile gate, including batches, delayed pushes and offline replay. */
+export function captureSharedTaskPush(source: string, channel: string, payload: unknown): (() => boolean) | null {
+  if (!isSharedTaskPeer(source)) return () => true;
+  // Turn-change reads/actions are same-account only; do not expose an unusable guest card.
+  if (channel === 'maker:turn-change-set:updated') return null;
+  const capture = captureSharedTaskPeer(source);
+  if (!capture || !capture.authorize('events.subscribe')) return null;
+  const sessionId = capture.author.sessionId;
+  const row = record(payload);
+  if (channel === FILE_BROWSER_EVENT_CHANNEL) {
+    // Workdir-scoped and carries no sessionId; the subscription itself was
+    // admitted only for this task's workdir.
+    const workdir = row?.workdir;
+    if (typeof workdir !== 'string' || !capture.authorize('file.read') ||
+        !subscriptions.controllerHasTopic(source, fsWatchTopic(workdir))) return null;
+    return () => capture.isCurrent() && capture.authorize('file.read');
+  }
+  if (row?.sessionId !== sessionId) return null;
+  // Never forward a device/account projection just because it has a sessionId.
+  if (!(channel.startsWith('maker:') || channel.startsWith('local-db:messages:') ||
+      sharedTaskMetadataTopic(channel, payload) !== null ||
+      channel.startsWith('usage:message-') || channel === 'usage:session-spend-changed' || channel === 'usage:session-tokens-changed')) return null;
+  if (channel === 'maker:event:batch' && (!Array.isArray(row.events) || row.events.some((event) => record(event)?.sessionId !== sessionId))) return null;
+  // 代输入 is the owner's own sign-in step; guests never see or answer it.
+  if (channel === 'maker:interaction-request' && record(row.request)?.kind === 'input_handoff') return null;
+  return () => capture.isCurrent();
+}

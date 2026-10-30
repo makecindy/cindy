@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, rm, writeFile, unlink, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  defaultClaudeConfigDirCandidates,
   findClaudeSessionJsonl,
   __resetClaudeTranscriptPathCacheForTesting,
 } from '../claudeTranscriptAnchors';
@@ -90,5 +91,40 @@ describe('Claude transcript path lookup cache', () => {
 
     const first = await writeTranscript(root, 'first-project', 's0');
     await expect(findClaudeSessionJsonl('s0', undefined, root, () => now)).resolves.toBe(first);
+  });
+});
+
+describe('defaultClaudeConfigDirCandidates', () => {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalUserDataDir = process.env.XDT_USER_DATA_DIR;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+    if (originalUserDataDir === undefined) delete process.env.XDT_USER_DATA_DIR;
+    else process.env.XDT_USER_DATA_DIR = originalUserDataDir;
+  });
+
+  it('puts the CLI default dir first and keeps the legacy dev dir only as a read fallback', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue('/home/tester');
+    delete process.env.CLAUDE_CONFIG_DIR;
+    process.env.XDT_USER_DATA_DIR = '/data/dev-instance';
+
+    expect(defaultClaudeConfigDirCandidates()).toEqual([
+      path.join('/home/tester', '.claude'),
+      path.join('/data/dev-instance', 'claude-home'),
+    ]);
+  });
+
+  it('honors an explicit CLAUDE_CONFIG_DIR ahead of the default dir', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue('/home/tester');
+    process.env.CLAUDE_CONFIG_DIR = '/custom/claude';
+    delete process.env.XDT_USER_DATA_DIR;
+
+    expect(defaultClaudeConfigDirCandidates()).toEqual([
+      '/custom/claude',
+      path.join('/home/tester', '.claude'),
+    ]);
   });
 });

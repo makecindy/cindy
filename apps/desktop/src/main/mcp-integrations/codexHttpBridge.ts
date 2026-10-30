@@ -28,7 +28,9 @@ import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
 } from './codexMcpThreadContextStore.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import { isFrozenBuiltinPluginAllowed, isFrozenMcpServerAllowed } from './codexBuiltinToolPolicy.js';
+import { appServerIds } from '../mcp-apps/runtime.js';
+import { runTaskActionRequest } from '../maker-ipc/taskActionAuthorization.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
@@ -48,10 +50,12 @@ export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
  * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
  */
 export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
+/** Remote helper is enabled only for Bot Sessions and rechecks their live surface. */
+export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
 /**
  * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
  * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
- * 只放协同 (cindy_orca / orca_worker_bridge) 与 Maker Memory (cindy_memory,
+ * 放行协同、按 Session 限定的伙伴 helper 与 Maker Memory (cindy_memory,
  * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
  * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
  * 本机 server。
@@ -59,6 +63,7 @@ export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
 export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
   ...REMOTE_COLLAB_SERVER_NAMES,
   REMOTE_MEMORY_SERVER_NAME,
+  REMOTE_BOT_HELPER_SERVER_NAME,
 ]);
 
 /**
@@ -71,10 +76,14 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
  */
 export function selectRemoteInjectableServerNames(
   available: readonly string[],
-  gates: { collabEnabled: boolean; memoryEnabled: boolean },
+  gates: { collabEnabled: boolean; memoryEnabled: boolean; botHelperEnabled?: boolean; appServerNames?: readonly string[] },
 ): string[] {
   return [
+    ...available.filter(name => appServerIds().includes(name) && (gates.appServerNames === undefined || gates.appServerNames.includes(name))),
     ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
+    ...(gates.botHelperEnabled && available.includes(REMOTE_BOT_HELPER_SERVER_NAME)
+      ? [REMOTE_BOT_HELPER_SERVER_NAME]
+      : []),
     ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
       ? [REMOTE_MEMORY_SERVER_NAME]
       : []),
@@ -138,6 +147,8 @@ export interface CodexHttpBridge {
   instanceId: string;
   /** 拼出 codex 端 config 用的 URL，例如 http://127.0.0.1:54321/mcp/lizi_feishu */
   url(serverName: string): string;
+  /** Startup identity for App initialization and tools/list, never tool execution. */
+  withDiscoveryContext<T>(ctx: LiziMcpSessionContext, run: () => Promise<T>): Promise<T>;
   registerThreadContext(threadId: string, ctx: LiziMcpSessionContext): void;
   unregisterThreadContext(threadId: string, expectedSessionInstanceId?: string): void;
   /**
@@ -157,7 +168,7 @@ export interface CodexHttpBridge {
    */
   unregisterSessionCtx(sessionId: string, expectedCtx?: LiziMcpSessionContext): void;
   /**
-   * per-session bearer token (pi 会话用)。与主 token 同权但按会话隔离:
+   * per-session bearer token (pi 会话用)。按会话隔离,冻结伙伴仅能访问实际挂载的 server:
    * pi 每个会话在 spawn 前生成独立 token,经 env-file 交给远端进程 —— 单个
    * 会话的 env-file 泄漏只暴露该会话的 bridge 权限,不殃及其它会话与本地
    * codex 主 token(R5 安全审计 C-2)。必须与 registerSessionCtx 成对注册,
@@ -191,6 +202,8 @@ export interface StartCodexHttpBridgeOptions {
    * 函数形式读取:token 允许晚于 bridge 启动才生成/落盘。
    */
   additionalBearerTokens?: () => readonly string[];
+  /** Explicit configured user MCP facades in this bridge generation; never arbitrary built-ins. */
+  appServerNames?: readonly string[];
   logger: Logger;
 }
 
@@ -213,6 +226,7 @@ export async function startCodexHttpBridge(
     transportsByServer.set(name, new Map());
   }
   const threadContextStore = createCodexMcpThreadContextStore();
+  const discoveryContexts = new Map<string, LiziMcpSessionContext>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
   // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
@@ -224,7 +238,7 @@ export async function startCodexHttpBridge(
   const sessionTokenBySessionId = new Map<string, { token: string; generation: number }>();
   let nextTokenGeneration = 0;
 
-  const httpServer = http.createServer(async (req, res) => {
+  const httpServer = http.createServer((req, res) => runTaskActionRequest(async () => {
     res.setHeader('Server', SERVER_HEADER);
 
     try {
@@ -240,9 +254,9 @@ export async function startCodexHttpBridge(
 
       // bearer token 鉴权:主 token (per-run, 本地 codex 子进程) / 额外 token
       // (persistent, 远端常驻 codex daemon 与远端 cc 共用) / per-session token
-      // (pi 会话, 按 ?session= 隔离, 见 interface 注释)。主 token 与 pi
-      // per-session token 全通;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
-      // 白名单 (协同 + cindy_memory; 远端进程拿到 token 也不得初始化其余本机 server)。
+      // (pi 会话, 按 ?session= 隔离, 见 interface 注释)。Pi token 核对冻结伙伴的实际挂载;
+      // 主 token 沿用 Codex 线程策略;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
+      // 白名单 (协同、记忆、伙伴 helper；helper 另有 Session 实例与能力面校验)。
       // URL 解析提前:per-session token 匹配需要 session query,纯解析无副作用。
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       const sessionQuery = url.searchParams.get('session');
@@ -336,13 +350,36 @@ export async function startCodexHttpBridge(
         res.end();
         return;
       }
-      // scoped (persistent) token 仅限远端白名单 server (协同 + cindy_memory):
+      // scoped (persistent) token 仅限远端白名单 server:
       // 同一 remote-forward 能摸到完整 /mcp/<name> 路由, 不得经它初始化
       // cindy_ssh 等其余本机 server — codex-connector P1。
-      if (isScopedRemoteToken && !REMOTE_ALLOWED_SERVER_NAMES.has(serverName)) {
+      const appServer = opts.appServerNames?.includes(serverName) === true;
+      const remoteAppServer = isScopedRemoteToken && appServer && appServerIds().includes(serverName);
+      if (isScopedRemoteToken && !REMOTE_ALLOWED_SERVER_NAMES.has(serverName) && !remoteAppServer) {
         res.statusCode = 403;
         res.end();
         log.warn('rejected scoped remote token for non-collab server', { serverName });
+        return;
+      }
+      // A process-wide daemon has no frozen mount policy. App facades
+      // may attach upstream credentials only for an explicitly bound Session,
+      // including Codex's short-lived discovery lease before thread/start returns.
+      const appContext = appServer
+        ? sessionTokenCtx ?? (instanceQuery === null ? undefined
+          : threadContextStore.getContextForSessionInstanceId(instanceQuery) ?? discoveryContexts.get(instanceQuery))
+        : undefined;
+      if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
+        res.statusCode = 401;
+        res.end('MCP App server requires a bound Session');
+        return;
+      }
+      // Bind frozen mounts for every token before initialization or transport lookup: an
+      // excluded facade could otherwise attach Main-held upstream credentials,
+      // or borrow a transport initialized by another Session.
+      if ((appServer && !appServerIds().includes(serverName)) ||
+        ((isPiSessionToken || appServer) && !isFrozenMcpServerAllowed((appContext ?? sessionTokenCtx)?.vendorOptions, serverName))) {
+        res.statusCode = 403;
+        res.end('MCP server is not mounted for this Session');
         return;
       }
       const createMcpServer = opts.serverFactories[serverName];
@@ -362,9 +399,13 @@ export async function startCodexHttpBridge(
         serverName,
         log,
         threadContextStore,
+        discoveryContexts,
+        remoteAppServer,
+        appServer,
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
+        remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
       });
     } catch (err) {
       log.error('request handler threw', {
@@ -379,7 +420,7 @@ export async function startCodexHttpBridge(
         res.end(err instanceof Error ? err.message : 'Internal server error');
       }
     }
-  });
+  }));
 
   // streamable-http 是长连接 SSE 流；默认 5s keep-alive 会切断 codex 连接。
   httpServer.keepAliveTimeout = 0;
@@ -487,6 +528,15 @@ export async function startCodexHttpBridge(
     token,
     instanceId: randomBytes(8).toString('hex'),
     url: (serverName) => `http://127.0.0.1:${port}${MCP_PATH_PREFIX}${encodeURIComponent(serverName)}`,
+    withDiscoveryContext: async (ctx, run) => {
+      const instance = ctx.sessionInstanceId;
+      if (!instance) return run();
+      // Each lease owns its exact object, so late completion cannot delete a replacement.
+      const lease = { ...ctx };
+      discoveryContexts.set(instance, lease);
+      try { return await run(); }
+      finally { if (discoveryContexts.get(instance) === lease) discoveryContexts.delete(instance); }
+    },
     registerThreadContext: threadContextStore.registerThreadContext,
     unregisterThreadContext: threadContextStore.unregisterThreadContext,
     registerSessionCtx: (sessionId, ctx) => {
@@ -552,6 +602,10 @@ interface DispatchOpts {
   serverName: string;
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
+  discoveryContexts: ReadonlyMap<string, LiziMcpSessionContext>;
+  remoteBotHelper?: boolean;
+  remoteAppServer?: boolean;
+  appServer?: boolean;
   pluginId?: string;
   /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
   sessionTokenCtx?: LiziMcpSessionContext;
@@ -582,9 +636,13 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     serverName,
     log,
     threadContextStore,
+    discoveryContexts,
     pluginId,
     sessionTokenCtx,
     threadInstanceQuery,
+    remoteBotHelper,
+    remoteAppServer,
+    appServer,
   } = opts;
 
   const sessionIdHeader = req.headers['mcp-session-id'];
@@ -620,6 +678,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
           threadContextStore,
           threadInstanceQuery,
         );
+        // Native Codex lists tools before thread/start returns. Only that exact
+        // request may use the startup lease; batches, calls and claimed thread ids
+        // still require the real registered execution context.
+        if (!activeContext && !threadId && threadInstanceQuery !== null
+          && parsedBody && !Array.isArray(parsedBody)
+          && (parsedBody as { method?: unknown }).method === 'tools/list') {
+          activeContext = discoveryContexts.get(threadInstanceQuery);
+        }
         let decision:
           | 'no_thread_id'
           | 'thread_unregistered'
@@ -640,6 +706,31 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
           registeredThreadCount: threadContextStore.registeredThreadCount(),
         });
       }
+    }
+    // Discovery and execution share the App's frozen mount policy on every route.
+    if (appServer && parsedBody && typeof parsedBody === 'object') {
+      const requests = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
+      const needsSession = requests.some((item) => {
+        if (!item || typeof item !== 'object') return true;
+        if ('id' in item) return !['ping', 'tools/list'].includes(String(item.method));
+        // Only the transport handshake may precede Session binding. Standard
+        // and extension notifications can mutate the credentialed upstream too.
+        return item.method !== 'notifications/initialized';
+      });
+      if (!isFrozenMcpServerAllowed(activeContext?.vendorOptions, serverName) ||
+        (needsSession && (!activeContext?.sessionId || !activeContext.sessionInstanceId ||
+          (remoteAppServer && !activeContext.remoteHostId)))) {
+        res.statusCode = 401;res.end('MCP App server requires a bound Session instance');return;
+      }
+    }
+    // Startup discovery may list tools, but calls still need the registered thread.
+    if (remoteBotHelper && (hasToolCall(parsedBody) ||
+      (parsedBody as { method?: unknown } | undefined)?.method === 'tools/list') &&
+      (!activeContext?.remoteHostId || !activeContext.sessionInstanceId ||
+        (activeContext.agentKind !== 'codex' && activeContext.agentKind !== 'claude-code'))) {
+      res.statusCode = 401;
+      res.end('Remote helper requires a bound Session instance');
+      return;
     }
     if (
       !sessionTokenCtx &&
@@ -787,8 +878,7 @@ function findBlockedToolCall(
     toolCallContexts.push(context);
   }
   for (const context of toolCallContexts) {
-    const raw = context?.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
-    if (Array.isArray(raw) && raw.some((id) => id === pluginId)) {
+    if (!isFrozenBuiltinPluginAllowed(context?.vendorOptions, pluginId)) {
       return { reason: 'disabled', context };
     }
   }
