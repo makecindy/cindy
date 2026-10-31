@@ -43,6 +43,23 @@ interface SessionDragEndEventLike {
 
 let activeSessionDragCancelled = false;
 let activeSessionDragCleanup: (() => void) | null = null;
+export interface ActiveSessionDrag {
+  sessionId: string;
+  deviceId: string | null;
+}
+let activeSessionDrag: ActiveSessionDrag | null = null;
+const sessionDragListeners = new Set<() => void>();
+
+/** The browser hides DataTransfer contents during dragover; retain only the current gesture. */
+export const getActiveSessionDrag = (): ActiveSessionDrag | null => activeSessionDrag;
+export function subscribeSessionDrag(listener: () => void): () => void {
+  sessionDragListeners.add(listener);
+  return () => { sessionDragListeners.delete(listener); };
+}
+function publishSessionDrag(value: ActiveSessionDrag | null): void {
+  activeSessionDrag = value;
+  for (const listener of sessionDragListeners) listener();
+}
 
 /** 窗外预览卡的配色:按当前主题 token 实测(主进程那扇预览窗口拿不到 CSS 变量)。 */
 export function resolveSessionDragPreviewPalette(): SessionDragPreviewPalette | undefined {
@@ -75,6 +92,7 @@ function stopTrackingSessionDrag(): boolean {
   activeSessionDragCancelled = false;
   activeSessionDragCleanup?.();
   activeSessionDragCleanup = null;
+  if (activeSessionDrag) publishSessionDrag(null);
   return cancelled;
 }
 
@@ -87,6 +105,7 @@ function startTrackingSessionDrag(
 ): void {
   stopTrackingSessionDrag();
   activeSessionDragCancelled = false;
+  publishSessionDrag({ sessionId, deviceId: deviceId ?? null });
   if (typeof window === 'undefined') {
     return;
   }
@@ -112,6 +131,7 @@ function startTrackingSessionDrag(
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return;
     activeSessionDragCancelled = true;
+    publishSessionDrag(null);
     // Escape may cancel Chromium's drag without immediately producing
     // dragend. Disarm the macOS mouse-up fast path now so releasing the button
     // after cancellation cannot open a window.

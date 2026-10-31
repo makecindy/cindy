@@ -4933,7 +4933,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deviceLink: {
     confirmSkillMutation: (deviceId: string, operationId: string): Promise<import('../shared/remoteSkills').RemoteSkillReceipt> => ipcRenderer.invoke('device-link:confirm-skill-mutation', { deviceId, operationId }),
     pickPluginPackage: (deviceId: string): Promise<{ attachment: string } | null> => ipcRenderer.invoke('device-link:pick-plugin-package', deviceId),
-    taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
+    taskMigration: <Request extends import('@cindy/device-link').TaskMigrationRequest>(
+      deviceId: string | null,
+      request: Request,
+    ): Promise<import('../shared/taskMigrationIpc').TaskMigrationIpcResult<Request>> =>
       ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
     getState: (): Promise<{
       remoteControlEnabled: boolean;
