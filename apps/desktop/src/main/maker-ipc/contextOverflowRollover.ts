@@ -136,9 +136,21 @@ function isPiRequestBodyRecoveryExhausted(data: unknown): boolean {
     typeof value === 'string' && value.includes(PI_REQUEST_BODY_RECOVERY_EXHAUSTED));
 }
 
+/** Pi's byte-limit error, including the compact-failed marker from a native retry. */
+export function isPiRequestBodyTooLarge(data: unknown): boolean {
+  if (isPiRequestBodyRecoveryExhausted(data)) return true;
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(value =>
+    typeof value === 'string' && (
+      /Failed to buffer the request body:\s*length limit exceeded/i.test(value)
+      || /\b413\b[^\n]{0,120}\b(?:request body|payload|length limit exceeded)\b/i.test(value)
+    ));
+}
+
 /** PI 原生会话已经无法继续：超限，或 prompt RPC 超时（巨大 jsonl resume 卡死）。 */
 export function shouldRebuildPiNativeSession(data: unknown): boolean {
-  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data);
+  return isContextOverflowErrorData(data) || isPiPromptRpcTimeoutError(data) || isPiRequestBodyRecoveryExhausted(data) || isPiRequestBodyTooLarge(data);
 }
 
 const GROK_4_CONTEXT_CAP = 500_000;
@@ -393,7 +405,7 @@ export function findLatestRebuildableError(
       const data = errorContentToData(message.content);
       if (isContextOverflowErrorData(data)) return data;
       if (allowPiPromptTimeout && isPiPromptRpcTimeoutError(data)) return data;
-      if (allowPiPromptTimeout && isPiRequestBodyRecoveryExhausted(data)) return data;
+      if (allowPiPromptTimeout && (isPiRequestBodyRecoveryExhausted(data) || isPiRequestBodyTooLarge(data))) return data;
       if (isOversizedHistoryErrorData(data)) return data;
       if (allowCompanionCompactFailure && isCompanionCompactFailure(data)) return data;
       return null;
@@ -644,8 +656,9 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
+    const piRequestTooLarge = isPiRequestBodyTooLarge(errorData);
     const unsupportedOption = isUnsupportedRequestOptionErrorData(errorData);
-    if (!isContextOverflowErrorData(errorData) && !oversized && !unsupportedOption) return false;
+    if (!isContextOverflowErrorData(errorData) && !oversized && !piRequestTooLarge && !unsupportedOption) return false;
     await deps.drainPersistQueue();
     const sessionRow = await deps.getSessionRow(sessionId);
     signal?.throwIfAborted();
@@ -656,6 +669,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
     if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
     if (oversized && (!canContinueContextRecovery(sessionRow) || sessionRow.agentKind !== 'codex')) return false;
+    if (piRequestTooLarge && sessionRow.agentKind !== 'pi') return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
       const live = deps.getLiveSession(sessionId);
@@ -802,7 +816,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
       const action = decideCindyCompression({
         local: true,
-        bytes: oversized ? 'violated' : 'unknown',
+        bytes: oversized || piRequestTooLarge ? 'violated' : 'unknown',
         tokens,
       });
       if (action !== 'rebuild') return false;
@@ -846,8 +860,8 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         fromLabel: label,
         toLabel: label,
         sessionId,
-        reason: oversized ? 'native-session-recovery' : 'context-overflow',
-        includeToolResults: oversized || isBotChatContext(sessionRow),
+        reason: oversized || piRequestTooLarge ? 'native-session-recovery' : 'context-overflow',
+        includeToolResults: oversized || piRequestTooLarge || isBotChatContext(sessionRow),
         companion: isBotChatContext(sessionRow),
         ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
       });
@@ -1107,7 +1121,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     // recovery guard shared with ordinary Sessions (Codex manages its own limit).
     const pressure = sessionRow.agentKind !== 'codex' && shouldRebuildForContextPressure(usedTokens, window);
     const compactFailed = liveUsage?.needsRollover === true;
-    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && isPiRequestBodyRecoveryExhausted(lastError);
+    const piByteRecoveryFailed = sessionRow.agentKind === 'pi' && (isPiRequestBodyRecoveryExhausted(lastError) || isPiRequestBodyTooLarge(lastError));
     const tokenViolated =
       isContextOverflowErrorData(lastError) ||
       isPiPromptRpcTimeoutError(lastError) ||
