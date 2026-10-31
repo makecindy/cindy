@@ -81,12 +81,14 @@ export class ContactsFts {
     if (!query || query.trim().length === 0) return [];
     const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
     const matched = this.searchMatch(query, opts, limit);
-    if (matched.length >= limit) return matched;
     // MATCH 只覆盖整 token 命中; CJK 子串(「通讯录设计方案」含「设计方案」)只有
     // LIKE 扫描捞得到 — 部分命中时同样要合并兜底结果并按 contactId 去重,
     // 否则子串命中行被整 token 命中行遮蔽(MATCH 命中≥1 就提前返回的旧行为)
-    const seen = new Set(matched.map((h) => h.contactId));
-    const fallback = this.searchLike(query, opts, limit).filter((h) => !seen.has(h.contactId));
+    const seen = new Set(this.searchMatch(query, opts, -1).map((h) => h.contactId));
+    const fallback = this.searchLike(query, opts, -1).filter((h) => !seen.has(h.contactId));
+    // MATCH 已满 limit: 预留 1 个名额给 LIKE-only 子串命中, 避免其被整 token 命中
+    // 完全遮蔽 (limit=1 时不预留, 保住唯一最佳 MATCH; 与 memory/fts.ts 同口径)
+    if (limit > 1 && matched.length >= limit && fallback.length > 0) return [...matched.slice(0, limit - 1), fallback[0]];
     return [...matched, ...fallback].slice(0, limit);
   }
 
@@ -164,7 +166,7 @@ export class ContactsFts {
       params.push(opts.groupId);
     }
     sql += ` LIMIT ?`;
-    params.push(limit);
+    params.push(limit >= 0 ? limit : -1); // -1: 调用方要全量取回后再去重截断, SQLite 里即无上限
 
     try {
       const rows = this.db.prepare(sql).all(...params) as Array<{

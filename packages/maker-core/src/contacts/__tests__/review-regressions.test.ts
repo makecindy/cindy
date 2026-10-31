@@ -408,6 +408,27 @@ describe('bot review 回归(PR #875 threads)', () => {
     expect(ids).toContain(substr.id);
   });
 
+  it('search: MATCH 命中已满 limit 时为 LIKE-only 子串命中保留一个名额', () => {
+    // 回归: MATCH 满 limit 就 return, LIKE 兜底永不执行 — 「LinkedIn」是单个 token,
+    // 搜「link」时 phrase MATCH 命不中, 只有 LIKE 子串扫描捞得到
+    for (let i = 0; i < 7; i += 1) {
+      store.createContact({ kind: 'person', displayName: `link 联系人 ${i}` });
+    }
+    const linkedin = store.createContact({ kind: 'person', displayName: '乙', summary: 'LinkedIn 社交平台' });
+
+    const hits = store.search('link', { limit: 3 });
+    expect(hits).toHaveLength(3);
+    expect(hits.some((h) => h.contactId === linkedin.id)).toBe(true);
+  });
+
+  it('search: limit=1 且 MATCH 满额时不预留, 保住唯一最佳 MATCH', () => {
+    const exact = store.createContact({ kind: 'person', displayName: 'link 甲' });
+    store.createContact({ kind: 'person', displayName: '乙', summary: 'LinkedIn 社交平台' });
+
+    const hits = store.search('link', { limit: 1 });
+    expect(hits.map((h) => h.contactId)).toEqual([exact.id]);
+  });
+
   it('import: 任职关系建边失败(非重复)浮进 relationErrors, 不无声报成功', () => {
     // 用收紧的 maxRelationLen 让 addRelation 确定性抛 invalid-params
     const strictStore = new MakerContactsStore({ db, logger: noopLogger(), config: { maxRelationLen: 1 } });
