@@ -2640,6 +2640,60 @@ it('tells the model the call_tool envelope instead of forwarding a flattened env
   expect(requests[0].params).toEqual({ name: 'status', arguments: { args: ['x'], name: 'y' } });
 });
 
+it('intercepts a double-wrapped envelope and an entry-tool name before they reach the server', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 2026-10-31 实测双包形状一: {name:外层名, args:{name:内层名, args:参数}} ——
+  // 转发到服务端只会拿到 UNKNOWN_TOOL(requested=call_tool), 模型无从自纠; 桥在本地看穿。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 双包形状二: {name:正确名, args:{args:参数}} —— 参数藏在第二层 args 里。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { args: { type: 'project' } } },
+  })).rejects.toThrow(/nested twice/);
+  // 信封 name 填了入口工具名 call_tool 本身。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'call_tool', args: { type: 'project' } },
+  })).rejects.toThrow(/must be the INNER tool/);
+  expect(requests).toHaveLength(0);
+  // 正确信封原样放行。
+  await gateway.executeCall({
+    server: 'cindy_memory', tool: 'call_tool',
+    args: { name: 'memory_write', args: { type: 'project' } },
+  });
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'memory_write', args: { type: 'project' } },
+  });
+});
+
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

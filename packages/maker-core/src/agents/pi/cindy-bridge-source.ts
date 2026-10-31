@@ -3725,19 +3725,38 @@ class CindyMcpGateway {
     if (approvedDefinition !== undefined && this.approvalDefinition(resolved) !== approvedDefinition) {
       throw new McpBridgeError('tool definition changed; inspect it with cindy_mcp_list_tools and call again');
     }
-    if (this.requiresNameEnvelope(resolved.tool) && typeof recordInput(resolved.args).name !== 'string') {
-      // 该工具的 schema 自己声明了必填的字符串 name(即 Cindy 通用 call_tool 的 {name, args}
-      // 信封), 而模型没给 —— 多半是把内层字段平铺进来了。工具名无法猜, 但正确形态可以一次
-      // 说清, 让模型自纠错, 也省掉一轮往返。判定只看 schema 而不是工具名: 用户自接的第三方
-      // MCP 里可能也有叫 call_tool 的工具, 信封形状不同, 不能按名字连坐。
-      const keys = Object.keys(recordInput(resolved.args));
-      throw new Error(
-        resolved.tool.serverName + '/' + resolved.tool.name +
-        ' expects the envelope {"name": <tool>, "args": {<its parameters>}}; ' +
-        (keys.length > 0
-          ? 'you passed ' + JSON.stringify(keys) + ' directly — put the selected tool name in args.name.'
-          : 'args.name is required.'),
-      );
+    if (this.requiresNameEnvelope(resolved.tool)) {
+      // 双包防护(实测 2026-10-31: 三个会话在 memory_write / schedule_create 上连续撞这形状):
+      // 信封的 args 里又是一个 {name, args} 或只含 args 的对象。服务端只回 schema 不回显
+      // 收到的结构, 模型无法自愈; 宿主转发前看穿并一次说清。只看结构不看工具名 —
+      // 合法内层参数里出现名为 args 的字段时这里会误拦一次, 模型看错误重发原样调用仍走服务端。
+      const envelope = recordInput(resolved.args);
+      const nested = recordInput(envelope.args);
+      if (typeof nested.args === 'object' && nested.args !== null) {
+        throw new Error(
+          resolved.tool.serverName + '/' + resolved.tool.name
+          + ' envelope nested twice: args.args is itself an {"name", "args"} envelope.'
+          + ' Keep exactly one level: {"name": <inner tool>, "args": {<its parameters>}}'
+          + ' — inner parameters sit directly in args, without another wrapping args.',
+        );
+      }
+      if (typeof envelope.name !== 'string') {
+        const keys = Object.keys(envelope);
+        throw new Error(
+          resolved.tool.serverName + '/' + resolved.tool.name
+          + ' expects the envelope {"name": <tool>, "args": {<its parameters>}}; '
+          + (keys.length > 0
+            ? 'you passed ' + JSON.stringify(keys) + ' directly — put the selected tool name in args.name.'
+            : 'args.name is required.'),
+        );
+      }
+      if (envelope.name === resolved.tool.name) {
+        throw new Error(
+          resolved.tool.serverName + '/' + resolved.tool.name
+          + ' envelope name must be the INNER tool (e.g. memory_write), not the entry tool name'
+          + ' "' + resolved.tool.name + '". Correct shape: {"name": <inner tool>, "args": {<its parameters>}}.',
+        );
+      }
     }
     if (permissionSkipped || !this.isSchemaDisclosed(resolved)) {
       // 拦一次，把路标递到模型手上，同时记账。
