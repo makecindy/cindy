@@ -104,6 +104,25 @@ describe('hookScriptSlug / parseGeneratedScriptPath / buildHookCommand', () => {
     ).toBe(`node ${shellQuote(script)}`);
   });
 
+  // 实测:Claude Code 看到的托管技能是每个进程临时生成的链接目录,Agent 把它写进 /pr 跟进的
+  // 检查命令后,Cindy 一重启检查就永远 fail-closed。落库前换成技能的真实稳定位置。
+  it('stabilizeHookCommand 把 Claude 临时技能链接换成技能的稳定 .active 路径', () => {
+    const link = path.join(tmpdir(), 'cindy-claude-skills-AbC123', 'cindy', 'skills', 'pr');
+    const versioned = path.join(tmpdir(), 'shared-system-skills', '.versions', 'v26-abc', 'pr');
+    const active = path.join(tmpdir(), 'shared-system-skills', '.active', 'pr', 'scripts', 'gate.mjs');
+    const realpath = (p: string) => {
+      if (p === link) return versioned;
+      throw new Error('ENOENT');
+    };
+    const command = `node "${path.join(link, 'scripts', 'gate.mjs')}" https://github.com/o/r/pull/1`;
+    expect(stabilizeHookCommand(command, undefined, (p) => p === active, realpath)).toBe(
+      `node ${shellQuote(active)} https://github.com/o/r/pull/1`,
+    );
+    // 链接已经不在(旧对话照抄失效路径):拒绝落库,而不是存一个永远失败的检查。
+    const gone = `node "${path.join(tmpdir(), 'cindy-claude-skills-gone', 'cindy', 'skills', 'pr', 'scripts', 'gate.mjs')}" x`;
+    expect(() => stabilizeHookCommand(gone, undefined, () => false, realpath)).toThrow(/temporary Skill link/);
+  });
+
   it('stabilizeHookCommand 在文件不存在或缺少原 cwd 时明确报错', () => {
     expect(() => stabilizeHookCommand('node scripts/check.mjs', undefined)).toThrow(
       /original working directory/,
