@@ -1090,6 +1090,7 @@
     "allow": "许远程桌面",
     "allowHint": "许已登门之同名籍设备，览并操作此机之一切应用程序。须并启上方之设备控制。",
     "permissionHint": "请于此机之系统设置中许屏幕录制与辅助使用，而后重连。",
+    "inputUnsupported": "Cindy 暂不支持此机目前桌面环境的远程键鼠控制。",
     "controlUnavailable": "远方之机暂不能受操作，请察远程控制权限与连接，而后重连。",
     "beingControlled": "桌面方受远程控制",
     "beingViewed": "桌面方受远程查看",
@@ -1247,8 +1248,7 @@
     "credentialRequired": "请完成 Mac 密码验证。若不能验证，请更新两机之 Cindy。",
     "handoffEnded": "此番代书已毕，无可显之窗口。",
     "handoffUnavailable": "此机暂不能仅显此窗口。请于彼机更新 Cindy，或启远程桌面。",
-    "handoffWindow": "代书 · {{app}}",
-    "inputUnsupported": "Cindy 尚不支持此机当前桌面环境之远程键鼠操控。"
+    "handoffWindow": "代书 · {{app}}"
   },
   "ipcError": {
     "SSH_HARNESS_SWITCH_UNSUPPORTED": "此 SSH 差事暂不支持易 Harness。请择今 Harness 下之模型，或以所需 Harness 新立 SSH 差事。",
@@ -10517,8 +10517,8 @@
       "header": {
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
-        "planning": "{{name}} 方筹划…",
-        "queued": "{{name}} 候列中"
+        "queued": "{{name}} 候次",
+        "planning": "{{name}} 方筹划…"
       },
       "memberCount_one": "{{count}} 人",
       "memberCount_other": "{{count}} 人",
@@ -10704,9 +10704,9 @@
         "hostNotReady": "Cindy 尚在准备，请稍后再试",
         "planOpen": "方分工中，毕或止后，方可另筹",
         "planClosed": "此筹划已终或已更",
-        "revisionConflict": "事已更，未能行此操作。",
-        "stopOwnershipUnknown": "部分工作未能止，因未明其发起之人。",
-        "nothingToStop": "今无可止之工作。",
+        "revisionConflict": "工作状态已更，未能完成操作",
+        "stopOwnershipUnknown": "部分工作未能停止：无从确认由谁发起",
+        "nothingToStop": "目前无可停止之工作",
         "invalidAttachment": "附件不能读，请重择后再遣。",
         "attachmentUnavailable": "未能自手机取回附件，请察设备连接后再试。",
         "attachmentTooLarge": "附件逾 100 MB，请择较小之卷。",

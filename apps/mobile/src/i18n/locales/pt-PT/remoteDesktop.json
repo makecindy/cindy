@@ -130,7 +130,7 @@
   "rotate": "Rodar ecrã",
   "sound": "Som",
   "smallWindow": "Executar em segundo plano",
-  "inputUnsupported": "O ambiente de trabalho atual deste computador não suporta o controlo remoto do teclado e do rato no Cindy.",
+  "inputUnsupported": "O ambiente de trabalho atual deste computador não suporta o controlo remoto do teclado e do rato em Cindy.",
   "controlUnavailableHint": "O controlo do computador está temporariamente indisponível. Pode continuar a deslocar e ampliar o ecrã.",
   "backgroundRunningHint": "Continuar a mostrar o ecrã numa janela flutuante quando sair do ambiente de trabalho remoto ou mudar de aplicação.",
   "displaySettings": "Apresentação",

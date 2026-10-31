@@ -135,6 +135,28 @@ Agent 在任何界面遇到只有主人才能填的输入框——账号、密�
 sudo/ssh/git，属于本任务），合格则开启一步代输入，卡片显示完整命令；Agent 的命令直接继续，无需调用工具。
 Windows 暂不支持 askpass。
 
+### 5.1 GitHub 已有连接时，先把可用路径交还给 Agent
+
+本地任务通过 HTTPS 访问 `github.com` 遇到认证提示时，askpass 在弹卡前检查当前任务可见的
+`cindy-github`。只有实例唯一、已批准并启用、当前目录未停用、官方信任与 setup 状态合格，且宿主用
+该实例已有的凭据成功检查 GitHub 连接，才返回 `CINDY_AUTH_ALTERNATIVE_AVAILABLE`，本次 Git
+命令失败退出，Agent 得到明确的 `ghost_info` 路径后重新选择插件支持的操作；不弹凭据卡。
+
+- 预检与插件网络层共用宿主 GitHub 凭据资格检查：组织实例、身份标记为 `pending` 或
+  `unconfirmed` 的旧安装不读取凭据、不发连接探测，沿用原代输入。检查期间身份变化同样作废。
+- 跳过 Cindy 登录、使用本机资料的 local Profile 也可使用已有 GitHub 连接；未进入有效资料的
+  `signed-out` 状态及资料切换期间不探测。跨异步步骤复核现有 owner scope，防止混用资料。
+- 同时核对 Git transport 的远端 origin 和认证提示的 origin；其它站点、重定向后的其它 origin、
+  GitHub Enterprise、远程 SSH 任务不进入此分支。探测失败、超时、实例歧义或不可用时沿用原有代输入。
+- 检查复用插件的本机 GitHub 登录 → 同实例备用 Token 顺序，只返回宿主固定指引；不把 Token、
+  用户名、API 响应或异常正文交给 Agent、Git 或日志，也不自动执行插件操作。账号、实例或目录
+  在检查期间改变时丢弃结果。setup 就绪不等于账号连接可用。
+- 元数据预检允许识别 Agent 随包的 Git；真正交付主人填写的凭据仍使用原来的系统路径进程校验。
+- 插件不支持所需操作，或主人明确要求原生 Git 时，Agent 可给该次命令设置
+  `CINDY_INPUT_HANDOFF_PREFER_TERMINAL=1`，继续原有终端认证；这不是新的授权，也不修改全局设置。
+- 本规则只为已有 askpass 增加恢复路径，不改变插件召回、批准、manifest 或手册协议。手机和其它
+  电脑仍只能处理执行电脑发出的原有代输入卡；没有卡时不产生推送。
+
 ## 6. 已知边界（如实标注，不算缺陷）
 
 - 读取与执行依赖 macOS 辅助功能；其它平台返回 `UNSUPPORTED`。

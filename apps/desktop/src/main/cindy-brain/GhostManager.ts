@@ -220,6 +220,17 @@ export function isCindyOfficialTrustInfo(
   );
 }
 
+/** Shared gh-cli eligibility for plugin networking and host connection recovery. */
+export function canUseGithubHostCredentials(
+  ghost: Pick<InstalledGhost, 'manifest' | 'namespace' | 'namespaceState' | 'trust'>,
+): boolean {
+  return ghost.manifest.id === 'cindy-github' &&
+    ghost.namespace == null &&
+    ghost.namespaceState !== 'pending' &&
+    ghost.namespaceState !== 'unconfirmed' &&
+    isCindyOfficialTrustInfo(ghost.trust);
+}
+
 /** 完整校验官方 Host receipt；只看 level 会把损坏 receipt 误当成已回填。 */
 export function hasCindyOfficialTrustMetadata(dir: string): boolean {
   try {

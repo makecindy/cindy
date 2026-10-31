@@ -130,6 +130,7 @@
   "rotate": "转屏",
   "sound": "声",
   "smallWindow": "幕后行",
+  "inputUnsupported": "Cindy 暂不支持此机目前桌面环境的远程键鼠控制。",
   "controlUnavailableHint": "暂不能操此机，仍可移动及缩放画面。",
   "backgroundRunningHint": "离远程桌面或转入背景时，以小窗续示画面。",
   "displaySettings": "示",
@@ -182,6 +183,5 @@
   "hostMuteFailed": "远方之机之静音无从改",
   "handoffEnded": "此番代书已终，无可示之窗口。",
   "handoffUnavailable": "此机暂不能唯示此窗。请于彼机更新 Cindy，或启远程桌面。",
-  "handoffWindow": "代书 · {{app}}",
-  "inputUnsupported": "Cindy 尚不支持此机当前桌面环境之远程键鼠操控。"
+  "handoffWindow": "代书 · {{app}}"
 }
