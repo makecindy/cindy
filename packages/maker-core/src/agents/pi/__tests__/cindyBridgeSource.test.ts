@@ -2662,6 +2662,8 @@ it('intercepts a double-wrapped envelope and an entry-tool name before they reac
   gateway.add('cindy_memory', client, [
     { name: 'list_tools', inputSchema: { type: 'object' } },
     { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 真实 cindy_memory/memory_write: 无 args 参数 — 双包诊断对其成立。
+    { name: 'memory_write', inputSchema: { type: 'object', properties: { type: { type: 'string' }, name: { type: 'string' }, body: { type: 'string' } }, required: ['type'] } },
   ]);
   gateway.register({ registerTool: () => undefined });
   await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
@@ -2692,6 +2694,47 @@ it('intercepts a double-wrapped envelope and an entry-tool name before they reac
     name: 'call_tool',
     arguments: { name: 'memory_write', args: { type: 'project' } },
   });
+});
+
+it('passes through inner tools that legitimately declare an args parameter, repeatedly', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('acme_tools', client, [
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+    // 第三方信封 MCP 的内层工具合法声明 args 参数(数组): 与双包同形, 必须按 schema 放行。
+    { name: 'run', inputSchema: { type: 'object', properties: { args: { type: 'array' } }, required: ['args'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'acme_tools', tool: 'call_tool' });
+  // 合法 args 参数连续调用两次都放行: 拦截是确定性的, 不存在“重发原样调用就放行”的出口,
+  // 所以放行必须一次到位。
+  const legalCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'run', args: { args: ['--version'] } } };
+  await gateway.executeCall(legalCall);
+  await gateway.executeCall(legalCall);
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: ['--version'] } },
+  });
+  // 信封 name 查无此工具: 本地不断言双包, 放行给服务端报 UNKNOWN_TOOL。
+  await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(3);
 });
 
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {

@@ -3728,11 +3728,25 @@ class CindyMcpGateway {
     if (this.requiresNameEnvelope(resolved.tool)) {
       // 双包防护(实测 2026-10-31: 三个会话在 memory_write / schedule_create 上连续撞这形状):
       // 信封的 args 里又是一个 {name, args} 或只含 args 的对象。服务端只回 schema 不回显
-      // 收到的结构, 模型无法自愈; 宿主转发前看穿并一次说清。只看结构不看工具名 —
-      // 合法内层参数里出现名为 args 的字段时这里会误拦一次, 模型看错误重发原样调用仍走服务端。
+      // 收到的结构, 模型无法自愈; 宿主转发前看穿并一次说清。
+      // 此检查是确定性的: 原样重发会被同一条规则再拦一次, 误拦即永久拒绝 — 所以放行条件
+      // 必须从宽: 内层工具的真实 schema 声明了 args 参数时放行(含数组参数, typeof 拦不住);
+      // 信封 name 查无此工具时也放行, 让服务端报 UNKNOWN_TOOL。只有内层 schema 查得到
+      // 且未声明 args、或 name 缺失/填了入口名时, 双包诊断才本地成立。
       const envelope = recordInput(resolved.args);
       const nested = recordInput(envelope.args);
-      if (typeof nested.args === 'object' && nested.args !== null) {
+      const innerName = typeof envelope.name === 'string' ? envelope.name : '';
+      const entrySelf = innerName === '' || innerName === resolved.tool.name;
+      const innerTool = entrySelf
+        ? null
+        : (this.tools.get(mcpGatewayKey(resolved.tool.serverName, innerName)) ?? null);
+      const innerSchema = innerTool?.inputSchema as { properties?: Record<string, unknown> } | null;
+      const innerDeclaresArgs = innerSchema?.properties != null
+        && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args');
+      const doubleWrap = typeof nested.args === 'object' && nested.args !== null
+        && !Array.isArray(nested.args)
+        && (entrySelf || (innerTool !== null && !innerDeclaresArgs));
+      if (doubleWrap) {
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name
           + ' envelope nested twice: args.args is itself an {"name", "args"} envelope.'
