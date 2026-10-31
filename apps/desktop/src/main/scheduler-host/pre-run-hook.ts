@@ -23,6 +23,8 @@ import { execFile, spawn } from 'node:child_process';
 import type { PreRunHookRunResult } from '@cindy/maker-scheduler';
 import { capAppend as capAppendBase, killProcessTree } from './proc-util';
 import os from 'node:os';
+import { t } from '../i18n';
+import { preparePreRunNode, readPreRunNodeReport, type PreRunNodeRuntime } from './pre-run-node';
 
 /** stdout / stderr 各自的截断上限(字节级近似,按 UTF-16 length 截)。 */
 const OUTPUT_CAP = 8 * 1024;
@@ -59,28 +61,20 @@ export interface PreRunHookInput {
   stdinPayload: PreRunHookStdinPayload;
 }
 
-/**
- * `xdt-node` 命令前缀:用 Cindy 自带的 Electron 运行时以 Node 模式执行脚本
- * (ELECTRON_RUN_AS_NODE)。给"机器上没有系统 node"的用户兜底——AI 生成器探测
- * 不到系统 node 时改发 `xdt-node <script>`,执行时在这里解析成当前 app 的
- * process.execPath,**不把 exe 绝对路径写进 DB**(app 升级/换装路径变了命令
- * 依然有效)。纯 node 测试环境下 process.execPath 就是 node 本身,同样成立。
- */
+/** xdt-node uses a real bundled Node and a native lifecycle supervisor.
+ * No CLI or NODE_OPTIONS preload is injected/replayed. Gate proof is explicit
+ * in the user's script body; absent completion always blocks. */
 const XDT_NODE_PREFIX = /^xdt-node\s+/;
 
-/** 解析 xdt-node 前缀(纯函数,可测)。普通命令原样返回。 */
-export function resolveHookCommand(command: string): {
-  command: string;
-  extraEnv: Record<string, string>;
+/** Shell parses the original suffix. Only the existing leading prefix changes. */
+export function resolveHookCommand(command: string, supervisor?: string): {
+  command: string; extraEnv: Record<string, string>;
 } {
-  if (XDT_NODE_PREFIX.test(command.trim())) {
-    const rest = command.trim().replace(XDT_NODE_PREFIX, '');
-    return {
-      command: `"${process.execPath}" ${rest}`,
-      extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
-    };
-  }
-  return { command, extraEnv: {} };
+  if (!supervisor || !XDT_NODE_PREFIX.test(command.trim())) return { command, extraEnv: {} };
+  const quoted = process.platform === 'win32'
+    ? '"' + supervisor + '"'
+    : "'" + supervisor.replaceAll("'", "'\\''") + "'";
+  return { command: quoted + ' --node ' + command.trim().replace(XDT_NODE_PREFIX, ''), extraEnv: {} };
 }
 
 export type PreRunHookResult = PreRunHookRunResult;
@@ -159,7 +153,7 @@ export function resolvePreRunHookTimeoutMs(timeoutMs: number | undefined): numbe
  * 执行前置检查脚本。**永不 throw**——任何进程异常都折叠成结构化结果，由调用方
  * 按 fail-closed 协议处理；只有 exit 0 会返回 `decision: 'run'`。
  */
-export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunHookResult> {
+export async function executePreRunHook(input: PreRunHookInput, runtime?: PreRunNodeRuntime): Promise<PreRunHookResult> {
   const timeoutMs = resolvePreRunHookTimeoutMs(input.timeoutMs);
   const startedAt = Date.now();
   const abortedResult = (): PreRunHookResult => ({
@@ -177,7 +171,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
   // 进门先查:任务已被 pause/delete(信号已 abort)→ 不 spawn,直接返回
   if (input.signal?.aborted) return abortedResult();
 
-  const resolved = resolveHookCommand(input.command);
+  let resolved = resolveHookCommand(input.command);
   // 预检与真实执行共用同一个取消信号和超时预算。
   const syntaxError = await findShellSyntaxError(resolved.command, {
     signal: input.signal,
@@ -218,6 +212,27 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     };
   }
 
+  let managed: ReturnType<typeof preparePreRunNode> | undefined;
+  try {
+    if (XDT_NODE_PREFIX.test(input.command.trim())) {
+      managed = preparePreRunNode(runtime);
+      resolved = resolveHookCommand(input.command, managed.runtime.supervisor);
+    }
+  } catch {
+    managed?.close();
+    return {
+      status: 'failed', decision: 'block', exitCode: null,
+      durationMs: Date.now() - startedAt,
+      stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+      timedOut: false, aborted: false,
+      error: t('scheduler.runs.preRun.runtimeUnavailable'),
+    };
+  }
+  if (input.signal?.aborted) {
+    managed?.close();
+    return abortedResult();
+  }
+
   return new Promise<PreRunHookResult>((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -226,6 +241,7 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let settled = false;
+    let reportText = '';
     let child: ReturnType<typeof spawn>;
 
     const settle = (partial: { exitCode: number | null; spawnError?: string }): void => {
@@ -233,12 +249,16 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
       settled = true;
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener('abort', onAbort);
-      const exitCode = partial.exitCode;
+      const report = managed ? readPreRunNodeReport(reportText, partial.exitCode) : undefined;
+      const exitCode = report?.shellExit ?? partial.exitCode;
+      const runtimeError = managed && !report?.valid
+        ? t('scheduler.runs.preRun.gateUnverified')
+        : undefined;
       const status = aborted
         ? 'aborted'
         : timedOut
           ? 'timed_out'
-          : partial.spawnError
+          : partial.spawnError || runtimeError
             ? 'failed'
             : exitCode === 0
               ? 'passed'
@@ -263,9 +283,11 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
           partial.spawnError ??
           (timedOut
             ? `pre-run hook timed out after ${timeoutMs ?? 0}ms`
-            : !aborted && exitCode === null
-              ? 'pre-run hook exited without a valid result'
-              : undefined),
+            : aborted
+              ? undefined
+              : runtimeError ?? (exitCode === null
+                ? 'pre-run hook exited without a valid result'
+                : undefined)),
       });
     };
 
@@ -278,34 +300,49 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
       setTimeout(() => settle({ exitCode: null }), 1_000).unref?.();
     };
 
+    const stopOwnedProcess = (): void => {
+      if (!child) { armForceSettle(); return; }
+      if (managed) {
+        // POSIX supervisor handles SIGTERM and kills its owned shell group;
+        // Windows termination closes its non-inherited KILL_ON_JOB_CLOSE job.
+        try { child.kill('SIGTERM'); } catch { /* already exited */ }
+        armForceSettle();
+      } else killProcessTree(child.pid, child, armForceSettle);
+    };
+
     // 未配置 timeoutMs 时不武装定时器 —— 不限时;配置了则只用预检后剩余的预算。
     const timer =
       remainingTimeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            killProcessTree(child?.pid, child, armForceSettle);
-          }, remainingTimeoutMs);
+            stopOwnedProcess();
+          }, Math.max(0, (timeoutMs ?? 0) - (Date.now() - startedAt)));
     timer?.unref?.();
 
     // 任务 pause/delete → 与超时同款树杀 + 1s 强制 settle:abortInflightAndWait
     // 只等几秒,长 hook 不能拖住它,更不能在任务已删后继续跑完再进会话创建。
     const onAbort = (): void => {
       aborted = true;
-      killProcessTree(child?.pid, child, armForceSettle);
+      stopOwnedProcess();
     };
     input.signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      child = spawn(resolved.command, {
-        shell: true,
+      const options = {
         cwd: input.cwd?.trim() ? input.cwd : os.homedir(),
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, ...resolved.extraEnv },
-        // POSIX:自成进程组,超时/abort 时 kill(-pid) 才能连 shell 的子进程一起杀
-        // (见 proc-util killProcessTree);Windows 忽略此参数,树杀走 taskkill /T。
+        env: { ...process.env, ...resolved.extraEnv, ...managed?.env },
         detached: process.platform !== 'win32',
+      };
+      child = managed
+        ? spawn(managed.runtime.supervisor, ['--supervise', resolved.command, String(process.pid)], {
+            ...options, stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
+          })
+        : spawn(resolved.command, { ...options, shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      if (managed) child.stdio[3]?.on('data', (chunk: Buffer) => {
+        // Keep overflow visible as an invalid report, never truncate into valid JSON.
+        if (reportText.length <= 1024) reportText = (reportText + chunk.toString('utf8')).slice(0, 1025);
       });
     } catch (err) {
       settle({ exitCode: null, spawnError: err instanceof Error ? err.message : String(err) });
@@ -337,12 +374,15 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
     } catch {
       /* ignore stdin write failures */
     }
-  });
+  }).finally(() => managed?.close());
 }
 
 /** 给 run 错误、通知和日志共用的前置检查失败摘要。 */
 export function formatPreRunHookFailure(result: PreRunHookResult): string {
-  if (result.status === 'timed_out') return result.error ?? 'pre-run hook timed out';
-  if (result.error) return `pre-run hook failed: ${result.error}`;
-  return `pre-run hook failed with exit code ${result.exitCode ?? 'unknown'}`;
+  if (result.status === 'timed_out') return result.error ?? t('scheduler.runs.preRun.status.timed_out');
+  const reason = result.error;
+  if (reason) return t('scheduler.runs.preRun.failureWithReason').replaceAll('{{reason}}', () => reason);
+  return result.exitCode === null
+    ? t('scheduler.runs.preRun.failureWithoutExitCode')
+    : t('scheduler.runs.preRun.failureWithExitCode').replaceAll('{{code}}', String(result.exitCode));
 }

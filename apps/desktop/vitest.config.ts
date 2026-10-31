@@ -26,6 +26,9 @@ const desktopTestInclude = [
 const gitIntegrationTestInclude = [
   'src/main/**/*.git-integration.test.ts',
 ];
+const runtimeIntegrationTestInclude = [
+  'src/main/scheduler-host/__tests__/preRunHook.integration.test.ts',
+];
 
 export default defineConfig({
   define: {
@@ -100,14 +103,22 @@ export default defineConfig({
     environment: 'node',
     // Keep include arrays project-local: Vitest merges array options inherited
     // through extends:true, so a root include would make the resource project
-    // collect standard tests too. The two projects remain mutually exclusive.
+    // collect standard tests too. Each project owns its explicit include set.
     projects: [
       {
         extends: true,
         test: {
           name: 'standard',
           include: desktopTestInclude,
-          exclude: [...gitIntegrationTestInclude, ...cliTestExclude],
+          exclude: [...gitIntegrationTestInclude, ...runtimeIntegrationTestInclude, ...cliTestExclude],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'runtime-integration',
+          include: runtimeIntegrationTestInclude,
+          exclude: cliTestExclude,
         },
       },
       {

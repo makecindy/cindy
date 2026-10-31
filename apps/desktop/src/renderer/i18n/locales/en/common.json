@@ -15132,7 +15132,12 @@
         "stdout": "stdout",
         "stderr": "stderr",
         "truncated": "output truncated",
-        "noOutput": "No output"
+        "noOutput": "No output",
+        "gateUnverified": "The pre-run check did not provide verified completion. This run was blocked. Update the script to report entry and completion, and check its preload configuration.",
+        "failureWithReason": "Pre-run check failed: {{reason}}",
+        "failureWithExitCode": "Pre-run check failed with exit code {{code}}",
+        "failureWithoutExitCode": "Pre-run check failed without a valid exit code",
+        "runtimeUnavailable": "Could not prepare the pre-run runtime. This run was blocked. Check the runtime files and local temporary directory access."
       }
     },
     "editor": {

@@ -157,6 +157,9 @@ describe('buildHookScriptPrompt', () => {
     expect(prompt).toContain('C:/repo');
     expect(prompt).toContain('process.exit(0)');
     expect(prompt).toContain('MODIFIED');
+    expect(prompt).toContain('await gate.enter()');
+    expect(prompt).toContain('await gate.complete(code)');
+    expect(prompt).toContain('Do not use a preload to attest');
   });
 });
 
@@ -380,8 +383,10 @@ describe('运行时探测:系统无 node 时命令用 xdt-node 兜底', () => {
       { description: 'always run', scheduleName: 'X Y', workingDir: dir },
     );
     expect(result.command).toBe(`xdt-node ${shellQuote(result.filePath)}`);
-    // 自测走执行器的 xdt-node 解析(测试环境 execPath 即 node),照样能跑
-    expect(result.test.exitCode).toBe(0);
+    // Legacy exit-only content is never silently promoted to verified completion.
+    expect(result.content.trim()).toBe('process.exit(0)');
+    expect(result.test.decision).toBe('block');
+    expect(result.test.status).toBe('failed');
   });
 
   it('script 模式:hasSystemNode=true → 维持 node 前缀', async () => {

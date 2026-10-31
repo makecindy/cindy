@@ -15066,7 +15066,12 @@
         "stdout": "stdout",
         "stderr": "stderr",
         "truncated": "出力は切り詰められました",
-        "noOutput": "出力なし"
+        "noOutput": "出力なし",
+        "gateUnverified": "事前チェックの完了を確認できなかったため、今回の実行をブロックしました。スクリプトが開始と完了を報告するように更新し、プリロード設定を確認してください。",
+        "failureWithReason": "事前チェックが失敗しました: {{reason}}",
+        "failureWithExitCode": "事前チェックが失敗しました（終了コード {{code}}）",
+        "failureWithoutExitCode": "事前チェックが失敗しました。有効な終了コードがありません",
+        "runtimeUnavailable": "事前チェックの実行環境を準備できなかったため、今回の実行をブロックしました。実行ファイルとローカルの一時ディレクトリへのアクセス権を確認してください。"
       }
     },
     "editor": {

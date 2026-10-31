@@ -15066,7 +15066,12 @@
         "stdout": "stdout",
         "stderr": "stderr",
         "truncated": "출력이 잘림",
-        "noOutput": "출력 없음"
+        "noOutput": "출력 없음",
+        "gateUnverified": "사전 검사 완료를 확인하지 못해 이번 실행을 차단했습니다. 스크립트가 시작과 완료를 보고하도록 수정하고 사전 로드 설정을 확인하세요.",
+        "failureWithReason": "사전 검사 실패: {{reason}}",
+        "failureWithExitCode": "사전 검사 실패, 종료 코드 {{code}}",
+        "failureWithoutExitCode": "사전 검사 실패, 유효한 종료 코드 없음",
+        "runtimeUnavailable": "사전 검사 실행 환경을 준비할 수 없어 이번 실행을 차단했습니다. 실행 파일과 로컬 임시 디렉터리의 접근 권한을 확인하세요."
       }
     },
     "editor": {

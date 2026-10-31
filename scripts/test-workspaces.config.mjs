@@ -388,6 +388,14 @@ export default {
           command: vitestBin('run', `--maxWorkers=${desktopUnitWorkerCount()}`),
           include: desktopGitIntegrationInclude,
         },
+        integration: {
+          status: 'manual',
+          reason: 'Scheduler runtime matrices spawn real Node processes, local IPC, Workers and process trees; default unit keeps one smoke.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--project=runtime-integration', '--pool=forks', '--maxWorkers=1'),
+          include: ['src/main/scheduler-host/__tests__/preRunHook.integration.test.ts'],
+        },
         e2e: {
           status: 'manual',
           reason: 'Desktop E2E tests spawn the real Codex binary and are explicit because they are platform and binary dependent.',

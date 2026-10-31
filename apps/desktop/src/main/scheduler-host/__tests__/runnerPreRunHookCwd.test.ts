@@ -9,10 +9,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import type { Maker } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import { setMainLocale } from '../../i18n';
 
 const mocks = vi.hoisted(() => ({
   executePreRunHook: vi.fn(),
-  formatPreRunHookFailure: vi.fn(() => 'pre-run hook failed with exit code 1'),
   buildSkipResultText: vi.fn(() => 'skipped'),
   createMessage: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
@@ -24,11 +24,14 @@ const mocks = vi.hoisted(() => ({
   backfillSessionMeta: vi.fn(),
 }));
 
-vi.mock('../pre-run-hook', () => ({
-  executePreRunHook: mocks.executePreRunHook,
-  formatPreRunHookFailure: mocks.formatPreRunHookFailure,
-  buildSkipResultText: mocks.buildSkipResultText,
-}));
+vi.mock('../pre-run-hook', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../pre-run-hook')>();
+  return {
+    ...actual,
+    executePreRunHook: mocks.executePreRunHook,
+    buildSkipResultText: mocks.buildSkipResultText,
+  };
+});
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
 }));
@@ -123,6 +126,7 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
   beforeEach(() => {
+    setMainLocale('en');
     vi.clearAllMocks();
     mocks.getSessionRowSnapshot.mockReset();
     mocks.restoreArchivedSessionForSend.mockReset();
@@ -333,14 +337,45 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
 
     await expect(
       runner.fire(baseSchedule({ workingDir: '/repo/project' }), ctx),
-    ).rejects.toThrow(/pre-run hook failed/i);
+    ).rejects.toThrow('Pre-run check failed with exit code 1');
 
     expect(ctx.onPreRunHookCompleted).toHaveBeenCalledWith(hookResult);
     expect(maker.createSession).not.toHaveBeenCalled();
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'schedule-1' }),
-      expect.objectContaining({ status: 'failed', errorMsg: expect.stringMatching(/pre-run hook/) }),
+      expect.objectContaining({ status: 'failed', errorMsg: 'Pre-run check failed with exit code 1' }),
     );
+  });
+
+  it.each([
+    ['zh-CN', '前置检查失败：'],
+    ['zh-TW', '前置檢查失敗：'],
+    ['en', 'Pre-run check failed: '],
+    ['ja', '事前チェックが失敗しました: '],
+    ['ko', '사전 검사 실패: '],
+  ] as const)('uses the real localized failure formatter for thrown error and notification in %s', async (locale, prefix) => {
+    setMainLocale(locale);
+    try {
+      const hook = {
+        status: 'failed', decision: 'block', exitCode: 0,
+        timedOut: false, aborted: false, durationMs: 8,
+        stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+        error: 'fixture diagnostic',
+      };
+      mocks.executePreRunHook.mockResolvedValue(hook);
+      const { runner, maker, notifier } = createRunner(vi.fn(async () => null) as never);
+      const ctx = createFireContext();
+      const expected = prefix + hook.error;
+      await expect(runner.fire(baseSchedule({ workingDir: '/repo/project' }), ctx)).rejects.toThrow(expected);
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'schedule-1' }),
+        expect.objectContaining({ status: 'failed', errorMsg: expected, preRunHookResult: hook }),
+      );
+      expect(ctx.onPreRunHookCompleted).toHaveBeenCalledWith(hook);
+      expect(maker.createSession).not.toHaveBeenCalled();
+    } finally {
+      setMainLocale('en');
+    }
   });
 
   it('显式 workingDir 任务 → 直接用任务目录,不查 session meta', async () => {

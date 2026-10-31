@@ -15066,7 +15066,12 @@
         "stdout": "stdout",
         "stderr": "stderr",
         "truncated": "输出已截断",
-        "noOutput": "无输出"
+        "noOutput": "无输出",
+        "gateUnverified": "未收到前置检查的完成验证，已阻止本次执行。请更新检查脚本的开始和完成回报，并检查预加载配置",
+        "failureWithReason": "前置检查失败：{{reason}}",
+        "failureWithExitCode": "前置检查失败，退出码 {{code}}",
+        "failureWithoutExitCode": "前置检查失败，未获得有效退出码",
+        "runtimeUnavailable": "无法准备前置检查的运行环境，已阻止本次执行。请检查运行文件和本地临时目录的访问权限"
       }
     },
     "editor": {

@@ -547,6 +547,23 @@ test("desktop unit excludes integration, migration, direct db-tier, and source-c
 	);
 });
 
+test("desktop scheduler runtime matrix belongs to explicit integration while unit keeps its smoke", () => {
+	const desktop = manifest.workspaces.find((workspace) => workspace.cwd === "apps/desktop");
+	const tier = desktop.tiers.integration;
+	const unitFile = "apps/desktop/src/main/scheduler-host/__tests__/preRunHook.test.ts";
+	const runtimeFile = "apps/desktop/src/main/scheduler-host/__tests__/preRunHook.integration.test.ts";
+	assert.equal(tier.status, "manual");
+	assert.equal(tier.execution, "exclusive");
+	assert.equal(tier.coverage, "allowlist");
+	assert.deepEqual(tier.command, {
+		type: "packageBin", bin: "vitest",
+		args: ["run", "--project=runtime-integration", "--pool=forks", "--maxWorkers=1"],
+	});
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, [unitFile, runtimeFile]), [unitFile]);
+	assert.deepEqual(selectFilesForTier(desktop, tier, [unitFile, runtimeFile]), [runtimeFile]);
+	assert.doesNotThrow(() => checkIncludeCoverage(desktop, "integration", tier, [unitFile, runtimeFile]));
+});
+
 test("desktop real-Git coverage is an explicit coordinated tier outside default unit", () => {
 	const desktopPackage = readWorkspacePackageJson("apps/desktop");
 	const desktop = manifest.workspaces.find(

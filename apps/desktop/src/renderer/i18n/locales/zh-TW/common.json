@@ -15066,7 +15066,12 @@
         "stdout": "stdout",
         "stderr": "stderr",
         "truncated": "輸出已截斷",
-        "noOutput": "無輸出"
+        "noOutput": "無輸出",
+        "gateUnverified": "未收到前置檢查的完成驗證，已阻止本次執行。請更新檢查指令碼的開始和完成回報，並檢查預載入設定",
+        "failureWithReason": "前置檢查失敗：{{reason}}",
+        "failureWithExitCode": "前置檢查失敗，退出碼 {{code}}",
+        "failureWithoutExitCode": "前置檢查失敗，未取得有效退出碼",
+        "runtimeUnavailable": "無法準備前置檢查的執行環境，已阻止本次執行。請檢查執行檔案和本機暫存目錄的存取權限"
       }
     },
     "editor": {
