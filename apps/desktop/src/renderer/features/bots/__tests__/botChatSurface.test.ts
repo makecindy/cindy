@@ -85,10 +85,15 @@ describe('伙伴输入框只保留对话动作', () => {
     expect(chatInput).not.toContain('settingsLocked || hideRuntimeControls');
   });
 
-  it('伙伴不渲染任务目录、费用或压缩状态行', () => {
-    expect(sessionView).toContain('{!botChatIdentity ? (');
-    expect(sessionView).toContain('<TodaySpendChip');
-    expect(sessionView).toContain('<ContextCapacityRing');
+  it('伙伴隐藏目录和费用，保留上下文占用入口', () => {
+    // #8215: keep the ring outside the task-only controls; component behavior
+    // (including unknown snapshots and compaction) is covered by ring tests.
+    const footer = sessionView.slice(sessionView.indexOf('{/* F-FP-5: workingDir'), sessionView.indexOf('<ContextCapacityRing'));
+    expect(footer).toContain('{botChatIdentity ? null : worktreeCreation?.status');
+    expect(footer).toContain('{!botChatIdentity && <TodaySpendChip');
+    expect(footer).toContain('{!botChatIdentity && session?.usedProjectContext');
+    expect(footer).not.toContain('{!botChatIdentity ? (');
+    expect(sessionView).toContain('showWindowBudget={!botChatIdentity}');
   });
 });
 
