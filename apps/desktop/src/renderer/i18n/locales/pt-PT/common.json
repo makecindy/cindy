@@ -1087,6 +1087,7 @@
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
   },
   "remoteDesktop": {
+    "inputUnsupported": "O ambiente de trabalho atual deste computador não suporta o controlo remoto do teclado e do rato no Cindy.",
     "windowsTitle": "Controlo do ecrã de bloqueio",
     "windowsready": "Ativado para este processo de Cindy. Reiniciar Cindy requer novamente autorização de administrador.",
     "windowsmissing": "Permitir o controlo do ecrã de bloqueio e dos pedidos de administrador. É necessária autorização de administrador.",
@@ -2455,7 +2456,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Escrita e estilo",
+        "hint": "A IA responde no estilo escolhido. Com «Respostas habituais», a interface mantém-se em chinês clássico e as respostas seguem o seu idioma.",
+        "scriptAriaLabel": "Escrita do chinês clássico",
+        "styleAriaLabel": "Estilo de resposta da IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prosa clássica (predefinição)",
+          "tang-poetry": "Poesia Tang",
+          "song-ci": "Ci dos Song",
+          "yuan-qu": "Qu dos Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prosa paralela",
+          "pre-qin": "Mestres pré-Qin",
+          "historian": "Estilo do Grande Historiador",
+          "ming-qing-essay": "Ensaios Ming–Qing",
+          "plain": "Respostas habituais"
+        }
       }
     },
     "userProfile": {

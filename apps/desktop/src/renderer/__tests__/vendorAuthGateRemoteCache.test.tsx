@@ -31,6 +31,8 @@ vi.mock('@/hooks/useDeviceProviders', async (importOriginal) => ({
 }));
 
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
+import { createControlledModelCatalogReader } from '../../main/maker-ipc/controlledModelCatalog';
 
 const provider = (over: Partial<ProviderView>): ProviderView =>
   ({
@@ -43,7 +45,7 @@ const provider = (over: Partial<ProviderView>): ProviderView =>
     ...over,
   }) as ProviderView;
 
-const defaultInvoke = async (_deviceId: string, channel: string) => {
+const defaultInvoke = async (_deviceId: string, channel: string, _args: unknown[]): Promise<unknown> => {
   if (channel === 'maker:agent:status') return { binaryReady: true, authReady: true };
   if (channel === 'maker:provider:list') return { providers: [provider({})] };
   throw new Error('unexpected channel ' + channel);
@@ -70,6 +72,63 @@ afterEach(() => {
 });
 
 describe('useVendorAuthGate device-link 来源快照复用', () => {
+  // #8010 / unit: run the real send gate through the real B catalog reader.
+  // Earlier tests mocked only direct reads; a working picker could still fail at send time.
+  // Minimum input: source A (or B-only share), task B, no cached provider snapshot.
+  it.each([
+    ['cc', 'claude-code', 'self-a'],
+    ['codex', 'codex', 'self-a'],
+    ['pi', 'pi', 'share:b-only'],
+  ] as const)('checks %s on %s through the task host without using local credentials', async (vendor, agent, source) => {
+    const sourceRead = vi.fn(async (_id: string, channel: string) => ({
+      ok: true as const,
+      result: channel === 'maker:agent:status'
+        ? { binaryReady: true, authReady: false }
+        : { providers: [provider({ agents: [agent], routing: { [agent]: {} }, models: { [agent]: [] } })] },
+    }));
+    const read = createControlledModelCatalogReader({
+      assertCaller: () => {}, captureOwner: () => () => {},
+      locations: async () => ({ status: 'complete', locations: [{ agentDeviceId: source, name: 'Source' }] }),
+      invoke: sourceRead,
+    });
+    invoke.mockImplementation(async (host, channel, args) => {
+      if (host !== 'host-b' || channel !== 'maker:model-catalog:read') throw new Error('wrong execution host');
+      return read(args[0]);
+    });
+    const { result } = renderHook(() => useVendorAuthGate());
+    await expect(result.current.checkAndConfirm(vendor, { deviceId: modelCatalogKey(source, 'host-b') }))
+      .resolves.toEqual({ proceed: true });
+    expect(sourceRead).toHaveBeenCalledWith(source, 'maker:agent:status', [agent], expect.any(Function));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the scoped cache optimization but blocks a missing source binary without opening local settings', async () => {
+    const key = modelCatalogKey('self-a', 'host-b')!;
+    cachedProviders.mockImplementation(id => id === key ? { providers: [provider({})] } : null);
+    invoke.mockResolvedValueOnce({ binaryReady: false, authReady: true });
+    const { result } = renderHook(() => useVendorAuthGate());
+    await expect(result.current.checkAndConfirm('codex', { deviceId: key })).resolves.toEqual({ proceed: false });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('host-b', 'maker:model-catalog:read', [{
+      op: 'read', agentDeviceId: 'self-a', channel: 'maker:agent:status', args: ['codex'],
+    }]);
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'logic.confirm.remoteCodexBinaryMissingTitle' }));
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('blocks a failed host read even when the controller is ready', async () => {
+    revalidate.mockResolvedValue('ready');
+    invoke.mockRejectedValueOnce(new Error('offline')).mockRejectedValueOnce(new Error('offline'));
+    const { result } = renderHook(() => useVendorAuthGate());
+    await expect(result.current.checkAndConfirm('cc', { deviceId: modelCatalogKey('self-a', 'host-b') }))
+      .resolves.toEqual({ proceed: false });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: 'newChat.modelSelector.remoteLoadFailedShort' }));
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('cc:快照已有可用来源时直接放行,不发任何隧道请求', async () => {
     cachedProviders.mockReturnValue({ providers: [provider({})] });
     const { result } = renderHook(() => useVendorAuthGate());

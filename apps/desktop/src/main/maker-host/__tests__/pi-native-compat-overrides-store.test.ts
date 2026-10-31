@@ -98,7 +98,7 @@ describe('learned cache compatibility', () => {
 // Real child processes execute the production bridge wrapper. A controlled
 // rename barrier holds one writer after its disk read, reproducing lost updates
 // without relying on scheduler timing; the other writer must observe the lock.
-function cacheProcess(id: string, options: { pause?: boolean; failWrite?: boolean; failRelease?: 'once' | 'held' } = {}) {
+function cacheProcess(id: string, options: { pause?: boolean; failWrite?: boolean; failRelease?: 'once' | 'held'; freezeClock?: boolean } = {}) {
   const release = path.join(root.path, 'release-' + id);
   const script = `
 import * as fs from 'node:fs';
@@ -114,13 +114,15 @@ const rule = JSON.stringify([{ ...model, providerId: 'child', routeKey: 'c'.repe
 const ruleFile = path.join('/fixture', 'pi-cache-compatibility.json');
 const handlers = new Map();
 const registry = { getProvider() {}, getRegisteredNativeProvider() {} };
+const fixtureNow = Date.now();
 let pendingTimers = 0;
 let calls = 0, pause = ${Boolean(options.pause)}, failWrite = ${Boolean(options.failWrite)};
 let releaseFailure = ${JSON.stringify(options.failRelease ?? '')};
 const api = runInNewContext(${JSON.stringify(PI_CACHE_RECOVERY_SOURCE + '\ninstallCindyCacheRecovery(pi)')}, {
   ...fs, path, process: { pid: process.pid, platform: process.platform, uptime: () => process.uptime(), kill: (...a) => process.kill(...a),
     env: { PI_CODING_AGENT_DIR: '/fixture', CINDY_PI_CACHE_COMPAT_FILE: file } },
-  createHash, randomUUID, Buffer, clearTimeout, Date,
+  createHash, randomUUID, Buffer, clearTimeout,
+  Date: ${options.freezeClock ? 'class extends Date { static now() { return fixtureNow; } }' : 'Date'},
   setTimeout: (fn, ms) => {
     pendingTimers++;
     return setTimeout(() => {
@@ -246,7 +248,10 @@ describe('native and Desktop cache writers share one lock', () => {
   });
 
   it('returns successful generation while Desktop owns the lock, then merges after release', async () => {
-    const native = cacheProcess('waiting');
+    // This case tests serialization, not the native writer's one-second budget.
+    // Keep its clock fixed while the parent holds/releases the lock under CI load;
+    // the busy-persistence case below still verifies the real bounded timeout.
+    const native = cacheProcess('waiting', { freezeClock: true });
     try {
       await native.event('ready');
       await withCrossProcessLock(file + '.lock', { label: 'fixture' }, async status => {
@@ -257,7 +262,10 @@ describe('native and Desktop cache writers share one lock', () => {
         expect(fs.existsSync(file)).toBe(false);
       });
       expect(await record('desktop', 'other', fix, b)).toBe(true);
-      await vi.waitFor(() => expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).routes)).toHaveLength(2));
+      // Generation finishes before the native writer's background persistence.
+      // Wait for its existing completion signal before asserting both writers merged.
+      await native.event('persistence-idle');
+      expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).routes)).toHaveLength(2);
     } finally { await native.stop(); }
   });
 

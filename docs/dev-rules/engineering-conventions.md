@@ -228,11 +228,18 @@ PR 门禁必须在 Windows 上用多个并行分片（当前为 4 个）完整�
 一种语言。本节管“文案怎么落地进 i18n”，文案的语气／措辞见 `DESIGN.md` 的 Voice & Content。
 
 - 资源在 `renderer/i18n/locales/<locale>/common.json`，语言由 `shared/locale.ts` 的
-  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `pt-PT` / `pt-BR`），组件通过 `react-i18next` 的
+  `SUPPORTED_LOCALES` 定义（当前 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `pt-PT` / `pt-BR` / `zh-Hant-x-lzh` / `zh-Hans-x-lzh`），组件通过 `react-i18next` 的
   `t('<嵌套.key>')` 消费，单 namespace `common`。
 - **新增**：复用已有嵌套分组选 key，组件用 `t('key')`，绝不写 `<div>保存</div>` 裸文案。
 - **修改**：改某 key 文案时全部已支持语言同步更新，不要只改中文留其它语言旧值。
 - **删除**：删 UI 时把对应 key 从全部 locale 一起删掉，不留孤儿 key。
+- **文言版（繁 `zh-Hant-x-lzh`／简 `zh-Hans-x-lzh`）**：只能由用户手动选择，系统语言永不自动
+  落到它；Intl 日期与数字按 `zh-Hant`／`zh-Hans` 格式化，缺 key 先回退 `zh-TW`／`zh-CN` 再回退
+  英文。繁体版是译写正本，简体版由它转写生成（规则见 `i18n/classical-chinese-style.md`，含文风、
+  术语表与必须保持白话的删除、权限、凭证、付款、安全文案）。选用文言界面时，每轮界面语言说明
+  同时要求 AI 以文言作答，作答文风（唐诗、宋词等）在设置的语言卡片里选，登记在
+  `packages/maker-shared/src/classicalReply.ts`；新增文风只需在该表加一项并补齐各语言的
+  `settings.language.classical.styles.*` 文案。IM 渠道不套用文言作答风格。
 - **翻译准确性**：`fallbackLng = 'en'`，缺 key 会静默回退英文。全部已支持语言都必须补齐并给出
   **准确**翻译，不留空、占位或“待校对”；ja / ko 没把握时先查证再写。
 - **术语一致性**：写任何术语前先查 `i18n/GLOSSARY.md`。同一个概念在不同界面译法不一致

@@ -87,7 +87,7 @@ try {
       if(event.data?.method==='ui/notifications/sandbox-proxy-ready')controller.sandboxReady('cindy-mcp-app://'+controller.document.viewId+'-view/resource');
       else controller.receive(event.data);
     });
-    controller.open({platform:'desktop',theme:'light',styles:{variables:{'--color-background-primary':'rgb(248,248,246)','--color-text-primary':'rgb(0,0,0)'}}}).then(doc=>{
+    controller.open({platform:'desktop',theme:'light',styles:{variables:{'--color-background-primary':'rgb(248,248,246)','--color-text-primary':'rgb(0,0,0)','--color-background-secondary':'rgb(238,238,235)','--color-border-primary':'rgb(160,160,158)'}}}).then(doc=>{
       frame=document.createElement('iframe');frame.sandbox='allow-scripts allow-same-origin allow-forms';frame.src='cindy-mcp-app://'+doc.viewId+'/sandbox';frame.style='width:700px;height:550px';document.body.appendChild(frame);
     });
   `,
@@ -164,7 +164,8 @@ try {
       const allowed=process.env.CINDY_MCP_APP_TEST_ALLOWED;
       let config={id:'example',url:process.env.CINDY_MCP_APP_TEST_URL,transport:'http'};
       const pluginMode=process.env.CINDY_MCP_APP_TEST_PLUGIN==='1';let executePlugin;
-      let authorVault; const shellCalls=[], sdkDispatched=[]; let shellResultOverride;
+      let authorVault; const loaderCalls=[], sdkDispatched=[]; let loaderResultOverride;
+      const loaderImageUri='cindy-media://blobs/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png', loaderImage=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==','base64');
       const authorLibraryRoot=process.env.CINDY_MCP_APP_TEST_DIR+'/author-library';
       if(pluginMode){
         const fixture=JSON.parse(readFileSync(process.env.CINDY_MCP_APP_TEST_DIR+'/plugin.json','utf8'));
@@ -174,7 +175,7 @@ try {
         const dispatcher=new GhostPipeDispatcher({getGhost:()=>ghost,runtimeStateOf:()=>'running',spawn:async()=>({ok:true}),
           sendToGhost:(_id,payload)=>{if(payload.type==='tool-call')sdkDispatched.push(payload.args?.text);handler(payload);return true;}});
         runInNewContext(fixture.main,{setTimeout,cindy:{library:request=>{assert.ok(authorVault);assert.ok(['writeBegin','writeChunk','writeCommit','writeAbort'].includes(request.op));return authorVault[request.op](request);},onHostMessage:fn=>{handler=fn;},send:payload=>payload.type==='tool-progress'?dispatcher.handleToolProgress(ghost.manifest.id,payload):dispatcher.handleToolResult(ghost.manifest.id,payload)}});
-        executePlugin=async(name,args,onProgress)=>{const reply=await dispatcher.callGhostTool({ghostId:ghost.manifest.id,tool:name,args,onProgress});assert.equal(reply.ok,true);if(authorMode==='shell'){shellCalls.push({name,args});return shellResultOverride??reply.result;}return reply.result;};
+        executePlugin=async(name,args,onProgress)=>{const reply=await dispatcher.callGhostTool({ghostId:ghost.manifest.id,tool:name,args,onProgress});assert.equal(reply.ok,true);if(authorMode==='loader'){loaderCalls.push({name,args});return loaderResultOverride??reply.result;}return reply.result;};
         config={id:'example',url:'',transport:'in-process',plugin:{instance:ghost.manifest.id,revision:'fixture',packageSha256:'fixture',title:ghost.manifest.name,trust:'unverified',domains:independent||process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1'?[allowed]:[],assertCurrent(){},
           createTransport:()=>createPluginAppTransport({instance:ghost.manifest.id,revision:'fixture',tools:ghost.manifest.tools,ui:ghost.manifest.mcpApps?.ui,hosts:ghost.manifest.network?.hosts,assertCurrent(){},readHtml:()=>fixture.html,
             call:(grant,args)=>executePlugin(grant.tool,args,grant.onProgress)})}};
@@ -185,16 +186,19 @@ try {
         const call=client.callTool.bind(client);
         client.callTool=(params,schema,options)=>{if(params.arguments?.text==='old-upstream')sdkUpstreamSignal=options.signal;return call(params,schema,options);};
       }
-      const tool=(await connection.tools()).find(tool=>tool.name===(authorMode==='shell'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_planner':independent?'open_metrics':'draft_form'));
+      const tool=(await connection.tools()).find(tool=>tool.name===(authorMode==='loader'?'open_view':authorMode==='files'?'open_showcase':authorMode?'open_view':independent?'open_metrics':'draft_form'));
       if(process.env.CINDY_MCP_APP_TEST_HOST_SDK==='1' && process.env.CINDY_MCP_APP_TEST_REMOTE!=='1') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.txt',uri:'library:fixture.txt'}];
-      const args=authorMode==='shell'?{intent:'overview'}:independent?{threshold:75}:{title:'AI draft',body:'Review before creating'};
+      // A conversation image handed over with ghost_call.attachments; the generated page reads it from hostContext.
+      if(authorMode==='loader') tool._meta['cindy/attachments']=[{type:'resource_link',name:'fixture.png',uri:loaderImageUri,mimeType:'image/png'}];
+      const args=authorMode==='loader'?{intent:'请打开一个可以查看和编辑记录的页面'}:independent?{threshold:75}:{title:'AI draft',body:'Review before creating'};
       const result=pluginMode?await executePlugin(tool.name,args):await client.callTool({name:tool.name,arguments:args});
-      let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool,arguments:args,result:authorMode==='shell'?pluginAppResult(result):result};
-      if(authorMode==='shell'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
+      let record={version:1,serverId:'example',serverRevision:appServerRevision(config),resourceUri:tool._meta.ui.resourceUri,tool,arguments:args,result:authorMode==='loader'?pluginAppResult(result):result};
+      if(authorMode==='loader'){assert.ok(result._meta.view.html.includes('<style>'));assert.deepEqual(Object.keys(pluginModelResult(result)),['content']);}
       let turns=0, receivedImages=[], pageApprovals=0, approvalGate, sdkApprovalSignal, sdkReleaseApproval;
       host=new McpAppsHost({downloadFile:pluginMode?input=>saveAppDownload({...input,showSaveDialog:async name=>process.env.CINDY_MCP_APP_TEST_DIR+'/saved-'+name}):undefined,pluginFiles:pluginMode?{
-        describe:async(_instance,uri)=>{if(authorVault&&uri.startsWith('library:')){const file=await authorVault.stat({path:uri.slice('library:'.length)});return file.ok&&file.kind==='file'?{mimeType:'text/plain',size:file.bytes}:null;}return uri==='library:fixture.txt'?{mimeType:'text/plain',size:14}:uri==='cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png'?{mimeType:'image/png',size:8}:null;},
+        describe:async(_instance,uri)=>{if(authorVault&&uri.startsWith('library:')){const file=await authorVault.stat({path:uri.slice('library:'.length)});return file.ok&&file.kind==='file'?{mimeType:'text/plain',size:file.bytes}:null;}if(uri===loaderImageUri)return {mimeType:'image/png',size:loaderImage.length};return uri==='library:fixture.txt'?{mimeType:'text/plain',size:14}:uri==='cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png'?{mimeType:'image/png',size:8}:null;},
         read:async(_instance,uri,request)=>{
+          if(uri===loaderImageUri)return new Response(loaderImage,{headers:{'Content-Type':'image/png','Content-Length':String(loaderImage.length)}});
           if(uri!=='library:fixture.txt')return new Response(null,{status:404});
           const file=await openFile(process.env.CINDY_MCP_APP_TEST_DIR+'/fixture.txt','r');
           return buildRangedFileResponse({file,totalSize:14,mimeType:'text/plain',rangeHeader:request.headers.get('range'),cacheControl:'no-store',signal:request.signal});
@@ -372,60 +376,80 @@ try {
         return;
       }
       if(process.env.CINDY_MCP_APP_TEST_BOM==='1')assert.equal(await inner().executeJavaScript('document.compatMode'),'CSS1Compat');
-      if(authorMode==='shell'){
-        // Integration tier: actual packed shell, production result projection/dispatcher
-        // and CSP-blocked default submission. Existing fixed-template examples do not cover
-        // first-result HTML or click/Enter interception before native form submission.
-        stage='shell initial result';
-        await wait(()=>inner()?.executeJavaScript("document.querySelector('#content h1')?.textContent==='工作概览'"));
-        assert.equal(shellCalls.length,1,'initial HTML must not require a second backend call');
-        assert.equal(await inner().executeJavaScript("!!document.querySelector('#content style') && !!document.querySelector('#content svg')"),true);
+      if(authorMode==='loader'){
+        // Integration tier: authored loader + generated SDK page through the real Host
+        // and dispatcher. Old shell coverage lacked document replacement and JSON updates.
+        // Minimal failure: initial result -> second connect -> save, then load new content.
+        stage='loader generated page';
+        await wait(()=>inner()?.executeJavaScript("document.querySelector('#connection')?.textContent==='已连接'"));
+        assert.equal(loaderCalls.length,1,'first page must not request the view twice');
+        assert.equal(await inner().executeJavaScript("document.querySelector('#content h1').textContent"),'Overview');
+        assert.equal(await inner().executeJavaScript("document.querySelector('#content p').textContent"),'已按总览打开。');
+        stage='loader conversation attachment after document replacement';
+        await wait(()=>inner().executeJavaScript("document.querySelector('#attachments img')?.complete===true"));
+        assert.deepEqual(await inner().executeJavaScript("(()=>{const i=document.querySelector('#attachments img');return [i.naturalWidth,i.naturalHeight,i.alt,i.src.includes('/__cindy/files/')];})()"),[3,2,'fixture.png',true]);
+        assert.equal(await inner().executeJavaScript("fetch(document.querySelector('#attachments img').src).then(r=>r.status+':'+r.headers.get('content-type'))"),'200:image/png');
+        stage='loader local update preserves input';
+        await inner().executeJavaScript("document.querySelector('input').value='保留输入';document.querySelector('#refresh').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelectorAll('#items li').length===3"));
+        assert.equal(await inner().executeJavaScript("document.querySelector('input').value"),'保留输入');
+        stage='loader form submit click and real Enter';
+        await inner().executeJavaScript("document.querySelector('#record-form button').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent==='已保存 R-1'"));
+        await inner().executeJavaScript("document.querySelector('input').value='第二条';document.querySelector('input').focus()");
+        // Real browser Enter through CDP (hidden windows ignore sendInputEvent on macOS);
+        // implicit submission must reach the page's submit handler, not a synthetic keydown.
+        window.webContents.debugger.attach('1.3');
+        try {
+          await window.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled',{enabled:true});
+          await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:String.fromCharCode(13)});
+          await window.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+        } finally { window.webContents.debugger.detach(); }
+        await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent==='已保存 R-2'"));
+        assert.equal(loaderCalls.filter(call=>call.name==='api_write').length,2);
+        stage='loader fragment and persistent script';
+        await inner().executeJavaScript("document.querySelector('[data-view=chart]').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#content h1').textContent==='Chart'"));
+        await inner().executeJavaScript("document.querySelector('#refresh').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelectorAll('#items li').length===3"));
+        assert.equal(await inner().executeJavaScript("document.querySelectorAll('script[type=module]').length"),1);
         assert.equal(await window.webContents.executeJavaScript("document.querySelector('iframe').sandbox.contains('allow-forms')"),true);
-        stage='shell intent';
-        await inner().executeJavaScript("document.querySelector('[data-intent=stats]').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#content h1')?.textContent==='本周进展'"));
-        assert.equal(shellCalls.at(-1).name,'load_view');
-        stage='shell form click';
-        await inner().executeJavaScript("document.querySelector('[data-intent=search]').click()");
-        await wait(()=>inner().executeJavaScript("!!document.querySelector('form')"));
-        await inner().executeJavaScript("document.querySelector('#query').value='<b>点击</b>';document.querySelector('button[type=submit]').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#query-summary').textContent==='已收到关键词：<b>点击</b>'"));
-        assert.equal(shellCalls.at(-1).args.fields.query,'<b>点击</b>');
-        assert.equal(await inner().executeJavaScript("document.querySelector('#query-summary b')===null"),true);
-        stage='shell form Enter';
-        await inner().executeJavaScript("document.querySelector('#query').value='回车提交';document.querySelector('#query').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#query-summary').textContent==='已收到关键词：回车提交'"));
-        assert.equal(shellCalls.at(-1).args.fields.query,'回车提交');
-        stage='shell native form blocked';
-        const beforeUrl=inner().url, beforeRequests=requests;
-        await inner().executeJavaScript("(()=>{const form=document.createElement('form');form.action="+JSON.stringify(denied)+";form.method='post';document.body.append(form);form.submit();form.remove();})()");
+        stage='loader native form fallback';
+        const loaderUrl=inner().url, loaderRequests=requests, loaderWrites=loaderCalls.length;
+        // Unhandled submit button and form.submit() must be no-ops: no request, no navigation.
+        await inner().executeJavaScript("(()=>{const form=document.createElement('form');form.action="+JSON.stringify(denied)+";form.method='post';form.innerHTML='<button>native</button>';document.body.append(form);form.querySelector('button').click();form.submit();form.remove();})()");
         await inner().executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-        assert.equal(inner().url,beforeUrl,'native submit must not navigate');
-        assert.equal(requests,beforeRequests,'native submit must not reach the network');
-        stage='shell sanitization';
-        // Inject a backend result at the tool boundary; retain the real RPC return path.
-        const unsafe={content:[{type:'text',text:'清理测试'}],_meta:{view:{html:'<style>.safe{font-weight:bold}</style><h1 class="safe" onclick="window.shellUnsafe=1">可信标题</h1><script>window.shellUnsafe=1</script><iframe></iframe><object></object><embed><base><meta><link><a href="javascript:window.shellUnsafe=1">链接</a><svg onload="window.shellUnsafe=1"></svg><button data-intent="overview">恢复概览</button>'}}};
-        shellResultOverride=unsafe;
-        await inner().executeJavaScript("document.querySelector('[data-intent=stats]').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#content h1')?.textContent==='可信标题'"));
-        await inner().executeJavaScript("document.querySelector('#content h1').click();document.querySelector('#content a').click()");
-        assert.equal(await inner().executeJavaScript("document.querySelectorAll('#content script,#content iframe,#content object,#content embed,#content base,#content meta,#content link,#content [onclick],#content [onload],#content a[href]').length"),0);
-        assert.equal(await inner().executeJavaScript('window.shellUnsafe===undefined'),true);
-        assert.equal(turns,0);
-        // Restore the real backend page for reusable screenshots.
-        shellResultOverride=undefined;
-        await inner().executeJavaScript("document.querySelector('[data-intent=overview]').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#content h1')?.textContent==='工作概览'"));
-        await window.webContents.executeJavaScript('document.body.style.margin="0";document.querySelector("iframe").style.width="100%";document.querySelector("iframe").style.border="0"');
+        assert.ok(inner(),'native submission must not replace the page');
+        assert.equal(inner().url,loaderUrl,'native submit must not navigate');
+        assert.equal(requests,loaderRequests,'native submit must not reach the network');
+        assert.equal(loaderCalls.length,loaderWrites,'native submit must not call tools');
+        // Regression (review): switching content must keep the unconfirmed write key, so
+        // resubmitting the same content after an unknown outcome cannot create a duplicate.
+        stage='loader write key survives a content switch';
+        await inner().executeJavaScript("document.querySelector('input').value='切换前'");
+        loaderResultOverride={isError:true,content:[{type:'text',text:'写入结果未知'}]};
+        await inner().executeJavaScript("document.querySelector('#record-form button').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent==='写入结果未知'"));
+        loaderResultOverride=undefined;
+        await inner().executeJavaScript("document.querySelector('[data-view=form]').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#content h1')?.textContent==='Form'"));
+        await inner().executeJavaScript("document.querySelector('input').value='切换前';document.querySelector('#record-form button').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#result').textContent.startsWith('已保存')"));
+        const switchWrites=loaderCalls.filter(call=>call.name==='api_write');
+        assert.equal(switchWrites.at(-1).args.idempotencyKey,switchWrites.at(-2).args.idempotencyKey,'same content after a switch reuses the write key');
+        stage='loader themes and narrow screen';
         for(const theme of ['light','dark']){
-          const variables=theme==='light'?{'--color-background-primary':'rgb(248,248,246)','--color-background-secondary':'rgb(238,238,235)','--color-text-primary':'rgb(38,38,38)','--color-text-secondary':'rgb(102,102,100)','--color-border-primary':'rgb(215,215,212)'}:{'--color-background-primary':'rgb(31,31,30)','--color-background-secondary':'rgb(44,44,42)','--color-text-primary':'rgb(235,235,232)','--color-text-secondary':'rgb(165,165,160)','--color-border-primary':'rgb(60,60,58)'};
-          await window.webContents.executeJavaScript('window.testController.context('+JSON.stringify({theme,styles:{variables}})+')');
+          const variables=theme==='light'?{'--color-background-primary':'rgb(248,248,246)','--color-background-secondary':'rgb(238,238,235)','--color-text-primary':'rgb(38,38,38)','--color-border-primary':'rgb(160,160,158)'}:{'--color-background-primary':'rgb(31,31,30)','--color-background-secondary':'rgb(44,44,42)','--color-text-primary':'rgb(235,235,232)','--color-border-primary':'rgb(100,100,98)'};
+          await window.webContents.executeJavaScript('window.testController.context('+JSON.stringify({theme,styles:{variables}})+');document.querySelector("iframe").style.width="320px"');
           await wait(()=>inner().executeJavaScript('document.documentElement.style.colorScheme==='+JSON.stringify(theme)));
+          await wait(()=>inner().executeJavaScript('innerWidth<=320'));
           await inner().executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-          const size=await inner().executeJavaScript('({width:innerWidth,scroll:document.documentElement.scrollWidth})');assert.ok(size.scroll<=size.width);
-          if(process.env.CINDY_AUTHOR_SCREENSHOTS){mkdirSync(process.env.CINDY_AUTHOR_SCREENSHOTS,{recursive:true});const box=await window.webContents.executeJavaScript('(()=>{const r=document.querySelector("iframe").getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()');const shot=await window.webContents.capturePage(box);writeFileSync(process.env.CINDY_AUTHOR_SCREENSHOTS+'/shell-'+theme+'.png',shot.toPNG());}
+          const size=await inner().executeJavaScript('({width:innerWidth,scroll:document.documentElement.scrollWidth})');
+          assert.ok(size.scroll<=size.width);
+          if(process.env.CINDY_AUTHOR_SCREENSHOTS){mkdirSync(process.env.CINDY_AUTHOR_SCREENSHOTS,{recursive:true});writeFileSync(process.env.CINDY_AUTHOR_SCREENSHOTS+'/loader-'+theme+'.png',(await window.webContents.capturePage()).toPNG());}
         }
-        console.log('AUTHOR_APP_VERDICT=passed (shell; first result, intent replacement, form click/Enter fields, escaped data, sanitized HTML, Light/Dark)');
+        assert.equal(turns,0);
+        console.log('AUTHOR_APP_VERDICT=passed (loader; first result, generated SDK, hostContext attachment image, JSON preserves inputs, submit click/real Enter, native submit no-op, fragment, Light/Dark)');
         return;
       }
       if(authorMode==='files'){
@@ -435,8 +459,8 @@ try {
         stage='author capability example';
         await wait(()=>inner()?.executeJavaScript("document.querySelector('#connection').textContent==='已连接'"));
         stage='author form';
-        await inner().executeJavaScript("document.querySelector('#title-input').value='已核对的计划';document.querySelector('#form button[data-action]').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#form pre').textContent.includes('已核对的计划')"));
+        await inner().executeJavaScript("document.querySelector('#title-input').value='已核对的记录';document.querySelector('#form button[data-action]').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#form pre').textContent.includes('已核对的记录')"));
         await inner().executeJavaScript("document.querySelector('#denied button[data-action]').click()");
         stage='author visibility result';
         await wait(()=>inner().executeJavaScript("document.querySelector('#denied pre').textContent.includes('MCP_APP_TOOL_NOT_VISIBLE')"));
@@ -504,9 +528,9 @@ try {
           await window.webContents.executeJavaScript('window.testController.context('+JSON.stringify({theme})+')');
           await wait(()=>inner().executeJavaScript('document.documentElement.style.colorScheme==='+JSON.stringify(theme)));
         }
-        await inner().executeJavaScript("document.querySelector('#title').value='已核对的计划';document.querySelector('#save').click()");
-        await wait(()=>inner().executeJavaScript("document.querySelector('#status').textContent.includes('已暂存 1 次')"));
-        assert.equal(await inner().executeJavaScript("document.querySelector('#title').value"),'已核对的计划');
+        await inner().executeJavaScript("document.querySelector('#title').value='已核对的记录';document.querySelector('#save').click()");
+        await wait(()=>inner().executeJavaScript("document.querySelector('#status').textContent.includes('已保存 1 次')"));
+        assert.equal(await inner().executeJavaScript("document.querySelector('#title').value"),'已核对的记录');
         assert.equal(await inner().executeJavaScript('typeof window.cindy'),'undefined');
         console.log('AUTHOR_APP_VERDICT=passed ('+authorMode+'; real Electron, standard RPC, main.js, size, Light/Dark)');
         return;

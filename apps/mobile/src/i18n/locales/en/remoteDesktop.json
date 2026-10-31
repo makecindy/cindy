@@ -130,6 +130,7 @@
   "rotate": "Rotate screen",
   "sound": "Sound",
   "smallWindow": "Run in background",
+  "inputUnsupported": "This computer’s current desktop environment does not support remote keyboard and mouse control in Cindy.",
   "controlUnavailableHint": "Computer control is temporarily unavailable. You can still pan and zoom the screen.",
   "backgroundRunningHint": "Keep displaying the screen in a floating window when you leave remote desktop or switch apps.",
   "displaySettings": "Display",

@@ -1,6 +1,7 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isClassicalLocale, modernLocaleOf } from '../../../shared/locale';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Check, Mic, Square } from 'lucide-react';
 
@@ -49,8 +50,9 @@ export function VoiceSpeakerEnrollmentDialog({
 }: VoiceSpeakerEnrollmentDialogProps) {
   const { t, i18n } = useTranslation();
   const language = i18n.resolvedLanguage || i18n.language;
-  // The model covers Chinese and English; other UI locales use English passages.
-  const passageLanguage = language === 'zh-CN' || language === 'zh-TW' ? language : 'en';
+  // The model covers Chinese and English; classical editions read their modern passages aloud.
+  const modernLanguage = isClassicalLocale(language) ? modernLocaleOf(language) : language;
+  const passageLanguage = modernLanguage === 'zh-CN' || modernLanguage === 'zh-TW' ? modernLanguage : 'en';
   const [clips, setClips] = useState<Array<ArrayBuffer | null>>(() => CLIP_INDEXES.map(() => null));
   const [current, setCurrent] = useState(0);
   const [recording, setRecording] = useState(false);

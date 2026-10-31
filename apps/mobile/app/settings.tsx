@@ -28,7 +28,9 @@ import {
 } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb, setTapdbUser, stopMobileTapdbReporting } from '@/analytics/mobileTapdb';
 import { hasPrivacyConsent } from '@/update/updateConsentGate';
+import { CLASSICAL_REPLY_STYLES, isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import { isClassicalLocale, type ClassicalLocale } from '@/i18n/locale';
 import { useLocale } from '@/i18n/useLocale';
 import { goBackGuarded } from '@/utils/backGuard';
 import {
@@ -112,12 +114,21 @@ import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { useGuardedPush } from '@/utils/useGuardedPush';
 
 type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'uptodate' | 'error';
-// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列。
-const LANGUAGE_OPTIONS: readonly LocalePreference[] = [
+// 显示语言选项:「跟随系统」在前,英语作为第一个显式语言,其余语言按支持列表顺序排列;
+// 文言等古典版本在菜单里合为一项放最后,选中后下方出现简繁与文风两行。
+const CLASSICAL_OPTION = 'classical';
+type LanguageOption = LocalePreference | typeof CLASSICAL_OPTION;
+const LANGUAGE_OPTIONS: readonly LanguageOption[] = [
   'system',
   'en',
-  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en'),
+  ...SUPPORTED_LOCALES.filter((locale) => locale !== 'en' && !isClassicalLocale(locale)),
+  CLASSICAL_OPTION,
 ];
+const CLASSICAL_SCRIPTS: readonly { locale: ClassicalLocale; key: 'hans' | 'hant' }[] = [
+  { locale: 'zh-Hans-x-lzh', key: 'hans' },
+  { locale: 'zh-Hant-x-lzh', key: 'hant' },
+];
+type ClassicalPicker = 'script' | 'style';
 
 function hasRunningRemoteTasks(): boolean {
   return remoteSessionStore.getSessions().some((session) => remoteSessionStore.isSessionRunning(session.id));
@@ -137,7 +148,9 @@ export default function SettingsScreen() {
   const push = useGuardedPush();
   const auth = useAuth();
   const { t } = useTranslation();
-  const { locale, setLocale } = useLocale();
+  const { locale, effectiveLocale, setLocale, classicalStyle, setClassicalStyle } = useLocale();
+  const classical = isClassicalLocale(locale) ? locale : null;
+  const languageOption: LanguageOption = classical ? CLASSICAL_OPTION : locale;
   const windowDimensions = useWindowDimensions();
   const safeAreaInsets = useSafeAreaInsets();
   const { status, connectionIssue } = useDeviceLink();
@@ -150,6 +163,8 @@ export default function SettingsScreen() {
     useState(false);
   const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
   const [languagePickerSnap, setLanguagePickerSnap] = useState<ContextSheetSnap>('half');
+  const [classicalPicker, setClassicalPicker] = useState<ClassicalPicker | null>(null);
+  const [classicalPickerSnap, setClassicalPickerSnap] = useState<ContextSheetSnap>('half');
   const [appearancePickerOpen, setAppearancePickerOpen] = useState(false);
   const [appearancePickerSnap, setAppearancePickerSnap] = useState<ContextSheetSnap>('half');
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>('idle');
@@ -249,11 +264,44 @@ export default function SettingsScreen() {
     setLanguagePickerOpen(true);
   }, []);
   const selectLanguage = useCallback((next: string) => {
-    const nextLocale = LANGUAGE_OPTIONS.find((option) => option === next);
-    if (!nextLocale) return;
-    setLocale(nextLocale);
+    const nextOption = LANGUAGE_OPTIONS.find((option) => option === next);
+    if (!nextOption) return;
     setLanguagePickerOpen(false);
+    if (nextOption !== CLASSICAL_OPTION) {
+      setLocale(nextOption);
+      return;
+    }
+    if (classical) return;
+    // First switch keeps the script the user already reads.
+    setLocale(effectiveLocale === 'zh-TW' ? 'zh-Hant-x-lzh' : 'zh-Hans-x-lzh');
+  }, [classical, effectiveLocale, setLocale]);
+  const classicalScriptOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => CLASSICAL_SCRIPTS.map((script) => ({
+      id: script.locale,
+      label: t(`settings.language.classical.script.${script.key}`),
+    })),
+    [t],
+  );
+  const classicalStyleOptions = useMemo<readonly MobileChoiceOption[]>(
+    () => CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+      id: style.id,
+      label: t(`settings.language.classical.styles.${style.id}`),
+    })),
+    [t],
+  );
+  const openClassicalPicker = useCallback((picker: ClassicalPicker) => {
+    setClassicalPickerSnap('half');
+    setClassicalPicker(picker);
+  }, []);
+  const selectClassicalScript = useCallback((next: string) => {
+    const script = CLASSICAL_SCRIPTS.find((candidate) => candidate.locale === next);
+    setClassicalPicker(null);
+    if (script) setLocale(script.locale);
   }, [setLocale]);
+  const selectClassicalStyle = useCallback((next: string) => {
+    setClassicalPicker(null);
+    if (isClassicalReplyStyle(next)) setClassicalStyle(next);
+  }, [setClassicalStyle]);
   const appearancePickerOptions = useMemo<readonly MobileChoiceOption[]>(
     () => THEME_PREFERENCES.map((option) => ({
       id: option,
@@ -846,7 +894,7 @@ export default function SettingsScreen() {
           <NativePullDownMenu
             actions={LANGUAGE_OPTIONS.map((option) => ({
               id: option,
-              state: option === locale ? 'on' : 'off',
+              state: option === languageOption ? 'on' : 'off',
               title: t(`settings.language.options.${option}`),
             }))}
             onAction={selectLanguage}
@@ -856,9 +904,45 @@ export default function SettingsScreen() {
               label={t('settings.language.title')}
               onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
               testID="settings.language.picker"
-              value={t(`settings.language.options.${locale}`)}
+              value={t(`settings.language.options.${languageOption}`)}
             />
           </NativePullDownMenu>
+          {classical ? (
+            <>
+              <NativePullDownMenu
+                actions={CLASSICAL_SCRIPTS.map((script) => ({
+                  id: script.locale,
+                  state: script.locale === classical ? 'on' : 'off',
+                  title: t(`settings.language.classical.script.${script.key}`),
+                }))}
+                onAction={selectClassicalScript}
+              >
+                <ChoicePickerRow
+                  expanded={classicalPicker === 'script'}
+                  label={t('settings.language.classical.scriptAriaLabel')}
+                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('script')}
+                  testID="settings.language.classicalScript"
+                  value={t(`settings.language.classical.script.${classical === 'zh-Hant-x-lzh' ? 'hant' : 'hans'}`)}
+                />
+              </NativePullDownMenu>
+              <NativePullDownMenu
+                actions={CLASSICAL_REPLY_STYLES.lzh.map((style) => ({
+                  id: style.id,
+                  state: style.id === classicalStyle ? 'on' : 'off',
+                  title: t(`settings.language.classical.styles.${style.id}`),
+                }))}
+                onAction={selectClassicalStyle}
+              >
+                <ChoicePickerRow
+                  expanded={classicalPicker === 'style'}
+                  label={t('settings.language.classical.styleAriaLabel')}
+                  onPress={usesNativePullDownMenu() ? () => undefined : () => openClassicalPicker('style')}
+                  testID="settings.language.classicalStyle"
+                  value={t(`settings.language.classical.styles.${classicalStyle}`)}
+                />
+              </NativePullDownMenu>
+            </>
+          ) : null}
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -1029,10 +1113,36 @@ export default function SettingsScreen() {
           title={t('settings.language.title')}
         >
           <MobileChoicePickerList
-            activeId={locale}
+            activeId={languageOption}
             onSelect={selectLanguage}
             options={languagePickerOptions}
             testID="settings.languagePicker.option"
+          />
+        </SheetSurface>
+      </SheetModal>
+      <SheetModal
+        backdropTestID="settings.classicalPicker.backdrop"
+        nativePresentation
+        onBackdropPress={() => setClassicalPicker(null)}
+        onRequestClose={() => setClassicalPicker(null)}
+        visible={classicalPicker !== null}
+      >
+        <SheetSurface
+          bottomInset={safeAreaInsets.bottom}
+          heights={choicePickerHeights}
+          onClose={() => setClassicalPicker(null)}
+          onSnapChange={setClassicalPickerSnap}
+          snap={classicalPickerSnap}
+          testID="settings.classicalPicker"
+          title={t(classicalPicker === 'script'
+            ? 'settings.language.classical.scriptAriaLabel'
+            : 'settings.language.classical.styleAriaLabel')}
+        >
+          <MobileChoicePickerList
+            activeId={classicalPicker === 'script' ? (classical ?? '') : classicalStyle}
+            onSelect={classicalPicker === 'script' ? selectClassicalScript : selectClassicalStyle}
+            options={classicalPicker === 'script' ? classicalScriptOptions : classicalStyleOptions}
+            testID="settings.classicalPicker.option"
           />
         </SheetSurface>
       </SheetModal>

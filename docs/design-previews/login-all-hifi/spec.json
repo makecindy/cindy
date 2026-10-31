@@ -37,7 +37,9 @@
       "fr",
       "de",
       "pt-PT",
-      "pt-BR"
+      "pt-BR",
+      "zh-Hant-x-lzh",
+      "zh-Hans-x-lzh"
     ]
   },
   "states": [
@@ -2158,6 +2160,26 @@
           "os": "mac",
           "mode": "dark",
           "lang": "pt-BR"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-zh-Hant-x-lzh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-Hant-x-lzh"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-zh-Hans-x-lzh",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "zh-Hans-x-lzh"
         }
       }
     ],

@@ -11,6 +11,8 @@
  *   capabilities?.availableModels.map(...);
  */
 import { useEffect, useState } from 'react';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -417,7 +419,7 @@ async function fetchCapabilities(
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    raw = dl.invoke(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
+    raw = invokeModelCatalog(dl, deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
   } else {
     // 本机:原路径,行为不变。
     const api = getMakerApi();
@@ -604,11 +606,34 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
   await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
+export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceCapabilities(key);
+  }
+}
+
+export function refreshControlledDeviceCapabilities(taskDeviceId: string): void {
+  const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of devices) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) void prefetchDeviceCapabilities(key);
+  }
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
 export function evictDeviceCapabilities(
   deviceId: string,
   options?: { retainDisplaySnapshot?: boolean },
 ): void {
+  const scopedDevices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
+    .map(key => key.slice(0, key.lastIndexOf(':'))));
+  for (const key of scopedDevices) {
+    const route = parseModelCatalogKey(key);
+    if (route && (route.taskDeviceId === deviceId || route.agentDeviceId === deviceId)) {
+      evictDeviceCapabilities(key, options);
+    }
+  }
   const prefix = `${deviceId}:`;
   for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k);
   for (const k of [...inflight.keys()]) if (k.startsWith(prefix)) inflight.delete(k);

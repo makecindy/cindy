@@ -33,6 +33,8 @@ export const OAUTH_LANG_TO_APP_LOCALES: Record<OAuthResultPageLang, string[]> = 
   'de': ['de'],
   'pt-PT': ['pt-PT'],
   'pt-BR': ['pt-BR'],
+  'zh-Hant-x-lzh': ['zh-Hant-x-lzh', 'zh-TW', 'zh-CN'],
+  'zh-Hans-x-lzh': ['zh-Hans-x-lzh', 'zh-CN'],
 };
 
 /** 页面语言全集,与 OAUTH_LANG_TO_APP_LOCALES 保持同源。 */

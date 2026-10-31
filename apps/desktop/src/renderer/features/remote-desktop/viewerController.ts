@@ -509,7 +509,7 @@ export class DesktopViewerController {
       .catch(() => {});
     const blocked =
       remoteDesktopFailureKey(code) ??
-      (/DESKTOP_(VIEW_ONLY|INPUT_(BUSY|UNSUPPORTED|UNAVAILABLE|TIMEOUT))/.test(code)
+      (/DESKTOP_(VIEW_ONLY|INPUT_(BUSY|UNAVAILABLE|TIMEOUT))/.test(code)
         ? 'controlUnavailable'
         : null);
     this.cancel(

@@ -1090,7 +1090,8 @@
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
     "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
-    "controlUnavailable": "远端电脑暂时无法接受操作，请检查远端控制权限和连接，然后重新连接。",
+    "inputUnsupported": "Cindy 暂不支持这台电脑当前桌面环境的远程键鼠控制。",
+    "controlUnavailable": "远程键鼠控制暂时不可用，请重新连接。",
     "beingControlled": "桌面正在被远程控制",
     "beingViewed": "桌面正在被远程查看",
     "controlledByDevice": "{{name}} 正在远程控制桌面",
@@ -2390,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "简繁与文风",
+        "hint": "AI 按所选文风作答；选“照常作答”时界面仍为文言，回答随你的语言",
+        "scriptAriaLabel": "文言简繁",
+        "styleAriaLabel": "AI 作答文风",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "文言（默认）",
+          "tang-poetry": "唐诗",
+          "song-ci": "宋词",
+          "yuan-qu": "元曲",
+          "chu-ci": "楚辞",
+          "parallel-prose": "骈文",
+          "pre-qin": "先秦诸子",
+          "historian": "史传",
+          "ming-qing-essay": "明清小品",
+          "plain": "照常作答"
+        }
       }
     },
     "userProfile": {

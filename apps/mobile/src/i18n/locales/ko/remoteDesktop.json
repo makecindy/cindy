@@ -130,6 +130,7 @@
   "rotate": "화면 회전",
   "sound": "소리",
   "smallWindow": "백그라운드 실행",
+  "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
   "controlUnavailableHint": "일시적으로 컴퓨터를 조작할 수 없습니다. 화면 이동과 확대·축소는 가능합니다.",
   "backgroundRunningHint": "원격 데스크톱을 나가거나 다른 앱으로 전환해도 작은 창으로 화면을 계속 표시합니다.",
   "displaySettings": "디스플레이",

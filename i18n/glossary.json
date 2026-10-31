@@ -1,7 +1,7 @@
 {
   "$schema": "./glossary.schema.json",
   "version": 1,
-  "locales": ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "es", "de", "pt-PT", "pt-BR"],
+  "locales": ["en", "zh-CN", "zh-TW", "ja", "ko", "fr", "es", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"],
   "sourceLocale": "en",
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
@@ -447,8 +447,8 @@
         "fr": "actif",
         "de": "Aktiv",
         "pt-PT": "Ativo",
-        "pt-BR": "Ativo"
-      },
+        "pt-BR": "Ativo", "zh-Hant-x-lzh": "活躍", "zh-Hans-x-lzh": "活跃"
+      }, "minorityByDesign": {"zh-Hant-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。", "zh-Hans-x-lzh": "文言版按语境分译：状态标签用「活躍」，运行中用「方行」，订阅/规则生效用「生效」；三者各有专义，不强求统一。"},
       "checkCase": false,
       "alsoAllowed": {
         "zh-CN": [
@@ -771,7 +771,7 @@
         "zh-CN": "Agent",
         "zh-TW": "Agent",
         "ja": "Agent",
-        "ko": "Agent", "es": "Agent", "fr": "Agent", "de": "Agent", "pt-PT": "Agent", "pt-BR": "Agent"},
+        "ko": "Agent", "es": "Agent", "fr": "Agent", "de": "Agent", "pt-PT": "Agent", "pt-BR": "Agent", "zh-Hant-x-lzh": "Agent", "zh-Hans-x-lzh": "Agent"},
       "forbidden": {
         "zh-CN": [
           "智能体",
@@ -786,7 +786,7 @@
             "text": "代理",
             "whenEn": "Agent"
           }
-        ]
+        ], "zh-Hant-x-lzh": ["智能體", {"text": "代理", "whenEn": "Agent"}], "zh-Hans-x-lzh": ["智能体", {"text": "代理", "whenEn": "Agent"}]
       },
       "note": "产品一级概念，五语统一保留英文原词。zh-CN 现状 44:5 已是主流；zh-TW 沿用同一裁决；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故四个目标语言一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 \"Agent\"→「代理」的 4 处和 \"Subagent models\" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 \"SSH agent\" / \"probe agent\"），是与产品 Agent 同形的另一个概念。",
       "exempt": ["desktop:settings.remote."]
@@ -804,7 +804,7 @@
         "fr": "auteur",
         "de": "Autor",
         "pt-PT": "Autor",
-        "pt-BR": "Autor"
+        "pt-BR": "Autor", "zh-Hant-x-lzh": "作者", "zh-Hans-x-lzh": "作者"
       },
       "checkCase": false,
       "forbidden": {
@@ -864,7 +864,7 @@
         "fr": "automatisation",
         "de": "Automatisierung",
         "pt-PT": "Automatização",
-        "pt-BR": "Automação"
+        "pt-BR": "Automação", "zh-Hant-x-lzh": "自運", "zh-Hans-x-lzh": "自运"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -925,7 +925,7 @@
         "fr": "solde",
         "de": "Guthaben",
         "pt-PT": "Saldo",
-        "pt-BR": "Saldo"
+        "pt-BR": "Saldo", "zh-Hant-x-lzh": "餘資", "zh-Hans-x-lzh": "余资"
       },
       "checkCase": false,
       "forbidden": {
@@ -965,7 +965,7 @@
         "fr": "conversation",
         "de": "Chat",
         "pt-PT": "Conversa",
-        "pt-BR": "Conversa"
+        "pt-BR": "Conversa", "zh-Hant-x-lzh": "言談", "zh-Hans-x-lzh": "言谈"
       },
       "checkCase": false,
       "forbidden": {
@@ -974,7 +974,7 @@
         ],
         "zh-TW": [
           "聊天"
-        ]
+        ], "zh-Hant-x-lzh": ["聊天"], "zh-Hans-x-lzh": ["聊天"]
       },
       "note": "Chat 专指任务内人与 AI 交流的过程与内容（对话区 / 对话正文 / 对话记录 / 继续对话），中文「对话」。指那个可打开可删除的条目时用 Session（中文「任务」）——此前 Chat 与 Session 混用同一个中文词的问题已随 2026-07-31 的改名解决：英文侧指容器的 Chat 已改为 Session。「聊天」一律禁用。ja / ko 保留各自既有译法。",
       "alsoAllowed": {
@@ -1015,7 +1015,7 @@
         "fr": "collaboration",
         "de": "Zusammenarbeit",
         "pt-PT": "Colaboração",
-        "pt-BR": "Colaboração"
+        "pt-BR": "Colaboração", "zh-Hant-x-lzh": "協同", "zh-Hans-x-lzh": "协同"
       },
       "checkCase": false,
       "forbidden": {
@@ -1070,7 +1070,7 @@
         "fr": "Réduire",
         "de": "Einklappen",
         "pt-PT": "Recolher",
-        "pt-BR": "Recolher"
+        "pt-BR": "Recolher", "zh-Hant-x-lzh": "收", "zh-Hans-x-lzh": "收"
       },
       "checkCase": false,
       "forbidden": {
@@ -1121,8 +1121,8 @@
         "fr": "crédits",
         "de": "Credits",
         "pt-PT": "Créditos",
-        "pt-BR": "Créditos"
-      },
+        "pt-BR": "Créditos", "zh-Hant-x-lzh": "籌", "zh-Hans-x-lzh": "筹"
+      }, "minorityByDesign": {"zh-Hant-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。", "zh-Hans-x-lzh": "文言版里多数命中是第三方服务自身的 credits（Codex / ChatGPT 等），按 zh-TW 惯例保留原名；Cindy 自家点数用「籌」。"},
       "checkCase": false,
       "alsoAllowed": {
         "zh-CN": [
@@ -1249,7 +1249,7 @@
         "fr": "répertoire",
         "de": "Verzeichnis",
         "pt-PT": "Diretório",
-        "pt-BR": "Diretório"
+        "pt-BR": "Diretório", "zh-Hant-x-lzh": "目錄", "zh-Hans-x-lzh": "目录"
       },
       "checkCase": false,
       "forbidden": {},
@@ -1283,7 +1283,7 @@
         "zh-CN": "关闭",
         "zh-TW": "關閉",
         "ja": "閉じる",
-        "ko": "닫기", "es": "Cerrar", "fr": "Fermer", "de": "Schließen", "pt-PT": "Fechar", "pt-BR": "Fechar"},
+        "ko": "닫기", "es": "Cerrar", "fr": "Fermer", "de": "Schließen", "pt-PT": "Fechar", "pt-BR": "Fechar", "zh-Hant-x-lzh": "闔", "zh-Hans-x-lzh": "阖"},
       "checkCase": false,
       "forbidden": {
         "zh-CN": [
@@ -1322,7 +1322,7 @@
         "fr": "effort de raisonnement",
         "de": "Denkintensität",
         "pt-PT": "Esforço de raciocínio",
-        "pt-BR": "Esforço de raciocínio"
+        "pt-BR": "Esforço de raciocínio", "zh-Hant-x-lzh": "思之深淺", "zh-Hans-x-lzh": "思之深浅"
       },
       "forbidden": {
         "zh-CN": [
@@ -1379,7 +1379,7 @@
         "fr": "issue",
         "de": "Issue",
         "pt-PT": "Issue",
-        "pt-BR": "Issue"
+        "pt-BR": "Issue", "zh-Hant-x-lzh": "Issue", "zh-Hans-x-lzh": "Issue"
       },
       "checkCase": false,
       "forbidden": {
@@ -1390,7 +1390,7 @@
         "zh-TW": [
           "工單",
           "議題"
-        ],
+        ], "zh-Hant-x-lzh": ["工單", "議題"], "zh-Hans-x-lzh": ["工单", "议题"],
         "ja": [
           {
             "text": "課題",
@@ -1487,7 +1487,7 @@
         "zh-CN": "隐私政策",
         "zh-TW": "隱私政策",
         "ja": "プライバシーポリシー",
-        "ko": "개인정보 처리방침", "es": "Política de privacidad", "fr": "Politique de confidentialité", "de": "Datenschutzerklärung", "pt-PT": "Política de Privacidade", "pt-BR": "Política de Privacidade"},
+        "ko": "개인정보 처리방침", "es": "Política de privacidad", "fr": "Politique de confidentialité", "de": "Datenschutzerklärung", "pt-PT": "Política de Privacidade", "pt-BR": "Política de Privacidade", "zh-Hant-x-lzh": "隱私政策", "zh-Hans-x-lzh": "隐私政策"},
       "checkCase": false,
       "forbidden": {
         "zh-TW": [
@@ -1524,7 +1524,7 @@
         "fr": "plugin",
         "de": "Plugin",
         "pt-PT": "plugin",
-        "pt-BR": "plugin"
+        "pt-BR": "plugin", "zh-Hant-x-lzh": "法器", "zh-Hans-x-lzh": "法器"
       },
       "forbidden": {
         "zh-CN": [
@@ -1535,7 +1535,7 @@
           "Plugin",
           "plugin",
           "外掛"
-        ]
+        ], "zh-Hant-x-lzh": ["外掛"], "zh-Hans-x-lzh": ["插件"]
       },
       "note": "中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。",
       "exempt": [
@@ -1575,7 +1575,7 @@
         "fr": "projet",
         "de": "Projekt",
         "pt-PT": "Projeto",
-        "pt-BR": "Projeto"
+        "pt-BR": "Projeto", "zh-Hant-x-lzh": "案", "zh-Hans-x-lzh": "案"
       },
       "forbidden": {
         "zh-CN": [
@@ -1621,7 +1621,7 @@
         "fr": "fournisseur",
         "de": "Anbieter",
         "pt-PT": "Fornecedor",
-        "pt-BR": "Provedor"
+        "pt-BR": "Provedor", "zh-Hant-x-lzh": "供方", "zh-Hans-x-lzh": "供方"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -1693,7 +1693,7 @@
         "zh-CN": "Proxy",
         "zh-TW": "Proxy",
         "ja": "プロキシ",
-        "ko": "프록시", "es": "proxy", "fr": "proxy", "de": "Proxy", "pt-PT": "proxy", "pt-BR": "proxy"},
+        "ko": "프록시", "es": "proxy", "fr": "proxy", "de": "Proxy", "pt-PT": "proxy", "pt-BR": "proxy", "zh-Hant-x-lzh": "Proxy", "zh-Hans-x-lzh": "Proxy"},
       "forbidden": {
         "zh-CN": [
           {
@@ -1706,7 +1706,7 @@
             "text": "代理",
             "whenEn": "Proxy"
           }
-        ]
+        ], "zh-Hant-x-lzh": [{"text": "代理", "whenEn": "Proxy"}], "zh-Hans-x-lzh": [{"text": "代理", "whenEn": "Proxy"}]
       },
       "note": "网络代理，中文保留英文原词（2026-07 裁决：Agent 与 Proxy 都不叫「代理」）。本条只管英文源为 Proxy 的那些——Agent / Subagent 的「代理」误译各自登记在自己条目下。ja / ko 沿用既有音译。whenEn 的匹配走 makeSourceTermMatcher,复数按英语真实形态展开:Proxy 的复数是 proxies,原先只认「加 s」,英文源写 system proxies 时这条条件禁用会整个跳过。"
     },
@@ -1723,7 +1723,7 @@
         "fr": "quota",
         "de": "Kontingent",
         "pt-PT": "Quota",
-        "pt-BR": "Cota"
+        "pt-BR": "Cota", "zh-Hant-x-lzh": "限額", "zh-Hans-x-lzh": "限额"
       },
       "checkCase": false,
       "forbidden": {
@@ -1782,7 +1782,7 @@
         "fr": "en cours d'exécution",
         "de": "Wird ausgeführt",
         "pt-PT": "Em execução",
-        "pt-BR": "Em execução"
+        "pt-BR": "Em execução", "zh-Hant-x-lzh": "方行", "zh-Hans-x-lzh": "方行"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -1875,7 +1875,7 @@
         "fr": "session",
         "de": "Sitzung",
         "pt-PT": "Sessão",
-        "pt-BR": "Sessão"
+        "pt-BR": "Sessão", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事"
       },
       "checkCase": false,
       "forbidden": {
@@ -1884,7 +1884,7 @@
         ],
         "zh-TW": [
           "會話"
-        ]
+        ], "zh-Hant-x-lzh": ["會話"], "zh-Hans-x-lzh": ["会话"]
       },
       "note": "面向用户叫「任务」——它是左侧列表里可单独打开/删除/分享的条目，有自己的独立空间、可以同时跑多个；「对话」表达不出这个并行性（2026-07-31 裁决，替代此前的「对话」）。任务内人与 AI 交流的过程与内容仍叫「对话」，见 alsoAllowed 与 chat 条目。「会话」继续禁用于产品概念。但英文的 session 在本仓实际承载**五个**不同概念，其中最容易译错、也最影响用户行为的是 Agent 运行时会话——已单独立为 agent-session 条目，中文叫「Agent 会话」，务必先读它再改这类文案；余下三类（登录/绑定校验、SSH 远程与传输、操作系统桌面）与 mobile 语音连接会话都与产品无关，存量译法不在本条约束内，见本条 exempt。代码与内部标识仍用 Session，本条只约束 UI 文案。ja / ko 用音译 `セッション` / `세션`，本次一并收敛：改名前这两种语言就在混用（音译 271 / 277 处 vs `会話`・`대화` 16 / 11 处），改完英文后不一致放大到 133 处，2026-07-31 逐条判断后统一到音译（详见 docs/product-rules/task-and-conversation-naming.md §5.1）。日韩不存在中文那种一词多义问题，所以 `タスク` / `작업`（task）无需像中文那样改写成「自动化」。交流过程仍用 `会話` / `대화`，chat history 仍用 `チャット履歴` / `채팅 기록`。概念分层与判定规则见 docs/product-rules/task-and-conversation-naming.md。",
       "exempt": [
@@ -1982,7 +1982,7 @@
         "fr": "session Agent",
         "de": "Agent-Sitzung",
         "pt-PT": "Sessão do Agent",
-        "pt-BR": "Sessão do Agent"
+        "pt-BR": "Sessão do Agent", "zh-Hant-x-lzh": "Agent 會話", "zh-Hans-x-lzh": "Agent 会话"
       },
       "checkCase": false,
       "forbidden": {
@@ -2105,7 +2105,7 @@
         "fr": "skill",
         "de": "Skill",
         "pt-PT": "Skill",
-        "pt-BR": "Skill"
+        "pt-BR": "Skill", "zh-Hant-x-lzh": "技藝", "zh-Hans-x-lzh": "技艺"
       },
       "alsoAllowed": {
         "zh-CN": [
@@ -2150,7 +2150,7 @@
         "zh-CN": "SkillHub",
         "zh-TW": "SkillHub",
         "ja": "SkillHub",
-        "ko": "SkillHub", "es": "SkillHub", "fr": "SkillHub", "de": "SkillHub", "pt-PT": "SkillHub", "pt-BR": "SkillHub"},
+        "ko": "SkillHub", "es": "SkillHub", "fr": "SkillHub", "de": "SkillHub", "pt-PT": "SkillHub", "pt-BR": "SkillHub", "zh-Hant-x-lzh": "SkillHub", "zh-Hans-x-lzh": "SkillHub"},
       "forbidden": {
         "ja": ["スキルハブ"],
         "ko": ["스킬 허브"]
@@ -2177,7 +2177,7 @@
         "zh-CN": "Subagent",
         "zh-TW": "Subagent",
         "ja": "サブエージェント",
-        "ko": "하위 에이전트", "es": "Subagent", "fr": "sous-Agent", "de": "Subagent", "pt-PT": "Subagent", "pt-BR": "Subagent"},
+        "ko": "하위 에이전트", "es": "Subagent", "fr": "sous-Agent", "de": "Subagent", "pt-PT": "Subagent", "pt-BR": "Subagent", "zh-Hant-x-lzh": "Subagent", "zh-Hans-x-lzh": "Subagent"},
       "forbidden": {
         "zh-CN": [
           {
@@ -2190,7 +2190,7 @@
             "text": "代理",
             "whenEn": "Subagent"
           }
-        ]
+        ], "zh-Hant-x-lzh": [{"text": "代理", "whenEn": "Subagent"}], "zh-Hans-x-lzh": [{"text": "代理", "whenEn": "Subagent"}]
       },
       "note": "Agent 的派生概念，中文跟随 Agent 保留英文原词，不译「子代理」。「代理」在此条下按 whenEn=Subagent 登记：同一个中文词在 Agent / Subagent / Proxy 三处各有来源，只有按英文源区分，自动替换才知道该换成哪个词。ja / ko 沿用既有音译。"
     },
@@ -2207,7 +2207,7 @@
         "fr": "fil",
         "de": "Thread",
         "pt-PT": "Tópico",
-        "pt-BR": "Tópico"
+        "pt-BR": "Tópico", "zh-Hant-x-lzh": "話題", "zh-Hans-x-lzh": "话题"
       },
       "checkCase": false,
       "alsoAllowed": {
@@ -2277,7 +2277,7 @@
         "fr": "consommation",
         "de": "Nutzung",
         "pt-PT": "Utilização",
-        "pt-BR": "Uso"
+        "pt-BR": "Uso", "zh-Hant-x-lzh": "耗用", "zh-Hans-x-lzh": "耗用"
       },
       "forbidden": {
         "zh-CN": [
@@ -2388,7 +2388,7 @@
         "zh-CN": "Worker",
         "zh-TW": "Worker",
         "ja": "Worker",
-        "ko": "Worker", "es": "Worker", "fr": "Worker", "de": "Worker", "pt-PT": "Worker", "pt-BR": "Worker"},
+        "ko": "Worker", "es": "Worker", "fr": "Worker", "de": "Worker", "pt-PT": "Worker", "pt-BR": "Worker", "zh-Hant-x-lzh": "Worker", "zh-Hans-x-lzh": "Worker"},
       "forbidden": {},
       "note": "Orca 协同角色名，五语统一保留英文。这里只钉大小写形态：首字母大写 Worker。小写 worker 由 guard 的大小写规则单独覆盖（desktop 26:13 混用、mobile 一律小写）。"
     },
@@ -2418,7 +2418,7 @@
         "fr": "répertoire de travail",
         "de": "Arbeitsverzeichnis",
         "pt-PT": "Diretório de trabalho",
-        "pt-BR": "Diretório de trabalho"
+        "pt-BR": "Diretório de trabalho", "zh-Hant-x-lzh": "工作目錄", "zh-Hans-x-lzh": "工作目录"
       },
       "checkCase": false,
       "forbidden": {
@@ -2466,7 +2466,7 @@
         "fr": "worktree",
         "de": "Worktree",
         "pt-PT": "Worktree",
-        "pt-BR": "Worktree"
+        "pt-BR": "Worktree", "zh-Hant-x-lzh": "worktree", "zh-Hans-x-lzh": "worktree"
       },
       "checkCase": false,
       "forbidden": {
@@ -2489,7 +2489,7 @@
             "text": "工作區",
             "whenEn": "Worktree"
           }
-        ]
+        ], "zh-Hant-x-lzh": [{"text": "工作樹", "whenEn": "Worktree"}], "zh-Hans-x-lzh": [{"text": "工作树", "whenEn": "Worktree"}]
       },
       "note": "Git worktree 是外部工具的既定概念，五语一律保留英文小写原词（现状 21 处最多）。desktop:chat 一个模块里就有 worktree / 工作区 / 工作树 三种写法。特别要紧的是「工作区」——它同时被用于 worktree、Workspace、working tree 三个不同英文概念，必须让出来只表示 Workspace；working directory 用「工作目录」。条件禁用只在英文源含 Worktree 时生效，不影响 Workspace 的正常翻译。豁免导入提示那一句：英文原文同时出现 worktree 与 main workspace，条件禁用是按整句英文判定的，无法区分句内两个概念——那里的「主工作区」正是 Workspace，必须保留，否则会把「不影响主工作区」这条安全边界说成「不影响主 worktree」。",
       "exempt": [
@@ -2624,7 +2624,7 @@
         "fr": "tâche",
         "de": "Aufgabe",
         "pt-PT": "Tarefa",
-        "pt-BR": "Tarefa"
+        "pt-BR": "Tarefa", "zh-Hant-x-lzh": "差事", "zh-Hans-x-lzh": "差事"
       },
       "checkCase": false,
       "note": "指 Agent 正在执行的一件活，与 Session（也叫「任务」）同名。**同一句里同时出现两者时必须消解歧义**：task 一侧优先动词化（\"当前任务正在运行\" / \"执行完成\"），确需名词时用「执行」或「作业」——\"当前任务正在执行任务\" 这类写法一律不可接受。不同句、语境清晰时沿用「任务」（现状 104 处）。定时任务（Schedule）与后台作业各有限定词，不歧义。判定规则见 docs/product-rules/task-and-conversation-naming.md §3。",
@@ -2662,7 +2662,7 @@
         "fr": "message",
         "de": "Nachricht",
         "pt-PT": "Mensagem",
-        "pt-BR": "Mensagem"
+        "pt-BR": "Mensagem", "zh-Hant-x-lzh": "訊", "zh-Hans-x-lzh": "讯"
       },
       "checkCase": false,
       "forbidden": {
@@ -2714,7 +2714,7 @@
         "fr": "tour",
         "de": "Runde",
         "pt-PT": "Turno",
-        "pt-BR": "Turno"
+        "pt-BR": "Turno", "zh-Hant-x-lzh": "輪", "zh-Hans-x-lzh": "轮"
       },
       "checkCase": false,
       "note": "一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。",

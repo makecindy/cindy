@@ -154,6 +154,7 @@ import { getControllersForTopic } from './subscriptions';
 import { getKnownControllerIds } from './subscriptions';
 import { startSharedTaskRuntime, stopSharedTaskRuntime } from './sharedTaskRuntime.js';
 import { startProviderShareRuntime, stopProviderShareRuntime } from './providerShareRuntime.js';
+import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
 import {
   isProviderShareRefusal,
   getReceivedShares,
@@ -1148,6 +1149,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    tapRemoteModelCatalogChange(env.src, p?.channel, isDeviceRevoked(env.src));
     const sharePeer = parseProviderSharePeer(env.src);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
       if (sharePeer.role !== 'host' || !getReceivedShares().some(share => share.shareId === sharePeer.shareId
