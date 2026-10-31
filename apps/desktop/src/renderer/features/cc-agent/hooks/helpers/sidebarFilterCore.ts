@@ -36,6 +36,8 @@ export const VENDOR_KEY = 'cc-agent.sidebar.filter.vendor';
 export const GROUP_BY_KEY = 'cc-agent.sidebar.filter.groupBy';
 export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
+export const GROUP_IN_PROGRESS_KEY = 'cc-agent.sidebar.filter.groupInProgress';
+export const IN_PROGRESS_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.inProgressSectionCollapsed';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
 export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
@@ -396,6 +398,35 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
   }
 }
 
+/* ============================== groupInProgress load/persist ============================== */
+
+/**
+ * 「进行中」段开关:true = 等你处理 / 完成未读 / 运行中的任务从项目与对话里
+ * 提到置顶下方的「进行中」段。默认 true;只存用户关掉的覆盖值,重新打开即删除,
+ * 未改过的用户跟随以后的默认值(configuration-and-overrides §2)。
+ */
+export function loadGroupInProgress(): boolean {
+  const storage = safeStorage();
+  if (!storage) return true;
+  try {
+    return storage.getItem(GROUP_IN_PROGRESS_KEY) !== 'false';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read groupInProgress:', err);
+    return true;
+  }
+}
+
+export function persistGroupInProgress(groupInProgress: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (groupInProgress) storage.removeItem(GROUP_IN_PROGRESS_KEY);
+    else storage.setItem(GROUP_IN_PROGRESS_KEY, 'false');
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist groupInProgress:', err);
+  }
+}
+
 /* ============================== groupDevice load/persist ============================== */
 
 /**
@@ -510,6 +541,28 @@ export function persistPinnedSectionCollapsed(collapsed: boolean): void {
     else storage.removeItem(PINNED_SECTION_COLLAPSED_KEY);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist pinnedSectionCollapsed:', err);
+  }
+}
+
+export function loadInProgressSectionCollapsed(): boolean {
+  const storage = safeStorage();
+  if (!storage) return false;
+  try {
+    return storage.getItem(IN_PROGRESS_SECTION_COLLAPSED_KEY) === 'true';
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read inProgressSectionCollapsed:', err);
+    return false;
+  }
+}
+
+export function persistInProgressSectionCollapsed(collapsed: boolean): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (collapsed) storage.setItem(IN_PROGRESS_SECTION_COLLAPSED_KEY, 'true');
+    else storage.removeItem(IN_PROGRESS_SECTION_COLLAPSED_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist inProgressSectionCollapsed:', err);
   }
 }
 

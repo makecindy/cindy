@@ -14098,6 +14098,11 @@
       "pinned": "置首",
       "pinnedToggleExpand": "展置頂",
       "pinnedToggleCollapse": "收置頂",
+      "inProgress": "方行",
+      "inProgressToggleExpand": "展方行",
+      "inProgressToggleCollapse": "收方行",
+      "pinSuggestion": "「{{title}}」屢啟",
+      "pinSuggestionDismiss": "勿復示",
       "pinnedShowMore": "餘者",
       "viewStyle": "易顯示之式",
       "viewStyleList": "文",
@@ -14153,7 +14158,8 @@
         "project": "案",
         "flat": "平列",
         "device": "機",
-        "dialogue": "言談"
+        "dialogue": "言談",
+        "inProgress": "方行"
       },
       "filterGroupByDeviceManualTip": "手動排序時，暫不能依裝置分組",
       "deviceGroup": {
@@ -14479,7 +14485,8 @@
       "groupSummary": {
         "project": "案",
         "dialogue": "言談",
-        "device": "機"
+        "device": "機",
+        "inProgress": "方行"
       },
       "taskStatusHeading": "差事狀態",
       "taskStatus": {

@@ -14299,6 +14299,11 @@
       "pinned": "Fijado",
       "pinnedToggleExpand": "Expandir elementos fijados",
       "pinnedToggleCollapse": "Contraer elementos fijados",
+      "inProgress": "En curso",
+      "inProgressToggleExpand": "Expandir sección En curso",
+      "inProgressToggleCollapse": "Contraer sección En curso",
+      "pinSuggestion": "Abierto a menudo: {{title}}",
+      "pinSuggestionDismiss": "No volver a sugerir",
       "pinnedShowMore": "Más",
       "viewStyle": "Cambiar estilo de vista",
       "viewStyleList": "Texto",
@@ -14354,7 +14359,8 @@
         "project": "Proyecto",
         "flat": "Lista plana",
         "device": "Dispositivo",
-        "dialogue": "Conversación"
+        "dialogue": "Conversación",
+        "inProgress": "En curso"
       },
       "filterGroupByDeviceManualTip": "No se puede agrupar por dispositivo con el orden manual",
       "deviceGroup": {
@@ -14686,7 +14692,8 @@
       "groupSummary": {
         "project": "Proyecto",
         "dialogue": "Conversación",
-        "device": "Dispositivo"
+        "device": "Dispositivo",
+        "inProgress": "En curso"
       },
       "taskStatusHeading": "Estado de la sesión",
       "taskStatus": {

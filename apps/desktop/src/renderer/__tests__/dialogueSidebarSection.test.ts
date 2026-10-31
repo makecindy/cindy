@@ -50,7 +50,7 @@ const remoteProjectsHookSource = readFileSync(
 
 describe('Mixed main list (sidebar-redesign D 期)', () => {
   it('renders dialogues through the mixed ProjectsSection instead of a fixed DialogueSection', () => {
-    expect(sidebarSource).toContain('dialogues={visibleDialogues}');
+    expect(sidebarSource).toContain('dialogues={mainDialogues}');
     expect(sidebarSource).not.toContain('<DialogueSection');
     expect(projectsSectionSource).toContain('useMainListEntries({');
     const entriesHook = readFileSync(

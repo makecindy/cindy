@@ -14065,6 +14065,11 @@
       "pinned": "置顶",
       "pinnedToggleExpand": "展开置顶",
       "pinnedToggleCollapse": "收起置顶",
+      "inProgress": "进行中",
+      "inProgressToggleExpand": "展开进行中",
+      "inProgressToggleCollapse": "收起进行中",
+      "pinSuggestion": "最近常打开「{{title}}」",
+      "pinSuggestionDismiss": "不再提示",
       "pinnedShowMore": "更多",
       "viewStyle": "切换显示样式",
       "viewStyleList": "文字",
@@ -14120,7 +14125,8 @@
         "project": "项目",
         "flat": "平铺",
         "device": "设备",
-        "dialogue": "对话"
+        "dialogue": "对话",
+        "inProgress": "进行中"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -14446,7 +14452,8 @@
       "groupSummary": {
         "project": "项目",
         "dialogue": "对话",
-        "device": "设备"
+        "device": "设备",
+        "inProgress": "进行中"
       },
       "taskStatusHeading": "任务状态",
       "taskStatus": {

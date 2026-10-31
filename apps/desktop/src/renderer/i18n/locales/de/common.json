@@ -14165,6 +14165,11 @@
       "pinned": "Angeheftet",
       "pinnedToggleExpand": "Angeheftete ausklappen",
       "pinnedToggleCollapse": "Angeheftete einklappen",
+      "inProgress": "In Arbeit",
+      "inProgressToggleExpand": "„In Arbeit“ ausklappen",
+      "inProgressToggleCollapse": "„In Arbeit“ einklappen",
+      "pinSuggestion": "Oft geöffnet: {{title}}",
+      "pinSuggestionDismiss": "Nicht mehr vorschlagen",
       "pinnedShowMore": "Mehr",
       "viewStyle": "Ansicht wechseln",
       "viewStyleList": "Text",
@@ -14220,7 +14225,8 @@
         "project": "Projekt",
         "flat": "Flache Liste",
         "device": "Gerät",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "inProgress": "In Arbeit"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -14546,7 +14552,8 @@
       "groupSummary": {
         "project": "Projekt",
         "dialogue": "Chat",
-        "device": "Gerät"
+        "device": "Gerät",
+        "inProgress": "In Arbeit"
       },
       "taskStatusHeading": "Sitzungsstatus",
       "taskStatus": {

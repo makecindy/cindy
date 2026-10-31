@@ -191,6 +191,10 @@ import {
   restoreSelectedHiddenProject,
 } from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
+import { InProgressSection } from './sidebar/sections/InProgressSection';
+import { PinSuggestionHint } from './sidebar/PinSuggestionHint';
+import { selectInProgressSessions } from './lib/inProgressSessions';
+import { usePinSuggestion } from './hooks/usePinSuggestion';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import { compareDialogueSessions, type DialogueSortBy } from './sidebar/sections/DialogueSection';
 import { hasSettledOnlineDeviceSection } from './lib/mainListModel';
@@ -2068,6 +2072,58 @@ function ExpandedView({
     [visiblePinnedEntries, filter.sortBy, pinnedSortContext],
   );
 
+  // 主列表(未置顶项目 / 对话 / 未分类)当前可见的全部任务:「进行中」段从这里取成员,
+  // 置顶提示也只在这些任务里挑。未分类在选中具体项目时隐藏,与 ProjectsSection 同判定。
+  const mainListSessions = useMemo(() => {
+    const projectSessions = visibleProjects.flatMap((project) =>
+      projectKeyComparisonSetHas(pinnedProjectComparisonKeys, project.projectKey, localPlatform)
+        ? []
+        : project.sessions.filter(
+            (session) =>
+              session.pinnedAt == null && (vendorPredicate === null || vendorPredicate(session)),
+          ),
+    );
+    return [...projectSessions, ...visibleDialogues, ...railUnclassified];
+  }, [
+    visibleProjects,
+    pinnedProjectComparisonKeys,
+    localPlatform,
+    vendorPredicate,
+    visibleDialogues,
+    railUnclassified,
+  ]);
+  const inProgressSessions = useMemo(
+    () =>
+      filter.groupInProgress
+        ? selectInProgressSessions(mainListSessions, projectPriorityContext)
+        : EMPTY_SESSION_LIST,
+    [filter.groupInProgress, mainListSessions, projectPriorityContext],
+  );
+  // 进行中的任务只在「进行中」段出现一次,项目与对话里先排除。
+  const inProgressIds = useMemo(
+    () => new Set(inProgressSessions.map((session) => session.id)),
+    [inProgressSessions],
+  );
+  const mainDialogues = useMemo(
+    () =>
+      inProgressIds.size === 0
+        ? visibleDialogues
+        : visibleDialogues.filter((session) => !inProgressIds.has(session.id)),
+    [visibleDialogues, inProgressIds],
+  );
+  const mainUnclassified = useMemo(
+    () =>
+      inProgressIds.size === 0
+        ? visibleUnclassified
+        : visibleUnclassified.filter((session) => !inProgressIds.has(session.id)),
+    [visibleUnclassified, inProgressIds],
+  );
+  const pinSuggestion = usePinSuggestion(
+    sidebarSettingsSnapshot.dataOwnerId,
+    activeSessionId,
+    mainListSessions,
+  );
+
   const visibleProjectsWithVendor = useMemo(() => {
     const unpinnedProjects = visibleProjects.filter(
       (project) =>
@@ -2084,7 +2140,12 @@ function ExpandedView({
       )
         return [];
       return [
-        withProjectSessions(project, matchingSessions.filter((session) => session.pinnedAt == null)),
+        withProjectSessions(
+          project,
+          matchingSessions.filter(
+            (session) => session.pinnedAt == null && !inProgressIds.has(session.id),
+          ),
+        ),
       ];
     });
     return sortProjectsForSidebar(
@@ -2097,6 +2158,7 @@ function ExpandedView({
     );
   }, [
     visibleProjects,
+    inProgressIds,
     pinnedProjectComparisonKeys,
     localPlatform,
     vendorPredicate,
@@ -3893,12 +3955,36 @@ function ExpandedView({
                   projectOptions={projectPickerOptions}
                   onReorder={handlePinnedReorder}
                 />
+                {pinSuggestion.suggestion && (
+                  <PinSuggestionHint
+                    session={pinSuggestion.suggestion}
+                    onPin={(sessionId) => void handleTogglePin(sessionId, false)}
+                    onDismiss={pinSuggestion.dismiss}
+                  />
+                )}
+                <InProgressSection
+                  sessions={inProgressSessions}
+                  allKnownProjects={visibleProjectUniverse}
+                  activeSessionId={activeSessionId}
+                  runningSessionIds={displayRunningSessionIds}
+                  attachedSessionIds={attachedSessionIds}
+                  notifications={sidebarNotifications}
+                  scheduleSessionIndex={automationGroupingIndex}
+                  selectedSessionIds={selectedSessionIds}
+                  onSessionClick={handleSessionClick}
+                  onAction={handleActionClick}
+                  onRename={handleRename}
+                  onTogglePin={handleTogglePin}
+                  onMoveSession={handleMoveSession}
+                  projectOptions={projectPickerOptions}
+                  onScheduleAction={handleScheduleAction}
+                />
                 {/* D 期:主列表 = 混排模型(项目行 + 散排对话 / 对话组,ProjectsSection
                   内部按 mainListModel 统一排序)。按日期分组与固定 Dialogue 段已删除。 */}
                 <ProjectsSection
-                  unclassified={visibleUnclassified}
+                  unclassified={mainUnclassified}
                   projects={visibleProjectsWithVendor}
-                  dialogues={visibleDialogues}
+                  dialogues={mainDialogues}
                   dialogueActionSessions={dialogueActionSessions}
                   bots={groups.bots}
                   onOpenBot={(botId) => navigate(`/bots/${botId}`)}
