@@ -420,6 +420,7 @@
     "sent": "Submitted",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
+    "downloadVideo": "Download video",
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."

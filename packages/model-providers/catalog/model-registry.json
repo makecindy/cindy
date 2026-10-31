@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-30T08:00:00.000Z",
+  "updatedAt": "2026-10-31T03:14:42.037Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3353,7 +3353,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3400,7 +3400,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3447,7 +3447,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -3494,7 +3494,7 @@
               "agnes-openai-responses"
             ],
             "pi": [
-              "agnes-anthropic-messages"
+              "agnes-openai-completions"
             ]
           }
         }
@@ -11060,8 +11060,7 @@
         "https://apihub.agnes-ai.com/v1"
       ],
       "defaultFor": [
-        "claude-code",
-        "pi"
+        "claude-code"
       ],
       "modelIds": [
         "agnes-3.0-flash",
@@ -11098,7 +11097,9 @@
         "https://apihub.agnes-ai.com",
         "https://apihub.agnes-ai.com/v1"
       ],
-      "defaultFor": [],
+      "defaultFor": [
+        "pi"
+      ],
       "modelIds": [
         "agnes-3.0-flash",
         "agnes-2.5-pro",

@@ -1,4 +1,5 @@
 {
+  "teammateProcess": {"record":"작업 내역","operations":"작업 기록","elapsed":"처리 중 {{duration}}","took":"소요 시간 {{duration}}","processing":"처리 중","worked":"작업 내역","thinking":"생각 중","thought":"생각함","failed_one":"호출 {{count}}회 실패","failed_other":"호출 {{count}}회 실패","separator":" · ","actions":{"running":{"read":"파일 확인 중","edit":"파일 수정 중","search":"검색 중","web":"웹 확인 중","command":"명령 실행 중","tools":"도구 사용 중","delegate":"작업 위임 중","plan":"계획 정리 중"},"done":{"read":"파일 확인함","edit":"파일 수정함","search":"검색함","web":"웹 확인함","command":"명령 실행함","tools":"도구 사용함","delegate":"작업 위임함","plan":"계획 정리함"}}},
   "imageDelivery": {
     "stored": "이미지 전달 완료",
     "failed": "이미지 전달에 실패했습니다. 기존 이미지 전송을 다시 시도할 수 있습니다.",

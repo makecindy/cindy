@@ -1,3 +1,4 @@
+import { isToolResultFailureLike } from './messagePresentation';
 /**
  * Shared work activity projection for desktop and mobile.
  *
@@ -263,6 +264,7 @@ export function projectRecentWorkActivities<TMessage extends WorkActivityMessage
 export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
   childItems: readonly ProjectableWorkChild<TMessage>[],
   isStreaming: boolean,
+  preserveRepeatedReads = false,
 ): WorkActivityProjection<TMessage> {
   const rawActivities: ProjectedWorkActivity<TMessage>[] = [];
   const rawToolActivitiesByChildKey = new Map<string, ProjectedToolActivity<TMessage>[]>();
@@ -287,7 +289,8 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     const activity = rawActivities[index];
     if (resetsReadDeduplication(activity)) seenReadKeys.clear();
     if (
-      activity.kind === 'tool'
+      !preserveRepeatedReads
+      && activity.kind === 'tool'
       && activity.exploration?.kind === 'read'
       && activity.exploration.readKey
     ) {
@@ -325,4 +328,78 @@ export function projectWorkActivities<TMessage extends WorkActivityMessageLike>(
     isPureExploration:
       toolActivities.length > 0 && toolActivities.every((activity) => !!activity.exploration),
   };
+}
+
+/** Teammate-only summaries are deterministic projections of existing events.
+ * No prompt, generated copy, model request, or hidden reasoning is needed. */
+export type TeammateWorkKind = 'read' | 'edit' | 'search' | 'web' | 'command' | 'tools' | 'delegate' | 'plan';
+export interface TeammateWorkSummary {
+  kinds: TeammateWorkKind[];
+  toolCount: number;
+  failedCount: number;
+  running: boolean;
+  thinking: boolean;
+}
+
+export function summarizeTeammateWork<T extends WorkActivityMessageLike>(
+  activities: readonly ProjectedWorkActivity<T>[],
+): TeammateWorkSummary {
+  const kinds = new Set<TeammateWorkKind>();
+  const calls = new Set<string>();
+  const failed = new Set<string>();
+  let running = false;
+  let thinking = false;
+  for (const activity of activities) {
+    if (activity.kind === 'thinking') { thinking = true; continue; }
+    const message = activity.message;
+    calls.add(message.clientId);
+    running ||= activity.status === 'running';
+    const descriptor = describeToolUse(message.toolName ?? '', message.toolInput);
+    if (activity.toolResult && isToolResultFailureLike(descriptor, activity.toolResult)) failed.add(message.clientId);
+    if (activity.exploration) kinds.add(activity.exploration.kind === 'search' ? 'search' : 'read');
+    else switch (descriptor.kind) {
+      case 'file': kinds.add(descriptor.action === 'read' ? 'read' : 'edit'); break;
+      case 'fileChange': kinds.add('edit'); break;
+      case 'search': kinds.add('search'); break;
+      case 'web': kinds.add('web'); break;
+      case 'command': kinds.add('command'); break;
+      case 'task': case 'collab': kinds.add('delegate'); break;
+      case 'todo': kinds.add('plan'); break;
+      default: kinds.add('tools');
+    }
+  }
+  return { kinds: [...kinds], toolCount: calls.size, failedCount: failed.size, running, thinking };
+}
+
+/** Prose and recovery cards are boundaries, never extracted to a separate list.
+ * Keys follow the preceding visible boundary, remaining stable across lazy hydration. */
+export function segmentTeammateWork<T extends { key: string }>(
+  items: readonly T[], isActivity: (item: T) => boolean,
+): Array<{ kind: 'work'; key: string; items: T[] } | { kind: 'content'; key: string; item: T }> {
+  const result: Array<{ kind: 'work'; key: string; items: T[] } | { kind: 'content'; key: string; item: T }> = [];
+  let pending: T[] = [];
+  let anchor = 'start';
+  const flush = () => {
+    if (pending.length) result.push({ kind: 'work', key: `segment:${anchor}`, items: pending });
+    pending = [];
+  };
+  for (const item of items) {
+    if (isActivity(item)) pending.push(item);
+    else { flush(); result.push({ kind: 'content', key: item.key, item }); anchor = item.key; }
+  }
+  flush();
+  return result;
+}
+
+export function teammateWorkSummaryText(
+  summary: TeammateWorkSummary,
+  active: boolean,
+  t: (key: string, options?: { count?: number }) => string,
+): string {
+  const prefix = 'chat.teammateProcess.';
+  const state = active && summary.running ? 'running' : 'done';
+  const actions = summary.kinds.map(kind => t(`${prefix}actions.${state}.${kind}`));
+  const text = actions.length ? actions.join(t(`${prefix}separator`))
+    : t(`${prefix}${active ? 'thinking' : summary.thinking ? 'thought' : 'worked'}`);
+  return summary.failedCount ? `${text} · ${t(`${prefix}failed`, { count: summary.failedCount })}` : text;
 }

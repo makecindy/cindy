@@ -9,6 +9,16 @@
  *   'system' 的实际语言由 main 侧读取 OS 首选语言后传入 renderer。
  */
 
+import esCommon from './locales/es/common.json';
+import esAiRename from './locales/es/aiRename.json';
+import frCommon from './locales/fr/common.json';
+import frAiRename from './locales/fr/aiRename.json';
+import deCommon from './locales/de/common.json';
+import deAiRename from './locales/de/aiRename.json';
+import ptPTCommon from './locales/pt-PT/common.json';
+import ptPTAiRename from './locales/pt-PT/aiRename.json';
+import ptBRCommon from './locales/pt-BR/common.json';
+import ptBRAiRename from './locales/pt-BR/aiRename.json';
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
@@ -35,9 +45,14 @@ export {
 } from '../../shared/locale';
 export type { LocalePreference, SupportedLocale } from '../../shared/locale';
 
-// 凭证写入逃生口必须在五语里共用同一条安全命令；集中覆盖防止某个 locale 又退回
+// 凭证写入逃生口必须在全部语言里共用同一条安全命令；集中覆盖防止某个 locale 又退回
 // “手动设置环境变量”的危险指引。对应跨 locale 契约由 devOAuthWritePolicy.test 锁住。
 const resources = {
+  'es': { common: esCommon, aiRename: esAiRename },
+  'fr': { common: frCommon, aiRename: frAiRename },
+  'de': { common: deCommon, aiRename: deAiRename },
+  'pt-PT': { common: ptPTCommon, aiRename: ptPTAiRename },
+  'pt-BR': { common: ptBRCommon, aiRename: ptBRAiRename },
   en: {
     common: {
       ...enCommon,

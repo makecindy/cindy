@@ -1,6 +1,9 @@
 *.sh text eol=lf
 # Raw-imported plugin authoring chapters retain FORGE_GUIDE's LF bytes on Windows.
 apps/desktop/resources/system-skills/cindy-plugin-creator/references/*.md text eol=lf
+# The page generation manual is published by content hash (plugin-pages/manual/<sha256>.md);
+# clients hash their bundled copy, so Windows checkouts must package the same LF bytes.
+apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md text eol=lf
 # Published teammate compatibility fixtures retain the exact source bytes for SHA-256 verification.
 apps/desktop/src/main/maker-ipc/__tests__/fixtures/released-teammate-host/*.ts.txt text eol=lf
 # Bundled teammate packages retain the exact source bytes (text and webp alike) for SHA-256 integrity verification;

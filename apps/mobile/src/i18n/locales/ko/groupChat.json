@@ -33,8 +33,10 @@
   },
   "mention": {
     "all": "모두",
-    "allHint": "모두 답변",
-    "label": "동료 멘션"
+    "allHint": "사람만",
+    "label": "동료 멘션",
+    "allBots": "모든 동료",
+    "allBotsHint": "동료만"
   },
   "composer": {
     "label": "그룹 채팅 메시지",
@@ -228,7 +230,7 @@
     "speakingMode": "발언 순서",
     "speakingModeAuto": "자동",
     "speakingModeSequential": "항상 차례대로",
-    "speakingModeAutoNote": "멘션이 없거나 @모두이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
+    "speakingModeAutoNote": "멘션이 없거나 @모든 동료이면 첫 라운드는 동시에 생각하고 이후에는 번갈아 답합니다. 동료를 멘션하면 멘션 순서대로 답합니다.",
     "speakingModeSequentialNote": "한 번에 한 동료만 말하며, 뒤에 말하는 동료는 앞의 답을 보고 답합니다.",
     "speakingModeSaveFailed": "발언 순서를 저장하지 못했습니다. 다시 시도해 주세요.",
     "setOrganizer": "담당자로 지정",
@@ -254,7 +256,9 @@
     "cloudStatus": {
       "loading": "설정 불러오는 중…",
       "unavailable": "그룹 설정을 불러오지 못했습니다. 다시 시도하세요."
-    }
+    },
+    "allowMentionAllBots": "모든 동료 멘션 허용",
+    "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동료가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
   },
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
@@ -278,7 +282,8 @@
     "quoteUnavailable": "인용한 메시지가 삭제되었거나 더 이상 볼 수 없습니다. 인용을 해제했으니 다시 보내세요.",
     "lifecycleUnavailable": "현재 서버 또는 컴퓨터에서 아직 이 작업을 지원하지 않습니다.",
     "groupDissolved": "이 그룹은 해산되었습니다. 열람 권한이 있는 기록은 계속 볼 수 있습니다.",
-    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
+    "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요.",
+    "allBotsMentionDisabled": "그룹 소유자가 모든 동료 멘션을 켜지 않았습니다."
   },
   "followUp": {
     "next": "분담 · 다음 단계",

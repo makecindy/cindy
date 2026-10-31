@@ -4,13 +4,13 @@
  * 本模块保持零依赖(不 import expo / RN):偏好存储及其测试直接消费,
  * 读系统语言的 detectSystemLocale 在 systemLocale.ts。
  * 解析规则与 loginMessages.resolveLoginLocale 保持一致:zh-Hans/CN/SG → zh-CN，
- * zh-Hant/TW/HK/MO → zh-TW，ja / ko 前缀直取,其余兜底 en。
+ * zh-Hant/TW/HK/MO → zh-TW；葡语按地区选择，其它已支持语言按 language 子标签匹配。
  * 刻意用字符串前缀而非 Intl.Locale——Hermes 的 Intl 子集在各版本间能力不齐,
  * 前缀匹配对当前支持的语言足够且行为可预期。
  */
 
 /** UI 支持的具体语言。 */
-export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko"] as const;
+export const SUPPORTED_LOCALES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /** 用户偏好:'system' = 跟随系统语言,由本模块在运行时解析。 */
@@ -35,13 +35,20 @@ export function resolveSystemLocale(
   languageTag: string | null | undefined,
 ): SupportedLocale {
   const tag = languageTag?.trim().toLowerCase().replace(/_/g, "-") ?? "";
+  const language = tag.split("-")[0];
   if (tag.startsWith("zh")) {
     if (tag.includes("hans")) return "zh-CN";
     if (tag.includes("hant") || /(?:-|^)(?:tw|hk|mo)(?:-|$)/.test(tag))
       return "zh-TW";
     return "zh-CN";
   }
-  if (tag.startsWith("ja")) return "ja";
-  if (tag.startsWith("ko")) return "ko";
+  if (language === "pt") {
+    // The optional script subtag precedes the region; extension values cannot
+    // select a different regional catalog (pt-PT-u-rg-brzzzz stays pt-PT).
+    const parts = tag.split("-");
+    const region = parts[/^[a-z]{4}$/.test(parts[1] ?? "") ? 2 : 1];
+    return region === "br" ? "pt-BR" : "pt-PT";
+  }
+  if (isSupportedLocale(language)) return language;
   return DEFAULT_LOCALE;
 }

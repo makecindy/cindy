@@ -189,6 +189,37 @@ describe('buildMenubarView', () => {
     expect(view.headlineSecondary).toBeNull();
   });
 
+  it('shows every account by its weekly window, even when the 5-hour one is tighter or not started', () => {
+    const idle = codex('alpha', 0, {
+      windows: [
+        { kind: 'session', usedPercent: 0, resetsAtMs: null, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 0, resetsAtMs: NOW + 4 * DAY + 22 * HOUR, windowMinutes: 10_080 },
+      ],
+    });
+    const burst = codex('beta', 0, {
+      windows: [
+        { kind: 'session', usedPercent: 95, resetsAtMs: NOW + 2 * HOUR, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+      ],
+    });
+    const view = buildMenubarView(input([idle, burst], { locale: 'zh-CN' }));
+    expect(view.sources.find((cell) => cell.id === 'alpha')).toMatchObject({ value: '100', when: '4天22时后重置' });
+    expect(view.sources.find((cell) => cell.id === 'beta')).toMatchObject({ value: '60', when: '3天后重置', whenLevel: 'normal' });
+  });
+
+  it('keeps the detail page on the window that limits the account when the tube shows the weekly one', () => {
+    const blocked = codex('alpha', 0, {
+      resetCredits: { count: 1, earliestExpiryMs: NOW + 5 * DAY },
+      windows: [
+        { kind: 'session', usedPercent: 100, resetsAtMs: NOW + 2 * HOUR, windowMinutes: 300 },
+        { kind: 'week', usedPercent: 40, resetsAtMs: NOW + 3 * DAY, windowMinutes: 10_080 },
+      ],
+    });
+    const view = buildMenubarView(input([blocked]));
+    expect(view.sources[0]).toMatchObject({ value: '60' });
+    expect(view.details.alpha).toMatchObject({ bigValue: '0', action: { kind: 'open-settings' } });
+  });
+
   it('names when a nearly empty source resets', () => {
     const low = codex('alpha', 92, {
       windows: [{ kind: 'session', usedPercent: 92, resetsAtMs: NOW + 3 * HOUR + 5 * 60_000, windowMinutes: 300 }],

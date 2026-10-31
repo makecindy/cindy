@@ -530,10 +530,10 @@ describe('db worker tx handlers', () => {
         { id: 'plain', text: 'PRIVATE session has ended', expected: undefined },
         { id: 'secret-code', text: JSON.stringify({ ok: false, errorCode: 'PRIVATE_KEY_VALUE', password: 'PRIVATE' }), expected: { ok: false } },
       ];
-      await client.tx('claude.importMessages', { sessionId: 'diagnostics',
-        importClientIdPrefix: 'diagnostics:', sdkSessionId: 'sdk-diagnostics',
-        rows: cases.map((item, index) => ({ lineNo: index, partIndex: 0, role: 'tool_result',
-          content: item.text, toolUseId: item.id, agentMeta: null, createdAt: index + 1 })) });
+      await client.tx('sessionImport.execute', { action: 'messages', sessionId: 'diagnostics',
+        clientIdPrefix: 'diagnostics:', idPrefix: 'diagnostics-',
+        rows: cases.map((item, index) => ({ key: String(index), role: 'tool_result',
+          content: JSON.stringify(item.text), toolUseId: item.id, agentMeta: null, agentKind: null, createdAt: index + 1 })) });
       await client.exec("UPDATE sessions SET status='archived' WHERE id='diagnostics'");
       await client.tx('toolResults.compactSession', { sessionId: 'diagnostics', now: 500 });
       const rows = await client.query<{ id: string; content: string }>("SELECT tool_use_id AS id,content FROM messages WHERE session_id='diagnostics'");
@@ -623,539 +623,64 @@ describe('db worker tx handlers', () => {
     },
   );
 
-  // #8005: the real transaction must reconcile citation-only differences and
-  // existing import copies, without swallowing separate replies. Existing file
-  // citation tests did not cover memory tails, phase or already imported rows.
-  // Unit tier: both production worker transports, isolated SQLite files.
-  it.each([false, true])('codex import reconciles memory citations and existing copies (inline=%s)', async (useInlineWorker) => {
+  // Imported rows never overwrite what the user changed in Cindy afterwards:
+  // tombstoned or rewound rows, and tool results already compacted by Cindy, stay as they are.
+  it.each([false, true])('sessionImport.execute messages keeps tombstoned, rewound and compacted rows (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
       await seedSession(client, 's1');
-      const citation = '\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2[note]\n</citation_entries>\n</oai-mem-citation>';
-      const insert = 'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)';
-      await client.exec(insert, ['local-1', 'local-1', 's1', 'assistant', JSON.stringify('Done.'), JSON.stringify({ assistantPhase: 'final_answer', totalCostUsd: 2 }), 1000]);
-      await client.exec(insert, ['old-copy', 'codex-import:1', 's1', 'assistant', JSON.stringify('Done.' + citation), '{}', 301001]);
-      const args = {
-        sessionId: 's1', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread-1', model: 'gpt-5',
-        rows: [{ lineNo: 1, role: 'assistant' as const, text: 'Done.' + citation, content: 'Done.' + citation, createdAt: 301001, sourceCreatedAt: 1001, phase: 'final_answer' as const }],
-      };
-      await expect(client.tx('codex.importMessages', args)).resolves.toMatchObject({ hiddenClientIds: ['codex-import:1'], updatedLocalIds: ['local-1'] });
-      await expect(client.query('SELECT id FROM messages WHERE rewind_at IS NULL ORDER BY created_at')).resolves.toEqual([{ id: 'local-1' }]);
-      const local = await client.queryOne<{ content: string; agent_meta: string }>('SELECT content, agent_meta FROM messages WHERE id = ?', ['local-1']);
-      expect(JSON.parse(local!.content)).toBe('Done.' + citation);
-      expect(JSON.parse(local!.agent_meta)).toMatchObject({ assistantPhase: 'final_answer', totalCostUsd: 2 });
-      await expect(client.queryOne('SELECT content FROM messages WHERE id = ?', ['old-copy'])).resolves.toEqual({ content: JSON.stringify('Done.' + citation) });
-      await expect(client.tx('codex.importMessages', args)).resolves.toEqual({ changed: 0 });
-    }, { useInlineWorker });
-  });
-
-  it.each([false, true])('codex import keeps distinct phases, prose and repeated native items (inline=%s)', async (useInlineWorker) => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ['local', 'local', 's1', 'assistant', JSON.stringify('Same'), JSON.stringify({ assistantPhase: 'commentary', agentMessageId: 'item-a', sdkSessionId: 'thread-1' }), 1000]);
-      await client.tx('codex.importMessages', {
-        sessionId: 's1', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread-1', model: 'gpt-5',
-        rows: [
-          { lineNo: 1, role: 'assistant', text: 'Same', content: 'Same', createdAt: 1001, phase: 'final_answer' },
-          { lineNo: 2, role: 'assistant', text: 'Same', content: 'Same', createdAt: 1002, phase: 'commentary', agentMessageId: 'item-b' },
-          { lineNo: 3, role: 'assistant', text: 'Same\n<oai-mem-citation>example</oai-mem-citation>\nExtra conclusion', content: 'Same\n<oai-mem-citation>example</oai-mem-citation>\nExtra conclusion', createdAt: 1003 },
-        ],
-      });
-      await expect(client.query('SELECT id FROM messages WHERE rewind_at IS NULL')).resolves.toHaveLength(4);
-      await seedSession(client, 's2');
-      await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        ['prior', 'prior', 's2', 'assistant', JSON.stringify('Same'), 1000]);
-      await client.tx('codex.importMessages', {
-        sessionId: 's2', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread-2', model: 'gpt-5',
-        rows: [
-          { lineNo: 1, role: 'user', text: 'Next question', content: 'Next question', createdAt: 2000 },
-          { lineNo: 2, role: 'assistant', text: 'Same', content: 'Same', createdAt: 2100 },
-        ],
-      });
-      await expect(client.query('SELECT id FROM messages WHERE session_id = ?', ['s2'])).resolves.toHaveLength(3);
-      // Background reconciliation supplies assistant candidates only. The
-      // persisted imported user turn must still prevent matching an old reply.
-      await expect(client.tx('codex.importMessages', {
-        sessionId: 's2', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread-2', model: 'gpt-5',
-        rows: [{ lineNo: 2, role: 'assistant', text: 'Same', content: 'Same', createdAt: 2100 }],
-      })).resolves.toEqual({ changed: 0 });
-    }, { useInlineWorker });
-  });
-
-  // #8005 review: valid nested fence examples/inline backticks must not prevent
-  // matching a terminal citation, while an unclosed code block remains prose.
-  it.each([false, true])('codex import recognizes actual Markdown fences around examples (inline=%s)', async (useInlineWorker) => {
-    await withClient(async (client) => {
-      await seedSession(client, 'fences');
-      const citation = '\n<oai-mem-citation><citation_entries>MEMORY.md:1[note]</citation_entries></oai-mem-citation>';
-      const cases = [
-        { body: 'Example:\n````markdown\n```\n````\nDone.', dedupe: true },
-        { body: 'Use ``` as the delimiter.', dedupe: true },
-        { body: 'Example:\n~~~~\n~~~\n~~~~\nDone.', dedupe: true },
-        { body: 'Example:\n````\n```', dedupe: false },
-        { body: 'Example:\n```\n~~~', dedupe: false },
-      ];
-      for (const [index, { body, dedupe }] of cases.entries()) {
-        await client.exec('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [`local-${index}`, `local-${index}`, 'fences', 'assistant', JSON.stringify(body), 1000 + index]);
-        await client.tx('codex.importMessages', {
-          sessionId: 'fences', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread', model: 'gpt-5',
-          rows: [{ lineNo: index, role: 'assistant', text: body + citation, content: body + citation, createdAt: 1000 + index }],
-        });
-        await expect(client.queryOne('SELECT content FROM messages WHERE client_id = ?', [`codex-import:${index}`]))
-          .resolves.toEqual(dedupe ? undefined : { content: JSON.stringify(body + citation) });
-      }
-    }, { useInlineWorker });
-  });
-
-  it.each([false, true])('codex import uses native identity across delays and consumes legacy matches once (inline=%s)', async (useInlineWorker) => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      const insert = 'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-      await client.exec(insert, ['native', 'native', 's1', 'assistant', JSON.stringify('Long reply'), JSON.stringify({ agentMessageId: 'native-item' }), 1000, null]);
-      await client.exec(insert, ['other-thread', 'other-thread', 's1', 'assistant', JSON.stringify('Other thread'), JSON.stringify({ sdkSessionId: 'different-thread', agentMessageId: 'same-id' }), 1000, null]);
-      await client.exec(insert, ['legacy', 'legacy', 's1', 'assistant', JSON.stringify('Repeated'), null, 1000, null]);
-      await client.exec(insert, ['rewound', 'rewound', 's1', 'assistant', JSON.stringify('Rewound'), null, 1000, 2000]);
-      const args = {
-        sessionId: 's1', importClientIdPrefix: 'codex-import:', sdkSessionId: 'thread-1', model: 'gpt-5',
-        rows: [
-          { lineNo: 1, role: 'assistant' as const, text: 'Long reply', content: 'Long reply', createdAt: 601000, agentMessageId: 'native-item' },
-          { lineNo: 2, role: 'assistant' as const, text: 'Repeated', content: 'Repeated', createdAt: 1001 },
-          { lineNo: 3, role: 'assistant' as const, text: 'Repeated', content: 'Repeated', createdAt: 1002 },
-          { lineNo: 4, role: 'assistant' as const, text: 'Rewound', content: 'Rewound', createdAt: 1003 },
-          { lineNo: 5, role: 'assistant' as const, text: 'Other thread', content: 'Other thread', createdAt: 601000, agentMessageId: 'same-id' },
-        ],
-      };
-      await client.tx('codex.importMessages', args);
-      await expect(client.query('SELECT client_id FROM messages WHERE client_id LIKE ? ORDER BY client_id', ['codex-import:%']))
-        .resolves.toEqual([{ client_id: 'codex-import:3' }, { client_id: 'codex-import:5' }]);
-      // A retained rollout must not resurrect a local reply removed by rewind.
-      await expect(client.queryOne('SELECT content, rewind_at FROM messages WHERE id = ?', ['rewound']))
-        .resolves.toEqual({ content: JSON.stringify('Rewound'), rewind_at: 2000 });
-      await expect(client.tx('codex.importMessages', args)).resolves.toEqual({ changed: 0 });
-    }, { useInlineWorker });
-  });
-
-  it('codex.importMessages skips likely local duplicates and upserts imported rows', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
+      const marker = JSON.stringify({ type: 'tool_result_compacted', version: 1, originalBytes: 80_000, compactedAt: 500 });
       await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        ['local-1', 'local-1', 's1', 'user', JSON.stringify('same'), 1000],
+        `INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at) VALUES
+          ('t', 'import:s1:tomb', 's1', 'message_tombstone', 'null', NULL, NULL, 1000, NULL),
+          ('r', 'import:s1:rew', 's1', 'assistant', '"kept"', NULL, NULL, 1100, 5000),
+          ('c', 'import:s1:comp', 's1', 'tool_result', ?, 'tool-2', NULL, 1200, NULL),
+          ('p', 'import:s1:part', 's1', 'tool_result', '{"type":"tool_result_compacted","version":1,', 'tool-3', NULL, 1300, NULL)`,
+        [marker],
       );
-
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
+      const row = (key: string, role: string, content: string, createdAt: number, toolUseId: string | null = null) =>
+        ({ key, role, content: JSON.stringify(content), toolUseId, agentMeta: null, agentKind: null, createdAt });
+      const write = () => client.tx('sessionImport.execute', {
+        action: 'messages', sessionId: 's1', clientIdPrefix: 'import:s1:', idPrefix: 'imp-s1-',
         rows: [
-          { lineNo: 1, role: 'user', text: 'same', content: 'same', createdAt: 1001 },
-          { lineNo: 2, role: 'assistant', text: 'new', content: 'new', createdAt: 2000 },
+          row('tomb', 'assistant', 'secret body', 1000),
+          row('rew', 'assistant', 'replacement', 1100),
+          row('comp', 'tool_result', 'restored full body', 1200, 'tool-2'),
+          row('part', 'tool_result', 'replacement full body', 1300, 'tool-3'),
+          row('new', 'user', 'fresh', 1400),
         ],
       });
-
-      expect(result).toEqual({ changed: 1 });
-      await expect(
-        client.query('SELECT client_id, agent_meta FROM messages WHERE client_id LIKE ?', [
-          'codex-import:%',
-        ]),
-      ).resolves.toEqual([
-        {
-          client_id: 'codex-import:2',
-          agent_meta: JSON.stringify({ sdkSessionId: 'thread-1', model: 'gpt-5' }),
-        },
+      // Only the half-written marker and the new row change; a second identical write changes nothing.
+      await expect(write()).resolves.toEqual({ changed: 2 });
+      await expect(write()).resolves.toEqual({ changed: 0 });
+      const rows = await client.query<{ client_id: string; role: string; content: string; rewind_at: number | null }>(
+        "SELECT client_id, role, content, rewind_at FROM messages WHERE session_id = 's1' ORDER BY created_at",
+      );
+      expect(rows).toEqual([
+        { client_id: 'import:s1:tomb', role: 'message_tombstone', content: 'null', rewind_at: null },
+        { client_id: 'import:s1:rew', role: 'assistant', content: '"kept"', rewind_at: 5000 },
+        { client_id: 'import:s1:comp', role: 'tool_result', content: marker, rewind_at: null },
+        { client_id: 'import:s1:part', role: 'tool_result', content: JSON.stringify('replacement full body'), rewind_at: null },
+        { client_id: 'import:s1:new', role: 'user', content: JSON.stringify('fresh'), rewind_at: null },
       ]);
-    });
-  });
-
-  it('codex.importMessages dedupes pre-upgrade local rows that still carry raw citation markers', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      // 升级前经流式路径落库的本地 assistant 行:正文仍是原始 citation 标记。
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [
-          'local-1',
-          'local-1',
-          's1',
-          'assistant',
-          JSON.stringify('已保存::codex-file-citation{path="/tmp/报告.docx" purpose="output"},请查收。'),
-          1000,
-        ],
-      );
-
-      // 升级后再导入同一条回复:导入侧文本已归一化。两侧指纹统一规范化后应判定为
-      // 同一条,不插入第二份(review 反馈)。
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
-        rows: [
-          {
-            lineNo: 1,
-            role: 'assistant',
-            text: '已保存:`/tmp/报告.docx`,请查收。',
-            content: '已保存:`/tmp/报告.docx`,请查收。',
-            createdAt: 1001,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 0 });
-      await expect(
-        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
-      ).resolves.toEqual([{ client_id: 'local-1' }]);
-    });
-  });
-
-  it('codex.importMessages keeps distinct replies that differ only by Markdown formatting', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      // 仅 Markdown 格式不同的两条**不同**回复:canon 有损比较只在「至少一侧含
-      // 原始标记字面量」时启用,这里两侧都不含 → 原文精确比较,不得误判成重复
-      // (review 反馈:无条件去反引号会把 `Use \`foo\`` 与 `Use foo` 判成同一条)。
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        ['local-1', 'local-1', 's1', 'assistant', JSON.stringify('Use `foo`'), 1000],
-      );
-
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
-        rows: [
-          { lineNo: 1, role: 'assistant', text: 'Use foo', content: 'Use foo', createdAt: 1001 },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 1 });
-      await expect(
-        client.query('SELECT client_id FROM messages WHERE session_id = ? ORDER BY client_id', [
-          's1',
-        ]),
-      ).resolves.toEqual([{ client_id: 'codex-import:1' }, { client_id: 'local-1' }]);
-    });
-  });
-
-  it('codex.importMessages dedupes unfinished-marker rows against finalized plain text', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      // 升级前落库的残尾行:生成被打断,正文停在未闭合标记。导入侧同一条回复
-      // finalize 后是**不含标记/反引号的纯文本**——纯文本也要有规范形候选指纹,
-      // 否则永远配不上残尾行的规范形(review 反馈)。
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [
-          'local-1',
-          'local-1',
-          's1',
-          'assistant',
-          JSON.stringify('Result :codex-file-citation{path="/tmp/x'),
-          1000,
-        ],
-      );
-
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
-        rows: [
-          { lineNo: 1, role: 'assistant', text: 'Result', content: 'Result', createdAt: 1001 },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 0 });
-      await expect(
-        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
-      ).resolves.toEqual([{ client_id: 'local-1' }]);
-    });
-  });
-
-  it('codex.importMessages dedupes marker-literal filenames (指纹不动点规范形)', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      // 极端文件名:路径解码后本身是完整标记字面量。展示形二次处理不幂等,指纹
-      // 用不动点规范形让原始行与展示形行收敛到同一形。
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [
-          'local-1',
-          'local-1',
-          's1',
-          'assistant',
-          JSON.stringify('保存 :codex-file-citation{path="/tmp/a:codex-file-citation{path=\\"/b\\"}.md"} 完成'),
-          1000,
-        ],
-      );
-
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
-        rows: [
-          {
-            lineNo: 1,
-            role: 'assistant',
-            text: '保存 `/tmp/a:codex-file-citation{path="/b"}.md` 完成',
-            content: '保存 `/tmp/a:codex-file-citation{path="/b"}.md` 完成',
-            createdAt: 1001,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 0 });
-      await expect(
-        client.query('SELECT client_id FROM messages WHERE session_id = ?', ['s1']),
-      ).resolves.toEqual([{ client_id: 'local-1' }]);
-    });
-  });
-
-  it('codex.importMessages does not rewrite tombstoned imported messages', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ['deleted', 'codex-import:2', 's1', 'message_tombstone', 'null', null, 2000, 5000],
-      );
-
-      const result = await client.tx('codex.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'codex-import:',
-        sdkSessionId: 'thread-1',
-        model: 'gpt-5',
-        rows: [
-          {
-            lineNo: 2,
-            role: 'assistant',
-            text: 'secret body',
-            content: 'secret body',
-            createdAt: 2000,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 0 });
-      await expect(
-        client.queryOne('SELECT role, content, agent_meta, rewind_at FROM messages WHERE id = ?', [
-          'deleted',
-        ]),
-      ).resolves.toEqual({
-        role: 'message_tombstone',
-        content: 'null',
-        agent_meta: null,
-        rewind_at: 5000,
-      });
-    });
-  });
-
-  it('claude.importMessages upserts imported message parts', async () => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      const result = await client.tx('claude.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'claude-import:',
-        sdkSessionId: 'sdk-1',
-        rows: [
-          {
-            lineNo: 7,
-            partIndex: 0,
-            role: 'assistant',
-            content: { text: 'hello' },
-            toolUseId: 'tool-1',
-            agentMeta: { uuid: 'u1' },
-            createdAt: 3000,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 1 });
-      await expect(
-        client.queryOne('SELECT id, client_id, tool_use_id, agent_meta FROM messages'),
-      ).resolves.toEqual({
-        id: 'claude-import-sdk-1-7-0',
-        client_id: 'claude-import:7-0',
-        tool_use_id: 'tool-1',
-        agent_meta: JSON.stringify({ uuid: 'u1' }),
-      });
-    });
-  });
-
-  it.each([false, true])(
-    'claude.importMessages does not restore a compacted tool result (inline=%s)',
-    async (useInlineWorker) => {
-      await withClient(async (client) => {
-        await seedSession(client, 's1');
-        const marker = JSON.stringify({
-          type: 'tool_result_compacted',
-          version: 1,
-          originalBytes: 80_000,
-          compactedAt: 500,
-        });
-        await client.exec(
-          `INSERT INTO messages
-            (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at)
-           VALUES
-            (?, ?, ?, 'tool_result', ?, ?, NULL, ?),
-            (?, ?, ?, 'tool_result', ?, ?, NULL, ?)`,
-          [
-            'existing',
-            'claude-import:8-0',
-            's1',
-            marker,
-            'tool-2',
-            3100,
-            'prefix-collision',
-            'claude-import:9-0',
-            's1',
-            '{"type":"tool_result_compacted","version":1,',
-            'tool-3',
-            3200,
-          ],
-        );
-
-        await expect(
-          client.tx('claude.importMessages', {
-            sessionId: 's1',
-            importClientIdPrefix: 'claude-import:',
-            sdkSessionId: 'sdk-1',
-            rows: [
-              {
-                lineNo: 8,
-                partIndex: 0,
-                role: 'tool_result',
-                content: 'restored full body',
-                toolUseId: 'tool-2',
-                agentMeta: null,
-                createdAt: 3100,
-              },
-              {
-                lineNo: 9,
-                partIndex: 0,
-                role: 'tool_result',
-                content: 'replacement full body',
-                toolUseId: 'tool-3',
-                agentMeta: null,
-                createdAt: 3200,
-              },
-            ],
-          }),
-        ).resolves.toEqual({ changed: 1 });
-        await expect(
-          client.queryOne<{ content: string }>(
-            'SELECT content FROM messages WHERE client_id = ?',
-            ['claude-import:8-0'],
-          ),
-        ).resolves.toEqual({ content: marker });
-        const collision = await client.queryOne<{ content: string }>(
-          'SELECT content FROM messages WHERE client_id = ?',
-          ['claude-import:9-0'],
-        );
-        expect(JSON.parse(collision!.content)).toBe('replacement full body');
-      }, { useInlineWorker });
-    },
-  );
-
-  it.each([false, true])('claude.importMessages caps oversized results and preserves card references (inline=%s)', async (useInlineWorker) => {
-    await withClient(async (client) => {
-      await seedSession(client, 's1');
-      const cap = 8 * 1024;
-      const result = await client.tx('claude.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'claude-import:',
-        sdkSessionId: 'sdk-1',
-        rows: [
-          {
-            lineNo: 8,
-            partIndex: 0,
-            role: 'tool_result',
-            content: 'z'.repeat(cap * 2),
-            toolUseId: 'tool-2',
-            agentMeta: null,
-            createdAt: 3100,
-          },
-          {
-            lineNo: 10,
-            partIndex: 0,
-            role: 'tool_result',
-            content: JSON.stringify({ ok: true, result: { bodyHtml: '邮件'.repeat(cap) }, xdt_card_id: 'draft-card' }),
-            toolUseId: 'tool-card',
-            agentMeta: null,
-            createdAt: 3300,
-          },
-          {
-            lineNo: 9,
-            partIndex: 0,
-            role: 'assistant',
-            content: { text: 'a'.repeat(cap * 2) },
-            toolUseId: null,
-            agentMeta: null,
-            createdAt: 3200,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 3 });
-      const toolResult = (await client.queryOne(
-        'SELECT content FROM messages WHERE client_id = ?',
-        ['claude-import:8-0'],
-      )) as { content: string };
-      const storedText = JSON.parse(toolResult.content) as string;
-      expect(storedText.length).toBeLessThanOrEqual(cap);
-      expect(storedText).toContain('[tool result truncated');
-      const assistant = (await client.queryOne(
-        'SELECT content FROM messages WHERE client_id = ?',
-        ['claude-import:9-0'],
-      )) as { content: string };
-      expect((JSON.parse(assistant.content) as { text: string }).text.length).toBe(cap * 2);
-      const card = await client.queryOne<{ content: string }>('SELECT content FROM messages WHERE client_id = ?', ['claude-import:10-0']);
-      expect(JSON.parse(JSON.parse(card!.content))).toMatchObject({ xdt_card_id: 'draft-card' });
     }, { useInlineWorker });
   });
 
-  it('claude.importMessages does not rewrite rewound imported messages', async () => {
+  // Two imports of the same source (desktop and phone) share one target task: a failed or
+  // cancelled request must not delete the hidden task the other request is still writing.
+  it.each([false, true])('sessionImport.execute abort only removes the hidden task of its own request (inline=%s)', async (useInlineWorker) => {
     await withClient(async (client) => {
-      await seedSession(client, 's1');
-      await client.exec(
-        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ['deleted', 'claude-import:7-0', 's1', 'message_tombstone', 'null', null, null, 3000, 5000],
-      );
-
-      const result = await client.tx('claude.importMessages', {
-        sessionId: 's1',
-        importClientIdPrefix: 'claude-import:',
-        sdkSessionId: 'sdk-1',
-        rows: [
-          {
-            lineNo: 7,
-            partIndex: 0,
-            role: 'assistant',
-            content: { text: 'secret body' },
-            toolUseId: 'tool-1',
-            agentMeta: { uuid: 'u1' },
-            createdAt: 3000,
-          },
-        ],
-      });
-
-      expect(result).toEqual({ changed: 0 });
-      await expect(
-        client.queryOne(
-          'SELECT role, content, tool_use_id, agent_meta, rewind_at FROM messages WHERE id = ?',
-          ['deleted'],
-        ),
-      ).resolves.toEqual({
-        role: 'message_tombstone',
-        content: 'null',
-        tool_use_id: null,
-        agent_meta: null,
-        rewind_at: 5000,
-      });
-    });
+      // The shared test schema predates import columns; add just what abort reads.
+      await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
+      await client.exec('CREATE TABLE session_imports (session_id TEXT PRIMARY KEY, request_id TEXT)');
+      await seedSession(client, 'imp-x');
+      // The phone's request took over the source after the desktop's began.
+      await client.exec("UPDATE sessions SET hidden_at = 1000 WHERE id = 'imp-x'");
+      await client.exec("INSERT INTO session_imports (session_id, request_id) VALUES ('imp-x', 'req-b')");
+      await expect(client.tx('sessionImport.execute', { action: 'abort', sessionId: 'imp-x', requestId: 'req-a' }))
+        .resolves.toEqual({ removed: 0 });
+      await expect(client.tx('sessionImport.execute', { action: 'abort', sessionId: 'imp-x', requestId: 'req-b' }))
+        .resolves.toEqual({ removed: 1 });
+    }, { useInlineWorker });
   });
 
   it.each([false, true])('stages message publication without exposing live history or list changes (inline=%s)', async useInlineWorker => {
@@ -1291,7 +816,7 @@ describe('db worker tx handlers', () => {
   );
 
   it.each([false, true])(
-    'import and treeRehydrate invalidate list projection only when messages change (inline=%s)',
+    'session import and treeRehydrate invalidate list projection only when messages change (inline=%s)',
     async (useInlineWorker) => {
       await withClient(
         async (client) => {
@@ -1318,57 +843,21 @@ describe('db worker tx handlers', () => {
             list_message_count: null,
           };
 
+          const importRows = (rows: Array<{ key: string; content: string; createdAt: number }>) =>
+            client.tx('sessionImport.execute', {
+              action: 'messages', sessionId: 's1', clientIdPrefix: 'import:s1:', idPrefix: 'imp-s1-',
+              rows: rows.map((r) => ({ key: r.key, role: 'assistant', content: JSON.stringify(r.content), toolUseId: null, agentMeta: null, agentKind: null, createdAt: r.createdAt })),
+            });
           await seedCache();
-          expect(
-            await client.tx('codex.importMessages', {
-              sessionId: 's1',
-              importClientIdPrefix: 'codex-import:',
-              sdkSessionId: 'thread-1',
-              model: 'gpt-5',
-              rows: [],
-            }),
-          ).toEqual({ changed: 0 });
+          expect(await importRows([])).toEqual({ changed: 0 });
           await expect(readCache()).resolves.toEqual(stale);
 
-          expect(
-            await client.tx('codex.importMessages', {
-              sessionId: 's1',
-              importClientIdPrefix: 'codex-import:',
-              sdkSessionId: 'thread-1',
-              model: 'gpt-5',
-              rows: [
-                {
-                  lineNo: 1,
-                  role: 'assistant',
-                  text: 'imported',
-                  content: 'imported',
-                  createdAt: 2000,
-                },
-              ],
-            }),
-          ).toEqual({ changed: 1 });
+          expect(await importRows([{ key: '1', content: 'imported', createdAt: 2000 }])).toEqual({ changed: 1 });
           await expect(readCache()).resolves.toEqual(cleared);
 
           await seedCache();
-          expect(
-            await client.tx('claude.importMessages', {
-              sessionId: 's1',
-              importClientIdPrefix: 'claude-import:',
-              sdkSessionId: 'sdk-1',
-              rows: [
-                {
-                  lineNo: 7,
-                  partIndex: 0,
-                  role: 'assistant',
-                  content: { text: 'hello' },
-                  toolUseId: null,
-                  agentMeta: null,
-                  createdAt: 3000,
-                },
-              ],
-            }),
-          ).toEqual({ changed: 1 });
-          await expect(readCache()).resolves.toEqual(cleared);
+          expect(await importRows([{ key: '1', content: 'imported', createdAt: 2000 }])).toEqual({ changed: 0 });
+          await expect(readCache()).resolves.toEqual(stale);
 
           await seedCache();
           await client.tx('session.treeRehydrate', {

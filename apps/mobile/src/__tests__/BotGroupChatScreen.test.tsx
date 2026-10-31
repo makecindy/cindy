@@ -6,6 +6,7 @@ import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@c
 import { shareSelectionStore } from '@/session/shareSelectionStore';
 
 const h = vi.hoisted(() => ({
+  processRead: vi.fn(),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
   openTeammate: vi.fn(),
@@ -129,7 +130,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
 }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -185,6 +186,7 @@ vi.mock('@/session/BotGroupAvatars', () => ({
   BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
   useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
 }));
+vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
   BotGroupSpeakerRow: ({ identity, activity, sessionId }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name),
 }));
@@ -1689,6 +1691,32 @@ it('renders component body as readable text without changing the message', async
   expect(reply.content).toBe(content);
 });
 
+
+// Unit: the actual main/thread timeline must retain owner-only historical progress.
+// The remote resource parser and the disclosure state have separate regression coverage.
+it.each([
+  [undefined, undefined], ['thread-root', undefined], [undefined, 'original-mac'], ['thread-root', 'original-mac'],
+])('keeps group process above the final answer on its execution host (thread=%s, host=%s)', async (threadRootId, deviceId) => {
+  const process = { groupId: 'g1', executionId: 'execution', sessionId: 'lane', clientId: 'source', deviceId };
+  const data = group({ plans: [], openPlan: null, members: [{ ...group().members[0], isOwned: true, homeDeviceId: 'owner-mac' }],
+    messages: [message('result', 2, { authorBotId: 'mimi', content: 'Final answer', process, threadRootId })] });
+  h.processRead.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Help' },
+    { clientId: 'note', role: 'assistant', content: 'Progress note', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  h.chat.server = true;
+  await render(data, 'ready', threadRootId, '');
+  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }]);
+  expect(node.textContent).toContain('Progress note');
+  const record = [...node.querySelectorAll('section')].find(section => section.textContent?.includes('Progress note'))!;
+  expect(record.textContent).not.toContain('Final answer');
+  expect(node.textContent!.indexOf('Progress note')).toBeLessThan(node.textContent!.indexOf('Final answer'));
+  h.processRead.mockClear();
+  await render({ ...data, members: [{ ...data.members[0], isOwned: false }] }, 'ready', threadRootId, '');
+  expect(node.textContent).not.toContain('Progress note');
+  expect(h.processRead).not.toHaveBeenCalled();
+  await render({ ...data, messages: [{ ...data.messages[0], process: { ...process, groupId: 'another-group' } }] }, 'ready', threadRootId, '');
+  expect(h.processRead).not.toHaveBeenCalled();
+});
 
 // D2 feature acceptance (unit, real Screen/Timeline/Composer entry): prior coverage
 // opened notifications but not user-created threads, remote rejection or return anchors.

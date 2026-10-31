@@ -418,6 +418,8 @@ export interface CodexExtraSpawnConfig {
     session?: CodexSessionMcpConfigInput,
   ) => Record<string, unknown>;
   codexProxyActive?: boolean;
+  /** Default native identity for ordinary models routed through the local proxy. */
+  codexDefaultModelProviderId?: string;
   /**
    * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。
    */

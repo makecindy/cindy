@@ -6,6 +6,12 @@ const INTERFACE_LANGUAGE_NAME: Record<SupportedLocale, string> = {
   en: 'English',
   ja: '日本語',
   ko: '한국어',
+
+  "es": "Español",
+  "fr": "Français",
+  "de": "Deutsch",
+  "pt-PT": "Português (Portugal)",
+  "pt-BR": "Português (Brasil)",
 };
 
 export function isSupportedUiLanguage(value: unknown): value is SupportedLocale {

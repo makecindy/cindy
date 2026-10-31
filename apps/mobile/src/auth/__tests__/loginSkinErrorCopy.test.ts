@@ -29,6 +29,11 @@ const LOCALE_TAGS: Record<LoginLocale, string> = {
   en: "en-US",
   ja: "ja-JP",
   ko: "ko-KR",
+  es: "es-MX",
+  fr: "fr-CA",
+  de: "de-AT",
+  "pt-PT": "pt-PT",
+  "pt-BR": "pt-BR",
 };
 const LOCALES = Object.keys(LOCALE_TAGS) as LoginLocale[];
 

@@ -63,7 +63,12 @@
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)"
     }
   },
   "version": {

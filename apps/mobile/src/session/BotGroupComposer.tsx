@@ -73,15 +73,16 @@ export interface BotGroupSendInput {
 }
 
 type MentionOption =
-  | { kind: 'all'; label: string }
+  | { kind: 'all' | 'allBots'; label: string }
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
+  allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
   online: boolean;
@@ -149,6 +150,8 @@ export function BotGroupComposer({
   const mentionMembers = useMemo(() => members.filter(member => member.isSelf !== true), [members]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
+  const allBotsLabel = t('groupChat.mention.allBots');
+  const allBotLabels = [allBotsLabel, 'bots'];
   const query = focused ? findBotGroupMentionQuery(text, caret) : null;
   const options = useMemo<MentionOption[]>(() => {
     if (!query || mentionCandidates.length === 0) return [];
@@ -157,8 +160,10 @@ export function BotGroupComposer({
       : [];
     const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
       .map((member): MentionOption => ({ kind: 'member', label: member.name, member }));
-    return [...everyone, ...people];
-  }, [mentionCandidates, allLabel, query]);
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+      ? [{ kind: 'allBots', label: allBotsLabel }] : [];
+    return [...everyone, ...allBots, ...people];
+  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllBots, query]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();
@@ -183,7 +188,7 @@ export function BotGroupComposer({
     setTracked(current => {
       const remaining = retainBotGroupTrackedMentions(text, next.text, {
         members: members.map(member => ({ botId: member.botId, name: member.name })),
-        allLabels: [allLabel], tracked: current, editStart: query.start, editEnd: caret,
+        allLabels: [allLabel], allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
       });
       return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
     });
@@ -228,7 +233,7 @@ export function BotGroupComposer({
       const attachmentIds = attachments.map((attachment) => attachment.id);
       const mentions = resolveBotGroupMentions(draft, {
         members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
-        allLabels: [allLabel],
+        allLabels: [allLabel], allBotLabels,
         tracked: draftTracked,
       });
       // Targets, tag and attachments are part of the same send intent.
@@ -317,17 +322,17 @@ export function BotGroupComposer({
     {pickerOpen && query ? <View style={styles.picker} accessibilityLabel={t('groupChat.mention.label')} testID="botGroup.mentionPicker">
       <ScrollView keyboardShouldPersistTaps="always" style={styles.pickerScroll}>
         {/* M9: candidates ease in one after another, 30ms apart, fast 150ms from 4pt below. */}
-        {options.map((option, index) => <CompanionFadeIn key={option.kind === 'all' ? 'all' : option.member.botId} play distance={4}
+        {options.map((option, index) => <CompanionFadeIn key={option.kind !== 'member' ? option.kind : option.member.botId} play distance={4}
           duration={motionDuration.fast} delay={index * 30}>
           <Pressable accessibilityRole="button"
           accessibilityLabel={option.label} onPress={() => choose(option)}
           style={({ pressed }) => [styles.pickerRow, pressed && mobileInteractionStyles.pressed]}
-          testID={`botGroup.mention.${option.kind === 'all' ? 'all' : option.member.botId}`}>
-          {option.kind === 'all'
+          testID={`botGroup.mention.${option.kind !== 'member' ? option.kind : option.member.botId}`}>
+          {option.kind !== 'member'
             ? <View style={styles.everyone}><Users size={iconSize.sm} color={colors.textSecondary} /></View>
             : <BotGroupAvatar deviceId={deviceId} identity={identityFor(option.member.botId, option.member.name)} size={BOT_GROUP_STEP_AVATAR_SIZE} online={online} />}
           <Text numberOfLines={1} style={styles.pickerName}>{option.label}</Text>
-          {option.kind === 'all' ? <Text numberOfLines={1} style={styles.pickerHint}>{t('groupChat.mention.allHint')}</Text> : null}
+          {option.kind !== 'member' ? <Text numberOfLines={1} style={styles.pickerHint}>{t(option.kind === 'allBots' ? 'groupChat.mention.allBotsHint' : 'groupChat.mention.allHint')}</Text> : null}
           </Pressable>
         </CompanionFadeIn>)}
       </ScrollView>
@@ -360,7 +365,7 @@ export function BotGroupComposer({
         setText(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
           members: members.map(member => ({ botId: member.botId, name: member.name })),
-          allLabels: [allLabel],
+          allLabels: [allLabel], allBotLabels,
           tracked: current,
           editStart,
           editEnd,

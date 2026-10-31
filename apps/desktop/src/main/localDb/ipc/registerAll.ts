@@ -25,7 +25,7 @@ import {
 } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
-import { registerSessionImportIpc } from './session-import';
+import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';

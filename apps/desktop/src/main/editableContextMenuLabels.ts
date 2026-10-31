@@ -66,4 +66,50 @@ export const EDITABLE_CONTEXT_MENU_LABELS: Record<SupportedLocale, EditableConte
     pasteAsPlainText: '서식 없이 붙여넣기',
     selectAll: '모두 선택',
   },
+
+  "es": {
+    "undo": "Deshacer",
+    "redo": "Rehacer",
+    "cut": "Cortar",
+    "copy": "Copiar",
+    "paste": "Pegar",
+    "pasteAsPlainText": "Pegar como texto sin formato",
+    "selectAll": "Seleccionar todo"
+  },
+  "fr": {
+    "undo": "Annuler",
+    "redo": "Rétablir",
+    "cut": "Couper",
+    "copy": "Copier",
+    "paste": "Coller",
+    "pasteAsPlainText": "Coller en texte brut",
+    "selectAll": "Tout sélectionner"
+  },
+  "de": {
+    "undo": "Rückgängig machen",
+    "redo": "Wiederholen",
+    "cut": "Ausschneiden",
+    "copy": "Kopieren",
+    "paste": "Einfügen",
+    "pasteAsPlainText": "Als reinen Text einfügen",
+    "selectAll": "Alles auswählen"
+  },
+  "pt-PT": {
+    "undo": "Desfazer",
+    "redo": "Refazer",
+    "cut": "Cortar",
+    "copy": "Copiar",
+    "paste": "Colar",
+    "pasteAsPlainText": "Colar como texto simples",
+    "selectAll": "Selecionar tudo"
+  },
+  "pt-BR": {
+    "undo": "Desfazer",
+    "redo": "Refazer",
+    "cut": "Cortar",
+    "copy": "Copiar",
+    "paste": "Colar",
+    "pasteAsPlainText": "Colar como texto simples",
+    "selectAll": "Selecionar tudo"
+  },
 };

@@ -189,6 +189,9 @@ export interface ThemeColors {
    * 注意:侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar(light 近白),不受本 token 影响。
    */
   overlay: string;
+  /** 视频封面播放标记：恒深底与恒白前景，保证任意画面上的对比度。 */
+  mediaPlayBackground: string;
+  mediaPlayForeground: string;
   /** 素雅新建对话 FAB:dark 用柔白 #E6E6E6 而非 cta 近白,避免主入口在深底上过跳 */
   homeListFab: string;
   /** List FAB 描边:light 无描边(transparent),dark 按 301:1073 帧白色 hairline */
@@ -487,6 +490,8 @@ export const lightColors: ThemeColors = {
   // overlay:遮罩双模式恒深(light 原 0.24 太浅近白;0.50 实机过重,用户定稿 0.35,2026-07-21)。
   // 侧栏/抽屉毛玻璃底色另有 surfaceTranslucentSidebar,不受影响。
   overlay: 'rgba(38, 38, 38, 0.35)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性,不染品牌红(lead 裁决 2026-07-17:染红=扩张红名单,超 U8
   // 已批决策表范围;日后要红 FAB 须单独过用户关卡)。light 对齐 textPrimary / cta 近黑 #0F0F0F。
   homeListFab: '#0F0F0F',
@@ -580,6 +585,8 @@ export const darkColors: ThemeColors = {
   sharedTaskConfirmForeground: '#121212',
   errorBorder: '#8A8A8A',
   overlay: 'rgba(0, 0, 0, 0.45)',
+  mediaPlayBackground: 'rgba(0, 0, 0, 0.55)',
+  mediaPlayForeground: '#ffffff',
   // homeListFab:反相中性(lead 裁决,见 lightColors 注释);dark 用 #E6E6E6 柔白(比 cta 略收)。
   homeListFab: '#E6E6E6',
   homeListFabBorder: '#FFFFFF',

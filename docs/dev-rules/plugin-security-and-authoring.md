@@ -22,6 +22,13 @@
 > （下节 5）对**所有**触及相关路径的改动都生效，不因是存量代码而豁免。作者契约同步
 > （下节 6）在改动命中作者可见契约时触发；不要求为统一形式专项重构无关存量。
 
+MCP Apps 交互页面的 iframe 使用 `allow-scripts allow-same-origin allow-forms`。
+`allow-forms` 只让页面收到 submit 事件；页面须 `preventDefault()` 后调用工具，由 Host 执行授权请求。
+宿主前置代码在 window 冒泡阶段兜底取消默认提交，并令 `form.submit()` 不执行；整页替换后恢复监听，
+避免未处理的表单把卡片导航到 CSP 错误页。此 JS 保护不替代 CSP 权限边界。
+Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 'none'`，原生提交到任何地址均被禁止，
+不增加网络或凭证权限。依赖此行为的页面要求执行端与查看端均为 `0.1.122-beta` 或更新版本。
+
 ## 事实来源
 
 | 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
@@ -789,7 +796,9 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 技能随应用内置 bundle 升级，不另建安装或权限流程。
 `forgeGuide.ts` 从这些 Markdown 构造兼容的 `FORGE_GUIDE`，供旧 `ghost_forge_guide`
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。
+修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《页面生成手册》
+（`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
+[`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的页面生成手册一条。
 **手册过期 = AI 按旧规则写出过不了校验的插件包**（校验拒装只是兜底，用户体验是“AI
 反复打包反复被拒”）。
 

@@ -26,6 +26,27 @@ const messages = {
     showHiddenDirectories: "숨김 폴더 표시",
     emptyDirectory: "표시할 하위 폴더가 없습니다.",
   },
+
+  "es": {
+    "showHiddenDirectories": "Mostrar carpetas ocultas",
+    "emptyDirectory": "No hay carpetas para mostrar."
+  },
+  "fr": {
+    "showHiddenDirectories": "Afficher les dossiers masqués",
+    "emptyDirectory": "Aucun dossier à afficher."
+  },
+  "de": {
+    "showHiddenDirectories": "Versteckte Ordner anzeigen",
+    "emptyDirectory": "Keine Ordner zum Anzeigen vorhanden."
+  },
+  "pt-PT": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para mostrar."
+  },
+  "pt-BR": {
+    "showHiddenDirectories": "Mostrar pastas ocultas",
+    "emptyDirectory": "Não há pastas para exibir."
+  },
 } as const;
 
 export type NewSessionMessageKey = keyof (typeof messages)["zh-CN"];

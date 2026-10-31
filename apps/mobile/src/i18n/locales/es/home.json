@@ -1,0 +1,8 @@
+{
+  "drawer": {
+    "openA11y": "Abrir lista de sesiones",
+    "closeA11y": "Cerrar lista de sesiones",
+    "home": "Inicio",
+    "empty": "Aún no hay sesiones"
+  }
+}

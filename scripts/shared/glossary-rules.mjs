@@ -297,7 +297,7 @@ export function makeExemptChecker(list) {
  *    英文也用省略号字符「…」而非三个半角点。原先漏掉 en,等于让门禁替既有违规背书。
  */
 export const HALFWIDTH_PUNCT_LOCALES = new Set(['zh-CN', 'zh-TW']);
-export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'ko']);
+export const ELLIPSIS_LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR']);
 
 /**
  * 中文正文里的半角标点。两种形态:

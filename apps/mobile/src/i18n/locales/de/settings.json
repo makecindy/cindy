@@ -1,0 +1,332 @@
+{
+  "localLogs": {
+    "upload": "Protokolle hochladen",
+    "uploadResult": {
+      "unavailable": "Der Log-Upload ist in diesem Build nicht verfügbar.",
+      "consentRequired": "Akzeptiere die Datenschutzerklärung, bevor du Logs hochlädst.",
+      "empty": "Keine aktuellen Logs. Aktiviere die Aufzeichnung und reproduziere zuerst das Problem.",
+      "failed": "Upload fehlgeschlagen. Die Logs bleiben auf diesem Smartphone gespeichert."
+    },
+    "title": "Debug-Protokolle",
+    "record": "Logs aufzeichnen",
+    "export": "Logs exportieren",
+    "clear": "Logs löschen",
+    "busy": "Wird verarbeitet…",
+    "failed": "Logs konnten nicht gespeichert oder geteilt werden. Versuch es erneut.",
+    "clearHint": "Gespeicherte Diagnose-Logs löschen?",
+    "cancel": "Abbrechen",
+    "uploadCopied": "Logs hochgeladen. Code {{code}} kopiert",
+    "uploadSucceeded": "Logs hochgeladen. Code {{code}}",
+    "footer": "Logs bleiben bis zu 7 Tage oder bis zu einer Größe von 8 MB auf diesem Smartphone und werden nie automatisch hochgeladen. Exportierte Logs enthalten weder Gesprächstexte noch Zugangsdaten. Bei Uploads werden nur gefilterte Ausführungsprotokolle und Versionsinfos gesendet."
+  },
+  "title": "Einstellungen",
+  "appearance": {
+    "title": "Darstellung",
+    "modeLabel": "Darstellung",
+    "options": {
+      "system": "System",
+      "light": "Hell",
+      "dark": "Dunkel"
+    },
+    "saveFailed": "Darstellungsmodus konnte nicht gespeichert werden. Nach einem Neustart gilt wieder die vorherige Einstellung.",
+    "userBubble": {
+      "title": "Farbe meiner Nachrichtenblasen",
+      "presets": "Farbe",
+      "default": "Standard",
+      "peach": "Erster Entwurf",
+      "yellow": "Tagesanbruch",
+      "sage": "Funke",
+      "blue": "Traumwelt",
+      "lavender": "Nachtkatze",
+      "red": "Rotes Halsband",
+      "custom": "Eigene Farbe",
+      "hue": "Farbton",
+      "preview": "Nachrichtenvorschau",
+      "sampleUser": "Hilf mir, meine heutigen Ideen zu ordnen.",
+      "sampleAssistant": "Klar, lass uns deine Ideen gemeinsam durchgehen.",
+      "hint": "Passt sich an den hellen und dunklen Modus an, damit der Text lesbar bleibt. Wird nur auf diesem Gerät gespeichert.",
+      "customHint": "Ziehe am Farbstreifen, um einen Farbton auszuwählen. Passt sich an den hellen und dunklen Modus an und wird nur auf diesem Gerät gespeichert.",
+      "saveFailed": "Die Farbe wurde vorerst angewendet, konnte aber nicht gespeichert werden.",
+      "retry": "Erneut versuchen",
+      "cancel": "Abbrechen",
+      "reset": "Auf Standard zurücksetzen",
+      "apply": "Anwenden",
+      "hex": "Farbwert"
+    }
+  },
+  "language": {
+    "title": "Sprache",
+    "hint": "Wird für die Benutzeroberfläche und KI-Fehlerberichte verwendet. Andere Antworten richten sich nach deiner Nachricht oder deinem Sprachwunsch.",
+    "options": {
+      "system": "Automatisch (Systemeinstellung)",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁體中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)"
+    }
+  },
+  "version": {
+    "sectionTitle": "Version",
+    "updateMethodInApp": "Updates werden in der App installiert und nach einem Neustart angewendet.",
+    "updateMethodPackage": "Lade die neue Version herunter und installiere sie, um zu aktualisieren.",
+    "updateMethodUnavailable": "Entwicklungs-Builds können nicht in der App aktualisiert werden.",
+    "checkAction": "Nach Updates suchen",
+    "testFlightCheckAction": "Nach Inhaltsupdates suchen",
+    "checking": "Wird geprüft",
+    "checkingAccessibility": "Suche nach Updates",
+    "testFlightCheckingAccessibility": "Suche nach Inhaltsupdates",
+    "testFlightUpdateManaged": "Installiere neue Test-Builds über TestFlight.",
+    "testFlightNoContentUpdate": "Kein Inhaltsupdate verfügbar.",
+    "testFlightContentUpdateUnavailable": "Dieser Build kann nicht nach Inhaltsupdates suchen.",
+    "googlePlayUpdateManaged": "Aktualisiere über Google Play auf neue Versionen.",
+    "googlePlayNoContentUpdate": "Kein Inhaltsupdate verfügbar.",
+    "googlePlayContentUpdateUnavailable": "Dieser Build kann nicht nach Inhaltsupdates suchen.",
+    "bundleUpdateFound": "App-Paket-Update verfügbar",
+    "upToDate": "Bereits aktuell",
+    "bundleUpToDateNoOta": "Auf dem neuesten Stand. Diese Version unterstützt keine Hot-Updates.",
+    "downloadedRestarting": "Update heruntergeladen, Neustart läuft",
+    "downloadedRestartRequired": "Update heruntergeladen. Beende die App vollständig und öffne sie erneut, um es anzuwenden.",
+    "bundleCheckFailed": "App-Paket-Updates konnten nicht geprüft werden. Versuch es später erneut.",
+    "checkFailedDetail": "Update-Prüfung fehlgeschlagen: {{detail}}",
+    "checkFailed": "Update-Prüfung fehlgeschlagen. Versuch es später erneut.",
+    "currentLabel": "Aktuelle Version",
+    "pairedDesktopLabel": "Version des gekoppelten Computers"
+  },
+  "betaChannel": {
+    "title": "Beta-Kanal",
+    "badge": "Beta",
+    "description": "Erhalte kommende Client-Updates früher. Inhaltsupdates werden bei der nächsten Update-Prüfung heruntergeladen und nach einem App-Neustart wirksam.",
+    "saveFailed": "Beta-Kanal-Einstellung konnte nicht gespeichert werden",
+    "unavailable": "Der Beta-Kanal ist nicht verfügbar – der Beta-Update-Server konnte nicht erreicht werden."
+  },
+  "notifications": {
+    "sectionTitle": "Benachrichtigungen",
+    "taskDone": "Nachrichten- und Aufgabenbenachrichtigungen",
+    "taskDoneHint": "Erhalte Benachrichtigungen über Chatnachrichten und Aufgaben, die abgeschlossen sind, fehlschlagen oder deine Antwort benötigen.",
+    "permissionDenied": "Erlaube Cindy-Benachrichtigungen in deinen Systemeinstellungen.",
+    "unregisterQueued": "Deaktiviert. Die Abmeldung wird abgeschlossen, sobald du wieder online bist.",
+    "preview": "Chatvorschauen anzeigen",
+    "background": "Chat im Hintergrund verbunden halten",
+    "backgroundActive": "Chatnachrichten werden im Hintergrund empfangen",
+    "backgroundStop": "Empfang beenden",
+    "backgroundHint": "Die Hintergrundverbindung funktioniert ohne Google und zeigt eine dauerhafte Benachrichtigung an. Darüber kannst du sie beenden.",
+    "googleUnavailable": "Google-Push ist nicht verfügbar. Aktiviere die Hintergrundverbindung für den Chat, um Nachrichten zu empfangen."
+  },
+  "about": {
+    "sectionTitle": "Über dieses Smartphone",
+    "deviceName": "Gerätename",
+    "deviceNameDetail": "Wird in der Autorisierungsliste des Computers angezeigt.",
+    "platform": "Plattform",
+    "editAccessibility": "{{label}} bearbeiten"
+  },
+  "relay": {
+    "online": "Mit Relay verbunden",
+    "connecting": "Verbindung mit Relay wird hergestellt",
+    "stopped": "Relay nicht verbunden",
+    "lastSynced": "Zuletzt synchronisiert: {{time}}",
+    "canSync": "Remote-Sitzungen können synchronisiert werden.",
+    "reconnectHint": "Remote-Sitzungen werden automatisch erneut abonniert, sobald das Netzwerk wieder verfügbar ist.",
+    "resumeHint": "Die Verbindung wird fortgesetzt, wenn du zur App zurückkehrst oder dich erneut anmeldest."
+  },
+  "header": {
+    "notSignedIn": "Nicht angemeldet",
+    "thisPhone": "Dieses Smartphone"
+  },
+  "debug": {
+    "sectionTitle": "Debug / Entwicklung",
+    "userId": "Benutzer-ID",
+    "notSynced": "Nicht synchronisiert",
+    "deviceId": "Geräte-ID",
+    "initializing": "Wird initialisiert",
+    "authServer": "Authentifizierungsserver",
+    "authRegion": "Anmelderegion"
+  },
+  "devServerEnvironment": {
+    "title": "Serverumgebung",
+    "description": "Betrifft nur das Backend, mit dem sich CindyDev verbindet",
+    "accessibility": "Serverumgebung wechseln",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "Zu {{environment}} wechseln?",
+    "confirmBody": "Beim Wechsel wirst du abgemeldet und die App wird neu gestartet.",
+    "cancel": "Abbrechen",
+    "switchAction": "Wechseln",
+    "switching": "Wechsel läuft",
+    "switchFailed": "Serverumgebung konnte nicht gewechselt werden. Versuch es erneut."
+  },
+  "updateInfo": {
+    "embedded": "Mit App-Paket",
+    "embeddedFallback": "Mit App-Paket (OTA nicht angewendet)",
+    "unknown": "Unbekannt",
+    "source": "Ausführungsquelle",
+    "sourceEmbedded": "Eingebettet (mit App-Paket)",
+    "sourceEmergencyFallback": "Eingebettet (Notfallstart; OTA nicht angewendet)",
+    "sourceOta": "OTA-Update",
+    "updateId": "Update-ID",
+    "updatedAt": "Aktualisiert am",
+    "channel": "Kanal",
+    "runtime": "Laufzeit",
+    "otaMarker": "OTA-Markierung",
+    "emergencyLaunch": "Notfallstart",
+    "emergencyLaunchYes": "Ja (OTA kann in diesem Durchlauf nicht angewendet werden)",
+    "otaVersion": "OTA-Version"
+  },
+  "legal": {
+    "sectionTitle": "Rechtliches",
+    "privacyPolicy": "Datenschutzerklärung",
+    "userAgreement": "Nutzungsvereinbarung",
+    "view": "Anzeigen",
+    "openPrivacyPolicy": "Datenschutzerklärung öffnen",
+    "openUserAgreement": "Nutzungsvereinbarung öffnen",
+    "appFilingNumber": "App-Registrierungsnummer",
+    "analytics": "Nutzungsstatistiken",
+    "analyticsHint": "Hilft uns, App-Starts und die Nutzerbindung zu verstehen. Übermittelt Geräteinfos wie Modell, Betriebssystem und App-Version sowie eine Gerätekennung und nach der Anmeldung deine Konto-ID; niemals Unterhaltungen, Dateien oder Prompts.",
+    "analyticsSaveFailed": "Diese Einstellung konnte nicht gespeichert werden und wird nach einem Neustart möglicherweise zurückgesetzt.",
+    "analyticsReset": "Auf Standard zurücksetzen",
+    "analyticsResetAction": "Zurücksetzen"
+  },
+  "account": {
+    "logoutConfirmTitle": "Abmelden?",
+    "logoutConfirmRunning": "Einige Sitzungen laufen noch. Sie laufen auf deinem Computer weiter, aber dieses Smartphone empfängt sie nicht mehr und kann sie nicht mehr steuern. Alle auf diesem Smartphone gespeicherten Konten und lokalen Spiegelkopien werden gelöscht.",
+    "logoutHint": "Löscht alle Konten und die Remote-Spiegelkopie auf diesem Smartphone. Sitzungen auf deinem Computer sind nicht betroffen.",
+    "logout": "Abmelden",
+    "loggingOut": "Abmeldung läuft",
+    "loggingOutAccessibility": "Abmeldung läuft"
+  },
+  "copyRow": {
+    "action": "Kopieren",
+    "done": "Kopiert",
+    "accessibility": "{{label}} kopieren"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "Sprachwörterbuch",
+    "label": "Wörterbuch ansehen",
+    "hint": "Bearbeite das Wörterbuch am Computer; es wird automatisch synchronisiert. Auf diesem Smartphone kannst du es nur lesen.",
+    "openAccessibility": "Sprachwörterbuch ansehen",
+    "screenTitle": "Sprachwörterbuch",
+    "entryCount": "{{count}} Begriffe",
+    "aliasSeparator": ", ",
+    "aliases": "Oft falsch erkannt als: {{aliases}}",
+    "refresh": "Aktualisieren",
+    "refreshing": "Wird aktualisiert…",
+    "refreshAccessibility": "Wörterbuch aktualisieren",
+    "readOnlyHint": "Auf dem Smartphone ansehen; Einträge am Computer hinzufügen oder entfernen.",
+    "offlineHint": "Deine Computer sind offline. Das zuletzt synchronisierte Wörterbuch wird angezeigt.",
+    "noDesktops": "Melde dich auf einem Computer mit demselben Konto an, um dein Wörterbuch zu synchronisieren."
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "Die Änderung konnte nicht gespeichert werden. Versuch es erneut.",
+    "title": "Meine Stimme erkennen",
+    "sectionTitle": "Stimmabdruckfilter",
+    "label": "Meine Stimme erkennen",
+    "entryHint": "Blendet andere Personen bei der Spracheingabe aus. Dein Stimmprofil bleibt auf diesem Smartphone.",
+    "openAccessibility": "Einstellungen zur Erkennung meiner Stimme öffnen",
+    "on": "Ein",
+    "off": "Aus",
+    "hint": "Blendet andere Personen bei der Spracheingabe aus, sodass nur deine Sprache transkribiert wird. Gleichzeitig mit dir gesprochene Sprache lässt sich nicht vollständig entfernen. Dein Stimmprofil wird auf diesem Smartphone verschlüsselt und niemals hochgeladen oder synchronisiert.",
+    "unsupported": "Diese App-Version unterstützt keine Stimmprofile. Aktualisiere auf die neueste Version.",
+    "model": {
+      "title": "Erkennungsmodell",
+      "needed": "Bei der ersten Nutzung wird ein Erkennungsmodell mit etwa {{size}} heruntergeladen. WLAN empfohlen.",
+      "download": "Erkennungsmodell herunterladen",
+      "downloading": "Wird heruntergeladen ({{done}} / {{total}})",
+      "cancel": "Download abbrechen",
+      "retry": "Erneut herunterladen",
+      "failed": {
+        "network": "Das Erkennungsmodell konnte nicht heruntergeladen werden. Prüfe dein Netzwerk und versuche es erneut.",
+        "disk": "Das Erkennungsmodell konnte nicht gespeichert werden. Prüfe den freien Speicher auf deinem Smartphone und versuch es erneut.",
+        "checksum": "Das heruntergeladene Erkennungsmodell konnte nicht verifiziert werden. Versuche es erneut.",
+        "unavailable": "Das Erkennungsmodell ist derzeit nicht verfügbar. Versuche es später erneut."
+      }
+    },
+    "profile": {
+      "title": "Stimmprofil",
+      "missing": "Noch kein Stimmprofil",
+      "missingHint": "Nimm dein Stimmprofil auf, um die Filterung zu aktivieren.",
+      "enrolled": "Stimmprofil aufgenommen",
+      "enrolledAt": "Aufgenommen am {{date}}",
+      "enroll": "Stimmprofil aufnehmen",
+      "reenroll": "Erneut aufnehmen",
+      "delete": "Stimmprofil löschen",
+      "deleteConfirm": {
+        "title": "Stimmprofil löschen?",
+        "description": "Die Spracheingabe filtert andere Personen erst wieder heraus, wenn du dein Stimmprofil erneut aufnimmst.",
+        "confirm": "Löschen",
+        "cancel": "Abbrechen"
+      }
+    },
+    "strictness": {
+      "label": "Strenge",
+      "hint": "Eine strengere Einstellung filtert mehr fremde Stimmen heraus, kann an lauten Orten aber auch deine eigenen Wörter abschneiden.",
+      "restoreDefault": "Standard wiederherstellen",
+      "options": {
+        "relaxed": "Locker",
+        "standard": "Standard",
+        "strict": "Streng"
+      }
+    },
+    "enroll": {
+      "description": "Lies die {{clips}} Textabschnitte unten mit deiner normalen Stimme vor. Jede Aufnahme dauert bis zu {{seconds}} Sekunden; beende die Aufnahme, wenn du mit dem Vorlesen fertig bist. Nimm dort auf, wo du die Spracheingabe normalerweise nutzt, ohne dass andere Personen sprechen.",
+      "step": "Abschnitt {{current}} von {{total}}",
+      "record": "Vorlesen starten",
+      "stop": "Aufnahme beenden",
+      "rerecord": "Diesen Abschnitt erneut aufnehmen",
+      "recording": "Aufnahme läuft… noch {{seconds}} Sekunden",
+      "saving": "Stimmprofil wird erstellt…",
+      "submit": "Abschließen",
+      "cancel": "Abbrechen",
+      "passages": {
+        "p1": "Heute Morgen werde ich den Plan für die Woche durchgehen und am Nachmittag werde ich die Fragen auflisten, die wir besprechen müssen, und sie verschicken, damit jeder sie zuerst lesen kann.",
+        "p2": "Wenn das Wetter morgen schön ist, können wir etwas früher aufbrechen, unterwegs Obst und Snacks mitnehmen und im Park zu Mittag essen.",
+        "p3": "Bitte kürze diesen Text, behalte die wichtigsten Zahlen und Schlussfolgerungen bei und fasse dann die Kernaussagen in drei bis fünf Sätzen zusammen."
+      },
+      "errors": {
+        "too_short": "In Abschnitt {{index}} wurde zu wenig Sprache erkannt. Nimm ihn erneut auf.",
+        "no_embedding": "Aus Abschnitt {{index}} konnte kein Stimmprofil ermittelt werden. Nimm ihn erneut auf.",
+        "inconsistent": "Passage {{index}} klingt nicht nach derselben Person wie die anderen; möglicherweise wurde eine andere Stimme oder ein Geräusch aufgenommen. Nimm sie erneut auf.",
+        "models_missing": "Das Erkennungsmodell ist noch nicht vollständig heruntergeladen. Versuche es gleich noch einmal.",
+        "storage_unavailable": "Der Systemschlüsselbund ist nicht verfügbar, daher kann der Stimmabdruck nicht verschlüsselt gespeichert werden. Versuche es später erneut.",
+        "failed": "Der Stimmabdruck konnte nicht erstellt werden. Versuche es erneut.",
+        "microphone": "Das Mikrofon kann nicht verwendet werden. Prüfe die Mikrofonberechtigung und versuch es erneut.",
+        "noAudio": "Das Mikrofon hat keinen Ton erfasst. Prüfe es und versuch es erneut."
+      },
+      "stepChoice": "Abschnitt {{index}}, {{status}}",
+      "stepStatus": {
+        "pending": "Nicht erfasst",
+        "recorded": "Aufgenommen",
+        "retry": "Erneut aufnehmen",
+        "recording": "Aufnahme läuft"
+      },
+      "rerecordStep": "Abschnitt {{index}} erneut aufnehmen",
+      "readHint": "Starte, wenn du bereit bist. Beende die Aufnahme, wenn du fertig gelesen hast.",
+      "otherClipsKept": "Deine anderen Aufnahmen wurden beibehalten."
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "Gerätename",
+    "placeholder": "Smartphonename",
+    "resetAccessibility": "Standardnamen des Smartphones wiederherstellen",
+    "emptyError": "Der Gerätename darf nicht leer sein.",
+    "deviceInitializing": "Das Gerät wird noch initialisiert. Versuch es später erneut.",
+    "restoredDefault": "Standardname wiederhergestellt.",
+    "resetAction": "Standardnamen wiederherstellen",
+    "clearAccessibility": "Namen löschen",
+    "discardTitle": "Änderungen verwerfen?",
+    "discardBody": "Deine Änderungen am Gerätenamen wurden nicht gespeichert.",
+    "discardConfirm": "Änderungen verwerfen",
+    "keepEditing": "Weiter bearbeiten"
+  },
+  "developer": {
+    "title": "Entwickler",
+    "identity": "Kennungen",
+    "updateInfo": "Update-Infos"
+  }
+}

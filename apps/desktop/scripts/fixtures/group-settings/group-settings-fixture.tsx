@@ -45,6 +45,7 @@ const group = {
   description: data.noAbout ? '' : '这里讨论每周发版：确认要合并的 PR、跑完回归、整理更新说明。\n\n需要谁处理就直接 @ 他；不确定的事情先发在群里，别私下拍板。\n发版当天由负责人统一确认，其他人只补充事实。\n周五回顾这一周的问题。',
   replyMode: 'mentioned', speakingMode: 'auto', singleSpeaker: false, members,
   organizerBotId: data.alone ? null : 'aster', projectDir: data.role === 'member' ? null : '/Users/nana/Projects/cindy', autoContinue: false,
+  supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsDissolve: true, supportsGroupLeave: true, supportsListRemoval: true, supportsMemberAvatar: true,
   canInvite: data.role !== 'member', archived: !!data.archived, dissolvedAt: data.dissolved ? '2026-10-29T08:00:00Z' : null,
   lastMessage: null, speakingBotIds: [], planningBotId: null, openPlan: null, plans: [], messages: [],

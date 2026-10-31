@@ -68,4 +68,50 @@ export const RSB_BROWSER_WEBAUTHN_LABELS: Record<
     unknownRelyingParty: '이 웹사이트',
     touchIdPromptReason: '$1에서 본인 확인',
   },
+
+  "es": {
+    "title": "Elegir clave de acceso",
+    "message": "Elige una clave de acceso para {{relyingPartyId}}",
+    "detail": "Cindy solo envía tu selección al autenticador. El secreto de la clave de acceso permanece en el autenticador.",
+    "cancel": "Cancelar inicio con clave de acceso",
+    "unknownAccount": "Clave de acceso {{index}}",
+    "unknownRelyingParty": "este sitio web",
+    "touchIdPromptReason": "verificar tu identidad en $1"
+  },
+  "fr": {
+    "title": "Choisir une clé d'accès",
+    "message": "Choisissez une clé d'accès pour {{relyingPartyId}}",
+    "detail": "Cindy transmet uniquement votre choix à l'authentificateur ; le secret de la clé d'accès reste dans l'authentificateur.",
+    "cancel": "Annuler la connexion par clé d'accès",
+    "unknownAccount": "Clé d'accès {{index}}",
+    "unknownRelyingParty": "ce site web",
+    "touchIdPromptReason": "confirmer votre identité sur $1"
+  },
+  "de": {
+    "title": "Passkey wählen",
+    "message": "Passkey für {{relyingPartyId}} wählen",
+    "detail": "Cindy gibt nur deine Auswahl an den Authentifikator weiter. Der geheime Schlüssel des Passkeys bleibt im Authentifikator.",
+    "cancel": "Passkey-Anmeldung abbrechen",
+    "unknownAccount": "Passkey {{index}}",
+    "unknownRelyingParty": "diese Website",
+    "touchIdPromptReason": "deine Identität auf $1 bestätigen"
+  },
+  "pt-PT": {
+    "title": "Escolher uma chave de acesso",
+    "message": "Escolha uma chave de acesso para {{relyingPartyId}}",
+    "detail": "A Cindy apenas envia a sua escolha ao autenticador. O segredo da chave de acesso permanece no autenticador.",
+    "cancel": "Cancelar início de sessão com chave de acesso",
+    "unknownAccount": "Chave de acesso {{index}}",
+    "unknownRelyingParty": "este site",
+    "touchIdPromptReason": "verifique a sua identidade em $1"
+  },
+  "pt-BR": {
+    "title": "Escolher uma chave de acesso",
+    "message": "Escolha uma chave de acesso para {{relyingPartyId}}",
+    "detail": "A Cindy apenas envia sua escolha ao autenticador. O segredo da chave de acesso permanece no autenticador.",
+    "cancel": "Cancelar login com chave de acesso",
+    "unknownAccount": "Chave de acesso {{index}}",
+    "unknownRelyingParty": "este site",
+    "touchIdPromptReason": "verifique sua identidade em $1"
+  },
 };

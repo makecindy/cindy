@@ -245,6 +245,7 @@ function buildMessageHtml(
                   top,
                   available,
                 ),
+              message.images,
             );
           })
           .join("")

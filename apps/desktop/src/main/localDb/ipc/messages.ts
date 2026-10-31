@@ -49,8 +49,7 @@ import {
   removeRefs as removeMediaRefs,
   removeSessionAttachmentRefIfUnreferencedByLiveMessage,
 } from '../../cindy-media/ledger';
-import { importExternalCodexMessagesForSession } from '../../maker-host/codex-local-sessions';
-import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/claude-local-sessions';
+import { adoptLegacySessionBeforeOpen } from '../../session-import/legacy';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
@@ -828,11 +827,11 @@ export function registerMessageIpc(
 }
 
 /**
- * messages:list 的「按需导入外部 CLI 会话历史」副作用。
+ * messages:list 的副作用：旧版导入的任务（codex- / claude- 前缀）第一次打开时接入新导入器。
  *
- * 普通 Cindy 任务不需要外部 CLI 历史导入；只有带有明确来源前缀的任务才运行对应 importer。
- * 这样可以避免每次切换普通任务都先为两个 importer 各做一次 sessions 查询。device-link 远程读
- * 仍遵循首页/分页语义，但首页也只对 Codex/Claude 来源任务运行对应 importer。
+ * 新导入器在导入时就把完整历史写进 Cindy，打开任务不再读取来源文件（只导入、不同步）。
+ * 这里只处理升级前导入、还没接入的旧任务：同步接入正在打开的这一条（与旧版「打开时导入」
+ * 同等的等待），其余旧任务在后台一次性接入。普通任务直接返回，不做任何查询。
  *
  * 抽成可注入函数仅为单测(规则 14):默认依赖即生产实现,Electron `ipcMain.handle` 只做 adapter。
  */
@@ -840,37 +839,21 @@ export async function runMessagesListImportSideEffects(
   sessionId: string,
   deps: {
     isDeviceLink?: () => boolean;
-    importCodex?: (id: string) => Promise<void>;
-    importClaude?: (id: string) => Promise<void>;
+    adoptLegacy?: (id: string) => Promise<void>;
   } = {},
   opts: { deviceLinkFirstPage?: boolean } = {},
 ): Promise<void> {
   const isDeviceLink = deps.isDeviceLink ?? isDeviceLinkInvoke;
-  // device-link **分页**请求跳过导入(#318 性能语义:每页重跑 importer 会把
-  // 导入延迟串接到查询前,拖慢手机端);**首页**请求照跑(review P2):被控端
-  // 可能从未本机打开该会话,rollout/transcript 从未导入 —— 崩溃前 CLI 已写的
-  // 产出不进 DB,中断行滞留尾部,控制端会看到可「继续」的假中断。首页一次
-  // 导入与本机路径的既有成本同水平。
+  // device-link 分页请求跳过（#318 性能语义）；首页照常接入。
   if (isDeviceLink() && !opts.deviceLinkFirstPage) return;
-  const importCodex = deps.importCodex ?? importExternalCodexMessagesForSession;
-  const importClaude = deps.importClaude ?? importExternalClaudeCodeMessagesForSession;
-  if (sessionId.startsWith('codex-')) {
-    await importCodex(sessionId).catch((err) => {
-      log.warn('external Codex message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
+  if (!sessionId.startsWith('codex-') && !sessionId.startsWith('claude-')) return;
+  const adopt = deps.adoptLegacy ?? adoptLegacySessionBeforeOpen;
+  await adopt(sessionId).catch((err) => {
+    log.warn('legacy imported session adoption failed', {
+      sessionId,
+      err: err instanceof Error ? err.message : String(err),
     });
-    return;
-  }
-  if (sessionId.startsWith('claude-')) {
-    await importClaude(sessionId).catch((err) => {
-      log.warn('external Claude Code message import failed', {
-        sessionId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }
+  });
 }
 
 /**
@@ -2875,6 +2858,10 @@ export async function listMessagesForAgentHandoff(
       }
       if (agentMeta?.voiceCall) return null;
       if (agentMeta && typeof agentMeta.contextRebuild === 'object' && agentMeta.contextRebuild) {
+        return null;
+      }
+      // 任务导入的时间线标记只用于显示。
+      if (agentMeta && typeof agentMeta.sessionImport === 'object' && agentMeta.sessionImport) {
         return null;
       }
       return {

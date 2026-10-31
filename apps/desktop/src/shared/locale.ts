@@ -1,5 +1,5 @@
 /** UI-supported concrete locales. */
-export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'pt-PT', 'pt-BR'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 /** User-facing locale preference. 'system' is resolved by the host process. */
@@ -57,6 +57,12 @@ function matchSupportedLocale(raw: string | undefined | null): SupportedLocale |
   }
 
   const language = getLanguageCode(raw);
+  // Portuguese has two independent catalogs. Explicit Brazil selects Brazilian
+  // Portuguese; bare pt and other Lusophone regions use European Portuguese.
+  if (language === 'pt') {
+    const tag = normalizeLocaleTag(raw);
+    return tag && new Intl.Locale(tag).region === 'BR' ? 'pt-BR' : 'pt-PT';
+  }
   return language ? (UNIQUE_LOCALE_BY_LANGUAGE.get(language) ?? null) : null;
 }
 

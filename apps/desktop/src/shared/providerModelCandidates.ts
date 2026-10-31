@@ -46,9 +46,9 @@ export function presetModelCandidate(
     if ((requireDeclaration || hasBindings) && !choices.some(choice => choice.route.wireProtocol === explicitRoute.wireProtocol)) return undefined;
     return sameRoute(runtimeRoute, sourceRoute) ? model : { ...model, route: sourceRoute };
   }
-  const selected = choices.find(choice => sameRoute(choice.route, runtimeRoute))
+  const selected = choices.find(choice => choice.preferred)
+    ?? choices.find(choice => sameRoute(choice.route, runtimeRoute))
     ?? choices.find(choice => sameRoute(choice.route, sourceRoute))
-    ?? choices.find(choice => choice.preferred)
     ?? choices[0];
   if (selected) {
     return choices.find(choice => choice.preferred)?.profileId === selected.profileId

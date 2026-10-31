@@ -424,10 +424,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
     const owner = getMobileAuthOwner();
     if (!valid() || owner.accountId !== api.userId || mobileDurableOutbox.getAccountId() !== owner.accountKey) throw new Error('OWNER_CHANGED');
-    const mentions = input.mentions as { all: boolean; botIds: string[] };
+    const mentions = input.mentions as import('@cindy/maker-shared/botGroupChat').BotGroupMention;
     const root = threadRootId ? latest.page.messages.find(message => message.id === threadRootId) : undefined;
     const recipients = [...mentions.botIds];
-    if (root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
+    if (!mentions.all && !mentions.allBots && root && latest.page.snapshot.members.some(member => member.id === root.authorId && member.kind === 'bot' && member.state === 'joined')) recipients.push(root.authorId);
     await enqueueChatMessage(mobileDurableOutbox, owner.accountKey, groupId, {
       ...(latest.page.snapshot.room.kind === 'direct' ? { conversationKind: 'direct' as const } : {}),
       clientId: String(input.clientId), text: String(input.text), threadRootId,
@@ -435,7 +435,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       attachments: input.attachments as RemoteSerializedAttachment[] | undefined,
       ...(input.quote && typeof input.quote === 'object' && 'messageId' in input.quote
         ? { quote: { messageId: String(input.quote.messageId) } } : {}),
-      mentions: { all: mentions.all, botIds: [...new Set(recipients)] },
+      mentions: { ...mentions, botIds: [...new Set(recipients)] },
     }, latest.page.messages.length, input.quote as import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView | undefined,
     latest.page.messages.reduce<string | undefined>((seq, message) => !seq || BigInt(message.seq) > BigInt(seq) ? message.seq : seq, undefined));
     if (!isMobileAuthOwnerCurrent(owner)) throw new Error('OWNER_CHANGED');

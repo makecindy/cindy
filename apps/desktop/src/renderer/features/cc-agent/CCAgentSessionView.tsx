@@ -1246,7 +1246,7 @@ function CCAgentSessionContent({
   const remoteSync = useRemoteSessionSync(sessionId, remoteDeviceId);
   // 远程会话连接健康(本机断链重连中 / 被控端离线)→ 顶部 banner 提示 + 手动重新同步。
   const remoteConn = useRemoteSessionConnection(remoteDeviceId);
-  const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId);
+  const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId, remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
   const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   const showRemoteWriteBlockedToast = useCallback(() => {
@@ -1872,6 +1872,7 @@ function CCAgentSessionContent({
     errorIsRecoverable,
     errorRetryText,
     errorCanContinue,
+    errorPersistId,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -5306,6 +5307,7 @@ function CCAgentSessionContent({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
+      activeErrorClientId={!readOnly && error ? errorPersistId : null}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'

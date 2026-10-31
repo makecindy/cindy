@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ScrollView } from 'react-native';
+import { View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import type { BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -65,7 +65,7 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError
     return () => { cancelled = true; off(); topics.forEach(offTopic => offTopic()); };
   }, [scope, online, connectionEpoch, presenceVersion, invoke, openLink, subscribe, unsubscribe, onRemoteResourceChanged, getPresenceAvailability, i18n.language]));
   if (group.round.status !== 'running' || !group.round.speakers.length) return null;
-  return <ScrollView testID="botGroup.work" style={{ maxHeight: 220 }} contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 8, gap: 12 }} keyboardShouldPersistTaps="handled">
+  return <View testID="botGroup.work" style={{ paddingHorizontal: 16, paddingVertical: 8, gap: 12 }}>
     {group.round.speakers.map(speaker => {
       const member = group.members.find(member => member.botId === speaker.botId);
       if (!member) return null;
@@ -74,7 +74,8 @@ export function BotGroupWorkArea({ group, deviceId, online, identityFor, onError
       return <BotGroupSpeakerRow key={speaker.executionId ?? `${speaker.botId}:${speaker.activity}`}
         deviceId={host} online={online && !!host && getPresenceAvailability(host) !== false}
         identity={{ ...identityFor(member.botId, member.name), ...(target ? { botId: target.botId } : {}) }} sessionId={speaker.sessionId ?? target?.sessionId ?? null}
+        executionId={speaker.executionId} startedAt={speaker.startedAt} groupId={group.id}
         activity={speaker.activity} executionStatus={speaker.executionStatus} stopping={speaker.stopping} onError={onError} />;
     })}
-  </ScrollView>;
+  </View>;
 }

@@ -31,8 +31,12 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status controls host receipts), round control, real device-link control and revocation, answering pending interactions, plans and attachments; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
+    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
+    'share-pending': {
+      about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
+      data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
+    },
     'send-status': {
       about: 'Mac send flicker regression: real composer/outbox/timeline, controlled slow receipt; row geometry stays stable and failed sends remain retryable',
       data: { ...base, messages: 40, sendStatus: true },
@@ -42,6 +46,10 @@ export default {
       viewport: { width: 720, height: 700 },
       data: { ...base, sidebar: false, remoteLimits: true },
     },
+    'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
+    'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
+    'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
     'work-reading': { about: 'Actual group work status, scenario data: file reading', data: { ...base, messages: 2, workState: 'reading-file' } },
@@ -132,6 +140,39 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.processRecord) {
+      const journal = page.locator('[data-teammate-process]');
+      await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
+      if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
+      await journal.waitFor();
+      const heading = journal.locator(':scope > button');
+      assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+      await heading.click();
+      await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await ui.capture('history-expanded');
+      const endError = await journal.evaluate(root => {
+        const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
+        const body = root.querySelector('[data-process-guide] + div').getBoundingClientRect();
+        return Math.abs(rail.bottom - body.bottom);
+      });
+      assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
+      await heading.click();
+      await ui.capture('history-collapsed');
+      return;
+    }
+    if (ui.case === 'share-pending') {
+      await page.locator('[data-bot-group-message-id="a1"] [data-thread-preview]').click();
+      const source = page.locator('aside [data-bot-group-message-id="r1"]');
+      await source.hover();
+      await source.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.server.thread.postToMain'), exact: true }).click();
+      const pending = page.locator('[data-testid="bot-group-timeline"] [data-bot-group-message-id="pending:share:r1"]');
+      await pending.waitFor({ timeout: 1500 });
+      assert.equal(await pending.locator('article').getAttribute('aria-busy'), 'true');
+      await pending.scrollIntoViewIfNeeded();
+      await ui.capture('share-pending');
+      return;
+    }
     if (ui.case === 'send-status') {
       // Renderer integration: jsdom's send tests cannot measure the 600ms layout jump.
       const input = page.locator('textarea');
@@ -192,9 +233,27 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      if (definition.data.workQueuedStep) {
+        const header = await page.getByTestId('bot-group-content-header').innerText();
+        const sidebar = await page.getByTestId('bot-group-running').innerText();
+        assert.ok(header.includes(await ui.t('bots.groupChat.header.speaking', { name: 'Nova' })));
+        assert.ok(sidebar.includes('Nova') && !sidebar.includes('Aster'));
+        const progress = await page.getByTestId('bot-group-progress').allTextContents();
+        assert.equal(progress.length, 2);
+        assert.ok(progress[0].includes(await ui.t('bots.groupChat.progress.queued')));
+      } else if (state === 'queued') {
+        const header = await page.getByTestId('bot-group-content-header').innerText();
+        const progress = await page.getByTestId('bot-group-progress').innerText();
+        assert.ok(header.includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.ok((await page.getByTestId('bot-group-running').innerText()).includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.ok(progress.includes(await ui.t('bots.groupChat.progress.queued')));
+        const elapsedLabel = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
+        assert.ok(!progress.includes(elapsedLabel));
+        assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).isEnabled(), true);
+      }
       if (definition.data.workNoStart) {
         const strip = page.getByTestId('bot-group-progress');
-        const elapsed = (await ui.t('bots.groupChat.progress.elapsed')).split('{{')[0];
+        const elapsed = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();

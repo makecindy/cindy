@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createInstance } from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
+import es from '@/i18n/locales/es/common.json';
+import fr from '@/i18n/locales/fr/common.json';
+import de from '@/i18n/locales/de/common.json';
+import ptPT from '@/i18n/locales/pt-PT/common.json';
+import ptBR from '@/i18n/locales/pt-BR/common.json';
 import en from '@/i18n/locales/en/common.json';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
 import zhTW from '@/i18n/locales/zh-TW/common.json';
@@ -24,7 +29,7 @@ import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/com
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/newMakerDraftKeys';
 import { getDraft as getNewMakerDraft, patchDraft } from '@/state/newMakerDraft';
 
-const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko };
+const locales = { en, 'zh-CN': zhCN, 'zh-TW': zhTW, ja, ko, es, fr, de, 'pt-PT': ptPT, 'pt-BR': ptBR };
 const raw = JSON.stringify({ error: {
   message: 'X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls` to be false.',
   type: 'invalid_request_error', code: 'unsupported_value', param: 'parallel_tool_calls',

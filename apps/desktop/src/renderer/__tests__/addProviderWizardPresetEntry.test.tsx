@@ -1275,10 +1275,11 @@ it('keeps an explicit tenant path through online discovery, saving and runtime p
   expect(saved.runtimes.codex?.models[0].interfaceId).toBeUndefined();
 });
 
-it('preserves an explicit additional discovery path instead of replacing it with a profile route', async () => {
+it.each([[false, false], [true, false], [true, true]])('preserves discovery route priority, offline=%s mainHit=%s', async (offline, mainHit) => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
   const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
-  const model = { id: 'discovery-tenant-chat-only', name: 'Discovery tenant Chat-only' };
+  const model = { id: offline ? 'deepseek-v4-flash-vision-exp' : 'discovery-tenant-chat-only', name: 'Discovery tenant Chat-only' };
+  preset.runtimes['claude-code']!.models = [];
   delete preset.runtimes.codex;
   delete preset.runtimes.pi;
   const source = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,
@@ -1288,7 +1289,7 @@ it('preserves an explicit additional discovery path instead of replacing it with
     modelId: model.id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
   window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
   window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { modelsUrl?: string | null }) => ({ ok: true,
-    models: input.modelsUrl === source.modelsUrl ? [model] : [] }));
+    models: input.modelsUrl === source.modelsUrl || mainHit ? [model] : [] }));
   renderWizard('deepseek');
   await screen.findByDisplayValue('DeepSeek');
   fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
@@ -1298,11 +1299,44 @@ it('preserves an explicit additional discovery path instead of replacing it with
   fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
   await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
   const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
-  const route = { baseUrl: source.baseUrl, wireProtocol: source.wireProtocol, requestPath: source.requestPath };
+  const route = { baseUrl: source.baseUrl, wireProtocol: source.wireProtocol, ...(!mainHit ? { requestPath: source.requestPath } : {}) };
   expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)).toMatchObject({ route });
-  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBeUndefined();
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBe(mainHit ? 'deepseek-openai-completions' : undefined);
   const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
   expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({ id: model.id, route });
+});
+
+it.each([false, true])('follows an exact preferred interface through discovery and saving, additional=%s', async additional => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: 'discovery-dual-preferred-chat', name: 'Discovery preferred Chat' };
+  delete preset.runtimes.codex;
+  delete preset.runtimes.pi;
+  const source = { baseUrl: 'https://api.deepseek.com/anthropic', wireProtocol: 'anthropic-messages' as const,
+    modelsUrl: 'https://api.deepseek.com/anthropic/extra/models' };
+  if (additional) preset.runtimes['claude-code']!.modelDiscovery = [source];
+  registry.models.push({ id: 'review/dual-preferred', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [
+      { profileId: 'deepseek-anthropic-messages' }, { profileId: 'deepseek-openai-completions' },
+    ], preferredInterfaces: { 'claude-code': ['deepseek-openai-completions'] } }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { modelsUrl?: string | null }) => ({
+    ok: true, models: !additional || input.modelsUrl === source.modelsUrl ? [model] : [],
+  }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(await screen.findByText(model.name));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBeUndefined();
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({
+    api: 'openai-completions', selectedInterface: { profileId: 'deepseek-openai-completions' },
+  });
 });
 
 it.each([false, true])('honors exact online declarations with different preset memberships, existing row=%s', async existingRow => {

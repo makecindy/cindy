@@ -359,7 +359,8 @@ describe('2026-01-26 MCP Apps conformance against an independent local server', 
         appInfo: { name: 'Raw', version: '1' },
         appCapabilities: {},
       }),
-    ).rejects.toThrow('MCP_APP_ALREADY_INITIALIZED');
+    ).resolves.toMatchObject({ protocolVersion: '2026-01-26' });
+    await f.peer.notify('ui/notifications/initialized');
     expect(await f.peer.request('ping')).toEqual({});
   });
   it('negotiates an unknown requested version to the actual supported stable version', async () => {

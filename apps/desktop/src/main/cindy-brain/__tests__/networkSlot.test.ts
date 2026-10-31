@@ -755,15 +755,46 @@ describe('networkSlot · 响应收敛', () => {
     }
   });
 
-  it('fetch 抛错折叠为结构化失败,不异常穿透', async () => {
-    const { slot } = makeSlot({
-      fetchImpl: async () => {
-        throw new Error('ECONNRESET');
-      },
-    });
+  // 插件协议:网络层失败给稳定 errorCode,原因码进 message。undici 只抛 `fetch failed`,
+  // 真实原因在 cause(可能再套 AggregateError);2026-10-31 证书过期时插件只拿到
+  // 「请求失败:fetch failed」无法定位。识别不出的异常保持原文、不打码,避免误标网络错误。
+  const coded = (code: string, message = '') => Object.assign(new Error(message), { code });
+  const undiciFailure = (cause?: unknown) => new TypeError('fetch failed', cause === undefined ? undefined : { cause });
+  it.each([
+    ['证书过期', undiciFailure(coded('CERT_HAS_EXPIRED', 'certificate has expired')),
+      'TLS_ERROR', '请求失败:HTTPS 证书或加密连接校验失败(CERT_HAS_EXPIRED: certificate has expired)'],
+    ['DNS 失败', undiciFailure(coded('ENOTFOUND', 'getaddrinfo ENOTFOUND api.search.brave.com')),
+      'DNS_FAILED', '请求失败:域名解析失败(getaddrinfo ENOTFOUND api.search.brave.com)'],
+    // 外层 AggregateError 不带 code,只有子错误带:验证会遍历 errors。
+    ['多地址连接全被拒(AggregateError)', undiciFailure(
+      new AggregateError([coded('ECONNREFUSED', 'connect ECONNREFUSED 10.0.0.1:443')], '')),
+    'CONNECTION_REFUSED', '请求失败:连接被拒绝(connect ECONNREFUSED 10.0.0.1:443)'],
+    ['读响应时连接断开', new TypeError('terminated', { cause: coded('UND_ERR_SOCKET', 'other side closed') }),
+      'CONNECTION_RESET', '请求失败:连接被中断(UND_ERR_SOCKET: other side closed)'],
+    ['连接阶段超时', undiciFailure(coded('UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error')),
+      'NETWORK_TIMEOUT', '请求失败:请求超时(UND_ERR_CONNECT_TIMEOUT: Connect Timeout Error)'],
+    ['只有 fetch failed', undiciFailure(), 'NETWORK_ERROR', '请求失败:网络错误(fetch failed)'],
+    ['非网络异常', new Error('installation changed'), undefined, '请求失败:installation changed'],
+  ])('fetch 抛错折叠为结构化失败:%s', async (_name, thrown, errorCode, message) => {
+    const { slot } = makeSlot({ fetchImpl: async () => { throw thrown; } });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toContain('ECONNRESET');
+    expect(r).toEqual({ ok: false, message, ...(errorCode ? { errorCode } : {}) });
+  });
+
+  it('主机超时中断保留「请求超时(Nms)」文案并标 NETWORK_TIMEOUT', async () => {
+    vi.useFakeTimers();
+    try {
+      const { slot } = makeSlot({
+        fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+      const pending = slot.handleFetchRequest('web-search', { url: BRAVE_URL, timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toEqual({ ok: false, errorCode: 'NETWORK_TIMEOUT', message: '请求失败:请求超时(1000ms)' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -64,7 +64,7 @@ button{font:inherit;color:inherit;background:var(--color-background-secondary,Ca
   }
   content.addEventListener('click', event => {
     const control = event.target.closest('button,input');
-    // sandbox 无 allow-forms 且 CSP form-action 'none'：表单只能走工具桥接，须先接管 click/Enter。
+    // CSP form-action 'none' 禁止原生提交；接管 click/Enter 也兼容没有 allow-forms 的旧查看端。
     if (control?.form && content.contains(control.form) && ['submit', 'image'].includes(control.type)) {
       event.preventDefault(); submit(control.form, control); return;
     }

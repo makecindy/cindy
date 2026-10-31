@@ -100,6 +100,7 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
@@ -1461,6 +1462,10 @@ export function buildPiNativeProvidersFromConfigs(
           nativeAnthropicBaseUrl ??
           (m.api && m.route ? m.route.baseUrl :
             m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
+        // Model-level defaults follow the final endpoint. Putting them on the
+        // provider would leak them to a model routed to a different service.
+        const modelHeaders = authMethod === 'oauth' ? bundledModel?.headers
+          : withProviderAppAttribution(modelBaseUrl ?? rt.baseUrl, headers, bundledModel?.headers);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1505,7 +1510,7 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(resolved?.cost ? { cost: catalogCostForPiNative(resolved.cost) }
             : bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
-          ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
+          ...(modelHeaders && Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
           ...(bundledModel?.compat
             ? { compat: structuredClone(bundledModel.compat) }
             : !bundledModel && modelApi === 'openai-completions'

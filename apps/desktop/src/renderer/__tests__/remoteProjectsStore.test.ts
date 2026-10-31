@@ -600,6 +600,22 @@ describe('remoteProjectsStore', () => {
     expect(remoteProjectsStore.getArchivedLoadedDeviceIds().size).toBe(0);
   });
 
+  // PR #8182 / unit: scope invalidation must also fence reads/loading before
+  // their first shard exists, while an independent connection retains authority.
+  it.each(['disconnect', 'clear'] as const)('scopes %s to matching in-flight devices without shards', (operation) => {
+    const primaryEpoch = remoteProjectsStore.nextSnapshotEpoch('primary-pending');
+    const otherEpoch = remoteProjectsStore.nextSnapshotEpoch('other-pending');
+    remoteProjectsStore.markSessionStatusLoading('primary-pending', 'active');
+    remoteProjectsStore.markSessionStatusLoading('other-pending', 'active');
+    const matches = (id: string) => id === 'primary-pending';
+    if (operation === 'disconnect') remoteProjectsStore.markAllDisconnected(matches);
+    else remoteProjectsStore.clear(matches);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('primary-pending', primaryEpoch)).toBe(false);
+    expect(remoteProjectsStore.isLatestSnapshotEpoch('other-pending', otherEpoch)).toBe(true);
+    expect(remoteProjectsStore.isSessionStatusLoading('primary-pending', 'active')).toBe(false);
+    expect(remoteProjectsStore.isSessionStatusLoading('other-pending', 'active')).toBe(true);
+  });
+
   it('setDeviceSessions reconnects a disconnected cached shard', () => {
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
     remoteProjectsStore.markDeviceDisconnected('dev-B');

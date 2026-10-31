@@ -35,11 +35,8 @@ vi.mock('electron', () => ({
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: h.warn, error: vi.fn() }),
 }));
-vi.mock('../../maker-host/codex-local-sessions.js', () => ({
-  importExternalCodexMessagesForSession: vi.fn(async () => undefined),
-}));
-vi.mock('../../maker-host/claude-local-sessions.js', () => ({
-  importExternalClaudeCodeMessagesForSession: vi.fn(async () => undefined),
+vi.mock('../../session-import/legacy.js', () => ({
+  adoptLegacySessionBeforeOpen: vi.fn(async () => undefined),
 }));
 vi.mock('../../embedders/chat-history-embedder.js', () => ({
   onMessageCreated: vi.fn(async () => undefined),

@@ -12,6 +12,11 @@
  * strings ever grow beyond a couple of dialogs, move the locales to
  * shared/i18n/locales/ and update both call sites.
  */
+import esCommon from '../renderer/i18n/locales/es/common.json';
+import frCommon from '../renderer/i18n/locales/fr/common.json';
+import deCommon from '../renderer/i18n/locales/de/common.json';
+import ptPTCommon from '../renderer/i18n/locales/pt-PT/common.json';
+import ptBRCommon from '../renderer/i18n/locales/pt-BR/common.json';
 import { app } from 'electron';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
@@ -28,6 +33,11 @@ import jaCommon from '../renderer/i18n/locales/ja/common.json';
 import koCommon from '../renderer/i18n/locales/ko/common.json';
 
 const resources: Record<SupportedLocale, Record<string, unknown>> = {
+  'es': esCommon as Record<string, unknown>,
+  'fr': frCommon as Record<string, unknown>,
+  'de': deCommon as Record<string, unknown>,
+  'pt-PT': ptPTCommon as Record<string, unknown>,
+  'pt-BR': ptBRCommon as Record<string, unknown>,
   en: enCommon as Record<string, unknown>,
   'zh-CN': zhCNCommon as Record<string, unknown>,
   'zh-TW': zhTWCommon as Record<string, unknown>,
@@ -40,6 +50,11 @@ const resources: Record<SupportedLocale, Record<string, unknown>> = {
  * 链尾统一由 t() 落回 key 本身。
  */
 const FALLBACK_CHAIN: Record<SupportedLocale, readonly SupportedLocale[]> = {
+  'es': ['es', 'en'],
+  'fr': ['fr', 'en'],
+  'de': ['de', 'en'],
+  'pt-PT': ['pt-PT', 'en'],
+  'pt-BR': ['pt-BR', 'en'],
   'zh-CN': ['zh-CN', 'en'],
   'zh-TW': ['zh-TW', 'zh-CN', 'en'],
   en: ['en'],

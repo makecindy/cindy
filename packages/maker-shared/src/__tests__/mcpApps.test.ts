@@ -1,6 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+const parserLoads = vi.hoisted(() => ({ count: 0 }));
+vi.mock('parse5', async original => { parserLoads.count++; return original(); });
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { Script } from 'node:vm';
 import { mcpAppSandboxDocument, mcpAppFrameUrlAllowed, mcpAppHistoryText, parseMcpAppRecord, parseMcpAppHistory, projectMcpAppContent } from '../mcpApps.js';
+const coreParserLoads = parserLoads.count;
+let withHostAppSdk: typeof import('../mcpAppSdk.js').withHostAppSdk;
+beforeAll(async () => { ({ withHostAppSdk } = await import('../mcpAppSdk.js')); });
+it('keeps the HTML parser out of the core MCP Apps import', () => { expect(coreParserLoads).toBe(0); });
 describe('MCP Apps cross-platform document contract', () => {
   function proxy(resourceUrl?: string, requestedUrl = resourceUrl) {
     const attributes: Record<string, string> = {};
@@ -32,6 +38,8 @@ describe('MCP Apps cross-platform document contract', () => {
     expect(result.mounted).toBe(true);
     expect(result.frame.src).toBe('http://127.0.0.1:5001/resource.html');
     expect(result.frame.srcdoc).toBe('');
+    // G5: submit events must reach page code without relaxing top-navigation.
+    expect(result.attributes.sandbox).toBe('allow-scripts allow-same-origin allow-forms');
   });
   it.each(['http://127.0.0.1:5002/app.html', 'javascript:alert(1)', 'file:///private'])(
     'refuses a same-origin or privileged resource URL: %s', (url) => {
@@ -42,7 +50,7 @@ describe('MCP Apps cross-platform document contract', () => {
     const result = proxy();
     expect(result.mounted).toBe(true);
     expect(result.frame.srcdoc).toBe('<script>untrusted</script>');
-    expect(result.attributes.sandbox).toBe('allow-scripts');
+    expect(result.attributes.sandbox).toBe('allow-scripts allow-forms');
   });
   it.each([
     ['http://127.0.0.1:5001/resource.html', 'http://127.0.0.1:5001'],
@@ -185,4 +193,76 @@ describe('MCP Apps cross-platform document contract', () => {
     expect(projectMcpAppContent(content, false)).toBe(content);
     expect(projectMcpAppContent(JSON.stringify(content), false)).toBe(JSON.stringify(content));
   });
+});
+
+// Unit: actual HTML preparation preserves a page's own SDK mapping and doctype;
+// comments/template heads must not swallow the host importmap before module scripts.
+it('adds a host importmap without overriding authored SDKs or parsing comments as the head', async () => {
+  const authored = '<!doctype html><head><script type="importmap">{"imports":{"@modelcontextprotocol/ext-apps":"/bundled.js"}}</script></head>';
+  expect(withoutRuntime(withHostAppSdk(authored, sdkUrl))).toBe(authored);
+  const html = '<!doctype html><!-- <head> --><html><head><script type="module">import "@modelcontextprotocol/ext-apps"</script></head></html>';
+  const prepared = withHostAppSdk(html, sdkUrl);
+  expect(withoutRuntime(prepared)).toContain('<!-- <head> --><html><head><script type="importmap">');
+  expect(prepared.startsWith('<!doctype html>')).toBe(true);
+  expect(prepared.indexOf('type="importmap"')).toBeLessThan(prepared.indexOf('type="module"'));
+});
+
+// Unit: WebViews supporting one importmap must keep an existing unrelated mapping.
+// Minimal input is one authored map; SDK preparation must merge without creating a second.
+it('keeps other imports in one importmap when adding the host SDK', () => {
+  const html = '<head><base href="https://assets.example/"><script type="importmap">{"imports":{"chart":"/chart.js"},"scopes":{"/chart/":{"text":"/text.js"}}}</script>' + sdkModule + '</head>';
+  const prepared = withHostAppSdk(html, 'https://view.example/__cindy/sdk/ext-apps/app.js');
+  expect(prepared.match(/type="importmap"/g)).toHaveLength(1);
+  const map = JSON.parse(prepared.match(/<script type="importmap">(.*?)<\/script>/)![1]);
+  expect(map).toEqual({ imports: { chart: '/chart.js', '@modelcontextprotocol/ext-apps': 'https://view.example/__cindy/sdk/ext-apps/app.js' }, scopes: { '/chart/': { text: '/text.js' } } });
+});
+
+// Lead R4/R5/R9: production HTML preparation must preserve ordinary bytes/standards mode.
+const withoutRuntime = (html: string) => html.replace(/<script data-cindy-runtime>[\s\S]*?<\/script>/, '');
+const sdkUrl = 'https://view.example/__cindy/sdk/ext-apps/app.js';
+const sdkModule = '<script type="module">import { App } from "@modelcontextprotocol/ext-apps";</script>';
+it('prepares SDK-free BOM pages for later computed imports without changing standards mode', () => {
+  const html = '\ufeff<!doctype html><html><head></head><body>Old page</body></html>';
+  const prepared = withHostAppSdk(html, sdkUrl);
+  expect(prepared.startsWith('\ufeff<!doctype html>')).toBe(true);
+  expect(prepared).toContain(sdkUrl);
+});
+it('puts the SDK importmap after the BOM and doctype', () => {
+  const html = '\ufeff<!doctype html><html><head>' + sdkModule + '</head></html>';
+  const prepared = withHostAppSdk(html, sdkUrl);
+  expect(prepared.startsWith('\ufeff<!doctype html>')).toBe(true);
+  expect(prepared.indexOf('type="importmap"')).toBeGreaterThan(prepared.indexOf('<head>'));
+});
+it('recognizes HTML importmap type with browser whitespace', () => {
+  const html = '<head><script type="  importmap\t ">{"imports":{"@modelcontextprotocol/ext-apps":"/own.js"}}</script>' + sdkModule + '</head>';
+  expect(withoutRuntime(withHostAppSdk(html, sdkUrl))).toBe(html);
+});
+it('does not treat an SVG script as an HTML importmap', () => {
+  const html = '<html><head>' + sdkModule + '</head><body><svg><script type="importmap">{"imports":{"@modelcontextprotocol/ext-apps":"/svg.js"}}</script></svg></body></html>';
+  expect(withHostAppSdk(html, sdkUrl)).toContain(sdkUrl);
+});
+it.each([undefined, '/relative.js'])('requires an absolute SDK URL: %s', url => {
+  expect(() => Reflect.apply(withHostAppSdk, undefined, [sdkModule, url])).toThrow();
+});
+
+// Unit: the initial HTML cannot predict generated documents or external modules.
+// The host runtime is available independently of source text or script MIME types.
+it.each([
+  '<head><script type="module">import(["@modelcontextprotocol", "ext-apps"].join("/"))</script></head>',
+  '<head><script type="module" src="https://assets.example/app.js"></script></head>',
+  // Codex 4429721129: inline event handlers can import the SDK without a script element.
+  '<button onclick="import(\'@modelcontextprotocol/ext-apps\')">Load</button>',
+])('prepares the host mapping without inspecting JavaScript: %s', html => {
+  expect(withHostAppSdk(html, sdkUrl)).toContain(sdkUrl);
+});
+
+// Codex 4428250526: the browser accepts prefix importmap entries; overriding one
+// changes an installed page's SDK. Unit / production preparation, exact bytes.
+it.each([
+  { '@modelcontextprotocol/': 'https://vendor.example/mcp/' },
+  { '@modelcontextprotocol/': null },
+  { '@modelcontextprotocol/ext-apps': null },
+])('preserves authored SDK prefix mappings and explicit blocks: %j', imports => {
+  const html = '<script type="importmap">' + JSON.stringify({ imports }) + '</script>' + sdkModule;
+  expect(withoutRuntime(withHostAppSdk(html, sdkUrl))).toBe(html);
 });

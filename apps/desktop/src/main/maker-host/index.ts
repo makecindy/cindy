@@ -358,6 +358,7 @@ import {
 import {
   buildCodexProxySpawnArgs,
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -2205,6 +2206,7 @@ export function getMaker(): Maker {
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
           ...(smartSubagentConfig

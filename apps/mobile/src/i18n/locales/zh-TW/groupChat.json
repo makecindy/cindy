@@ -33,8 +33,10 @@
   },
   "mention": {
     "all": "所有人",
-    "allHint": "大家都回答",
-    "label": "點名夥伴"
+    "allHint": "僅真人",
+    "label": "點名夥伴",
+    "allBots": "所有夥伴",
+    "allBotsHint": "僅夥伴"
   },
   "composer": {
     "label": "群聊訊息",
@@ -228,7 +230,7 @@
     "speakingMode": "發言方式",
     "speakingModeAuto": "自動",
     "speakingModeSequential": "一律輪流",
-    "speakingModeAutoNote": "未 @ 人或 @所有人時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
+    "speakingModeAutoNote": "未 @ 人或 @所有夥伴時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
     "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
     "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次",
     "setOrganizer": "設為負責人",
@@ -254,7 +256,9 @@
     "cloudStatus": {
       "loading": "正在讀取群組設定…",
       "unavailable": "群組設定讀取失敗，請重試"
-    }
+    },
+    "allowMentionAllBots": "允許 @所有夥伴",
+    "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
   },
   "errors": {
     "memberLimit": "一個群聊需要 2–6 位夥伴",
@@ -278,7 +282,8 @@
     "quoteUnavailable": "引用的訊息已刪除或無法查看，已取消引用，請再傳送一次",
     "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
     "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
-    "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+    "lastOwner": "請先轉讓群主或解散群聊，再退出。",
+    "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。"
   },
   "followUp": {
     "next": "分工 · 下一步",

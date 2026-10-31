@@ -252,7 +252,7 @@ describe('botGroupChatService', () => {
     const readReplyText = vi.fn(async () => written ? '落库后的实际回复' : null);
     const harness = createHarness((_bot, _prompt, index) => index === 0 ? null : 'NO_REPLY', { readReplyText });
     const groupId = await createGroup(harness);
-    await harness.service.sendMessage({ groupId, text: '继续讨论', mentions: { all: true, botIds: [] }, clientId: 'source-input' });
+    await harness.service.sendMessage({ groupId, text: '继续讨论', mentions: { all: false, botIds: [] }, clientId: 'source-input' });
     await vi.waitFor(() => expect(harness.dispatches).toHaveLength(3));
     const call = harness.dispatches[0]!;
     let settlement: Promise<boolean> | undefined;
@@ -375,7 +375,7 @@ describe('botGroupChatService', () => {
     const replies: Record<string, string[]> = { mimi: ['咪咪后到', 'NO_REPLY'], xiaoman: ['小满先到', 'NO_REPLY'] };
     const harness = createHarness((botId) => replies[botId]!.shift() ?? 'NO_REPLY', {}, { mimi: 30 });
     const groupId = await createGroup(harness, ['mimi', 'xiaoman']);
-    await harness.service.sendMessage({ groupId, text: '说说看', mentions: { all: true, botIds: [] }, clientId: 'c-1' });
+    await harness.service.sendMessage({ groupId, text: '说说看', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
     const group = await waitForIdle(harness, groupId);
     expect(group.messages.filter((m) => m.authorKind === 'bot').map((m) => m.content)).toEqual(['小满先到', '咪咪后到']);
     const mimiSecond = harness.dispatches.filter((call) => call.botId === 'mimi')[1]!;
@@ -422,7 +422,7 @@ describe('botGroupChatService', () => {
       name: '六个人', botIds: ['mimi', 'xiaoman', 'abu', 'cindy'],
     });
     if (!created.ok) throw new Error(created.message);
-    await harness.service.sendMessage({ groupId: created.groupId, text: '聊聊', mentions: { all: true, botIds: [] }, clientId: 'c-1' });
+    await harness.service.sendMessage({ groupId: created.groupId, text: '聊聊', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
     const group = await waitForIdle(harness, created.groupId);
     expect(group.messages.filter((m) => m.authorKind === 'bot')).toHaveLength(10);
     expect(harness.dispatches).toHaveLength(10);
@@ -1217,22 +1217,22 @@ describe('botGroupChatService 分工', () => {
       .toEqual(['加上英文版了']);
   });
 
-  it('checks 「@所有人」 but leaves unaddressed messages idle in mention-only groups', async () => {
+  it('keeps human broadcasts quiet and preserves explicit planning in mention-only groups', async () => {
     const decidePlan = vi.fn(async (_input: PlanDecisionInput) => ({ needsPlan: false }) as PlanDecision);
     const harness = createHarness(() => 'NO_REPLY', { decidePlan });
     const groupId = await createGroup(harness);
     await harness.service.sendMessage({ groupId, text: '@所有人 帮我做个海报', mentions: { all: true, botIds: [] }, clientId: 'all' });
     await waitForIdle(harness, groupId);
-    expect(decidePlan).toHaveBeenCalledTimes(1);
-    expect(harness.dispatches).toHaveLength(3);
+    expect(decidePlan).not.toHaveBeenCalled();
+    expect(harness.dispatches).toHaveLength(0);
     await harness.service.updateGroup({ groupId, replyMode: 'mentioned' });
     await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'quiet' });
     await waitForIdle(harness, groupId);
-    expect(decidePlan).toHaveBeenCalledTimes(1);
-    expect(harness.dispatches).toHaveLength(3);
+    expect(decidePlan).not.toHaveBeenCalled();
+    expect(harness.dispatches).toHaveLength(0);
     await harness.service.sendMessage({ groupId, text: '帮我做个海报', mentions: NONE, clientId: 'explicit', division: true });
     await waitForIdle(harness, groupId);
-    expect(decidePlan).toHaveBeenCalledTimes(2);
+    expect(decidePlan).toHaveBeenCalledTimes(1);
   });
 
   it('an explicit request whose chosen members all became unavailable says so', async () => {

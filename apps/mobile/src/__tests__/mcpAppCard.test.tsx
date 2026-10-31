@@ -193,7 +193,7 @@ it('binds a served resource origin and gates declared frame navigation', async (
     data: dispatchEvent.mock.calls[0][0].data,
   });
   const appFrame = shell.querySelector('iframe')!;
-  expect(appFrame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+  expect(appFrame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
   expect(appFrame.srcdoc).toBe('');
   expect(appFrame.src).toBe('http://127.0.0.1:5001/resource.html');
   // The same WindowProxy can now name a frame-domain replacement document.

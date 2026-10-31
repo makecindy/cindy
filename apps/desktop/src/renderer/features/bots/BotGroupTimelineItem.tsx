@@ -1,3 +1,4 @@
+import { BotGroupProcess } from './BotGroupProcess';
 /**
  * 群聊时间线的一行（主时间线与话题面板共用），与伙伴私聊同一套气泡：
  *
@@ -366,6 +367,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     );
   }
 
+  const sending = message.pending && !message.sendConfirmed;
   const shareable = message.kind === 'message' && !message.pending;
   const shareAttrs = shareable ? { [SHARE_SESSION_ATTR]: shareScope, [SHARE_MESSAGE_ATTR]: message.id } : {};
   const hasText = message.content.trim().length > 0;
@@ -389,7 +391,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   ) : null;
   const shareBody = share ? <>
     <p className="flex select-none items-center gap-1 text-12 text-[var(--text-tertiary)]">
-      <CornerDownRight size={12} aria-hidden />{botGroupThreadShareLabel(share, t)}</p>
+      <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
     <BotGroupThreadShareQuote share={share} members={members} inset={!self}
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
@@ -417,11 +419,11 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           {...shareAttrs}
           data-testid={message.outbox ? "bot-group-outbox" : undefined}
           data-status={message.outbox?.status}
-          aria-busy={message.pending && message.outbox?.status !== 'failed' ? true : undefined}
+          aria-busy={sending && message.outbox?.status !== 'failed' ? true : undefined}
           className={cn('group/message relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10')}
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
-          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, message.pending && message.outbox?.status !== 'failed' && 'opacity-60')}>
+          <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
             {/* The toolbar and the reaction corner hang off the message's own content. */}
             <div className={cn("relative flex min-w-0 max-w-full flex-col items-end gap-1.5", threadPreview && "self-stretch")}>
               {share ? <>{reactions}<div className="relative flex w-full min-w-0 max-w-full flex-col items-end gap-1.5">{quote}{shareBody}{actions}</div></> : null}
@@ -445,7 +447,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
             {threadPreview}
             {props.footer}
             {message.outbox ? <BotGroupOutboxStatus entry={message.outbox} readOnly={props.readOnly} /> : null}
-            {message.pending && !message.outbox ? <span className="sr-only">{t('bots.groupChat.timeline.sending')}</span> : null}
+            {sending && !message.outbox && !share ? <span className="sr-only">{t('bots.groupChat.timeline.sending')}</span> : null}
           </div>
           {attribution ? <div className="ml-2.5 w-8 shrink-0"><GroupMaskMessageAvatar messageId={message.id} attribution={attribution} /></div> : null}
         </article>
@@ -523,6 +525,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS)}>
             <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
+            {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
+              member={members.find(member => member.botId === message.authorBotId)} /> : null}
             <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">
               {isPlanCard ? (
                 <div>

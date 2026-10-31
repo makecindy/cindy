@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { groupWorkRuns, type MessageRenderItem, type ToolSegmentRenderItem, type RenderItem } from '@/components/chat/messageWorkGroups';
-import { simplifyBotRenderItems } from '../botConversationPresentation';
+import { botProcessItems, simplifyBotRenderItems } from '../botConversationPresentation';
 
 const message = (id: string, role: ChatMessage['role'], content = id,
   extra: Partial<ChatMessage> = {}): MessageRenderItem => ({
@@ -382,4 +382,41 @@ it('keeps streaming component answers visible through commentary and later tools
   const rows = [message('u', 'user'), message('rich', 'assistant', body, { assistantPhase: 'commentary', isStreaming: true }), tool('later')];
   expect(proseIds(project(rows, true))).toContain('rich');
   expect(rows[1].type === 'message' && rows[1].message.content).toBe(body);
+});
+
+// User-approved journal: the production entry must retain its identity through the
+// first tool, commentary, engine switch and final seal; ordinary task grouping is unchanged.
+describe('continuous teammate process', () => {
+  it('keeps the journal openable when an opaque history group loads before its user row', () => {
+    const empty: Extract<RenderItem, { type: 'work_group' }> = { type: 'work_group', key: 'work-summary-older', children: [], isStreaming: false,
+      deferred: { key: 'older', owner: 'lane', expanded: false, loading: false, failed: false, toggle() {}, retry() {} } as never };
+    const loaded: RenderItem = { ...empty, children: [tool('older')] };
+    expect(botProcessItems([empty], false)[0]?.key).toBe(botProcessItems([loaded], false)[0]?.key);
+  });
+  it('keeps one stable disclosure and leaves the final reply outside', async () => {
+    const user = message('journal-user', 'user');
+    const first = tool('first');
+    const note = message('note', 'assistant', 'Found the cause', { assistantPhase: 'commentary' });
+    const switched = message('switch', 'assistant', '', { systemCardType: 'agent-switch' });
+    const stages = [[user, first], [user, first, note], [user, first, note, switched, tool('verify')]];
+    const keys = stages.map(rows => {
+      const result = botProcessItems(groupWorkRuns(rows, true), true);
+      const groups = result.filter(item => item.type === 'work_group');
+      expect(groups).toHaveLength(1);
+      expect(groups[0]).toMatchObject({ teammateJournal: true, isStreaming: true });
+      return groups[0]!.key;
+    });
+    const done = botProcessItems(groupWorkRuns([...stages[2]!, message('final', 'assistant', 'Fixed and verified', { turnCompleted: true })], false), false);
+    expect(done[1]?.key).toBe(keys[0]);
+    expect(new Set(keys).size).toBe(1);
+    expect(proseIds(done)).toEqual(['final']);
+    expect(allKeys(done)).toEqual(expect.arrayContaining(['tools-first', 'msg-note', 'msg-switch', 'tools-verify']));
+  });
+  it('does not swallow an addressed answer or merge two user turns', async () => {
+    const rows = [message('u1', 'user'), tool('one'), message('intro', 'assistant', 'Introduction'),
+      message('final1', 'assistant', 'Answer', { turnCompleted: true }), message('u2', 'user'), tool('two')];
+    const result = botProcessItems(groupWorkRuns(rows, true), true);
+    expect(proseIds(result)).toEqual(['intro', 'final1']);
+    expect(result.filter(item => item.type === 'work_group')).toHaveLength(2);
+  });
 });

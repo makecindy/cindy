@@ -5,7 +5,7 @@
     "official": "{{appName}} Official Relay",
     "switchToOfficial": "Switch Back to Official Relay",
     "officialHint": "Your devices connect through the {{appName}} official relay. To use your own relay, show its join QR code on the computer running it and scan the code with your phone’s camera.",
-    "selfHostedHint": "Your devices connect through your own relay at {{address}}. Sign-in, models, and other services still use {{appName}}.",
+    "selfHostedHint": "Your devices connect through your own relay at {{address}}. Sign-in, models, shared tasks, and other services still use {{appName}}.",
     "removedHint": "This phone was removed from the relay, or the relay was turned off. Switch back to the official relay, or join again from your computer.",
     "credentialMissingHint": "The relay credential isn’t on this phone anymore. Join again from your computer, or switch back to the official relay.",
     "confirmTitle": "Switch Back to Official Relay?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Join Relay",
     "checking": "Connecting to the relay…",
-    "body": "After you join, this phone connects to your computers through this relay. Sign-in, models, and other services still use {{appName}}. While you use your own relay, task notifications from your computers aren’t sent to this phone.",
+    "body": "After you join, this phone connects to your computers through this relay. Sign-in, models, shared tasks, and other services still use {{appName}}. While you use your own relay, task notifications from your computers aren’t sent to this phone.",
     "switchNote": "Joining switches this phone from “{{current}}” to this relay.",
     "action": "Join",
     "pairingCodeLabel": "Pairing Code",

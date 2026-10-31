@@ -832,6 +832,21 @@ describe('[6] active controller 生命周期与故障半径', () => {
     expect(changes.at(-1)).toEqual({ active: [], updateRelaunch: [] });
   });
 
+  // 故障半径:走自建中转时访客在官方连接上,自建中转断开不能让访客静默收不到推送(反之亦然)。
+  it('跨账号控制端在独立连接上时,一条连接断开只清这条连接上的控制端', () => {
+    const guest = sharedTaskGuestPeer('task-a', 'member-a', 'guest-device');
+    const activeIds = () => __testing.getActiveControllers().map((controller) => controller.deviceId);
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    subscriptions.subscribe(guest, ['session:b'], 'Guest', []);
+
+    deactivateAllControllers('relay-disconnected', 'same-account');
+    expect(activeIds()).toEqual([guest]);
+
+    subscriptions.subscribe('ctrl-a', ['session:a'], 'A', []);
+    deactivateAllControllers('cross-account-relay-disconnected', 'cross-account');
+    expect(activeIds()).toEqual(['ctrl-a']);
+  });
+
   it('旧 connection epoch 的 offline 事件不能清掉新 link-open 的 active controller', () => {
     let connectionEpoch = 1;
     const client = mkClient({ getConnectionEpoch: vi.fn(() => connectionEpoch) });

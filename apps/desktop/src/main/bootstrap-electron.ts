@@ -620,6 +620,8 @@ import {
   initDeviceLinkService,
   getDeviceLinkStatus,
   isSharedTaskAvailable,
+  isSharedTaskRelayOnline,
+  waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
   getControllerName,
@@ -10008,7 +10010,7 @@ app.on('ready', async () => {
       drain: drainPersistQueue,
     },
   );
-  registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
+  registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();

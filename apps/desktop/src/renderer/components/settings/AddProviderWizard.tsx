@@ -1197,6 +1197,7 @@ export function AddProviderWizard({
         const userModels = new Set(Object.values(detected?.config.runtimes ?? {}).flatMap(runtime => runtime?.models.map(model => model.id) ?? []));
         for (const [id] of next) if (!available.has(id) && !userModels.has(id)) next.delete(id);
       }
+      const confirmedDiscoveryRoutes = new Set<string>();
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
         for (const m of models) {
@@ -1217,18 +1218,24 @@ export function AddProviderWizard({
               existing.contextWindows?.[agent] === undefined && m.contextWindow !== undefined;
             const presetOwnsModel =
               preset.runtimes[agent]?.models.some((model) => model.id === m.id) === true;
+            const discoveryKey = `${agent}\u0000${m.id}`;
+            const configuredRoute = detected?.config.runtimes[agent]?.models.find(model => model.id === m.id)?.route;
+            // An online explicit route supersedes an offline suggestion, but not
+            // an imported route, a main-source hit or an earlier discovery source.
             const discoveredRoute =
-              (candidate?.route ?? route) &&
+              candidate?.route &&
               !presetOwnsModel &&
               !defaultDiscoveredModels.has(`${agent}\u0000${m.id}`) &&
-              !existing.routes?.[agent]
-                ? candidate?.route ?? route
+              !configuredRoute && !confirmedDiscoveryRoutes.has(discoveryKey)
+                ? candidate.route
                 : undefined;
+            if (discoveredRoute) confirmedDiscoveryRoutes.add(discoveryKey);
+            const updateInterface = discoveredRoute || (!route && !configuredRoute && candidate?.interfaceId);
             if (
               mergedAgents !== existing.agents ||
               backfillWindow ||
               discoveredRoute ||
-              candidate?.interfaceId ||
+              updateInterface ||
               existing.name !== m.name ||
               m.discoveredCost ||
               m.discoveredMetadata || existing.speechReference
@@ -1242,7 +1249,7 @@ export function AddProviderWizard({
                 name: m.name,
                 ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
                 agents: mergedAgents,
-                ...(candidate?.interfaceId ? { interfaceIds: { ...existing.interfaceIds, [agent]: candidate.interfaceId } } : {}),
+                ...(updateInterface ? { interfaceIds: { ...existing.interfaceIds, [agent]: candidate?.interfaceId } } : {}),
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
                   [agent]: m.discoveredMetadata ?? {
@@ -1259,6 +1266,7 @@ export function AddProviderWizard({
               });
             }
           } else {
+            if (candidate?.route) confirmedDiscoveryRoutes.add(`${agent}\u0000${m.id}`);
             next.set(m.id, {
               name: m.name,
               ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),
@@ -1275,7 +1283,7 @@ export function AddProviderWizard({
               ...(m.contextWindow !== undefined
                 ? { contextWindows: { [agent]: m.contextWindow } }
                 : {}),
-              ...(candidate?.route ?? route ? { routes: { [agent]: candidate?.route ?? route } } : {}),
+              ...(candidate?.route ? { routes: { [agent]: candidate.route } } : {}),
             });
           }
         }

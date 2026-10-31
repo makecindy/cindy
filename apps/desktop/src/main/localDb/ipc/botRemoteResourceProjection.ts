@@ -24,42 +24,42 @@ export const TEAMMATES_TITLE: RemoteLocalizedText = {
     'zh-TW': '所有夥伴',
     ja: 'すべてのチームメイト',
     ko: '모든 팀원',
-  },
+    "es":"Compañeros","fr":"Coéquipiers","de":"Teammitglieder","pt-PT":"Colegas de equipa","pt-BR":"Colegas de equipe"},
 };
 
 const STATUS_COPY: Readonly<Record<string, RemoteResourceStatus>> = {
   active: {
     label: {
       fallback: 'Available',
-      translations: { 'zh-CN': '可用', 'zh-TW': '可用', ja: '利用可能', ko: '사용 가능' },
+      translations: { 'zh-CN': '可用', 'zh-TW': '可用', ja: '利用可能', ko: '사용 가능' , "es":"Disponible","fr":"Disponible","de":"Verfügbar","pt-PT":"Disponível","pt-BR":"Disponível"},
     },
     tone: 'positive',
   },
   paused: {
     label: {
       fallback: 'Paused',
-      translations: { 'zh-CN': '已暂停', 'zh-TW': '已暫停', ja: '一時停止中', ko: '일시 중지됨' },
+      translations: { 'zh-CN': '已暂停', 'zh-TW': '已暫停', ja: '一時停止中', ko: '일시 중지됨' , "es":"En pausa","fr":"En pause","de":"Pausiert","pt-PT":"Em pausa","pt-BR":"Pausado"},
     },
     tone: 'neutral',
   },
   archived: {
     label: {
       fallback: 'Archived',
-      translations: { 'zh-CN': '已归档', 'zh-TW': '已封存', ja: 'アーカイブ済み', ko: '보관됨' },
+      translations: { 'zh-CN': '已归档', 'zh-TW': '已封存', ja: 'アーカイブ済み', ko: '보관됨' , "es":"Archivado","fr":"Archivé","de":"Archiviert","pt-PT":"Arquivado","pt-BR":"Arquivado"},
     },
     tone: 'neutral',
   },
   error: {
     label: {
       fallback: 'Needs attention',
-      translations: { 'zh-CN': '需要关注', 'zh-TW': '需要注意', ja: '確認が必要', ko: '확인 필요' },
+      translations: { 'zh-CN': '需要关注', 'zh-TW': '需要注意', ja: '確認が必要', ko: '확인 필요' , "es":"Requiere atención","fr":"Attention requise","de":"Handlungsbedarf","pt-PT":"Requer atenção","pt-BR":"Precisa de atenção"},
     },
     tone: 'critical',
   },
   deleting: {
     label: {
       fallback: 'Deleting',
-      translations: { 'zh-CN': '删除中', 'zh-TW': '刪除中', ja: '削除中', ko: '삭제 중' },
+      translations: { 'zh-CN': '删除中', 'zh-TW': '刪除中', ja: '削除中', ko: '삭제 중' , "es":"Eliminando","fr":"Suppression en cours","de":"Wird gelöscht","pt-PT":"A eliminar","pt-BR":"Excluindo"},
     },
     tone: 'neutral',
   },
@@ -72,7 +72,7 @@ const ATTENTION_COPY: RemoteLocalizedText = {
     'zh-TW': '需要注意',
     ja: '確認が必要',
     ko: '확인 필요',
-  },
+    "es":"Requiere atención","fr":"Attention requise","de":"Handlungsbedarf","pt-PT":"Requer atenção","pt-BR":"Precisa de atenção"},
 };
 
 function resourceRef(id: string) {

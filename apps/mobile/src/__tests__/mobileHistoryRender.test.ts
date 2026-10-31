@@ -340,3 +340,26 @@ it.each([false, true])('selects visible rows without reading unused raw bodies (
   }
   view.setActive(false);
 });
+
+// Unit regression: the screen's real history/raw renderer must not duplicate a
+// live failure when a hidden continuation row follows its persisted record.
+// Existing tail-only tests did not cover this non-tail identity.
+it.each([false, true])('hides only the live error identity and restores history when cleared (history=%s)', async ready => {
+  const rows = [row(0, 'user', 'Earlier request'),
+    row(1, 'error', { message: 'No capacity' }),
+    row(2, 'user', 'Current request'),
+    row(3, 'error', { message: 'No capacity' }),
+    row(4, 'user', CONTINUE_AFTER_ERROR_PROMPT)];
+  const { view } = harness(rows);
+  if (ready) await view.refresh();
+  const render = (activeErrorClientId: string | null) => buildMobileSessionRenderWindow({
+    history: { view, snapshot: view.getSnapshot(), messages: [], streaming: false, sessionId: 'session' },
+    raw: { cacheKey: 'en', messages: rows, options: { sessionId: 'session' } },
+    activeErrorClientId,
+  }).items.filter(item => item.type === 'message' && item.message.role === 'error')
+    .map(item => item.type === 'message' ? item.message.source.clientId : '');
+  try {
+    expect(render('client-3')).toEqual(['client-1']);
+    expect(render(null)).toEqual(['client-1', 'client-3']);
+  } finally { view.setActive(false); }
+});

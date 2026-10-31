@@ -1,5 +1,19 @@
 # 跨端协议兼容
 
+## Desktop 群聊消息的即时投影（2026-10-31）
+
+既有 `maker:bot-group:changed` 可选追加 `messages`（已授权的 `BotGroupMessageView[]`）和
+`historyRevision`。只向原账号窗口广播，且只合并到同一房间、相同投影代次的已显示主群；
+未知代次、切账号或撤权继续由完整读取重建／清空。旧成功读取被较新的增量超越时丢弃，
+权限拒绝仍立即清空。WS 消息仍先持久化再 ACK；消息投影不等待执行／安排／已读的完整刷新。
+贴回来源可复用实时投影或原有 30 秒内的已校验消息缓存；过期／缺失时重新鉴权读取。
+贴回成功后的 HTTP 单条授权读取提供断线兜底；失败不构造消息。旧客户端忽略可选字段，
+原有完整刷新继续执行；旧 Host 无字段时新客户端同样回退。无新 channel 或 allowlist。
+手机经原 remote resource 失效通知重新读取，新增正文只进入本机账号窗口，不改变远控权限。
+本机已读回执／已认证 actor `read.changed` 可直接更新缓存读位；不完整的旧格式、偏好变更、
+真实连接中断、重连和撤权保留原快照校准；从未连通的握手失败不反复作废已校验的 HTTP 缓存。无服务端 REST/WS 帧、数据库 schema 或原生指纹变化。
+
+
 ## Chat Server 只读工作发现与定向通知（2026-10-29）
 
 `/me.capabilities` 新增 `workAvailabilityVersion:1`、`workNotificationsVersion:1`。
@@ -392,6 +406,9 @@ stream 匹配后才处理；信令不进入业务可靠 FIFO，也不走直连�
   401 `RELAY_CREDENTIAL_INVALID`，刻意不用 Desktop `serverApiFetch` 会触发刷新/登出 Cindy 账号的三种错误码。
 - hello-ack 的 `capabilities` 为空：客户端据此不发 `notify`、不发 `sharedTask` / `providerShare` 帧；
   中转收到带这两种范围的帧回 `BAD_REQUEST`，不转发。`userId` 为主人账号，`deviceId` 由凭证绑定，不信任自报。
+- 跨账号帧不进自建中转：`RoutedDeviceLinkClient`（`packages/device-link/src/routedClient.ts`）在主连接走自建中转时另开一条
+  `scopedPeersOnly` 的官方连接承载共享任务与供应商分享，同账号路由帧在这条连接的入站边界丢弃。两条连接的状态与恢复互不牵连，
+  host 按 peer 取连接用 `connectionFor` / `crossAccountConnection`。官方线路不启动第二条连接，wire 不变；中转程序无需升级。
 - 官方 REST 同形：`/devices`（GET/PATCH/DELETE）、`/media/presign-put`、`/media/presign-get`、`DELETE /media`。
   媒体地址指向中转自身（带签名、短期有效、一次性上传、支持单段 Range）；`/ice-servers` 返回 404（客户端退回公共 STUN）；
   `/push-token` 返回 204 不保存；`GET /provider-shares` 返回空列表。
@@ -615,6 +632,27 @@ SDK 重新读取并恢复草稿；再次发送必须重新经过完整倒计时�
 锁定编辑；旧手机可能无法操作新增按钮，完整撤销交互需升级查看端。没有新 channel 或原生配置。
 
 ## MCP Apps
+
+页面 iframe 沙箱允许 `allow-scripts allow-same-origin allow-forms`；`allow-forms` 仅让 submit 事件分发，
+页面在监听器中 `preventDefault()` 后通过工具桥接提交；宿主在 window 冒泡监听末尾（含页面自己的 window 监听器之后）取消尚未取消的默认提交，
+并令直接 `form.submit()` 不执行；`method="dialog"` 只关闭对话框、不导航，保留原生行为。前置代码在显式 open 和隐式 write/writeln 替换文档后恢复监听。Desktop（本机与远程）和 Mobile
+始终保留 CSP `form-action 'none'`，禁止任何地址的原生表单提交，不新增网络出口。
+旧执行端和旧查看端没有该沙箱能力，依赖 submit 事件的插件需声明 `minCindyVersion: 0.1.122-beta`，两端升级。
+
+McpAppDocument 增量增加可选的 sdk: { source }，由执行电脑从与 AppBridge 同版本的
+官方依赖提供，随临时 View 转发，不写入卡片。新查看端为所有页面准备表单前置代码和 SDK importmap，
+无须检测初始 HTML 的 JavaScript；作者已有的 imports、前缀及 null 映射优先，BOM/doctype 保持正确位置。
+本机 SDK 从内存按同源地址供给，远程/Mobile 沿用 sdk.source，不新增缓存、操作或传输字段；
+open 结果沿用现有 invokeTransfer gzip 协商，自建中转继续透明转发既有 invoke/invoke-result。
+旧查看端忽略 sdk，旧 Host 缺字段时新查看端照常打开文档；此时 SDK 地址不可用，只使对应 import 失败，
+不影响自带 SDK、作者映射或不用 SDK 的页面。显式或隐式整页替换、外部模块和计算 import 均无需源码探测。
+页面本身的远程预算维持原限制；页面合格但附带 SDK 超限时，仅省略 sdk 并记录明确原因，仍打开页面。
+由于不再检测是否使用 SDK，此取舍优先保证存量页面可用；该 View 若依赖裸 SDK import，导入会失败。
+完整宿主 SDK 能力需执行端和查看端都升级，插件 minCindyVersion 为 0.1.122-beta。
+重复 ui/initialize 仅更换当前 View 的文档代次：取消旧请求、审批并丢弃旧回复，已发出的初始工具输入/结果不重放，未发出的在初始化后送达，
+保留卡片、已授予的附件投影与最新 hostContext；不改变安装批准、持久记录、channel 或手机原生配置。
+新 Host 的每个事件都携带 generation（首份文档为 0）。查看端在转发前按当前代次丢弃途中旧回复；
+事件缺 generation 表示旧执行端，新查看端不按代次过滤、保持旧行为；旧查看端忽略该字段。完整换页隔离仍要求执行端和查看端均升级。
 
 标准 MCP Apps 使用 `io.modelcontextprotocol/ui` 扩展及官方 `2026-01-26` 协议。
 客户端新增独立 `maker:mcp-apps:v1` channel，复用 device-link 的同账号调用与错误协议，
@@ -3816,6 +3854,15 @@ Pi 的原生供应商适配器只暴露获准模型，在打开流前用既有�
 复核当前任务绑定和远程模型范围。访客仍可省略该字段并使用已绑定的唯一来源，提供其他来源时拒绝。
 适配器启动与热刷新保留来源标记；本机普通任务不生成标记，不增加远程授权检查。此扩展不改变跨电脑 wire 格式。
 
+## 任务导入 `session-import`（Remote Resource，2026-10-30）
+
+新增隐藏集合 `session-import`（resourceKind `import`），只对声明 client primitive `session-import` 的控制端返回内容，
+旧控制端拿到 `UNSUPPORTED_CAPABILITY`，电脑详情页的入口只在新版手机出现。资源 `scan` / `scan:force` 返回可导入的任务：
+key、来源、标题、分组名（不含路径，分组键是不透明摘要）、时间、大小与状态位；`job:<requestId>` / `job:latest` 返回导入进度与
+逐项结果。动作 `import`（`input.keys`，最多 400 个）开始导入并以 `navigate` 指向对应 job；`cancel`（`input.requestId`）停止。
+文件路径、来源内部定位信息不出电脑；原文件夹不存在的任务只能在电脑上选新文件夹。桌面、手机与 Agent 同时发起时，
+已在另一次导入里排队或进行中的条目不会重复导入。不改 relay 帧、服务端 schema 或 Mobile 原生配置，自建中转无需适配。
+
 ## 伙伴导入的消息机器人分类
 
 `companion-import` Remote Resource 的 client primitives 可追加 `companion-import-bots-v1`。只有声明它的控制端
@@ -4192,6 +4239,10 @@ contacts 在每次 begin 投递前核对原元素仍连接、仍声明 contacts�
 沿用可选 `requestSource.ownerVerified` 和持久 `autoReviewUserText` 回执，不新增字段或 migration。
 伙伴私信开始携带当前已接受的主人请求；原话与正文包装仍按旧接收端的逐字验证。无原话时不传空回执。
 当前接受的核实回执可继续转交，`agent-request` 与 `delegated-continuation` 的审核投影保持同一原话。
+新增界面语言 `es`、`fr`、`de`、`pt-PT`、`pt-BR` 发出的原话包装沿用英文，避免旧接收端因不认识
+新语言前缀而拒绝逐字验证。读取端继续严格匹配这些语言已经生成的历史包装；不改原话、
+补充正文或核实条件，也不新增 wire 字段。实现见 `shared/forwardedRequest.ts`，回归同时覆盖
+旧端可读的新发送格式、历史法语回执和原话篡改拒绝。
 旧接收端仍可能丢弃核实状态或把接收回复标成私密；完整修复需要执行交接的宿主升级。
 账号、群与 IM 发言人校验、权限档、Plan、输入代次和撤销校验保持不变。
 不改变连接恢复或重放策略；单次派发失败只影响该请求，不重启连接或扩大设备访问。
@@ -4245,6 +4296,19 @@ Slack 复用既有 user-token 工具网关，在 `listTools` 增加 `cindy_get_m
 
 X 属于公开帖子接入，本轮不新增付费历史抓取；其已有推文上下文自动带图路径不变。
 
+## 伙伴群聊过程关联（2026-10-29）
+
+完成答复在既有 `ChatContentBlock` 列表末尾附可选 `cindy.work-record` v1 card，包含可选执行电脑 `deviceId`（与伙伴当前主力电脑无关；缺失时兼容旧记录），
+必需字段仅 `groupId / executionId / sessionId / clientId`；`fallback` 为空，正文与附件次序不变。
+旧客户端忽略未知 card 或读取空 fallback，仍能阅读原答复；新版遇到旧消息缺少关联时不补猜任务。
+新版 Desktop / Mobile 只在伙伴答复上投影 `process`，群和话题共用组件，并核对群 ID 与伙伴归属。
+关联不授予权限：阶段文字通过既有同账号设备授权的 `local-db:messages:around-client-id` 精确读取，
+遇到下一个用户输入或本轮终态停止，原始思考和工具结果不进入群消息。
+不增加 device-link RPC、relay 帧、权限或数据库 migration；自建中转仍透传既有调用，无服务端代码变更。
+没有真实 Chat Server 或自建中转互通验收时，客户端测试不可表述为服务端已验收。
+
+过程关联可附带非负 `durationMs`，在执行终态固定；上传和回执重试不增加该值。旧记录缺少此值时，展开后由原始时间戳计算；未知时间不编造。
+
 ## 插件伙伴委派协议与回执（未发布）
 
 agent.delegation 为可选独立能力，依赖 tasks + targets，只有 Host 确认的
@@ -4280,3 +4344,23 @@ RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phas
 - 离线回退：升级后首次请求失败时，仍可读取升级前按旧 URL（不带新能力位，或 V5）缓存的 last-known-good
   快照；此时没有推荐表，按协议推断兜底，不报错。
 - 字段位于目录 HTTP 响应内，不涉及 device-link、relay 或远控 wire；手机端经现有活动目录投影拿到结果。
+
+### 群广播对象（2026-10-30）
+
+Chat Server `/me` 新增可选能力 `groupMentionAudiences: 1`，群快照新增 `allow_mention_all_bots`（默认 false）。
+仅群主可 PATCH `allowMentionAllBots`；旧客户端忽略新字段，管理员原有资料编辑权限不变。
+消息可选 `mentionAudience: humans|bots|everyone` 表示真人、伙伴或两者广播，与明确的 `mentions` 合并；
+伙伴广播须开关开启。消息读回保留同名字段，服务端持久化后延迟派发仍保留目标。
+客户端无能力时不发送新字段，真人广播只展开真人；空目标以本人 actor 保持定向，不触发旧服务端的无点名兜底。
+`BotGroupMention.all` 只指真人，新增可选 `allBots` 独立表示伙伴，手机远程资源保留二者；
+只有已声明支持的新电脑/服务端才提供伙伴入口。原样重试已提交待发消息，不重算目标或更换操作标识。
+先部署数据库增量迁移和服务端，再发布客户端。旧客户端此前已展开的 actor 列表无法可靠区分广播与逐个点名，
+因此修复旧客户端行为须升级客户端。批量开关不授权工具，不改变个人代答配置。
+
+## Desktop 话题回复附件
+
+本机 `ChatServerApi.reply` 增量接受可选 `attachments`，沿用群聊的附件输入、校验、上传与引用结算；
+旧调用不带此字段仍按文字回复处理。此 IPC 未加入 device-link 白名单，手机和远程调用合同不变。
+Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`，不新增服务端字段或消息类型。
+无数据库迁移、权限扩大或服务端改动；回退客户端只收起电脑话题的附件输入，已有媒体消息仍可读取。
+回归入口：`ChatServerControls.test.tsx`、`chatServer.test.ts`。

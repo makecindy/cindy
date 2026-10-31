@@ -10,6 +10,7 @@ import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
+import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
@@ -978,6 +979,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

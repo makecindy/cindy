@@ -212,7 +212,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         frame = window.document.createElement('iframe');
         frame.title = appTitle;
         frame.addEventListener('load', () => { if (!disposed && phase === 'sandbox') phase = 'initialize'; }, { once: true });
-        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
         frame.setAttribute(
           'allow',
           "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'",

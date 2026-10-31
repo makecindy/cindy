@@ -420,6 +420,7 @@
     "sent": "送信済み",
     "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
+    "downloadVideo": "動画をダウンロード",
     "openVideoSource": "元の動画を開く",
     "calculationUnavailable": "この値を計算できません。",
     "incomplete": "一部の内容を表示できませんでした。"

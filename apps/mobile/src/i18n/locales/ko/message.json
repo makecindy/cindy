@@ -420,6 +420,7 @@
     "sent": "제출됨",
     "sendFailed": "메시지가 제출되지 않았습니다. 입력한 내용은 유지됩니다.",
     "playVideo": "동영상 재생",
+    "downloadVideo": "동영상 다운로드",
     "openVideoSource": "원본 동영상 열기",
     "calculationUnavailable": "이 값을 계산할 수 없습니다.",
     "incomplete": "일부 내용을 표시하지 못했습니다."

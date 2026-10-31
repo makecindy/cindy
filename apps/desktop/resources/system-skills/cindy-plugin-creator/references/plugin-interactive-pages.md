@@ -1,5 +1,8 @@
 ## 4.23 交互页面 MCP Apps（mcpApps.ui）
 
+宿主始终提供 SDK 映射（`@modelcontextprotocol/ext-apps`）和表单兜底；整页替换需两端 `0.1.122-beta`，每页只建一个 App。
+重握手取消旧调用、保留卡片/附件/hostContext；已发数据不重发。
+
 交互页面适合工具结果里的表单、图表和连续操作：模型用 `ghost_call` 打开页面，用户在页面里
 继续调用插件 main.js 的同一组工具。页面使用 MCP Apps 标准协议，不需要 Node、额外 MCP
 服务或 `mcp.json`。`mcpApps` 是 **Cindy 自定义的包清单格式**，不是 MCP Apps 定义的包格式；
@@ -406,12 +409,12 @@ render(result); // 读取 result._meta.view.html，替换当前内容。
   CSS 和链接也会影响页面。`innerHTML` 插入的脚本默认不执行，但内联事件或主动创建的
   脚本可能执行，不能只靠这个特性处理不可信内容。
 - 使用通用外壳时，市场审核只能看到外壳，不能据此审核运行时后端生成的全部界面。
-- **表单怎么提交：** 外壳接管提交按钮 click、文本框 Enter，并保留 submit 监听；
-  验证并收集字段 → `tools/call` 调用 app-only 工具 → main.js 用 `cindy.fetch` 发到
-  声明过的域名，凭证由宿主注入。这是表单提交的正规方式。原生提交受 sandbox
-  （无 `allow-forms`）和 CSP `form-action 'none'` 双重拦截，任何地址都提交不出去。
-  页面自己 `fetch` 只能访问 `connectDomains` 内的地址，永远不带宿主凭证。
-  从 basic-host 等允许原生表单的宿主移植时，必须改用上述桥接方式。
+- **表单怎么提交：** `0.1.122-beta` 两端升级后，sandbox 的 `allow-forms` 允许 submit
+  事件；监听器先 `preventDefault()`，再验证并收集字段 → `tools/call` 调 app-only 工具 →
+  main.js 用 `cindy.fetch` 请求声明域名，宿主注入凭证。CSP `form-action 'none'` 仍禁止
+  原生提交；宿主兜底取消未处理的提交，`form.submit()` 不执行。移植页也须改用桥接，
+  示例的 click / Enter 接管兼容旧查看端。
+  页面自己 `fetch` 仅访问 `connectDomains`，永远不带宿主凭证。
 - 鉴权图片由 main.js 用 `cindy.fetch({ url, as: 'media', callId: msg.callId })` 取回，
   凭证照常注入。检查 `ok`、HTTP 状态及 `media` 后返回标准 `resource_link`
   （`uri: r.media.url`，`mimeType` 用实际类型）；页面以资源 `_meta['cindy/file'].url`

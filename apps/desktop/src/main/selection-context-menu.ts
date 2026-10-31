@@ -76,6 +76,11 @@ function localizedActionLabel(
     if (resolvedLocale === 'zh-TW') return '新增到對話';
     if (resolvedLocale === 'ja') return 'チャットに追加';
     if (resolvedLocale === 'ko') return '대화에 추가';
+    if (resolvedLocale === 'es') return "Añadir a la conversación";
+    if (resolvedLocale === 'fr') return "Ajouter à la conversation";
+    if (resolvedLocale === 'de') return "Zum Chat hinzufügen";
+    if (resolvedLocale === 'pt-PT') return "Adicionar à conversa";
+    if (resolvedLocale === 'pt-BR') return "Adicionar à conversa";
     return 'Add to chat';
   }
   // Copy 是两套菜单共用的同一条命令,标签只保留 catalog 一处正本。
@@ -85,12 +90,22 @@ function localizedActionLabel(
     if (resolvedLocale === 'zh-TW') return `查詢「${preview}」`;
     if (resolvedLocale === 'ja') return `「${preview}」を調べる`;
     if (resolvedLocale === 'ko') return `“${preview}” 찾아보기`;
+    if (resolvedLocale === 'es') return `Buscar «${preview}»`;
+    if (resolvedLocale === 'fr') return `Rechercher « ${preview} »`;
+    if (resolvedLocale === 'de') return `„${preview}“ nachschlagen`;
+    if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}»`;
+    if (resolvedLocale === 'pt-BR') return `Consultar “${preview}”`;
     return `Look Up “${preview}”`;
   }
   if (resolvedLocale === 'zh-CN') return `在网页中搜索“${preview}”`;
   if (resolvedLocale === 'zh-TW') return `在網頁中搜尋「${preview}」`;
   if (resolvedLocale === 'ja') return `「${preview}」をウェブで検索`;
   if (resolvedLocale === 'ko') return `웹에서 “${preview}” 검색`;
+  if (resolvedLocale === 'es') return `Buscar «${preview}» en la web`;
+  if (resolvedLocale === 'fr') return `Rechercher « ${preview} » sur le Web`;
+  if (resolvedLocale === 'de') return `Im Web nach „${preview}“ suchen`;
+  if (resolvedLocale === 'pt-PT') return `Pesquisar «${preview}» na Web`;
+  if (resolvedLocale === 'pt-BR') return `Pesquisar “${preview}” na Web`;
   return `Search the web for “${preview}”`;
 }
 

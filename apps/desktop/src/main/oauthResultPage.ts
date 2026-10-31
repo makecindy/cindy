@@ -4,10 +4,11 @@
  * unavailable; the inlined values mirror docs/design-rules/cindy-design-system.md's default light/dark theme.
  */
 
+import { resolveSystemLocale, type SupportedLocale } from '../shared/locale.js';
 import { DEEP_LINK_URL_PREFIX } from '../shared/deepLinkSchemes';
 import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
 
-export type OAuthResultPageLang = 'zh' | 'zh-TW' | 'en' | 'ja' | 'ko';
+export type OAuthResultPageLang = Exclude<SupportedLocale, 'zh-CN'> | 'zh';
 
 /** Receipt is not token-exchange success. The authoritative result stays in the cloud card. */
 export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: string; body: string } {
@@ -17,7 +18,28 @@ export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: 
     en: { title: 'Authorization callback received', body: 'Return to Cindy to check the authorization result on the remote device.' },
     ja: { title: '認証コールバックを受信しました', body: 'Cindy に戻り、リモートデバイスの認証結果を確認してください。' },
     ko: { title: '인증 콜백을 받았습니다', body: 'Cindy로 돌아가 원격 기기의 인증 결과를 확인하세요.' },
-  }[lang];
+
+  "es": {
+    "title": "Respuesta de autorización recibida",
+    "body": "Vuelve a Cindy para consultar el resultado de la autorización en el dispositivo remoto."
+  },
+  "fr": {
+    "title": "Rappel d'autorisation reçu",
+    "body": "Revenez dans Cindy pour vérifier le résultat de l'autorisation sur l'appareil distant."
+  },
+  "de": {
+    "title": "Autorisierungsrückmeldung erhalten",
+    "body": "Kehre zu Cindy zurück, um das Ergebnis der Autorisierung auf dem Remote-Gerät zu prüfen."
+  },
+  "pt-PT": {
+    "title": "Resposta de autorização recebida",
+    "body": "Volte a Cindy para verificar o resultado da autorização no dispositivo remoto."
+  },
+  "pt-BR": {
+    "title": "Resposta de autorização recebida",
+    "body": "Volte para Cindy para verificar o resultado da autorização no dispositivo remoto."
+  },
+}[lang];
 }
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
 export type OAuthResultPageTheme = 'light' | 'dark';
@@ -70,6 +92,12 @@ export const OAUTH_RESULT_HTML_LANG: Record<OAuthResultPageLang, string> = {
   en: 'en',
   ja: 'ja',
   ko: 'ko',
+
+  "es": "es",
+  "fr": "fr",
+  "de": "de",
+  "pt-PT": "pt-PT",
+  "pt-BR": "pt-BR",
 };
 
 /** Selects the first supported language in browser preference order. */
@@ -87,12 +115,25 @@ export function pickOAuthResultPageLang(acceptLanguage: string | undefined): OAu
     if (primary.startsWith('ja')) return 'ja';
     if (primary.startsWith('ko')) return 'ko';
     if (primary.startsWith('en')) return 'en';
+    if (['es', 'fr', 'de', 'pt'].includes(primary.split('-')[0])) {
+      return resolveSystemLocale(primary) as Exclude<SupportedLocale, 'zh-CN'>;
+    }
   }
   return 'en';
 }
 
 function returnLabel(lang: OAuthResultPageLang, brandName: string): string {
   switch (lang) {
+    case 'es':
+      return `Volver a ${brandName}`;
+    case 'fr':
+      return `Revenir dans ${brandName}`;
+    case 'de':
+      return `Zurück zu ${brandName}`;
+    case 'pt-PT':
+      return `Voltar a ${brandName}`;
+    case 'pt-BR':
+      return `Voltar para ${brandName}`;
     case 'zh':
       return `返回 ${brandName}`;
     case 'zh-TW':
@@ -134,6 +175,51 @@ export function getProviderOAuthResultCopy(
   brandName: string,
 ): ProviderOAuthCopy {
   switch (lang) {
+    case 'es':
+      return {
+        successTitle: `Autorización completada`,
+        successBody: `${providerName} ya está conectado a ${brandName}. Puedes volver a la aplicación para continuar.`,
+        errorTitle: `Autorización no completada`,
+        missingCodeBody: `No se recibió ningún código de autorización de ${providerName}. Vuelve a ${brandName} e inténtalo de nuevo.`,
+        invalidStateBody: `La validación de la autorización falló. Vuelve a ${brandName} e inicia la conexión otra vez.`,
+        exchangeFailedBody: `Se produjo un error al conectar ${providerName}. Vuelve a ${brandName} e inténtalo de nuevo.`,
+      };
+    case 'fr':
+      return {
+        successTitle: `Autorisation terminée`,
+        successBody: `${providerName} est maintenant connecté à ${brandName}. Revenez dans l’application pour continuer.`,
+        errorTitle: `Autorisation non terminée`,
+        missingCodeBody: `Aucun code d’autorisation reçu de ${providerName}. Revenez dans ${brandName} et réessayez.`,
+        invalidStateBody: `La vérification de l’autorisation a échoué. Revenez dans ${brandName} et relancez la connexion.`,
+        exchangeFailedBody: `Une erreur est survenue lors de la connexion à ${providerName}. Revenez dans ${brandName} et réessayez.`,
+      };
+    case 'de':
+      return {
+        successTitle: `Autorisierung abgeschlossen`,
+        successBody: `${providerName} ist jetzt mit ${brandName} verbunden. Du kannst zur App zurückkehren und fortfahren.`,
+        errorTitle: `Autorisierung nicht abgeschlossen`,
+        missingCodeBody: `Von ${providerName} wurde kein Autorisierungscode empfangen. Kehre zu ${brandName} zurück und versuche es erneut.`,
+        invalidStateBody: `Die Autorisierung konnte nicht bestätigt werden. Kehre zu ${brandName} zurück und starte die Verbindung erneut.`,
+        exchangeFailedBody: `Beim Verbinden mit ${providerName} ist ein Fehler aufgetreten. Kehre zu ${brandName} zurück und versuche es erneut.`,
+      };
+    case 'pt-PT':
+      return {
+        successTitle: `Autorização concluída`,
+        successBody: `${providerName} está agora ligado a ${brandName}. Pode voltar à aplicação para continuar.`,
+        errorTitle: `Autorização por concluir`,
+        missingCodeBody: `Não foi recebido um código de autorização de ${providerName}. Volte a ${brandName} e tente novamente.`,
+        invalidStateBody: `A validação da autorização falhou. Volte a ${brandName} e inicie novamente a ligação.`,
+        exchangeFailedBody: `Ocorreu um erro ao ligar a ${providerName}. Volte a ${brandName} e tente novamente.`,
+      };
+    case 'pt-BR':
+      return {
+        successTitle: `Autorização concluída`,
+        successBody: `${providerName} está conectado ao ${brandName}. Você pode voltar ao aplicativo para continuar.`,
+        errorTitle: `Autorização não concluída`,
+        missingCodeBody: `Nenhum código de autorização foi recebido de ${providerName}. Volte para ${brandName} e tente novamente.`,
+        invalidStateBody: `A validação da autorização falhou. Volte para ${brandName} e inicie a conexão novamente.`,
+        exchangeFailedBody: `Ocorreu um erro ao conectar ${providerName}. Volte para ${brandName} e tente novamente.`,
+      };
     case 'zh':
       return {
         successTitle: '授权成功',
@@ -254,6 +340,57 @@ const GHOST_OAUTH_PAGE_STRINGS: Record<OAuthResultPageLang, GhostOAuthResultCopy
       internal: '콜백 처리 중 오류가 발생했습니다. {brand}(으)로 돌아가 다시 시도하세요.',
     },
   },
+
+  "es": {
+    "successTitle": "Autorización exitosa",
+    "successBody": "Puedes cerrar esta página y volver a {brand}.",
+    "errorTitle": "Autorización fallida",
+    "errors": {
+      "provider-error": "El servidor de autorización devolvió un error: {detail}",
+      "invalid-callback": "La respuesta de autorización está incompleta o no pasó la validación. Vuelve a {brand} e inténtalo de nuevo.",
+      "internal": "Ocurrió un error al procesar la respuesta de autorización. Vuelve a {brand} e inténtalo de nuevo."
+    }
+  },
+  "fr": {
+    "successTitle": "Autorisation réussie",
+    "successBody": "Vous pouvez fermer cette page et revenir dans {brand}.",
+    "errorTitle": "Échec de l'autorisation",
+    "errors": {
+      "provider-error": "Le serveur d'autorisation a renvoyé une erreur : {detail}",
+      "invalid-callback": "Le rappel est incomplet ou sa validation a échoué. Revenez dans {brand} et réessayez.",
+      "internal": "Une erreur s'est produite lors du traitement du rappel. Revenez dans {brand} et réessayez."
+    }
+  },
+  "de": {
+    "successTitle": "Autorisierung erfolgreich",
+    "successBody": "Du kannst diese Seite schließen und zu {brand} zurückkehren.",
+    "errorTitle": "Die Autorisierung ist fehlgeschlagen",
+    "errors": {
+      "provider-error": "Der Autorisierungsserver hat einen Fehler zurückgegeben: {detail}",
+      "invalid-callback": "Die Rückmeldung ist unvollständig oder konnte nicht bestätigt werden. Kehre zu {brand} zurück und versuche es erneut.",
+      "internal": "Beim Verarbeiten der Rückmeldung ist ein Fehler aufgetreten. Kehre zu {brand} zurück und versuche es erneut."
+    }
+  },
+  "pt-PT": {
+    "successTitle": "Autorização bem-sucedida",
+    "successBody": "Pode fechar esta página e voltar para {brand}.",
+    "errorTitle": "Falha na autorização",
+    "errors": {
+      "provider-error": "O servidor de autorização devolveu um erro: {detail}",
+      "invalid-callback": "A resposta de autorização está incompleta ou não passou na validação. Volte a {brand} e tente novamente.",
+      "internal": "Ocorreu um erro ao processar a resposta de autorização. Volte a {brand} e tente novamente."
+    }
+  },
+  "pt-BR": {
+    "successTitle": "Autorização bem-sucedida",
+    "successBody": "Você pode fechar esta página e retornar para {brand}.",
+    "errorTitle": "Falha na autorização",
+    "errors": {
+      "provider-error": "O servidor de autorização retornou um erro: {detail}",
+      "invalid-callback": "A resposta de autorização está incompleta ou não passou na validação. Volte para {brand} e tente novamente.",
+      "internal": "Ocorreu um erro ao processar a resposta de autorização. Volte para {brand} e tente novamente."
+    }
+  },
 };
 
 /** Ghost OAuth 回调页文案(占位符原样返回,替换责任在调用方)。 */
@@ -277,6 +414,16 @@ export function getOAuthNeutralResultCopy(
   brandName: string,
 ): OAuthNeutralResultCopy {
   switch (lang) {
+    case 'es':
+      return { title: "Acción necesaria", body: `Vuelve a ${brandName} y termina la instalación en el espacio de trabajo actual.` };
+    case 'fr':
+      return { title: "Action requise", body: `Revenez dans ${brandName} et terminez l’installation dans l’espace de travail actuel.` };
+    case 'de':
+      return { title: "Aktion erforderlich", body: `Kehre zu ${brandName} zurück und schließe die Installation im aktuellen Arbeitsbereich ab.` };
+    case 'pt-PT':
+      return { title: "É necessário continuar", body: `Volte a ${brandName} e conclua a instalação no espaço de trabalho atual.` };
+    case 'pt-BR':
+      return { title: "Ação necessária", body: `Volte para ${brandName} e conclua a instalação no espaço de trabalho atual.` };
     case 'zh':
       return {
         title: '需要继续操作',

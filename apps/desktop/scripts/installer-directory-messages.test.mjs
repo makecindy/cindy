@@ -22,8 +22,8 @@ const source = readFileSync(
 const glossary = JSON.parse(
   readFileSync(new URL('../../../i18n/glossary.json', import.meta.url), 'utf8'),
 );
-const locales = { en: 'en', zh_CN: 'zh-CN', zh_TW: 'zh-TW', ja: 'ja', ko: 'ko' };
-const entries = [...source.matchAll(/^!define (\w+)_(en|zh_CN|zh_TW|ja|ko) "([^"]+)"$/gm)].map(
+const locales = { en: 'en', zh_CN: 'zh-CN', zh_TW: 'zh-TW', ja: 'ja', ko: 'ko', es: 'es', fr: 'fr', de: 'de', pt_PT: 'pt-PT', pt_BR: 'pt-BR' };
+const entries = [...source.matchAll(/^!define (\w+)_(en|zh_CN|zh_TW|ja|ko|es|fr|de|pt_PT|pt_BR) "([^"]+)"$/gm)].map(
   ([, key, language, value]) => ({ key, locale: locales[language], value }),
 );
 const english = new Map(

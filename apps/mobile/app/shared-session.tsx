@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState, Keyboard, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -6,12 +6,13 @@ import { Check, Clock, FileText, Laptop, Link, Users } from 'lucide-react-native
 import { buildSharedTaskInvitationLink, parseSharedTaskInvitation, sharedTaskAccountName, sharedTaskHostPeer, parseSharedTaskPeer, SHARED_TASK_HOST_CHANNEL,
   type SharedTaskHostCommand, type SharedTaskHostState, type SharedTaskListItem } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
-import { APP_SCHEME, DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { APP_SCHEME, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { clearSharedTaskInvitationIntent, usePendingSharedTaskInvitationIntent } from '@/device-link/sharedTaskInvitationIntent';
 import { goBackGuarded } from '@/utils/backGuard';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import { getActiveSelfHostedRelay, subscribeSelfHostedRelayRoute } from '@/device-link/selfHostedRelayRouting';
 import { notifySharedTaskMembershipChanged } from '@/device-link/sharedTaskMembershipSignal';
 import { filterVisibleSharedTasks } from '@/device-link/sharedTaskVisibility';
 import { sharedTaskErrorKey } from '@/device-link/sharedTaskCompatibility';
@@ -38,6 +39,7 @@ export default function SharedSessionScreen() {
   const { isAuthenticated, accountGeneration, user } = useAuth();
   const incomingInvitation = usePendingSharedTaskInvitationIntent();
   const api = useSharedTaskApi();
+  const selfHostedRelay = useSyncExternalStore(subscribeSelfHostedRelayRoute, getActiveSelfHostedRelay, getActiveSelfHostedRelay);
   const confirmation = useSharedTaskConfirmation();
   const link = useDeviceLink();
   const { colors } = useTheme();
@@ -228,7 +230,7 @@ export default function SharedSessionScreen() {
     router.replace({ pathname: '/sessions/[sessionId]', params: { sessionId: detail.sessionId, deviceId: target, deviceName: targetName } });
   };
   const joinInvitation = (input: string, enter = false) => void run(async (current) => {
-    const parsed = parseSharedTaskInvitation(input, DEVICE_LINK_API_BASE_URL);
+    const parsed = parseSharedTaskInvitation(input, getOfficialDeviceLinkApiBaseUrl());
     if (!parsed.ok) { setNotice(t(parsed.reason === 'different-server' ? 'sharedTask.invitationDifferentServer' : 'sharedTask.invalid')); return; }
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
     notifySharedTaskMembershipChanged();
@@ -370,6 +372,7 @@ export default function SharedSessionScreen() {
       setJoinedId(undefined); setEnded(false); setState(null); setNotice(''); setLoadError('');
       router.replace('/devices');
     }} /> : link.sharedTaskAvailable !== true ? <Text style={styles.intro}>{t(link.sharedTaskAvailable === false ? 'sharedTask.upgrade' : 'sharedTask.retry')}</Text> : <>
+      {!!selfHostedRelay && <Text style={styles.intro}>{t('sharedTask.officialRelayNote')}</Text>}
       {!guestId && !management && <View style={styles.tabs}>
         <MainWindowRowButton accessibilityLabel={t(hostContext ? 'sharedTask.tabCurrent' : 'sharedTask.join')} selected={tab === 'current'} style={[styles.tab, tab === 'current' && styles.tabSelected]} onPress={() => { setNotice(''); setTab('current'); }}><Text style={styles.small}>{t(hostContext ? 'sharedTask.tabCurrent' : 'sharedTask.join')}</Text></MainWindowRowButton>
         <MainWindowRowButton accessibilityLabel={t('sharedTask.tabOwned')} selected={tab === 'owned'} style={[styles.tab, tab === 'owned' && styles.tabSelected]} onPress={() => { setNotice(''); setTab('owned'); }}><Text style={styles.small}>{t('sharedTask.tabOwned')}</Text><View style={styles.badge}><Text style={styles.metadata}>{owned.length}</Text></View></MainWindowRowButton>
@@ -406,7 +409,7 @@ export default function SharedSessionScreen() {
             const result = await host({ action: 'invite', sharedTaskId: detail.sharedTaskId }) as { invitation: string };
             if (!current()) return;
             const invitationApp = APP_SCHEME === 'cindycn' ? 'cindycn' : APP_SCHEME === 'cindydev' ? 'cindydev' : 'cindy';
-            const invitationLink = buildSharedTaskInvitationLink(result.invitation, DEVICE_LINK_API_BASE_URL, invitationApp);
+            const invitationLink = buildSharedTaskInvitationLink(result.invitation, getOfficialDeviceLinkApiBaseUrl(), invitationApp);
             try { await writeClipboardText(t('sharedTask.invitationMessage', { title, link: invitationLink })); if (current()) setNotice(t('sharedTask.invitationCopied')); }
             catch { if (current()) setNotice(t('sharedTask.invitationCopyFailed')); }
           }, false) }} />
