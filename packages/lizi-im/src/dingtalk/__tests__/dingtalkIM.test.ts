@@ -429,6 +429,34 @@ describe("DingTalkIM", () => {
     }
   });
 
+  it("does not let an opted-in guest resolve a permission waiter in the owner's DM", async () => {
+    const { host, secrets } = makeHost();
+    secrets.set("dingtalk-bot-owner-user-id", "owner-1");
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      allowGuestDirectMessages: true, clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage(event => received.push(event));
+    await im.init();
+    vi.spyOn(im, "sendText").mockResolvedValue({ messageId: "permission-prompt" });
+    try {
+      let settled = false;
+      const reply = im.requestTextReply("owner-1", "confirm tool", text => text === "allow" ? text : null);
+      void reply.then(() => { settled = true; });
+      client.emit(directMessage({ msgId: "guest-approval", senderStaffId: "guest-1", text: { content: "allow" } }));
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      expect(received[0].speaker?.isOwner).toBe(false);
+      expect(settled).toBe(false);
+      client.emit(directMessage({ msgId: "owner-approval", text: { content: "allow" } }));
+      await expect(reply).resolves.toBe("allow");
+      expect(received).toHaveLength(1);
+    } finally {
+      await im.dispose();
+    }
+  });
+
   it("routes mentioned group messages to one lane with speaker metadata", async () => {
     const { host } = makeHost();
     const client = new FakeClient();
