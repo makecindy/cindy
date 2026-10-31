@@ -13965,6 +13965,7 @@
       "collapseFields": "Contraer",
       "formSyncFailed": "Las ediciones de la tarjeta no se han sincronizado. Verifique la conexión y continúe editando; el mensaje no ha sido enviado.",
       "linkOpenFailed": "No se pudo abrir el enlace",
+      "modelSelectFailed": "No se cambió el modelo. Vuelve a elegirlo.",
       "mailPreview": "Vista previa de correo electrónico",
       "mailEnlarge": "Ampliar vista previa",
       "mailInsertImage": "Insertar en mensaje",

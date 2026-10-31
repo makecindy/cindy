@@ -13965,6 +13965,7 @@
       "collapseFields": "Recolher",
       "formSyncFailed": "As alterações ao cartão não foram sincronizadas. Verifique a ligação e continue a editar; a mensagem não foi enviada.",
       "linkOpenFailed": "Não foi possível abrir a ligação",
+      "modelSelectFailed": "O modelo não foi alterado. Escolha novamente.",
       "mailPreview": "Pré-visualização do email",
       "mailEnlarge": "Ampliar pré-visualização",
       "mailInsertImage": "Inserir na mensagem",

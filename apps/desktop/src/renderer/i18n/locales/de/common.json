@@ -13837,6 +13837,7 @@
       "collapseFields": "Einklappen",
       "formSyncFailed": "Kartenänderungen wurden nicht synchronisiert. Prüfe die Verbindung und bearbeite weiter; die Nachricht wurde nicht gesendet.",
       "linkOpenFailed": "Link konnte nicht geöffnet werden",
+      "modelSelectFailed": "Das Modell wurde nicht geändert. Bitte erneut auswählen.",
       "mailPreview": "E-Mail-Vorschau",
       "mailEnlarge": "Vorschau vergrößern",
       "mailInsertImage": "In Nachricht einfügen",

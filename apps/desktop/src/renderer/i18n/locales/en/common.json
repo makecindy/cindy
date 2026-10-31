@@ -13838,6 +13838,7 @@
       "collapseFields": "Collapse",
       "formSyncFailed": "Card edits have not synced. Check the connection and continue editing; the message has not been sent.",
       "linkOpenFailed": "Failed to open link",
+      "modelSelectFailed": "The model wasn't changed. Please choose again.",
       "mailPreview": "Email preview",
       "mailEnlarge": "Enlarge preview",
       "mailInsertImage": "Insert into message",

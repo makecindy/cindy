@@ -89,6 +89,7 @@ import {
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
 import { GhostModelPicker, chooseModelPickerWindow, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from './ghostModelPicker.js';
+import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -2575,6 +2576,7 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
         return prepareMailAttachmentSelection(result.filePaths[0], sessionId, inline);
       },
       prepareMailUpload: prepareMailAttachmentUpload,
+      isModelRouteAvailable: isPluginModelRouteAvailableNow,
       // 呼吸起点:点击成功投递即把该会话标为"意识活动中"(结束由 card-update
       // state / TTL 收口)。
       onActivityStart: (key, sessionId) => getGhostSessionActivityTracker().begin(key, sessionId),
@@ -3883,11 +3885,13 @@ export function getGhostModelPicker(): GhostModelPicker {
         },
       };
     },
-    available: async route => {
-      const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
-      return isPluginModelPickerRouteAvailable(route, views, getPluginModelPickerAgents());
-    },
+    available: isPluginModelRouteAvailableNow,
   });
+}
+
+async function isPluginModelRouteAvailableNow(route: PluginTaskRoute): Promise<boolean> {
+  const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  return isPluginModelPickerRouteAvailable(route, views, getPluginModelPickerAgents());
 }
 
 function createGhostFileTransferProgress(id: string, callId?: string) {
@@ -9473,9 +9477,9 @@ export function registerGhostIpc(): void {
   // 派发器内部永不抛;意识随后自绘 card-update 换新卡走既有回放路径。
   ipcMain.handle(
     'ghosts:card:action',
-    async (event, callId: unknown, actionId: unknown, prompt?: unknown, formValues?: unknown, formChange?: unknown) => {
+    async (event, callId: unknown, actionId: unknown, prompt?: unknown, formValues?: unknown, formChange?: unknown, modelSelection?: unknown) => {
       assertTrustedAppRendererEvent(event);
-      const r = await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, undefined, formValues, formChange === true);
+      const r = await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, undefined, formValues, formChange === true, undefined, modelSelection);
       return { ok: r.ok };
     },
   );

@@ -44,6 +44,9 @@ import { ImageLightbox } from './ImageLightbox';
 import { mailCardFooterHtml, updateMailCardDocument } from './mailCardFooter';
 import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
+import { GhostCardModelSelect } from './GhostCardModelSelect';
+import { isPluginModelSelection } from '@cindy/device-link';
+import type { PluginTaskRoute } from '../../../shared/pluginTasks';
 import { toast } from '@/lib/toast';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -282,6 +285,12 @@ function GhostCardCanvas({
     left: number;
   } | null>(null);
   const [promptText, setPromptText] = useState('');
+  // data-ghost-model-select 类动作的模型下拉框(锚在被点按钮下方,选中后随 card-action 回传)。
+  const [modelAsk, setModelAsk] = useState<{
+    actionId: string;
+    initial: PluginTaskRoute | null;
+    rect: { top: number; left: number; width: number; height: number };
+  } | null>(null);
   // 弹面板那颗按钮的引用:发送时对它上锁(防连点),与普通按钮同一套锁。
   const promptSourceElRef = useRef<HTMLElement | null>(null);
   // data-ghost-link 外链确认框(卡片交互 v3):卡内声明式外链点击后先弹宿主
@@ -591,6 +600,27 @@ function GhostCardCanvas({
           }).then(result => { if (mailSubmit || !result.ok) unlock(); }).catch(unlock);
           return;
         }
+        // data-ghost-model-select 类动作:在按钮下方弹模型下拉框,选中后才派发。
+        if (el.dataset.ghostModelSelect !== undefined) {
+          const anchor = anchorRef.current;
+          const iframeEl = iframeRef.current;
+          if (!anchor || !iframeEl) return;
+          iframeEl.blur();
+          const o = anchor.getBoundingClientRect();
+          const f = iframeEl.getBoundingClientRect();
+          const r = el.getBoundingClientRect();
+          let initial: PluginTaskRoute | null = null;
+          try {
+            const value: unknown = JSON.parse(el.dataset.ghostModelSelect || 'null');
+            if (isPluginModelSelection(value)) initial = value;
+          } catch { /* 没有当前值:从空白选择开始 */ }
+          setModelAsk({
+            actionId,
+            initial,
+            rect: { top: f.top - o.top + r.top, left: f.left - o.left + r.left, width: r.width, height: r.height },
+          });
+          return;
+        }
         // data-ghost-prompt 类动作:先弹宿主输入框收集文字,发送时才派发
         // (与老基座 imgPrompt popover 同体验;零输入直发会被上游拒)。
         if (el.dataset.ghostPrompt !== undefined) {
@@ -829,6 +859,18 @@ function GhostCardCanvas({
           onTextChange={setPromptText}
           onSubmit={submitPrompt}
           onCancel={() => setPromptAsk(null)}
+        />
+      ) : null}
+      {modelAsk ? (
+        <GhostCardModelSelect
+          rect={modelAsk.rect}
+          initial={modelAsk.initial}
+          onSelect={(route) => {
+            void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, modelAsk.actionId, undefined, undefined, undefined, route)
+              ?.then((r) => { if (!r.ok) toast.error(t('chat.ghostCall.modelSelectFailed')); })
+              .catch(() => toast.error(t('chat.ghostCall.modelSelectFailed')));
+          }}
+          onClose={() => setModelAsk(null)}
         />
       ) : null}
       {linkAsk ? (

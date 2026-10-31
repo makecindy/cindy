@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
-import { GHOST_CARD_HTML_MAX_BYTES } from '../../../shared/ghost';
+import { GHOST_CARD_HTML_MAX_BYTES, ghostCardDeclaresModelSelect } from '../../../shared/ghost';
 import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
@@ -405,6 +405,24 @@ describe('sanitizeGhostCardHtml · 手机呈现提示(data-ghost-primary / data-
     expect(ok('<div data-ghost-live-label="跟进中">x</div><b data-ghost-live-label="x">y</b>')).toBe('<div data-ghost-live-label="跟进中">x</div><b>y</b>');
     expect(ok('<button data-ghost-toggle="maybe">a</button><div data-ghost-primary data-ghost-toggle="on">b</div>'))
       .toBe('<button type="button">a</button><div>b</div>');
+  });
+});
+
+// 模型下拉框:宿主据此在按钮下方弹模型列表,并凭紧跟动作的这段字面量核对动作确实声明了下拉框。
+describe('sanitizeGhostCardHtml · 模型下拉框(data-ghost-model-select)', () => {
+  it('只挂在有动作的 button 上,值只留合格的模型选择', () => {
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false };
+    const enc = (v: unknown) => JSON.stringify(v).replace(/"/g, '&quot;');
+    const html = ok(`<button data-ghost-model-select="${enc(route)}" data-ghost-action="pick">x</button>`);
+    expect(html).toBe(`<button data-ghost-action="pick" data-ghost-model-select="${enc(route)}" type="button">x</button>`);
+    expect(ghostCardDeclaresModelSelect(html, 'pick')).toBe(true);
+    expect(ghostCardDeclaresModelSelect(html, 'pic')).toBe(false);
+    for (const bad of ['{bad', enc({ ...route, extra: 1 })]) {
+      expect(ok(`<button data-ghost-action="a" data-ghost-model-select="${bad}">x</button>`))
+        .toBe('<button data-ghost-action="a" data-ghost-model-select="" type="button">x</button>');
+    }
+    expect(ok('<button data-ghost-model-select="">x</button><div data-ghost-action="a" data-ghost-model-select="">y</div>'))
+      .toBe('<button type="button">x</button><div data-ghost-action="a">y</div>');
   });
 });
 

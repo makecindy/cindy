@@ -13772,6 +13772,7 @@
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
       "linkOpenFailed": "링크를 열지 못했습니다",
+      "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
       "mailEnlarge": "확대 보기",
       "mailInsertImage": "본문에 삽입",

@@ -3,7 +3,7 @@ import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermission
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
-import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
+import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -7600,6 +7600,16 @@ export function isFullWidthGhostCardHtml(html: string): boolean {
   return html.includes(' data-ghost-width="full"');
 }
 
+/**
+ * 卡内模型下拉框:插件在动作按钮上标 `data-ghost-model-select`(值 = 当前模型的 JSON,可空),
+ * 宿主点击时在按钮下方弹出模型选择器,选中结果随 card-action 的 modelSelection 回传。
+ * 净化器把它紧跟在 data-ghost-action 之后输出,这里据此确认该动作确实声明了下拉框。
+ */
+export function ghostCardDeclaresModelSelect(html: string, actionId: string): boolean {
+  return GHOST_CARD_ACTION_ID_RE.test(actionId) &&
+    html.includes(` data-ghost-action="${actionId}" data-ghost-model-select="`);
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
@@ -8651,6 +8661,11 @@ export type GhostPipeEventPush =
       mailAttachment?: { path: string; filename: string; bytes: number; sha256: string; contentId?: string };
       /** Passive editor update: no user-action token, no Agent continuation. */
       formChange?: boolean;
+      /**
+       * 用户在卡内模型下拉框(data-ghost-model-select)里选中的模型。宿主已核对该动作
+       * 确实声明了下拉框、且这个模型当前可用;别的按钮永远没有此字段。
+       */
+      modelSelection?: PluginModelSelection;
       /**
        * 主机铸造的衍生卡位(`<根callId>::sp<序>`,见 GHOST_CARD_SPAWN_SEP)。
        * 对它 card-update = 原卡下方长出新卡(原卡保留,母卡按钮可反复点);

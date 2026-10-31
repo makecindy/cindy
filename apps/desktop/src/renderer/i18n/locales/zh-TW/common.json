@@ -13771,6 +13771,7 @@
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，請檢查連線後繼續編輯；訊息尚未傳送。",
       "linkOpenFailed": "連結開啟失敗",
+      "modelSelectFailed": "模型沒有換成，請重新選擇",
       "mailPreview": "郵件預覽",
       "mailEnlarge": "放大檢視",
       "mailInsertImage": "插入內文",

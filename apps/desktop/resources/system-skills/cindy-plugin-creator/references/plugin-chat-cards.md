@@ -49,6 +49,11 @@ cindy.onHostMessage(async function (msg) {
   `data-ghost-prompt="占位文案"`(≤128 字,可空串)。用户点击时主机弹标准输入框
   收集文字(textarea,回车发送/Esc 取消),card-action 事件多带 `prompt` 字段
   (≤2000 字)——输入交互由主机代管;
+- **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
+  (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
+  属性转义;没有当前值写空串)。新版电脑端点击时在按钮正下方弹出 Cindy 的模型列表,选中后
+  card-action 多带 `modelSelection`(主机已核对它当前可用)。手机和旧版客户端照常派发不带
+  `modelSelection` 的动作,这时请自己调用 `cindy.pickModel({ initial, mobilePageId })` 兜底;
 - **可编辑文本表单**:一张卡至多声明一个 div，其 `data-ghost-form` 属性为经 HTML 属性转义的
   JSON 字段数组，每项 `{name,label,value,multiline?,row?,collapsed?,kind?}`；1–16 项、字段名唯一、label ≤128 字、value ≤16000 字。
   div 内保留纯文本预览供旧客户端使用。宿主在卡片顶部用标准控件渲染；卡内仍零脚本，禁止用它收集凭证。
@@ -152,6 +157,7 @@ cindy.onHostMessage(async function (msg) {
     // msg.callId = 被点那张卡的归因号(和当初 tool-call 同值);
     // msg.actionId = 你在 data-ghost-action 里写的动作 id;
     // msg.prompt = 用户输入的文字(仅 data-ghost-prompt 类按钮有,非空才带);
+    // msg.modelSelection = 卡内模型下拉框选中的模型(仅 data-ghost-model-select 类按钮,新版电脑端);
     // msg.spawnCallId = 主机铸的**衍生卡位**:画到它 = 原卡下方长出新卡。
     // 声明 agent 后还会收到 msg.sessionId 与 msg.userActionToken；后者是
     // 绑定本插件+本会话、两分钟有效且只能使用一次的 Agent 通行票(见 §4.11)。

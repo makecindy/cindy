@@ -13772,6 +13772,7 @@
       "collapseFields": "折りたたむ",
       "formSyncFailed": "カードの変更を同期できませんでした。接続を確認して編集を続けてください。メッセージは未送信です。",
       "linkOpenFailed": "リンクを開けませんでした",
+      "modelSelectFailed": "モデルを変更できませんでした。もう一度選択してください。",
       "mailPreview": "メールプレビュー",
       "mailEnlarge": "拡大表示",
       "mailInsertImage": "本文に挿入",

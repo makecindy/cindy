@@ -20,6 +20,7 @@ import {
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
+import { isPluginModelPickerRoute as isPluginModelSelection } from '../../shared/pluginModelPicker.js';
 
 /** 允许保留(含子树)的标签。仅结构/排版/图片 + 交互按钮(v2,零脚本:
  *  点击由宿主受信桥委托,见 GhostToolCard.attachClickBridge);无脚本载体。
@@ -146,6 +147,19 @@ function escapeText(s: string): string {
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 模型下拉框的当前值:只留合格的模型选择(按固定字段重新序列化),否则为空。 */
+function modelSelectValue(raw: string): string {
+  if (!raw || raw.length > 1024) return '';
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isPluginModelSelection(value)) return '';
+    const { agentKind, providerId, model, effort, fastMode } = value;
+    return JSON.stringify({ agentKind, providerId, model, effort, fastMode });
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -311,6 +325,11 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   const actionValid = GHOST_CARD_ACTION_ID_RE.test(action);
   if (actionValid) {
     parts.push(` data-ghost-action="${escapeAttr(action)}"`);
+    // data-ghost-model-select:点击由宿主在按钮下方弹模型下拉框,选中结果随 card-action 回传
+    // (ghostCardDeclaresModelSelect 依赖它紧跟在动作之后)。值 = 当前模型 JSON,不合格只清空值。
+    if (tag === 'button' && attrs['data-ghost-model-select'] !== undefined) {
+      parts.push(` data-ghost-model-select="${escapeAttr(modelSelectValue(attrs['data-ghost-model-select']))}"`);
+    }
     if (attrs['data-ghost-submit'] === 'true') parts.push(' data-ghost-submit="true"');
     // data-ghost-prompt:该动作需要用户输入文字(宿主点击时弹输入框收集,
     // 文字随 card-action 的 prompt 字段回传)。属性值 = 输入框占位文案

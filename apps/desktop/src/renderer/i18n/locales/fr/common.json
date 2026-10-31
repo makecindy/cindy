@@ -13965,6 +13965,7 @@
       "collapseFields": "Réduire",
       "formSyncFailed": "Les modifications de la carte n'ont pas été synchronisées. Vérifiez la connexion et continuez la modification ; le message n'a pas été envoyé.",
       "linkOpenFailed": "Impossible d'ouvrir le lien",
+      "modelSelectFailed": "Le modèle n'a pas été changé. Choisissez-le à nouveau.",
       "mailPreview": "Aperçu de l'e-mail",
       "mailEnlarge": "Agrandir l'aperçu",
       "mailInsertImage": "Insérer dans le message",
