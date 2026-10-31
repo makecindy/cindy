@@ -2701,13 +2701,12 @@ describe('GoalController', () => {
     local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
     await tick();
     await tick();
-    // 落库失败:等待标记保留(chip 显示等待中),安全网照排 —— DB 恢复后能自愈补检
-    // (idle 兜底被等待标记挡住,安全网是唯一的自动自愈通道)。
-    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
-    await tick();
-    await tick();
-    await tick(); // 30ms > 25ms:安全网重检轮发出
-    expect(local.session.sends.length).toBeGreaterThan(1); // 未修复时永远为 1
+    // 落库失败:目标进入等待,安全网已排 —— DB 恢复后自愈补检是唯一的自动通道
+    // (idle 兕底被等待标记挡住)。断言安全网重检轮最终发出(未修复时没有 timer,
+    // 永远 1 轮);用 vi.waitFor 避开与 25ms 触发点的时序竞速。标记在重检发轮时
+    // 被按设计消费,不在消费后断言非空。
+    await vi.waitFor(() => expect(local.session.sends.length).toBeGreaterThan(1), { timeout: 1000 });
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
