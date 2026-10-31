@@ -88,7 +88,7 @@ import {
   projectGhostAgentModels,
   type GhostAgentLocationsReadResult,
 } from './ghostAgentModels.js';
-import { GhostModelPicker, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from './ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from './ghostModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
@@ -3854,9 +3854,8 @@ export function getGhostModelPicker(): GhostModelPicker {
     installation: ghostInstallMutationTargetFor,
     target: (ghostId, mobilePageId) => {
       if (mobilePageId) return mobilePluginPages?.modelPickerTarget(mobilePageId, ghostId) ?? null;
-      const focused = BrowserWindow.getFocusedWindow();
-      const win = focused && isTrustedAppRendererWindow(focused) ? focused
-        : BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && isTrustedAppRendererWindow(w));
+      const win = chooseModelPickerWindow(BrowserWindow.getFocusedWindow(), BrowserWindow.getAllWindows(),
+        (w) => !w.isDestroyed() && w.isVisible() && !w.isMinimized() && isTrustedAppRendererWindow(w));
       if (!win || win.isDestroyed()) return null;
       const contents = win.webContents, ownerStamp = getGhostOwnerPushStamp();
       let cleanup = () => {};

@@ -8,7 +8,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, isPluginModelPickerRouteAvailable } from '../ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, isPluginModelPickerRouteAvailable } from '../ghostModelPicker.js';
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -185,4 +185,17 @@ it('validates effort and Fast against the exact connected model and available en
   expect(
     isPluginModelPickerRouteAvailable({ ...route, fastMode: false }, [provider], ['codex']),
   ).toBe(false);
+});
+
+// Unit: after a first successful pick, "choose a model" on a PR card stopped opening the picker.
+// The request went to a pre-warmed hidden app window (still an app window) and timed out unseen.
+describe('chooseModelPickerWindow', () => {
+  it('uses the focused window only when usable, otherwise the first visible app window', () => {
+    const hidden = { id: 'prewarmed', usable: false }, main = { id: 'main', usable: true };
+    const usable = (w: { usable: boolean }) => w.usable;
+    expect(chooseModelPickerWindow(hidden, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(main, [hidden, main], usable)).toBe(main);
+    expect(chooseModelPickerWindow(null, [hidden], usable)).toBeUndefined();
+  });
 });
