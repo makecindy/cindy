@@ -59,6 +59,18 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({ message: 'overloaded_error: Overloaded' })).toBe(true);
   });
 
+  it('matches the upstream wording that only says the engine is overloaded', () => {
+    // Kimi 在编码端点回的原文：既带 `rate limit exceeded` 又说明是服务过载。
+    // 只认 `at capacity` / `overloaded_error` 时这里会落到限额通道，把 2 分钟冷却
+    // 拉成 30 分钟（issue #7897）。
+    expect(
+      classifyTurnOverload({
+        message: 'rate limit exceeded: The engine is currently overloaded, please try again later',
+      }),
+    ).toBe(true);
+    expect(classifyTurnOverload({ message: 'The engine is currently overloaded' })).toBe(true);
+  });
+
   it('does NOT match a real account rate limit (different recovery timing)', () => {
     // 限额要等账号周期重置(小时级),不能走过载的一分钟短窗口。
     expect(classifyTurnOverload({ sdkError: 'rate_limit', message: 'rate limit reached' })).toBe(false);

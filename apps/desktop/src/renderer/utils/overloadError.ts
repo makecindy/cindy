@@ -47,7 +47,7 @@ export function parseOverloadError(
   if (errorStatus === 529) return { kind: 'overloaded' };
   // 文案 pattern 保留作老 daemon(不发结构化标识)与 Anthropic 侧的兜底。
   if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
-  if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
+  if (/\boverloaded_error\b|\bcurrently overloaded\b|\b529\b/.test(message)) return { kind: 'overloaded' };
   return null;
 }
 

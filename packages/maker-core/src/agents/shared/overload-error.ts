@@ -72,7 +72,9 @@ export interface OverloadError {
  *
  * pattern 说明：capacity 要求 `at capacity` 精确短语，避免误伤业务文案里的
  * "capacity"（如缓存容量、队列容量）；overloaded 认 529 状态码与 Anthropic 的
- * `overloaded_error` 错误码字面量，不认裸词 "overloaded"——后者在工具输出、日志
+ * `overloaded_error` 错误码字面量与 `currently overloaded` 整句（上游服务自己写的
+ * 容量提示，见 Kimi 的 `The engine is currently overloaded`），不认裸词 "overloaded"
+ * ——后者在工具输出、日志
  * 摘要里太常见，会把模型正常返回的内容误判成平台故障。
  */
 export function parseOverloadError(
@@ -83,7 +85,7 @@ export function parseOverloadError(
   if (codexErrorInfoTag === 'serverOverloaded') return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
   if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
-  if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
+  if (/\boverloaded_error\b|\bcurrently overloaded\b|\b529\b/.test(message)) return { kind: 'overloaded' };
   return null;
 }
 

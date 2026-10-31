@@ -34,6 +34,8 @@ describe('isOverloadErrorMessage', () => {
     'Selected model is at capacity. (auto-retry 2/4)',
     // Anthropic 529
     'SDK API request failed: overloaded_error (HTTP 529)',
+    // 上游自己写的容量提示(issue #7897 的实录文案)
+    'rate limit exceeded: The engine is currently overloaded, please try again later',
   ])('matches overload message: %s', (msg) => {
     expect(isOverloadErrorMessage(msg)).toBe(true);
   });
