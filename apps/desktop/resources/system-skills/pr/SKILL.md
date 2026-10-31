@@ -66,6 +66,8 @@ Hard convergence lines (the check output repeats them with the current round num
 
 **When to follow:** when the user asked you to (including `/pr <link>` and the PR card's Auto-follow button), or when the card's "Follow after opening" setting or their saved preference says so. With a PR card, its button and setting are the offer: do not also ask in text. Without one, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked.
 
+If this task has no PR card for this PR yet (for example `/pr <link>` or "follow <link>"), show one first with `pr_card` (`repo`, `pr`) when the plugin offers it, and keep its `card_id` for the schedule prompt.
+
 Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`). First `schedule_list` without a status filter and look for a schedule whose prompt or `preRunHook.command` contains this exact PR URL (host, owner/repo and number). If one exists, keep it; do not create a second. Otherwise call `schedule_create`, filling only the placeholders:
 
 ```json
