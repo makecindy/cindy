@@ -537,6 +537,149 @@ describe('HermesManager socket integration (fake hermes)', () => {
     expect((closed.params as SessionClosedNotification).reason).toBe('killed');
   }, 20_000);
 
+  it('marks the interrupted turn not-running in the registry and resumes the same Hermes session (ROADMAP 1.10)', async () => {
+    const h = current!;
+    await h.client.request(METHODS.QUERY_START, {
+      sessionId: 'si1',
+      cwd: h.dir,
+      permissionMode: 'default',
+    }, { timeoutMs: 5_000 });
+    process.env.FAKE_BEHAVIOR = 'slow';
+    try {
+      await h.client.request(METHODS.QUERY_SEND, { sessionId: 'si1', text: 'long job' }, { timeoutMs: 5_000 });
+      await h.collector.waitFor(
+        (n) =>
+          n.method === NOTIFICATIONS.QUERY_EVENT &&
+          (n.params as { event?: { type?: string } }).event?.type === 'system',
+      );
+      await h.client.request(METHODS.QUERY_INTERRUPT, { sessionId: 'si1' }, { timeoutMs: 5_000 });
+      const killed = await h.collector.waitFor(
+        (n) =>
+          n.method === NOTIFICATIONS.SESSION_CLOSED &&
+          (n.params as SessionClosedNotification).sessionId === 'si1',
+      );
+      expect((killed.params as SessionClosedNotification).reason).toBe('killed');
+    } finally {
+      delete process.env.FAKE_BEHAVIOR;
+    }
+
+    // The aborted turn is marked not-running in the registry, in memory and on
+    // disk, and the bound Hermes session id survived the interrupt.
+    const list = (await h.client.request(METHODS.SESSION_LIST, {}, { timeoutMs: 5_000 })) as {
+      sessions: Array<{ sessionId: string; running: boolean; hermesSessionId?: string }>;
+    };
+    expect(list.sessions.find((s) => s.sessionId === 'si1'))
+      .toMatchObject({ running: false, hermesSessionId: 'fake-h-1' });
+    const afterInterrupt = JSON.parse(fs.readFileSync(h.registryFile, 'utf8')) as
+      Array<{ sessionId: string; running: boolean }>;
+    expect(afterInterrupt.find((s) => s.sessionId === 'si1')?.running).toBe(false);
+
+    // The conversation stays resumable: the next send is accepted (no
+    // TURN_ALREADY_RUNNING) and replays the bound id instead of starting fresh.
+    const argvRecord = recordPath(h.dir, 'si1-turn2');
+    process.env.FAKE_RECORD = argvRecord;
+    try {
+      await h.client.request(METHODS.QUERY_SEND, { sessionId: 'si1', text: 'carry on' }, { timeoutMs: 5_000 });
+      const second = await h.collector.waitFor(
+        (n) =>
+          n.method === NOTIFICATIONS.SESSION_CLOSED &&
+          (n.params as SessionClosedNotification).sessionId === 'si1' &&
+          h.collector.closedEvents().filter((c) => c.sessionId === 'si1').length >= 2,
+      );
+      expect((second.params as SessionClosedNotification).reason).toBe('completed');
+    } finally {
+      delete process.env.FAKE_RECORD;
+    }
+    const argv = JSON.parse(fs.readFileSync(argvRecord, 'utf8')) as string[];
+    const resumeIndex = argv.indexOf('--resume');
+    expect(resumeIndex).toBeGreaterThan(-1);
+    expect(argv[resumeIndex + 1]).toBe('fake-h-1');
+  }, 20_000);
+
+  it('repairs a crash-left running flag at startup and keeps the session resumable (ROADMAP 1.10)', async () => {
+    const h = current!;
+    await h.client.request(METHODS.QUERY_START, {
+      sessionId: 'sc1',
+      cwd: h.dir,
+      permissionMode: 'bypassPermissions',
+    }, { timeoutMs: 5_000 });
+    await h.client.request(METHODS.QUERY_SEND, { sessionId: 'sc1', text: 'hello' }, { timeoutMs: 5_000 });
+    await h.collector.waitFor(
+      (n) =>
+        n.method === NOTIFICATIONS.SESSION_CLOSED &&
+        (n.params as SessionClosedNotification).sessionId === 'sc1',
+    );
+
+    // Forge what a hard daemon kill (SIGKILL, power loss) leaves behind: the
+    // child died with the daemon, but the persisted record claims a live turn.
+    const raw = JSON.parse(fs.readFileSync(h.registryFile, 'utf8')) as Array<Record<string, unknown>>;
+    const crashed = raw.find((r) => r.sessionId === 'sc1');
+    expect(crashed).toBeDefined();
+    crashed!.running = true;
+    fs.writeFileSync(h.registryFile, JSON.stringify(raw));
+
+    // Restart a daemon against the same registry file.
+    const socketPath2 = path.join(h.dir, 'm2.sock');
+    const manager2 = new HermesManager({
+      socketPath: socketPath2,
+      hermesHome: path.join(h.dir, 'home'),
+      hermesBin: process.execPath,
+      hermesExtraArgs: [FIXTURE],
+      registryFile: h.registryFile,
+    });
+    await manager2.start();
+    const socket2 = net.createConnection(socketPath2);
+    await once(socket2, 'connect');
+    const collector2 = new NotificationCollector();
+    const client2 = new RpcClient(socket2, { onNotification: (n) => collector2.push(n) });
+    try {
+      await client2.hello({ timeoutMs: 5_000 });
+      const list = (await client2.request(METHODS.SESSION_LIST, {}, { timeoutMs: 5_000 })) as {
+        sessions: Array<{ sessionId: string; running: boolean }>;
+      };
+      expect(list.sessions.find((s) => s.sessionId === 'sc1')).toMatchObject({ running: false });
+
+      // The repaired session accepts a new turn instead of rejecting it as
+      // TURN_ALREADY_RUNNING forever.
+      await client2.request(METHODS.QUERY_SEND, { sessionId: 'sc1', text: 'after restart' }, { timeoutMs: 5_000 });
+      const closed = await collector2.waitFor(
+        (n) =>
+          n.method === NOTIFICATIONS.SESSION_CLOSED &&
+          (n.params as SessionClosedNotification).sessionId === 'sc1',
+      );
+      expect((closed.params as SessionClosedNotification).reason).toBe('completed');
+    } finally {
+      client2.dispose();
+      await manager2.stop();
+    }
+  }, 20_000);
+
+  it('persists running:false when the daemon stops during a live turn (ROADMAP 1.10)', async () => {
+    const h = current!;
+    await h.client.request(METHODS.QUERY_START, {
+      sessionId: 'sst1',
+      cwd: h.dir,
+      permissionMode: 'default',
+    }, { timeoutMs: 5_000 });
+    process.env.FAKE_BEHAVIOR = 'slow';
+    try {
+      await h.client.request(METHODS.QUERY_SEND, { sessionId: 'sst1', text: 'long job' }, { timeoutMs: 5_000 });
+      await h.collector.waitFor(
+        (n) =>
+          n.method === NOTIFICATIONS.QUERY_EVENT &&
+          (n.params as { event?: { type?: string } }).event?.type === 'system',
+      );
+      // Graceful shutdown mid-turn (the SIGTERM path in bin/hermes-mgr.ts):
+      // the child is killed and the record must not claim a live turn after.
+      await h.manager.stop();
+    } finally {
+      delete process.env.FAKE_BEHAVIOR;
+    }
+    const onDisk = JSON.parse(fs.readFileSync(h.registryFile, 'utf8')) as
+      Array<{ sessionId: string; running: boolean }>;
+    expect(onDisk.find((s) => s.sessionId === 'sst1')?.running).toBe(false);
+  }, 20_000);
+
   it('reports a failed run (non-zero exit, no result event) as error with stderr detail', async () => {
     const h = current!;
     await h.client.request(METHODS.QUERY_START, {

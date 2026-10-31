@@ -589,6 +589,28 @@ describe('HermesAgent', () => {
     expect(daemon.methods.filter((method) => method === 'query/close')).toHaveLength(1);
   });
 
+  it('accepts a new turn after a cancelled turn (the session stays resumable)', async () => {
+    // ROADMAP 1.10: a Stop ends the turn, not the conversation. The handle
+    // must not latch closedByUser/connectionLost from a killed turn.
+    const daemon = await startDaemon({ turn: 'abort' });
+    const handle = await start(buildAgent());
+    const pump = createEventPump(handle);
+    try {
+      await handle.send({ type: 'user', content: 'start a long task' });
+      await handle.abort();
+      const events = await pump.until((event) => event.type === 'done');
+      expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+        status: 'cancelled',
+      });
+
+      await handle.send({ type: 'user', content: 'carry on' });
+      expect(daemon.sendTexts).toEqual(['start a long task', 'carry on']);
+      expect(daemon.methods.filter((method) => method === 'query/send')).toHaveLength(2);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('announces a running status before the provider emits anything', async () => {
     const daemon = await startDaemon({ turn: 'manual' });
     const handle = await start(buildAgent());

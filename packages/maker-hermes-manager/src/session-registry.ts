@@ -52,12 +52,20 @@ export class SessionRegistry {
       const raw = fs.readFileSync(file, 'utf8');
       const parsed: unknown = JSON.parse(raw);
       if (Array.isArray(parsed)) {
+        let repairedStaleRunning = false;
         for (const item of parsed) {
           const rec = item as HermesSessionRecord;
           if (typeof rec?.sessionId === 'string') {
-            this.sessions.set(rec.sessionId, { ...rec, ring: [] });
+            // A turn never survives a daemon restart: stop() kills the child and
+            // a hard crash orphans it. A loaded `running: true` is therefore a
+            // turn the restart aborted, and the record is repaired to
+            // not-running instead of being trusted (ROADMAP 1.10). The Hermes
+            // session id stays; the next send resumes the conversation.
+            if (rec.running) repairedStaleRunning = true;
+            this.sessions.set(rec.sessionId, { ...rec, running: false, ring: [] });
           }
         }
+        if (repairedStaleRunning) this.persist();
       }
     } catch (error) {
       // Missing or corrupt file: start empty; Hermes-side session ids held by
