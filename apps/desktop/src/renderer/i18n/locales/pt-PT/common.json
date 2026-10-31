@@ -15200,6 +15200,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Automatizações do repositório encontradas em {{projectName}}",
+        "review": "Rever importação",
+        "title": "Importar automatizações do repositório",
+        "description": "Origem: {{workingDir}}. Reveja as definições abaixo. A importação aplica estas alterações e ativa novas automatizações, que podem executar comandos e iniciar Agents com acesso total. Importe apenas conteúdo de confiança.",
+        "accept": "Confirmar importação",
+        "removed": "Serão removidos: {{names}}"
+      },
       "toast": {
         "summary": "adicionados {{inserted}} · atualizados {{updated}} · removidos {{deleted}}",
         "installed": "Automatização de projeto instalada para {{projectName}} ({{summary}})",

@@ -8492,8 +8492,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
 
     projectAutomation: {
-      reconcile: (params: { workingDir: string }): Promise<unknown> =>
+      reconcile: (params: { workingDir: string; approvedHash?: string }): Promise<unknown> =>
         ipcRenderer.invoke('maker:project-automation:reconcile', params),
+      listPendingImports: (): Promise<unknown[]> =>
+        ipcRenderer.invoke('maker:project-automation:pending-imports'),
       listConsents: (): Promise<unknown[]> =>
         ipcRenderer.invoke('maker:project-automation:list-consents'),
       revokeConsent: (workingDir: string): Promise<{ deleted: number }> =>

@@ -706,6 +706,7 @@ export const MAKER_INVOKE = {
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
+  PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',
   PROJECT_AUTOMATION_REVOKE_CONSENT: 'maker:project-automation:revoke-consent',
   PROJECT_AUTOMATION_UPSERT_SCHEDULE: 'maker:project-automation:upsert-schedule',

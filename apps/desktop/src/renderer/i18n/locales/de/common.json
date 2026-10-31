@@ -15057,6 +15057,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Repository-Automatisierungen in {{projectName}} gefunden",
+        "review": "Import prüfen",
+        "title": "Repository-Automatisierungen importieren",
+        "description": "Quelle: {{workingDir}}. Prüfen Sie die folgenden Definitionen. Der Import übernimmt diese Änderungen und aktiviert neue Automatisierungen. Diese können Befehle ausführen und Agents mit Vollzugriff starten. Importieren Sie nur vertrauenswürdige Inhalte.",
+        "accept": "Import bestätigen",
+        "removed": "Wird entfernt: {{names}}"
+      },
       "toast": {
         "summary": "{{inserted}} hinzugefügt · {{updated}} aktualisiert · {{deleted}} entfernt",
         "installed": "Projektautomatisierung für {{projectName}} installiert ({{summary}})",

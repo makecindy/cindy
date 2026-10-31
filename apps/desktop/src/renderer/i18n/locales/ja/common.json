@@ -14957,6 +14957,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "{{projectName}} にインポート待ちの自動化があります",
+        "review": "内容を確認",
+        "title": "リポジトリの自動化をインポート",
+        "description": "取得元：{{workingDir}}。以下の設定を確認してください。インポートすると変更が適用され、新しい自動化が有効になります。コマンドの実行やフルアクセス権限の Agent の起動が可能になるため、信頼できる内容のみインポートしてください。",
+        "accept": "インポートを確定",
+        "removed": "削除対象：{{names}}"
+      },
       "toast": {
         "summary": "追加 {{inserted}} · 更新 {{updated}} · 削除 {{deleted}}",
         "installed": "{{projectName}} のプロジェクト自動化をインストールしました（{{summary}}）",

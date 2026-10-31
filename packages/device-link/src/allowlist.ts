@@ -446,6 +446,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'agent-island:completion-action',
   // —— Project automation ——
   'maker:project-automation:reconcile',
+  'maker:project-automation:pending-imports',
   'maker:project-automation:list-consents',
   'maker:project-automation:revoke-consent',
   'maker:project-automation:upsert-schedule',

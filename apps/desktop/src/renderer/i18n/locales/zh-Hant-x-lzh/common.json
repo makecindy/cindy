@@ -14990,6 +14990,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "專案「{{projectName}}」中發現待匯入的自動任務",
+        "review": "查看匯入內容",
+        "title": "匯入儲存庫自動任務",
+        "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增自動任務，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
+        "accept": "確認匯入",
+        "removed": "將刪除：{{names}}"
+      },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 刪 {{deleted}}",
         "installed": "案「{{projectName}}」之自運已裝（{{summary}}）",

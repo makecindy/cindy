@@ -1087,6 +1087,14 @@ interface ProjectAutomationReconcileResult {
   updated: number;
   deleted: number;
   skipped: 'no-file' | 'parse-error' | null;
+  pendingImport?: ProjectAutomationImport;
+}
+
+interface ProjectAutomationImport {
+  workingDir: string;
+  configHash: string;
+  schedules: Array<Record<string, unknown>>;
+  removedNames: string[];
 }
 
 type ProjectAutomationEvent = {
@@ -1097,7 +1105,7 @@ type ProjectAutomationEvent = {
   deleted: number;
   isFirstTime: boolean;
   hashChanged: boolean;
-};
+} | { type: 'import-required'; pendingImport: ProjectAutomationImport };
 
 type ApplicationMenuCommand = import('../shared/applicationMenuCommands').ApplicationMenuCommand;
 type ApplicationMenuLocale = import('../shared/locale').SupportedLocale;
@@ -7365,7 +7373,8 @@ interface ElectronAPI {
     };
 
     projectAutomation: {
-      reconcile: (params: { workingDir: string }) => Promise<ProjectAutomationReconcileResult>;
+      reconcile: (params: { workingDir: string; approvedHash?: string }) => Promise<ProjectAutomationReconcileResult>;
+      listPendingImports: () => Promise<ProjectAutomationImport[]>;
       listConsents: () => Promise<ProjectAutomationConsent[]>;
       revokeConsent: (workingDir: string) => Promise<{ deleted: number }>;
       upsertSchedule: (params: {

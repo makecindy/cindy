@@ -15200,6 +15200,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Automatisations à importer dans {{projectName}}",
+        "review": "Vérifier l’importation",
+        "title": "Importer les automatisations du dépôt",
+        "description": "Source : {{workingDir}}. Vérifiez les définitions ci-dessous. L’importation applique ces modifications et active les nouvelles automatisations, qui peuvent exécuter des commandes et lancer des Agents avec un accès complet. Importez uniquement du contenu de confiance.",
+        "accept": "Confirmer l’importation",
+        "removed": "Suppressions prévues : {{names}}"
+      },
       "toast": {
         "summary": "{{inserted}} ajoutées · {{updated}} mises à jour · {{deleted}} supprimées",
         "installed": "Automatisation de projet installée pour {{projectName}} ({{summary}})",

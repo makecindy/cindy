@@ -15023,6 +15023,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Repository automations found in {{projectName}}",
+        "review": "Review Import",
+        "title": "Import Repository Automations",
+        "description": "Source: {{workingDir}}. Review the definitions below. Importing applies these changes and enables new automations, which can run commands and start Agents with full access. Import only content you trust.",
+        "accept": "Confirm Import",
+        "removed": "Will remove: {{names}}"
+      },
       "toast": {
         "summary": "added {{inserted}} · updated {{updated}} · removed {{deleted}}",
         "installed": "Project automation installed for {{projectName}} ({{summary}})",
