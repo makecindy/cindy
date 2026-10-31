@@ -16,6 +16,7 @@ import {
   mergeSessionRuntimeProfilePatch,
   pickSessionRuntimeFallback,
   recordFailedSessionRuntimeFallbackCandidate,
+  recordSkippedSessionRuntimeFallbackRoutes,
   recordRecoveredSessionRuntimeMutation,
   recordRecoveredSessionRuntimeAxisMutation,
   recordUserSessionRuntimeAxisMutation,
@@ -718,6 +719,23 @@ describe('session runtime fallback selection', () => {
       }),
     ).toBe(false);
     expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+  });
+
+  it('rejects skipped fallback route recording when generation is stale', () => {
+    const sessionId = 'runtime-stale-skipped-routes';
+    const observed = getSessionRuntimeControlSnapshot(sessionId).generation;
+    recordUserSessionRuntimeMutation(sessionId);
+
+    expect(
+      recordSkippedSessionRuntimeFallbackRoutes(sessionId, observed, ['key-1', 'key-2']),
+    ).toBe(false);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual([]);
+
+    const currentGen = getSessionRuntimeControlSnapshot(sessionId).generation;
+    expect(
+      recordSkippedSessionRuntimeFallbackRoutes(sessionId, currentGen, ['key-1', 'key-2']),
+    ).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId).visitedRoutes).toEqual(['key-1', 'key-2']);
   });
 
   it('admits Ultrafast only for the model copy advertising that tier', () => {
