@@ -4345,6 +4345,28 @@ it('keeps only the current public progress note between tool calls', () => {
   expect(botGroupWorkPreview({ ...state, streamingText: 'NO_REPLY' }, 2)).toBe('');
 });
 
+// Remounting a group may delay revealing activity, but must never invent an
+// execution start from the component's mount clock (owner report 2026-10-28).
+it('does not show elapsed execution time when the host has no start timestamp', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+  try {
+    mocks.activity = null;
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
+      status: 'running', canContinue: false,
+      speakers: [{ botId: 'mimi', activity: 'reply', executionId: 'unknown-start', sessionId: null, executionStatus: 'running' }],
+    } }) });
+    const first = renderView();
+    await screen.findByTestId('bot-group-progress');
+    await act(async () => { vi.advanceTimersByTime(4_000); });
+    expect(screen.getByTestId('bot-group-progress').textContent).not.toContain('chat.teammateProcess.elapsed');
+    first.unmount();
+    renderView();
+    await screen.findByTestId('bot-group-progress');
+    await act(async () => { vi.advanceTimersByTime(4_000); });
+    expect(screen.getByTestId('bot-group-progress').textContent).not.toContain('chat.teammateProcess.elapsed');
+  } finally { vi.useRealTimers(); }
+});
+
 // #7583, unit: missing start timestamps must not turn a stale waiting execution
 // into a newly started timer. Existing progress cases all supplied a timestamp.
 it('keeps waiting work inspectable without inventing an elapsed time', async () => {
