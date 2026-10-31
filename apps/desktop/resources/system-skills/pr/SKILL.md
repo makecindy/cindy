@@ -101,23 +101,25 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 - The hook path must be the resolved stable `<skill-dir>` (it contains `/.active/`). Never put a path under the system temp directory (for example one containing `cindy-claude-skills-`) in the hook: it disappears when Cindy restarts and every check then fails. Resolve it right before creating the schedule: run `realpath` on the base directory Cindy gave when this Skill was loaded and apply the `/.active/` rule above. If that directory no longer exists, load this Skill again for a fresh one. Never search the disk for it.
 - `notify` values are JSON booleans. On `INVALID_ARGS`, fix the arguments once from the returned schema; if it fails again, report it.
 - A returned id is not proof. Read it back with `schedule_get`, confirm its `preRunHook.command` points at the stable path, and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following", or the card's Stop button), and update the card with `following: true`.
-- Leave `cronExpr` and `intervalMs` alone afterwards. The check paces itself: it looks at GitHub less often the longer the PR stays quiet and returns to every 10 minutes as soon as anything changes. How the check decides is described in `references/follow-up.md`.
+- Leave `cronExpr` and `intervalMs` alone afterwards. Each check first asks GitHub one small question and reads the PR in full only when something changed. How the check decides is described in `references/follow-up.md`.
 
 ## 5. Background round
 
-The schedule wakes this task only when the check found something worth a look. Each round:
+The schedule wakes this task only when something new needs you: a check failed, the required checks passed, someone else commented or reviewed, the branch started to conflict, no checks reported for a new commit, the PR became or left a draft, the merge queue dropped it, or it was merged or closed. Your own comments and pushes never wake you, and each failure or comment is reported once. Each round:
 
-1. Run `node "<skill-dir>/scripts/pr-snapshot.mjs" <PR_URL>` and `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --last-result --json`. Act on both; the `detail` carries the reason, the round number and any convergence instructions, which you must follow.
+1. Read what happened: the check's output lists each item with links, and `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --last-result --json` returns the same list as `report`. Its `detail` carries the reason, the round number and any convergence instructions, which you must follow. Run `node "<skill-dir>/scripts/pr-snapshot.mjs" <PR_URL>` when you need more than the list, for example before calling the PR ready.
 2. Do the work:
-   - **Technical work** (`NEEDS_WORK`, review threads, CI, conflicts, base sync): a fix round (section 3). Never just `--ack` with unresolved technical blockers.
-   - **Ready, approved, or only waiting for review, approval or merge:** nothing to fix. The first time the PR becomes ready, tell the user once; afterwards stay silent. Waiting for approval or merge is not a decision for the user.
-   - **Draft:** fix technical problems that do not change what is being discussed; tell the user once what the draft is waiting for, then `--defer 240`.
+   - **Failed checks, comments, conflicts, merge queue problems:** a fix round (section 3). Each item is reported only this once: fix it, or reply where it was raised and say why not. Never just `--ack` with unhandled technical items.
+   - **Required checks passed, approved, or only waiting for review, approval or merge:** nothing to fix. The first time the PR becomes ready, tell the user once; afterwards stay silent. Waiting for approval or merge is not a decision for the user.
+   - **`draft-entered`:** unless the user asked you to follow this draft, tell them in one line that it became a draft and stop following (below).
+   - **`comment-limit`:** ten updates in a row brought only comments, usually a loop with a bot. Stop following and tell the user why.
+   - **`defer-expired`:** the wait you set is over. Continue with what you have, for example fix with the bot feedback that did arrive.
    - **`silence-guard`:** a periodic look at what the check cannot see. Decide whether to merge in the base, re-run, close or nudge, rather than staying silent just because nothing changed.
    - **Merged or closed:** report it in one line, then `schedule_delete` this schedule (delete, never pause), then clean up (section 6).
 3. If the prompt names a PR card, refresh it before finishing: `pr_card` with `card_id`, `repo` and `pr`. It reads the current CI, review and merge state itself.
-4. Finish every round with `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --ack`, or `--defer <minutes>` (which implies `--ack`) only in these cases: waiting for a user decision (240, after asking), blocked on something you cannot move (240, say what you are waiting for), or waiting for this push's bot reviewers (15, at most once per push).
+4. Finish every round with `node "<skill-dir>/scripts/pr-heartbeat-gate.mjs" <PR_URL> --ack`. Use `--defer <minutes>` (which implies `--ack`) only to be woken again at a set time when nothing else happens first: waiting for this push's bot reviewers (15, at most once per push). When you are waiting for the user's decision, just `--ack`: their reply comes to this task.
 
-**Notifications.** The schedule runs silently. Call `schedule_notify_current_run` (then write one short message) only when the user should know now: the PR became ready to merge for the first time, it was merged or closed, you need their decision, or the check reports a problem stuck for several backoff cycles. Never notify to say nothing changed, and never nag about pending approval or merge.
+**Notifications.** The schedule runs silently. Call `schedule_notify_current_run` (then write one short message) only when the user should know now: the PR became ready to merge for the first time, it was merged or closed, you need their decision, following stopped on its own (a draft or the comment limit), or the check reports a problem stuck for several backoff cycles. Never notify to say nothing changed, and never nag about pending approval or merge.
 
 If the user asks to stop (the card's Stop button sends this request too), delete the schedule and update the card with `following: false`.
 

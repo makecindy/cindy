@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import nodeTest from 'node:test';
 
-import { decide, fingerprint, isHumanOnlyReviewPending } from '../../apps/desktop/resources/system-skills/pr/scripts/pr-heartbeat-gate.mjs';
+import { decide, isHumanOnlyReviewPending, watchFromSnapshot } from '../../apps/desktop/resources/system-skills/pr/scripts/pr-heartbeat-gate.mjs';
 import { splitHttpResponse, rateLimitRetryAt } from '../../apps/desktop/resources/system-skills/pr/scripts/lib/gh.mjs';
 import {
   parseGitHubRemote,
@@ -44,6 +44,7 @@ if [ "$1" = pr ] && [ "$2" = view ]; then cat "$d/resp-prview.json"; exit 0; fi
 if [ "$1" = api ] && [ "$2" = graphql ]; then
   q=""
   for a in "$@"; do case "$a" in query=*) q="$a" ;; esac; done
+  case "$q" in *checkRunCountsByState*) cat "$d/resp-probe.json"; exit 0 ;; esac
   for f in mergeQueueEntry beforeCommit ADDED_TO_MERGE_QUEUE_EVENT headRefOid; do
     case "$q" in *"$f"*) ;; *) echo "Missing query field: $f" >&2; exit 1 ;; esac
   done
@@ -64,11 +65,12 @@ exit 1
       reviewThreads: { nodes: [] }, mergeQueueEntry: null,
       timelineItems: { nodes: [removal] }, ...overrides,
     } };
-    write('resp-prview.json', { headRefOid: data.checkHead, statusCheckRollup: [{ __typename: 'CheckRun', name: 'PR check', status: 'COMPLETED', conclusion: 'SUCCESS' }] });
-    write('resp-graphql.json', { data: { repository: { pullRequest: data.pr } } });
+    write('resp-prview.json', { headRefOid: data.checkHead, statusCheckRollup: data.rollup ?? [{ __typename: 'CheckRun', name: 'PR check', status: 'COMPLETED', conclusion: 'SUCCESS' }] });
+    write('resp-graphql.json', { data: { viewer: { login: 'me' }, repository: { pullRequest: data.pr } } });
+    write('resp-probe.json', { data: { repository: { pullRequest: data.pr } } });
     write('resp-compare.json', { status: data.comparison });
     write('resp-rest.json', { head: { sha: data.restHead }, mergeable: true, state: 'open', html_url: 'https://github.com/acme/game/pull/54' });
-    return JSON.parse(execFileSync(process.execPath, [script, 'https://github.com/acme/game/pull/54'], {
+    return JSON.parse(execFileSync(process.execPath, [script, 'https://github.com/acme/game/pull/54', ...(data.args ?? [])], {
       env: { ...process.env, PATH: `${root}${path.delimiter}${process.env.PATH}`, QUEUE_FIXTURE_DIR: root }, encoding: 'utf8',
     }));
   };
@@ -84,9 +86,10 @@ test('full snapshot: PR green + merge-group failed/removed wakes gate despite ap
   assert.equal(broken.mergeQueue.checksSummary.failingRuns[0].name, 'arm64-build');
   assert.ok(broken.blockers.includes('merge_queue_ci_failing'));
   assert.equal(isHumanOnlyReviewPending(broken), false);
-  const decision = decide({ snap: broken, previous: { fingerprint: fingerprint(healthy) }, now: Date.now() });
+  const decision = decide({ snap: broken, previous: { watch: watchFromSnapshot(healthy, Date.now()) }, now: Date.now() });
   assert.equal(decision.exitCode, 0);
   assert.equal(decision.reason, 'changed');
+  assert.match(decision.detail, /events=\[merge-queue\]/);
 });
 
 test('full snapshot: compare ancestry prevents stale failures, including batched groups', t => {
@@ -253,4 +256,29 @@ nodeTest('rejects a URL that cannot supply a GitHub repository', () => {
     () => resolvePullRequestTarget('https://gitlab.example.com/acme/widgets/pull/42'),
     /Unsupported GitHub PR URL/,
   );
+});
+
+test('checks keep only the latest run per name, carry required flags, and the probe stays small', t => {
+  const run = fixture(t);
+  const ci = (name, conclusion, startedAt) => ({ __typename: 'CheckRun', name, workflowName: 'ci', status: 'COMPLETED', conclusion, startedAt });
+  const rollup = [
+    ci('verify', 'CANCELLED', '2026-10-17T10:00:00Z'),
+    ci('verify', 'SUCCESS', '2026-10-17T10:20:00Z'),
+    ci('lint', 'FAILURE', '2026-10-17T10:00:00Z'),
+    { __typename: 'CheckRun', name: 'codeql', status: 'IN_PROGRESS', startedAt: '2026-10-17T10:05:00Z' },
+  ];
+  const contexts = { totalCount: 4, pageInfo: { hasNextPage: false }, nodes: [{ __typename: 'CheckRun', name: 'verify', isRequired: true }] };
+  const snap = run({ timelineItems: { nodes: [] }, commits: { nodes: [{ commit: { statusCheckRollup: { contexts } } }] } }, 'ahead', { rollup });
+  assert.equal(snap.viewer, 'me');
+  assert.deepEqual(snap.checks.map((c) => [c.name, c.outcome, c.required]), [
+    ['verify', 'passed', true], ['lint', 'failed', false], ['codeql', 'pending', false],
+  ]);
+  assert.equal(snap.checksSummary.failed, 1, 'the re-run replaced the cancelled verify');
+
+  const probe = run({
+    isDraft: false, mergeable: 'MERGEABLE', comments: { totalCount: 2, nodes: [{ updatedAt: 'c2' }] },
+    reviews: { totalCount: 0, nodes: [] }, reviewThreads: { totalCount: 1 },
+    commits: { nodes: [{ commit: { statusCheckRollup: { contexts: { checkRunCountsByState: [{ state: 'SUCCESS', count: 3 }, { state: 'QUEUED', count: 0 }] } } } }] },
+  }, 'ahead', { args: ['--probe'] });
+  assert.deepEqual(probe, { status: 'OPEN false MERGEABLE head-sha  SUCCESS:3 ', remarks: '2 c2 0  1' });
 });

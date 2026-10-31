@@ -2,8 +2,15 @@
 /**
  * PR 心跳前置检查脚本(Cindy 自动化任务的 preRunHook gate)
  *
- * 每轮先跑只读 PR 快照,只有 PR 侧真的出现值得 AI 介入的变化时才放行;否则零
- * token 跳过本轮,绑定会话也不会被空转轮次污染。
+ * 只有 PR 上出现需要 AI 处理的新情况(事件)时才放行,并把「发生了什么」附在输出里;否则零
+ * token 跳过本轮,绑定会话也不会被空转轮次污染。事件规则参考 T3 Code 的 PR watch:
+ *   - 某个检查新失败了(同一个 head 上按名字只报一次);
+ *   - 必需检查全部通过(没有必需检查时看全部),仍在跑的其它检查结束时再报一次;
+ *   - 别人的新评论或 review(自己账号的不算);
+ *   - 分支开始与 base 冲突;新 head 迟迟没有任何检查;
+ *   - 草稿转换、合并队列出问题;合并或关闭(每轮放行,直到收口)。
+ * 推送本身、检查在跑、失败一直没变,都不唤起。连续 10 次只有评论的唤起后要求停止跟进,
+ * 防止与机器人来回回复。
  *
  * 退出码严格遵循宿主 preRunHook 协议:
  *   0  = 放行本轮(唤起 agent)
@@ -11,83 +18,56 @@
  *   其它 = fail-closed(阻止本轮并记 failed + 通知,让用户看见跟进坏了)
  *
  * 为什么必须包一层,不能直接把 pr-snapshot.mjs 填进 preRunHook.command:
- * pr-snapshot.mjs 查询失败时自己 exit 2(见其 main().catch),而 exit 2 在
- * preRunHook 协议里的语义是「静默跳过」—— gh 掉线 / auth 过期 / rate limit 会被
- * 翻译成「本轮无事」,心跳就此无声死掉,恰好违反 pr 技能「snapshot 失败时不得
- * 声称已闭环」那条规则。它的 --strict-exit 码(10/20/30/40)同样不匹配协议,会让
- * 每一轮都 fail-closed。本脚本负责把这些码翻译成协议语义:快照失败先容忍几轮
- * 瞬时抖动(跳过),连续失败到阈值才非零退出暴露出来。
+ * pr-snapshot.mjs 查询失败时自己 exit 2,而 exit 2 在 preRunHook 协议里是「静默跳过」——
+ * gh 掉线 / auth 过期 / rate limit 会被翻译成「本轮无事」,心跳就此无声死掉。本脚本把快照
+ * 失败先容忍几轮瞬时抖动,连续失败到阈值才非零退出暴露出来。
  *
- * 状态文件刻意落在 worktree 之外(默认 ~/.cache/cindy-pr/):PR 心跳绑定
- * 的是被审查仓库的 worktree,收口时会被删掉,状态与脚本都不能放在那里。
+ * 状态文件刻意落在 worktree 之外(默认 ~/.cache/cindy-pr/):PR 心跳绑定的是被审查仓库的
+ * worktree,收口时会被删掉。
  *
- * 指纹是**两段式**的,这是正确性关键:`fingerprint` 只记 agent 已确认处理完的状态
- * (由 --ack / --defer 提升),`pendingFingerprint` 记已放行但还没被确认处理完的。
- * 判定一律拿 confirmed 比 —— 所以放行之后宿主建会话失败、agent 启动失败或中途崩掉
- * 时,下一轮仍会看到「与已确认状态不同」并重试,不会把那次 PR 变化永久吞掉(这是
- * 单段式指纹的致命缺陷:READY / WAITING_CI / BLOCKED_HUMAN / NOT_READY 状态没有
- * work-pending 兜底,一旦漏掉就是永久漏掉)。
- *
- * `pendingFingerprint` 只登记**最早一个**未确认的变化、不被后续轮次覆盖:agent 跑得
- * 比心跳间隔慢时,下一轮 gate 可能已看到更新的指纹,而那个慢 agent 随后的无参数
- * --ack 会把它从没处理过的指纹提升成 confirmed。保留最早值后,confirmed 只会前进到
- * 某个确实放行过的指纹,更新的变化仍因「current != confirmed」继续被放行。
+ * 状态是**两段式**的,这是正确性关键:`watch` 记 agent 已确认处理完的基线(由 --ack / --defer
+ * 提升;没有新事件时直接前进),`pendingWatch` 记已放行但还没被确认的那一份。事件一律拿已确认
+ * 的 watch 算 —— 所以放行之后宿主建会话失败、agent 启动失败或中途崩掉时,同一批事件下一轮
+ * 还在,会被重试。`pendingWatch` 只登记**最早一份**:慢 agent 随后的 --ack 只能把基线推进到
+ * 它确实被告知过的状态,之后的新事件仍会再报。
  *
  * 前提假设(改动心跳配置前必读):无参数 --ack 的正确性依赖「同一绑定会话上不会有两个
- * agent turn 并发」。PR 心跳固定 bindToCurrentSession=true,宿主对 heartbeat 撞忙会
- * 顺延本轮(runner 的 deferFire('session-running')),注入排队桥时也只是让消息排队、
- * 同一 session 的 turn 依旧串行 —— 所以不会出现「两个已放行轮次交错 ack」互相确认
- * 对方指纹的情况。若将来把心跳改成非绑定 / 每轮新建会话 / 允许并发的模式,这个假设
- * 就不再成立,必须改成让 ack 携带本轮的轮次标识(runId 或放行时的指纹)再提升。
+ * agent turn 并发」。PR 心跳固定 bindToCurrentSession=true,宿主对 heartbeat 撞忙会顺延本轮,
+ * 同一 session 的 turn 串行。若将来改成非绑定 / 每轮新建会话 / 允许并发,必须让 ack 携带
+ * 本轮的标识再提升。
  *
- * gate 同时是 **cadence 的唯一决策源**(见 suggestCadence):它按「距上次真实变化多久 +
- * 当前 verdict」算出该隔多久查一次 GitHub,并**自己执行**(见 cadenceThrottle):调度固定
- * 每 10 分钟触发一次,未到档位间隔的轮次直接跳过、不调 GitHub API。被跳过的轮次不唤起
- * agent,所以「长期安静 → 逐档降」只能由 gate 自己完成,不依赖 agent 或外部巡检去改调度。
+ * 成本:调度固定每 10 分钟触发。每次先跑一个很小的探测查询(pr-snapshot.mjs --probe),与上次
+ * 完整读取一致就直接跳过;有变化、有未确认的放行、检查在跑或超过 30 分钟没完整读过时,才做
+ * 完整快照(三四个接口)。
  *
  * 用法:
  *   node pr-heartbeat-gate.mjs <PR_URL|PR号> [--repo owner/name] [选项]
  *   node pr-heartbeat-gate.mjs <PR_URL|PR号> --ack [--repo owner/name]
  *   node pr-heartbeat-gate.mjs <PR_URL|PR号> --defer <分钟> [--repo owner/name]
- *   node pr-heartbeat-gate.mjs <PR_URL|PR号> --suggest [--json]
  *   node pr-heartbeat-gate.mjs <PR_URL|PR号> --last-result [--json]
  *
  * 选项:
  *   --repo owner/name          PR 号形式时必填;URL 形式会自动解析
- *   --ack                      确认本轮已处理完:把 pending 指纹提升为已确认,并退出 0。
- *                              心跳每轮收尾必须调它,否则同一变化会被重放到上限。
- *                              输出里附带本轮该设成多少的 cadence 建议。
- *   --suggest                  只读状态文件输出 cadence 建议(零 API、不改状态),
- *                              供排查当前档位用。
- *   --last-result              只读输出最近一轮普通 gate 的 run/skip/block、reason 与
- *                              detail(零 API、不改状态),供被唤起的 AI 判断本轮是否通知。
- *   --defer <分钟>             把「下次最早放行时间」推后并退出 0(**隐含 --ack**:
- *                              显式 defer 意味着这轮已处理完)。给 agent 用:通知用户
- *                              等其决策后设定提醒节奏。软闸门 —— 期间 PR 真有
- *                              新变化仍然穿透放行。
+ *   --ack                      确认本轮已处理完:把 pendingWatch 提升为已确认,并退出 0。
+ *                              心跳每轮收尾必须调它,否则同一批事件会被重放。
+ *   --last-result              只读输出最近一轮普通 gate 的 run/skip/block、reason、detail 与
+ *                              事件清单(零 API、不改状态)。
+ *   --defer <分钟>             **隐含 --ack**,并约定到点再唤起一次(期间有新事件照常唤起)。
+ *                              用于等一会儿再看,例如等这次推送的机器人 review。
  *   --snapshot <path>          pr-snapshot.mjs 路径(默认见 DEFAULT_SNAPSHOT)
  *   --state-dir <dir>          状态目录(默认 ~/.cache/cindy-pr,或 CINDY_PR_STATE_DIR)
  *   --max-snapshot-failures N  连续快照失败容忍轮数,超过则 fail-closed(默认 3)
  *                              明确限流首轮提醒并按响应头退避;同类故障一天内不重复提醒
- *   --max-pass-attempts N      同一未确认变化每轮快速重试的次数上限(含首轮,默认 3);
+ *   --max-pass-attempts N      同一批未确认事件每轮快速重试的次数上限(含首轮,默认 3);
  *                              用尽后转入退避重试,不放弃也不再每轮唤起
- *   --retry-backoff-minutes N  退避重试间隔(默认 30):快速重试用尽后每这么久放行一次,
- *                              直到被 --ack 确认
- *   --max-work-pending-passes N  同一个**无变化**的 NEEDS_WORK 状态最多连续唤起几轮
- *                              (默认 2);用尽后转入退避(间隔同上)。agent 已确认过的
- *                              状态若连续几轮推不动,说明剩下的 blocker 短期不可操作,
- *                              不该每 10 分钟无限唤起
+ *   --retry-backoff-minutes N  退避重试间隔(默认 30)
  *   --min-pass-spacing-minutes N  两次放行之间的最小有效间隔(默认 5):比这更密的放行
- *                              不计入重试/唤起计数 —— 宿主顺延、spawn 失败等「放行了
- *                              但 agent 根本没跑」不该消耗额度
- *   --max-silence-hours N      保底巡检闸门(默认 24):连续这么久没真正放行过就强制唤起
- *                              一次,兜住指纹看不到的变化与 gate 自身的静默失效
- *   --draft-reminder-hours N   草稿复提醒闸门(默认 24):PR 停在草稿期间每这么久唤起一次,
- *                              让 AI 复述一句「还卡在草稿、在等谁做什么」。
- *                              0 = 关闭(只在转草稿那一次提醒)
+ *                              不计入重试计数 —— 宿主顺延、spawn 失败等「放行了但 agent 根本
+ *                              没跑」不该消耗额度
+ *   --max-silence-hours N      保底巡检闸门(默认 24):连续这么久没真正放行过就强制唤起一次
  *   --json                     决策以 JSON 输出(便于排查;不影响退出码)
- *   --no-cadence-throttle      关闭 gate 内的 cadence 节流:由调度自身按 --ack 给出的档位
- *                              调整触发间隔时使用(每次触发都查 GitHub)
+ *   已退役、接受并忽略:--suggest(只读兼容输出)、--no-cadence-throttle、
+ *   --draft-reminder-hours N、--max-work-pending-passes N
  */
 
 import { createHash } from 'node:crypto';
@@ -131,21 +111,6 @@ const DEFAULT_MAX_PASS_ATTEMPTS = 3;
  * 同时保证失败/崩溃的 PR 任务在下一小时内重新获得执行机会。
  */
 const DEFAULT_RETRY_BACKOFF_MINUTES = 30;
-
-/**
- * 同一个**无变化**的 NEEDS_WORK 状态最多连续唤起几轮,用尽后转入退避(间隔复用
- * --retry-backoff-minutes)。
- *
- * work-pending 的语义是「上轮判定还有活要干,PR 侧没动也放行」——它防的是 agent 偷懒。
- * 但走到这条分支的前提是 current === confirmed:agent 已经完整处理并 --ack 过这个
- * 状态。确认之后连续几轮状态仍一字未变,说明剩下的 blocker 是 agent 当下推不动的
- * (上游 CI 故障、被禁用 workflow 留下的死红灯、等外部恢复),继续每轮唤起只是无限
- * 烧 token(实测:两个 PR 被一个已禁用 workflow 的残留红灯各烧掉十几轮
- * 「无变化」turn)。与未确认变化的退避重试同款节奏:永不放弃(每个退避周期仍re-nudge
- * 一次),也永不无限唤起。真实变化随时走 changed 立刻穿透;agent 的 --defer 仍可更早
- * 压住,但不再是唯一防线。
- */
-const DEFAULT_MAX_WORK_PENDING_PASSES = 2;
 
 /**
  * 两次放行之间的最小有效间隔(分钟):比这更密的放行**不计入**任何重试/唤起计数。
@@ -196,15 +161,6 @@ const HUMAN_ONLY_BLOCKERS = new Set(['branch_protection_blocked', 'approval_requ
 const HARD_AGENT_BLOCKERS = new Set([
   'ci_failing', 'merge_conflict', 'branch_behind_base',
   'merge_queue_removed', 'merge_queue_ci_failing', 'merge_queue_unavailable', 'merge_queue_unmergeable',
-]);
-
-/**
- * 明确属于 agent 自己的技术待办。它们可以长期不改变 GitHub 指纹,所以 work-pending
- * 每次放行都要重申行动边界,避免 agent 把「还有活」误读成「等用户授权」。
- */
-const ACTIONABLE_WORK_BLOCKERS = new Set([
-  'unresolved_review_threads',
-  ...HARD_AGENT_BLOCKERS,
 ]);
 
 /**
@@ -280,80 +236,24 @@ const SNAPSHOT_MAX_BUFFER = 50 * 1024 * 1024;
  *   - gate 自身的未知故障(状态文件被写成一个永不变化的指纹、某个边界让它恒 skip)——
  *     这类静默失效没有任何报错,只有定期强制放行能兜住;
  *   - "长期停滞"本身就是个需要人判断的信号,而不是一个可以无限静默的稳态。
- *
- * 触发的那一轮刻意**不刷新** lastChangedAt(它不是真实变化),所以 cadence 不会因为
- * 保底巡检而回弹到高频。
  */
 const DEFAULT_MAX_SILENCE_HOURS = 24;
 
 /**
- * 草稿复提醒:PR 停在草稿状态期间,每这么久强制唤起一次(默认 24 小时)。
- *
- * 为什么草稿要单独一条闸门,而不是靠保底巡检兜:两者语义与锚点都不同。
- *   - 保底巡检问的是「gate 是不是瞎了」,锚点是 lastPassAt —— 任何不相关的放行(一次
- *     CI 变化)都会把它的 24 小时推后。草稿等的是**人**,它的钟不该被 PR 侧的杂音重置。
- *   - 草稿意味着某处改动被要求挪到新建 issue 里讨论,而那个讨论需要人来回复
- *     确认修改并说明目的 —— 这是一件挂在人名下的待办,漏掉不会有任何别的机制发现。
- *
- * 所以它有独立锚点 lastDraftReminderAt(转草稿那一轮初始化),只被草稿相关的放行推进。
- * 与保底巡检同样刻意**不刷新** lastChangedAt:复提醒不是真实变化,不该把 cadence 拉回高频。
+ * 事件制唤醒(参考 T3 Code 的 PR watch):只有出现需要 agent 处理的新情况才唤起,同一件事只说一次。
+ * 推送本身、检查从排队到运行、失败一直没变、我们自己的评论都不唤起 —— 实测(2026-09-26 至 10-31,
+ * 本机 284 次唤起)41% 是同一个红灯被反复唤起,12% 是有变化但无事可做。
  */
-const DEFAULT_DRAFT_REMINDER_HOURS = 24;
-
-/**
- * 草稿期间 cadence 的下限:取「不粗于复提醒闸门一半」的**最粗**档位。
- *
- * 为什么必须由闸门推导而不是写死一个常量:最坏延迟 = 闸门 + 轮询间隔(某轮恰好落在闸门
- * 到点前一刻 → 本轮 idle,要再等一个完整轮询周期)。所以把轮询间隔压到闸门的一半以内,
- * 提醒最多晚 50%。写死 8h 只对默认的 24h 闸门成立;`--draft-reminder-hours 2` 时 8h 仍比
- * 闸门粗 4 倍,2 小时的提醒会拖到约 10 小时。
- *
- * 闸门关成 0(不复提醒)时没有要兑现的承诺,不设下限,让阶梯自由降到 1d。
- * 闸门比阶梯最细档(10m)的两倍还短时只能给到最细档,此时延迟仍可能超过 50% —— 这是
- * 阶梯粒度的下限,不是本函数的缺陷。
- */
-/**
- * 解析本次调用该用哪个复提醒闸门。
- *
- * 三个入口是三个独立进程:普通 gate 轮由 `preRunHook.command` 带参数,而 agent 的 `--ack`
- * 与排查用的 `--suggest` 按 skill 里的写法只带 PR URL。若各自独立取默认值,配了
- * `--draft-reminder-hours 2` 的心跳会在 `--ack` 里按 24h 推出 8h 档,把短闸门顶掉 ——
- * 相位问题原样复发。
- *
- * 所以:**普通 gate 轮是配置的权威来源**,它把生效值写进 state;`--ack` / `--suggest`
- * 没显式传参时从 state 读。显式传参始终优先。0 是合法值(关闭复提醒),不能被当成缺省。
- */
-function resolveDraftReminderMs(explicitMs, state) {
-  if (explicitMs !== undefined) return explicitMs;
-  const stored = state?.draftReminderMs;
-  if (typeof stored === 'number' && Number.isFinite(stored) && stored >= 0) return stored;
-  return DEFAULT_DRAFT_REMINDER_HOURS * 3_600_000;
-}
-
-function draftCadenceFloor(draftReminderMs) {
-  if (!(draftReminderMs > 0)) return null;
-  const budget = draftReminderMs / 2;
-  // CADENCE_LADDER 由细到粗;倒序找第一个「够细」的,即最粗的可接受档位
-  return [...CADENCE_LADDER].reverse().find((t) => t.intervalMs <= budget) ?? CADENCE_LADDER[0];
-}
-
-/**
- * cadence 阶梯(gate 是 cadence 的**唯一决策源**,并由 cadenceThrottle 自己执行)。
- *
- * 为什么 gate 守门之后还要降档:gate 只把 **agent token** 压到零,轮询本身仍有成本 ——
- * 每轮 2-3 次 GitHub API 请求、一条 skipped run 记录(13 个心跳 × 每 10 分钟 ≈ 每天
- * 1900 条)、一次 node + gh spawn。两层节流互补:cadence 降档省轮询次数,gate 省 token。
- * 降档后那一轮若无变化,仍然只是 gate 跑一次、不唤起 agent,gate 的价值一点没丢。
- *
- * 按 quiet(距上次真实变化多久)选档。第一档同时兼作「必须保持敏感」的兜底档。
- */
-const CADENCE_LADDER = [
-  { maxQuietMs: 30 * 60_000, intervalMs: 10 * 60_000, cronExpr: '*/10 * * * *', label: '10m' },
-  { maxQuietMs: 2 * 3_600_000, intervalMs: 3_600_000, cronExpr: '0 * * * *', label: '1h' },
-  { maxQuietMs: 8 * 3_600_000, intervalMs: 4 * 3_600_000, cronExpr: '0 */4 * * *', label: '4h' },
-  { maxQuietMs: 3 * 86_400_000, intervalMs: 8 * 3_600_000, cronExpr: '0 */8 * * *', label: '8h' },
-  { maxQuietMs: Infinity, intervalMs: 86_400_000, cronExpr: '0 9 * * *', label: '1d' },
-];
+/** 新 head 这么久还没有任何检查上报,告诉 agent 一次(仓库以前在这个 PR 上跑过检查时才算)。 */
+const NO_CHECKS_MS = 15 * 60_000;
+/** 连续只有评论的唤起达到这个数就停止跟进(防与机器人来回回复);检查、冲突或推送消息清零。 */
+const COMMENT_WAKE_LIMIT = 10;
+/** 新跟进的首次检查最多晚一个调度间隔,这段时间里别人的评论仍算新消息。 */
+const FIRST_CHECK_LOOKBACK_MS = 10 * 60_000;
+/** 低成本探测看不到 review thread 里的评论编辑,隔这么久无条件完整读一次。 */
+const FULL_REREAD_MS = 30 * 60_000;
+const LISTED_ITEMS = 10;
+const SNIPPET_LENGTH = 200;
 
 function formatDuration(ms) {
   const m = Math.round(ms / 60_000);
@@ -363,106 +263,12 @@ function formatDuration(ms) {
   return `${Math.round(h / 24)} d`;
 }
 
-/**
- * 建议 cadence(纯函数,可测)。只读状态文件,不跑快照、不改状态 —— 所以每轮 gate
- * 可以零 API 成本地先问一句「现在该多久查一次」。
- *
- * 一个刻意的设计:**被跳过的轮次不唤起 agent**,所以「长期安静 → 逐档降」这个方向
- * agent 自己做不到(最该降档的心跳恰恰全是跳过的轮次)。因此调度固定 10 分钟触发,
- * 由 gate 每轮用本函数 + cadenceThrottle 决定这一轮要不要真的去查 GitHub;
- * 一有变化(回弹到 10m 档)下一轮就恢复高频,不需要任何人改调度。
- */
-export function suggestCadence(
-  state,
-  now = Date.now(),
-  draftReminderMs = DEFAULT_DRAFT_REMINDER_HOURS * 3_600_000,
-) {
-  const pick = (tier, reason, detail) => ({
-    intervalMs: tier.intervalMs,
-    cronExpr: tier.cronExpr,
-    label: tier.label,
-    reason,
-    detail,
-  });
-  const fast = (reason, detail) => pick(CADENCE_LADDER[0], reason, detail);
-
-  if (!state || typeof state !== 'object') {
-    return fast('no-state', 'no previous state; poll fast to establish a baseline');
-  }
-  if (state.merged || state.closed) {
-    return fast('terminal', 'PR is merged/closed; keep polling fast while wrapping up');
-  }
-  if (state.pendingFingerprint) {
-    return fast('unacked', 'a released change has not been acknowledged with --ack yet; keep the retry pace');
-  }
-  if ((Number(state.nextAllowAt) || 0) > now) {
-    // defer 期间不降档:压制提醒交给 defer(软闸门),cadence 仍要对真变化敏感
-    return fast('deferred', 'a defer is active; defer, not cadence, holds wake-ups back');
-  }
-  if ((state.blockers ?? []).includes('merge_queue_pending')) {
-    return fast('merge-queue', 'PR is in the merge queue; poll every 10 minutes, wake the agent only on change');
-  }
-  if (state.humanOnlyPending) {
-    const anchor = Number(state.lastChangedAt) || Number(state.lastCheckedAt) || now;
-    const quietMs = Math.max(0, now - anchor);
-    const tier = CADENCE_LADDER.find((t) => quietMs < t.maxQuietMs) ?? CADENCE_LADDER.at(-1);
-    return pick(tier, 'human-only', `only human approval left; polling quietly (quiet for about ${formatDuration(quietMs)})`);
-  }
-  if (state.verdict === 'NEEDS_WORK') {
-    return fast('work-pending', 'verdict=NEEDS_WORK, there is work left');
-  }
-  const anchor = Number(state.lastChangedAt) || Number(state.lastCheckedAt) || now;
-  const quietMs = Math.max(0, now - anchor);
-  const tier = CADENCE_LADDER.find((t) => quietMs < t.maxQuietMs) ?? CADENCE_LADDER.at(-1);
-
-  // 草稿期间给档位设下限:**轮询粒度必须比复提醒闸门细,否则闸门兑现不了**。
-  // 反例(cadence=1d + 闸门 24h,两者同粒度):某轮恰好落在 lastDraftReminderAt+23h,
-  // 本轮未到点 → idle,而下一轮要等「本轮完成 + 24h」,于是实际提醒间隔接近 47 小时,
-  // 而不是承诺的每天一次。下限由闸门推导(见 draftCadenceFloor),代价只是多几次
-  // gate 查询 —— 零 agent token。
-  const floor = state.wasDraft ? draftCadenceFloor(draftReminderMs) : null;
-  if (floor && tier.intervalMs > floor.intervalMs) {
-    return pick(
-      floor,
-      'draft-floor',
-      `draft (quiet for about ${formatDuration(quietMs)}); cadence held at ${floor.label} to honour the ${formatDuration(draftReminderMs)} reminder`,
-    );
-  }
-  return pick(tier, 'quiet', `about ${formatDuration(quietMs)} since the last change`);
-}
-
-/**
- * 调度触发间隔的容差:调度每 10 分钟触发一次,「上次检查 + 档位间隔」很少恰好落在某次
- * 触发上。留半个触发周期的余量,让 1h 档实际约 1h 一查,而不是被推到 1h10m。
- */
-const CADENCE_SLACK_MS = 5 * 60_000;
-
-/**
- * cadence 的执行者(纯函数,可测):按 suggestCadence 的档位,决定本轮是否不查 GitHub、
- * 直接跳过。返回 null = 照常查;否则返回 { cadence, nextCheckAt }。
- *
- * 只在「上次成功检查」之后计时(lastCheckedAt 只在拿到完整快照时写入);档位为最细
- * 一档(未确认变化、defer、NEEDS_WORK、合并队列、终态等)时从不节流,所以节流只会
- * 发生在 PR 确实安静的时候。代价与降档调度相同:安静越久,新变化被发现得越晚(最多
- * 一个档位间隔)。
- */
-export function cadenceThrottle(state, now, draftReminderMs = DEFAULT_DRAFT_REMINDER_HOURS * 3_600_000) {
-  if (!state || typeof state !== 'object') return null;
-  const lastCheckedAt = Number(state.lastCheckedAt) || 0;
-  if (!lastCheckedAt) return null;
-  const cadence = suggestCadence(state, now, draftReminderMs);
-  if (cadence.intervalMs <= CADENCE_LADDER[0].intervalMs) return null;
-  const nextCheckAt = lastCheckedAt + cadence.intervalMs - CADENCE_SLACK_MS;
-  return now < nextCheckAt ? { cadence, nextCheckAt } : null;
-}
-
 function usage(err = (text) => process.stderr.write(text)) {
   err(
     'Usage: node pr-heartbeat-gate.mjs <PR_URL|number> [--repo owner/name] ' +
-      '[--ack] [--defer <minutes>] [--suggest] [--last-result] [--snapshot <path>] [--state-dir <dir>] ' +
-      '[--max-snapshot-failures <n>] [--max-pass-attempts <n>] [--max-work-pending-passes <n>] ' +
-      '[--retry-backoff-minutes <n>] [--max-silence-hours <n>] ' +
-      '[--draft-reminder-hours <n>] [--no-cadence-throttle] [--json]\n',
+      '[--ack] [--defer <minutes>] [--last-result] [--snapshot <path>] [--state-dir <dir>] ' +
+      '[--max-snapshot-failures <n>] [--max-pass-attempts <n>] ' +
+      '[--retry-backoff-minutes <n>] [--max-silence-hours <n>] [--json]\n',
   );
 }
 
@@ -478,15 +284,10 @@ export function parseArgs(argv, env = process.env) {
   let stateDir = env.CINDY_PR_STATE_DIR?.trim() || '';
   let maxSnapshotFailures = DEFAULT_MAX_SNAPSHOT_FAILURES;
   let maxPassAttempts = DEFAULT_MAX_PASS_ATTEMPTS;
-  let maxWorkPendingPasses = DEFAULT_MAX_WORK_PENDING_PASSES;
   let retryBackoffMinutes = DEFAULT_RETRY_BACKOFF_MINUTES;
   let minPassSpacingMinutes = DEFAULT_MIN_PASS_SPACING_MINUTES;
   let maxSilenceHours = DEFAULT_MAX_SILENCE_HOURS;
-  // 刻意不预设默认值:留 undefined 才能区分「没传」与「显式传了 24」——
-  // 前者要允许从 state 继承(见 resolveDraftReminderMs),后者是显式覆盖。
-  let draftReminderHours;
   let json = false;
-  let cadenceThrottleEnabled = true;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -499,8 +300,10 @@ export function parseArgs(argv, env = process.env) {
       ack = true;
       continue;
     }
-    if (arg === '--no-cadence-throttle') {
-      cadenceThrottleEnabled = false;
+    // 已退役的选项:旧调度的 hook 可能还带着,接受并忽略,不让它们 fail-closed。
+    if (arg === '--no-cadence-throttle') continue;
+    if (arg === '--draft-reminder-hours' || arg === '--max-work-pending-passes') {
+      i++;
       continue;
     }
     if (arg === '--suggest') {
@@ -547,30 +350,11 @@ export function parseArgs(argv, env = process.env) {
       }
       continue;
     }
-    if (arg === '--max-work-pending-passes') {
-      const raw = argv[++i];
-      maxWorkPendingPasses = Number(raw);
-      if (!Number.isInteger(maxWorkPendingPasses) || maxWorkPendingPasses < 1) {
-        throw new Error(`--max-work-pending-passes expects a positive integer, got: ${raw}`);
-      }
-      continue;
-    }
     if (arg === '--max-silence-hours') {
       const raw = argv[++i];
       maxSilenceHours = Number(raw);
       if (!Number.isFinite(maxSilenceHours) || maxSilenceHours <= 0) {
         throw new Error(`--max-silence-hours expects a positive number, got: ${raw}`);
-      }
-      continue;
-    }
-    // 与上面几个不同:这里允许 0 = 关闭复提醒(只在转草稿那一次提醒)
-    if (arg === '--draft-reminder-hours') {
-      const raw = argv[++i];
-      draftReminderHours = Number(raw);
-      if (!Number.isFinite(draftReminderHours) || draftReminderHours < 0) {
-        throw new Error(
-          `--draft-reminder-hours expects a non-negative number (0 disables), got: ${raw}`,
-        );
       }
       continue;
     }
@@ -627,14 +411,10 @@ export function parseArgs(argv, env = process.env) {
     stateDir: stateDir || path.join(os.homedir(), '.cache', 'cindy-pr'),
     maxSnapshotFailures,
     maxPassAttempts,
-    maxWorkPendingPasses,
     retryBackoffMs: Math.round(retryBackoffMinutes * 60_000),
     minPassSpacingMs: Math.round(minPassSpacingMinutes * 60_000),
     maxSilenceMs: Math.round(maxSilenceHours * 3_600_000),
-    draftReminderMs:
-      draftReminderHours === undefined ? undefined : Math.round(draftReminderHours * 3_600_000),
     json,
-    cadenceThrottle: cadenceThrottleEnabled,
   };
 }
 
@@ -752,11 +532,6 @@ export function fingerprintPayload(snap, lastKnownConflicting = null) {
     latestCommitOid: snap.latestCommitOid ?? null,
     // Queue position/time estimates are noise. No queue preserves the old fingerprint.
     ...(mergeQueue ? { mergeQueue } : {}),
-    // 只在 CI 已失败时观察 base HEAD。这样 main 修好旧基线问题会立刻穿透退避；
-    // 健康 PR / 单纯 pending CI 的 main 日常推进不改变旧指纹，也不会在上线时集体误唤醒。
-    ...((snap.blockers ?? []).some(b => ['ci_failing', 'merge_queue_ci_failing'].includes(b)) && snap.baseCommitOid
-      ? { ciFailingBaseCommitOid: snap.baseCommitOid }
-      : {}),
     state: snap.state ?? null,
     closed: Boolean(snap.closed),
     merged: Boolean(snap.merged),
@@ -837,314 +612,404 @@ function diffFingerprintFields(prevFields, currentFields) {
   return changed.length ? changed.join(',') : null;
 }
 
+/* ── 事件 ─────────────────────────────────────────────────────────────── */
+
+const isoAt = (ms) => new Date(ms).toISOString();
+
+/** 快照里的检查结果:新快照自带 outcome,旧格式(测试夹具等)按状态推出来。 */
+function checkOutcome(check) {
+  if (check?.outcome) return check.outcome;
+  const status = String(check?.status ?? '').toUpperCase();
+  const conclusion = String(check?.conclusion ?? '').toUpperCase();
+  if (check?.type === 'StatusContext') {
+    if (['PENDING', 'EXPECTED'].includes(status)) return 'pending';
+    return ['FAILURE', 'ERROR'].includes(status) ? 'failed' : 'passed';
+  }
+  if (status && status !== 'COMPLETED') return 'pending';
+  if (!conclusion) return 'pending';
+  return ['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(conclusion) ? 'passed' : 'failed';
+}
+
+/**
+ * PR 上的全部留言:顶层评论、有内容或有结论的 review、review thread 里的评论。只有内容的
+ * 「COMMENTED」空 review 不单列 —— 它的内容就是 thread 里的那几条评论。
+ */
+export function remarksOf(snap) {
+  const out = [];
+  for (const c of snap?.comments ?? []) {
+    out.push({ id: c?.id, author: c?.author, at: c?.updatedAt ?? c?.createdAt, body: c?.body ?? '', path: null, url: c?.url ?? null });
+  }
+  for (const r of snap?.reviews ?? []) {
+    const body = String(r?.body ?? '').trim();
+    if (!body && ['COMMENTED', 'PENDING'].includes(r?.state)) continue;
+    out.push({ id: r?.id, author: r?.author, at: r?.submittedAt, body, state: r?.state ?? null, path: null, url: r?.url ?? null });
+  }
+  for (const t of snap?.reviewThreads?.nodes ?? []) {
+    for (const c of t?.comments ?? []) {
+      out.push({ id: c?.id, author: c?.author, at: c?.updatedAt ?? c?.createdAt, body: c?.body ?? '', path: t?.path ?? null, url: c?.url ?? null });
+    }
+  }
+  return out.filter((r) => r.id && Number.isFinite(Date.parse(r.at ?? '')));
+}
+
+const queueProblemsOf = (snap) =>
+  [...new Set((snap?.mergeQueue?.blockers ?? []).filter((b) => b !== 'merge_queue_pending'))].sort();
+
+/**
+ * 新跟进的起点:检查从空白开始(这样失败、全部通过都会报一次),评论从首次检查前一个调度
+ * 间隔起算 —— 开始跟进的那一轮 agent 已经处理过更早的评论。
+ */
+export function freshWatch(snap, now) {
+  return {
+    headSha: null,
+    failedChecks: [],
+    passed: false,
+    passedChecks: [],
+    owedChecks: [],
+    remarksThrough: isoAt(now - FIRST_CHECK_LOOKBACK_MS),
+    remarkIds: [],
+    conflicting: false,
+    isDraft: Boolean(snap?.isDraft),
+    queueProblems: [],
+    wakes: 0,
+    checksAwaitedSince: null,
+    everHadChecks: false,
+  };
+}
+
+/**
+ * 对比已确认的 watch 与这次快照,算出要告诉 agent 的事件和下一份 watch(纯函数)。规则与 T3 Code
+ * 一致:每个 head 上新失败的检查(按名字)、必需检查全部通过(没有必需检查时看全部)、别人的新
+ * 留言、开始冲突、新 head 迟迟没有检查;另加草稿转换与合并队列出问题。
+ */
+export function evaluateWatch(watch, snap, now, lastKnownConflicting = null) {
+  const events = [];
+  const headSha = snap?.latestCommitOid ?? null;
+  const headMoved = headSha !== watch.headSha;
+
+  // 读不到检查时(快照标了 unavailable)保留原状态,不把「没读到」当成「没有检查」。
+  let failedChecks = headMoved ? [] : watch.failedChecks ?? [];
+  let passed = headMoved ? false : Boolean(watch.passed);
+  let passedChecks = headMoved ? [] : watch.passedChecks ?? [];
+  let owedChecks = headMoved ? [] : watch.owedChecks ?? [];
+  const checksUnavailable = Boolean(snap?.checksSummary?.unavailable);
+  const checks = checksUnavailable ? [] : (snap?.checks ?? []).filter((c) => c?.name);
+  if (checks.length > 0) {
+    const failed = checks.filter((c) => checkOutcome(c) === 'failed');
+    const newlyFailed = failed.filter((c) => !failedChecks.includes(c.name));
+    if (newlyFailed.length > 0) events.push({ kind: 'checks-failed', failed: newlyFailed });
+    failedChecks = failed.map((c) => c.name);
+
+    const required = checks.filter((c) => c.required === true);
+    const gate = required.length > 0 ? required : checks;
+    const passedNow = gate.every((c) => checkOutcome(c) === 'passed');
+    const gateNames = gate.map((c) => c.name);
+    const told = passed && passedChecks.length === 0 ? gateNames : passedChecks;
+    // 必需检查可能在两次检查之间新增;没有必需检查时不理会非必需检查的增减。
+    const gateGrew = required.length > 0 && gateNames.some((name) => !told.includes(name));
+    // 必需检查通过时仍在跑的其它检查,全部结束时再报一次;之后它们怎么变都不再唤起。
+    const owed = passedNow && passed
+      ? checks.filter((c) => c.required !== true && owedChecks.includes(c.name)).map((c) => c.name)
+      : [];
+    const settled = failed.length === 0 && checks.every((c) => checkOutcome(c) !== 'pending');
+    owedChecks = owed;
+    if (passedNow && (!passed || gateGrew)) {
+      events.push({ kind: 'checks-passed', count: gate.length, required: required.length > 0 });
+      owedChecks = required.length > 0
+        ? checks.filter((c) => c.required !== true && checkOutcome(c) === 'pending').map((c) => c.name)
+        : [];
+    } else if (settled && owed.length > 0) {
+      events.push({ kind: 'checks-passed', count: checks.length, required: false });
+      owedChecks = [];
+    }
+    passed = passedNow;
+    passedChecks = passedNow ? gateNames : [];
+  }
+
+  // 这个 PR 以前跑过检查,新 head 却迟迟没有任何检查:可能没触发,也可能被禁用了。
+  const everHadChecks = Boolean(watch.everHadChecks) || checks.length > 0;
+  let checksAwaitedSince = watch.checksAwaitedSince ?? null;
+  if (!checksUnavailable && watch.everHadChecks) {
+    const awaitedBefore = headMoved ? isoAt(now) : checksAwaitedSince;
+    checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
+    const awaitedMs = checksAwaitedSince === null ? 0 : now - Date.parse(checksAwaitedSince);
+    if (awaitedMs >= NO_CHECKS_MS) {
+      events.push({ kind: 'no-checks', minutes: Math.round(awaitedMs / 60_000) });
+      checksAwaitedSince = null;
+    }
+  }
+
+  // 别人的新留言;自己账号(agent 就用它回复)的不算。时间戳只到秒,同一秒的按 id 区分。
+  const own = String(snap?.viewer ?? '').toLowerCase();
+  const through = Date.parse(watch.remarksThrough) || 0;
+  const fresh = remarksOf(snap).filter((r) => {
+    const at = Date.parse(r.at);
+    return (at > through || (at === through && !(watch.remarkIds ?? []).includes(r.id)))
+      && !(own && String(r.author ?? '').toLowerCase() === own);
+  }).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  if (fresh.length > 0) events.push({ kind: 'remarks', remarks: fresh });
+  const latest = Math.max(through, ...fresh.map((r) => Date.parse(r.at)));
+  const atLatest = fresh.filter((r) => Date.parse(r.at) === latest);
+  const remarksThrough = latest === through ? watch.remarksThrough : isoAt(latest);
+  const remarkIds = [...(latest === through ? watch.remarkIds ?? [] : []), ...atLatest.map((r) => r.id)];
+
+  // 合并态未知(GitHub 还在算)时沿用上次的结论,只有明确的答案才清除冲突。
+  const conflicting = normalizeConflicting(snap, lastKnownConflicting ?? Boolean(watch.conflicting));
+  if (conflicting && !watch.conflicting) events.push({ kind: 'conflicting' });
+
+  const isDraft = Boolean(snap?.isDraft);
+  if (isDraft !== Boolean(watch.isDraft)) events.push({ kind: isDraft ? 'draft-entered' : 'draft-exited' });
+
+  const queueProblems = queueProblemsOf(snap);
+  if (queueProblems.some((b) => !(watch.queueProblems ?? []).includes(b))) {
+    events.push({ kind: 'merge-queue', blockers: queueProblems, reason: snap?.mergeQueue?.reason ?? null });
+  }
+
+  const commentsOnly = events.length > 0 && events.every((e) => e.kind === 'remarks');
+  const progress = headMoved || (events.length > 0 && !commentsOnly);
+  const wakes = (progress ? 0 : Number(watch.wakes) || 0) + (commentsOnly ? 1 : 0);
+  return {
+    events,
+    exhausted: commentsOnly && wakes >= COMMENT_WAKE_LIMIT,
+    next: {
+      headSha, failedChecks, passed, passedChecks, owedChecks, remarksThrough, remarkIds,
+      conflicting, isDraft, queueProblems, wakes, checksAwaitedSince, everHadChecks,
+    },
+  };
+}
+
+/** 从旧版状态升级时的起点:把这次快照里的一切当作已知,不补报旧事。 */
+export function watchFromSnapshot(snap, now, lastKnownConflicting = null) {
+  const base = { ...freshWatch(snap, now), remarksThrough: isoAt(0), conflicting: normalizeConflicting(snap, lastKnownConflicting) };
+  const { next } = evaluateWatch(base, snap, now, lastKnownConflicting);
+  return { ...next, queueProblems: queueProblemsOf(snap), wakes: 0, checksAwaitedSince: null };
+}
+
+function snippet(body) {
+  const text = String(body ?? '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.length <= SNIPPET_LENGTH ? text : `${text.slice(0, SNIPPET_LENGTH - 3)}...`;
+}
+
+function listed(items, line) {
+  const lines = items.slice(0, LISTED_ITEMS).map(line);
+  if (items.length > LISTED_ITEMS) lines.push(`  - and ${items.length - LISTED_ITEMS} more`);
+  return lines;
+}
+
+/** 唤起 agent 时附上的「发生了什么」:具体到检查名、留言人和片段、链接,agent 不必再从头翻。 */
+export function eventReport(events, snap, exhausted = false) {
+  const commit = snap?.latestCommitOid ? ` on ${String(snap.latestCommitOid).slice(0, 7)}` : '';
+  const base = snap?.baseRefName || 'the base branch';
+  const lines = [];
+  for (const e of events) {
+    if (e.kind === 'checks-failed') {
+      lines.push(`- Checks failed${commit}:`, ...listed(e.failed, (c) => {
+        const outcome = String(c.conclusion ?? c.status ?? '').toLowerCase();
+        return `  - ${c.name}${outcome && outcome !== 'failure' ? ` (${outcome})` : ''}${c.detailsUrl ? ` ${c.detailsUrl}` : ''}`;
+      }));
+    } else if (e.kind === 'checks-passed') {
+      lines.push(`- All ${e.count} ${e.required ? 'required ' : ''}${e.count === 1 ? 'check' : 'checks'} passed${commit}.`);
+    } else if (e.kind === 'remarks') {
+      lines.push(`- ${e.remarks.length} new ${e.remarks.length === 1 ? 'comment' : 'comments'}:`, ...listed(e.remarks, (r) => {
+        const body = snippet(r.body);
+        const said = body ? `"${body}"` : String(r.state ?? 'reviewed').toLowerCase();
+        return `  - ${r.author ?? 'someone'}${r.path ? ` on ${r.path}` : ''}: ${said}${r.url ? ` ${r.url}` : ''}`;
+      }));
+    } else if (e.kind === 'no-checks') {
+      lines.push(`- No checks have reported${commit} after ${e.minutes} minutes, although this PR ran checks before. They may not have been triggered.`);
+    } else if (e.kind === 'conflicting') {
+      lines.push(`- The branch now conflicts with ${base}.`);
+    } else if (e.kind === 'draft-entered') {
+      lines.push('- The PR was converted to a draft.');
+    } else if (e.kind === 'draft-exited') {
+      lines.push('- The PR left draft and is ready for review.');
+    } else if (e.kind === 'merge-queue') {
+      lines.push(`- Merge queue problem: ${e.blockers.join(', ')}${e.reason ? ` (reason: ${e.reason})` : ''}.`);
+    }
+  }
+  if (exhausted) {
+    lines.push(`- This is the ${COMMENT_WAKE_LIMIT}th update in a row with only comments. Stop following: delete this schedule and tell the user why.`);
+  }
+  return lines.join('\n');
+}
+
+/** 这次要报的事件的身份:同一批事件重复放行才算重试。 */
+function eventKey(events) {
+  const parts = events.map((e) => {
+    if (e.kind === 'checks-failed') return `${e.kind}:${e.failed.map((c) => c.name).sort().join(',')}`;
+    if (e.kind === 'remarks') return `${e.kind}:${e.remarks.map((r) => `${r.id}@${r.at}`).sort().join(',')}`;
+    if (e.kind === 'merge-queue') return `${e.kind}:${e.blockers.join(',')}`;
+    return e.kind;
+  });
+  return createHash('sha256').update(parts.sort().join('\n')).digest('hex').slice(0, 16);
+}
+
 /**
  * 决策(纯函数,可测)。返回本轮退出码与**下一轮状态**,由 main 原样落库:
- *   { exitCode, reason, detail, fingerprint,
- *     nextConfirmed, nextPending, nextPendingCount, keepNextAllowAt }
+ *   { exitCode, reason, detail, report, fingerprint,
+ *     nextWatch, nextPendingWatch, nextPendingKey, nextPendingCount, nextRetryBackoffUntil, keepNextAllowAt }
  *
- * 判定一律拿 `previous.fingerprint`(已 --ack 确认处理完的指纹)比,而不是拿上一轮
- * 见过的指纹比 —— 见文件头「两段式」说明:放行后 agent 没能真正处理完时必须还能重试。
+ * 两段式:`watch` 是 agent 已确认处理完的基线(由 --ack / --defer 提升,或在没有新事件时直接
+ * 前进),`pendingWatch` 是已放行、未确认的那一份。事件一律拿已确认的 watch 算,所以放行后
+ * agent 没跑成时,同一批事件下一轮还在,会被重试。
  *
  * 优先级:
- *   1. merged / closed         → 放行:收口(汇报 + 删调度 + cleanup)必须有 agent 出场
- *   2. 首轮(既无 confirmed 也无 pending) → 放行:先让 agent 建立基线
- *   3. 快照被截断              → 放行:数据不全时不得判定「无变化 / 已闭环」
- *   4. 与已确认指纹不同        → 放行:真实新变化(changed),或上一轮放行后未被确认
- *                                处理完的重试(retry-unacked)。每轮快速重试
- *                                maxPassAttempts 次后转入退避重试:到点放行一次
- *                                (retry-backoff-attempt),未到点跳过(retry-backoff),
- *                                直到被 --ack 确认 —— 永不放弃,也永不每轮无限唤起
- *   5. defer 未到点            → 跳过:agent 显式设定的提醒/退避节奏
- *   6. 纯人工批准等待         → 跳过:review thread 已明确要求指定批准人,agent 不应
- *                                把等待批准误当技术待办反复唤起;真实 review/CI/冲突变化仍穿透
- *   7. NEEDS_WORK              → 放行:还有活要干,不能因为 PR 侧没动就停手(本身就是
- *                                重试路径,不需要 pending 参与)。但同一个无变化状态
- *                                连续放行 maxWorkPendingPasses 轮后转入退避(与第 4 条
- *                                同款节奏):agent 确认过又推不动的活不该无限唤起,
- *                                真实变化仍随时走第 4 条穿透
- *   8. 其余(READY/WAITING_CI/
- *      BLOCKED_HUMAN/NOT_READY) → 跳过:在等外部,等到有变化再说
+ *   1. merged / closed     → 放行:收口(汇报 + 删调度 + cleanup)必须有 agent 出场
+ *   2. 快照被截断          → 放行:数据不全时不得判定「无变化」
+ *   3. 只剩人工批准的等待  → 跳过并吸收变化(真实的检查失败、冲突不在此列)
+ *   4. 有新事件            → 放行,附上事件清单;同一批事件未确认时按快速重试 + 退避重试
+ *   5. 没有新事件          → 基线直接前进;defer 未到点、等人批准或空闲时跳过,
+ *                            defer 到点或太久没唤起过(保底巡检)时放行一次
  */
 export function decide({
   snap,
   previous,
   now,
   maxPassAttempts = DEFAULT_MAX_PASS_ATTEMPTS,
-  maxWorkPendingPasses = DEFAULT_MAX_WORK_PENDING_PASSES,
   retryBackoffMs = DEFAULT_RETRY_BACKOFF_MINUTES * 60_000,
   minPassSpacingMs = DEFAULT_MIN_PASS_SPACING_MINUTES * 60_000,
   maxSilenceMs = DEFAULT_MAX_SILENCE_HOURS * 3_600_000,
-  draftReminderMs = DEFAULT_DRAFT_REMINDER_HOURS * 3_600_000,
 }) {
   const lastKnownConflicting =
     typeof previous?.lastKnownConflicting === 'boolean' ? previous.lastKnownConflicting : null;
   const current = fingerprint(snap, lastKnownConflicting);
-  const confirmed = previous?.fingerprint;
-  const pending = previous?.pendingFingerprint;
+  const pendingWatch = previous?.pendingWatch ?? null;
+  const pendingKey = previous?.pendingKey ?? null;
   const pendingCount = Number(previous?.pendingPassCount) || 0;
-  // 上一轮 gate 见到的指纹(纯计数用):区分「PR 又变了」和「同一状态没被处理掉」
-  const lastSeen = previous?.currentFingerprint;
-  const sameAsLastSeen = lastSeen !== undefined && lastSeen === current;
   // 距上次放行太近 = 上一次放行没换来一轮真实处理(宿主顺延/spawn 失败/重启),
   // 本轮照常放行但不消耗额度。理由见 DEFAULT_MIN_PASS_SPACING_MINUTES 的注释。
   const lastPassAt = Number(previous?.lastPassAt) || 0;
   const emptyPass = minPassSpacingMs > 0 && lastPassAt > 0 && now - lastPassAt < minPassSpacingMs;
-  // 排查时最想看到的一句:为什么连续放行了好几轮,计数却一直没动
   const emptyPassNote = emptyPass
     ? ` (previous release was only ${formatDuration(now - lastPassAt)} ago and produced no real run; not counted)`
     : '';
 
+  // 基线:新跟进从空白起;旧版 gate 留下的状态(只有指纹)从这次快照起,不补报旧事。
+  const legacy = !previous?.watch && Boolean(previous?.fingerprint || previous?.pendingFingerprint);
+  const baseline = previous?.watch
+    ?? (legacy ? watchFromSnapshot(snap, now, lastKnownConflicting) : freshWatch(snap, now));
+  const result = evaluateWatch(baseline, snap, now, lastKnownConflicting);
+  const base = { fingerprint: current };
+
   /**
-   * 放行并登记「已放行未确认」。每轮快速重试 maxPassAttempts 次后转入退避重试:
+   * 放行并登记「已放行未确认」。同一批事件每轮快速重试 maxPassAttempts 次后转入退避重试:
    * 既不永久放弃(那会漏事件),也不继续每轮唤起(那会无限烧 token)。
+   * pendingWatch 只记**最早一份**:慢 agent 随后的 --ack 只能确认它确实被告知过的状态。
    */
-  const passPending = (reason, detail) => {
-    // pending 只记**最早一个**未确认的变化,不被后续轮次覆盖:agent 跑得比心跳间隔
-    // 慢时,下一轮 gate 可能已经看到更新的指纹,而那个慢 agent 随后的无参数 --ack
-    // 会把它从没处理过的指纹提升为 confirmed,把那次变化永久吞掉。保留最早值后,
-    // confirmed 只会被提升到某个确实放行过的指纹,而只要 current 仍与 confirmed
-    // 不同就会继续放行 —— 新变化不会丢。
-    const nextPending = pending ?? current;
-    // 计数衡量「同一个未处理状态被放行了几次」。PR 持续有新变化时每轮都该放行,
-    // 所以按 current 是否与上一轮所见相同判定,而不是看 pending 在不在。
-    const attempt = sameAsLastSeen ? Math.max(1, emptyPass ? pendingCount : pendingCount + 1) : 1;
+  const passPending = (reason, detail, report, key, nextWatch) => {
+    const nextPendingWatch = pendingWatch ?? nextWatch;
+    const attempt = pendingKey === key ? Math.max(1, emptyPass ? pendingCount : pendingCount + 1) : 1;
+    const pending = { ...base, report, nextWatch: baseline, nextPendingWatch, nextPendingKey: key };
     if (attempt > maxPassAttempts) {
       const backoffUntil = Number(previous?.retryBackoffUntil) || 0;
       if (backoffUntil > now) {
         return {
+          ...pending,
           exitCode: EXIT_SKIP,
           reason: 'retry-backoff',
-          detail: `${detail}; retried ${pendingCount} times without --ack, next try at ${new Date(backoffUntil).toISOString()}`,
-          fingerprint: current,
-          nextConfirmed: confirmed,
-          nextPending,
-          // 本轮没放行,不累加尝试次数
+          detail: `${detail}; released ${pendingCount} times without --ack, next try at ${isoAt(backoffUntil)}`,
           nextPendingCount: pendingCount,
           nextRetryBackoffUntil: backoffUntil,
         };
       }
-      // 快速重试额度之外的都是退避周期;连续多个周期没被 ack,说明这条心跳反复没跑成
       const stuckCycles = attempt - maxPassAttempts;
-      const stuckNote =
-        stuckCycles >= STUCK_NOTIFY_BACKOFF_CYCLES
-          ? `; ⚠️ the same change has gone unacknowledged for ${stuckCycles} backoff cycles: notify the user (schedule_notify_current_run) with what is stuck and what it is waiting for; do not keep retrying silently`
-          : '';
+      const stuckNote = stuckCycles >= STUCK_NOTIFY_BACKOFF_CYCLES
+        ? `; ⚠️ the same update has gone unacknowledged for ${stuckCycles} backoff cycles: notify the user (schedule_notify_current_run) with what is stuck; do not keep retrying silently`
+        : '';
       return {
+        ...pending,
         exitCode: EXIT_PASS,
         reason: 'retry-backoff-attempt',
         detail: `${detail}; attempt=${attempt} (backoff retry, next in ${Math.round(retryBackoffMs / 60_000)} min)${stuckNote}`,
-        fingerprint: current,
-        nextConfirmed: confirmed,
-        nextPending,
         nextPendingCount: attempt,
         nextRetryBackoffUntil: now + retryBackoffMs,
       };
     }
     return {
+      ...pending,
       exitCode: EXIT_PASS,
       reason: attempt > 1 ? 'retry-unacked' : reason,
       detail: `${detail}; attempt=${attempt}/${maxPassAttempts}${emptyPassNote}`,
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending,
       nextPendingCount: attempt,
     };
   };
+  const skip = (reason, detail, nextWatch, extra = {}) => ({
+    ...base, exitCode: EXIT_SKIP, reason, detail, nextWatch, nextPendingWatch: null, nextPendingKey: null, nextPendingCount: 0, ...extra,
+  });
 
   if (snap.merged || snap.closed) {
-    // 收口每轮都必须放行,不受 pending 上限约束(agent 收口失败就得再来一轮)
+    // 收口每轮都必须放行,不受重试上限约束(agent 收口失败就得再来一轮)
     return {
+      ...base,
       exitCode: EXIT_PASS,
       reason: 'terminal',
       detail: snap.merged ? 'merged' : 'closed',
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: pending ?? current,
-      nextPendingCount: sameAsLastSeen ? pendingCount + 1 : 1,
+      nextWatch: baseline,
+      nextPendingWatch: pendingWatch ?? result.next,
+      nextPendingKey: 'terminal',
+      nextPendingCount: pendingKey === 'terminal' ? pendingCount + 1 : 1,
     };
-  }
-  if (!confirmed && !pending) {
-    return passPending('first-round', 'no previous state');
   }
   if (snap.gate?.truncated) {
-    return passPending('truncated', 'snapshot truncated');
+    // 数据不全:不推进基线(确认后仍从原基线算,不会越过可能漏掉的留言)
+    return passPending('truncated', 'snapshot truncated', '', 'truncated', baseline);
   }
-  // 纯人工批准等待期间,CI 从 pending→pass、评论时间抖动等外部变化不需要
-  // 再唤起 agent。只在上一轮已经确认这是 human-only 时自动吸收变化；首次
-  // 退化成 human-only 仍放行一次,让 agent 看到并留下必要的收尾说明。
-  if (current !== confirmed && previous?.humanOnlyPending === true && isHumanOnlyReviewPending(snap)) {
-    return {
-      exitCode: EXIT_SKIP,
-      reason: 'blocked-human',
-      detail: `${humanOnlyReviewDetail(snap)}; only external state changed, new fingerprint confirmed without waking the agent`,
-      fingerprint: current,
-      nextConfirmed: current,
-      nextPending: null,
-      nextPendingCount: 0,
-    };
+  if (legacy && previous?.pendingFingerprint) {
+    return passPending('upgraded', 'the follow-up check was upgraded while an update was still unacknowledged; look at the PR once', '', 'upgraded', result.next);
   }
-  if (current !== confirmed) {
-    // 草稿翻转单独给个 reason:run 记录里能一眼看出「就是这一轮被设成草稿的」,
-    // SKILL.md 也有个具体串可以引用。仍然走 passPending —— 草稿转换是挂在
-    // 人名下的阻塞事件,必须享受两段式指纹的重试保护,不能因一次建会话失败被吞掉。
-    // previous.wasDraft 为 undefined(旧状态迁移)时不猜:当普通 changed 处理。
-    const wasDraft = previous?.wasDraft;
-    if (typeof wasDraft === 'boolean' && wasDraft !== Boolean(snap.isDraft)) {
-      return passPending(
-        snap.isDraft ? 'draft-entered' : 'draft-exited',
-        snap.isDraft
-          ? `PR was converted to draft (often because a change was asked to move to a separate discussion), verdict=${snap.verdict}`
-          : `PR left draft, verdict=${snap.verdict}`,
-      );
-    }
-    const changedKeys = diffFingerprintFields(
-      previous?.fingerprintFields,
-      fingerprintFieldHashes(snap, lastKnownConflicting),
-    );
+  // 纯人工批准等待期间,外部变化(评论、检查通过)不再唤起 agent;首次退化成这种状态时
+  // 仍按事件放行一次,让 agent 看到并留下必要的收尾说明。
+  if (result.events.length > 0 && previous?.humanOnlyPending === true && isHumanOnlyReviewPending(snap)) {
+    return skip('blocked-human', `${humanOnlyReviewDetail(snap)}; only external state changed, confirmed without waking the agent`, result.next);
+  }
+  if (result.events.length > 0) {
+    const kinds = [...new Set(result.events.map((e) => e.kind))];
+    const reason = result.exhausted ? 'comment-limit' : kinds.length === 1 && kinds[0].startsWith('draft-') ? kinds[0] : 'changed';
     return passPending(
-      'changed',
-      `verdict=${snap.verdict}${changedKeys ? `; changedFields=[${changedKeys}]` : ''}`,
+      reason,
+      `events=[${kinds.join(',')}]; verdict=${snap.verdict}`,
+      eventReport(result.events, snap, result.exhausted),
+      eventKey(result.events),
+      result.next,
     );
   }
 
-  const nextAllowAt = Number(previous.nextAllowAt) || 0;
+  // 没有新事件:推送、检查在跑、自己的评论这类变化直接并入基线,不唤起 agent。
+  const changedKeys = diffFingerprintFields(previous?.fingerprintFields, fingerprintFieldHashes(snap, lastKnownConflicting));
+  const quietNote = changedKeys ? `; no news in changedFields=[${changedKeys}]` : '';
+  // defer = 「到点叫我,除非先有事」:未到点跳过,到点放行一次(放行即消费掉)。
+  const nextAllowAt = Number(previous?.nextAllowAt) || 0;
   if (nextAllowAt > now) {
-    return {
-      exitCode: EXIT_SKIP,
-      reason: 'deferred',
-      detail: `nextAllowAt=${new Date(nextAllowAt).toISOString()}`,
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: pending ?? null,
-      nextPendingCount: pendingCount,
-      keepNextAllowAt: true,
-    };
+    return skip('deferred', `nextAllowAt=${isoAt(nextAllowAt)}${quietNote}`, result.next, { keepNextAllowAt: true });
   }
-  // 草稿复提醒:PR 还停在草稿里,且距上次草稿提醒已超过闸门 —— 复述一句,别让这件挂在
-  // 人名下的事无声躺着。放在 defer 之后:agent 通知用户后往往会 --defer 240,那 4
-  // 小时内不该重复打扰(defer 压不住 24h 闸门,所以第二天照样提醒)。放在保底巡检之前:
-  // 草稿是更具体的原因,不该被笼统的 silence-guard 吃掉。
-  //
-  // 锚点回落链与写侧保持一致(lastDraftReminderAt → lastDraftEnteredAt → lastPassAt →
-  // lastCheckedAt):旧版 gate 写的状态没有前两个字段,若这里直接当 0 处理,第一轮就会
-  // 误判「已静默无限久」而立刻提醒;若直接当 now,则已卡了三天的草稿要再等一天才提醒。
-  const draftAnchor =
-    Number(previous.lastDraftReminderAt) ||
-    Number(previous.lastDraftEnteredAt) ||
-    Number(previous.lastPassAt) ||
-    Number(previous.lastCheckedAt) ||
-    0;
-  if (snap.isDraft && draftReminderMs > 0 && draftAnchor > 0 && now - draftAnchor >= draftReminderMs) {
+  if (nextAllowAt > 0) {
     return {
+      ...base,
       exitCode: EXIT_PASS,
-      reason: 'draft-reminder',
-      // 与保底巡检同款:不产生 pending(这不是未处理的变化,漏一次下个窗口还会来)
-      detail: `PR is still a draft, about ${formatDuration(now - draftAnchor)} since the last draft reminder; remind once (verdict=${snap.verdict})`,
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: null,
+      reason: 'defer-expired',
+      detail: `the wait you set with --defer is over and nothing new happened meanwhile (verdict=${snap.verdict})`,
+      nextWatch: result.next,
+      nextPendingWatch: null,
+      nextPendingKey: null,
       nextPendingCount: 0,
     };
   }
-  // 保底巡检:确认过的状态但太久没有真正放行过 —— 指纹看不到的东西该让 AI 看一眼了。
-  // 放在 defer 之后:agent 显式说过「别烦我」时先尊重它(defer 通常 ≤4h,压不住 24h 的闸门)。
-  const silenceAnchor =
-    Number(previous.lastPassAt) || Number(previous.lastChangedAt) || Number(previous.lastCheckedAt) || 0;
+  // 保底巡检:太久没有真正放行过 —— 指纹看不到的东西,以及 gate 自身的静默失效,让 AI 看一眼。
+  const silenceAnchor = lastPassAt || Number(previous?.lastCheckedAt) || 0;
   if (silenceAnchor > 0 && now - silenceAnchor >= maxSilenceMs) {
     return {
+      ...base,
       exitCode: EXIT_PASS,
       reason: 'silence-guard',
-      // 刻意不产生 pending:这不是"未处理的变化",漏一次也不会丢事件,下一个闸门周期还会来
       detail: `the agent has not been woken for ${formatDuration(now - silenceAnchor)}; safety check-in (verdict=${snap.verdict})`,
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: null,
+      nextWatch: result.next,
+      nextPendingWatch: null,
+      nextPendingKey: null,
       nextPendingCount: 0,
     };
   }
-  if (isHumanOnlyReviewPending(snap)) {
-    return {
-      exitCode: EXIT_SKIP,
-      reason: 'blocked-human',
-      detail: humanOnlyReviewDetail(snap),
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: null,
-      nextPendingCount: 0,
-    };
-  }
-  // 以下两条的前提是 current === confirmed(已确认处理过这个状态),pending 无意义,清掉
-  if (snap.verdict === 'NEEDS_WORK') {
-    const blockerList = [...(snap.blockers ?? [])].sort().join(',') || 'none';
-    const actionableBlockers = [...new Set(snap.blockers ?? [])]
-      .filter((b) => ACTIONABLE_WORK_BLOCKERS.has(b))
-      .sort();
-    const actionableNote = actionableBlockers.length
-      ? `; agent-owned blocker=${actionableBlockers.join(',')}: technical review, CI, conflict and base sync must be pushed forward autonomously; do not just reply "waiting for the user" and --ack. When scope has grown, deleting, reverting or shrinking back to the original goal is technical convergence, not splitting the PR, and needs no user confirmation; only when keeping or adding complex machinery (concurrency, locks, caches, persistence, retries) or changing product behaviour, state the exact decision for the user and --defer 240`
-      : '';
-    // 同一个无变化状态的连续唤起计数;状态一变(指纹不同)自动从头数。
-    // 上限与退避的理由见 DEFAULT_MAX_WORK_PENDING_PASSES 的注释。
-    const sameState = previous?.workPendingFingerprint === current;
-    const wpCount = sameState ? Number(previous?.workPendingPassCount) || 0 : 0;
-    if (wpCount < maxWorkPendingPasses) {
-      // 空放行(宿主顺延等)同样不计数,否则 agent 一次没跑就被压进短退避
-      const attempt = Math.max(1, emptyPass ? wpCount : wpCount + 1);
-      return {
-        exitCode: EXIT_PASS,
-        reason: 'work-pending',
-        detail: `blockers=${blockerList}; attempt=${attempt}/${maxWorkPendingPasses}${emptyPassNote}${actionableNote}`,
-        fingerprint: current,
-        nextConfirmed: confirmed,
-        nextPending: null,
-        nextPendingCount: 0,
-        nextWorkPendingCount: attempt,
-        // 最后一轮快速唤起时顺手立好退避闸门:下一轮同状态直接进入退避,不再多烧一轮
-        ...(attempt === maxWorkPendingPasses
-          ? { nextWorkPendingBackoffUntil: now + retryBackoffMs }
-          : {}),
-      };
-    }
-    const backoffUntil = sameState ? Number(previous?.workPendingBackoffUntil) || 0 : 0;
-    if (backoffUntil > now) {
-      return {
-        exitCode: EXIT_SKIP,
-        reason: 'work-pending-backoff',
-        detail: `blockers=${blockerList}; the same state was woken ${wpCount} times without progress, backing off until ${new Date(backoffUntil).toISOString()}. Backoff limits cost; it does not mean "no work"${actionableNote}`,
-        fingerprint: current,
-        nextConfirmed: confirmed,
-        nextPending: null,
-        nextPendingCount: 0,
-        nextWorkPendingCount: wpCount,
-        nextWorkPendingBackoffUntil: backoffUntil,
-      };
-    }
-    // 超出快速唤起额度后的都是退避周期;连着几个周期状态一字不动 = 卡死,用户必须知道
-    const wpStuckCycles = wpCount + 1 - maxWorkPendingPasses;
-    const wpStuckNote =
-      wpStuckCycles >= STUCK_NOTIFY_BACKOFF_CYCLES
-        ? `; ⚠️ the same unchanged state has been stuck for ${wpStuckCycles} backoff cycles (over ${Math.round((wpStuckCycles * retryBackoffMs) / 3_600_000)} h): notify the user (schedule_notify_current_run) with what is stuck and what it is waiting for; do not keep waiting silently`
-        : '';
-    return {
-      exitCode: EXIT_PASS,
-      reason: 'work-pending-backoff-attempt',
-      detail: `blockers=${blockerList}; attempt=${wpCount + 1} (backoff wake-up, next in ${Math.round(retryBackoffMs / 60_000)} min)${wpStuckNote}${actionableNote}`,
-      fingerprint: current,
-      nextConfirmed: confirmed,
-      nextPending: null,
-      nextPendingCount: 0,
-      nextWorkPendingCount: wpCount + 1,
-      nextWorkPendingBackoffUntil: now + retryBackoffMs,
-    };
-  }
-  return {
-    exitCode: EXIT_SKIP,
-    reason: 'idle',
-    detail: `verdict=${snap.verdict}`,
-    fingerprint: current,
-    nextConfirmed: confirmed,
-    nextPending: null,
-    nextPendingCount: 0,
-  };
+  if (isHumanOnlyReviewPending(snap)) return skip('blocked-human', humanOnlyReviewDetail(snap), result.next);
+  return skip('idle', `verdict=${snap.verdict}${quietNote}`, result.next);
 }
 
 /**
@@ -1214,15 +1079,13 @@ export function passAdvisories(snap, roundCount, extras = {}) {
   return notes;
 }
 
-/** --ack / --defer 共用:把 pending 指纹提升为已确认。无 pending 时是 no-op。 */
+/** --ack / --defer 共用:把已放行的 pendingWatch 提升为已确认。无 pending 时是 no-op。 */
 function promotePending(state, now) {
-  const pending = state.pendingFingerprint;
-  if (!pending) return { ...state, lastAckAt: now };
-  const next = { ...state, fingerprint: pending, lastAckAt: now };
-  delete next.pendingFingerprint;
-  delete next.pendingPassCount;
-  // 重试结束,退避闸门一并清掉
-  delete next.retryBackoffUntil;
+  const next = { ...state, lastAckAt: now };
+  if (state.pendingWatch) next.watch = state.pendingWatch;
+  // 旧版 gate 留下的未确认指纹:确认后照旧前进,下一轮按新规则从快照建立基线
+  if (state.pendingFingerprint) next.fingerprint = state.pendingFingerprint;
+  for (const key of ['pendingWatch', 'pendingKey', 'pendingFingerprint', 'pendingPassCount', 'retryBackoffUntil']) delete next[key];
   return next;
 }
 
@@ -1245,6 +1108,42 @@ function runSnapshot(snapshotPath, repo, number) {
   });
 }
 
+/** 低成本探测(pr-snapshot.mjs --probe)。永不 throw;失败时 gate 照常做完整读取。 */
+function runProbe(snapshotPath, repo, number) {
+  return new Promise((resolve) => {
+    execFile(process.execPath, [snapshotPath, String(number), '--repo', repo, '--probe'], { encoding: 'utf8' },
+      (err, stdout, stderr) => resolve({ code: err ? 1 : 0, stdout: stdout ?? '', stderr: stderr ?? '' }));
+  });
+}
+
+function parseProbe(run) {
+  if (run?.code !== 0) return null;
+  try {
+    const value = JSON.parse(run.stdout);
+    return typeof value?.status === 'string' && typeof value?.remarks === 'string'
+      ? { status: value.status, remarks: value.remarks } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 探测结果与上次完整读取时一致、且没有必须完整读取的理由时,本轮直接跳过。必须完整读取:
+ * 还有未确认的放行、上次读到检查在跑或合并态未知、已合并/关闭、超过 30 分钟没完整读过、
+ * 新 head 等检查的期限到了、保底巡检到点。
+ */
+export function probeAllowsSkip(previous, probe, now, maxSilenceMs = DEFAULT_MAX_SILENCE_HOURS * 3_600_000) {
+  if (!probe || !previous?.watch || !previous.probe) return false;
+  if (probe.status !== previous.probe.status || probe.remarks !== previous.probe.remarks) return false;
+  if (previous.pendingWatch || previous.inFlight || previous.merged || previous.closed) return false;
+  if ((Number(previous.nextAllowAt) || 0) > 0 && now >= Number(previous.nextAllowAt)) return false;
+  if (!(now - (Number(previous.lastFullReadAt) || 0) < FULL_REREAD_MS)) return false;
+  const awaited = previous.watch.checksAwaitedSince ? Date.parse(previous.watch.checksAwaitedSince) : NaN;
+  if (Number.isFinite(awaited) && now - awaited >= NO_CHECKS_MS) return false;
+  const silenceAnchor = Number(previous.lastPassAt) || Number(previous.lastCheckedAt) || 0;
+  return !(silenceAnchor > 0 && now - silenceAnchor >= maxSilenceMs);
+}
+
 function emit(args, payload, out = (text) => process.stdout.write(text)) {
   if (args.json) {
     out(`${JSON.stringify(payload, null, 2)}\n`);
@@ -1254,7 +1153,8 @@ function emit(args, payload, out = (text) => process.stdout.write(text)) {
     payload.exitCode === EXIT_PASS ? 'PASS' : payload.exitCode === EXIT_SKIP ? 'SKIP' : 'BLOCK';
   out(
     `[pr-heartbeat-gate] ${decision} ${payload.repo}#${payload.number} ` +
-      `reason=${payload.reason}${payload.detail ? ` (${payload.detail})` : ''}\n`,
+      `reason=${payload.reason}${payload.detail ? ` (${payload.detail})` : ''}\n` +
+      (payload.report ? `${payload.report}\n` : ''),
   );
 }
 
@@ -1289,7 +1189,7 @@ async function gateMain(argv, ctx) {
   const now = ctx.now();
 
   // --last-result:只读最近一轮普通 gate 的实际结果。preRunHook 本身只负责 run/skip；
-  // 被 run 唤起的 AI 再结合这份 reason/detail 与 fresh snapshot 自主决定是否通知。
+  // 被 run 唤起的 AI 再结合这份 reason/detail/report 与 fresh snapshot 自主决定是否通知。
   if (args.lastResult) {
     const state = readState(file);
     const lastResult =
@@ -1314,23 +1214,20 @@ async function gateMain(argv, ctx) {
       detail: lastResult
         ? `decision=${lastResult.decision} reason=${lastResult.reason}${lastResult.detail ? ` (${lastResult.detail})` : ''}`
         : 'no gate result recorded yet',
+      report: lastResult?.report,
       lastResult,
     }, out);
     return EXIT_PASS;
   }
 
-  // --suggest:只读状态文件给出 cadence 建议,不跑快照、不改状态(零 API 成本)
+  // --suggest 已退役:检查不再降频(每次先做一个低成本探测),保留只读兼容输出。
   if (args.suggest) {
-    const state = readState(file);
-    // 没显式传参时用普通 gate 轮落进 state 的闸门,否则短闸门会被默认 24h 顶掉
-    const cadence = suggestCadence(state, now, resolveDraftReminderMs(args.draftReminderMs, state));
     emit(args, {
       exitCode: EXIT_PASS,
       repo: args.repo,
       number: args.number,
-      reason: `suggest-${cadence.reason}`,
-      detail: `cadence=${cadence.label} intervalMs=${cadence.intervalMs} cron="${cadence.cronExpr}" (${cadence.detail})`,
-      cadence,
+      reason: 'suggest-fixed',
+      detail: 'the check no longer changes its pace; keep the 10-minute schedule',
     }, out);
     return EXIT_PASS;
   }
@@ -1339,14 +1236,11 @@ async function gateMain(argv, ctx) {
   if (args.ack || args.deferMinutes !== undefined) {
     const previous = readState(file) ?? {};
     let next = promotePending(previous, now);
-    let detail = `confirmed=${(next.fingerprint ?? '').slice(0, 12) || 'none'}`;
+    let detail = next.watch ? `confirmed head=${String(next.watch.headSha ?? 'none').slice(0, 7)}` : 'confirmed';
     if (args.deferMinutes !== undefined) {
-      // defer 隐含 ack:显式推后提醒意味着这一轮已经处理完了
+      // defer 隐含 ack,并约定到点再唤起一次;期间新事件照常唤起。
+      // deferredHeadOid:当前 head 已用掉一次等待额度(回合制机判依据),head 一变由普通轮清掉。
       const nextAllowAt = now + Math.round(args.deferMinutes * 60_000);
-      // deferredHeadOid:把「当前 head 已用掉一次等待额度」持久化(回合制的机判依据)。
-      // nextAllowAt 被穿透放行后会被消费掉,deferredAt 也只反映最近一次 defer 的时间;
-      // 只有按 head 登记才能让 worker 在被 CI 变化等穿透唤醒后仍知道"这轮已经等过了"。
-      // head 一变(新 push)由普通 gate 轮的写侧自动清掉,等待额度随新回合重置。
       next = {
         ...next,
         nextAllowAt,
@@ -1356,18 +1250,12 @@ async function gateMain(argv, ctx) {
       detail += ` nextAllowAt=${new Date(nextAllowAt).toISOString()}`;
     }
     writeState(file, next);
-    // 顺带给出 cadence 建议:agent 收尾只调一次命令就能拿到该设成多少,不必再问一遍。
-    // 注意要用**写入后**的状态算(ack 已清掉 pending,否则会恒命中 unacked 档)。
-    // 同上:闸门从 state 继承(next 由 previous 展开而来,带着它)
-    const cadence = suggestCadence(next, now, resolveDraftReminderMs(args.draftReminderMs, next));
-    detail += ` | cadence=${cadence.label} intervalMs=${cadence.intervalMs} cron="${cadence.cronExpr}" (${cadence.reason}: ${cadence.detail})`;
     emit(args, {
       exitCode: EXIT_PASS,
       repo: args.repo,
       number: args.number,
       reason: args.deferMinutes !== undefined ? 'defer-set' : 'acked',
       detail,
-      cadence,
     }, out);
     return EXIT_PASS;
   }
@@ -1378,27 +1266,19 @@ async function gateMain(argv, ctx) {
   }
 
   const previous = readState(file);
-  // Persist CLI configuration even while snapshot requests are backing off.
-  const effectiveDraftReminderMs =
-    args.draftReminderMs ?? DEFAULT_DRAFT_REMINDER_HOURS * 3_600_000;
   if (Number(previous?.snapshotFailureBackoffUntil) > now) {
     const detail = `nextProbeAt=${new Date(previous.snapshotFailureBackoffUntil).toISOString()}`;
     const lastResult = { decision: 'skip', exitCode: EXIT_SKIP, reason: 'snapshot-failure-backoff', detail, checkedAt: now };
-    writeState(file, { ...previous, draftReminderMs: effectiveDraftReminderMs, lastDecision: 'skip', lastDecisionReason: lastResult.reason, lastResult });
+    writeState(file, { ...previous, lastDecision: 'skip', lastDecisionReason: lastResult.reason, lastResult });
     emit(args, { ...lastResult, repo: args.repo, number: args.number }, out);
     return EXIT_SKIP;
   }
-  const throttle = args.cadenceThrottle && cadenceThrottle(
-    previous,
-    now,
-    resolveDraftReminderMs(args.draftReminderMs, previous),
-  );
-  if (throttle) {
-    const detail = `cadence=${throttle.cadence.label} (${throttle.cadence.detail}); nextCheckAt=${new Date(throttle.nextCheckAt).toISOString()}`;
-    const lastResult = { decision: 'skip', exitCode: EXIT_SKIP, reason: 'cadence-throttle', detail, checkedAt: now };
-    writeState(file, { ...previous, lastDecision: 'skip', lastDecisionReason: lastResult.reason, lastResult });
+  // 先问一句「有没有变」:一个很小的查询,与上次完整读取时一致就不做三四个接口的完整读取。
+  const probe = parseProbe(await ctx.runProbe(args.snapshot, args.repo, args.number));
+  if (probeAllowsSkip(previous, probe, now, args.maxSilenceMs)) {
+    const lastResult = { decision: 'skip', exitCode: EXIT_SKIP, reason: 'unchanged', detail: 'probe matches the last full read', checkedAt: now };
+    writeState(file, { ...previous, lastProbeAt: now, lastDecision: 'skip', lastDecisionReason: lastResult.reason, lastResult });
     emit(args, { ...lastResult, repo: args.repo, number: args.number }, out);
-    // 节流是健康的跳过(上次检查成功、只是还没到档位间隔),与普通 idle 轮一样标记成功。
     if (!args.json) out('CINDY_PRECHECK_OK\n');
     return EXIT_SKIP;
   }
@@ -1422,8 +1302,6 @@ async function gateMain(argv, ctx) {
     const detail = `${plan.rateLimited ? 'rate limit; ' : ''}snapshotExit=${run.code} failures=${failures}/${args.maxSnapshotFailures}${tail ? ` stderr=${tail}` : ''}`;
     writeState(file, {
       ...(previous ?? {}),
-      // 闸门与快照无关,失败轮也要落盘(见上面的说明)
-      draftReminderMs: effectiveDraftReminderMs,
       consecutiveSnapshotFailures: failures,
       lastSnapshotFailureAt: now,
       snapshotFailureFingerprint: plan.fingerprint,
@@ -1459,41 +1337,11 @@ async function gateMain(argv, ctx) {
     previous,
     now,
     maxPassAttempts: args.maxPassAttempts,
-    maxWorkPendingPasses: args.maxWorkPendingPasses,
     retryBackoffMs: args.retryBackoffMs,
     minPassSpacingMs: args.minPassSpacingMs,
     maxSilenceMs: args.maxSilenceMs,
-    draftReminderMs: effectiveDraftReminderMs,
   });
   const passed = decision.exitCode === EXIT_PASS;
-  // cadence 阶梯的锚点:只有「真的看到新东西」才刷新,同一状态的重试 / work-pending /
-  // idle 都不算 —— 否则 quiet 永远归零,永远降不下来。truncated 数据不全,保守当变化。
-  // 回落顺序与 suggestCadence 的读取侧保持一致:旧版 gate 写的状态没有 lastChangedAt,
-  // 若这里直接落 now,第一个 idle / 重试 / work-pending 轮就会把锚点重置成"现在",
-  // 把本可从 lastCheckedAt 推断出的安静时长抹掉(已安静 3 天的心跳会重新从 10m 起跳)。
-  // draft-entered / draft-exited 是真实变化(该回弹到高频);draft-reminder 不是,
-  // 与 silence-guard 一样刻意不刷新锚点,否则复提醒会把 cadence 自己拉回 10m。
-  const isChange = ['changed', 'first-round', 'truncated', 'draft-entered', 'draft-exited'].includes(
-    decision.reason,
-  );
-  const lastChangedAt = isChange
-    ? now
-    : Number(previous?.lastChangedAt) || Number(previous?.lastCheckedAt) || now;
-  // 草稿闸门的锚点:只被草稿相关的放行推进,不被其它放行重置 —— 否则草稿期间来一次
-  // 不相关的 CI 变化就把「等人回复」的钟推后一天,复提醒形同虚设。
-  // 回落链与 decide() 的读侧逐项对齐(见那里的注释),避免迁移轮抹平可推断的等待时长。
-  // 草稿期间把回落值**固化**下来,正是这一步让不相关的放行推不动这个钟:一旦落成具体
-  // 时间戳,后面 lastPassAt 再怎么前进,读侧都优先取这个固化值。
-  // 不在草稿时落 0(等价于不保留),下次真的转草稿时由 draft-entered 重新起钟。
-  const draftReminderAnchor = ['draft-entered', 'draft-reminder'].includes(decision.reason)
-    ? now
-    : snap.isDraft
-      ? Number(previous?.lastDraftReminderAt) ||
-        Number(previous?.lastDraftEnteredAt) ||
-        Number(previous?.lastPassAt) ||
-        Number(previous?.lastCheckedAt) ||
-        now
-      : 0;
   // 回合状态:per-head 持久化,供「回合制与收敛止损」的机判使用(references/review-convergence.md)。
   // 这些信息理论上能从即时快照推导,但快照的 reviews 窗口只有 50 条、defer 痕迹又只活
   // 一轮,推导出的判据在边界上会失效 —— 所以由 gate 用确定性代码跨轮累积:
@@ -1537,44 +1385,38 @@ async function gateMain(argv, ctx) {
     if (advisories.length) decision.detail = `${decision.detail}; ${advisories.join('; ')}`;
   }
   // 合并态 carry-forward:本轮已算出就刷新,未知窗口(GitHub 重算中)保留上次已知值。
-  // 指纹里的 conflicting 靠它在抖动窗口保持稳定;decide() 用的是 previous 里的值,
-  // 与本轮持久化的新值天然衔接(下一轮的 previous 就是它)。
   const lastKnownConflicting = mergeSignalKnown(snap)
     ? normalizeConflicting(snap, null)
     : typeof previous?.lastKnownConflicting === 'boolean'
       ? previous.lastKnownConflicting
       : null;
+  // 上次读到检查在跑或合并态还没算出:下一轮不靠探测跳过,直接完整读取。
+  const inFlight = !mergeSignalKnown(snap) || (snap.checks ?? []).some((c) => checkOutcome(c) === 'pending');
   writeState(file, {
-    // confirmed 指纹只由 --ack / --defer 推进,绝不在放行时直接推进
-    ...(decision.nextConfirmed ? { fingerprint: decision.nextConfirmed } : {}),
-    ...(decision.nextPending
-      ? { pendingFingerprint: decision.nextPending, pendingPassCount: decision.nextPendingCount }
+    // watch 只由 --ack / --defer 或「没有新事件」推进,放行时不推进
+    watch: decision.nextWatch,
+    ...(decision.nextPendingWatch
+      ? {
+          pendingWatch: decision.nextPendingWatch,
+          pendingKey: decision.nextPendingKey,
+          pendingPassCount: decision.nextPendingCount,
+        }
       : {}),
-    ...(decision.nextRetryBackoffUntil
-      ? { retryBackoffUntil: decision.nextRetryBackoffUntil }
-      : {}),
+    ...(decision.nextRetryBackoffUntil ? { retryBackoffUntil: decision.nextRetryBackoffUntil } : {}),
+    // 旧版状态的未确认指纹:在 agent 确认前保留,让升级那一轮能继续按未确认处理
+    ...(previous?.pendingFingerprint && !previous?.watch && decision.nextPendingWatch
+      ? { pendingFingerprint: previous.pendingFingerprint } : {}),
     currentFingerprint: decision.fingerprint,
-    lastChangedAt,
     verdict: snap.verdict ?? null,
     blockers: snap.blockers ?? [],
-    // NEEDS_WORK 里若只剩明确的人工批准 thread,下一轮 gate 静默跳过而不是
-    // 把同一状态再次当成 agent-owned work-pending。
+    // NEEDS_WORK 里若只剩明确的人工批准 thread,下一轮 gate 静默跳过
     humanOnlyPending: isHumanOnlyReviewPending(snap),
     merged: Boolean(snap.merged),
     closed: Boolean(snap.closed),
-    // 下一轮靠它判断草稿是否刚翻转(旧状态没有这个字段时 decide 不猜,当普通 changed)
-    wasDraft: Boolean(snap.isDraft),
-    // 让 --ack / --suggest 能拿到同一个闸门:它们的命令行按 skill 写法只带 PR URL
-    draftReminderMs: effectiveDraftReminderMs,
-    // writeState 是整对象替换,所以这两个字段每轮都要显式带上,否则下一轮就没了
-    // (与上面 lastAckAt 同一套写法)。撤回草稿后不再保留,下次转草稿重新起算。
-    ...(decision.reason === 'draft-entered'
-      ? { lastDraftEnteredAt: now }
-      : snap.isDraft && previous?.lastDraftEnteredAt
-        ? { lastDraftEnteredAt: previous.lastDraftEnteredAt }
-        : {}),
-    ...(draftReminderAnchor > 0 ? { lastDraftReminderAt: draftReminderAnchor } : {}),
     url: snap.url ?? null,
+    ...(probe ? { probe } : {}),
+    inFlight,
+    lastFullReadAt: now,
     consecutiveSnapshotFailures: !checkSucceeded
       ? Number(previous?.consecutiveSnapshotFailures) || 0 : 0,
     ...(!checkSucceeded && previous?.snapshotFailureReports
@@ -1587,51 +1429,30 @@ async function gateMain(argv, ctx) {
       exitCode: decision.exitCode,
       reason: decision.reason,
       detail: decision.detail,
+      ...(decision.report ? { report: decision.report } : {}),
       verdict: snap.verdict ?? null,
       blockers: snap.blockers ?? [],
       checkedAt: now,
     },
     ...(previous?.lastAckAt ? { lastAckAt: previous.lastAckAt } : {}),
-    // 跳过的轮次也要把上次放行时间带下去:writeState 是整对象替换,不显式携带就丢了,
-    // 而「距上次放行多久」正是 decide 判定空放行(宿主顺延等)的唯一依据
+    // 跳过的轮次也要把上次放行时间带下去:「距上次放行多久」是空放行与保底巡检的依据
     ...(passed
       ? { lastPassAt: now }
       : previous?.lastPassAt
         ? { lastPassAt: previous.lastPassAt }
         : {}),
-    // 放行即消费掉 defer(下一轮由 agent 自己决定是否重新 defer);
-    // 跳过时原样保留,否则 defer 永远只生效一轮。
+    // 放行即消费掉 defer;跳过时原样保留,否则 defer 永远只生效一轮。
     ...(decision.keepNextAllowAt ? { nextAllowAt: previous.nextAllowAt } : {}),
     // 回合状态(见上方注释):writeState 是整对象替换,必须显式带上才能跨轮存活
     ...(initialAdditions !== undefined ? { initialAdditions } : {}),
     ...(headOid ? { headOid, roundCount } : {}),
     ...(reviewersSeen.length ? { reviewersSeen } : {}),
     ...(deferredHeadOid ? { deferredHeadOid } : {}),
-    // 合并态 carry-forward 与逐字段短哈希(变化定位诊断),同样每轮显式携带
     ...(typeof lastKnownConflicting === 'boolean' ? { lastKnownConflicting } : {}),
     fingerprintFields: fingerprintFieldHashes(
       snap,
       typeof previous?.lastKnownConflicting === 'boolean' ? previous.lastKnownConflicting : null,
     ),
-    // work-pending 退避计数:decide 只在 NEEDS_WORK 分支给出新值;其它轮次(deferred /
-    // draft-reminder / silence-guard 等)只要状态没变就原样携带,状态一变自动作废
-    ...(decision.nextWorkPendingCount !== undefined
-      ? {
-          workPendingPassCount: decision.nextWorkPendingCount,
-          workPendingFingerprint: decision.fingerprint,
-          ...(decision.nextWorkPendingBackoffUntil
-            ? { workPendingBackoffUntil: decision.nextWorkPendingBackoffUntil }
-            : {}),
-        }
-      : previous?.workPendingFingerprint === decision.fingerprint
-        ? {
-            workPendingPassCount: previous.workPendingPassCount,
-            workPendingFingerprint: previous.workPendingFingerprint,
-            ...(previous.workPendingBackoffUntil
-              ? { workPendingBackoffUntil: previous.workPendingBackoffUntil }
-              : {}),
-          }
-        : {}),
   });
 
   emit(args, {
@@ -1640,6 +1461,7 @@ async function gateMain(argv, ctx) {
     number: args.number,
     reason: decision.reason,
     detail: decision.detail,
+    report: decision.report,
     verdict: snap.verdict ?? null,
   }, out);
   // Optional host marker: healthy SKIP is recovery, backoff SKIP is not.
@@ -1680,11 +1502,12 @@ export async function runGate(argv, {
   env = process.env,
   now = Date.now,
   runSnapshot: snapshotRunner = runSnapshot,
+  runProbe: probeRunner = runProbe,
   out = (text) => process.stdout.write(text),
   err = (text) => process.stderr.write(text),
 } = {}) {
   try {
-    return await gateMain(argv, { env, now, runSnapshot: snapshotRunner, out, err });
+    return await gateMain(argv, { env, now, runSnapshot: snapshotRunner, runProbe: probeRunner, out, err });
   } catch (error) {
     err(`[pr-heartbeat-gate] ${error.message}\n`);
     return EXIT_BLOCK;

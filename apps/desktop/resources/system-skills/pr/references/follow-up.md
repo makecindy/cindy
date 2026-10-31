@@ -4,45 +4,44 @@ Read this when debugging a follow-up, or before changing the schedule or the che
 
 The schedule fires every 10 minutes. Each time, `scripts/pr-heartbeat-gate.mjs` runs first as the schedule's pre-run check:
 
-- **exit 0:** wake the agent in the bound task; the check's output is attached to the prompt.
+- **exit 0:** wake the agent in the bound task; the check's output, including the list of what happened, is attached to the prompt.
 - **exit 2:** skip this run. No model call, no tokens, nothing in the task.
 - **anything else:** the run is recorded as failed and the user is notified.
 
-Each check saves its decision, reason and detail as `lastResult`. The agent reads it with the read-only `--last-result --json`, together with a fresh snapshot, and decides from both whether to notify.
+Each check saves its decision, reason, detail and list as `lastResult`. The agent reads it with the read-only `--last-result --json`.
 
-## Pacing (cadence)
+## Cost: a small question first
 
-The check paces itself, so the schedule never needs editing. Based on how long the PR has been quiet since its last real change, it decides how often it actually queries GitHub; the 10-minute firings in between are skipped without any API call (`cadence-throttle`):
-
-| Quiet for | Checks GitHub every |
-|---|---|
-| < 30 min | 10 min |
-| < 2 h | 1 h |
-| < 8 h | 4 h |
-| < 3 days | 8 h |
-| longer | 1 day |
-
-It stays at 10 minutes while there is work (`NEEDS_WORK`), an unacknowledged change, an active defer, a merge-queue entry, or a merged/closed PR waiting for cleanup. Drafts never drop below the pace their reminder needs. Any real change brings it straight back to 10 minutes. The price is the same as a slower schedule: the quieter a PR has been, the later a new event is noticed (at most one interval). `--suggest` prints the current pace; `--no-cadence-throttle` turns pacing off for setups that adjust the schedule themselves.
+Every check first runs `pr-snapshot.mjs --probe`: one small GraphQL query for the PR's state, head, mergeability, check counts by state, and the newest comment and review. When it matches the last full read, the check stops there (`unchanged`). It reads the PR in full (three or four API calls) only when the probe differs or when one of these holds: an update was released but not yet acknowledged, checks were still running or mergeability was unknown at the last full read, the PR is merged or closed, 30 minutes have passed since the last full read (the probe cannot see edits inside review threads), a new commit's check deadline or a defer is due, or the silence guard is due. A failed probe also falls back to a full read.
 
 ## When the agent is woken
 
+The check keeps a `watch`: what the agent has already been told about. It wakes the agent only for news against it, in the spirit of T3 Code's pull request watch:
+
+- **Checks failed:** a check failed (including cancelled, timed out or needing action) that had not failed on this commit before. Reported once per commit and name; a re-run that replaced a failed attempt no longer counts, because the snapshot keeps only the latest run of each check.
+- **Checks passed:** all required checks passed (all checks when the repository marks none as required). Non-required checks still running at that moment get one more update when they all finish; later changes to them do not wake.
+- **Comments:** new comments, reviews with a body or a verdict, and review-thread comments from anyone except the account the agent uses. Edits count as new. Empty "commented" reviews are skipped; their thread comments carry the content.
+- **Conflict:** the branch started to conflict with the base. GitHub's mergeability recomputation ("unknown") neither raises nor clears it.
+- **No checks:** 15 minutes after a new commit, no check has reported, although this PR ran checks before.
+- **Draft:** the PR became a draft (`draft-entered`) or left draft (`draft-exited`).
+- **Merge queue:** the merge queue removed the PR, its group's checks failed, or the group cannot merge. Waiting in the queue does not wake.
 - **Merged or closed:** always, until the schedule is deleted (cleanup must happen; a failed cleanup gets another round).
-- **First check:** to establish a baseline.
-- **Truncated snapshot:** incomplete data never counts as "nothing changed".
-- **Different from the last acknowledged state:** a real change, or a change released earlier that was never acknowledged with `--ack` (`retry-unacked`). The fingerprint ignores per-run noise (fetch times, check run URLs and start times) and GitHub's asynchronous mergeability recomputation; a real conflict appearing or disappearing still counts. Checks and review threads are fingerprinted separately because CI changes do not update the PR's `updatedAt`. Only while CI is failing, the base branch's head is part of the fingerprint, so a fix on the base branch wakes the PR without waking healthy PRs on every base push. The detail lists `changedFields=[...]`.
-- **`NEEDS_WORK` with no change:** woken twice for the same state, then every 30 minutes (`work-pending-backoff`). Backoff limits cost; it does not mean there is no work, and the detail repeats that technical blockers must be pushed forward.
-- **Only explicit human-approval threads left** (no red CI, conflict or stale base): skipped as `blocked-human`; later external changes are absorbed silently.
-- **Ready, waiting for CI, waiting for humans, or draft, with no change:** skipped.
-- **Silence guard:** after 24 hours without waking the agent, one look at what the fingerprint cannot see (`silence-guard`).
-- **Draft reminder:** while the PR is a draft, once a day (`draft-reminder`); entering or leaving draft wakes immediately (`draft-entered`, `draft-exited`).
-- **`--defer`:** holds wake-ups until the given time, except for real changes, which still break through.
+
+Not woken: pushes, checks starting or running, an unchanged failure, the agent's own comments, comments while only an explicit human approval is pending (`blocked-human`). These advance the watch silently.
+
+- **Comment limit:** after 10 updates in a row that bring only comments, the check asks the agent to stop following (`comment-limit`), which stops reply loops with bots. A push or any check, conflict or queue news resets the count.
+- **Defer:** `--defer <minutes>` acknowledges the round and asks for one more wake at that time if nothing happens first (`defer-expired`).
+- **Silence guard:** after 24 hours without waking the agent, one look at what the check cannot see (`silence-guard`).
+- **Truncated snapshot:** incomplete data never counts as "nothing changed"; the watch does not advance past it.
 
 ## Reliability rules
 
-- **Two-phase fingerprint.** A released change stays pending until the agent's `--ack`. If the run never starts or crashes, the next check releases it again: three quick retries, then every 30 minutes until acknowledged. Releases less than 5 minutes apart (the host postponing a run) do not count as attempts.
-- Pending records only the earliest unacknowledged change, so a slow agent's `--ack` can only confirm a state that was actually released to it. This relies on one agent turn at a time in the bound task: keep `bindToCurrentSession: true`.
+- **Two-phase watch.** A released update stays pending until the agent's `--ack` moves `pendingWatch` into `watch`. If the run never starts or crashes, the same items are released again: three quick retries, then every 30 minutes until acknowledged. Releases less than 5 minutes apart (the host postponing a run) do not count as attempts.
+- Pending records only the earliest unacknowledged watch, so a slow agent's `--ack` can only confirm what it was actually told; anything newer is reported again. This relies on one agent turn at a time in the bound task: keep `bindToCurrentSession: true`.
+- If the items disappear before the agent acknowledges them (for example a fix was pushed), the pending update is dropped.
 - **Snapshot failures** are skipped up to three times in a row before the check fails and the user is notified. A GitHub rate limit backs off until the reset time from the response headers. The same failure is reported at most once a day.
-- After the same change goes unacknowledged, or the same state stays stuck, for three backoff cycles, the detail tells the agent to notify the user.
+- After the same update goes unacknowledged for three backoff cycles, the detail tells the agent to notify the user.
+- **Upgrades.** A state file written by the earlier version of the check (fingerprints, no watch) starts a watch from the current PR without repeating old news. If it still had an unacknowledged change, the agent is woken once (`upgraded`). Retired options (`--no-cadence-throttle`, `--draft-reminder-hours`, `--max-work-pending-passes`) are accepted and ignored so existing schedules keep working.
 
 ## Machine-checked hints in the detail
 
@@ -54,5 +53,5 @@ It stays at 10 minutes while there is work (`NEEDS_WORK`), an unacknowledged cha
 ## Files
 
 - State: `~/.cache/cindy-pr/<owner>__<repo>-<number>.json` (override with `--state-dir` or `CINDY_PR_STATE_DIR`). It lives outside the worktree because cleanup deletes the worktree.
-- `pr-snapshot.mjs`: read-only facts, including merge-queue state. Not a pre-run hook by itself: its exit codes do not match the hook protocol.
+- `pr-snapshot.mjs`: read-only facts, including merge-queue state, required checks and the viewer; `--probe` prints the small change fingerprint. Not a pre-run hook by itself: its exit codes do not match the hook protocol.
 - `pr-cleanup-plan.mjs`: read-only local cleanup plan after merge or close.

@@ -32,6 +32,7 @@ function parseArgs(argv) {
   let repo = null;
   let prArg = null;
   let strictExit = false;
+  let probe = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '-h' || arg === '--help') {
@@ -46,6 +47,10 @@ function parseArgs(argv) {
       strictExit = true;
       continue;
     }
+    if (arg === '--probe') {
+      probe = true;
+      continue;
+    }
     if (!prArg) {
       prArg = arg;
       continue;
@@ -55,6 +60,7 @@ function parseArgs(argv) {
   return {
     ...resolvePullRequestTarget(prArg, { explicitRepo: repo }),
     strictExit,
+    probe,
   };
 }
 
@@ -79,6 +85,29 @@ function isCheckFailure(c) {
   if (c.type === 'StatusContext') return FAIL_CONCLUSIONS.has(c.status);
   if (!c.conclusion) return false;
   return !PASS_CONCLUSIONS.has(c.conclusion) && !isCheckActionRequired(c);
+}
+
+/** pending / failed / passed, as the gate's events read it (action-required counts as failed). */
+function checkOutcome(c) {
+  if (isCheckPending(c)) return 'pending';
+  if (isCheckFailure(c) || isCheckActionRequired(c)) return 'failed';
+  return 'passed';
+}
+
+/**
+ * Keep only the latest run of each check. A re-run adds a new run under the same name and the
+ * rollup keeps the old one, so a cancelled or failed attempt that a later run replaced would
+ * otherwise count as failing forever (a follow-up woke 91 times on one such leftover).
+ */
+function latestChecks(checks) {
+  const latest = new Map();
+  for (const c of checks) {
+    const key = `${c.workflowName ?? ''}\u0000${c.name ?? ''}`;
+    const at = Date.parse(c.startedAt ?? c.completedAt ?? '') || 0;
+    const kept = latest.get(key);
+    if (!kept || at >= kept.at) latest.set(key, { at, check: c });
+  }
+  return [...latest.values()].map((entry) => entry.check);
 }
 
 function summarizeChecks(checks, unavailable, truncated, totalCount) {
@@ -244,6 +273,7 @@ function normalizeTopComment(c) {
 
 const THREAD_QUERY = `
 query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       id
@@ -284,7 +314,7 @@ query($owner: String!, $name: String!, $number: Int!) {
           path
           line
           originalLine
-          comments(first: 20) {
+          comments(last: 30) {
             nodes {
               id
               databaseId
@@ -304,6 +334,11 @@ query($owner: String!, $name: String!, $number: Int!) {
               contexts(first: 100) {
                 totalCount
                 pageInfo { hasNextPage }
+                nodes {
+                  __typename
+                  ... on CheckRun { name isRequired(pullRequestNumber: $number) }
+                  ... on StatusContext { context isRequired(pullRequestNumber: $number) }
+                }
               }
             }
           }
@@ -349,10 +384,60 @@ fragment QueueCommit on Commit {
 }
 `;
 
+/**
+ * One small query that changes whenever anything the follow-up reacts to changes: state, head,
+ * mergeability, check counts by state, and the newest comment and review. The gate compares it
+ * with the last full read and skips the full snapshot (three or four API calls) when it matches.
+ * Edits inside review threads do not show here; the gate rereads in full every 30 minutes.
+ */
+const PROBE_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      state isDraft mergeable headRefOid
+      mergeQueueEntry { state }
+      comments(last: 1) { totalCount nodes { updatedAt } }
+      reviews(last: 1) { totalCount nodes { updatedAt } }
+      reviewThreads { totalCount }
+      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 1) {
+        checkRunCountsByState { state count }
+        statusContextCountsByState { state count }
+      } } } } }
+    }
+  }
+}
+`;
+
+const counts = (list) => (list ?? []).filter((c) => c.count > 0).map((c) => `${c.state}:${c.count}`).sort().join(',');
+
+function probeFingerprint(pr) {
+  const contexts = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts;
+  return {
+    status: [
+      pr.state, pr.isDraft, pr.mergeable, pr.headRefOid, pr.mergeQueueEntry?.state ?? '',
+      counts(contexts?.checkRunCountsByState), counts(contexts?.statusContextCountsByState),
+    ].join(' '),
+    remarks: [
+      pr.comments?.totalCount ?? 0, pr.comments?.nodes?.at(-1)?.updatedAt ?? '',
+      pr.reviews?.totalCount ?? 0, pr.reviews?.nodes?.at(-1)?.updatedAt ?? '',
+      pr.reviewThreads?.totalCount ?? 0,
+    ].join(' '),
+  };
+}
+
+async function probe(args) {
+  const gql = await ghGraphQL(PROBE_QUERY, { owner: args.owner, name: args.name, number: args.number }, { includeHeaders: true });
+  if (gql.errors?.length) throw new Error('Probe failed: ' + gql.errors.map(e => e.message).join('; '));
+  const pr = gql.data?.repository?.pullRequest;
+  if (!pr) throw new Error(`Pull request not found: ${args.repo}#${args.number}`);
+  process.stdout.write(JSON.stringify(probeFingerprint(pr)) + '\n');
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   await ensureBinary();
   await ensureAuth();
+  if (args.probe) return probe(args);
 
   const prView = await ghJson(
     `repos/${args.repo}/pulls/${args.number}`, { includeHeaders: true }
@@ -367,7 +452,7 @@ async function main() {
     const stdoutShape = await ghPrViewJson(args.number, args.repo);
     checksHeadOid = stdoutShape.headRefOid || null;
     checkRollup = Array.isArray(stdoutShape.statusCheckRollup)
-      ? stdoutShape.statusCheckRollup.map(normalizeCheckRun).filter(Boolean)
+      ? latestChecks(stdoutShape.statusCheckRollup.map(normalizeCheckRun).filter(Boolean))
       : [];
     if (Array.isArray(stdoutShape.commits) && stdoutShape.commits.length) {
       prView.__ghCommits = stdoutShape.commits;
@@ -424,6 +509,9 @@ async function main() {
   const latestCommit = lastCommit(commits);
   const reviewThreadsTruncated = Boolean(pr.reviewThreads?.pageInfo?.hasNextPage);
   const checkContexts = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts || null;
+  const requiredNames = new Set((checkContexts?.nodes ?? [])
+    .filter((n) => n?.isRequired === true).map((n) => n.name ?? n.context).filter(Boolean));
+  checkRollup = checkRollup.map((c) => ({ ...c, required: requiredNames.has(c.name), outcome: checkOutcome(c) }));
   const checksTruncated = Boolean(checkContexts?.pageInfo?.hasNextPage);
   const checksSummary = summarizeChecks(
     checkRollup,
@@ -451,6 +539,8 @@ async function main() {
     number: args.number,
     url: ghView.html_url,
     title: ghView.title,
+    // The account the follow-up acts as: its own comments never wake it.
+    viewer: gql.data?.viewer?.login ?? null,
     state: pr.state,
     closed: Boolean(pr.closed),
     merged: Boolean(pr.merged),
