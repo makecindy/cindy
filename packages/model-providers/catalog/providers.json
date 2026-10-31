@@ -512,6 +512,42 @@
       }
     },
     {
+      "id": "devin",
+      "name": "Devin",
+      "nameEn": "Devin",
+      "docsUrl": "https://docs.devin.ai/",
+      "regionHint": "global",
+      "models": [
+        {
+          "id": "swe-1-6",
+          "name": "SWE-1.6",
+          "contextWindow": 200000,
+          "maxOutputTokens": 128000,
+          "supportsImageInput": false
+        },
+        {
+          "id": "swe-1-6-fast",
+          "name": "SWE-1.6 Fast",
+          "contextWindow": 200000,
+          "maxOutputTokens": 128000,
+          "supportsImageInput": false
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.devin.ai"
+        },
+        "codex": {
+          "baseUrl": "https://api.devin.ai",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://api.devin.ai",
+          "wireProtocol": "openai-chat"
+        }
+      }
+    },
+    {
       "id": "deepseek",
       "name": "DeepSeek",
       "docsUrl": "https://api-docs.deepseek.com/guides/anthropic_api",

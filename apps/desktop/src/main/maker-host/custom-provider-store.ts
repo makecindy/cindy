@@ -39,6 +39,7 @@ import {
   PI_REASONING_EFFORTS,
   PI_MODEL_APIS,
   preservesPiCatalogModels,
+  providerOAuthContract,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -459,7 +460,18 @@ function validateAuthSection(auth: unknown): ValidationResult {
     return invalid('auth.oauth authorization-code fields not allowed for device-code');
   }
   for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
-    if (typeof o[field] !== 'string' || (field !== 'scopes' && (o[field] as string).trim().length === 0)) {
+    if (typeof o[field] !== 'string') {
+      return invalid(`auth.oauth.${field} required`);
+    }
+    // scopes may be empty (provider defaults); Devin CLI OAuth omits client_id.
+    if (field === 'scopes') continue;
+    if ((o[field] as string).trim().length === 0) {
+      if (
+        field === 'clientId' &&
+        providerOAuthContract(o as OAuthProviderDescriptor) === 'devin'
+      ) {
+        continue;
+      }
       return invalid(`auth.oauth.${field} required`);
     }
   }

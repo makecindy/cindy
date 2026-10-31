@@ -63,6 +63,7 @@ const links: Record<string, ProviderSetupLink> = {
   together: key('https://api.together.ai/settings/projects/~current/api-keys'),
   mistral: key('https://console.mistral.ai/api-keys'),
   nous: account('https://portal.nousresearch.com/'),
+  devin: account('https://app.devin.ai/'),
 };
 
 /** Shared by local and remote settings; old catalogs inherit the maintained links. */
