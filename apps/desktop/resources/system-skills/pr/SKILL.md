@@ -24,6 +24,12 @@ Reply in the user's language. Read the reference files only when this file point
 - Public replies stay short, factual and traceable. Ask before posting anything that takes a product position, discloses sensitive material, or attaches screenshots.
 - Requires the GitHub CLI signed in (`gh auth status`) and Node.js. If either is missing, or the repository is not on GitHub, say exactly that; you can still do the local work.
 
+## Where to start
+
+- **No PR yet** (a change to make or finish): sections 1 and 2.
+- **An existing PR** (a link or number, `/pr <link>`, "follow <link>", or the current branch's PR): first show its PR card if this task has none (section 4), do a fix round only if something stands in the way (section 3), then start following it in the background (section 4). Following is the default here; skip it only when the user said to just check or look.
+- **A background round** (the prompt says so): section 5.
+
 ## 1. Start the work
 
 For a change that will become a pull request (not for a question or a read-only investigation):
