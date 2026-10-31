@@ -1043,22 +1043,46 @@ export function registerSelfHostedRelayIpc(): void {
 
   // 登录后按设置拉起本机中转;登出 / 换账号时停掉(中转属于开启它的账号)。
   // 登录态与账号数据作用域分两步就绪:作用域还没提交时短暂重试,不在临时命名空间里启动。
+  // 提交账号后、运行时就绪前还有一段会话边界,期间 ensureHost 按未登录直接返回,而边界结束没有事件:
+  // 换账号的清理照常立即做,启动等边界结束后补上,否则重开应用后已开启的本机中转要等手动保存才起来。
   let lastKey: string | null = null;
+  let startDeferred = false;
+  // 上一个账号的中转要等设备连接关掉才释放端口;推迟的启动先等它关完。
+  let stopping: Promise<void> = Promise.resolve();
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retries = 0;
+  const retrySoon = () => {
+    retryTimer = setTimeout(sync, 1_000);
+    retryTimer.unref?.();
+  };
+  const reportFailure = (error: unknown) => {
+    if (!(error instanceof RelayOperationExpired)) log.warn('relay owner synchronization failed');
+  };
   const sync = () => {
     if (retryTimer) clearTimeout(retryTimer);
     retryTimer = null;
     const authenticated = authManager.getAuthState().isAuthenticated;
     const ownerId = getActiveAppSession().dataOwnerId;
     if (authenticated && !ownerId && retries++ < 30) {
-      retryTimer = setTimeout(sync, 1_000);
-      retryTimer.unref?.();
+      retrySoon();
       return;
     }
     retries = 0;
     const key = authenticated && ownerId ? activeOwnerScopeKey() : null;
-    if (key === lastKey) return;
+    if (key === lastKey) {
+      if (!startDeferred) return;
+      if (isAppSessionBoundaryPending()) {
+        retrySoon();
+        return;
+      }
+      startDeferred = false;
+      const assertOwner = captureOwner();
+      void stopping.then(() => {
+        assertOwner();
+        return ensureHost();
+      }).then(() => { assertOwner(); emitChanged(); }).catch(reportFailure);
+      return;
+    }
     lastKey = key;
     ownerEpoch += 1;
     cancelJoin();
@@ -1066,13 +1090,15 @@ export function registerSelfHostedRelayIpc(): void {
     stopPairing();
     deployJob = null;
     hostStarting = null;
+    startDeferred = key !== null && isAppSessionBoundaryPending();
+    if (startDeferred) retrySoon();
+    const deferred = startDeferred;
     const assertOwner = captureOwner();
-    void stopHost(false).then(() => {
+    stopping = stopHost(false);
+    void stopping.then(() => {
       assertOwner();
-      return key ? ensureHost() : undefined;
-    }).then(() => { assertOwner(); emitChanged(); }).catch((error: unknown) => {
-      if (!(error instanceof RelayOperationExpired)) log.warn('relay owner synchronization failed');
-    });
+      return key && !deferred ? ensureHost() : undefined;
+    }).then(() => { assertOwner(); emitChanged(); }).catch(reportFailure);
   };
   sync();
   authManager.onAuthStateChange(sync);
