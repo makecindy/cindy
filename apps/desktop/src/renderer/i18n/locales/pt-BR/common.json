@@ -17167,13 +17167,15 @@
       "complete": "Concluído",
       "budgetLimited": "Limite atingido",
       "usageLimited": "Uso limitado",
-      "capacityLimited": "Serviço do modelo ocupado"
+      "capacityLimited": "Serviço do modelo ocupado",
+      "waiting": "Aguardando"
     },
     "turns": "{{used}} turnos",
     "turnsWithMax": "{{used}} / {{max}} turnos",
     "clear": "Limpar meta",
     "pause": "Pausar meta",
     "resume": "Retomar meta",
+    "wake": "Acordar meta",
     "tokensTooltip": "{{used}} / {{budget}} tokens usados",
     "tokensUsedLabel": "{{used}} tokens usados",
     "elapsedTooltip": "Tempo decorrido",

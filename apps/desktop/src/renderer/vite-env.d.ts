@@ -1125,6 +1125,8 @@ interface GoalStatusPayload {
   /** 目标创建时刻(unix ms),供 chip 显示实时运行时长。 */
   startedAt: number;
   lastReason: string | null;
+  /** waiting(active 子态,等会话外事件)进入等待的时刻(unix ms);非等待 null。 */
+  waitingSince: number | null;
 }
 
 type ElectronLocalDbSessionListOptions = {

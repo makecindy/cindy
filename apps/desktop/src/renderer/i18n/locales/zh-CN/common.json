@@ -16904,13 +16904,15 @@
       "complete": "已完成",
       "budgetLimited": "已达上限",
       "usageLimited": "用量受限",
-      "capacityLimited": "模型服务繁忙"
+      "capacityLimited": "模型服务繁忙",
+      "waiting": "等待中"
     },
     "turns": "{{used}} 轮",
     "turnsWithMax": "{{used}} / {{max}} 轮",
     "clear": "清除目标",
     "pause": "暂停目标",
     "resume": "继续目标",
+    "wake": "唤醒目标",
     "tokensTooltip": "已用 {{used}} / 上限 {{budget}} tokens",
     "tokensUsedLabel": "已用 {{used}} tokens",
     "elapsedTooltip": "已运行时长",
