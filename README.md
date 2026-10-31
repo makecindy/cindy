@@ -1,5 +1,6 @@
 <p align="center">
   <a href="https://cindy.app"><img src=".github/assets/hero-en.webp" width="100%" alt="CINDY — Consider it done. The open-source AI agent that works out of the box, doing real work on your own computer."></a>
+  <a href="https://getmerged.abhishekco.de/makecindy/cindy"><img src="https://getmerged.abhishekco.de/api/badge/makecindy/cindy" alt="GetMerged Scorecard"></a>
 </p>
 
 <p align="center">
