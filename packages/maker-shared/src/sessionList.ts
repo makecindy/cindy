@@ -9,6 +9,7 @@ import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdenti
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
 import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
+import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
 let sessionListCollator: Intl.Collator | undefined;
@@ -261,7 +262,7 @@ export function summarizeRemoteSessionOverview(
     // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
     // 否则概览里的项目数会比列表里的项目分区多出来。
     const projectDir = sessionProjectDirectory(session);
-    if (projectDir) projects.add(collapseWorktreeDirForGrouping(projectDir));
+    if (projectDir) projects.add(normalizeProjectOrderPath(projectDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
   }
@@ -395,6 +396,15 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
   return '点开任务继续控制，长按任务进入批量选择。';
 }
 
+/**
+ * 项目分区的分组键。与首页 projectGroupKey、项目顺序表、conversationSearch 同一套归一化:
+ * Windows 盘符 / UNC 路径统一正斜杠并小写,worktree 折到 base repo。只折 worktree 会让
+ * `C:\Repo\App` 与 `c:/repo/app` 落成两个分区，概览的 projectCount 也会重复计数。
+ */
+function projectGroupKey(session: RemoteSession): string {
+  return normalizeProjectOrderPath(sessionProjectDirectory(session) ?? 'unknown');
+}
+
 function buildProjectSections(
   items: readonly RemoteSessionListItem[],
   now: number,
@@ -409,7 +419,7 @@ function buildProjectSections(
   if (options.projectAliases) {
     for (const session of allSessions) {
       if (session.status === 'deleted' || isDialogueSession(session)) continue;
-      const key = collapseWorktreeDirForGrouping(sessionProjectDirectory(session) ?? 'unknown');
+      const key = projectGroupKey(session);
       const members = projectMembers.get(key) ?? [];
       members.push(session);
       projectMembers.set(key, members);
@@ -426,16 +436,18 @@ function buildProjectSections(
     if (isDialogueSession(item.session)) continue;
     // worktree 会话按 base repo 归组(与首页 projectGroupKey、桌面侧栏同一口径),
     // 否则每个 worktree 会单独成一个随机名分区。
-    const key = collapseWorktreeDirForGrouping(sessionProjectDirectory(item.session) ?? 'unknown');
+    const key = projectGroupKey(item.session);
     const list = projectGroups.get(key) ?? [];
     list.push(item);
     projectGroups.set(key, list);
   }
   for (const [workingDir, data] of [...projectGroups].sort(([a], [b]) => compareSessionListStrings(a, b))) {
+    // 标题用组内首条会话的原始目录(只折 worktree),保留用户自己的大小写与分隔符风格。
+    const displayDir = collapseWorktreeDirForGrouping(sessionProjectDirectory(data[0].session) ?? workingDir);
     sections.push({
       key: `project:${workingDir}`,
       title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
-        ?? projectTitle(workingDir),
+        ?? projectTitle(displayDir),
       data: groupAutomationListItems(data, now, groupAutomations, undefined, localizer),
     });
   }
