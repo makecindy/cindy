@@ -79,3 +79,18 @@ Pi 的显式版本选择沿用原内核管理器，不由后台更新覆盖。�
 
 验证命令按 [`desktop-development.md`](desktop-development.md) 选择；更新链路的真实行为
 无法靠单测完全覆盖，评估与实测结论必须如实记录。
+
+## 桌面端检查与下载反馈
+
+手动「检查更新」由 `checkForUpdateWithToast` 立即显示检查提示，并在现有
+`update-status` 事件进入 downloading / superseding 时切换下载提示，不等待整次下载的
+IPC 返回。同一窗口重复点击共用进行中的检查；完成或失败后移除提示与订阅。
+
+`UpdateBanner` 在账号行上方显示 checking 状态和 downloading 的真实百分比进度条；
+初始快照没有进度时保留不确定状态，不编造百分比。ready 后沿用原来的重启与忙碌任务
+确认入口，superseding 仍保留既有准备提示。`useUpdateStatus` 先订阅再读取初始快照，
+避免迟到的快照覆盖较新的事件。此展示不改变 main 的下载、校验、安装、自动重启或回滚条件。
+
+检查结束但无可下载更新（含清单失败）时，更新服务通过现有 `update-status` 广播 idle；
+下载失败时广播 error，并保留启动页使用的 `app-update-progress` 失败通知，避免侧栏
+停留在 checking/downloading。已有 ready 补丁的 superseding 失败仍恢复原 ready 状态。
