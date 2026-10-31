@@ -8,6 +8,7 @@
 import {
   fetchWithSsrFGuard,
   type GuardedFetchResult,
+  type SsrFPolicy,
 } from '@cindy/browser-control-runtime/ssrf-runtime';
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -18,7 +19,22 @@ export type GuardedImageFetch = (params: {
   signal: AbortSignal;
   requireHttps: true;
   maxRedirects: number;
+  policy?: SsrFPolicy;
 }) => Promise<GuardedFetchResult>;
+
+/**
+ * Proxy fake-IP stacks (Clash / Surge / sing-box in TUN mode) resolve public
+ * CDN hostnames into 198.18.0.0/15 (RFC 2544). Without this exemption a
+ * legitimate HTTPS image is rejected as a private address. Loopback, RFC 1918,
+ * link-local, cloud-metadata and IPv6 unique-local (fc00::/7) addresses stay
+ * blocked: fc00::/7 hosts real internal services and cannot be told apart from
+ * an IPv6 fake-IP, so exempting it would let an untrusted image URL read
+ * private HTTPS endpoints (SSRF). This mirrors the managed browser's proxy
+ * mode, which exempts only RFC 2544 (browser-managed-config.ts).
+ */
+export const PUBLIC_IMAGE_SSRF_POLICY: SsrFPolicy = {
+  allowRfc2544BenchmarkRange: true,
+};
 
 async function readBodyLimited(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (!response.body) throw new Error('remote image response has no body');
@@ -70,6 +86,7 @@ export async function fetchPublicImageBytes(
       signal: controller.signal,
       requireHttps: true,
       maxRedirects: MAX_REDIRECTS,
+      policy: PUBLIC_IMAGE_SSRF_POLICY,
     });
     const { response } = result;
     if (!response.ok) throw new Error(`remote image request failed: HTTP ${response.status}`);
