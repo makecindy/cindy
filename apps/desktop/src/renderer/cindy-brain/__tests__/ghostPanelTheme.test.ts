@@ -14,11 +14,13 @@ import {
 function mockWebview(): ThemeInjectableWebview & {
   insertCSS: ReturnType<typeof vi.fn>;
   removeInsertedCSS: ReturnType<typeof vi.fn>;
+  executeJavaScript: ReturnType<typeof vi.fn>;
 } {
   let n = 0;
   return {
     insertCSS: vi.fn(async () => `key-${++n}`),
     removeInsertedCSS: vi.fn(async () => {}),
+    executeJavaScript: vi.fn(async () => {}),
   };
 }
 
@@ -47,6 +49,34 @@ describe('createGhostThemeInjector · webview 主题注入状态机', () => {
     await flush();
     expect(webview.insertCSS).toHaveBeenCalledTimes(2);
     expect(webview.removeInsertedCSS).toHaveBeenCalledWith('key-1');
+  });
+
+  // #8150: inserted styles do not mutate guest DOM attributes. The real injector
+  // must notify dependent Host frames only after removing the previous sheet.
+  it('notifies guest frames after the replacement stylesheet has taken effect', async () => {
+    const webview = mockWebview();
+    let css = 'a';
+    const injector = createGhostThemeInjector(webview, () => css);
+    injector.inject();
+    await flush();
+    webview.executeJavaScript.mockClear();
+    let removed!: () => void;
+    webview.removeInsertedCSS.mockImplementation(() => new Promise<void>(resolve => { removed = resolve; }));
+    css = 'b';
+    injector.inject();
+    await flush();
+    expect(webview.executeJavaScript).not.toHaveBeenCalled();
+    removed();
+    await flush();
+    expect(webview.executeJavaScript).toHaveBeenCalledOnce();
+    // Disposal during another in-flight removal must not execute in a new page.
+    css = 'c';
+    injector.inject();
+    await flush();
+    injector.dispose();
+    removed();
+    await flush();
+    expect(webview.executeJavaScript).toHaveBeenCalledOnce();
   });
 
   it('回归:dom-ready(拖动换位触发整页重载)后即使 css 未变也必须重灌', async () => {

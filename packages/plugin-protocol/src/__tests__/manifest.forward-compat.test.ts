@@ -78,3 +78,12 @@ it('validates opt-in delegation while preserving unrelated future agent fields',
   }
   expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: true } })).toMatchObject({ ok: true });
 });
+
+// #8128: author declaration parsing preserves future providers without granting them.
+it('validates video provider identifiers and round-trips the explicit declaration', () => {
+  const raw = { ...base, videoPlayers: ['bilibili', 'future-player'] };
+  expect(validateGhostManifest(raw)).toMatchObject({ ok: true, manifest: { videoPlayers: raw.videoPlayers } });
+  for (const videoPlayers of [['https://player.bilibili.com'], ['bilibili', 'bilibili'], true, [42]]) {
+    expect(validateGhostManifest({ ...base, videoPlayers }).ok).toBe(false);
+  }
+});

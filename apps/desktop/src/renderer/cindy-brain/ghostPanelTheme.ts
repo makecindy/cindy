@@ -188,6 +188,7 @@ export function observeHostTheme(onChange: () => void): () => void {
 export interface ThemeInjectableWebview {
   insertCSS(css: string): Promise<string>;
   removeInsertedCSS(key: string): Promise<void>;
+  executeJavaScript(code: string): Promise<unknown>;
 }
 
 /**
@@ -214,11 +215,15 @@ export function createGhostThemeInjector(
     lastCss = css;
     void webview
       .insertCSS(css)
-      .then((key) => {
+      .then(async (key) => {
         if (disposed) return;
         const prev = cssKey;
         cssKey = key;
-        if (prev) void webview.removeInsertedCSS(prev).catch(() => {});
+        if (prev) await webview.removeInsertedCSS(prev).catch(() => {});
+        if (disposed) return;
+        // insertCSS does not mutate DOM attributes; same-origin Host documents need
+        // a notification after the old sheet is removed to sample the new tokens.
+        await webview.executeJavaScript('window.dispatchEvent(new Event("cindy:theme-changed"))');
       })
       .catch(() => {});
   };

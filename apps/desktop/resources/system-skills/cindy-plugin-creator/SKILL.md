@@ -58,6 +58,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 
 - [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
+- [官方视频播放器内嵌（新增接口，尚未发布）](references/plugin-video-player.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
 - [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
 - [插件移动端页面接入与操作来源（§5.1）](references/plugin-mobile-pages.md)

@@ -14,6 +14,7 @@ import {
   confirmedTaskCapability,
   confirmedUiCapability,
   type GhostInstallConsentPrompt,
+  confirmedVideoPlayers,
   isGhostInstallConsentRequiredError,
   obtainGhostInstallConsent,
   trackGhostInstallConsentPrompt,
@@ -393,6 +394,21 @@ describe('interactive page consent', () => {
     const reduced = structuredClone(base); getPluginToolUi(reduced)!.tools.open.visibility = ['model'];
     await expect(obtainGhostInstallConsent({ mode: 'automatic' }, old, reduced, reviewedDigest)).resolves.toEqual({ mode: 'unprompted' });
   });
+});
+
+// #8128: old unknown declarations must not become grants after a Host upgrade.
+// Unit: confirmed install/update facts are the production authorization boundary.
+it('requires a visible video grant even when an old manifest already declared the provider', async () => {
+  const next = { ...manifest(['api.weather.test']), videoPlayers: ['bilibili', 'future-player'] };
+  const before = installed(next);
+  const prompt = userPrompt(true);
+  const decision = await obtainGhostInstallConsent({ mode:'prompt',prompt,initiator:'user',origin:'local-file' }, before, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ added: expect.arrayContaining([expect.objectContaining({ key: 'videoPlayer:bilibili' })]) }) }));
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedVideoPlayers(decision, before, next)).toEqual(['bilibili']);
+  expect(confirmedVideoPlayers({ mode:'unprompted' }, before, next)).toBeUndefined();
+  before.videoPlayerApprovals = ['bilibili'];
+  expect(await obtainGhostInstallConsent({mode:'automatic'},before,next,reviewedDigest)).toEqual({mode:'unprompted'});
 });
 
 it('records observe consent only when that capability was shown', async () => {

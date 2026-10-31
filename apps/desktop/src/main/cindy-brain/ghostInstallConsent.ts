@@ -62,6 +62,15 @@ export type GhostInstallConsentDecision =
 
 const pendingPromptAborts = new Set<AbortController>();
 
+/** Only providers actually shown in this package-bound confirmation gain permission. */
+export function confirmedVideoPlayers(decision: GhostInstallConsentDecision, installed: InstalledGhost | null | undefined, next: GhostManifest): string[] | undefined {
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'videoPlayer:bilibili') ? ['bilibili'] : undefined;
+}
+
+
 /** Use only after assertGhostInstallConsent binds the confirmed facts to this package/receiver. */
 export function confirmedTaskCapability(
   decision: GhostInstallConsentDecision,

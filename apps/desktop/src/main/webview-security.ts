@@ -1,3 +1,4 @@
+import { isVideoPlayerDescendant, isVideoWrapper, videoRequestAllowed } from './cindy-brain/runtime/pluginVideoPlayer.js';
 /**
  * webview-security — RSB 内置浏览器 (web-browser plugin) 用的 `<webview>` 加固。
  *
@@ -897,6 +898,15 @@ export function installGhostGuestNavigationHandlers(
   });
   guestContents.on('before-input-event', (_event, input) => {
     if (input.type === 'keyDown') noteGesture();
+  });
+  guestContents.on('will-frame-navigate', event => {
+    if (event.isMainFrame) return;
+    try {
+      const prefix = 'cindy-ghost://' + ghostId + '/';
+      if (isVideoPlayerDescendant(event.frame, prefix) || (event.frame?.parent && isVideoWrapper(event.frame.parent.url, prefix))) {
+        if (!isCurrent() || !videoRequestAllowed({ url: event.url, resourceType: 'subFrame', frame: event.frame }, prefix)) event.preventDefault();
+      }
+    } catch { event.preventDefault(); }
   });
   guestContents.on('will-navigate', (event, url) => {
     // owner commit 后、Renderer 卸载旧 guest 前仍可能收到导航事件。旧页

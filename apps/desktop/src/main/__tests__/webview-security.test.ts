@@ -738,6 +738,26 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
     };
   }
 
+  // #8128: actual navigation handler; a player must never navigate into Host endpoints.
+  it('keeps video subframe navigation within its bound official player and current owner', () => {
+    const harness = makeHarness();
+    const panel = { url: 'cindy-ghost://xd-sites/panel.html', parent: null };
+    const wrapper = { url: 'cindy-ghost://xd-sites/__video_player__/bilibili?aid=1', parent: panel };
+    const frame = { url: 'https://player.bilibili.com/player.html?aid=1&page=1&autoplay=0', parent: wrapper };
+    for (const url of ['cindy-ghost://xd-sites/wake', 'about:blank', 'file:///secret', 'https://evil.test/']) {
+      const event = { frame, url, isMainFrame:false, preventDefault:vi.fn() };
+      harness.guest.emit('will-frame-navigate',event);
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    }
+    const event = { frame, url:frame.url, isMainFrame:false, preventDefault:vi.fn() };
+    harness.guest.emit('will-frame-navigate',event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    harness.setOwnerActive(false);
+    harness.guest.emit('will-frame-navigate',event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.external).not.toHaveBeenCalled();
+  });
+
   it('does not navigate or record a gesture after its attached instance is replaced', () => {
     const harness = makeHarness('_ns__acme__xd-sites');
     const url = 'https://example.invalid/control';

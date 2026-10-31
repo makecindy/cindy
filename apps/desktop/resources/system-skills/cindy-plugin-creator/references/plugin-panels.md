@@ -71,3 +71,10 @@ AppKit 的两指位置投递为标准 Touch/Pointer 事件，嵌套 iframe 同�
 `begin/change/end/cancel` 对应落指、移动、结束、取消；touches 是全部仍按下的手指。
 一次事件必须同时更新所有触点再发送，避免先产生单指手势；结束/取消必须释放输入。
 标准 Touch/Pointer 处理仍需保留，供不支持整帧投递的宿主使用。
+
+
+### 插件官方视频嵌入（#8128，尚未发布）
+
+显式 videoPlayers 声明与独立批准后，仅 Host 播放器文档可嵌入官方播放器。
+普通插件页与主 Renderer CSP 不变。作者接口、精确资源域、安全与存量兼容边界见
+[官方视频嵌入契约](plugin-video-player.md)。

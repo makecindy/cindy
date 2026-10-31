@@ -36,6 +36,7 @@ import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator
 import mainView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-main-view.md?raw';
 import taskView from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-task-view.md?raw';
 import recommendations from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-recommendations.md?raw';
+import videoPlayer from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-video-player.md?raw';
 import panels from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panels.md?raw';
 import mobilePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-mobile-pages.md?raw';
 import sandbox from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-sandbox.md?raw';
@@ -80,6 +81,7 @@ export const FORGE_GUIDE = [
   recommendations,
   interactivePages,
   panels,
+  videoPlayer,
   mobilePages,
   sandbox,
   packaging,
