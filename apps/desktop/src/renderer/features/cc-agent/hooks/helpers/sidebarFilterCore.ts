@@ -12,6 +12,7 @@ import {
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
+import { hasSidebarUsageTrace } from '../../lib/sidebarInstallVintage';
 
 const log = createLogger('SidebarFilterCore');
 /**
@@ -38,6 +39,7 @@ export const GROUP_DIALOGUE_KEY = 'cc-agent.sidebar.filter.groupDialogue';
 export const GROUP_DEVICE_KEY = 'cc-agent.sidebar.filter.groupDevice';
 export const GROUP_IN_PROGRESS_KEY = 'cc-agent.sidebar.filter.groupInProgress';
 export const IN_PROGRESS_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.inProgressSectionCollapsed';
+export const IN_PROGRESS_DEFAULT_KEY = 'cc-agent.sidebar.inProgressDefault.v1';
 export const DEVICE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.deviceGroupCollapsed';
 export const DIALOGUE_GROUP_COLLAPSED_KEY = 'cc-agent.sidebar.dialogueGroupCollapsed';
 export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionCollapsed';
@@ -402,17 +404,35 @@ export function persistGroupDialogue(groupDialogue: boolean): void {
 
 /**
  * 「进行中」段开关:true = 等你处理 / 完成未读 / 运行中的任务从项目与对话里
- * 提到置顶下方的「进行中」段。默认 true;只存用户关掉的覆盖值,重新打开即删除,
- * 未改过的用户跟随以后的默认值(configuration-and-overrides §2)。
+ * 提到置顶下方的「进行中」段。
+ *
+ * 默认值按安装新旧分叉(sidebar-redesign-plan §3.0「老用户升级后尽量不变」):
+ * 首次读取时本机已有使用痕迹 = 升级上来的老用户,默认关;否则是新装,默认开。
+ * 判定一次性固化到 IN_PROGRESS_DEFAULT_KEY,之后新装用户留下痕迹也不会翻转。
+ * 不复用 sidebarInstallVintage 的固化结果:它在侧栏重设计时就已定格,其后才装的
+ * 用户对本功能而言同样是老用户。
+ *
+ * GROUP_IN_PROGRESS_KEY 只存与默认值不同的用户覆盖(configuration-and-overrides §2),
+ * 切回默认值即删除。
  */
+function groupInProgressDefault(storage: Storage): boolean {
+  const fixed = storage.getItem(IN_PROGRESS_DEFAULT_KEY);
+  if (fixed === 'on' || fixed === 'off') return fixed === 'on';
+  const next = hasSidebarUsageTrace() ? 'off' : 'on';
+  storage.setItem(IN_PROGRESS_DEFAULT_KEY, next);
+  return next === 'on';
+}
+
 export function loadGroupInProgress(): boolean {
   const storage = safeStorage();
-  if (!storage) return true;
+  if (!storage) return false;
   try {
-    return storage.getItem(GROUP_IN_PROGRESS_KEY) !== 'false';
+    const override = storage.getItem(GROUP_IN_PROGRESS_KEY);
+    if (override === 'true' || override === 'false') return override === 'true';
+    return groupInProgressDefault(storage);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to read groupInProgress:', err);
-    return true;
+    return false;
   }
 }
 
@@ -420,8 +440,11 @@ export function persistGroupInProgress(groupInProgress: boolean): void {
   const storage = safeStorage();
   if (!storage) return;
   try {
-    if (groupInProgress) storage.removeItem(GROUP_IN_PROGRESS_KEY);
-    else storage.setItem(GROUP_IN_PROGRESS_KEY, 'false');
+    if (groupInProgress === groupInProgressDefault(storage)) {
+      storage.removeItem(GROUP_IN_PROGRESS_KEY);
+    } else {
+      storage.setItem(GROUP_IN_PROGRESS_KEY, String(groupInProgress));
+    }
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist groupInProgress:', err);
   }

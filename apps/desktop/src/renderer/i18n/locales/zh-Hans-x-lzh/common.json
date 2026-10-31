@@ -14101,7 +14101,7 @@
       "inProgress": "方行",
       "inProgressToggleExpand": "展方行",
       "inProgressToggleCollapse": "收方行",
-      "pinSuggestion": "「{{title}}」屡启",
+      "pinSuggestion": "屡启：{{title}}",
       "pinSuggestionDismiss": "勿复示",
       "pinnedShowMore": "余者",
       "viewStyle": "易显示之式",

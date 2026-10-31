@@ -3969,7 +3969,6 @@ function ExpandedView({
                   runningSessionIds={displayRunningSessionIds}
                   attachedSessionIds={attachedSessionIds}
                   notifications={sidebarNotifications}
-                  scheduleSessionIndex={automationGroupingIndex}
                   selectedSessionIds={selectedSessionIds}
                   onSessionClick={handleSessionClick}
                   onAction={handleActionClick}

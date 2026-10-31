@@ -14068,7 +14068,7 @@
       "inProgress": "進行中",
       "inProgressToggleExpand": "進行中を展開",
       "inProgressToggleCollapse": "進行中を折りたたむ",
-      "pinSuggestion": "「{{title}}」をよく開いています",
+      "pinSuggestion": "よく開いています：{{title}}",
       "pinSuggestionDismiss": "今後表示しない",
       "pinnedShowMore": "もっと見る",
       "viewStyle": "表示スタイルを切り替え",
