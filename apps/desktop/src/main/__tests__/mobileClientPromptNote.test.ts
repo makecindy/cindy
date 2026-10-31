@@ -297,6 +297,21 @@ describe('shouldPrependMobileClientPromptNote(内置命令旁路)', () => {
     )).toBe(false);
   });
 
+  it('Cindy 固定 Skill 的命令同样留在开头(/learn 与命名空间写法)', () => {
+    // 固定 Skill 的复核(pinned-skill-invocation.ts)要求整条消息以命令开头;说明一旦前置,
+    // 消息被整条拒掉:「Pinned Claude Skill does not match the user invocation.」
+    expect(shouldPrependMobileClientPromptNote('/learn 根据本对话生成系统学习 Skill', 'claude-code'))
+      .toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/learn', 'claude-code')).toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/skill:learn release flow', 'claude-code'))
+      .toBe(false);
+    expect(shouldPrependMobileClientPromptNote('/cindy:learn hub:market:some-skill', 'claude-code'))
+      .toBe(false);
+    // 没注册过的同前缀文本、没命名空间的其它 slash 文本仍然是普通消息。
+    expect(shouldPrependMobileClientPromptNote('/learnx', 'claude-code')).toBe(true);
+    expect(shouldPrependMobileClientPromptNote('/writing 一段文案', 'claude-code')).toBe(true);
+  });
+
   it('不把相似文本、带附件消息或其他 Agent 的输入误判成 Claude 命令', () => {
     expect(shouldPrependMobileClientPromptNote('/compactness', 'claude-code')).toBe(true);
     expect(shouldPrependMobileClientPromptNote(' /compact', 'claude-code')).toBe(true);
