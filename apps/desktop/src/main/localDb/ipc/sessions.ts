@@ -1,3 +1,5 @@
+import { captureSessionCreationCancellation } from '../sessionRuntimeCleanup.js';
+import { pagePermissionSessionChanged } from '../../mcp-apps/pagePermissions.js';
 import { removeSessionModelInterface } from '../../maker-host/session-model-interface.js';
 import { isEndedWriteSuppressed } from '../sessionActiveTurn.js';
 import { ensureOpenedProjectGit, openSession } from '../sessionOpening.js';
@@ -42,7 +44,7 @@ import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import type { SessionsSetTerminalStatusResult } from '../client/tx/types';
-import { sessions, messages } from '../schema';
+import { sessions, messages, botSessionLinks } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
   selectSessionListRows,
@@ -142,7 +144,9 @@ import { cindyMakeManager } from '../../cindy-make/manager.js';
 import { recycleCindyMakeTask } from '../../cindy-make/taskManagement.js';
 import { broadcastSubagentRunsInvalidated } from './subagentRuns.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
-import { consumeWritableDirectoryPickerGrants } from '../../maker-ipc/writableDirectoryPickerGrant.js';
+import { consumeWritableDirectoryPickerGrants, WritableDirectoryPickerGrantError } from '../../maker-ipc/writableDirectoryPickerGrant.js';
+import { botSessionInputBlockReason, isShadowedCompanionSession } from '../../maker-ipc/botSessionInputGuard.js';
+import { isCompanionShadowed } from '../../companion-cloud/homes.js';
 
 export { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
 
@@ -482,6 +486,7 @@ export function broadcastSessionPatched(
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  pagePermissionSessionChanged(sessionId, patch);
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   try {
@@ -1034,6 +1039,7 @@ export interface SessionRowSnapshot {
   title: string | null;
   userSendAt: number | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   providerId: string | null;
   /** Hook exact-takeover must reject SSH-owned sessions. */
@@ -1064,6 +1070,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       title: sessions.title,
       userSendAt: sessions.userSendAt,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       workspaceKind: sessions.workspaceKind,
       // heartbeat 任务 providerId 留空时,沿用绑定会话在聊天里选的来源(与 model
       // 留空沿用 meta.model 对称)。零新增查询,复用 runner 已并行取的这行快照。
@@ -1210,6 +1217,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
       lastActivityAt: sessions.lastActivityAt,
       updatedAt: sessions.updatedAt,
       workingDir: sessions.workingDir,
+      projectDir: sessions.projectDir,
       workspaceKind: sessions.workspaceKind,
       remoteHostId: sessions.remoteHostId,
       source: sessions.source,
@@ -1243,7 +1251,7 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     !row.remoteHostId &&
     isRetainableProjectSession(row)
   ) {
-    const projectDir = normalizeWorkingDirForProjectSettings(row.workingDir);
+    const projectDir = normalizeWorkingDirForProjectSettings(row.projectDir ?? row.workingDir);
     const touched = await upsertRecentWorkdir(projectDir, ts, process.platform, dbClient);
     if (touched && projectDir) broadcastRecentWorkdirsChanged(projectDir, ownerScope);
   }
@@ -1785,7 +1793,7 @@ export function registerSessionIpc(
         });
       } catch (error) {
         throwIpcError(
-          'PRECONDITION_FAILED',
+          error instanceof WritableDirectoryPickerGrantError ? error.code : 'PRECONDITION_FAILED',
           error instanceof Error ? error.message : 'Writable directory authorization failed',
         );
       }
@@ -1834,7 +1842,7 @@ export function registerSessionIpc(
       !insertRow.remoteHostId &&
       isRetainableProjectSession(insertRow)
     ) {
-      void upsertRecentWorkdir(insertRow.workingDir, now);
+      void upsertRecentWorkdir(insertRow.projectDir ?? insertRow.workingDir, now);
     }
     // 订阅槽①旁路通知(fire-and-forget,动态 import 防环):意识旁听会话创建。
     // 资格过滤(用户主会话)与订阅者快路径都在 cindy-brain 内部,这里零判断。
@@ -1862,7 +1870,11 @@ export function registerSessionIpc(
   // 正在跑的 turn 算进来。只服务本机顶层 renderer,不进 device-link allowlist。
   ipcMain.handle('local-db:sessions:interrupted-resume-candidates', async (event) => {
     assertTrustedAppRendererEvent(event);
-    const rows = await listInterruptedResumeCandidateRows();
+    const rows = await listInterruptedResumeCandidateRows(
+      ({ botId, role, profileStatus }) =>
+        botSessionInputBlockReason({ source: 'bot', role, profileStatus }) === null
+        && !isShadowedCompanionSession({ role, botId }, isCompanionShadowed),
+    );
     const wording = createLocalizedToolRowWording();
     return rows.map(({ sessionId, interruptedAt, lastToolUse }) => ({
       sessionId,
@@ -2177,6 +2189,23 @@ export function registerSessionIpc(
  * (GUI 侧栏、MCP 工具、device-link)一并生效;GUI 侧的预检只为及时反馈,规则
  * 以本函数为准,不得在入口层另立一份。
  */
+
+/** Pre-lock cancellation is limited to validated terminal intent; commit/cleanup stay locked. */
+async function cancelValidatedCreation(
+  dbClient: DbClient, sessionId: string, status: unknown,
+  assertCurrent: () => void,
+): Promise<void> {
+  if (status !== 'archived' && status !== 'deleted') return;
+  const cancel = captureSessionCreationCancellation(dbClient, sessionId);
+  const [target] = await dbClient.drizzle.select({ source: sessions.source })
+    .from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+  if (!target) throwIpcError('NOT_FOUND', 'Session 不存在');
+  await assertGenericSessionLifecycleAllowed(dbClient.drizzle, sessionId);
+  assertCurrent();
+  if (getDbClient() !== dbClient) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+  cancel();
+}
+
 export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
@@ -2420,6 +2449,10 @@ export async function updateSessionInDb(
     const previousContextWindowBudget: number | null = hasContextWindowBudgetChange
       ? readSessionContextWindowBudget(sid)
       : null;
+    await cancelValidatedCreation(dbClient, sid, p.status, () => {
+      moveGuard?.assertCurrent();
+      if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Session owner changed');
+    });
     let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
     await withStatusWriteLock(
       db,
@@ -2503,12 +2536,12 @@ export async function updateSessionInDb(
       isRetainableProjectSession(row)
     ) {
       const touched = await upsertRecentWorkdir(
-        row.workingDir,
+        row.projectDir ?? row.workingDir,
         Date.now(),
         process.platform,
         dbClient,
       );
-      if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
+      if (touched) broadcastRecentWorkdirsChanged(row.projectDir ?? row.workingDir, ownerScope);
     }
     // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
     // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
@@ -2530,10 +2563,13 @@ export async function updateSessionInDb(
       if (currentRow) broadcastStatus = currentRow.status;
     }
     const broadcastPatch =
-      p.pinnedAt === undefined && p.status === undefined
+      p.pinnedAt === undefined && p.status === undefined && setObj.projectDir === undefined
         ? p
         : {
             ...p,
+            // Include mapper-derived changes so every mounted mirror drops the
+            // old explicit membership after a move, just as SQLite does.
+            ...(setObj.projectDir !== undefined ? { projectDir: updated.projectDir } : {}),
             ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
             ...(p.status !== undefined ? { status: broadcastStatus } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
@@ -2566,6 +2602,7 @@ export async function updateSessionInDb(
       status: updated.status,
       title: updated.title,
       workingDir: updated.workingDir,
+      projectDir: updated.projectDir,
       workspaceKind: updated.workspaceKind,
     });
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
@@ -2648,7 +2685,8 @@ export async function restoreArchivedSessionForSend(
     if (!isOwnerScopeCurrent(ownerScope)) throwIpcError('PRECONDITION_FAILED', 'Task owner changed');
     if (row?.status === 'deleted') throwIpcError('NOT_FOUND', 'Session does not exist');
     if (row?.status !== 'archived') return;
-    if (row.source === 'bot' || row.orcaRole === 'worker' || row.orcaRemoteLead) {
+    if ((row.source === 'bot' && !(await isTaskListBotLane(db, sessionId)))
+      || row.orcaRole === 'worker' || row.orcaRemoteLead) {
       throwIpcError('PRECONDITION_FAILED', 'Restore the managed task before continuing');
     }
     await patchSessionMetaInDb(sessionId, { status: 'active' }, { ...options, routeLockHeld: true });
@@ -2690,6 +2728,12 @@ export async function patchSessionMetaInDb(
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
+  await cancelValidatedCreation(dbClient, sessionId, patch.status, () => {
+    if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) {
+      throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+    }
+    options.beforeWrite?.();
+  });
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     options.beforeWrite?.();
@@ -2770,7 +2814,24 @@ export async function patchSessionMetaInDb(
 }
 
 /**
- * Bot tasks are absent from the ordinary task pool, so their active/history/
+ * Routine and channel lanes are listed with ordinary tasks (`ordinaryTaskListFilter`)
+ * and hold no Profile pointer, so they archive, restore and delete like ordinary tasks.
+ * Their next trigger resumes an archived lane (`ensureBotOwnedLaneSession`).
+ */
+async function isTaskListBotLane(db: DbClient['drizzle'], sessionId: string): Promise<boolean> {
+  const [link] = await db
+    .select({ role: botSessionLinks.role })
+    .from(botSessionLinks)
+    .where(and(
+      eq(botSessionLinks.sessionId, sessionId),
+      inArray(botSessionLinks.role, ['routine', 'channel']),
+    ))
+    .limit(1);
+  return !!link;
+}
+
+/**
+ * Other Bot tasks are absent from the ordinary task pool, so their active/history/
  * route transitions must go through the Bot lifecycle service. That service
  * updates the Profile pointer and Session projection atomically.
  */
@@ -2783,7 +2844,7 @@ async function assertGenericSessionLifecycleAllowed(
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
-  if (target?.source === 'bot') {
+  if (target?.source === 'bot' && !(await isTaskListBotLane(db, sessionId))) {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Bot task lifecycle is managed by teammate recovery and history controls',

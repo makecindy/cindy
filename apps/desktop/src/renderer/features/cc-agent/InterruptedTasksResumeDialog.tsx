@@ -47,6 +47,22 @@ interface InterruptedTask {
   session: Session;
   interruptedAt: number;
   activity: string | null;
+  /** 伙伴的任务不在普通任务列表,来源标签显示伙伴名字,而不是它的工作目录。 */
+  botName: string | null;
+}
+
+/** 伙伴任务 id → 伙伴名字;读取失败时退回普通来源标签,不挡住弹窗。 */
+async function loadBotNamesBySessionId(): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const bots: unknown = await window.electronAPI.localDb.bots.list().catch(() => []);
+  if (!Array.isArray(bots)) return names;
+  for (const bot of bots as { name?: unknown; sessions?: unknown }[]) {
+    if (typeof bot?.name !== 'string' || !Array.isArray(bot.sessions)) continue;
+    for (const row of bot.sessions as { id?: unknown }[]) {
+      if (typeof row?.id === 'string') names.set(row.id, bot.name);
+    }
+  }
+  return names;
 }
 
 async function listStillInterruptedIds(): Promise<Set<string>> {
@@ -64,10 +80,22 @@ async function loadInterruptedTasks(): Promise<InterruptedTask[]> {
     batches.push(sessionsApi.getMany(ids.slice(i, i + SESSION_READ_BATCH_LIMIT)));
   }
   const byId = new Map((await Promise.all(batches)).flat().map((s) => [s.id, s]));
+  const botNames = [...byId.values()].some((s) => s.source === 'bot')
+    ? await loadBotNamesBySessionId()
+    : new Map<string, string>();
   return candidates
     .flatMap((c) => {
       const session = byId.get(c.sessionId);
-      return session ? [{ session, interruptedAt: c.interruptedAt, activity: c.activity }] : [];
+      return session
+        ? [
+            {
+              session,
+              interruptedAt: c.interruptedAt,
+              activity: c.activity,
+              botName: botNames.get(session.id) ?? null,
+            },
+          ]
+        : [];
     })
     .sort((a, b) => b.interruptedAt - a.interruptedAt);
 }
@@ -207,12 +235,12 @@ export function InterruptedTasksResumeDialog({ suspended = false }: { suspended?
         </span>
       </div>
       <ul className="border-y border-[var(--border-default)] py-1">
-        {tasks.map(({ session, interruptedAt, activity }) => {
+        {tasks.map(({ session, interruptedAt, activity, botName }) => {
           const checked = !deselected.has(session.id);
           const title = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'), t);
           const relative = formatSidebarTime(new Date(interruptedAt).toISOString(), t);
           const meta = [
-            sourceLabels.get(session.id),
+            botName ?? sourceLabels.get(session.id),
             activity,
             Date.now() - interruptedAt < 60_000
               ? t('chat.interruptedResumeDialog.interruptedJustNow')

@@ -119,6 +119,9 @@ importers:
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link
+      '@cindy/device-link-relay':
+        specifier: workspace:*
+        version: link:../../packages/device-link-relay
       '@cindy/embedding-client':
         specifier: workspace:*
         version: link:../../packages/embedding-client
@@ -660,6 +663,9 @@ importers:
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../packages/plugin-protocol
       '@cindy/voice-input-core':
         specifier: workspace:*
         version: link:../../packages/voice-input-core
@@ -1030,6 +1036,37 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+
+  packages/device-link-relay:
+    dependencies:
+      '@cindy/device-link':
+        specifier: workspace:*
+        version: link:../device-link
+      '@cindy/device-link-protocol':
+        specifier: workspace:*
+        version: link:../device-link-protocol
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.1
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.33.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/embedding-client:
     devDependencies:

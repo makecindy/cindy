@@ -9,7 +9,7 @@ import { nativeToolMediaFields } from '@cindy/maker-shared/tool-process-media';
  *  - tool_result_full: { toolUseId, fullText, isError }
  *  - tool_result:      { summary, toolUseIds }
  *  - status:   { status, ...UsageSnapshot 展开, isRunning }
- *  - done:     { type: 'pi/agent_settled', ... }
+ *  - done:     { type: 'pi/agent_settled', requestUsage, ... }
  *
  * 文本策略:pi 一条 assistant 消息可含多个 text block(text→toolcall→text),
  * renderer 的 isFinal 语义是"整条消息全文 overwrite"——因此流式期间只发 delta,
@@ -34,7 +34,7 @@ import type { AgentEvent, AgentTaskUpdateEventData, UsageSnapshot } from '../../
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { attachLiveGeneration } from '../shared/live-generation-snapshot.js';
 import { TokenSpeedMeter } from '../shared/token-speed.js';
-import type { UsageSegment } from '../shared/usage-tracker.js';
+import { RequestUsageTracker, type UsageSegment } from '../shared/usage-tracker.js';
 import {
   UPSTREAM_OVERLOAD_REASON,
   formatOverloadRetryMessage,
@@ -72,6 +72,7 @@ interface PiUsage {
 }
 
 interface PiAssistantMessage {
+  cindyCacheRecoveryHandled?: boolean;
   role: 'assistant';
   content?: Array<Record<string, unknown>>;
   usage?: PiUsage;
@@ -102,6 +103,7 @@ interface PiThinkingBlock {
 export interface PiTranslateContext {
   getCacheCompatibility?: () => import('./cache-compatibility.js').PiCacheCompatibility | undefined;
   cacheRecoveryHasOutput?: boolean;
+  cacheRecoveryHandled?: boolean;
   logger: Logger;
   /** Host-owned live tariff selector fallback when the provider response has no accepted tier. */
   getPriceVariant?: () => 'standard' | 'priority';
@@ -117,6 +119,7 @@ export interface PiTranslateContext {
   turnOutput: number;
   turnCacheRead: number;
   turnCacheWrite: number;
+  requestUsageTracker: RequestUsageTracker;
   turnUsageSegments: UsageSegment[];
   turnUsageSegmentsComplete: boolean;
   turnUsageSegmentSeq: number;
@@ -218,6 +221,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     turnOutput: 0,
     turnCacheRead: 0,
     turnCacheWrite: 0,
+    requestUsageTracker: new RequestUsageTracker(),
     turnUsageSegments: [],
     turnUsageSegmentsComplete: true,
     turnUsageSegmentSeq: 0,
@@ -373,6 +377,7 @@ function startPiGenerationHeartbeat(ctx: PiTranslateContext): void {
 export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
   return attachLiveGeneration(
     {
+      requestUsage: ctx.requestUsageTracker.snapshot(),
       tokenUsage: ctx.turnTokens,
       contextTokens: ctx.contextTokens,
       contextWindow: ctx.workingContextWindow && ctx.workingContextWindow > 0
@@ -448,6 +453,7 @@ function applyUsage(
   ctx.contextTokens = input + cacheRead + cacheWrite;
   const cost = usage.cost?.total;
   if (typeof cost === 'number' && Number.isFinite(cost)) ctx.costUsd += cost;
+  ctx.requestUsageTracker.ingest({ model, inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheCreateTokens: cacheWrite });
   ctx.turnUsageSegments.push({
     id: `pi:${++ctx.turnUsageSegmentSeq}`,
     ...(model ? { model } : {}),
@@ -515,6 +521,7 @@ function applyDelegatedUsage(
       ctx.turnCacheRead += segment.cacheRead;
       ctx.turnCacheWrite += segment.cacheWrite;
       ctx.costUsd += segment.cost;
+      ctx.requestUsageTracker.ingest({ model: segment.model, inputTokens: segment.input, outputTokens: segment.output, cacheReadTokens: segment.cacheRead, cacheCreateTokens: segment.cacheWrite });
       ctx.turnUsageSegments.push({
         id: `pi-child:${identity}`,
         ...(segment.model ? { model: segment.model } : {}),
@@ -545,6 +552,7 @@ function applyDelegatedUsage(
     cacheWrite: Math.max(0, cumulative.cacheWrite - (previous?.cacheWrite ?? 0)),
     cost: Math.max(0, cumulative.cost - (previous?.cost ?? 0)),
   };
+  ctx.requestUsageTracker.ingest({ inputTokens: delta.input, outputTokens: delta.output, cacheReadTokens: delta.cacheRead, cacheCreateTokens: delta.cacheWrite });
   ctx.delegatedUsage.set(taskId, cumulative);
   ctx.turnTokens += delta.input + delta.output;
   ctx.turnInput += delta.input;
@@ -685,6 +693,7 @@ export function translatePiEvent(
     case 'agent_start': {
       ctx.turnGeneration += 1;
       ctx.cacheRecoveryHasOutput = false;
+      ctx.cacheRecoveryHandled = false;
       ctx.pendingHostTurnStartToken = null;
       if (ctx.hostAbortRequestGeneration !== ctx.turnGeneration) {
         clearPiHostAbortRequests(ctx);
@@ -752,6 +761,7 @@ export function translatePiEvent(
     case 'message_end': {
       const message = event.message as PiAssistantMessage | undefined;
       if (!message || message.role !== 'assistant') return;
+      if (message.cindyCacheRecoveryHandled === true) ctx.cacheRecoveryHandled = true;
       const pendingPriceVariant = ctx.pendingPriceVariants.shift();
       const reportedPriceVariant = priceVariantFromServiceTier(message.usage?.service_tier);
       const executionPriceVariant = message.usage && ctx.resolveUsagePriceVariant?.({
@@ -1037,6 +1047,7 @@ export function translatePiEvent(
           data: {
             ...terminalError,
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
+            ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
             isTerminal: true,
           },
           source: 'pi',
@@ -1058,6 +1069,7 @@ export function translatePiEvent(
         type: 'done',
         data: {
           type: 'pi/agent_settled',
+          requestUsage: ctx.requestUsageTracker.snapshot(),
           // 本 turn 最终 assistant 回复文本。与 CC/Codex 的 done.data.result 对齐:
           // register.ts 的 will-assistant-message 出口钩子与 Orca worker 终态 finalText
           // 都读 done.data.result,不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
@@ -1166,6 +1178,7 @@ export function translatePiEvent(
           ...(finalError.reason === UNSUPPORTED_REQUEST_OPTION_REASON ? {
             piCacheCompatibility: ctx.getCacheCompatibility?.(),
             piCacheRecoverySafe: ctx.cacheRecoveryHasOutput === false,
+            ...(ctx.cacheRecoveryHandled ? { piCacheRecoveryHandled: true } : {}),
           } : {}),
           isTerminal: true,
           ...(exhaustedReason ? { reason: exhaustedReason } : {}),

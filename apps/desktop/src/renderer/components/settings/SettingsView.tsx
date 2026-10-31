@@ -54,6 +54,7 @@ import { GitSafetySection } from './GitSafetySection';
 import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
+import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
 import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
@@ -411,6 +412,11 @@ export function SettingsView() {
                       aria-label={t('settings.sections.collaboration')}
                     >
                       <CollaborationSection />
+                    </section>
+
+                    <section id="settings-new-chat-default-permission" className="py-[18px]"
+                      aria-label={t('settings.newChatDefaults.title')}>
+                      <NewChatDefaultPermissionSection />
                     </section>
 
                     {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}

@@ -91,8 +91,10 @@ describe('isolated PDF structure inspection', () => {
                 textPreview: '',
                 drawOps: 0,
                 imageOps: 0,
-                blank: true,
-                visibilityUnverified: false,
+                blank: false,
+                visibilityUnverified: true,
+                // 单页文字提取失败的原因要穿过进程边界交给 inspect_pdf,否则无法区分空文字与解析失败。
+                textError: "Cannot read properties of null (reading 'name')",
               },
             ],
           },
@@ -109,7 +111,11 @@ describe('isolated PDF structure inspection', () => {
         pages: [2],
         fork: () => child,
       }),
-    ).resolves.toMatchObject({ numPages: 3, pagesInspected: 1 });
+    ).resolves.toMatchObject({
+      numPages: 3,
+      pagesInspected: 1,
+      pages: [{ textError: "Cannot read properties of null (reading 'name')" }],
+    });
 
     expect(sent).toMatchObject({ kind: 'inspect', pages: [2], maxPages: 5, previewChars: 100 });
     expect(child.kill).toHaveBeenCalledTimes(1);

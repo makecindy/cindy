@@ -157,6 +157,25 @@ it('reports a playback failure without claiming the file is missing and lets the
   fireEvent.click(view.getByRole('button', { name: 'chat.errorBanner.retry' }));
   expect(view.container.querySelector('video')?.src).toBe(props.src);
 });
+// Regression: Seedance 2.5 1080p is HEVC-only; where Chromium cannot decode it the placeholder
+// used to be a dead end (retry only) for a file the user already paid for.
+// Tier 1, minimum input: one media error on a local cindy-media source.
+it('offers reveal-in-folder on the failure placeholder for local media', async () => {
+  const reveal = vi.fn().mockResolvedValue({ success: true });
+  vi.stubGlobal('electronAPI', { showItemInFolder: reveal });
+  const src = 'cindy-media://blobs/hevc.mp4';
+  const view = render(<ChatVideoView {...props} src={src} />, { wrapper: Tooltip.Provider });
+  fireEvent.error(view.container.querySelector('video')!);
+  fireEvent.click(view.getByRole('button', { name: 'chat.media.revealVideo' }));
+  await vi.waitFor(() => expect(reveal).toHaveBeenCalledWith({ url: src }));
+});
+it('does not offer reveal-in-folder for remote sources that failed', () => {
+  const view = render(<ChatVideoView {...props} src="https://media.test/x.mp4" />, {
+    wrapper: Tooltip.Provider,
+  });
+  fireEvent.error(view.container.querySelector('video')!);
+  expect(view.queryByRole('button', { name: 'chat.media.revealVideo' })).toBeNull();
+});
 it('pauses video when its message leaves view', () => {
   const view = render(<ChatVideoView {...props} />, { wrapper: Tooltip.Provider });
   const video = view.container.querySelector('video')!;

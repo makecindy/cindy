@@ -11,8 +11,10 @@ import { PluginTaskPickerView as AndroidTaskPickerView } from "@/plugins/PluginT
 import { pluginDetailModel } from "@/plugins/pluginDetailModel";
 import { palettes } from "@/theme/tokens";
 import { PluginManagementConfirmation } from "@/plugins/PluginManagementConfirmation.ios";
+import { PluginModelPicker } from '@/plugins/PluginModelPicker';
 
 const bridge = vi.hoisted(() => ({
+  maker: { getCapabilities: async () => ({ availableModels: [], effortLevels: [], permissionModes: [] }) },
   props: new Map<string, any>(),
   ownerCurrent: true,
   keyboardVisible: false,
@@ -151,6 +153,8 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
   ),
 }));
 vi.mock("react-native", () => ({
+  Platform: { OS: 'ios' },
+  Alert: { alert: vi.fn() },
   PlatformColor: (name: string) => name,
   Keyboard: { addListener: () => ({ remove() {} }) },
   useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }),
@@ -264,6 +268,12 @@ vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => "owner",
   isMobileAuthOwnerCurrent: () => bridge.ownerCurrent,
 }));
+vi.mock('@/device-link/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], ready: true }) }));
+vi.mock('@/device-link/useMobileMakerTransport', () => ({ useMobileMakerTransport: () => bridge.maker }));
+vi.mock('@/session/ModelPickerSheet', () => ({ ModelPickerSheet: (props: unknown) => {
+  bridge.props.set('plugin-model-picker', props);
+  return null;
+} }));
 vi.mock("@/session/CompanionNativeContent.ios", () => ({
   CompanionNativeContent: (p: any) => p.children,
 }));
@@ -292,6 +302,33 @@ function mount(component: any, props: any) {
       act(() => root.render(createElement(component, props))),
   };
 }
+// New plugin picker wrapper: native sheets call onClose after a successful onSelect.
+// Minimal input is one model click; the observable result must be one complete route,
+// never a second cancellation. Existing native view tests do not cover this round trip. Tier: unit.
+it('returns the complete Host model choice once when the native sheet closes after selecting', async () => {
+  const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+  mount(PluginModelPicker, { deviceId: 'execution-computer', onAnswer,
+    request: { requestId: 'pick', ghostId: 'plugin', ghostName: 'Example', expiresAt: Date.now() + 90_000 } });
+  await act(async () => {
+    const props = bridge.props.get('plugin-model-picker');
+    await props.unified.onSelect({ agent: 'codex', providerId: 'provider', modelId: 'model', effort: 'high', fast: 'ultrafast' });
+    bridge.props.get('plugin-model-picker').onClose();
+  });
+  expect(onAnswer).toHaveBeenCalledExactlyOnceWith({ agentKind: 'codex', providerId: 'provider', model: 'model', effort: 'high', fastMode: 'ultrafast' });
+});
+
+it('returns cancellation from the native picker and ignores actions after owner revocation', async () => {
+  const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+  mount(PluginModelPicker, { deviceId: 'execution-computer', onAnswer,
+    request: { requestId: 'pick', ghostId: 'plugin', ghostName: 'Example', expiresAt: Date.now() + 90_000 } });
+  bridge.ownerCurrent = false;
+  await act(async () => { bridge.props.get('plugin-model-picker').onClose(); });
+  expect(onAnswer).not.toHaveBeenCalled();
+  bridge.ownerCurrent = true;
+  await act(async () => { bridge.props.get('plugin-model-picker').onClose(); });
+  expect(onAnswer).toHaveBeenCalledExactlyOnceWith(null);
+});
+
 const row = {
   key: "mac:demo",
   host: { deviceId: "mac", deviceName: "Mac" },
@@ -1150,4 +1187,18 @@ it.each([PluginDetailView, AndroidDetailView])("keeps unknown-result recovery re
   expect(onPress).toHaveBeenCalledTimes(1);
   rerender({ ...p, managementNotice: undefined });
   expect(container.textContent).not.toContain("Result unconfirmed");
+});
+
+/* 依据：三端展示同一份页面权限 facts；最小输入：ui purpose + app 工具列表；tier: unit。 */
+it('renders UI capability purpose, trust and complete Host permission details in the existing confirmation sheet', () => {
+  const state = { outcome: 'confirmation', online: true, busy: false, receipt: { consent: {
+    requestId: 'request', origin: 'local-file', initiator: 'user', purpose: 'ui-capability', trust: 'unverified',
+    facts: { kind: 'install', ghostId: 'planner', name: 'Planner', version: '1', permissions: [
+      { key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi', detail: 'planner.html\napi.example.org\nsave_plan, open_plan' },
+    ] },
+  } } } as any;
+  const { container } = mount(PluginManagementConfirmation, { state, controller: { getState: () => state, answer: vi.fn() } as any, active: true, deviceName: 'Mac' });
+  for (const fact of ['plugins.uiApproval.purpose', 'plugins.management.trust.unverified', 'planner.html', 'api.example.org', 'save_plan, open_plan'])
+    expect(container.textContent).toContain(fact);
+  expect(container.textContent).not.toContain('plugins.notice.taskCapability');
 });

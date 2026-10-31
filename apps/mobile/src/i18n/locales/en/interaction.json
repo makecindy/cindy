@@ -261,6 +261,7 @@
       "embedded-frame": "These fields are inside another site embedded in the page. Make sure the source is trusted."
     },
     "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
+    "agentPicture": "This code is from a screenshot the agent took, so Cindy can't see the original screen or tell when you're done. Check that it leads to the site you mean to sign in to, and choose Hand Back to Agent after scanning.",
     "error": {
       "decision": "That didn't go through. Try again.",
       "stale": "The screen has changed. Use the latest version.",

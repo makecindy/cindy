@@ -8,6 +8,7 @@ import { ScrollCapture } from '../../../shared/scrollCapture';
 import type { RegionCaptureBegin } from '../../../shared/regionCapture';
 import type { RegionScreenshotBitmap } from '../../../shared/regionScreenshot';
 import { bitmapToImageData, type RegionScreenshotOverlayBridge } from './bridge';
+import { SCREENSHOT_OVERLAY } from './screenshotColors';
 
 /** The selection stays over the source app; only its thumbnail/actions take input. */
 export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
@@ -28,7 +29,7 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
   const previousHeight = useRef(begin.first.height);
   const reducedMotion = useReducedMotion();
   const followEdge = useRef<'start' | 'end'>('start');
-  const runtime = useRef({ active: true, finishing: false, capture: new ScrollCapture(begin.first), pending: null as Promise<void> | null, automatic: false, stillFrames: 0, unmatchedSince: 0, movingUntil: 0 });
+  const runtime = useRef({ active: true, finishing: false, capture: new ScrollCapture(begin.first), pending: null as Promise<void> | null, automatic: false, automaticRevision: 0, stillFrames: 0, unmatchedSince: 0, movingUntil: 0 });
   const [height, setHeight] = useState(begin.first.height);
   const [automatic, setAutomatic] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -102,8 +103,12 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
   async function changeAutomatic(enabled: boolean) {
     const state = runtime.current;
     if (state.finishing) return;
+    const revision = ++state.automaticRevision;
     const accepted = await bridge.autoScroll(token, enabled);
-    if (!state.active || state.finishing) return;
+    if (!state.active || state.finishing || revision !== state.automaticRevision) return;
+    // Frames requested before this acknowledgement describe the previous switch
+    // state, including frames requested while the command itself was in flight.
+    state.automaticRevision++;
     state.automatic = accepted === true && enabled;
     state.stillFrames = 0;
     setAutomatic(state.automatic);
@@ -112,9 +117,11 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
 
   async function sample() {
     const state = runtime.current;
+    const revision = state.automaticRevision;
     const frame = await bridge.liveFrame(token, false, panel.current?.clientHeight);
     if (!frame || !state.active || state.finishing) return;
-    if (state.automatic && frame.autoScrolling === false) {
+    const currentAutomatic = state.automatic && revision === state.automaticRevision;
+    if (currentAutomatic && frame.autoScrolling === false) {
       state.automatic = false; setAutomatic(false); setError('autoUnavailable');
     }
     const match = state.capture.add(frame.image);
@@ -127,12 +134,12 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
       state.unmatchedSince ||= performance.now();
       if (performance.now() - state.unmatchedSince > 1500) {
         if (state.capture.height > begin.first.height) setStatus('overlap');
-        if (state.automatic) await changeAutomatic(false);
+        if (currentAutomatic && state.automatic) await changeAutomatic(false);
       }
     } else {
       state.unmatchedSince = 0;
       setStatus(match === 'limit' ? 'limit' : 'scrollHint');
-      if (state.automatic && (match === 'limit' || ++state.stillFrames >= 8)) await changeAutomatic(false);
+      if (currentAutomatic && state.automatic && (match === 'limit' || ++state.stillFrames >= 8)) await changeAutomatic(false);
     }
   }
 
@@ -190,7 +197,11 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
   ];
   const message = error === 'captureFailed' ? t('regionScreenshot.captureFailed') : t(`regionScreenshot.live.${error || status}`);
   return <div className="fixed inset-0 pointer-events-none select-none text-[var(--text-primary)]">
-    <div aria-hidden className="absolute border border-[var(--text-primary)]" style={{ left: begin.selection.x - 1, top: begin.selection.y - 1, width: begin.selection.width + 2, height: begin.selection.height + 2, boxShadow: '0 0 0 1px var(--surface-elevated)' }} />
+    <div aria-hidden className="absolute" style={{
+      left: begin.selection.x, top: begin.selection.y, width: begin.selection.width, height: begin.selection.height,
+      outline: `1px solid ${SCREENSHOT_OVERLAY.edge}`,
+      boxShadow: `0 0 0 1px ${SCREENSHOT_OVERLAY.edgeOuter}, 0 0 0 100000px ${SCREENSHOT_OVERLAY.shade}`,
+    }} />
     <aside ref={panel} aria-label={t('regionScreenshot.live.preview')} className="absolute overflow-hidden pointer-events-auto" style={{ left: layout.preview.x, bottom: layout.viewport.height - layout.preview.y - layout.preview.height, width: layout.preview.width, height: initialPreviewHeight }}>
       <div ref={preview} tabIndex={0} className="h-full w-full overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', overflowAnchor: 'none', scrollBehavior: 'auto' }} onWheel={() => { followGrowth.current = false; }} onScroll={() => {
         cancelAnimationFrame(scrollPaint.current);
@@ -205,7 +216,7 @@ export function ScrollCaptureOverlay({ begin, token, bridge, onEdit }: {
     <div className="absolute flex items-center justify-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pointer-events-auto" style={{ left: layout.actions.x, top: layout.actions.y, width: layout.actions.width, height: layout.actions.height }}>
         {actions.map(({ key, label, Icon, run }) => <Tip key={key} text={label} side="top"><Button size="xs" variant={key === 'copy' ? 'cta' : 'secondary'} className="w-7 px-0" aria-label={label} disabled={busy} onClick={run}><Icon size={16} aria-hidden /></Button></Tip>)}
     </div>
-    <div className="absolute flex items-center justify-center rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] pointer-events-auto" style={{ left: layout.auto.x, top: layout.auto.y, width: layout.auto.width, height: layout.auto.height }}>
+    <div className="absolute flex items-center justify-center pointer-events-auto" style={{ left: layout.auto.x, top: layout.auto.y, width: layout.auto.width, height: layout.auto.height }}>
       <Tip text={t('regionScreenshot.live.scrollHint')} side="top"><Button size="sm" variant="secondary" disabled={busy} onClick={() => void changeAutomatic(!automatic)}>{t(`regionScreenshot.live.${automatic ? 'stopScroll' : 'autoScroll'}`)}</Button></Tip>
     </div>
   </div>;

@@ -23,7 +23,8 @@ import { leadingSlashInvocation, loadAllCommands, rewriteAgentSkillInvocationFor
 import { toast } from '@/lib/toast';
 import { getDraft as getWorkspaceDraft, patchDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
-const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost, catalog } = vi.hoisted(() => ({
+  catalog: { device: null as { deviceId: string; name: string } | null },
   pickAndUpdateGhost: vi.fn(),
   auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
   translation: {
@@ -31,6 +32,9 @@ const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
   },
 }));
+
+vi.mock('../useCatalogDevice', () => ({ CatalogDeviceScope: ({ children }: { children: (...args: unknown[]) => unknown }) =>
+  children(catalog.device, false, 1, { selected: catalog.device, onSelect: vi.fn(), directory: { candidates: [], online: false, relayOnline: false } }) }));
 
 vi.mock('../GhostPagePanelHost', () => ({
   GhostPagePanelHost: ({ ghost }: { ghost: { manifest: { id: string } } }) => (
@@ -95,6 +99,7 @@ const loadDetail = vi.fn<() => Promise<PluginMarketDetail>>();
 const listAgentSkills = vi.fn();
 
 beforeEach(() => {
+  catalog.device = null;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   auth.mode = 'local';
   auth.user.membershipKind = 'personal';
@@ -136,6 +141,13 @@ beforeEach(() => {
     },
     setApplicationMenuLocale: async () => {},
   });
+});
+
+it('opens a shared package before the selected remote plugin catalogue', async () => {
+  catalog.device = { deviceId: 'remote-computer', name: 'Remote Computer' };
+  render(<MemoryRouter initialEntries={['/plugins?share=' + 's'.repeat(32)]}><GhostPluginPage /></MemoryRouter>);
+  expect(await screen.findByRole('button', { name: 'sharing.localSignIn' })).toBeTruthy();
+  expect(loadDetail).not.toHaveBeenCalled();
 });
 
 afterEach(() => {
@@ -405,7 +417,7 @@ describe('plugin page return navigation', () => {
     { id: 'personal-plugin', namespace: 'org', namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'privatePlugin' },
     { id: 'personal-plugin', namespace: null, namespaceState: 'pending', approval: 'approved', reason: 'identityPending' },
     { id: 'personal-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'invalid', reason: 'approvalRequired' },
-  ])('explains why $id cannot be published ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
+  ])('keeps publishing restrictions out of use details for $id ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
     const installed = {
       manifest: { ...detail.manifest, id, name: 'Installed Plugin' },
       dir: '/tmp/brain/' + id, namespace, namespaceState, publishingSource: { kind: 'local', source: 'manual' },
@@ -415,9 +427,9 @@ describe('plugin page return navigation', () => {
     window.electronAPI.pluginMarket.snapshot = async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
     render(page('/plugins'));
     fireEvent.click(await screen.findByText('Installed Plugin'));
-    fireEvent.click(screen.getByText('settings.ghosts.contribution.versionUpdates'));
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
-    expect(screen.getByText('settings.ghosts.contribution.unavailable.' + reason)).toBeTruthy();
+    expect(screen.queryByText('settings.ghosts.contribution.unavailable.' + reason)).toBeNull();
   });
 
   it('offers only locally publishable exact installations and opens a read-only package summary without uploading or publishing', async () => {

@@ -6,6 +6,7 @@ import {
   DeviceLinkError,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SHARED_TASK_CAPABILITY,
+  sharedTaskHostPeer,
   type DeviceLinkClient,
   type DeviceLinkStatus,
   type DeviceView,
@@ -21,6 +22,8 @@ import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
+import { remoteSessionStore } from '../session/remoteSessionStore';
+import { getDeviceFetchEpoch } from '../device-link/deviceProvidersCache';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -52,6 +55,7 @@ vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}),
 }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
+vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}),
   getAllKeys: vi.fn(async () => []), multiRemove: vi.fn(async () => {}),
@@ -71,6 +75,7 @@ const transport = vi.hoisted(() => {
   class Client {
     status: DeviceLinkStatus = 'online';
     statusChanged: (status: DeviceLinkStatus) => void = () => {};
+    crossAccountStatusChanged: (status: DeviceLinkStatus) => void = () => {};
     presenceChanged: (snapshot: PresenceSnapshot) => void = () => {};
     peerReset: Parameters<DeviceLinkClient['onPeerTransportReset']>[0] = () => {};
     frame: Parameters<DeviceLinkClient['onFrame']>[0] = () => {};
@@ -85,6 +90,10 @@ const transport = vi.hoisted(() => {
     restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
+    separate: Client | null = null;
+    scopedPeers = new Set<string>();
+    connectionFor(deviceId: string) { return this.scopedPeers.has(deviceId) ? this.separate ?? this : this; }
+    waitUntilOnline = vi.fn(async () => { throw new DeviceLinkError('NOT_CONNECTED', 'relay is offline'); });
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
     isOutboundExplicitlyClosed = vi.fn((_deviceId: string) => false);
@@ -96,12 +105,18 @@ const transport = vi.hoisted(() => {
     onConnectionIssue = () => () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }
     onReliableFrameBeforeLink = () => () => {};
+    onSeparateCrossAccountStatus(listener: Client['crossAccountStatusChanged']) { this.crossAccountStatusChanged = listener; return () => {}; }
+    onSeparateCrossAccountIssue = () => () => {};
+    hasOfflineDirectPath = () => false;
+    crossAccountConnection() { return this.separate ?? this; }
+    connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
+    restartConnections(...args: unknown[]) { (this.restartConnection as (...input: unknown[]) => void)(...args); }
   }
   return { Client, clients: [] as Client[] };
 });
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/device-link')>(),
-  DeviceLinkClient: class extends transport.Client {
+  RoutedDeviceLinkClient: class extends transport.Client {
     constructor() { super(); transport.clients.push(this); }
   },
 }));
@@ -113,7 +128,9 @@ const historyChannel = 'local-db:messages:view';
 let root: Root;
 let context: DeviceLinkContextValue;
 let maker: MobileMakerTransport;
-function Probe() { context = useDeviceLink(); maker = useMobileMakerTransport('host'); return null; }
+let scopedPeer: string | undefined;
+let scopedContext: DeviceLinkContextValue;
+function Probe() { context = useDeviceLink(); scopedContext = useDeviceLink(scopedPeer); maker = useMobileMakerTransport('host'); return null; }
 function render() { root.render(createElement(DeviceLinkProvider, null, createElement(Probe))); }
 function deferredAccept() {
   let resolve!: (value: LinkAcceptPayload) => void;
@@ -139,6 +156,7 @@ beforeEach(async () => {
   auth.apiFetch.mockReset();
   auth.apiFetch.mockResolvedValue({ devices: [] });
   transport.clients.length = 0;
+  scopedPeer = undefined;
   root = createRoot(document.createElement('div'));
   await act(async () => render());
 });
@@ -475,17 +493,145 @@ describe('pending probe reply recovery', () => {
 });
 
 describe('Provider shared-task relay compatibility', () => {
+  // PR #8182: a healthy official connection must keep serving a shared task
+  // when the selected same-account relay disconnects or removes this phone.
+  it('keeps shared requests, subscriptions and scoped UI online while the primary relay is stopped', async () => {
+    const client = transport.clients[0];
+    const shared = sharedTaskHostPeer('independent-task', 'host');
+    scopedPeer = shared;
+    client.separate = new transport.Client();
+    client.scopedPeers.add(shared);
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => { render(); client.statusChanged('online'); client.crossAccountStatusChanged('online'); });
+    await act(async () => {
+      await context.openLink(shared);
+      await context.subscribe('shared-screen', shared, ['session:task']);
+      await context.subscribe('ordinary-screen', 'host', ['session:ordinary']);
+    });
+    const epoch = scopedContext.connectionEpoch;
+    const subscription = context.getSubscriptionIdentity!(shared, ['session:task']);
+    expect(subscription).not.toBeNull();
+    const interrupted = vi.spyOn(remoteSessionStore, 'noteLiveStreamInterrupted');
+    await act(async () => { client.status = 'stopped'; client.statusChanged('stopped'); });
+    expect(context.status).toBe('stopped');
+    expect(scopedContext.status).toBe('online');
+    expect(scopedContext.connectionEpoch).toBe(epoch);
+    expect(context.getSubscriptionIdentity!(shared, ['session:task'])).toBe(subscription);
+    expect(context.getSubscriptionIdentity!('host', ['session:ordinary'])).toBeNull();
+    expect(interrupted.mock.calls).toEqual([['ordinary']]);
+    interrupted.mockRestore();
+    await act(async () => expect(await context.invoke(shared, historyChannel)).toBe('history page'));
+    await expect(context.invoke('other-host', historyChannel)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+
+    client.openLink.mockClear();
+    await act(async () => {
+      client.crossAccountStatusChanged('connecting');
+      client.crossAccountStatusChanged('online');
+    });
+    expect(client.openLink).toHaveBeenCalledExactlyOnceWith(shared, expect.any(Object));
+    expect(scopedContext.status).toBe('online');
+    expect(scopedContext.connectionEpoch).toBeGreaterThan(epoch);
+    await act(async () => expect(await context.invoke(shared, historyChannel)).toBe('history page'));
+  });
+
+  // A queued catalog push used to be cancelled globally on a primary outage;
+  // successful shared reads must retain their own reconnect epoch in the cache.
+  it('retains a shared catalog refresh across primary disconnection and records its own epoch', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = transport.clients[0];
+      const shared = sharedTaskHostPeer('catalog-task', 'host');
+      scopedPeer = shared;
+      client.separate = new transport.Client();
+      client.scopedPeers.add(shared);
+      client.openLink.mockResolvedValue(accepted(supported));
+      client.invoke.mockImplementation(async (_deviceId, payload, _timeout, options) => {
+        options?.preSend?.();
+        return { ok: true, result: payload.channel === 'maker:provider:list' ? { providers: [] } : null };
+      });
+      await act(async () => { render(); client.statusChanged('online'); client.crossAccountStatusChanged('online'); });
+      await act(async () => {
+        client.frame({ v: 1, kind: 'push', src: shared, dst: 'mobile',
+          payload: { channel: 'maker:provider:changed', payload: {} } } as Parameters<typeof client.frame>[0]);
+        client.frame({ v: 1, kind: 'push', src: 'catalog-only-host', dst: 'mobile',
+          payload: { channel: 'maker:provider:changed', payload: {} } } as Parameters<typeof client.frame>[0]);
+        client.status = 'stopped'; client.statusChanged('stopped');
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(client.invoke).toHaveBeenCalledWith(shared, expect.objectContaining({ channel: 'maker:provider:list' }), undefined, expect.any(Object));
+      expect(getDeviceFetchEpoch(shared)).toBe(scopedContext.connectionEpoch);
+      expect(scopedContext.connectionEpoch).not.toBe(context.connectionEpoch);
+      expect(client.invoke.mock.calls.some(([peer]) => peer === 'catalog-only-host')).toBe(false);
+      expect(getDeviceFetchEpoch('catalog-only-host')).toBeUndefined();
+      await act(async () => {
+        client.status = 'online'; client.statusChanged('online');
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(client.invoke.mock.calls.some(([peer]) => peer === 'catalog-only-host')).toBe(false);
+      expect(getDeviceFetchEpoch(shared)).toBe(scopedContext.connectionEpoch);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // PR #8182: only the primary reconnect cleared stale REMOTE_DISABLED and
+  // permanent-close suppression. A real Provider must recover a shared peer
+  // after its official connection reconnects while same-account peers stay put.
+  // Unit: transport events and rejection are injected; no real network/timers.
+  it('recovers shared peers after an official reconnect without clearing same-account verdicts or links', async () => {
+    const client = transport.clients[0];
+    const shared = sharedTaskHostPeer('shared-task', 'host');
+    client.separate = new transport.Client();
+    client.scopedPeers.add(shared);
+    client.openLink.mockResolvedValue(accepted(supported));
+    await act(async () => {
+      await context.openLink(shared);
+      await context.openLink('other-host');
+      client.presenceChanged({ deviceId: 'disabled-host', deviceName: 'Disabled', platform: 'darwin',
+        appVersion: 'test', online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1 });
+    });
+    await act(async () => client.crossAccountStatusChanged('connecting'));
+    const beforeDisabled = context.presenceVersion;
+    client.openLink.mockRejectedValueOnce(new DeviceLinkError('REMOTE_DISABLED', 'host disabled'));
+    await act(async () => client.crossAccountStatusChanged('online'));
+    expect(context.presenceVersion).toBeGreaterThan(beforeDisabled);
+    await expect(context.invoke(shared, historyChannel)).rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+    await act(async () => client.frame({ v: 1, kind: 'link-close', src: shared, dst: 'mobile',
+      payload: { reason: 'toggle-off' } } as Parameters<typeof client.frame>[0]));
+
+    client.openLink.mockClear();
+    const recovering = deferredAccept();
+    client.openLink.mockReturnValueOnce(recovering.promise);
+    const beforeReconnect = context.presenceVersion;
+    await act(async () => {
+      client.crossAccountStatusChanged('connecting');
+      client.crossAccountStatusChanged('online');
+    });
+    // Consumers must learn that the old false verdict was cleared before any
+    // successful host response can publish its own reachability notification.
+    expect(context.presenceVersion).toBeGreaterThan(beforeReconnect);
+    expect(client.openLink).toHaveBeenCalledExactlyOnceWith(shared, expect.any(Object));
+    expect(context.getPresenceAvailability('disabled-host')).toBe(false);
+    await act(async () => recovering.resolve(accepted(supported)));
+    await act(async () => {
+      expect(await context.invoke(shared, historyChannel)).toBe('history page');
+      expect(await context.invoke('other-host', historyChannel)).toBe('history page');
+    });
+    expect(client.openLink).toHaveBeenCalledTimes(1);
+    expect(client.stop).not.toHaveBeenCalled();
+    expect(client.restartConnection).not.toHaveBeenCalled();
+  });
+
   it('distinguishes an old online relay from disconnection and re-negotiates after upgrade', async () => {
     const client = transport.clients[0];
     expect(context.sharedTaskAvailable).toBeUndefined();
-    await act(async () => client.statusChanged('online'));
+    const transition = (status: DeviceLinkStatus) => act(async () => { client.status = status; client.statusChanged(status); });
+    await transition('online');
     expect(context.sharedTaskAvailable).toBe(false);
-    await act(async () => client.statusChanged('connecting'));
+    await transition('connecting');
     expect(context.sharedTaskAvailable).toBeUndefined();
     client.serverCapabilities = [SHARED_TASK_CAPABILITY];
-    await act(async () => client.statusChanged('online'));
+    await transition('online');
     expect(context.sharedTaskAvailable).toBe(true);
-    await act(async () => client.statusChanged('stopped'));
+    await transition('stopped');
     expect(context.sharedTaskAvailable).toBeUndefined();
   });
 });

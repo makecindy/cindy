@@ -5,7 +5,7 @@ import { orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { OrcaRemotePendingReport } from '../../shared/orcaRemoteWorker.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 
-import { getDbClient } from './client/current.js';
+import { getDbClient, getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from './client/current.js';
 import type { OrcaRemoteWorkerProxySessionSeed } from './client/tx/types.js';
 import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, orcaRemoteOpens, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
@@ -722,9 +722,21 @@ async function listActiveWorkerSessionIdsForInactiveTeams(
 export async function setSessionOrcaRole(
   sessionId: string,
   role: OrcaRole | null,
+  options: { owner?: CurrentDbClientSnapshot; assertCurrent?: () => void } = {},
 ): Promise<void> {
-  const db = getDbClient().drizzle;
+  const owner = options.owner ?? getCurrentDbClientSnapshot();
+  const assertCurrent = () => {
+    options.assertCurrent?.();
+    if (!owner || getCurrentDbClientSnapshot() !== owner) {
+      throw new Error('[REMOTE_AGENT_EXPIRED] The task owner has changed.');
+    }
+  };
+  assertCurrent();
+  const db = owner!.client.drizzle;
   await db.update(sessions).set({ orcaRole: role }).where(eq(sessions.id, sessionId));
+  // The issued write belongs to the captured DB. Never broadcast its result
+  // into another account, or after the owning creation has been cancelled.
+  assertCurrent();
   broadcastSessionPatch(sessionId, { orcaRole: role });
 }
 

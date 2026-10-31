@@ -243,7 +243,7 @@ export function ScreenshotModeBar(props: {
     <Divider />
     <div className="relative">
       <Button size="xs" variant="secondary" tone={props.aiMenuOpen ? 'default' : 'quiet'} disabled={!props.canAsk} aria-label={t('regionScreenshot.cindy')} aria-expanded={props.aiMenuOpen}
-        onMouseDown={(event) => event.preventDefault()} onClick={props.onToggleAiMenu}><Sparkles size={14} />Cindy</Button>
+        onMouseDown={(event) => event.preventDefault()} onClick={props.onToggleAiMenu}><Sparkles size={14} className="text-[var(--warning-fg)]" />Cindy</Button>
       {props.aiMenuOpen && <div role="menu" className="absolute right-0 top-full z-10 mt-2 flex min-w-[168px] flex-col rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1">
         {(['ask', 'translate', 'explain', 'extract'] as const).map((action) => {
           const Icon = AI_ICONS[action];

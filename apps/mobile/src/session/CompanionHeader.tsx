@@ -93,7 +93,7 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
       deviceId={deviceId} deviceName={deviceName} sessionId={sessionId} online={online} cloudHome={homed} todos={todos}
       onQuoteTodo={onQuoteTodo}
       onCheckTodos={askCompanionReady ? () => onAskCompanion(t('devices.glance.checkPrompt')) : undefined}
-      onOpenTask={taskId => router.push({ pathname: '/sessions/[sessionId]', params: { sessionId: taskId, deviceId } })}
+      onOpenTask={(taskId, taskDeviceId) => router.push({ pathname: '/sessions/[sessionId]', params: { sessionId: taskId, deviceId: taskDeviceId ?? deviceId } })}
       onOpenCindy={hosted => void navigation.openTeammate(hosted, { replace: true })}
       onSwitchHome={() => setHomeSheet(true)} />
     <CompanionProfileSheet initialPage={initialPage} visible={profile} onClose={() => setProfile(false)} onClosed={() => { const action = pending.current; pending.current = null; action?.(); }}

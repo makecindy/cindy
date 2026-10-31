@@ -106,8 +106,13 @@ function stripTrailingSeparators(value: string, allowBackslash: boolean): string
 function resolveWorktreeBase(
   value: string,
   containers: readonly (readonly string[])[],
+  comparison: 'exact' | 'windows-insensitive',
 ): string | null {
   const allowBackslash = usesBackslashSeparator(value);
+  // 分组可兼容 Windows 路径的容器大小写;托管识别必须保持精确匹配,
+  // 否则会改变项目设置继承和 worktree 恢复的判定。正斜杠 UNC 也按 Windows 比较。
+  const ignoreCase = comparison === 'windows-insensitive'
+    && (allowBackslash || value.startsWith('//'));
   const segments = splitPathSegments(value, allowBackslash);
   for (let i = 0; i < segments.length; i += 1) {
     for (const container of containers) {
@@ -115,7 +120,8 @@ function resolveWorktreeBase(
       if (i + container.length >= segments.length) continue;
       let matched = true;
       for (let k = 0; k < container.length; k += 1) {
-        if (segments[i + k].text !== container[k]) {
+        const segment = segments[i + k].text;
+        if ((ignoreCase ? segment.toLowerCase() : segment) !== container[k]) {
           matched = false;
           break;
         }
@@ -138,21 +144,33 @@ function resolveWorktreeBase(
 
 /**
  * 解析 Cindy 托管 worktree 的 base repo(只认 `.cindy-worktrees` / `.xdt-worktrees`)。
- * 不是托管 worktree 路径时返回 null。
+ * 容器名始终精确匹配;不是托管 worktree 路径时返回 null。
  */
 export function managedWorktreeBaseRepo(value: string): string | null {
-  return resolveWorktreeBase(value, MANAGED_WORKTREE_CONTAINERS);
+  return resolveWorktreeBase(value, MANAGED_WORKTREE_CONTAINERS, 'exact');
 }
 
 /**
  * 解析用于**项目分组**的 base repo:托管 worktree 加上 `.worktrees/<name>` 与
  * `.claude/worktrees/<name>` 这两种社区约定形态。不是 worktree 路径时返回 null。
+ * Windows 盘符 / UNC 路径的容器名忽略大小写,POSIX 保持精确匹配。
  */
 export function groupingWorktreeBaseRepo(value: string): string | null {
-  return resolveWorktreeBase(value, GROUPING_WORKTREE_CONTAINERS);
+  return resolveWorktreeBase(value, GROUPING_WORKTREE_CONTAINERS, 'windows-insensitive');
 }
 
 /** 项目分组用:是 worktree 路径就折叠到 base repo,否则原样返回。 */
 export function collapseWorktreeDirForGrouping(value: string): string {
   return groupingWorktreeBaseRepo(value) ?? value;
+}
+
+/** Explicit membership wins over cwd, including arbitrary sibling worktrees.
+ * Missing membership is the compatibility path for older tasks and hosts.
+ * This is a presentation/project identity, never a filesystem execution path.
+ */
+export function sessionProjectDirectory(session: {
+  projectDir?: string | null;
+  workingDir?: string | null;
+}): string | null {
+  return session.projectDir ?? session.workingDir ?? null;
 }

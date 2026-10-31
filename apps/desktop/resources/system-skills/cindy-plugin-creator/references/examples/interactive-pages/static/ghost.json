@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 3,
+  "id": "interactive-records",
+  "name": "记录表单示例",
+  "version": "1.0.0",
+  "minCindyVersion": "0.1.122-beta",
+  "entry": "main.js",
+  "command": "interactive-records",
+  "whenToUse": "需要查看和编辑记录、显示交互表单时使用",
+  "tools": [
+    {
+      "name": "open_view",
+      "description": "打开记录表单",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "save_record",
+      "description": "保存记录；同一请求编号只保存一次",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": ["title", "idempotencyKey"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "mcpApps": {
+    "ui": {
+      "resources": [
+        {
+          "uri": "ui://interactive-records/v1",
+          "file": "ui/page.html",
+          "prefersBorder": true,
+          "csp": {
+            "connectDomains": [],
+            "resourceDomains": []
+          }
+        }
+      ],
+      "tools": {
+        "open_view": {
+          "resourceUri": "ui://interactive-records/v1",
+          "visibility": ["model"]
+        },
+        "save_record": {
+          "resourceUri": "ui://interactive-records/v1",
+          "visibility": ["app"]
+        }
+      }
+    }
+  }
+}

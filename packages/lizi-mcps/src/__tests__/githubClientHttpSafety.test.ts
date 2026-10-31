@@ -29,6 +29,27 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Unit: GitHub requires User-Agent to identify the calling application. Cover
+// REST, GraphQL and download redirects, which have separate request builders.
+it('identifies Cindy on each GitHub API transport without changing authentication', async () => {
+  const sent: Headers[] = [];
+  const fetchImpl: typeof fetch = async (url, init) => {
+    sent.push(new Headers(init?.headers));
+    return String(url).endsWith('/zip')
+      ? new Response(null, { status: 302, headers: { location: 'https://example.invalid/archive.zip' } })
+      : new Response(JSON.stringify({ data: {}, login: 'fixture' }));
+  };
+  const client = new GithubClient({ token: 'fixture-token', owner: 'fixture', repo: 'fixture', fetchImpl });
+  await client.getUser('fixture');
+  await client.graphql('{ viewer { login } }');
+  await client.getArtifactDownloadUrl(1);
+  expect(sent).toHaveLength(3);
+  for (const headers of sent) {
+    expect(headers.get('user-agent')).toBe('Cindy (+https://cindy.app)');
+    expect(headers.get('authorization')).toBe('Bearer fixture-token');
+  }
+});
+
 describe('assertSafeBaseUrl (github, https enforced)', () => {
   it('accepts https (github.com + GHE) and loopback http', () => {
     expect(() => assertSafeBaseUrl('https://api.github.com')).not.toThrow();

@@ -21,6 +21,7 @@ import type { FastMode } from '@cindy/maker-shared';
 import { MemoryRouter } from 'react-router-dom';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
+import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
@@ -83,6 +84,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
   }),
 }));
 vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
+  useModelPickerAgents: () => ['claude-code', 'codex'],
+}));
 vi.mock('@/hooks/useConnectedSource', () => ({
   useConnectedSource: () => ({ hasConnectedSource: true, loading: false }),
 }));
@@ -250,6 +255,36 @@ import { toast } from '@/lib/toast';
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
 const onProviderChange = vi.fn();
+
+// Regression: plugin selection promises a request-local draft. The real dialog,
+// ModelSelector and row actions must never write engine/favorite defaults (unit).
+it('keeps plugin engine and favorite edits local after cancelling the real dialog', async () => {
+  const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'codex', effort: 'high' });
+  const baseline = listModelFavorites().map((item) => ({ ...item }));
+  const onAnswer = vi.fn(async () => ({ handled: true, accepted: true }));
+  const { unmount } = render(<PluginModelPickerDialog
+    request={{ requestId: 'plugin-draft', ghostId: 'plugin', ghostName: 'Plugin', expiresAt: Date.now() + 90_000 }}
+    onAnswer={onAnswer}
+  />);
+  const favoriteRow = document.querySelector(`[data-unified-anchor="fav::${uid}"]`) as HTMLElement;
+  const favoriteFlyout = await openFlyoutForRow(favoriteRow);
+  await act(async () => fireEvent.click(favoriteFlyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+  await waitFor(() => expect(favoriteRow.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Claude'));
+  expect(listModelFavorites()).toEqual(baseline);
+
+  // Work on the ordinary model row as well, including its engine override.
+  const modelRow = document.querySelector('[data-unified-anchor="model::xd::gpt-5.5"]') as HTMLElement;
+  const flyout = await openFlyoutForRow(modelRow);
+  await act(async () => fireEvent.click(flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+  await waitFor(() => expect(modelRow.querySelector('[data-unified-triple]')?.getAttribute('title')).toContain('Claude'));
+  expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  expect(onAnswer).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+  await waitFor(() => expect(onAnswer).toHaveBeenCalledExactlyOnceWith(null));
+  unmount();
+  expect(getModelEngineOverride('xd', 'gpt-5.5')).toBeUndefined();
+  expect(listModelFavorites()).toEqual(baseline);
+});
 
 function renderPanel(
   props: Partial<React.ComponentProps<typeof ModelSelectorContent>> = {},

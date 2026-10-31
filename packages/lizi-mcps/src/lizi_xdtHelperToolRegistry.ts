@@ -71,6 +71,11 @@ export interface XdtHelperToolDef {
   description: string;
   inputShape: z.ZodRawShape;
   handler: XdtHelperToolHandler;
+  /**
+   * Still callable by name, but never listed: a tool whose job moved to another
+   * entry keeps working for saved calls without offering the model two ways.
+   */
+  hidden?: boolean;
 }
 
 export interface XdtHelperToolSummary {
@@ -97,6 +102,7 @@ export class XdtHelperToolRegistry {
     description: string;
     inputShape: T;
     handler: XdtHelperToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
+    hidden?: boolean;
   }): void {
     if (this.tools.has(def.name) || this.aliases.has(def.name)) {
       throw new Error(`[cindyHelperToolRegistry] duplicate tool name: ${def.name}`);
@@ -115,6 +121,7 @@ export class XdtHelperToolRegistry {
   list(category?: XdtHelperToolCategory): XdtHelperToolSummary[] {
     const all: XdtHelperToolSummary[] = [];
     for (const t of this.tools.values()) {
+      if (t.hidden) continue;
       if (category && t.category !== category) continue;
       all.push({
         name: t.name,
@@ -127,7 +134,7 @@ export class XdtHelperToolRegistry {
 
   listCategories(): XdtHelperToolCategory[] {
     const set = new Set<XdtHelperToolCategory>();
-    for (const t of this.tools.values()) set.add(t.category);
+    for (const t of this.tools.values()) if (!t.hidden) set.add(t.category);
     return Array.from(set);
   }
 
@@ -143,7 +150,7 @@ export class XdtHelperToolRegistry {
               errorCode: 'UNKNOWN_TOOL',
               data: {
                 requested: name,
-                available: Array.from(this.tools.keys()),
+                available: Array.from(this.tools.values()).filter((t) => !t.hidden).map((t) => t.name),
                 hint: '调用 list_tools 查看完整工具列表',
               },
             }),

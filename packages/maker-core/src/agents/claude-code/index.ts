@@ -101,6 +101,7 @@ import type {
   AskUserQuestionItem,
   UsageSnapshot,
   RewindFilesResult,
+  RewindCommitOptions,
   ForkSdkSessionOptions,
   ForkSdkSessionResult,
 } from '../../types/events.js';
@@ -1911,7 +1912,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const client = opts[LOCAL_AGENT_CLIENT];
-      if (client) {
+      if (client && (!hosted || client.hostToolsOnly)) {
         hostMcpServerNames = new Set([client.mcpName ?? 'client']);
         registeredMcpServerNames = hostMcpServerNames;
         nonHarnessMcpServerNames = hostMcpServerNames;
@@ -4507,7 +4508,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { disallowedTools: [...claudeDisallowedTools] }
             : {}),
           // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
-          ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
+          ...(hosted?.guest && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+            ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
           settingSources: reviewMode || !!opts.botRuntimeProfile || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
@@ -7885,7 +7887,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
       },
 
-      async commitRewindFiles(userUuid: string, priorAssistantUuid: string): Promise<undefined> {
+      async commitRewindFiles(
+        userUuid: string,
+        priorAssistantUuid: string,
+        rewindOpts?: RewindCommitOptions,
+      ): Promise<undefined> {
         // 同 previewRewindFiles:重建窗口内不得对死掉/半替换的 q 做 rewindFiles/close,
         // 否则 pendingRewindTo 会指向一个已不存在的会话时点。等替换 query 就绪再走。
         while (idleResumeRebuildGate) {
@@ -7902,9 +7908,23 @@ export class ClaudeCodeAgent extends BaseAgent {
           await q.rewindFiles(userUuid, { dryRun: false });
           log.debug('commitRewindFiles: SDK rewindFiles ok');
         } catch (err) {
+          if (rewindOpts?.rewindsToNativeThreadStart) {
+            // 只回滚文件的路径没有下一次 send 的 forkSession 兜底重试,吞掉错误会让
+            // 宿主继续关闭会话、软删消息,用户看到回退成功但文件没恢复。
+            log.warn('commitRewindFiles: rewindFiles failed on files-only rewind', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            throw err;
+          }
           log.warn('commitRewindFiles: rewindFiles failed, continuing (forkSession on next send will retry)', {
             error: err instanceof Error ? err.message : String(err),
           });
+        }
+        if (rewindOpts?.rewindsToNativeThreadStart) {
+          // 目标之前没有可续接的 assistant:不设续接点,由宿主关闭会话并清掉原生
+          // 会话 id,下次发送开全新原生会话。
+          log.info('commitRewindFiles ◀ files only; host restarts the native session');
+          return undefined;
         }
         // ② **先**设 rewind transition 再 close —— q.close() 会让正在跑的 forward loop
         //    for-await 抛 "Claude Code process aborted by user", 这是预期行为不是错误。

@@ -24,6 +24,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
 import { MyDevicesPanel } from './MyDevicesPanel';
+import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
@@ -165,6 +166,7 @@ export function RemoteControlSection() {
   // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
   // 再把下方内容顶开一格。
   const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const relay = useSelfHostedRelayState(deviceLinkAvailable);
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -292,6 +294,18 @@ export function RemoteControlSection() {
                 focusRequestKey={focusRequestKey}
               />
             </CollapsibleSubSection>
+            {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
+            <section id="settings-search-target-remote-relay" className="flex flex-col gap-3">
+              <div className="flex flex-col gap-0.5">
+                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                  {t('settings.remoteControl.relay.route.title')}
+                </h3>
+                <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                  {t('settings.remoteControl.relay.route.hint')}
+                </p>
+              </div>
+              <RelayServicePanel controller={relay} />
+            </section>
             <div className="h-px w-full bg-[var(--border-default)]" />
           </>
         ) : null}

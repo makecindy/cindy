@@ -1,7 +1,13 @@
 import {
+  conversationShareReadableBody,
+  conversationShareVideoSources,
+} from "./conversationShareRichAnswer";
+import {
   collectMobileMarkdownImages,
   mobileMarkdownImageUrlForWorkdir,
 } from "@/session/messageMarkdown";
+import { isDirectPreviewableMediaUrl } from "./remoteMedia";
+import { youtubeVideo } from "@cindy/maker-shared/rich-answer";
 import type {
   ConversationShareImage,
   ConversationShareMessage,
@@ -11,6 +17,9 @@ export interface ConversationShareImageContext {
   workdir?: string;
   remoteHostId?: string;
   sessionId?: string;
+  snapshotRichValues?: (
+    message: ConversationShareMessage,
+  ) => ConversationShareMessage["richValues"];
 }
 
 // Compressed bytes do not bound native bitmap memory. Charge every rendered
@@ -22,7 +31,7 @@ const IMAGE_PREPARATION_CONCURRENCY = 3;
 /** Prepare selected, visible content only; source URLs never enter the export document. */
 export async function prepareConversationShareImages(
   messages: readonly ConversationShareMessage[],
-  load: (url: string) => Promise<ConversationShareImage | null>,
+  load: (url: string, kind?: "video") => Promise<ConversationShareImage | null>,
   context: ConversationShareImageContext = {},
   isActive: () => boolean = () => true,
 ): Promise<ConversationShareMessage[]> {
@@ -39,6 +48,7 @@ export async function prepareConversationShareImages(
   >();
   let remainingCharacters = 32 * 1024 * 1024;
   let remainingPixels = MAX_EXPORT_IMAGE_PIXELS;
+  const videoUrls = new Set<string>();
   for (const message of messages) {
     if (!isActive()) return [];
     const sources = new Map<string, { url: string; occurrences: number }>();
@@ -60,7 +70,24 @@ export async function prepareConversationShareImages(
       : [message.body];
     if (message.secondaryBody) texts.push(message.secondaryBody);
     for (const text of texts) {
-      for (const image of collectMobileMarkdownImages(text)) {
+      const videos = conversationShareVideoSources(message, text);
+      for (const source of videos) {
+        // These URLs are pages handled by VideoSitePreview in the live view.
+        // Keep the export's play-mark placeholder without native decoding.
+        if (youtubeVideo(source)) continue;
+        const url = isDirectPreviewableMediaUrl(source) || /^xdt-video:\/\//i.test(source)
+          ? source
+          : mobileMarkdownImageUrlForWorkdir(source, context.workdir, message.clientId, context.remoteHostId, context.sessionId);
+        if (url) {
+          addSource(source, url);
+          videoUrls.add(url);
+        }
+      }
+      for (const image of collectMobileMarkdownImages(
+        conversationShareReadableBody(message, text),
+      )) {
+        // Rich videos are collected from their visible nodes, not image syntax.
+        if (videos.includes(image.url)) continue;
         const url = mobileMarkdownImageUrlForWorkdir(
           image.url,
           context.workdir,
@@ -68,7 +95,9 @@ export async function prepareConversationShareImages(
           context.remoteHostId,
           context.sessionId,
         );
-        if (url) addSource(image.url, url);
+        if (url) {
+          addSource(image.url, url);
+        }
       }
     }
     const images = new Map<string, ConversationShareImage>();
@@ -87,7 +116,7 @@ export async function prepareConversationShareImages(
       const [url, references] = next.value;
       let image: ConversationShareImage | null;
       try {
-        image = await load(url);
+        image = videoUrls.has(url) ? await load(url, "video") : await load(url);
       } catch {
         continue;
       }

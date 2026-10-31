@@ -12,6 +12,7 @@ import {
   voiceInputShortcutNeedsMacNativeListener,
   voiceInputShortcutNeedsWindowsNativeListener,
 } from '../../../shared/voiceInputData';
+import { resolveBrowserVoiceInputLanguage } from '../refinementContextBuilder';
 import {
   createVoiceInputModifierShortcut,
   createVoiceInputShortcutFromEvent,
@@ -23,6 +24,12 @@ describe('voice input language defaults', () => {
     expect(getDefaultVoiceInputSettings('darwin', 'global').language).toBe('auto');
     expect(getDefaultVoiceInputSettings('darwin', 'cn').language).toBe('zh-CN');
     expect(getDefaultVoiceInputSettings('darwin', 'dev').language).toBe('auto');
+  });
+
+  it('persists a dictation language that is not a UI locale and passes it to recognition as-is', () => {
+    expect(normalizeVoiceInputSettings({ language: 'es' }, 'darwin', 'global').language).toBe('es');
+    expect(normalizeVoiceInputSettings({ language: 'xx' }, 'darwin', 'global').language).toBe('auto');
+    expect(resolveBrowserVoiceInputLanguage('es')).toBe('es');
   });
 
   it('keeps an explicit language instead of replacing it with the region default', () => {

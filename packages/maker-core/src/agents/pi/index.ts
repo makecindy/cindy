@@ -1,4 +1,5 @@
 import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
+import { createPiCacheInputTracker } from './cache-input.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
 import { canonicalSkillPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
@@ -416,6 +417,8 @@ function assertRemotePiContextProfileAvailable(
 const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
+/** Pi may spend over 30s restoring a large session during startup; keep this absolute and local to resume. */
+const PI_RESUME_TIMEOUT_MS = 60_000;
 /** prompt 接受前可能自动压缩，同样必须覆盖一次完整摘要调用。 */
 const PI_PROMPT_ACCEPTANCE_TIMEOUT_MS = PI_COMPACT_TIMEOUT_MS;
 const PI_PROMPT_ACCEPTANCE_PROGRESS_EVENTS = new Set([
@@ -543,7 +546,9 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1', '[::1]'])).join(',');
+  // NO_PROXY 使用裸 IPv6 地址，避免 [::1] 使 Python httpx 初始化失败（#7632）。
+  // Bun 对裸 ::1 的匹配不一致；MCP bridge 对已校验的回环 URL 使用独立直连。
+  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
   delete env.no_proxy;
 }
 
@@ -2293,9 +2298,9 @@ export class PiAgent extends BaseAgent {
     cacheRoutes: Map<string, PiCacheCompatibility>;
     gatewayImageInputByModel: Map<string, boolean>;
     gatewayApiByModel: Map<string, PiGatewayApi>;
-    /** models.json + settings.json 内容 sha256 —— 远端 daemon 启动身份的一部分。 */
+    /** Models, settings and cache route rules; remote daemon launch identity. */
     modelsJsonHash: string;
-    /** Models alone, excluding the independently mutable compaction settings. */
+    /** Models and cache routes, excluding independently mutable compaction settings. */
     modelConfigHash: string;
   }> {
     // 远端:baseUrl 用 host 注入的 upstream endpoint(remoteEndpoint,gateway key 同源),
@@ -2327,22 +2332,19 @@ export class PiAgent extends BaseAgent {
     const gatewayImageInputByModel = new Map<string, boolean>();
     const gatewayApiByModel = new Map<string, PiGatewayApi>();
     const cacheRoutes = new Map<string, PiCacheCompatibility>();
-    const cacheRequestRules: Array<{ provider: string; id: string; baseUrl: string }> = [];
-    const learnedCompat = (providerId: string, modelId: string, wireModelId: string,
+    const cacheRequestRules: Array<{ provider: string; id: string; baseUrl: string; api: string; providerId: string; routeKey: string }> = [];
+    const registerCacheRoute = (providerId: string, modelId: string, wireModelId: string,
       runtimeProvider: string, baseUrl: string, api: string, runtimeBaseUrl = baseUrl) => {
-      // Unknown identities and SSH must not consume local learning records.
-      if (opts.remote || api !== 'openai-completions') return undefined;
+      if (api !== 'openai-completions' && api !== 'openai-responses') return;
       const routeKey = piCacheRouteKey(baseUrl, api);
-      if (!routeKey) return undefined;
-      const compat = this.deps.resolvePiNativeCompatOverride?.(providerId, wireModelId, routeKey);
+      if (!routeKey) return;
       cacheRoutes.set(JSON.stringify([runtimeProvider, wireModelId]), {
         providerId, modelId, wireModelId, routeKey,
-        applied: compat?.supportsLongCacheRetention === false,
+        applied: false, // Sample the selected route's learning only when its input starts.
       });
-      if (compat?.supportsLongCacheRetention === false && !cacheRequestRules.some((rule) => rule.provider === runtimeProvider && rule.id === wireModelId)) {
-        cacheRequestRules.push({ provider: runtimeProvider, id: wireModelId, baseUrl: runtimeBaseUrl });
+      if (!cacheRequestRules.some((rule) => rule.provider === runtimeProvider && rule.id === wireModelId && rule.api === api)) {
+        cacheRequestRules.push({ provider: runtimeProvider, id: wireModelId, baseUrl: runtimeBaseUrl, api, providerId, routeKey });
       }
-      return compat;
     };
     const models = runtimeModels.flatMap((publicModel: ModelDescriptor) => {
       // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
@@ -2386,12 +2388,11 @@ export class PiAgent extends BaseAgent {
         return [];
       }
       const modelBaseUrl = endpoint ? piGatewayModelBaseUrl(endpoint, api) : undefined;
-      const gatewayCompat = {
-        ...(resolvedSpec?.compat ?? {}),
-        ...(!opts.remote && api === 'openai-completions' ?
-          learnedCompat(gatewayProviderId ?? 'xd', m.id, m.id, PI_PROVIDER_ID,
-            this.deps.runtimeConfig.remoteEndpoint ?? '', api, modelBaseUrl ?? '') ?? {} : {}),
-      };
+      if (api === 'openai-completions' || api === 'openai-responses') {
+        registerCacheRoute(gatewayProviderId ?? 'xd', m.id, m.id, PI_PROVIDER_ID,
+          this.deps.runtimeConfig.remoteEndpoint ?? modelBaseUrl ?? '', api, modelBaseUrl ?? '');
+      }
+      const gatewayCompat = resolvedSpec?.compat ?? {};
       gatewayApiByModel.set(m.id, api);
       // Missing capability metadata must not disable newly discovered vision models.
       // Explicit text-only declarations still take precedence over this default.
@@ -2459,8 +2460,8 @@ export class PiAgent extends BaseAgent {
         this.deps.logger.warn('pi: native provider id collides with gateway provider "cindy" — skipped', { id: np.id });
         continue;
       }
-      // Inherited bundled models need the same learning in modelOverrides.
-      for (const model of np.models) learnedCompat(np.sourceProviderId ?? np.id, model.id,
+      // Include inherited models; dynamic learning stays out of models.json.
+      for (const model of np.models) registerCacheRoute(np.sourceProviderId ?? np.id, model.id,
         model.wireId ?? model.id, np.id, model.cacheIdentityBaseUrl ?? np.cacheIdentityBaseUrl ?? model.baseUrl ?? np.baseUrl,
         model.api ?? np.api ?? '', model.baseUrl ?? np.baseUrl);
       const nativeModels = (
@@ -2470,16 +2471,9 @@ export class PiAgent extends BaseAgent {
           m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
           this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id) ?? 0,
         );
-        // 自愈写回的 per-model compat 覆盖（如上游拒收长缓存提示后关掉
-        // supportsLongCacheRetention）与目录/bundled compat 合并；覆盖字段最少，
-        // 不改路由与凭证。
+        // Explicit catalog compat stays native; learned cache hints expire in the payload wrapper.
         const wireModelId = m.wireId ?? m.id;
-        const compat = {
-          ...(m.compat ?? {}),
-          ...(learnedCompat(np.sourceProviderId ?? np.id, m.id, wireModelId, np.id,
-            m.cacheIdentityBaseUrl ?? np.cacheIdentityBaseUrl ?? m.baseUrl ?? np.baseUrl,
-            m.api ?? np.api ?? '', m.baseUrl ?? np.baseUrl) ?? {}),
-        };
+        const compat = m.compat ?? {};
         return {
           id: wireModelId,
           name: m.name ?? m.id,
@@ -2512,8 +2506,7 @@ export class PiAgent extends BaseAgent {
             const window = Math.max(model.contextWindow ?? 0,
               this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id) ?? 0);
             const contextWindow = Number.isSafeInteger(window) && window > 0 ? window : undefined;
-            const compat = cacheRoutes.get(JSON.stringify([np.id, model.wireId ?? model.id]))?.applied
-              ? { ...(model.compat ?? {}), supportsLongCacheRetention: false } : undefined;
+            const compat = model.compat;
             return contextWindow || compat ? [[model.wireId ?? model.id, {
               ...(contextWindow ? { contextWindow } : {}), ...(compat ? { compat } : {}),
             }]] : [];
@@ -2577,12 +2570,16 @@ export class PiAgent extends BaseAgent {
     );
     // 远端 launch identity 必须覆盖进程启动才读的快照。只 hash models.json 时，
     // retry/transport/compaction 改写会落到旧 configHome，daemon 纯 attach。
+    const cacheRequestRulesContent = JSON.stringify(cacheRequestRules);
+    const modelConfigHash = createHash('sha256').update(modelsJsonContent)
+      .update('\n').update(cacheRequestRulesContent).digest('hex');
     const modelsJsonHash = createHash('sha256')
       .update(modelsJsonContent)
       .update('\n')
       .update(settingsJsonContent)
+      .update('\n')
+      .update(cacheRequestRulesContent)
       .digest('hex');
-    const modelConfigHash = createHash('sha256').update(modelsJsonContent).digest('hex');
     if (!opts.preview) {
       // 诊断(排查 LAZY_CREATE_FAILED):远端写前留痕 —— 确认 writeModelsJson 是否
       // 执行、endpoint 是否有值、路径形态。
@@ -2597,6 +2594,7 @@ export class PiAgent extends BaseAgent {
         await opts.fileOps.mkdirp(agentHome);
         // fileOps 远端写入内部已 umask 077(创建即 600,无 TOCTOU —— R5 H-1)。
         await opts.fileOps.writeFile(modelsJsonPath, modelsJsonContent);
+        await opts.fileOps.writeFile(joinRemotePosixPath(agentHome, 'pi-cache-compatibility.json'), cacheRequestRulesContent);
         await opts.fileOps.writeFile(settingsJsonPath, settingsJsonContent);
         this.deps.logger.info?.('pi writeModelsJson done', { modelsJsonPath });
       } else {
@@ -2604,9 +2602,7 @@ export class PiAgent extends BaseAgent {
         // 控制面文件:显式 600,防同机其他用户读 BYOM baseUrl / provider 路由
         // (R5 安全审计 H-5)。
         await fs.writeFile(modelsJsonPath, modelsJsonContent, { mode: 0o600 });
-        await fs.writeFile(path.join(agentHome, 'pi-cache-compatibility.json'), JSON.stringify(
-          cacheRequestRules,
-        ), { mode: 0o600 });
+        await fs.writeFile(path.join(agentHome, 'pi-cache-compatibility.json'), cacheRequestRulesContent, { mode: 0o600 });
         await fs.writeFile(settingsJsonPath, settingsJsonContent, {
           mode: 0o600,
         });
@@ -4205,10 +4201,18 @@ export class PiAgent extends BaseAgent {
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
     let mutablePiProviderId = initialProvider;
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
-    ctx.getCacheCompatibility = () => {
+    const readCacheCompatibility = () => {
       const route = appliedCacheRoutes.get(JSON.stringify([mutablePiProviderId, mutableWireModel]));
-      return route ? { ...route, modelId: mutableModel ?? route.modelId } : undefined;
+      if (!route) return undefined;
+      const compat = remote ? undefined : this.deps.resolvePiNativeCompatOverride?.(
+        route.providerId, route.wireModelId, route.routeKey);
+      return { ...route, modelId: mutableModel ?? route.modelId,
+        applied: compat?.supportsLongCacheRetention === false };
     };
+    let inputCacheCompatibility: PiCacheCompatibility | undefined;
+    const cacheInputTracker = createPiCacheInputTracker(text => createHash('sha256').update(text).digest('hex'));
+    let pendingCacheCompatibility: { key: string; value: PiCacheCompatibility | undefined } | undefined;
+    ctx.getCacheCompatibility = () => inputCacheCompatibility;
     let activeEffortSnapshot = initialEffortSnapshot;
     let mutableEffort: Effort | null = startupEffort ?? null;
     // 用户明确关掉思考（setThinkingEnabled(false) / 切模显式 thinkingEnabled:false /
@@ -5530,11 +5534,18 @@ export class PiAgent extends BaseAgent {
       const operation = (async () => {
         await permissionWriteChain;
         if (closed) throw new Error('PI session is closed');
-        const [modelsJson, bridgeSource, runnerSource] = await Promise.all([
-          fs.readFile(path.join(configHome, 'models.json')),
-          fs.readFile(bridgeExtensionPath),
-          fs.readFile(subagentRunnerPath),
-        ]);
+        // Model refresh writes and rolls back these files in the RPC lane. Read
+        // the snapshot there too, so a child never freezes a mixed generation.
+        // Launch/refresh below stay outside: they may enqueue their own RPC.
+        const [modelsJson, bridgeSource, runnerSource, cacheRulesJson] = await runExclusivePiRpc(() => {
+          if (closed) throw new Error('PI session is closed');
+          return Promise.all([
+            fs.readFile(path.join(configHome, 'models.json')),
+            fs.readFile(bridgeExtensionPath),
+            fs.readFile(subagentRunnerPath),
+            fs.readFile(path.join(configHome, 'pi-cache-compatibility.json')),
+          ]);
+        });
         const runId = await resumePiSubagentRun(subagentRunRoot, taskId, message, {
           launchRunner: (request) => this.launchSubagentRunner(request),
           env: durableSpawnEnv,
@@ -5547,7 +5558,7 @@ export class PiAgent extends BaseAgent {
             ...reviewPathSnapshot,
           },
           runnerFallbackFile: subagentRunnerPath,
-          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource },
+          runtimeSnapshot: { modelsJson, bridgeSource, runnerSource, cacheRulesJson },
         }, childId);
         if (!runId) throw new Error('No terminal PI Subagent run is available to resume.');
         await requestPiSubagentRefresh();
@@ -5647,6 +5658,7 @@ export class PiAgent extends BaseAgent {
         ...(proxyEnv ?? {}),
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
         ...nativeEnv,
+        CINDY_PI_CACHE_COMPAT_FILE: this.deps.resolvePiNativeCompatStorePath?.(opts.remoteHostId) ?? joinRemotePosixPath(agentHome, 'pi-native-compat-overrides.json'),
         CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify(nativeProviderAdapterAliases(nativeProviders, hostedGuest ? hosted?.guestProvider?.modelIds : undefined, Boolean(hosted))),
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
@@ -5759,6 +5771,19 @@ export class PiAgent extends BaseAgent {
         transport,
         logger: this.deps.logger,
         onEvent: (event: PiRpcEvent) => {
+          const cacheInput = cacheInputTracker.observe(event);
+          if (cacheInput) pendingCacheCompatibility = { key: cacheInput.key, value: readCacheCompatibility() };
+          if (event.type === 'extension_ui_request' && event.method === 'input' && event.title === 'cindy:cache-input') {
+            let request: { key?: unknown; direct?: unknown } = {};
+            try { request = JSON.parse(typeof event.placeholder === 'string' ? event.placeholder : '{}'); } catch {}
+            const receipt = !closed && !proc.isClosed ? cacheInputTracker.read(request?.key) : undefined;
+            if (receipt && pendingCacheCompatibility?.key === receipt.key && (request.direct === true || receipt.followUp)) {
+              inputCacheCompatibility = pendingCacheCompatibility.value;
+              pendingCacheCompatibility = undefined;
+            }
+            proc.send({ type: 'extension_ui_response', id: event.id, value: JSON.stringify(receipt ?? {}) });
+            return;
+          }
           // Native retries remain within one agent_start/settled lifecycle.
           // A new start also recovers diagnostics if the previous turn omitted
           // settled (abort/retry exhaustion), without changing turn execution.
@@ -6523,7 +6548,7 @@ export class PiAgent extends BaseAgent {
           const switched = await proc.request({
             type: 'switch_session',
             sessionPath: opts.resumeSessionId,
-          });
+          }, { timeoutMs: PI_RESUME_TIMEOUT_MS });
           if (!switched.success) {
             // 轮 25 CRITICAL:switch 失败也允许 fallback(同文件缺失理由)——
             // CAS 结果不作门禁, fresh 比卡死强。CAS 仍执行清 DB 残留。
@@ -7028,8 +7053,8 @@ export class PiAgent extends BaseAgent {
       const previousGatewayModel = retainedLiveGatewayModel;
       const modelsPath = joinRemotePosixPath(configHome, 'models.json');
       const settingsPath = joinRemotePosixPath(configHome, 'settings.json');
-      const cacheRulesPath = path.join(configHome, 'pi-cache-compatibility.json');
-      const oldCacheRules = fileOps ? undefined : await fs.readFile(cacheRulesPath, 'utf8');
+      const cacheRulesPath = joinRemotePosixPath(configHome, 'pi-cache-compatibility.json');
+      const oldCacheRules = fileOps ? await fileOps.readFile(cacheRulesPath, 256 * 1024) : await fs.readFile(cacheRulesPath, 'utf8');
       // Capture exact private bytes. Rebuilding from a live catalog would not be
       // a rollback if the catalog changed after the session started.
       const [oldModelsContent, oldSettingsContent] = await Promise.all([
@@ -7050,6 +7075,7 @@ export class PiAgent extends BaseAgent {
           if (fileOps) {
             await fileOps.writeFile(modelsPath, oldModelsContent);
             await fileOps.writeFile(settingsPath, oldSettingsContent);
+            await fileOps.writeFile(cacheRulesPath, oldCacheRules);
           } else {
             await fs.writeFile(modelsPath, oldModelsContent, { mode: 0o600 });
             await fs.writeFile(settingsPath, oldSettingsContent, { mode: 0o600 });
@@ -7701,7 +7727,7 @@ export class PiAgent extends BaseAgent {
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         const expectedCompat = sendOpts?.[PI_CACHE_RECOVERY_EXPECTATION];
         if (expectedCompat) {
-          const applied = ctx.getCacheCompatibility?.();
+          const applied = readCacheCompatibility();
           if (!sendOpts?.retryTranscriptUserEntryId || !applied?.applied || applied.routeKey !== expectedCompat.routeKey
             || applied.providerId !== expectedCompat.providerId || applied.wireModelId !== expectedCompat.wireModelId) {
             throw new TurnDispatchRejectedError('Pi cache compatibility was not applied to the expected route');

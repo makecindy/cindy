@@ -290,6 +290,17 @@ export interface Schedule {
   expireAt?: number;
 }
 
+/** Complete persisted definition captured when a host approval is shown.
+ *
+ * `effectiveWorkingDir` is runtime-only metadata for a bound pre-run hook. It
+ * is intentionally excluded from the persisted schedule comparison, but is
+ * carried to the runner so the target session directory is checked again at
+ * the execution boundary.
+ */
+export type ScheduleMutationGuard = Readonly<Schedule> & {
+  effectiveWorkingDir?: string;
+};
+
 export interface ScheduleRun {
   id: string;
   scheduleId: string;

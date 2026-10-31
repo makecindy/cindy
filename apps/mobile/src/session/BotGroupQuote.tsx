@@ -1,6 +1,6 @@
 /**
  * 群聊「引用回复」的引用块（docs/product-rules/bot-group-chat.md §10「引用回复」）。
- * 手机只显示：作者与一到两行摘要，竖线与 Markdown 引用同一样式；原消息已删除时只显示
+ * 手机只显示：作者与最多一行摘要，竖线与 Markdown 引用同一样式；原消息已删除时只显示
  * 作者与「原消息已删除」。群聊的发起引用与跳转原消息目前只在电脑上；伙伴私聊在手机上也能发起和跳转。
  */
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -26,7 +26,7 @@ export function BotGroupQuote({ display, align = 'left', onPress }: {
       : display.attachmentName ?? '');
   const content = <>
     <Text numberOfLines={1} style={styles.author}>{display.authorName}</Text>
-    <Text numberOfLines={2} style={deleted ? styles.deleted : styles.excerpt}>{summary}</Text>
+    <Text numberOfLines={1} style={deleted ? styles.deleted : styles.excerpt}>{summary}</Text>
   </>;
   const label = t('groupChat.quote.label', { name: display.authorName, summary });
   return onPress ? (

@@ -9,7 +9,11 @@ import type { ResolveRemoteMediaFn } from '@/session/remoteMedia';
 vi.mock('@/session/McpAppCard', () => ({ McpAppCard: () => null }));
 // The shared message renderer also imports the site-video native surface.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  // The message cost sheet reaches Expo Blur; its native view is not part of attachment behavior.
+  requireNativeViewManager: () => () => null,
+}));
 
 // Group attachments open the real shared ImageLightbox here (#5875): the timeline strip, the payload
 // conversion and the viewer are production code; only native surfaces and unrelated views are replaced.

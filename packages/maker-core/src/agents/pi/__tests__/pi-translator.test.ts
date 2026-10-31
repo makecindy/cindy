@@ -2463,3 +2463,16 @@ it('retains tool image bytes and a video resource alongside text', () => {
   });
   disposePiTranslateContext(ctx);
 });
+
+// A second 400 must remain terminal; Desktop may not add the old process replay.
+it('projects native cache recovery ownership onto the terminal error', () => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error',
+    errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}', cindyCacheRecoveryHandled: true } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+  expect(events.find(event => event.type === 'error')?.data).toMatchObject({ piCacheRecoveryHandled: true, isTerminal: true });
+  disposePiTranslateContext(ctx);
+});

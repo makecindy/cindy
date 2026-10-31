@@ -519,3 +519,22 @@ describe('groupWindowEntryOf / laneThreadIdOf', () => {
     expect(entry.text).toBe('');
   });
 });
+
+// Durable history locators must select the largest photo, without preserving protected content.
+describe('history image references', () => {
+  it('records only the largest photo and drops protected message references', () => {
+    const input = {
+      message_id: 42,
+      date: 1,
+      chat: { id: -100, type: 'supergroup' as const },
+      photo: [
+        { file_id: 'small', file_unique_id: 'u1', width: 1, height: 1 },
+        { file_id: 'large', file_unique_id: 'u2', width: 100, height: 100 },
+      ],
+    };
+    expect(groupWindowEntryOf(input).imageRefs).toEqual([
+      { fileId: 'large', name: 'photo.jpg', mimeType: 'image/jpeg' },
+    ]);
+    expect(groupWindowEntryOf({ ...input, has_protected_content: true }).imageRefs).toEqual([]);
+  });
+});

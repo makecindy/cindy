@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { BrowserControlRequest, BrowserControlResult } from '@cindy/browser-control-runtime';
 
-import { BrowserBackendController } from '../controller.js';
+import { BrowserBackendController, resolveBackendProfile } from '../controller.js';
 import { createBrowserProfileLifecycleQueue } from '../../browser-real-profile/runtime-stop.js';
 import type { BackendKind, BrowserBackend } from '../types.js';
 
@@ -283,5 +283,20 @@ describe('BrowserBackendController', () => {
 
     expect(first.probeControl).not.toHaveBeenCalled();
     expect(second.probeControl).toHaveBeenCalledOnce();
+  });
+});
+
+describe('resolveBackendProfile', () => {
+  // Bug regression, unit: with the user's browser active, the MCP layer used to
+  // substitute the managed Chrome profile name for a missing `profile`; the
+  // extension backend matched no connection and every tool reported the
+  // extension as disconnected.
+  it('never substitutes the managed profile for the user browser backend', () => {
+    const managed = vi.fn(() => 'Cindy-real');
+    expect(resolveBackendProfile('user-browser', undefined, managed)).toBeUndefined();
+    expect(resolveBackendProfile('user-browser', 'abc12345', managed)).toBe('abc12345');
+    expect(managed).not.toHaveBeenCalled();
+    expect(resolveBackendProfile('external', undefined, managed)).toBe('Cindy-real');
+    expect(resolveBackendProfile('rsb-webview', 'ignored', managed)).toBe('rsb');
   });
 });

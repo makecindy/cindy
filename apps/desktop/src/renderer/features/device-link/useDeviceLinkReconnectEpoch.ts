@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 /**
  * 为依赖远端一次性快照的页面提供有意义的重试代次。
@@ -24,6 +25,7 @@ export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): numbe
       if (snapshot.online && wasOnline !== true) bump();
     });
     const offStatus = window.electronAPI.deviceLink.onStatusChanged(({ status }) => {
+      if (isSharedTaskPeer(deviceId)) return;
       const previous = relayStatusRef.current;
       relayStatusRef.current = status;
       // Presence from a previous relay connection cannot establish that the

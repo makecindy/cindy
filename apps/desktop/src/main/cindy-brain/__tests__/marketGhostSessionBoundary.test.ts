@@ -119,7 +119,7 @@ describe('market Ghost session boundary', () => {
     expect(leaseBody).not.toContain('isGhostSkillProjectionBoundaryStableForOwner');
   });
 
-  it('captures before async inspection but leases only after Node authorization', () => {
+  it('captures before async inspection but leases only after install consent revalidation', () => {
     const installStart = source.indexOf(
       'export async function installOrUpdateMarketGhostPackage(',
     );
@@ -132,14 +132,18 @@ describe('market Ghost session boundary', () => {
     const captureIndex = body.indexOf(
       'const mutationOwner = captureGhostMutationOwner();',
     );
-    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath)');
+    // PR #7924 adds a stored-release source argument; the owner/consent order is unchanged.
+    const inspectIndex = body.indexOf('await manager.inspect(cindyFilePath,');
+    const consentIndex = body.indexOf('assertGhostInstallConsent(');
     const leaseIndex = body.indexOf(
       'releaseMutation = beginGhostMutation(mutationOwner);',
     );
 
     expect(captureIndex).toBeGreaterThan(-1);
+    expect(inspectIndex).toBeGreaterThan(-1);
     expect(captureIndex).toBeLessThan(inspectIndex);
-    expect(leaseIndex).toBeGreaterThan(inspectIndex);
+    expect(consentIndex).toBeGreaterThan(inspectIndex);
+    expect(leaseIndex).toBeGreaterThan(consentIndex);
     expect(body).toContain('releaseMutation?.();');
   });
 

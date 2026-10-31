@@ -1,3 +1,5 @@
+import { mailReadingColor } from '@cindy/maker-shared/mail-text-edit';
+
 const authoredStyleAttribute = 'data-cindy-mail-authored-style';
 
 function rememberMailPreviewPaint(el: Element, style = el.getAttribute('style')) {
@@ -40,10 +42,7 @@ export function followMailPreviewTheme(doc: Document, host: Document, reading = 
   const paintLinks = () => {
     if (!reading) return;
     for (const link of doc.querySelectorAll<HTMLElement>('a')) {
-      for (const el of [link, ...link.querySelectorAll<HTMLElement>('*')]) {
-        rememberMailPreviewPaint(el);
-        el.style.setProperty('color', 'inherit', 'important');
-      }
+      rememberMailPreviewPaint(link);
       const clickable = Boolean(mailPreviewLinkUrl(link.getAttribute('href')));
       if (!clickable) {
         link.removeAttribute('href');
@@ -76,7 +75,8 @@ export function followMailPreviewTheme(doc: Document, host: Document, reading = 
     const authored = nodes.map(el => {
       const css = doc.defaultView!.getComputedStyle(el);
       return { el, style: el.getAttribute('style'), color: css.color, background: css.backgroundColor,
-        image: css.backgroundImage, border: css.borderTopColor };
+        image: css.backgroundImage, border: css.borderTopColor,
+        borders: [css.borderTopColor, css.borderRightColor, css.borderBottomColor, css.borderLeftColor] };
     });
     const colorInfo = (color: string) => {
       const rgb = color.match(/^rgba?\(([^)]+)\)/)?.[1].split(/[, /]+/).map(Number);
@@ -92,6 +92,17 @@ export function followMailPreviewTheme(doc: Document, host: Document, reading = 
       // style with the clone so neither saving nor cleanup relies on identity.
       rememberMailPreviewPaint(el, entry.style);
       const set = (name: string, value: string) => el.style.setProperty(name, value, 'important');
+      if (reading) {
+        const palette = { surface, text };
+        // Gradients can remain bright even when backgroundColor is transparent.
+        // Remove CSS decoration before making its foreground light, as in compose.
+        if (entry.image && entry.image !== 'none') set('background-image', 'none');
+        set('background-color', mailReadingColor(entry.background, 'background', palette));
+        set('color', mailReadingColor(entry.color, 'text', palette));
+        ['top', 'right', 'bottom', 'left'].forEach((side, index) =>
+          set(`border-${side}-color`, mailReadingColor(entry.borders[index], 'background', palette)));
+        continue;
+      }
       const background = colorInfo(entry.background), foreground = colorInfo(entry.color);
       if (background && background.brightness > 0.25) {
         // Ordinary white/gray mail should share the reading canvas. Mixing

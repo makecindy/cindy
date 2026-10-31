@@ -235,6 +235,32 @@ async function connect(): Promise<void> {
 }
 
 describe('TelegramIM', () => {
+  it('reads a persisted image locator without needing the recent in-memory media pool', async () => {
+    await im.init();
+    await connect();
+    const original = api.call.bind(api);
+    api.call = async (method, params, signal) =>
+      method === 'getFile'
+        ? ({ file_path: 'photos/saved.jpg', file_size: 3 } as never)
+        : original(method, params, signal);
+    const fetcher = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      expect(await im.readGroupHistoryImage('saved-file')).toEqual(Buffer.from([1, 2, 3]));
+      expect(fetcher).toHaveBeenCalledWith(
+        'https://files.local/photos/saved.jpg',
+        expect.anything(),
+      );
+      fetcher.mockImplementationOnce(async () => {
+        await im.dispose();
+        return new Response(new Uint8Array([1]));
+      });
+      expect(await im.readGroupHistoryImage('saved-file')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(['startup', 'poll'])('honors the full rate-limit wait during %s', async (phase) => {
     vi.useFakeTimers();
     ctx.host.secrets.write('telegram-bot-token', '999:saved-token');

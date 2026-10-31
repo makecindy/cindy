@@ -47,8 +47,12 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getResolvedMainLocale } from '../i18n.js';
-import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
+import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.js';
+import {
+  buildUiLanguageErrorNote,
+  turnClassicalStyleFromSendOpts,
+  turnUiLanguageFromSendOpts,
+} from './uiLanguageErrorNote.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
 import {
   excludeDirectoryGrantConflicts,
@@ -295,6 +299,8 @@ type MakerSendOptions = {
   fromMobileClient?: boolean;
   /** Coordinator-stamped interface language. Direct wire values are stripped. */
   uiLanguage?: string;
+  /** Classical output style stamped with uiLanguage. Direct wire values are stripped. */
+  classicalStyle?: string;
   /** Coordinator-transmitted provenance for device-link input.enqueue. */
   fromDeviceLinkClient?: boolean;
   /**
@@ -527,6 +533,8 @@ export interface MakerSendTransactionDeps {
    * 随后本事务按空 session 走 lazy-create,避免 peek 之后对已关闭对象 send。
    */
   prepareUnhealthySession?(sessionId: string): Promise<boolean | void>;
+  /** Retire external ownership before selecting a runtime or applying a route. */
+  prepareExternalInput?(sessionId: string): Promise<void>;
   /** Restore durable task status before route changes or native session resume. */
   restoreArchivedSessionForSend?(sessionId: string): Promise<void>;
   /**
@@ -1138,6 +1146,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       sendOpts,
     ): Promise<DesktopMakerSendResult> {
       if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
+      if (deps.prepareExternalInput) await deps.prepareExternalInput(sessionId);
       const dispatchProductTurn = deps.prepareProductTurn?.(sessionId);
       const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       if (!requestedSendOpts.signal?.aborted) {
@@ -1584,7 +1593,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ? buildCindyMakeTaskNote()
           : null;
       const uiLanguageNote = allowsEnvironmentNotes
-        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()))
+        ? buildUiLanguageErrorNote(turnUiLanguageFromSendOpts(so, getResolvedMainLocale()), {
+            classicalStyle: turnClassicalStyleFromSendOpts(so, getMainClassicalStyle()),
+          })
         : null;
       // 这三段是"环境说明":同一原生上下文里内容没变就不重复发(wireNoteMemory)。交接首条
       // (原生上下文刚重建)整体重发;只有引擎接受后才记为已发送。斜杠命令轮次本来就不带

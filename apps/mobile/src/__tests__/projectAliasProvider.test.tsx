@@ -41,6 +41,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 // Native WebView lifecycle has separate coverage; this suite exercises Provider subscriptions.
 vi.mock('@/device-link/DirectLinkTransport', () => ({ DirectLinkTransport: () => null }));
 vi.mock('expo-updates', () => ({ updateId: null, runtimeVersion: null, isEmbeddedLaunch: true }));
+vi.mock('expo-crypto', () => ({ getRandomBytes: (size: number) => new Uint8Array(size) }));
 vi.mock('@/device-link/rnWebSocket', () => ({ createRnWebSocket: vi.fn() }));
 vi.mock('@/debug/mobileDebugLog', () => ({ mobileDebugLog: vi.fn() }));
 vi.mock('@/debug/visualMock', () => ({ prepareVisualMockDeviceLinkContext: vi.fn() }));
@@ -55,6 +56,7 @@ const transport = vi.hoisted(() => {
     connectNow = vi.fn();
     notifyNetworkChanged = vi.fn();
     getStatus = () => 'online';
+    connectionFor() { return this; }
     hasServerCapability = () => false;
     isOutboundExplicitlyClosed = () => false;
     hasPendingRequestsTo = () => false;
@@ -65,12 +67,16 @@ const transport = vi.hoisted(() => {
     frame: (envelope: Envelope) => void = () => {};
     onFrame(listener: Client['frame']) { this.frame = listener; return () => {}; }
     onReliableFrameBeforeLink = () => () => {};
+    onSeparateCrossAccountStatus = () => () => {};
+    onSeparateCrossAccountIssue = () => () => {};
+    crossAccountConnection() { return this; }
+    connectAllNow(...args: unknown[]) { (this.connectNow as (...input: unknown[]) => void)(...args); }
   }
   return { Client, clients: [] as Client[] };
 });
 vi.mock('@cindy/device-link', async (importOriginal) => ({
   ...await importOriginal<typeof import('@cindy/device-link')>(),
-  DeviceLinkClient: class extends transport.Client {
+  RoutedDeviceLinkClient: class extends transport.Client {
     constructor() { super(); transport.clients.push(this); }
   },
 }));

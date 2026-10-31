@@ -164,6 +164,11 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
       );
     });
   };
+  const handleMouseDown = (event: MouseEvent<HTMLElement>) => {
+    // Shift extends the text selection on mousedown, before click opens the window.
+    // Cancel only that gesture so ordinary text selection and copying still work.
+    if (event.button === 0 && event.shiftKey) event.preventDefault();
+  };
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -222,6 +227,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
           aria-label={visibleMessageLabel}
           title={display}
           onClick={handleClick}
+          onMouseDown={handleMouseDown}
           onAuxClick={(event) => {
             if (event.button === 1) handleClick(event);
           }}
@@ -244,6 +250,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         tooltip={display}
         ariaLabel={display}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onAuxClick={(event) => {
           if (event.button === 1) handleClick(event);
         }}

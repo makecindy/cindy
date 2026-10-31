@@ -91,7 +91,7 @@ const DEFAULTS: BrowserBackendSettings = {
   useRealProfile: false,
 };
 
-const VALID_KINDS: readonly BackendKind[] = ['external', 'rsb-webview'];
+const VALID_KINDS: readonly BackendKind[] = ['external', 'rsb-webview', 'user-browser'];
 
 function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'browser-backend-settings.json');

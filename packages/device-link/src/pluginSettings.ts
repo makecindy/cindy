@@ -1,3 +1,4 @@
+import { isPluginModelSelection, type PluginModelSelection } from './pluginPages.js';
 export const PLUGIN_SETTINGS_ACTION = "settings-page";
 const oauthId = (value: unknown): value is string =>
   typeof value === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
@@ -11,6 +12,7 @@ export type PluginSettingsCommand =
   | { kind: "poll"; after: number }
   | { kind: "confirm"; requestId: string; accepted: boolean }
   | { kind: "answer-directory"; requestId: string; path: string | null }
+  | { kind: "answer-model-picker"; requestId: string; route: PluginModelSelection | null }
   | { kind: "authorize"; path: string; body?: string }
   | { kind: "authorization-result"; requestId: string }
   | { kind: "close" };
@@ -107,6 +109,10 @@ export function parsePluginSettingsRequest(
         exact(["kind", "requestId", "accepted"]) &&
         oauthId(c.requestId) &&
         typeof c.accepted === "boolean";
+      break;
+    case "answer-model-picker":
+      valid = exact(['kind', 'requestId', 'route']) && oauthId(c.requestId) &&
+        (c.route === null || isPluginModelSelection(c.route));
       break;
     case "answer-directory":
       valid =

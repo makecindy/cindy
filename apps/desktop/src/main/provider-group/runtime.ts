@@ -7,6 +7,7 @@
  * 调用方拿到的是固定的门面，每次调用按当前账号转发。
  */
 import type { ProviderView } from '@cindy/model-providers';
+import { createLocalAgentLoadRegistry } from '../local-agent/load.js';
 import { REMOTE_AGENT_CHANNEL, parseRemoteAgentCaps } from '@cindy/device-link';
 import { app } from 'electron';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
@@ -39,9 +40,11 @@ interface OwnerRuntime {
   directory: ProviderGroupDirectory;
   router: ProviderGroupRouter;
   externalLoad: ProviderGroupExternalLoad;
+  applicationLoad: ReturnType<typeof createLocalAgentLoadRegistry>;
 }
 
 let current: OwnerRuntime | null = null;
+let applicationLoadListener: ((sessionId: string) => void) | null = null;
 let isTurnRunning: (sessionId: string) => boolean = () => false;
 let localLoad: (() => Promise<ReadonlyMap<string, number>>) | null = null;
 let sessionGroupReader: ((sessionId: string) => Promise<ProviderGroupSessionGroup>) | null = null;
@@ -129,6 +132,7 @@ function runtimeForActiveOwner(): OwnerRuntime {
     now: () => Date.now(),
   });
   const externalLoad = createProviderGroupExternalLoad({ now: () => Date.now() });
+  const applicationLoad = createLocalAgentLoadRegistry();
   const router = createProviderGroupRouter({
     directory,
     readCaps: async (member) => {
@@ -139,8 +143,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
       return parseRemoteAgentCaps(reply.result);
     },
     readGroup: readProviderGroup,
-    listBindings: listProviderGroupBindings,
-    isTurnRunning: (sessionId) => isTurnRunning(sessionId),
+    listBindings: () => ({ ...listProviderGroupBindings(), ...Object.fromEntries(
+      Object.entries(applicationLoad.bindings()).filter(([, binding]) => !binding.groupDeviceId),
+    ) }),
+    isTurnRunning: (sessionId) => applicationLoad.isTurnRunning(sessionId) || isTurnRunning(sessionId),
     externalRunning: (providerId, memberKey) => externalLoad.running(providerId, memberKey),
     coolingStore: {
       read: readProviderGroupCooling,
@@ -152,7 +158,10 @@ function runtimeForActiveOwner(): OwnerRuntime {
     now: () => Date.now(),
     random: () => Math.random(),
   });
-  current = { owner, directory, router, externalLoad };
+  applicationLoad.subscribe((id) => {
+    if (activeOwnerScopeKey() === owner) applicationLoadListener?.(id);
+  });
+  current = { owner, directory, router, externalLoad, applicationLoad };
   return current;
 }
 
@@ -185,6 +194,16 @@ const routerFacade: ProviderGroupRouter = {
 
 export function getProviderGroupDirectory(): ProviderGroupDirectory {
   return directoryFacade;
+}
+
+/** Capture this registry per owner; old application callbacks must never enter a new account's snapshot. */
+export function getProviderGroupApplicationLoad() {
+  return runtimeForActiveOwner().applicationLoad;
+}
+
+/** IPC registers once; forward only the active owner's subsequent application changes. */
+export function setProviderGroupApplicationLoadListener(listener: (sessionId: string) => void): void {
+  applicationLoadListener = listener;
 }
 
 export function getProviderGroupRouter(): ProviderGroupRouter {

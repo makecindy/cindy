@@ -794,7 +794,7 @@ describe('password fields', () => {
         expect(await h.call(tool, { pid: 1, window_id: 2, element_token: 'w:1', ...extra })).toMatchObject({
           ok: false,
           errorCode: 'SECURE_FIELD',
-          data: { hint: expect.stringContaining('request_input_handoff') },
+          data: { hint: expect.stringContaining('ask_owner') },
         });
         expect(await h.call(tool, { pid: 1, window_id: 2, element_index: 1, snapshot_id: state.snapshot_id, ...extra }))
           .toMatchObject({ errorCode: 'SECURE_FIELD' });

@@ -12,9 +12,8 @@ import {
 import {
   continuableRoundEndId,
   mergeBotGroupMessages,
-  sortBotGroups,
 } from '../botGroupPresentation';
-import type { BotGroupMessageView, BotGroupSummary } from '../../../../shared/botGroupChat';
+import type { BotGroupMessageView } from '../../../../shared/botGroupChat';
 
 const members = [
   { botId: 'mimi', name: '咪咪' },
@@ -24,6 +23,22 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
+  // User decision: Everyone addresses humans; All Teammates is an independent
+  // broadcast. Existing tests cover only one broadcast kind (unit regression).
+  it('keeps human and companion broadcasts separate, including a picked namesake', () => {
+    const input = { members: [...members, { botId: 'namesake', name: '所有伙伴' }],
+      allLabels: ['所有人'], allBotLabels: ['所有伙伴'] };
+    expect(resolveBotGroupMentions('@所有伙伴 看下', input)).toEqual({ all: false, allBots: true, botIds: [] });
+    expect(resolveBotGroupMentions('@所有人 @所有伙伴 @小满 看下', input))
+      .toEqual({ all: true, allBots: true, botIds: ['xiaoman'] });
+    const tracked = [{ botId: 'namesake', label: '所有伙伴', start: 0 }];
+    const draft = '@所有伙伴 看下';
+    const kept = retainBotGroupTrackedMentions(draft, `${draft}！`, { ...input, tracked });
+    expect(resolveBotGroupMentions(`${draft}！`, { ...input, tracked: kept }))
+      .toEqual({ all: false, botIds: ['namesake'] });
+    expect(splitBotGroupRelaySteps('@所有伙伴 出方案，@小满 实现', input)).toBeNull();
+  });
+
   it('re-derives mentions from the text, in the order they were mentioned', () => {
     expect(
       resolveBotGroupMentions('@阿布 看下天气，@小满帮我查余票', { members, allLabels: ['所有人'] }),
@@ -241,32 +256,11 @@ describe('group presentation', () => {
     expect(continuableRoundEndId(messages, { status: 'running', canContinue: true })).toBeNull();
   });
 
-  it('merges pages by sequence and sorts groups by latest activity', () => {
+  it('merges pages by sequence', () => {
     const merged = mergeBotGroupMessages(
       [message({ id: 'a', sequence: 1 }), message({ id: 'b', sequence: 2 })],
       [message({ id: 'b2', sequence: 2 }), message({ id: 'c', sequence: 3 })],
     );
     expect(merged.map((item) => item.id)).toEqual(['a', 'b2', 'c']);
-
-    const group = (id: string, updatedAt: number, lastAt?: number): BotGroupSummary => ({
-      id,
-      name: id,
-      replyMode: 'all',
-      speakingMode: 'auto',
-      members: [],
-      organizerBotId: null,
-      projectDir: null,
-      lastMessage: lastAt ? { authorKind: 'user', authorName: '', preview: '', createdAt: lastAt } : null,
-      speakingBotIds: [],
-      planningBotId: null,
-      openPlan: null,
-      createdAt: 0,
-      updatedAt,
-    });
-    expect(sortBotGroups([group('old', 1), group('new', 1, 9), group('mid', 5)]).map((item) => item.id)).toEqual([
-      'new',
-      'mid',
-      'old',
-    ]);
   });
 });

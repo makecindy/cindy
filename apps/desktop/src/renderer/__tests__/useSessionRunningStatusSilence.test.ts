@@ -13,6 +13,7 @@ import {
 } from '@/lib/silencedSessionDoneStore';
 import { markSessionStarting, resetSessionStartingStoreForTests } from '@/lib/sessionStartingStore';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { noteSessionTurnStartedForAlerts, refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import {
   addSessionAttention,
@@ -104,6 +105,7 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     storeMock.pausedQueueSessions.clear();
     resetSilencedSessionDoneStoreForTests();
     resetSessionStartingStoreForTests();
+    setDataOwnerGeneration(null);
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -640,6 +642,117 @@ describe('useSessionRunningStatus silenced completion handling', () => {
 
     expect(vi.mocked(addSessionAttention)).toHaveBeenCalledWith('s-setup', 'awaiting');
     expect(onSessionNeedsReply).toHaveBeenCalledWith('s-setup');
+  });
+
+  it('does not repeat an already cleared pending reminder after the sidebar remounts', async () => {
+    setDataOwnerGeneration('remount-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    await emitSnapshot(new Map([['s-remount', {
+      ...status(false), hasPendingAskUser: true, pendingRequestKeys: ['ask:request-1'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    first.result.current.clearNotification('s-remount');
+    first.unmount();
+    vi.mocked(addSessionAttention).mockClear();
+
+    setDataOwnerGeneration('remount-owner', 2);
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-remount', 'awaiting');
+  });
+
+  it('alerts on the next handoff step after remount without repeating the current step', async () => {
+    // #3259: a new owner-input step needs a fresh reminder even while pending stays true.
+    setDataOwnerGeneration('handoff-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    const handoffStatus = (step: number, actionable = true): SessionStatusInfo => ({
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: actionable,
+      pendingRequestKeys: [`handoff:same-request:${step}`],
+    });
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledExactlyOnceWith('s-handoff', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+    first.result.current.clearNotification('s-handoff');
+    first.unmount();
+    vi.mocked(addSessionAttention).mockClear();
+
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-handoff', 'awaiting');
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1, false)]]));
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(1)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+
+    // The Host advances stepNumber before publishing a non-actionable finishing card.
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2, false)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(1);
+    expect(addSessionAttention).not.toHaveBeenCalledWith('s-handoff', 'awaiting');
+
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-handoff', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+    expect(addSessionAttention).toHaveBeenCalledWith('s-handoff', 'awaiting');
+    await emitSnapshot(new Map([['s-handoff', handoffStatus(2)]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps generic mobile delivery for a new permission alongside a handoff step', async () => {
+    setDataOwnerGeneration('mixed-handoff-owner');
+    const onSessionNeedsReply = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+
+    await emitSnapshot(new Map([['s-mixed', {
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: true,
+      pendingRequestKeys: ['handoff:same-request:1'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-mixed', { inputHandoff: true, inputHandoffRequestId: 'same-request' });
+
+    await emitSnapshot(new Map([['s-mixed', {
+      ...status(false), hasPendingInputHandoff: true, hasActionableInputHandoff: true,
+      hasPendingPermission: true,
+      pendingRequestKeys: ['handoff:same-request:1', 'permission:new-request'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenLastCalledWith('s-mixed');
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+  });
+
+  it('alerts for a different request while the sidebar is hidden, then again for a new owner', async () => {
+    setDataOwnerGeneration('first-owner');
+    const onSessionNeedsReply = vi.fn();
+    const first = renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-1'],
+    }]]));
+    first.unmount();
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-2'],
+    }]]));
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-2'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(2);
+    await emitSnapshot(new Map([['s-pending', {
+      ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-3'],
+    }]]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(3);
+    await emitSnapshot(new Map([
+      ['s-pending', {
+        ...status(false), hasPendingPermission: true, pendingRequestKeys: ['permission:request-3'],
+      }],
+      ['new-task', {
+        ...status(false), hasPendingAskUser: true, pendingRequestKeys: ['ask:new-task-request'],
+      }],
+    ]));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(4);
+
+    setDataOwnerGeneration('second-owner');
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionNeedsReply }));
+    expect(onSessionNeedsReply).toHaveBeenCalledTimes(6);
   });
 
   it('clears awaiting attention when resolving a card immediately starts a continuation', async () => {

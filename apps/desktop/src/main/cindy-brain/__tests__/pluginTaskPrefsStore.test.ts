@@ -40,20 +40,20 @@ describe('normalizeConfig(单插件配置清洗)', () => {
         model: '',
         effort: 'unknown',
         fastMode: 'yes',
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'unknown',
         workingDir: 42,
       }),
     ).toEqual({});
   });
 
-  it('保留普通任务的 ask 和旧 plan 配置，拒绝完全访问', () => {
+  it('保留用户选择的完全访问与旧权限配置，不自动改变权限', () => {
     expect(__testing.normalizeConfig({ permissionMode: 'plan' })).toEqual({
       permissionMode: 'plan',
     });
     expect(__testing.normalizeConfig({ permissionMode: 'auto' })).toEqual({
       permissionMode: 'auto',
     });
-    expect(__testing.normalizeConfig({ permissionMode: 'bypassPermissions' })).toEqual({});
+    expect(__testing.normalizeConfig({ permissionMode: 'bypassPermissions' })).toEqual({ permissionMode: 'bypassPermissions' });
     expect(__testing.normalizeConfig({ permissionMode: 'ask' })).toEqual({ permissionMode: 'ask' });
   });
 
@@ -117,13 +117,13 @@ describe('validating user task preferences before saving', () => {
     setPluginTaskConfigValidator(validate);
     await expect(validatePluginTaskConfig({ agentKind: 'codex', model: 'selected', providerId: 'removed' }))
       .rejects.toThrow('修复连接');
-    await expect(validatePluginTaskConfig({ permissionMode: 'bypassPermissions' })).rejects.toThrow('permissionMode');
+    await expect(validatePluginTaskConfig({ permissionMode: 'unknown' })).rejects.toThrow('permissionMode');
     expect(validate).toHaveBeenCalledOnce();
   });
   it('lets the user clear a broken model without losing independent permissions or directory', async () => {
     const validate = vi.fn(async () => { throw new Error('model unavailable'); });
     setPluginTaskConfigValidator(validate);
-    await expect(validatePluginTaskConfig({ permissionMode: 'auto', workingDir: '/user-selected' })).resolves.toBeUndefined();
+    await expect(validatePluginTaskConfig({ permissionMode: 'bypassPermissions', workingDir: '/user-selected' })).resolves.toBeUndefined();
     await expect(validatePluginTaskConfig(null)).resolves.toBeUndefined();
     expect(validate).not.toHaveBeenCalled();
   });

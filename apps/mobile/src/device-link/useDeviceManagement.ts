@@ -19,6 +19,24 @@ import { MAX_DEVICE_NAME_LENGTH } from './deviceName';
 
 type ApiFetch = <T>(path: string, options: ApiFetchOptions) => Promise<T>;
 const DEVICE_TIMEOUT_MS = 8_000;
+const REJECTED_DELETE_REFRESH_TIMEOUT_MS = 5_000;
+
+function reconcileListedDevices(incoming: DeviceView[], current: DeviceView[]) {
+  // Prefer home's latest valid identities, falling back to this account's
+  // last successful view. No extra persistent cache is needed.
+  const known = [...current, ...remoteSessionStore.getDeviceIdentity()];
+  const cache = hydrateDeviceIdentityCache({
+    names: Object.fromEntries(
+      known
+        .filter((item) => normalizeDeviceDisplayName(item.name))
+        .map((item) => [item.deviceId, item.name]),
+    ),
+    order: Object.fromEntries(
+      known.map((item, index) => [item.deviceId, index]),
+    ),
+  });
+  return reconcileDeviceIdentities(incoming, cache).devices;
+}
 
 /** The screen is keyed by accountGeneration so a previous account never shares this state. */
 export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
@@ -63,20 +81,7 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
         if (!isCurrent()) return;
         setDevices((current) => {
           if (!isCurrent()) return current;
-          // Prefer home's latest valid identities, falling back to this account's
-          // last successful view. No extra persistent cache is needed.
-          const known = [...current, ...remoteSessionStore.getDeviceIdentity()];
-          const cache = hydrateDeviceIdentityCache({
-            names: Object.fromEntries(
-              known
-                .filter((item) => normalizeDeviceDisplayName(item.name))
-                .map((item) => [item.deviceId, item.name]),
-            ),
-            order: Object.fromEntries(
-              known.map((item, index) => [item.deviceId, index]),
-            ),
-          });
-          return reconcileDeviceIdentities(result.devices, cache).devices;
+          return reconcileListedDevices(result.devices, current);
         });
       })
       .catch((cause) => {
@@ -227,12 +232,47 @@ export function useDeviceManagement(apiFetch: ApiFetch, focused: boolean) {
       setDeleteTarget(null);
       return true;
     } catch (cause) {
-      if (isCurrent())
-        setDeleteError(
-          (cause as { code?: string })?.code === 'ALREADY_EXISTS'
-            ? i18n.t('devices.management.deleteOnline')
-            : formatRemoteError(cause),
+      if (!isCurrent()) return false;
+      if ((cause as { code?: string })?.code !== 'ALREADY_EXISTS') {
+        setDeleteError(formatRemoteError(cause));
+        return false;
+      }
+      // A rejection is not proof that the device is online in the list (#7742).
+      // The editor/saving guards prevent a competing refresh while this runs.
+      let message = i18n.t('devices.management.deleteOnline');
+      try {
+        const result = await apiFetch<{ devices: DeviceView[] }>(
+          '/api/device-link/devices',
+          {
+            baseUrl: DEVICE_LINK_API_BASE_URL,
+            timeoutMs: REJECTED_DELETE_REFRESH_TIMEOUT_MS,
+            cache: 'no-store',
+            assertCurrent: () => {
+              if (!isCurrent()) throw new Error('STALE_DEVICE_MANAGEMENT');
+            },
+          },
         );
+        if (!isCurrent()) return false;
+        const listed = result.devices.find(
+          (item) => item.deviceId === target.deviceId,
+        );
+        setDevices((current) =>
+          isCurrent()
+            ? reconcileListedDevices(result.devices, current)
+            : current,
+        );
+        message = i18n.t(
+          !listed
+            ? 'devices.management.deleteFailed'
+            : listed.online
+              ? 'devices.management.deleteOnline'
+              : 'devices.management.deleteRejectedWhileOffline',
+        );
+      } catch {
+        // Keep the previous list and the existing rejection message on failure
+        // or timeout. Only a confirmed DELETE may clear shared device state.
+      }
+      if (isCurrent()) setDeleteError(message);
       return false;
     } finally {
       if (isCurrent()) {

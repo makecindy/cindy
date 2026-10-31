@@ -1,3 +1,4 @@
+import { isMemberBudgetPaused } from '../../../shared/providerShareBudget';
 /**
  * ErrorMessageCard — 消息流里的静态错误记录卡
  * ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ import {
 import { isStreamInterruptedErrorMessage } from '@/utils/streamInterruptError';
 import { chatRemoteErrorGuidanceKey } from '../../lib/autoReviewUnavailableGuidance';
 import { decodeRemoteErrorMessage, remoteErrorI18nKey } from '../../lib/makerChatStore';
-import { ERROR_REASON_I18N_KEYS } from './errorReasonI18n';
+import { errorReasonI18nKey } from './errorReasonI18n';
 import { getToolLoopI18nKey } from './toolLoopI18n';
 import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
@@ -53,13 +54,13 @@ export function ErrorMessageCard({
   const { t, i18n } = useTranslation();
   const decoded = decodeRemoteErrorMessage(message);
   const parsedRemoteKey = remoteErrorI18nKey(message);
-  const remoteKey = parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
+  const remoteKey = isMemberBudgetPaused(message) ? 'providerShare.memberBudget.paused' : parsedRemoteKey === 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE'
     ? chatRemoteErrorGuidanceKey('AUTO_REVIEW_UNAVAILABLE', sessionSource)
     : parsedRemoteKey;
   const isAttachmentAccessDenied = kind === 'reply-error'
     && remoteKey === 'chat.remoteError.DEVICE_LINK_MEDIA_ACCESS_DENIED';
   const remoteGuidance = remoteKey && i18n.exists(remoteKey) ? t(remoteKey) : undefined;
-  const i18nKey = reason ? ERROR_REASON_I18N_KEYS[reason] : undefined;
+  const i18nKey = errorReasonI18nKey(reason, decoded);
   const isStreamInterrupted = isStreamInterruptedErrorMessage(message, reason);
   const isGatewayProxyTokenInvalid = isCindyGatewayProxyTokenInvalidError({
     reason,
@@ -88,6 +89,7 @@ export function ErrorMessageCard({
   return (
     <ErrorNotice
       key={`${reason ?? ''}:${kind}`}
+      className="p-2"
       message={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedTitle') : text}
       description={isAttachmentAccessDenied ? t('chat.errorBanner.attachmentAccessDeniedRecovery') : undefined}
       details={showRawToggle ? message : undefined}

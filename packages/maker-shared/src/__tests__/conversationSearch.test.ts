@@ -59,6 +59,13 @@ function response(results: ConversationSearchResultItem[]): ConversationSearchRe
 }
 
 describe('remoteConversationSearchRequest', () => {
+  it('filters by explicit project membership while preserving the execution directory', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' }), result('legacy', 2)]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results.map(item => item.session.id)).toEqual(['checkout']);
+    expect(filterResultsByWorkingDirs(page, ['/repo']).results.map(item => item.session.id)).toEqual(['legacy']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(response([page.results[0]!]), ['/project'])).toBe(false);
+    expect(page.results[0]?.session.workingDir).toBe('/tmp/checkout');
+  });
   afterEach(() => { feature.enabled = false; });
 
   it.each([undefined, 1, 3, 24, 50, 100])('uses the bounded remote candidate pool for limit %s', (limit) => {
@@ -181,6 +188,20 @@ describe('filterResultsByWorkingDirs', () => {
       selected: '\\\\Server\\Share\\Repo',
       matching: '//server/share/repo',
       different: '//server/share/other',
+    },
+    // #7644 (unit): remote search must keep worktrees when filtering by their base
+    // project; the earlier case-variant fixtures never varied a container name.
+    {
+      name: 'worktree drive',
+      selected: 'c:/Work/Repo',
+      matching: 'C:/work/repo/.CINDY-WORKTREES/topic',
+      different: 'C:/work/other/.CINDY-WORKTREES/topic',
+    },
+    {
+      name: 'worktree UNC',
+      selected: '//Server/Share/Repo',
+      matching: '//server/share/repo/.CLAUDE/Worktrees/topic',
+      different: '//server/share/other/.CLAUDE/Worktrees/topic',
     },
   ])('keeps Windows $name case variants but drops genuinely different directories', ({ selected, matching, different }) => {
     const page = filterResultsByWorkingDirs(

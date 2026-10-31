@@ -29,6 +29,7 @@ export interface InlineReferenceChipProps {
   tooltipContentClassName?: string;
   selected?: boolean;
   onClick?: MouseEventHandler<HTMLSpanElement>;
+  onMouseDown?: MouseEventHandler<HTMLSpanElement>;
   onAuxClick?: MouseEventHandler<HTMLSpanElement>;
   onContextMenu?: MouseEventHandler<HTMLSpanElement>;
   chipRef?: Ref<HTMLSpanElement>;
@@ -54,6 +55,7 @@ export function InlineReferenceChip({
   tooltipContentClassName,
   selected = false,
   onClick,
+  onMouseDown,
   onAuxClick,
   onContextMenu,
   chipRef,
@@ -104,6 +106,7 @@ export function InlineReferenceChip({
       tabIndex={focusable ? 0 : undefined}
       aria-label={ariaLabel}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       onAuxClick={onAuxClick}
       onContextMenu={onContextMenu}
       onKeyDown={focusable ? handleKeyDown : undefined}

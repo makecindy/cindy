@@ -16,6 +16,11 @@ import type { AgentSkillCommand } from '@cindy/maker-core';
 import { plainTextToTiptapDoc, type BuiltInSkillDraftIntent } from '@/lib/composerDraftStore';
 import { leadingSlashInvocation, rebaseInlineRangesAfterSlashCommandRewrite, rewriteBuiltInSkillDraftForSend } from '@/lib/slashCommands';
 import { deviceDisplayName } from '@/lib/deviceName';
+import { isSharedTaskPeer } from '@cindy/device-link';
+import { controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices } from '@/lib/controlledTaskAgentLocation';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import { DraftDirectoryRecovery, type DraftDirectoryRecoveryContext } from '../draftDirectoryRecovery';
+import { createIpcError } from '../../../../shared/ipc-errors';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -26,12 +31,17 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceI
 const source = ts.createSourceFile('NewMakerDraftRoute.tsx', readFileSync(
   resolve(__dirname, '../NewMakerDraftRoute.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const callbacks: Record<string, ts.Expression> = {};
+const routeDeclarations: string[] = [];
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+    && ['controlledModelRoute', 'deviceLinkRemoteAgentSupported', 'effectiveAgentDeviceId', 'remoteAgentDevices', 'catalogDeviceId'].includes(node.name.text)) {
+    routeDeclarations.push(`const ${node.getText(source)};`);
+  }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text
       : ts.isObjectBindingPattern(node.name) && node.name.elements.some(e => e.name.getText(source) === 'draftInitialEffort')
         ? 'draftInitialSelection' : '';
-    if (['handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftInitialSelection'].includes(name)) {
+    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftInitialSelection'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -50,6 +60,32 @@ function executable(name: string) {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
 }
+
+// #7395: execute the actual route wrapper with its real recovery controller.
+// Other cases inject createSession, so they cannot observe this error handoff.
+// Minimal input: one local create rejected with the picker authorization code.
+// Tier: existing submission/permission integration fixture; no new source scan.
+it('passes the current create failure to directory recovery before returning null', async () => {
+  const context: DraftDirectoryRecoveryContext = {
+    scopeId: 'draft-id', ownerId: 'fixture', ownerGeneration: 1,
+    workingDir: '/virtual/project', writableDirs: ['/virtual/linked'],
+    remoteHostId: null, deviceLinkDeviceId: null, agentDeviceId: null,
+  };
+  const recovery = new DraftDirectoryRecovery(() => context, async () => ({ success: true, path: null }));
+  const error = createIpcError('WRITABLE_DIRECTORY_AUTHORIZATION_REQUIRED', 'Picker proof required');
+  const handled = { current: false };
+  const currentError = { current: null as unknown };
+  const create = runInNewContext(executable('createSession'), {
+    directoryRecoveryRef: { current: recovery }, createSessionErrorRef: currentError,
+    createSessionErrorHandledRef: handled, takeProvisionalDraftTask: async () => null,
+    createSessionRow: async (_args: unknown, onError: (value: unknown) => void) => { onError(error); return null; },
+    log: { warn: vi.fn() },
+  });
+  expect(await create({ id: context.scopeId, workingDir: context.workingDir, writableDirs: [...context.writableDirs] })).toBeNull();
+  expect(currentError.current).toBe(error);
+  expect(handled.current).toBe(true);
+  expect(recovery.getSnapshot()?.phase).toBe('required');
+});
 
 const modelId = 'qwen3:8b';
 const providerId = 'custom:cindy-local-ollama';
@@ -171,7 +207,9 @@ async function submit(options: {
     calibratedDraftModel: selectedModel, chatPrefs, getProviderModelEffort: () => undefined,
     chatInitialProviderId: selectedProviderId, chatInitialPermissionMode: 'default',
     effectiveSourceId: selectedProviderId,
-    sendInFlightRef: { current: false }, effectiveCollab: options.collab ?? { enabled: !!options.worktreeSkillsAfterCollab },
+    sendInFlightRef: { current: false }, directoryRecoveryRef: { current: { isSelecting: () => false } },
+    createSessionErrorHandledRef: { current: false },
+    effectiveCollab: options.collab ?? { enabled: !!options.worktreeSkillsAfterCollab },
     collabPolicy: { enabled: true }, collabPolicyEligible: true,
     usesDeviceCatalog: !!options.agentDeviceId || !!options.deviceId, deviceLinkInitial: null,
     isDeviceLinkDraft: !!options.deviceId, isRemoteProjectDraft: !!options.remoteHostId,
@@ -255,6 +293,29 @@ async function submit(options: {
 }
 
 describe('homepage submission to Main admission and first-message handoff', () => {
+  // #8010 review / unit: execute the route's actual declarations then its submit
+  // callback. Earlier fixtures always gave B a local provider/capability marker.
+  it('offers and submits a routed source when the task host has no local providers', async () => {
+    const devices = [{ deviceId: 'source-a', name: 'A' }];
+    const code = ts.transpileModule(`${routeDeclarations.join('\n')}\n({ remoteAgentDevices, effectiveAgentDeviceId, catalogDeviceId });`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    const derive = (agentDeviceId: string | null, modern = true) => runInNewContext(code, {
+      draft: { agentDeviceId }, effectiveDeviceLinkDeviceId: 'host-b', effectiveRemoteHostId: undefined,
+      deviceLinkHostProviders: [], selectableDevices: [], providerShareDevices: [],
+      useModelRouteDevices: () => ({ catalogHostDeviceId: modern ? 'host-b' : undefined, devices }),
+      useMemo: (read: () => unknown) => read(), isSharedTaskPeer,
+      controlledComputerSupportsRemoteAgent, selectControlledTaskAgentDevices, modelCatalogKey,
+    });
+    expect(derive(null).remoteAgentDevices).toEqual(devices);
+    const selected = derive('source-a');
+    expect(selected.effectiveAgentDeviceId).toBe('source-a');
+    expect(selected.catalogDeviceId).toBe(modelCatalogKey('source-a', 'host-b'));
+    expect(derive(null, false).remoteAgentDevices).toBeUndefined();
+    const result = await submit({ deviceId: 'host-b', agentDeviceId: selected.effectiveAgentDeviceId });
+    expect(result.errors).toEqual([]);
+    expect(result.invokeRemote).toHaveBeenCalledWith('host-b', 'maker:create-session', [expect.objectContaining({ agentDeviceId: 'source-a' })]);
+  });
   // PR #6787, unit: the form stored both computers but the real draft builder
   // dropped the model computer. Existing route tests stubbed that builder. Use
   // the same production callback harness with the actual builder and assert IPC.

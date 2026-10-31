@@ -1,5 +1,6 @@
 import { CatalogDeviceScope, type CatalogDeviceControl } from './useCatalogDevice';
 import { RemotePluginPage } from './RemotePluginPage';
+import { LocalPluginShareView } from './LocalPluginShareView';
 import { PluginVersionFacts } from './PluginVersionFacts';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { rememberContributionIntent, consumeContributionIntent, matchesContributionIntent } from './lib/contributionIntent';
@@ -433,7 +434,17 @@ function readIgnoredRound(storageKey: string): string {
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
 export function GhostPluginPage(props: { embedded?: boolean; active?: boolean; onSelectCatalogTab?: (tab: 'plugins' | 'skills') => void } = {}) {
-  return <CatalogDeviceScope>{(device, online, generation, deviceControl) => device
+  const [searchParams, setSearchParams] = useSearchParams();
+  const snapshotId = searchParams.get('share');
+  const closeShare = (ghost?: InstalledGhost) => {
+    const next = new URLSearchParams(searchParams); next.delete('share');
+    if (ghost) next.set('ghost', installedGhostStoragePart(ghost));
+    setSearchParams(next, { replace: true });
+  };
+  return <CatalogDeviceScope>{(device, online, generation, deviceControl) => snapshotId !== null
+    ? <LocalPluginShareView key={`${generation}:${snapshotId}:${device?.deviceId ?? 'local'}`} snapshotId={snapshotId}
+        deviceControl={deviceControl} onBack={() => closeShare()} onInstalled={closeShare} />
+    : device
     ? <RemotePluginPage key={`${generation}:${device.deviceId}`} device={device} online={online} deviceControl={deviceControl} {...props} />
     : <LocalGhostPluginPage deviceControl={deviceControl} {...props} />}</CatalogDeviceScope>;
 }
@@ -571,7 +582,7 @@ function LocalGhostPluginPage({
   if (contributionView.current.key !== contributionViewKey)
     contributionView.current = { key: contributionViewKey, token: {} };
   // 列表与详情是互斥分支;列表节点会卸载,返回时需显式恢复进入前的滚动位置。
-  const pluginCatalogVisible = marketDetail === null && selectedId === null && !searchParams.has('myPlugins');
+  const pluginCatalogVisible = marketDetail === null && selectedId === null && !searchParams.has('myPlugins') && !searchParams.has('share');
   const {
     listRef: pluginCatalogListRef,
     onListScroll: onPluginCatalogScroll,
@@ -1983,7 +1994,7 @@ function LocalGhostPluginPage({
             {t('settings.ghosts.contribution.myPlugins')}
             {reviewUnread.length > 0 ? (
               <span role="img" className="inline-flex" aria-label={t('settings.ghosts.contribution.unreadReview')}>
-                <AttentionDot tone={reviewUnread.some(item => item.status === 'rejected') ? 'error' : 'done'} />
+                <AttentionDot tone={reviewUnread.some(item => item.status !== 'approved' && item.status !== 'enabled') ? 'error' : 'done'} />
               </span>
             ) : null}
           </Button>

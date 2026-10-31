@@ -100,6 +100,7 @@ import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import hostSystemPrompt from './host-system-prompt.md?raw';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
 import { createLogger } from '../logger.js';
@@ -1440,17 +1441,31 @@ export function buildPiNativeProvidersFromConfigs(
         const explicitRouteApi = explicitRoute
           ? wireProtocolToPiApi(explicitRoute.wireProtocol)
           : undefined;
-        // bundled/official rows may lend protocol-compatible capabilities, but never routing.
+        // Bundled/official rows may lend protocol-compatible capabilities, but never routing.
         // A same-origin URL is not the same endpoint: replacing /proxy/v1 with /v1 can bypass
-        // the user's proxy. Only the model's own explicit route may create a model-level baseUrl.
-        // Exception: Google's official preset keeps /v1beta/openai for discovery, but its native
-        // SDK must call /v1beta. providerBaseUrlForApi only rewrites Google's public endpoints.
+        // the user's proxy. Keep explicit model routes, except for protocol-specific SDK roots:
+        // Google uses /v1beta instead of its discovery /v1beta/openai path, while Anthropic
+        // appends /v1/messages and needs an inherited trailing /v1 removed.
         const nativeGoogleBaseUrl =
           modelApi === 'google-generative-ai' && !m.route?.requestPath && !rt.requestPath
             ? providerBaseUrlForApi(rt.baseUrl, modelApi) : undefined;
+        const inheritedAnthropicBaseUrl = explicitRoute?.baseUrl ?? rt.baseUrl;
+        const nativeAnthropicBaseUrl =
+          authMethod !== 'oauth' &&
+          modelApi === 'anthropic-messages' &&
+          !m.route?.requestPath && !rt.requestPath &&
+          (!m.route || m.route.baseUrl === rt.baseUrl) &&
+          /\/v1\/?$/.test(inheritedAnthropicBaseUrl)
+            ? inheritedAnthropicBaseUrl.replace(/\/v1\/?$/, '')
+            : undefined;
         const modelBaseUrl =
-          m.api && m.route ? m.route.baseUrl :
-          m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl;
+          nativeAnthropicBaseUrl ??
+          (m.api && m.route ? m.route.baseUrl :
+            m.route && explicitRouteApi === modelApi ? explicitRoute?.baseUrl : nativeGoogleBaseUrl);
+        // Model-level defaults follow the final endpoint. Putting them on the
+        // provider would leak them to a model routed to a different service.
+        const modelHeaders = authMethod === 'oauth' ? bundledModel?.headers
+          : withProviderAppAttribution(modelBaseUrl ?? rt.baseUrl, headers, bundledModel?.headers);
         const spec = {
           id: m.id,
           ...(m.selectedInterface ? { wireId: m.selectedInterface.wireModelId } : {}),
@@ -1495,7 +1510,7 @@ export function buildPiNativeProvidersFromConfigs(
               : {}),
           ...(resolved?.cost ? { cost: catalogCostForPiNative(resolved.cost) }
             : bundledModel?.cost ? { cost: { ...bundledModel.cost } } : {}),
-          ...(bundledModel?.headers ? { headers: { ...bundledModel.headers } } : {}),
+          ...(modelHeaders && Object.keys(modelHeaders).length > 0 ? { headers: modelHeaders } : {}),
           ...(bundledModel?.compat
             ? { compat: structuredClone(bundledModel.compat) }
             : !bundledModel && modelApi === 'openai-completions'
@@ -1956,8 +1971,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   return new PiAgent({
     resolveSessionEnvironment: resolveCompanionRuntimeEnvironment,
     getDisabledSkillPaths: readDisabledSkillPaths,
-    // 上游拒收可选请求字段（如 prompt_cache_retention / prompt_cache_key）后学到的 per-model
-    // compat 修正，写 models.json 时合并；只改 compat，不动路由与凭证。
+    // 执行端动态学习；SSH 独立存储，避免把本机线路结论带到远端。
+    resolvePiNativeCompatStorePath: remoteHostId => remoteHostId
+      ? '$HOME/.xdt-server/v1/pi-agent-home/pi-native-compat-overrides.json'
+      : path.join(app.getPath('userData'), 'pi-native-compat-overrides.json'),
     resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
       readPiNativeCompatOverride(providerId, modelId, routeKey),
     getManagedSkills: listCindyManagedSkills,

@@ -10,6 +10,7 @@ import {
   clearDraft,
   clearDraftAndNotify,
   discardDraft,
+  discardDraftTree,
   draftHasContent,
   getAllDraftAttachmentUrls,
   getDraft,
@@ -23,6 +24,7 @@ import {
   saveDraft,
   saveComposerTextAfterAsyncTransition,
   setComposerDraftOwner,
+  setBotGroupThreadAttachmentUrls,
   setRemoteOptimisticAttachmentUrls,
   subscribeDraft,
   subscribeDraftPresence,
@@ -225,6 +227,7 @@ describe('owner isolation', () => {
     const commentUrl = 'cindy-media://blobs/comment.png';
     const commentSourceUrl = 'cindy-media://blobs/comment-source.png';
     const pendingUrl = 'cindy-media://blobs/pending.png';
+    const threadUrl = 'cindy-media://blobs/held-thread.png';
     const reportDraftUrls = vi.fn();
     const previousWindow = globalThis.window;
     Object.defineProperty(globalThis, 'window', {
@@ -257,10 +260,11 @@ describe('owner isolation', () => {
         }),
       );
       setRemoteOptimisticAttachmentUrls([pendingUrl, pendingUrl]);
+      setBotGroupThreadAttachmentUrls([threadUrl]);
 
       const expectedUrls = [pendingUrl, sharedUrl, sharedSourceUrl, commentUrl, commentSourceUrl];
-      expect(getAllDraftAttachmentUrls().sort()).toEqual(expectedUrls.sort());
-      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
+      expect(getAllDraftAttachmentUrls().sort()).toEqual([...expectedUrls, threadUrl].sort());
+      expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining([...expectedUrls, threadUrl]));
 
       setComposerDraftOwner('owner-b');
       saveDraft(otherOwnerKey, draft({ text: textDoc }));
@@ -268,6 +272,7 @@ describe('owner isolation', () => {
       expect(reportDraftUrls).toHaveBeenLastCalledWith(expect.arrayContaining(expectedUrls));
     } finally {
       setRemoteOptimisticAttachmentUrls([]);
+      setBotGroupThreadAttachmentUrls([]);
       setComposerDraftOwner('owner-b');
       clearDraft(otherOwnerKey);
       setComposerDraftOwner('owner-a');
@@ -286,6 +291,42 @@ describe('owner isolation', () => {
 });
 
 describe('draft discard lifecycle', () => {
+  // #8084: group deletion must release thread media and fence an unfinished first picker,
+  // while keeping similarly named groups and other owners. Unit: real draft store boundary.
+  it('discards a group draft tree without touching a sibling scope or another owner', () => {
+    const root = 'bot-group:discard-tree';
+    const child = `${root}:thread:root`;
+    const pending = `${root}:thread:empty-picker`;
+    const sibling = `${root}-other:thread:root`;
+    const url = 'cindy-media://blobs/discarded-thread.png';
+    setComposerDraftOwner('tree-owner-a');
+    saveDraft(root, draft({ text: textDoc }));
+    saveDraft(child, draft({ attachments: [{ ...attachment('tree-photo'), url }] }));
+    saveDraft(sibling, draft({ text: textDoc }));
+    const childToken = captureDraftDiscardToken(child);
+    const pendingToken = captureDraftDiscardToken(pending);
+    setComposerDraftOwner('tree-owner-b');
+    saveDraft(child, draft({ text: textDoc }));
+    setComposerDraftOwner('tree-owner-a');
+    try {
+      discardDraftTree(root);
+      expect(getDraft(root)).toBeUndefined();
+      expect(getDraft(child)).toBeUndefined();
+      expect(isDraftDiscardTokenCurrent(childToken)).toBe(false);
+      expect(isDraftDiscardTokenCurrent(pendingToken)).toBe(false);
+      expect(getAllDraftAttachmentUrls()).not.toContain(url);
+      expect(getDraft(sibling)?.text).toEqual(textDoc);
+      setComposerDraftOwner('tree-owner-b');
+      expect(getDraft(child)?.text).toEqual(textDoc);
+    } finally {
+      clearDraft(child);
+      setComposerDraftOwner('tree-owner-a');
+      discardDraftTree(root);
+      clearDraft(sibling);
+      setComposerDraftOwner(null);
+    }
+  });
+
   it('invalidates async work only for explicit discard and not an ordinary clear', () => {
     const key = 'session-draft-discard-generation';
     const beforeClear = captureDraftDiscardToken(key);

@@ -1,0 +1,6 @@
+{
+  "requestTimeout": "La requête a expiré. Réessayez plus tard.",
+  "networkUnavailable": "Connexion réseau indisponible. Vérifiez votre connexion et réessayez.{{webHint}}",
+  "networkUnavailableWebHint": " L'aperçu web est peut-être bloqué par la politique CORS du navigateur ; testez avec Expo Go ou un simulateur.",
+  "requestFailed": "La requête n'a pas abouti. Réessayez dans un instant."
+}

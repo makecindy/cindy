@@ -20,6 +20,9 @@ AI 会照做。直接声明工具时,工具/参数 description 是单工具局�
 当前类别内、随实时工具集合与参数变化的规则走 §3.5 的类目 RULES。多工具或跨类别的完整
 工作流与长期稳定共同原则走 §3.6 的 Manual。都不要塞进 `whenToUse`,也不要重复维护。
 
+交互页面工具返回 {content, structuredContent, _meta}：content 和 structuredContent 对 AI 可见，
+根 _meta 只给页面。模型/页面可见性及示例见[§4.23](plugin-interactive-pages.md)。
+
 ### 3.1 @ 插件入口
 
 Composer 的 `@` 面板只展示已安装且可用的插件入口；插件作者无需声明资源搜索字段。

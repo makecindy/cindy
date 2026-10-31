@@ -94,6 +94,9 @@ describe('provider share link admission', () => {
 describe('provider share invoke', () => {
   it('allows only the remote agent and the filtered provider list', async () => {
     state.access = ACCESS;
+    // #8010: a shared provider must not expose its owner's other model sources.
+    await expect(runInvoke(GUEST, { channel: 'maker:model-catalog:read', args: [{ op: 'locations' }] }))
+      .resolves.toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
     const handle = vi.fn(async () => ({ ok: true }));
     setRemoteAgentHandler({ handle, abortAll: vi.fn() });
     await expect(runInvoke(GUEST, { channel: 'local-db:sessions:list', args: [] }))

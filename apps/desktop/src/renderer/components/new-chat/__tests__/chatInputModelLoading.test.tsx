@@ -620,6 +620,61 @@ function companionProps() {
   return { ...props, deviceLinkDeviceId: null, initialModel: 'fixture-chat', initialProviderId: 'openai' };
 }
 
+// Unit regression for the 2026-10-29 coexistence rule: an empty companion
+// editor with a ready recommendation must still offer a call. Existing tests
+// cover drafts and recommendations separately, not this combined state.
+it.each(['click', 'Tab', 'Enter'] as const)('keeps a recommendation alongside the call action and accepts it with %s', async (accept) => {
+  const onSend = vi.fn().mockResolvedValue(true);
+  const onStartVoiceConversation = vi.fn();
+  const inputProps = { ...companionProps(), sessionId: 'queue-shortcut', onSend, onStartVoiceConversation };
+  const view = render(<ChatInput {...inputProps} />);
+  await act(async () => { h.editor!.commands.clearContent(); });
+  // jsdom has no Range geometry; real selection scrolling is covered by the Electron fixture.
+  h.editor!.view.setProps({ handleScrollToSelection: () => true });
+  vi.spyOn(makerChatStore, 'getPromptRecommendationCompletionStatus').mockReturnValue({
+    turnStoppedByUser: false, hasTerminalError: false, sideTask: false,
+    hasBackgroundAgentWork: false, hasAutoDrainingQueue: false,
+  });
+  const prompt = 'Continue with the recommendation';
+  await act(async () => {
+    promptRecommendations.applyRunningSnapshot(new Map([['queue-shortcut', { isRunning: true }]]));
+    promptRecommendations.noteTurnEnded('queue-shortcut', 200);
+    promptRecommendations.applyRunningSnapshot(new Map());
+    promptRecommendations.settleCompletion('queue-shortcut');
+    const seq = beginPromptRecommendationPrediction('queue-shortcut', 200)!;
+    resolvePromptRecommendationPrediction('queue-shortcut', 200, seq, prompt);
+  });
+  expect(screen.getByText(prompt)).toBeTruthy();
+  const call = screen.getByRole('button', { name: 'bots.voiceMode.startConversation' });
+  fireEvent.click(call);
+  expect(onStartVoiceConversation).toHaveBeenCalledOnce();
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.editor!.getText()).toBe('');
+
+  view.rerender(<ChatInput {...inputProps} voiceConversationActive />);
+  expect(screen.queryByText(prompt)).toBeNull();
+  view.rerender(<ChatInput {...inputProps} />);
+  expect(screen.getByText(prompt)).toBeTruthy();
+  await act(async () => {
+    if (accept === 'click') {
+      fireEvent.click(screen.getByRole('button', { name: `newChat.chatInput.recommendationShortcut: ${prompt}` }));
+    } else {
+      h.editor!.view.dom.focus();
+      fireEvent.keyDown(h.editor!.view.dom, { key: accept, code: accept });
+    }
+  });
+  if (accept !== 'Enter') {
+    expect(h.editor!.getText()).toBe(prompt);
+    expect(screen.queryByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeNull();
+    expect(onSend).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'newChat.sendButton.send' })); });
+  }
+  expect(onSend).toHaveBeenCalledOnce();
+  expect(onSend.mock.calls[0][0]).toBe(prompt);
+  expect(onStartVoiceConversation).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'bots.voiceMode.startConversation' })).toBeTruthy();
+});
+
 it('switches one companion action between call and send, retaining focus and dispatching the draft once', async () => {
   const onSend = vi.fn().mockResolvedValue(true);
   const onStartVoiceConversation = vi.fn();

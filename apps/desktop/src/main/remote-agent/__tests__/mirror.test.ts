@@ -3,16 +3,19 @@
  * (Claude Code 的 ~/.claude、Codex 的 CODEX_HOME)随任务同步到那台；那台给出的影子路径逐级
  * 映射回你这台的真实路径。
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
+import { LOCAL_AGENT_CLIENT, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
+import { providerShareGuestPeer } from '@cindy/device-link';
+import { createProviderShareUsageStore } from '../../device-link/providerShareUsageStore';
 
 import {
   collectAncestorInstructionFiles,
@@ -24,7 +27,7 @@ import {
 import { shadowAliases, startRemoteAgentSession } from '../controller/startRemote';
 import { EXEC_SERVER_NOT_FOUND_CODE } from '../host/execServerShortcut';
 import { createRemoteAgentHost, mirrorSegments, type HostedStartInput } from '../host/runHost';
-import { hostedStartOptions } from '../host/service';
+import { createProviderShareMemberPurger, hostedStartOptions } from '../host/service';
 import { ExecutorWorkspace } from '../executor/workspace';
 import { MAX_ANCESTOR_LEVELS } from '../wire';
 
@@ -44,6 +47,103 @@ function write(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
+
+// Unit tier: real membership ledger, host cleanup adapter and disk index. Controlled
+// legacy purge models its documented best-effort failure, which previously let a
+// reapproved member revive old native IDs / pending relay tombstones after restart.
+describe('reapproved member cleanup admission', () => {
+  it('cannot fork an old native session after a reused member ID is admitted again', async () => {
+    const ledger = path.join(root, 'usage.json');
+    let usage = createProviderShareUsageStore(ledger);
+    const controller = providerShareGuestPeer('s', 'm', 'G');
+    const identity = { ownerScope: 'owner', ownerDeviceId: 'O', shareId: 's', memberId: 'm' };
+    let joinedAt = 'g1';
+    const snapshot = () => [{ shareId: 's', members: [{ memberId: 'm', joinedAt }] }];
+    const forkHosted = vi.fn(async () => ({ newSdkSessionId: 'native-child', uuidMap: new Map() }));
+    const makeHost = () => createRemoteAgentHost({
+      isAgentAvailable: () => true, startHosted: async (input) => idleHandle(input), forkHosted,
+      isControllerAuthorized: () => usage.memberGenerationReady(identity, joinedAt), controllerTrust: () => 'guest',
+      providerAccess: { resolve: async () => 'shared', isAllowed: () => true },
+      bindGuestProviderRoute: async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release() {} }),
+      purgeHostedTranscripts: async () => undefined,
+      captureOwner: () => 'owner', isOwnerCurrent: () => true, runsRoot: path.join(root, 'remote-agent'),
+    });
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot());
+    let current = makeHost();
+    const fork = { op: 'fork', sourceSessionId: 'task-1', newSessionId: 'task-2', agentKind: 'claude-code',
+      sourceSdkSessionId: 'sdk-1', model: 'claude-opus', upToMessageId: 'message-1' };
+    try {
+      const runId = randomUUID();
+      await current.handle(controller, { op: 'open', runId, agentKind: 'claude-code', payload: { json: {
+        sessionId: 'task-1', virtualWorkspace: true, options: { model: 'claude-opus' },
+        workspace: { workingDir: '/guest/project', platform: 'darwin', shell: 'zsh' },
+        projectFiles: [], ancestorFiles: [], personal: { files: [] }, mcpServers: [],
+      } } });
+      await vi.waitFor(() => expect(fs.readFileSync(path.join(root, 'remote-agent', 'guest-sessions.json'), 'utf8')).toContain('sdk-1'));
+      await expect(current.handle(controller, fork)).resolves.toMatchObject({ newSdkSessionId: 'native-child' });
+      await current.handle(controller, { op: 'close', runId, mode: 'close', reason: 'navigation' });
+      current.dispose();
+      usage = createProviderShareUsageStore(ledger);
+      joinedAt = 'g2';
+      await usage.reconcileMemberGenerations('owner', 'O', snapshot());
+      current = makeHost();
+      await expect(current.handle(controller, fork)).rejects.toThrow();
+      const purge = createProviderShareMemberPurger({ userDataDir: root, usage, current,
+        ownerScope: () => 'owner', ownerDeviceId: () => 'O', isCurrent: () => true,
+        hasAccess: () => usage.memberGenerationReady(identity, joinedAt) });
+      await purge(() => true);
+      expect(usage.memberGenerationReady(identity, joinedAt)).toBe(true);
+      await expect(current.handle(controller, fork)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      expect(forkHosted).toHaveBeenCalledTimes(1);
+    } finally { current.dispose(); }
+  });
+
+  it('waits for legacy relay forgets and preserves directory cleanup receipts after an index deletion failure', async () => {
+    const ledger = path.join(root, 'usage.json');
+    let usage = createProviderShareUsageStore(ledger);
+    const controller = providerShareGuestPeer('s', 'm', 'G');
+    const index = path.join(root, 'remote-agent', 'guest-sessions.json');
+    const home = path.join(root, 'remote-agent', 'guest-homes', createHash('sha256').update(controller).digest('hex').slice(0, 16));
+    const member = { ownerScope: 'owner', ownerDeviceId: 'O', shareId: 's', memberId: 'm' };
+    const snapshot = (joinedAt: string) => [{ shareId: 's', members: [{ memberId: 'm', joinedAt }] }];
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot('g1'));
+    write(index, JSON.stringify({ old: { controller, nativeIds: ['old-native'], hostSessionIds: ['old-task'], relayDevices: ['M'] } }));
+    write(path.join(home, 'native-history'), 'private g1 data');
+    usage = createProviderShareUsageStore(ledger);
+    await usage.reconcileMemberGenerations('owner', 'O', snapshot('g2'));
+    const purgeControllers = vi.fn(async (match: (peer: string) => boolean) => {
+      expect(match(controller)).toBe(true);
+      write(index, JSON.stringify({ old: { controller, nativeIds: [], forgetPending: ['M'] } }));
+    });
+    const makePurger = () => createProviderShareMemberPurger({ userDataDir: root, usage,
+      current: { purgeControllers, activeControllers: () => [] }, ownerScope: () => 'owner', ownerDeviceId: () => 'O',
+      isCurrent: () => true, hasAccess: () => usage.memberGenerationReady(member, 'g2') });
+    await expect(makePurger()(() => true)).rejects.toThrow('legacy history cleanup is still pending');
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(false);
+    // A pending relay forget must not be converted back to a live relayDevices entry.
+    expect(JSON.parse(fs.readFileSync(index, 'utf8')).old.forgetPending).toEqual(['M']);
+    write(path.join(home, 'native-history'), 'failed legacy directory deletion');
+    purgeControllers.mockImplementation(async () => { fs.rmSync(index); });
+    const originalRm = fsp.rm.bind(fsp);
+    const rm = vi.spyOn(fsp, 'rm').mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(home)) throw new Error('guest home busy');
+      await originalRm(target, options);
+    });
+    await expect(makePurger()(() => true)).rejects.toThrow('guest home busy');
+    rm.mockRestore();
+    usage = createProviderShareUsageStore(ledger);
+    expect(usage.listPendingMemberCleanup('owner', 'O')[0]?.cleanupScopes).toContainEqual({ controller });
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(false);
+    purgeControllers.mockImplementation(async () => undefined);
+    await makePurger()(() => true);
+    expect(fs.existsSync(home)).toBe(false);
+    expect(fs.existsSync(index)).toBe(false);
+    expect(usage.memberGenerationReady(member, 'g2')).toBe(true);
+    const purger = makePurger();
+    purgeControllers.mockImplementation(async (match) => { expect(match(controller)).toBe(false); });
+    await purger(() => true); // delayed duplicate must not delete a new g2 task
+  });
+});
 
 describe('mirrorSegments', () => {
   it('keeps each path level and replaces names the other computer cannot store', () => {
@@ -499,6 +599,14 @@ describe('shadow on the other computer', () => {
     expect(input.workspace.homeDir).toBe(os.homedir());
     expect(input.options.userPrompt).toBe(`Please inspect ${path.join(input.shadowDir, 'src', 'index.ts')}.`);
     const opts = hostedStartOptions(input);
+    const application = hostedStartOptions({ ...input,
+      options: { ...input.options, localApplication: { mcpName: 'hhh', hostToolsOnly: true, storageKey: 'a'.repeat(64) } },
+      localApplicationStorage: path.join(root, 'app-runtime'), mcpServers: ['hhh'],
+    });
+    expect(application[LOCAL_AGENT_CLIENT]).toEqual({ url: `${input.tunnel.url}/mcp/hhh`, token: input.tunnel.token,
+      mcpName: 'hhh', hostToolsOnly: true, storageDirectory: path.join(root, 'app-runtime') });
+    expect(application.deviceHosted?.tunnelUrl).toBe(input.tunnel.url);
+    expect(() => hostedStartOptions({ ...input, options: { ...input.options, localApplication: { mcpName: 'hhh', hostToolsOnly: true, storageKey: 'a'.repeat(64) } } })).toThrow('REMOTE_AGENT_INVALID');
     expect(opts.deviceHosted?.workingDir).toBe(input.shadowDir);
     expect(opts.deviceHosted?.pathPlatform).toBe(process.platform);
     expect(opts.deviceHosted?.homeDir).toBeUndefined();

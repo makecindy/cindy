@@ -1827,7 +1827,7 @@ describe('remote sessions share the same permission semantics', () => {
           'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
       },
       {
-        toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async',
+        toolNamePrefix: 'mcp__cindy_helper__ask_owner',
         sourceServerId: 'cindy_helper',
         invocation: 'root-only',
         denialMessage:
@@ -1944,7 +1944,7 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(remote.remoteStartParams?.toolGuards).toHaveLength(3);
     expect(remote.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
     }));
     await expect(
       remote.onApprovalRequest({
@@ -2029,7 +2029,7 @@ describe('remote sessions share the same permission semantics', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(failed.remoteStartParams?.toolGuards).toHaveLength(3);
     expect(failed.remoteStartParams?.toolGuards).toContainEqual(expect.objectContaining({
-      toolNamePrefix: 'mcp__cindy_helper__ask_user_question_async', invocation: 'root-only',
+      toolNamePrefix: 'mcp__cindy_helper__ask_owner', invocation: 'root-only',
     }));
     await expect(
       failed.onApprovalRequest({

@@ -10,12 +10,17 @@ import { getPluginMarketService } from '../plugin-market/service.js';
 import { resolveHelperSurface } from './helperSurface.js';
 import { createProject } from './createProject.js';
 import { createMoveSession } from './moveSession.js';
-import { listProjects, renameProject, removeProject } from './projectManagement.js';
-import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { sessionImportCallbacks } from '../session-import/agentTools.js';
+import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from './projectManagement.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
-import { routineTools } from '../routines/service.js';
+import { getRoutineEngine, routineTools } from '../routines/service.js';
+import { taskActionRoutineRevision } from '../maker-ipc/taskActionAuthorization.js';
 import { join as pathJoin } from 'node:path';
-import { and, eq, inArray } from 'drizzle-orm';
+import { homedir } from 'node:os';
+import { app } from 'electron';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import {
   createLiziMcpProviders,
@@ -28,6 +33,7 @@ import {
   type SshHostSnapshotLike,
 } from '@cindy/mcps';
 import type { OrcaMcpDeps } from '@cindy/mcps';
+import type { Schedule } from '@cindy/maker-scheduler';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
 import {
@@ -38,6 +44,7 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { compressInlineImage } from './inlineImageCompressor.js';
 import { createTelegramBotMcpServer } from './telegramBotMcpServer.js';
 import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
@@ -64,10 +71,11 @@ import {
   tryGetBotDirectMessageService,
   tryGetOrcaCollabService,
   isSessionInTurn,
-  getSessionInputProvenance,
   getTaskActionInputState,
   getTaskActionSession,
   confirmTaskAction,
+  requestMcpSetupForSession,
+  captureTaskActionPermissionRequest,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
@@ -78,6 +86,7 @@ import {
 } from '../localDb/chatHistoryReader.js';
 import {
   isDbClientNotReadyError,
+  getDbClient,
   tryGetDbClient,
 } from '../localDb/client/current.js';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch.js';
@@ -87,7 +96,6 @@ import {
   saveBotSkillForSession,
 } from '../maker-ipc/botSkillService.js';
 import {
-  canBotContinueWorkbenchTask,
   captureBotCreatedTaskResponsibility,
   runBotWorkbenchTool,
   runBotProjectsTool,
@@ -97,7 +105,7 @@ import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps, createRemoteWorkbenchMessageReader } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
-import { assertTaskActionCurrent } from '../maker-ipc/taskActionAuthorization.js';
+import { assertTaskActionCurrent, taskActionScheduleGuard } from '../maker-ipc/taskActionAuthorization.js';
 import {
   getSessionRowSnapshot,
   patchSessionMetaInDb,
@@ -106,6 +114,7 @@ import {
 } from '../localDb/ipc/sessions.js';
 import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
+import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
@@ -202,6 +211,22 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
   );
   const { pluginRegistry } = deps;
+  // 代输入 gates shared by window and picture handoffs: a current local task,
+  // the service, and the teammate switch (unknown policy fails closed).
+  const admitInputHandoff = async (context: { sessionId?: string; sessionInstanceId?: string }) => {
+    if (!context.sessionId || !deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId))
+      return { ok: false as const, errorCode: 'NO_SESSION_CONTEXT', message: 'This task is no longer current.' };
+    const service = getInputHandoffService();
+    if (!service) return { ok: false as const, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: 'Input handoff is not ready yet.' };
+    if (await isInputHandoffDisabledForSession(context.sessionId).catch(() => true))
+      return {
+        ok: false as const,
+        errorCode: 'DISABLED_BY_OWNER',
+        message: 'The owner turned off input handoff for this teammate. Tell the owner what is still needed instead.',
+      };
+    const row = await getSessionRowSnapshot(context.sessionId).catch(() => null);
+    return { ok: true as const, service, sessionId: context.sessionId, requester: row?.title?.trim().slice(0, 120) };
+  };
   let redactSshText: ((snapshot: SshHostSnapshotLike, text: string) => string) | undefined;
   const loadRemoteSsh = async () => {
     const remoteSsh = await import('../remote-ssh/index.js');
@@ -307,12 +332,131 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     },
   }));
 
+  const remoteSessionId = (sessionId: string, device?: string): string => {
+    if (!device || device === 'local') return sessionId;
+    const separator = sessionId.indexOf('::');
+    if (separator < 0) return sessionId;
+    const prefix = sessionId.slice(0, separator);
+    const localId = sessionId.slice(separator + 2);
+    return prefix === device && localId ? localId : sessionId;
+  };
+
+  // Share the installer's directory resolver with its reviewed target snapshot.
+  // A remote target must be read from that computer; resolving its session id
+  // against this Mac would approve the wrong cwd.
+  const resolveHookSessionWorkDir = async (sessionId: string, device?: string) => {
+    if (device && device !== 'local') {
+      if (!deps.historyRemote) throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+      let assertAccess: (() => void) | undefined;
+      try {
+        assertAccess = deps.historyRemote.captureAccess();
+        const response = await deps.invokeRemote(
+          device,
+          'local-db:sessions:get',
+          [remoteSessionId(sessionId, device)],
+          { preSend: assertAccess },
+        );
+        assertAccess();
+        if (!response.ok) {
+          const code = response.error && typeof response.error === 'object' && 'code' in response.error
+            ? String((response.error as { code?: unknown }).code ?? '') : '';
+          if (code === 'NOT_FOUND') return undefined;
+          throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+        }
+        const row = response.result && typeof response.result === 'object' && !Array.isArray(response.result)
+          ? response.result as { workingDir?: unknown }
+          : null;
+        return typeof row?.workingDir === 'string' && row.workingDir.trim() ? row.workingDir : undefined;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'SCHEDULE_DEFINITION_UNAVAILABLE') throw error;
+        throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+      }
+    }
+    try {
+      const { getMaker } = await import('../maker-host/index.js');
+      const meta = await getMaker().getSessionMeta(sessionId);
+      return meta?.workDir?.trim() ? meta.workDir : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const authorizeTaskToolCall = createTaskToolCallAuthorizer({
     getDb: () => (isAppSessionBoundaryPending() ? null : tryGetDbClient()),
     isScopeCurrent: (db) => !isAppSessionBoundaryPending() && db === tryGetDbClient(),
     authorizeAction: createDesktopTaskActionAuthorizer({
       input: getTaskActionInputState, getSession: getTaskActionSession, confirm: confirmTaskAction,
-      isEntrustedTask: canBotContinueWorkbenchTask,
+      capturePermissionRequest: captureTaskActionPermissionRequest,
+      getSessionWorkDir: resolveHookSessionWorkDir,
+      getScheduleDefinition: async (id, hookInstallation, device) => {
+        let schedule: Schedule | null;
+        if (device && device !== 'local') {
+          if (!deps.historyRemote) throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+          let assertAccess: (() => void) | undefined;
+          try {
+            assertAccess = deps.historyRemote.captureAccess();
+            const response = await deps.invokeRemote(device, 'maker:schedule:get', [id], { preSend: assertAccess });
+            assertAccess();
+            if (!response.ok) {
+              const code = response.error && typeof response.error === 'object' && 'code' in response.error
+                ? String((response.error as { code?: unknown }).code ?? '') : '';
+              if (code === 'NOT_FOUND') return null;
+              throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+            }
+            schedule = response.result as Schedule | null;
+          } catch {
+            throw new Error('SCHEDULE_DEFINITION_UNAVAILABLE');
+          }
+        } else {
+          schedule = await getScheduler().get(id);
+        }
+        if (!schedule) return null;
+        const { name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId } = schedule;
+        const preRunWorkingDir = preRunHook?.command?.trim()
+          ? (targetSessionId ? await resolveHookSessionWorkDir(targetSessionId, device) : undefined) ?? workingDir
+          : undefined;
+        const mutationGuard = preRunWorkingDir?.trim()
+          ? { ...schedule, effectiveWorkingDir: preRunWorkingDir }
+          : schedule;
+        const definition = { id, name, prompt, persistentSession, useWorktree, executionMode, scriptConfig, preRunHook, workingDir, targetSessionId,
+          mutationGuard,
+          ...(preRunHook?.command?.trim() ? { preRunWorkingDir: preRunWorkingDir?.trim() ? preRunWorkingDir : homedir() } : {}) };
+        if (!hookInstallation) return definition;
+        let installWorkingDir = hookInstallation.workingDir;
+        if (!installWorkingDir && executionMode !== 'script' && targetSessionId)
+          installWorkingDir = await resolveHookSessionWorkDir(targetSessionId, device) ?? installWorkingDir;
+        return { ...definition, hookInstallation: { workingDir: installWorkingDir ?? workingDir,
+          fallbackDir: pathJoin(app.getPath('userData'), 'schedule-hooks') } };
+      },
+      captureRoutine: async (botId, id, forExecution) => {
+        const engine = await getRoutineEngine();
+        const routine = (await routineTools.list(botId)).find(row => row.id === id);
+        if (!routine) return undefined;
+        let execution: { targetSessionId: string | null; workingDir: string } | undefined;
+        if (forExecution && routine.preRunHook?.command?.trim()) {
+          // Match ensureBotOwnedLaneSession's read-only lookup. Fresh runs always
+          // create a lane in Home; persistent runs retain their existing meta cwd.
+          const [lane] = routine.sessionMode === 'fresh' ? [] : await getDbClient().drizzle
+            .select({ sessionId: botSessionLinks.sessionId }).from(botSessionLinks)
+            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+            .where(and(eq(botSessionLinks.botId, botId), eq(botSessionLinks.role, 'routine'),
+              eq(botSessionLinks.routeKey, `routine:${id}`), isNull(botSessionLinks.archivedAt),
+              eq(sessions.source, 'bot'), eq(sessions.status, 'active'))).limit(1);
+          execution = { targetSessionId: lane?.sessionId ?? null, workingDir: lane
+            ? await resolveHookSessionWorkDir(lane.sessionId) ?? homedir()
+            : pathJoin(botProfileDir(ownerScopedUserDataPath(), botId), 'workspace') };
+        }
+        return {
+          enabled: routine.enabled, revision: routine.revision, prompt: routine.prompt,
+          builtin: !!routine.builtin, preRunCommand: routine.preRunHook?.command,
+          details: { routine: { id, name: routine.name, prompt: routine.prompt, enabled: routine.enabled,
+            revision: routine.revision, preRunHook: routine.preRunHook }, ...(execution ? { execution } : {}) },
+          assertCurrent() {
+            if (engine.list(botId).find(row => row.id === id)?.revision !== routine.revision)
+              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+          },
+        };
+      },
     }),
   });
   // Companion history uses the same account scope as ordinary task history.
@@ -326,8 +470,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
     const assertAccess = async () => {
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
-      if (await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance) === 'restricted')
-        throw new Error('Account data is unavailable for plugin-managed tasks');
+      if (await resolveHelperSurface(dbClient, sessionId) === 'restricted')
+        throw new Error('Account data is unavailable for this task');
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
     };
     await assertAccess();
@@ -473,6 +617,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 注册表取用(静态 import ipc.ts 会与 maker-host 闭环, 见 slackToolBridge
     // 模块头); 未注册 = null, provider isEnabled fail-closed。
     slackHook: {
+      compressInlineImage,
       withAccountDataAccess,
       getBridge: () => getSlackToolBridge(),
       logger: createLogger('mcp/cindy_slack'),
@@ -481,6 +626,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       withAccountDataAccess,
       authorizeCall: authorizeTaskToolCall,
       getScheduler: () => getScheduler(),
+      getApprovedScheduleGuard: taskActionScheduleGuard,
       // 其它电脑上的定时任务:与历史查询共用设备目录与 owner fence,走既有远程控制通道。
       ...(deps.historyRemote
         ? {
@@ -501,15 +647,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
         // 绑定会话(heartbeat)任务安装 hook 时解析会话真实工作目录 —— schedule
         // 行上的 workingDir 为空/过期,落盘与自测必须用会话 meta.workDir。
-        resolveSessionWorkDir: async (sessionId) => {
-          try {
-            const { getMaker } = await import('../maker-host/index.js');
-            const meta = await getMaker().getSessionMeta(sessionId);
-            return meta?.workDir?.trim() ? meta.workDir : undefined;
-          } catch {
-            return undefined;
-          }
-        },
+        resolveSessionWorkDir: resolveHookSessionWorkDir,
         stabilizeCommand: async ({ command, workingDir }) => {
           await assertPreRunHookCommandSyntax(command);
           return stabilizeHookCommand(command, workingDir);
@@ -520,6 +658,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             import('../maker-host/index.js'),
             import('electron'),
           ]);
+          // Recheck after target resolution and lazy imports, before any script write/self-test.
+          await assertTaskActionCurrent();
           // maker 仅 description 生成模式需要;未就绪时传 null,script 模式照常工作,
           // description 模式由生成器报"maker not ready"。
           let maker = null;
@@ -554,6 +694,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       getPool: async () => (await loadRemoteSsh()).getRemoteSshPoolHydrated(),
       ensureReady: async (id: string) =>
         (await loadRemoteSsh()).ensureRemoteHostReady(id),
+      // 与设置页「添加」「重新读取」同一实现，Agent 与用户写的是同一份配置。
+      addHost: async (input) => {
+        await (await loadRemoteSsh()).addRemoteSshHost(input);
+      },
+      reloadConfig: async () => {
+        const result = await (await loadRemoteSsh()).reloadRemoteSshConfig();
+        return { diagnostic: result.diagnostic?.kind ?? null, warningCount: result.warningCount };
+      },
       redactSensitiveText: (snapshot, text) => {
         if (!redactSshText) throw new Error('SSH redactor is not initialized');
         return redactSshText(snapshot, text);
@@ -573,9 +721,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending() || !opts.callerSessionId)
           throw new Error('Task history caller unavailable');
-        // session_search bypasses cindy_helper, so share its ownership predicate.
-        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
-          throw new Error('Task history search is unavailable for plugin-managed tasks');
+        // session_search bypasses cindy_helper, so share its account-data surface.
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId) === 'restricted')
+          throw new Error('Task history search is unavailable for this task');
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
         const hits = await searchSessionsWithBotScope(query, opts, {
@@ -583,8 +731,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         });
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
-        if (await resolveHelperSurface(dbClient, opts.callerSessionId, getSessionInputProvenance) === 'restricted')
-          throw new Error('Task history search is unavailable for plugin-managed tasks');
+        if (await resolveHelperSurface(dbClient, opts.callerSessionId) === 'restricted')
+          throw new Error('Task history search is unavailable for this task');
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient())
           throw new Error('Task history caller unavailable');
         return hits;
@@ -627,6 +775,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      getSessionProject: readCurrentSessionProject,
       runtimeCapabilities: deps.runtimeCapabilities,
       productHelpDocs: HELP_KNOWLEDGE,
       // Install / auto-update requests become owner-only Host cards (see agent-app-update/).
@@ -636,28 +785,43 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 代输入: Host-owned card; values never return through this tool.
       inputHandoff: {
         start: async (context, request) => {
-          if (!context.sessionId || !deps.isCurrentLocalSessionInstance?.(context.sessionId, context.sessionInstanceId))
-            return { ok: false, errorCode: 'NO_SESSION_CONTEXT', message: 'This task is no longer current.' };
-          const service = getInputHandoffService();
-          if (!service) return { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE', message: 'Input handoff is not ready yet.' };
-          // Unknown policy (store unreadable) fails closed; a teammate switch must hold.
-          if (await isInputHandoffDisabledForSession(context.sessionId).catch(() => true))
-            return {
-              ok: false,
-              errorCode: 'DISABLED_BY_OWNER',
-              message: 'The owner turned off input handoff for this teammate. Tell the owner what is still needed instead.',
-            };
-          const row = await getSessionRowSnapshot(context.sessionId).catch(() => null);
-          const requester = row?.title?.trim().slice(0, 120);
-          const result = service.start({
-            sessionId: context.sessionId,
+          const ready = await admitInputHandoff(context);
+          if (!ready.ok) return ready;
+          // Report a bad target now, not as target_gone after the turn ended.
+          const problem = await ready.service.checkTarget(request.target).catch(() => null);
+          if (problem) return { ok: false, ...problem };
+          const result = ready.service.start({
+            sessionId: ready.sessionId,
             purpose: request.purpose,
             ...(request.note ? { note: request.note } : {}),
-            ...(requester ? { requester } : {}),
+            ...(ready.requester ? { requester: ready.requester } : {}),
             target: request.target,
             ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
             ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
           });
+          return result.ok ? { ok: true, requestId: result.requestId } : result;
+        },
+        startImage: async (context, request) => {
+          const ready = await admitInputHandoff(context);
+          if (!ready.ok) return ready;
+          const picture = await readHandoffPicture(request.image, context.workingDir, (absPath) => authorizeDesktopSessionPath({
+            sessionId: ready.sessionId,
+            sessionInstanceId: context.sessionInstanceId,
+            workingDir: context.workingDir ?? '',
+            path: absPath,
+            toolName: 'cindy_helper.ask_owner',
+            operation: 'read',
+          }, deps.getLiveSessionGrantState));
+          if (!picture.ok) return picture;
+          const result = await ready.service.startImageQr({
+            sessionId: ready.sessionId,
+            purpose: request.purpose,
+            ...(request.note ? { note: request.note } : {}),
+            ...(ready.requester ? { requester: ready.requester } : {}),
+            image: picture.bytes,
+            ...(request.timeoutMinutes ? { timeoutMinutes: request.timeoutMinutes } : {}),
+          });
+          picture.bytes.fill(0);
           return result.ok ? { ok: true, requestId: result.requestId } : result;
         },
       },
@@ -779,7 +943,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       resolveSurface: async ({ sessionId }) => {
         const dbClient = tryGetDbClient();
         if (!dbClient || isAppSessionBoundaryPending()) return 'restricted';
-        const surface = await resolveHelperSurface(dbClient, sessionId, getSessionInputProvenance);
+        const surface = await resolveHelperSurface(dbClient, sessionId);
         if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) return 'restricted';
         return surface;
       },
@@ -815,6 +979,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -873,6 +1038,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         title,
         useWorktree,
         workingDir,
+        projectDir,
         agentKind,
         model,
         effort,
@@ -898,6 +1064,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             title,
             useWorktree,
             workingDir,
+            projectDir,
             ...(hasExecutionOverrides
               ? {
                   execution: {
@@ -929,7 +1096,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            return await svc.startSessionTask(params);
+            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
+            if (!project.ok) return project;
+            const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
+              workingDir: params.workingDir ?? project.projectDir ?? undefined });
+            return result.ok ? { ...result, projectDir: project.projectDir } : result;
           } catch (err) {
             return {
               ok: false,
@@ -1027,7 +1198,12 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botRoutines: {
-        service: routineTools,
+        service: {
+          ...routineTools,
+          save: (botId, input, id) => routineTools.save(botId, input, id,
+            taskActionRoutineRevision(botId, id)),
+          runNow: (botId, id) => routineTools.runNow(botId, id, taskActionRoutineRevision(botId, id)),
+        },
         resolveBotId: async (callerSessionId) => {
           const scope = activeOwnerScopeKey();
           if (!getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()) {
@@ -1201,6 +1377,8 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // submit_github_issue: 官方反馈提交(确认卡片 → serverApiFetch)。
       // holder 同样是延迟查找，registerMakerIpc 里 init。
       githubIssue: (req) => submitGithubIssueForSession(req),
+      mcpSetup: (context, proposal) => requestMcpSetupForSession(
+        context.sessionId!, context.sessionInstanceId!, proposal),
     },
     // cindy_orca: 多 worker 协同 team 工具集。创建权限由 Main handler 实时校验。
     orca: {

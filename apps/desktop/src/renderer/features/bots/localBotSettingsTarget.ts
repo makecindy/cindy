@@ -177,6 +177,7 @@ export const localBotSettingsTarget: BotSettingsTarget = {
     runNow: (...args) => window.electronAPI.routines.runNow(...args),
     history: (...args) => window.electronAPI.routines.history(...args),
     sources: () => window.electronAPI.routines.sources(),
+    deliveryTargets: (botId) => window.electronAPI.routines.deliveryTargets?.(botId) ?? Promise.resolve([]),
     onChanged: (listener) => window.electronAPI.routines.onChanged(listener),
   },
   autonomy: {

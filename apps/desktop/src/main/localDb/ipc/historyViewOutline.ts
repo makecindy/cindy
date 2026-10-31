@@ -112,9 +112,20 @@ export function resetCommandArtifactCache(): void {
  * tool result, a background completion). The outline already reads every body, so length
  * and tail add CPU but no IO; grouping revisions hash it, and it never reaches the wire.
  * A rewrite with the same length and the same last 24 characters is not detected.
+ * Keep that character-length contract: byte length would miss edits whose UTF-8 byte
+ * count stays constant while their character count changes. A 96-byte suffix covers
+ * the maximum UTF-8 span of the legacy 24-character suffix; hex keeps a truncated
+ * leading code point opaque but comparable. Embedded NUL needs the legacy path because
+ * SQLite text functions deliberately stop there.
  */
 export function historyOutlineContentStamp(): SQL<string> {
-  return sql<string>`length(${messages.content}) || ':' || substr(${messages.content}, -24)`;
+  return sql<string>`CASE
+    WHEN typeof(${messages.content}) <> 'text'
+      OR instr(CAST(${messages.content} AS BLOB), x'00') > 0
+      THEN length(${messages.content}) || ':' || substr(${messages.content}, -24)
+    ELSE length(${messages.content}) || ':' || hex(
+      substr(CAST(${messages.content} AS BLOB), -96))
+    END`;
 }
 
 /** File content/patches never cross the outline query; commands yield only paths on the wire. */

@@ -49,6 +49,7 @@ function ScrollFixture({ bridge, locale }: { bridge: RegionScreenshotOverlayBrid
 
 mountPage({
   render: (ctx) => {
+    const snapping = ctx.case === 'snapping';
     const mode = (['default', 'idle', 'inactive', 'drag', 'preview-motion'].includes(ctx.case) ? 'scroll' : ctx.case) as RegionCaptureMode;
     qa.idle = ctx.case === 'idle';
     qa.manualScroll = ctx.case === 'preview-motion' ? 300 : null;
@@ -56,10 +57,11 @@ mountPage({
     let selected = { x: 100, y: 100, width: 480, height: 240 };
     const bridge: RegionScreenshotOverlayBridge = {
       autoScroll: async (_token, enabled) => { qa.automatic = enabled; return true; },
-      shellReady() { queueMicrotask(() => begin?.({ token: 'fixture', locale: ctx.locale, viewport: { width: innerWidth, height: innerHeight }, scaleFactor: 1, frame: frame(), windows: [], lastRegion: null, cursor: ctx.case === 'inactive' ? null : { x: 0, y: 0 }, safeArea: { x: 0, y: 0, width: innerWidth, height: innerHeight } })); },
+      shellReady() { queueMicrotask(() => begin?.({ token: 'fixture', locale: ctx.locale, viewport: { width: innerWidth, height: innerHeight }, scaleFactor: 1, frame: frame(), windows: snapping ? [{ id: 0, rect: { x: 0, y: 0, width: 700, height: 500 } }] : [], lastRegion: null, cursor: ctx.case === 'inactive' ? null : snapping ? { x: 150, y: 180 } : { x: 0, y: 0 }, safeArea: { x: 0, y: 0, width: innerWidth, height: innerHeight } })); },
       onBegin: (callback) => { begin = callback; return () => { begin = undefined; }; }, onEnd: () => () => {}, onClear: () => () => {},
       painted() {}, focused() {}, selectionStarted() {}, copyText() {}, cancel() {}, abandon() {},
-      elementsAt: async () => [], startLive: async (_token, captureMode, selection) => { selected = selection; return { mode: captureMode, selection, first: frame(qa.manualScroll ?? 0), scrollLayout: scrollCaptureLayout(selection, { width: innerWidth, height: innerHeight })!, recordingLayout: { viewport: { width: innerWidth, height: innerHeight }, controls: recordingControlsBounds(selection, { width: innerWidth, height: innerHeight }, false)! } }; },
+      elementsAt: async (_token, _window, x) => snapping ? { window: { id: 1, rect: { x: 100, y: 100, width: 480, height: 360 } }, rects: [x < 320 ? { x: 120, y: 140, width: 180, height: 140 } : { x: 340, y: 140, width: 200, height: 140 }] } : null,
+      startLive: async (_token, captureMode, selection) => { selected = selection; return { mode: captureMode, selection, first: frame(qa.manualScroll ?? 0), scrollLayout: scrollCaptureLayout(selection, { width: innerWidth, height: innerHeight })!, recordingLayout: { viewport: { width: innerWidth, height: innerHeight }, controls: recordingControlsBounds(selection, { width: innerWidth, height: innerHeight }, false)! } }; },
       recordingControls: async (_token, expanded, point) => recordingControlsBounds(selected, { width: innerWidth, height: innerHeight }, expanded, point),
       previewRecording: async () => false,
       restoreEditor: async () => { qa.restored = true; return true; },

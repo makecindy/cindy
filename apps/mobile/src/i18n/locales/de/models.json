@@ -1,0 +1,117 @@
+{
+  "picker": {
+    "title": "Modell",
+    "permissionTitle": "Berechtigungen",
+    "searchAccessibility": "Modelle suchen",
+    "searchPlaceholder": "Modelle suchen…",
+    "noResults": "Keine passenden Modelle",
+    "emptyDefault": "Keine Modelle verfügbar",
+    "loadingDefault": "Modelle werden geladen…",
+    "subscriptionBadge": "Abo",
+    "subscriptionBadgeCompact": "Abo",
+    "backToModels": "Zurück zur Modellliste",
+    "agentSwitchHint": "Nach der Modellauswahl wechselt die nächste Nachricht zu {{agent}}",
+    "crossAgentEmptyHint": "Verbinde zuerst eine Modellquelle für {{agent}} auf dem entfernten Gerät",
+    "permissionModeAccessibility": "Berechtigungsmodus: {{mode}}",
+    "selectProviderModelAccessibility": "{{model}} von {{provider}} auswählen",
+    "selectModelAccessibility": "{{model}} auswählen",
+    "configureAccessibility": "{{model}} konfigurieren",
+    "budgetDisabledHint": "Für dieses Modell muss zuerst ein API-Schlüssel auf dem entfernten Gerät eingerichtet werden",
+    "priceLine": "Eingabe {{input}} · Ausgabe {{output}} / Million Tokens",
+    "priceTitle": "Pro 1 Mio. Token",
+    "priceAmounts": "Eingabe {{input}} · Ausgabe {{output}}",
+    "discountedVsStandard": "Reduziert · {{percent}} % unter Standardpreis",
+    "contextSuffix": "{{size}} Kontext",
+    "fastTag": "Schnell"
+  },
+  "options": {
+    "speed": {
+      "label": "Geschwindigkeit",
+      "standard": "Standard",
+      "fast": "Schnell",
+      "ultrafast": "Ultraschnell"
+    },
+    "fastMode": "Schnellmodus",
+    "fastModeAccessibility": "Schnellmodus {{model}}",
+    "reasoningEffort": "Denkintensität",
+    "reasoningEffortAccessibility": "Denkintensität {{label}}",
+    "effortLevels": {
+      "minimal": "Minimal",
+      "low": "Niedrig",
+      "medium": "Mittel",
+      "high": "Hoch",
+      "xhigh": "Sehr hoch",
+      "max": "Maximal",
+      "ultra": "Ultra"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "Diese Unterhaltung passt nicht in dieses Modell",
+    "remoteTitle": "Dieser Modellwechsel auf dem entfernten Gerät wird nicht unterstützt",
+    "description": "Diese Unterhaltung nutzt bereits {{used}}, mehr als das neue Modell aufnehmen kann ({{total}}, etwa {{pct}} %). Wenn du wechselst, erstellt Cindy eine kurze Zusammenfassung und fährt fort. Dein Chatverlauf bleibt erhalten, wird aber nicht vollständig wortgetreu übergeben.",
+    "remoteDescription": "Diese entfernte Aufgabe nutzt bereits {{used}} / {{total}} des Kontexts des kleineren Modells (etwa {{pct}} %). Deshalb kann Cindy nicht sicher wechseln. Behalte das aktuelle Modell oder starte eine neue Aufgabe, bevor du dieses Modell auswählst.",
+    "cancel": "Dieses Modell behalten",
+    "confirm": "Wechseln und fortfahren"
+  },
+  "switchOutcome": {
+    "applied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
+    "failed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut."
+  },
+  "agentSwitch": {
+    "browseAccessibility": "Modelle für {{agent}} durchsuchen",
+    "confirmTitle": "Zu {{agent}} wechseln?",
+    "confirmMessage": "Wenn du die nächste Nachricht sendest, übergibt {{appName}} die aktuelle Sitzung an {{agent}}. Die beiden Agents können Kontext und Tools unterschiedlich interpretieren. Bestätige daher den Wechsel, bevor du das Zielmodell auswählst.",
+    "cancel": "Abbrechen",
+    "confirm": "Weiter"
+  },
+  "agentRelocation": {
+    "titleOther": "Agent auf „{{device}}“ ausführen?",
+    "titleHost": "Den Agent wieder auf „{{host}}“ ausführen?",
+    "titleHostUnnamed": "Den Agent wieder auf dem Computer der Sitzung ausführen?",
+    "message": "Der Unterhaltungsverlauf auf dem anderen Computer kann nicht übertragen werden. Die Fortsetzung erfolgt daher anhand einer Übergabezusammenfassung. Denkprozesse und ähnliche Details werden möglicherweise nicht vollständig übernommen. Wird beim Senden der nächsten Nachricht wirksam.",
+    "confirm": "Computer wechseln",
+    "cancel": "So beibehalten"
+  },
+  "unified": {
+    "favoriteConfiguration": "Diese Konfiguration als Favorit speichern",
+    "savedConfiguration": "Als Favorit gespeichert · Zum Entfernen tippen",
+    "currentConfiguration": "Aktuelle Konfiguration",
+    "usingRecommended": "Empfohlene Einstellungen aktiv",
+    "customized": "Angepasst",
+    "resetScopeHint": "„Empfohlene wiederherstellen“ setzt Harness, Denkintensität und Schnellmodus zurück. Bestehende Favoriten bleiben unverändert.",
+    "saveFavoriteHint": "Speichere diese Einstellungen für den Schnellzugriff über die Favoriten.",
+    "removeFavoriteHint": "Das Entfernen des Favoriten lässt deine aktuellen Einstellungen unverändert.",
+    "editFavorite": "Ursprünglichen Favoriten bearbeiten",
+    "editFavoriteHint": "Änderungen gelten erst nach dem Speichern für diesen Favoriten. Die verwendete Konfiguration bleibt unverändert.",
+    "saveFavorite": "Favoriten speichern",
+    "cancelEdit": "Bearbeitung abbrechen",
+    "originalFavoriteKept": "Einstellungen aktualisiert. Der ursprüngliche Favorit bleibt unverändert.",
+    "parametersSaved": "Einstellungen gespeichert.",
+    "restoredHint": "Empfohlene Einstellungen wiederhergestellt. Bestehende Favoriten bleiben unverändert.",
+    "favoriteRemoved": "Favorit entfernt. Aktuelle Einstellungen bleiben unverändert.",
+    "favoriteSaved": "Konfiguration zu Favoriten hinzugefügt.",
+    "favoriteUpdated": "Favorit aktualisiert. Die verwendete Konfiguration bleibt unverändert.",
+    "favoriteChanged": "Dieser Favorit wurde geändert oder entfernt. Brich die Bearbeitung ab und öffne ihn erneut, um es noch einmal zu versuchen.",
+    "favoriteExists": "Diese Konfiguration ist bereits in den Favoriten. Brich die Bearbeitung ab, um sie zu verwenden.",
+    "favorites": "Favoriten",
+    "all": "Alle Modelle",
+    "recommended": "Empfohlen",
+    "source": "Quelle",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "Anbietergruppe · {{count}} Computer",
+    "groupBadge_other": "Anbietergruppe · {{count}} Computer",
+    "harness": "Harness",
+    "restoreRecommended": "Empfohlene wiederherstellen",
+    "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
+    "configure": "Konfigurieren",
+    "syncFailed": "Favoriten konnten nicht synchronisiert werden. Öffne die Auswahl erneut, um es noch einmal zu versuchen; der entfernte Computer benötigt möglicherweise ein Update.",
+    "timeUnit": {
+      "day": "T",
+      "hour": "Std.",
+      "minute": "Min.",
+      "second": "Sek."
+    }
+  }
+}

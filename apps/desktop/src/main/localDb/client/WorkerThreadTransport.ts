@@ -1,5 +1,7 @@
 import { fastModeToStorage } from '@cindy/maker-shared';
+import { extractToolResultDiagnostics, sanitizeToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from '../worker/opHandlers/pluginUsageTx.js';
+import { runSessionImportTransaction } from '../worker/opHandlers/sessionImportTx.js';
 import { runTaskTagsTransaction } from '../worker/opHandlers/taskTagsTx.js';
 import { recordMediaSpend } from '../worker/opHandlers/mediaSpendTx.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
@@ -8,7 +10,7 @@ import { CLOSE_SHARED_TASKS_FOR_SESSION_SQL } from '../sharedTaskClosureSql.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
-import { capToolResultTextForPersist, compactToolCardResult, TOOL_RESULT_PERSIST_CONTENT_LIMIT, TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX } from '../../../shared/toolResultPersistCap.js';
+import { compactToolCardResult } from '../../../shared/toolResultPersistCap.js';
 
 import {
   createDbTransportError,
@@ -24,15 +26,15 @@ import {
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
-const TOOL_RESULT_PERSIST_CONTENT_LIMIT = ${TOOL_RESULT_PERSIST_CONTENT_LIMIT};
-const TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX = ${JSON.stringify(TOOL_RESULT_PERSIST_TRUNCATION_SUFFIX)};
+const sanitizeToolResultDiagnostics = ${sanitizeToolResultDiagnostics.toString()};
+const extractToolResultDiagnostics = ${extractToolResultDiagnostics.toString()};
 const compactToolCardResult = ${compactToolCardResult.toString()};
-const capToolResultTextForPersist = ${capToolResultTextForPersist.toString()};
 const createAutoReviewIntentProjection = ${createAutoReviewIntentProjection.toString()};
 const readAutoReviewProjection = ${readAutoReviewProjection.toString()};
 const batchAutoReviewProjection = ${batchAutoReviewProjection.toString()};
 const CLOSE_SHARED_TASKS_FOR_SESSION_SQL = ${JSON.stringify(CLOSE_SHARED_TASKS_FOR_SESSION_SQL)};
 const runPluginUsageTransaction = ${runPluginUsageTransaction.toString()};
+const runSessionImportTransaction = ${runSessionImportTransaction.toString()};
 const runTaskTagsTransaction = ${runTaskTagsTransaction.toString()};
 const recordMediaSpend = ${recordMediaSpend.toString()};
 const fastModeToStorage = ${fastModeToStorage.toString()};
@@ -421,7 +423,6 @@ function readLocalWorktreeReferences() {
   return rows;
 }
 
-const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1000, 5000, 30000, 5 * 60000, 30 * 60000];
 
@@ -437,10 +438,6 @@ function dispatchTransaction(readyDb, payload) {
       return recordMediaSpend(readyDb, request.args);
     case 'authorization.readProjection':
       return readAutoReviewProjection(readyDb, request.args, createAutoReviewIntentProjection);
-    case 'codex.importMessages':
-      return codexImportMessages(readyDb, request.args);
-    case 'claude.importMessages':
-      return claudeImportMessages(readyDb, request.args);
     case 'rewind.commit':
       return rewindCommit(readyDb, request.args);
     case 'session.treeRehydrate':
@@ -484,6 +481,7 @@ function dispatchTransaction(readyDb, payload) {
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(readyDb, request.args);
     case 'pluginUsage.execute': return runPluginUsageTransaction(readyDb, request.args);
+    case 'sessionImport.execute': return runSessionImportTransaction(readyDb, request.args);
     case 'taskTags.execute': return runTaskTagsTransaction(readyDb, request.args);
     case 'projectAliases.replaceIdentity':
       return projectAliasesReplaceIdentity(readyDb, request.args);
@@ -1169,6 +1167,8 @@ function sessionsSetStatus(readyDb, args) {
   })();
 }
 
+const TASK_LIST_BOT_LANE_SQL = "SELECT 1 FROM bot_session_links WHERE session_id = ? AND role IN ('routine', 'channel') LIMIT 1";
+
 // Keep this in sync with worker/opHandlers/tx.ts.
 function sessionsSetTerminalStatus(readyDb, args) {
   const payload = asRecord(args, 'sessions.setTerminalStatus args');
@@ -1181,7 +1181,8 @@ function sessionsSetTerminalStatus(readyDb, args) {
     const existing = readyDb.prepare('SELECT id, status, source FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
-    if (existing.source === 'bot') throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
+    // Routine/channel lanes are listed with ordinary tasks and follow their lifecycle.
+    if (existing.source === 'bot' && !readyDb.prepare(TASK_LIST_BOT_LANE_SQL).get(sessionId)) throw Object.assign(new Error('Bot sessions must use Bot lifecycle: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const now = Date.now();
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
     const updated = readyDb.prepare(
@@ -1205,6 +1206,10 @@ function compactSessionToolResults(readyDb, args) {
   const payload = asRecord(args, 'toolResults.compactSession args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const now = expectNumber(payload.now, 'now');
+  readyDb.function('tool_result_diagnostics', { deterministic: true }, content => {
+    const diagnostics = extractToolResultDiagnostics(content);
+    return diagnostics ? JSON.stringify(diagnostics) : null;
+  });
 
   const selectSession = readyDb.prepare(
     "SELECT id FROM sessions WHERE id = ? AND status IN ('archived', 'deleted') LIMIT 1",
@@ -1228,7 +1233,7 @@ function compactSessionToolResults(readyDb, args) {
     "SELECT COALESCE(SUM(octet_length(content)), 0) AS originalBytes FROM messages WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
   const compactMessages = readyDb.prepare(
-    "UPDATE messages SET content = json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
+    "UPDATE messages SET content = json_patch(json_object('type', 'tool_result_compacted', 'version', 1, 'originalBytes', octet_length(content), 'compactedAt', ?), json_object('diagnostics', json(tool_result_diagnostics(content)))) WHERE session_id = ? AND role = 'tool_result' AND (" + uncompactedContentPredicate + ') = 1',
   );
 
   return readyDb.transaction(() => {
@@ -1607,133 +1612,6 @@ function orcaReleaseWorkerCreationReservation(readyDb, args) {
   );
 }
 
-function invalidateSessionListProjection(readyDb, sessionId) {
-  readyDb.prepare(
-    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
-  ).run(sessionId);
-}
-
-function codexImportMessages(readyDb, args) {
-  const payload = asRecord(args, 'codex.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const model = expectString(payload.model, 'model');
-  const rows = expectArray(payload.rows, 'rows');
-  const existing = readExistingMessageFingerprints(readyDb, sessionId, importClientIdPrefix);
-  const existingImportedClientIds = readExistingImportedClientIds(readyDb, sessionId, importClientIdPrefix);
-  const upsert = readyDb.prepare(\`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, NULL, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  \`);
-  const changed = readyDb.transaction(() => {
-    let count = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'codex row');
-      const lineNo = expectNumber(row.lineNo, 'row.lineNo');
-      const role = expectString(row.role, 'row.role');
-      const text = expectString(row.text, 'row.text');
-      const createdAt = expectNumber(row.createdAt, 'row.createdAt');
-      const clientId = importClientIdPrefix + lineNo;
-      if (!existingImportedClientIds.has(clientId) && isLikelyLocalDuplicate(existing, { role, text, createdAt })) continue;
-      count += upsert.run({
-        id: 'codex-import-' + sdkSessionId + '-' + lineNo,
-        clientId,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        agentMeta: JSON.stringify({ sdkSessionId, model }),
-        createdAt,
-      }).changes;
-    }
-    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
-    return count;
-  })();
-  return { changed };
-}
-
-function claudeImportMessages(readyDb, args) {
-  const payload = asRecord(args, 'claude.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const rows = expectArray(payload.rows, 'rows');
-  const upsert = readyDb.prepare(\`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, @toolUseId, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      tool_use_id = excluded.tool_use_id,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role != 'tool_result' OR
-        CASE
-          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
-          WHEN json_valid(messages.content) = 0 THEN 1
-          WHEN json_type(messages.content) = 'object'
-           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
-           AND json_extract(messages.content, '$.version') = 1
-           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.originalBytes') >= 0
-           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
-          ELSE 1
-        END = 1
-      ) AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.tool_use_id IS NOT excluded.tool_use_id OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  \`);
-  const changed = readyDb.transaction(() => {
-    let count = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'claude row');
-      const key = expectNumber(row.lineNo, 'row.lineNo') + '-' + expectNumber(row.partIndex, 'row.partIndex');
-      const role = expectString(row.role, 'row.role');
-      count += upsert.run({
-        id: 'claude-import-' + sdkSessionId + '-' + key,
-        clientId: importClientIdPrefix + key,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        toolUseId: nullableString(row.toolUseId),
-        agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
-        createdAt: expectNumber(row.createdAt, 'row.createdAt'),
-      }).changes;
-    }
-    if (count > 0) invalidateSessionListProjection(readyDb, sessionId);
-    return count;
-  })();
-  return { changed };
-}
-
 function rewindCommit(readyDb, args) {
   const payload = asRecord(args, 'rewind.commit args');
   const sessionId = expectString(payload.sessionId, 'sessionId');
@@ -1750,6 +1628,18 @@ function rewindCommit(readyDb, args) {
     payload.expectedClearedAt === undefined || payload.expectedClearedAt === null
       ? null
       : expectNumber(payload.expectedClearedAt, 'expectedClearedAt');
+  // Mirror worker/opHandlers/tx.ts: a Claude rewind without a prior reply
+  // clears the native session id and leaves a hidden context_rebuild marker.
+  const resetPayload = payload.nativeContextReset === undefined
+    ? null
+    : asRecord(payload.nativeContextReset, 'nativeContextReset');
+  const nativeContextReset = resetPayload
+    ? {
+        markerId: expectString(resetPayload.markerId, 'nativeContextReset.markerId'),
+        markerClientId: expectString(resetPayload.markerClientId, 'nativeContextReset.markerClientId'),
+        markerContent: expectString(resetPayload.markerContent, 'nativeContextReset.markerContent'),
+      }
+    : null;
   const rows = readyDb.prepare(
     'SELECT id, client_id, role, created_at, agent_meta, tool_use_id FROM messages WHERE session_id = ? AND rewind_at IS NULL',
   ).all(sessionId);
@@ -1826,7 +1716,17 @@ function rewindCommit(readyDb, args) {
       // so fail closed rather than expose work from a withdrawn branch.
       rewindParentlessSubagentTail.run(now, sessionId, targetCreatedAt);
     }
-    if (sdkSessionId) {
+    if (nativeContextReset) {
+      readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = NULL, list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?').run(now, now, sessionId);
+      readyDb.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, 'context_rebuild', ?, ?, ?)").run(
+        nativeContextReset.markerId,
+        nativeContextReset.markerClientId,
+        sessionId,
+        nativeContextReset.markerContent,
+        now,
+        now,
+      );
+    } else if (sdkSessionId) {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, sdk_session_id = ?, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sdkSessionId, sessionId);
     } else {
       readyDb.prepare('UPDATE sessions SET user_send_at = ?, updated_at = ?, context_tokens = 0, context_window = 0, codex_plan_json = NULL, list_preview = NULL, list_preview_role = NULL WHERE id = ?').run(now, now, sessionId);
@@ -2120,6 +2020,9 @@ function forkSession(readyDb, args) {
       expectNumber(newSession.createdAt, 'newSession.createdAt'),
       expectNumber(newSession.updatedAt, 'newSession.updatedAt'),
     );
+    // Keep this in sync with the worker fork transaction.
+    readyDb.prepare('UPDATE sessions SET project_dir = (SELECT project_dir FROM sessions WHERE id = ?) WHERE id = ?')
+      .run(sourceSessionId, expectString(newSession.id, 'newSession.id'));
     if (newSession.source === 'side-chat') {
       readyDb.prepare("UPDATE sessions SET source = 'side-chat', extra_dirs = (SELECT extra_dirs FROM sessions WHERE id = ?), writable_dirs = (SELECT writable_dirs FROM sessions WHERE id = ?) WHERE id = ?")
         .run(sourceSessionId, sourceSessionId, expectString(newSession.id, 'newSession.id'));
@@ -2280,112 +2183,6 @@ function embeddingEnqueue(readyDb, args) {
   return { inserted, skipped: items.length - inserted };
 }
 
-function readExistingImportedClientIds(readyDb, sessionId, importClientIdPrefix) {
-  const rows = readyDb.prepare('SELECT client_id AS clientId FROM messages WHERE session_id = ? AND client_id LIKE ?').all(sessionId, importClientIdPrefix + '%');
-  return new Set(rows.map((row) => row.clientId));
-}
-
-function readExistingMessageFingerprints(readyDb, sessionId, importClientIdPrefix) {
-  const rows = readyDb.prepare("SELECT role, content, created_at AS createdAt FROM messages WHERE session_id = ? AND role IN ('user', 'assistant') AND client_id NOT LIKE ?").all(sessionId, importClientIdPrefix + '%');
-  const out = [];
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue;
-    const text = normalizeStoredMessageText(row.content);
-    if (text) out.push(messageFingerprint(row.role, text, row.createdAt));
-  }
-  return out;
-}
-
-function isLikelyLocalDuplicate(existing, row) {
-  const next = messageFingerprint(row.role, row.text, row.createdAt);
-  // 普通消息原文精确比较;canon 有损比较只在「至少一侧含原始标记字面量」时启用
-  // (升级前旧标记行 vs 已归一化导入行),避免仅 Markdown 格式不同的正常回复被
-  // 误判成重复。口径同 opHandlers/tx.ts。
-  return existing.some((prev) => prev.role === next.role
-    && Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS
-    && (prev.plain === next.plain
-      || (prev.canonical !== undefined && next.canonical !== undefined
-        && (prev.hasMarker || next.hasMarker)
-        && prev.canonical === next.canonical)));
-}
-
-function messageFingerprint(role, text, createdAt) {
-  const plain = normalizeFingerprintText(text);
-  const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
-  const canonical = role === 'assistant'
-    ? normalizeFingerprintText(canonicalizeCodexCitations(text))
-    : undefined;
-  const out = { role, plain, hasMarker, createdAt };
-  if (canonical !== undefined) out.canonical = canonical;
-  return out;
-}
-
-// 与 opHandlers/tx.ts 的指纹规范形同构;SSoT 注释见该文件,口径变更需同步。
-const CODEX_CITATION_RE = /:codex-file-citation\\{((?:[^"{}]|"(?:[^"\\\\]|\\\\.)*")*)\\}/g;
-const CODEX_CITATION_OPEN = ':codex-file-citation{';
-
-function codexCitationClose(text, attrsStart) {
-  let inQuote = false;
-  for (let i = attrsStart; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inQuote && ch === '\\\\') i += 1;
-    else if (ch === '"') inQuote = !inQuote;
-    else if (!inQuote && ch === '}') return i;
-    else if (!inQuote && ch === '{') return -2;
-  }
-  return -1;
-}
-
-function decodeCitationPathForFingerprint(attrs) {
-  const m = /(?:^|\\s)path="((?:[^"\\\\]|\\\\.)*)"/.exec(attrs);
-  if (!m) return '';
-  const raw = m[1];
-  const nativeUnc = raw.startsWith('\\\\\\\\') && raw[2] !== '\\\\';
-  const head = nativeUnc ? '\\\\\\\\' : '';
-  return head + (nativeUnc ? raw.slice(2) : raw).replace(/\\\\([\\\\"])/g, '$1');
-}
-
-function canonicalizeCodexCitations(text) {
-  let out = text;
-  let from = 0;
-  for (;;) {
-    const open = out.indexOf(CODEX_CITATION_OPEN, from);
-    if (open === -1) break;
-    const close = codexCitationClose(out, open + CODEX_CITATION_OPEN.length);
-    if (close === -1) { out = out.slice(0, open); break; }
-    from = close === -2 ? open + CODEX_CITATION_OPEN.length : close + 1;
-  }
-  for (let i = 0; i < 5; i += 1) {
-    const next = out.replace(CODEX_CITATION_RE, (_all, attrs) => decodeCitationPathForFingerprint(attrs));
-    if (next === out) break;
-    out = next;
-  }
-  return out.replace(/\`+/g, '').replace(/\\s+/g, ' ');
-}
-
-function normalizeStoredMessageText(raw) {
-  let value = raw;
-  try { value = JSON.parse(raw); } catch (_) {}
-  return extractContentText(value);
-}
-
-function normalizeFingerprintText(text) {
-  return text.replace(/\\r\\n/g, '\\n').trim();
-}
-
-function extractContentText(content) {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = typeof block.type === 'string' ? block.type : '';
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') parts.push(block.text);
-  }
-  return parts.join('\\n\\n');
-}
-
 // Mirror of worker/opHandlers/tx.ts remapNativeForkAnchorSession: only the
 // nativeForkAnchor.sdkSessionId moves; uuid / parent chains are untouched.
 function remapNativeForkAnchorSession(raw, map) {
@@ -2490,18 +2287,6 @@ function assertIdentifier(value) {
 
 function truncate(value, max) {
   return value.length <= max ? value : value.slice(0, max) + '...';
-}
-
-function stringifyContent(value) {
-  const json = JSON.stringify(value);
-  return json === undefined ? 'null' : json;
-}
-
-function stringifyImportedContent(role, content) {
-  if (role === 'tool_result' && typeof content === 'string') {
-    return stringifyContent(capToolResultTextForPersist(content));
-  }
-  return stringifyContent(content);
 }
 
 function asRecord(value, label) {

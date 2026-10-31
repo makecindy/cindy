@@ -493,7 +493,7 @@ function pluginView(
         : (value.market.unavailableReason ?? 'release_unavailable'),
       version: value.market.currentRelease?.version ?? null,
       releaseId: value.market.currentRelease?.releaseId ?? null,
-      reason: null,
+      reason: value.market.reason ?? null,
     },
     latestSubmission: value.latestSubmission ? releaseView(value.latestSubmission, content) : null,
     actions: { submitUpdate: value.publisherKind !== 'official' && value.actions.canSubmit, viewMarket: value.actions.canViewMarket },

@@ -1,3 +1,4 @@
+import { REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES } from '@cindy/device-link';
 import type { DesktopIceServer, RemoteDesktopRequest } from '@cindy/device-link';
 
 export const REMOTE_VIEWER = {
@@ -44,13 +45,15 @@ export interface RemoteViewerPreferences {
   hostMute: boolean;
   clipboardSync: boolean;
   lockOnExit: boolean;
+  idleTimeoutMinutes: number;
 }
 export const DEFAULT_VIEWER_PREFERENCES: RemoteViewerPreferences = {
   audio: true,
-  privacyScreen: false,
+  privacyScreen: true,
   hostMute: false,
   clipboardSync: false,
-  lockOnExit: false,
+  lockOnExit: true,
+  idleTimeoutMinutes: REMOTE_DESKTOP_DEFAULT_IDLE_MINUTES,
 };
 export interface RemoteViewerSafety {
   privacyActive: boolean;

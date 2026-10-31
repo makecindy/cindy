@@ -130,6 +130,7 @@ export interface UseSidebarFilterReturn {
   creatorOptions: readonly TaskBotIdentity[];
   toggleCreator: (key: string) => void;
   setCreatorsAll: () => void;
+  setCreatorsNone: () => void;
   /** Project 维度。'all' = 全部；string[] = 仅显示其中的 normalized workingDir。 */
   projects: FilterProjects;
   /** projects === 'all' 时返回 null，方便 render 阶段做"是否在集合内"判定。 */
@@ -190,7 +191,8 @@ export interface UseSidebarFilterReturn {
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
   /** 直接替换 Pinned 手动排序顺序并持久化。
    *  activeEntryIds 是拖拽开始时所有仍有效的 pinned session / project entry id；
-   *  baseOrder 是该次拖拽实际看到的完整顺序，供 Main 在最新快照上安全 rebase。 */
+   *  baseOrder 只含当前已加载目录内、此前已有持久 rank 的条目，不含仅展示的未排序置顶（#6345）；
+   *  供 Main 区分「并发移除」与「新条目」，并保留当前目录外的已有 rank。 */
   setManualPinnedOrder: (
     order: readonly string[],
     activeEntryIds: readonly string[],
@@ -253,6 +255,10 @@ export function useSidebarFilter(
       return next;
     });
   }, [ownerId, normalizeCreators]);
+  const setCreatorsNone = useCallback(() => {
+    setCreators('none');
+    persistCreators('none', ownerId);
+  }, [ownerId]);
   const setCreatorsAll = useCallback(() => {
     setCreators('all');
     persistCreators('all', ownerId);
@@ -644,6 +650,7 @@ export function useSidebarFilter(
     creatorOptions,
     toggleCreator,
     setCreatorsAll,
+    setCreatorsNone,
     status,
     projects,
     projectsAsSet,

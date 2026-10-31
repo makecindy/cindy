@@ -41,6 +41,7 @@ afterEach(() => {
 
 async function fixture(
   options: {
+    idleLock?: boolean;
     legacyTimeout?: boolean;
     delayStart?: boolean;
     busy?: boolean;
@@ -67,6 +68,7 @@ async function fixture(
         if (options.legacyTimeout && ++capabilityAttempts === 1) throw new Error('INVOKE_TIMEOUT');
         return {
           version: 1,
+          idleLock: options.idleLock,
           enabled: true,
           canControl: true,
           connectionTakeover: true,
@@ -83,7 +85,7 @@ async function fixture(
         startAttempts++;
         if (options.busy && !request.takeover) throw new Error('DESKTOP_BUSY');
         if (options.delayStart && startAttempts === 1) await start.promise;
-        if (hostLease) throw new Error('DESKTOP_BUSY');
+        if (hostLease && !(request.resume && options.idleLock)) throw new Error('DESKTOP_BUSY');
         hostLease = 'lease-' + request.displayId;
         return {
           lease: hostLease,
@@ -211,7 +213,7 @@ it('retries an initial capabilities timeout on a legacy host without inventing a
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, controlling: true, error: null });
   expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-    { op: 'start', displayId: 'one', lockOnExit: false },
+    { op: 'start', displayId: 'one', lockOnExit: true },
   ]);
 });
 
@@ -388,8 +390,8 @@ it.each([['two'], ['two', 'three']])(
     });
     expect(current.hostLease()).toBe('lease-' + latest);
     expect(current.requests.filter((request) => request.op === 'start')).toEqual([
-      { op: 'start', displayId: 'one', lockOnExit: false },
-      { op: 'start', displayId: latest, lockOnExit: false },
+      { op: 'start', displayId: 'one', lockOnExit: true },
+      { op: 'start', displayId: latest, lockOnExit: true },
     ]);
   },
 );
@@ -405,7 +407,7 @@ it('still requires explicit confirmation to take over another viewer', async () 
     op: 'start',
     displayId: 'one',
     takeover: true,
-    lockOnExit: false,
+    lockOnExit: true,
   });
 });
 
@@ -445,4 +447,29 @@ it('waits for an established lease to stop before a replacement Renderer starts'
   runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
   expect(snapshot).toMatchObject({ ready: true, error: null, controlling: true });
   expect(current.hostLease()).toBe('lease-one');
+});
+
+// Unit: a timeout is terminal even while the link is healthy; reconnect must be explicit.
+it('never automatically reconnects after the host idle deadline', async () => {
+  const current = await fixture({ heartbeat: async () => { throw new Error('DESKTOP_IDLE_TIMEOUT'); } });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(snapshot.error).toBe('idleDisconnected');
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(current.requests.filter((r) => r.op === 'start')).toHaveLength(1);
+});
+
+// Unit: automatic media recovery must not stop the host's running idle clock.
+it('retains the protected host lease while retrying a transient connection failure', async () => {
+  let first = true;
+  const current = await fixture({ idleLock: true, heartbeat: async () => {
+    if (first) { first = false; throw new Error('DESKTOP_LEASE_EXPIRED'); }
+    return { controlling: true };
+  } });
+  runtime.post?.({ type: 'streaming', epoch: 'lease-one' });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(snapshot.error).toBeNull();
+  expect(current.requests.filter((r) => r.op === 'stop')).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(current.requests.filter((r) => r.op === 'start').at(-1)).toMatchObject({ resume: true, idleTimeoutMinutes: 5 });
 });

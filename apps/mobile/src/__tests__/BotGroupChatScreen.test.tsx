@@ -3,10 +3,14 @@ import { act, createElement as el, useEffect, useImperativeHandle, useRef, useSt
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { shareSelectionStore } from '@/session/shareSelectionStore';
 
 const h = vi.hoisted(() => ({
-  chat: null as any,
+  processRead: vi.fn(),
+  chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
+  openTeammate: vi.fn(),
+  pickAvatar: vi.fn(async () => null),
   alert: vi.fn(),
   leaveGuard: [] as boolean[],
   leaveDecision: (async () => false) as () => Promise<boolean>,
@@ -24,10 +28,15 @@ const h = vi.hoisted(() => ({
   inputs: {} as Record<string, any>,
   teammates: { rows: [] as any[], loading: false, failed: false },
   teammateQuery: '',
+  cloudRows: null as any[] | null,
   uuid: 0,
   scroll: null as any,
   scrollToEnd: vi.fn(),
   markRead: vi.fn(),
+  push: vi.fn(), replace: vi.fn(), back: vi.fn(), scrollTo: vi.fn(),
+  navigation: { index: 0, routes: [{ params: {} }] } as any,
+  hardwareBack: null as null | (() => boolean),
+  hookCalls: vi.fn(),
   // Fake of the shared upload pipeline (useMobileLocalAttachments).
   local: null as any,
   discarded: [] as any[],
@@ -36,8 +45,18 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
-// Keep the real attachment components; only replace native reader and filesystem surfaces for jsdom.
+// Keep production message components; adapt native surfaces for jsdom.
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('@/session/ConversationShareSvg', () => ({ ConversationShareSvg: ({ ref, messages }: any) => {
+  h.exported.push(messages); useImperativeHandle(ref, () => ({ exportPng: h.pngExport })); return null;
+} }));
+vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationSharePngTemps: async () => {},
+  writeConversationSharePngTemp: async () => 'file:///export.png', deleteConversationSharePngTemp: async () => {} }));
+vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
+vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
+vi.mock('react-native-uitextview', () => ({
+  UITextView: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
+}));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
@@ -46,11 +65,12 @@ vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
       ref: (node: any) => { if (node) node.nativeLayout = onLayout; },
-      style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity } }, children);
+      style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
+        display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
-      useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd }));
+      useImperativeHandle(ref, () => ({ scrollToEnd: h.scrollToEnd, scrollTo: h.scrollTo }));
       return el('div', { 'data-testid': props.testID }, children);
     }, KeyboardAvoidingView: ({ children, ...props }: any) => {
       h.keyboardAvoidingView = props;
@@ -60,13 +80,14 @@ vi.mock('react-native', () => {
       { 'data-testid': testID, 'aria-label': accessibilityLabel, disabled, onClick: onPress },
       typeof children === 'function' ? children({ pressed: false }) : children),
     ActivityIndicator: ({ testID }: any) => el('i', { 'data-testid': testID ?? 'spinner' }),
-    StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
+    StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
-    useWindowDimensions: () => ({ width: 390, height: 844 }),
+    useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1, scale: 3 }),
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
       h.appStateListeners.add(listener); return { remove: () => h.appStateListeners.delete(listener) };
     } },
+    BackHandler: { addEventListener: (_event: string, fn: () => boolean) => { h.hardwareBack = fn; return { remove() {} }; } },
     Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
     Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
@@ -77,9 +98,15 @@ vi.mock('expo-router', () => ({
   useIsFocused: () => h.focused,
   Stack: {
     Screen: ({ options }: any) => typeof options.headerTitle === 'function' ? options.headerTitle() : null,
-    Toolbar: Object.assign(({ children }: any) => children, { View: ({ children }: any) => children }),
+    Toolbar: Object.assign(({ children }: any) => children, {
+      View: ({ children }: any) => children,
+      Button: ({ children, accessibilityLabel, onPress, disabled, selected }: any) => el('button', {
+        'aria-label': accessibilityLabel, 'aria-pressed': selected, disabled, onClick: onPress,
+      }, children),
+    }),
   },
-  useRouter: () => ({ back: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
+  useNavigation: () => ({ getState: () => h.navigation }),
   useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
@@ -96,32 +123,35 @@ vi.mock('react-i18next', async (importOriginal) => ({
 }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
-  ['ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown']
+  ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
+    'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
 }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ getPresenceAvailability: () => true }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
+vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
 vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   usesNativePullDownMenu: () => true,
-  NativePullDownMenu: ({ actions, onAction, children, testID, disabled }: any) => {
+  NativePullDownMenu: ({ actions, onAction, children, testID, disabled, longPress }: any) => {
+    const [opened, setOpened] = useState(false);
     const flat = (list: any[]): any[] => list.flatMap((action) => action.subactions ? flat(action.subactions) : [action]);
-    return el('div', { 'data-testid': testID }, children, disabled ? null : flat(actions).map((action) => el('button', {
+    return el('div', { 'data-testid': testID, onContextMenu: longPress ? () => setOpened(true) : undefined }, children, disabled || (longPress && !opened) ? null : flat(actions).map((action) => el('button', {
       key: action.id, 'data-testid': `${testID}.action.${action.id}`, 'data-state': action.state, disabled: action.disabled,
       onClick: () => onAction(action.id),
     }, action.title)));
   },
 }));
 vi.mock('@/components/AppText', () => ({
+  MAX_FONT_SIZE_MULTIPLIER: 1.5,
   Text: ({ children, testID }: any) => el('span', { 'data-testid': testID }, children),
   TextInput: ({ testID, ...props }: any) => { h.inputs[testID] = props; return el('input', { 'data-testid': testID, value: props.value ?? '', readOnly: true }); },
 }));
@@ -129,7 +159,7 @@ vi.mock('@/components/PaperPlaneIcon', () => ({ PaperPlaneIcon: () => null }));
 vi.mock('@/session/useConfirmLeaveWhileUploading', () => ({ useConfirmLeaveWhileUploading: (active: boolean) => { h.leaveGuard.push(active); return () => h.leaveDecision(); } }));
 vi.mock('@/components/MobilePrimitives', () => ({
   MainWindowActionButton: ({ action }: any) => el('button', {
-    'data-testid': action.testID, 'aria-label': action.accessibilityLabel, 'aria-busy': action.busy ? 'true' : undefined,
+    'data-testid': action.testID, 'aria-label': action.accessibilityLabel ?? action.label, 'aria-busy': action.busy ? 'true' : undefined,
     disabled: action.disabled || action.busy || !action.onPress, onClick: action.onPress,
   }, action.label),
   MainWindowOptionButton: ({ label, onPress, selected, disabled, testID }: any) => el('button',
@@ -141,11 +171,14 @@ vi.mock('@/session/HomeHeaderGlassButton', () => ({
   HomeHeaderGlassButton: ({ onPress, testID, disabled, children }: any) => el('button', { 'data-testid': testID, disabled, onClick: onPress }, children),
 }));
 vi.mock('@/session/CompanionSheet', () => ({
-  CompanionSheet: ({ visible, children, footer, preventDismiss, onClose, onClosed, testID }: any) => {
+  CompanionSheet: ({ visible, children, footer, preventDismiss, onClose, onClosed, onBack, trailingAction, testID }: any) => {
     if (testID === 'botGroup.settings') h.closeSettings = onClose;
     const was = useRef(visible);
     useEffect(() => { if (was.current && !visible) onClosed?.(); was.current = visible; }, [visible]);
-    return visible ? el('div', { 'data-testid': testID, 'data-prevent-dismiss': String(!!preventDismiss) }, children, footer) : null;
+    return visible ? el('div', { 'data-testid': testID, 'data-prevent-dismiss': String(!!preventDismiss) },
+      onBack ? el('button', { 'data-testid': `${testID}.back`, onClick: onBack }) : null,
+      trailingAction ? el('button', { 'data-testid': trailingAction.testID, disabled: trailingAction.disabled || trailingAction.busy, onClick: trailingAction.onPress }, trailingAction.label) : null,
+      children, footer) : null;
   },
 }));
 vi.mock('@/session/BotGroupAvatars', () => ({
@@ -153,6 +186,7 @@ vi.mock('@/session/BotGroupAvatars', () => ({
   BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
   useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
 }));
+vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
   BotGroupSpeakerRow: ({ identity, activity, sessionId }: any) => el('div', { 'data-testid': `speaker.${identity.botId}.${activity}`, 'data-session': sessionId }, identity.name),
 }));
@@ -221,12 +255,19 @@ vi.mock('@/session/MessageRenderer', () => ({
 }));
 vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async () => { throw new Error('offline'); } }));
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
-vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: () => h.chat }));
+vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
   group: undefined, editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh: vi.fn(),
-}), useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
+}), useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/session/listDisclosureTransition', () => ({ DisclosureItem: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children) }));
+vi.mock('@/session/FileBrowserSegmentedControl', () => ({
+  FileBrowserSegmentedControl: ({ options, onChange, value }: any) => el('div', null, options.map((option: any) => el('button', {
+    key: option.value, 'data-testid': option.testID, 'aria-pressed': option.value === value, onClick: () => onChange(option.value) }, option.label))),
+}));
+vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ openTeammate: h.openTeammate }) }));
+vi.mock('@/session/groupAvatarPicker', () => ({ pickGroupAvatar: () => h.pickAvatar() }));
 vi.mock('@/session/CompanionPresenceRing', () => ({ CompanionPresenceRing: () => null }));
 vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 // The live card of my own teammate's task reads the computer over device-link; only which computer is under test.
@@ -287,21 +328,30 @@ async function click(id: string) {
   if (!target) throw new Error(`missing ${id}`);
   await act(async () => { target.click(); });
 }
-async function render(data: BotGroupRemoteChatData | null = group(), kind: 'ready' | 'loading' | 'missing' | 'error' = 'ready', threadRootId?: string) {
-  h.chat = {
+async function openTopicMenu(messageId: string) {
+  const menu = byId(`botGroup.thread.context.${messageId}`);
+  expect(menu).not.toBeNull();
+  await click(`botGroup.thread.more.${messageId}`);
+}
+async function render(data: BotGroupRemoteChatData | null = group(), kind: 'ready' | 'loading' | 'missing' | 'error' = 'ready', threadRootId?: string, deviceId = 'mac') {
+  h.chat = { pending: [],
     ...h.chat,
     state: kind === 'ready' ? { kind, group: data } : kind === 'error' ? { kind, message: 'x' } : { kind },
   };
-  await act(async () => root.render(el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', threadRootId })));
+  await act(async () => root.render(el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId })));
 }
 
 beforeEach(() => {
+  shareSelectionStore.exit();
   h.management = null;
+  h.cloudRows = null;
+  h.navigation = { index: 0, routes: [{ params: {} }] }; h.hardwareBack = null;
   vi.clearAllMocks();
+  h.exported = []; h.pngExport.mockResolvedValue('encoded');
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
   h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
-  h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
+  h.chat = { pending: [], reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = []; h.leaveGuard = []; h.leaveDecision = async () => false;
   h.local = {
     options: null, setPending: null,
@@ -343,7 +393,7 @@ describe('group timeline', () => {
       { botId: 'mimi', name: '咪咪', avatar: '🐱', avatarColor: 'red', status: 'active', isOwned: true },
       { botId: 'abu', name: '阿布', avatar: '🦉', avatarColor: 'blue', status: 'active', isOwned: false },
     ] });
-    data.messages.push(message('t1', 20, { authorBotId: 'abu', authorName: '阿布', content: '我开了个任务',
+    data.messages.push(message('t1', 20, { authorBotId: 'abu', authorName: '阿布', content: '',
       task: { meta, state: 'waiting', title: '官网首页', summary: '首页要放几个案例？' } }));
     await render(parseBotGroupChatData(data)!);
     const card = byId('botGroup.task')!;
@@ -351,6 +401,8 @@ describe('group timeline', () => {
     expect(card.textContent).toContain('groupChat.task.state.waiting');
     expect(card.textContent).toContain('首页要放几个案例？');
     expect(byId('botGroup.task.live')).toBeNull();
+    await click('botGroup.thread.context.t1.action.quote');
+    expect(byId('botGroup.cancelReply')).not.toBeNull();
   });
 
   it('opens my own teammate\'s task live in a group entered straight from the Chat Server, via the companion\'s home computer', async () => {
@@ -362,7 +414,7 @@ describe('group timeline', () => {
     ] });
     data.messages.push(message('t3', 22, { authorBotId: 'mimi', authorName: '咪咪', content: '我开了个任务', task: { meta, state: 'started', title: '官网首页' } }),
       message('t4', 23, { authorBotId: 'abu', authorName: '阿布', content: '我也开了', task: { meta: { ...meta, delegationId: 'task-4', fromBotId: 'abu' }, state: 'started', title: '整理行程' } }));
-    h.chat = { ...h.chat, server: true, state: { kind: 'ready', group: data } };
+    h.chat = { pending: [], ...h.chat, server: true, state: { kind: 'ready', group: data } };
     // No computer on the route: the direct Chat Server entry.
     await act(async () => root.render(el(BotGroupChatScreen, { deviceId: '', deviceName: '', groupId: 'g1' })));
     expect(all('botGroup.task.live')).toHaveLength(1);
@@ -463,7 +515,7 @@ describe('group timeline', () => {
 
   it('notices arrivals after a notification opens history without acknowledging the tail', async () => {
     const data = group();
-    h.chat = { ...h.chat, state: { kind: 'ready', group: data } };
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: data } };
     const props = { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1', messageId: data.messages[0].id };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => {
@@ -471,7 +523,7 @@ describe('group timeline', () => {
       h.scroll.onContentSizeChange(400, 2000);
     });
     h.scrollToEnd.mockClear();
-    h.chat = { ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
+    h.chat = { pending: [], ...h.chat, state: { kind: 'ready', group: { ...data, messages: [...data.messages, message('arrival', 20, {})] } } };
     await act(async () => root.render(el(BotGroupChatScreen, props)));
     await act(async () => h.scroll.onContentSizeChange(400, 2500));
     expect(byId('botGroup.newMessages')?.textContent).toContain('count=1');
@@ -501,22 +553,48 @@ describe('group timeline', () => {
     await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
       authorName: 'Bot', noticeCode: 'member-unavailable', runtimeFailureCode })] }));
     const text = all('botGroup.notice')[0]?.textContent;
-    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}(name=Bot)`);
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.summary(name=Bot)`);
     expect(text).not.toContain('groupChat.notice.memberUnavailable');
   });
 
-  it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('renders the runtime reason and recovery advice on mobile: %s', async runtimeFailureCode => {
+  // Unit: the real group/thread renderer must keep long failure guidance collapsed.
+  // The previous matrix only checked concatenated text, missing the oversized notice reported by the user.
+  it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('discloses guidance without retrying a failed reply: %s', async runtimeFailureCode => {
     await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
       authorName: 'Bot', noticeCode: 'member-failed', runtimeFailureCode })] }));
     const text = all('botGroup.notice')[0]?.textContent;
-    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}(name=Bot)`);
-    expect(text).toContain('groupChat.notice.runtimeFailureSetupHint');
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.summary(name=Bot)`);
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.advice`);
+    expect(text).not.toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
+    expect(text).not.toContain('groupChat.notice.runtimeFailureSetupHint');
     expect(text).not.toContain('groupChat.notice.memberFailed');
+    const toggle = [...all('botGroup.notice')[0]!.querySelectorAll('button')]
+      .find(button => button.textContent === 'session.tail.showErrorDetails')!;
+    expect(toggle).toBeTruthy();
+    await act(async () => toggle.click());
+    expect(all('botGroup.notice')[0]?.textContent).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await act(async () => toggle.click());
+    expect(all('botGroup.notice')[0]?.textContent).not.toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
+  });
+
+  // #7769: model-switch advice must retain its computer location after disclosure.
+  it.each(['AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED', 'RUNTIME_TIMEOUT'] as const)(
+    'keeps computer setup guidance inside thread details: %s', async runtimeFailureCode => {
+    h.chat.server = true;
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-failed', runtimeFailureCode, threadRootId: 'thread-root' })] }), 'ready', 'thread-root', '');
+    const notice = all('botGroup.notice')[0]!;
+    expect(notice.textContent).not.toContain('groupChat.notice.runtimeFailureSetupHint');
+    const toggle = [...notice.querySelectorAll('button')].find(button => button.textContent === 'session.tail.showErrorDetails')!;
+    await act(async () => toggle.click());
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureSetupHint');
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   it('renders messages, notices, round ends and plan ends like the desktop timeline', async () => {
     await render();
-    expect(byId('botGroup.message.user')?.textContent).toBe('@咪咪 帮我做官网');
+    expect(byId('botGroup.message.userBubble')?.textContent).toBe('@咪咪 帮我做官网');
     expect(all('botGroup.message.bot')[0]?.textContent).toContain('好的，我看看');
     expect(all('botGroup.message.bot')[0]?.textContent).not.toContain('**');
     const notices = all('botGroup.notice').map((entry) => entry.textContent);
@@ -590,11 +668,16 @@ describe('group timeline', () => {
     await render(data);
     expect(byId('botGroup.plan.stepMenu.0.action.member:person')).toBeNull();
     await click('botGroup.settingsButton');
-    expect(byId('botGroup.settings.memberMenu.person.action.organizer:person')).toBeNull();
-    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    // The organizer is chosen among teammates in 群管理, never a person.
+    await click('botGroup.settings.manage');
+    expect(byId('botGroup.settings.organizer.action.person')).toBeNull();
+    expect(byId('botGroup.settings.organizer.action.abu')).not.toBeNull();
+    await click('botGroup.settings.back');
+    await click('botGroup.settings.tab.members');
+    await click('botGroup.settings.memberMenu.person.action.remove');
     expect(h.chat.act).toHaveBeenLastCalledWith('remove-member', { actorId: 'actor-person' });
     h.chat.act.mockRejectedValueOnce(new Error('PERMISSION_DENIED'));
-    await click('botGroup.settings.memberMenu.person.action.remove:person');
+    await click('botGroup.settings.memberMenu.person.action.remove');
     expect(node.textContent).toContain('groupChat.errors.permissionDenied');
     expect(byId('botGroup.settings.member.person')).not.toBeNull();
   });
@@ -686,7 +769,7 @@ describe('group composer', () => {
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
     ] }));
-    await click(`botGroup.reply.${originalId}`);
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     await type('引用回复');
     h.chat.act.mockRejectedValueOnce(new Error('QUOTE_UNAVAILABLE'));
     await click('botGroup.composer.send');
@@ -713,10 +796,10 @@ describe('group composer', () => {
     await render(group({ serverBacked: true, openPlan: null, messages: [
       message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
     ] }));
-    await click(`botGroup.reply.${originalId}`);
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     h.inputFocus.mockClear(); h.inputBlur.mockClear();
     h.inputFocused = focused; h.keyboardVisible = keyboard;
-    await click(`botGroup.reply.${originalId}`);
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     expect(h.inputBlur).toHaveBeenCalledTimes(blurs);
     expect(h.inputFocus).toHaveBeenCalledTimes(1);
   });
@@ -900,7 +983,7 @@ describe('group attachments', () => {
     expect(h.local.addPastedImages).not.toHaveBeenCalled();
     expect(h.deleted).toEqual(['file:///cache/cindy-composer-paste-1.png']);
     // Offline: the + stays the old disabled menu even on a computer that takes attachments.
-    h.chat = { ...h.chat, online: false };
+    h.chat = { pending: [], ...h.chat, online: false };
     await render(group({ openPlan: null, supportsAttachments: true }));
     expect(byId('botGroup.composer.menu')).not.toBeNull();
     expect(byId('botGroup.composer.more')?.disabled).toBe(true);
@@ -1150,10 +1233,12 @@ describe('group settings', () => {
     h.chat.act.mockImplementationOnce(() => new Promise(resolve => { finishOld = () => resolve({ effects: [] }); }))
       .mockImplementationOnce(() => new Promise(resolve => { finishNew = () => resolve({ effects: [] }); }));
     await openSettings(data);
+    await click('botGroup.settings.manage');
     await click('botGroup.settings.dissolve');
     expect(byId('botGroup.settings.dissolve')?.disabled).toBe(true);
     await act(async () => h.closeSettings!());
     await click('botGroup.settingsButton');
+    await click('botGroup.settings.manage');
     expect(byId('botGroup.settings.dissolve')?.disabled).toBe(false);
     await click('botGroup.settings.dissolve');
     expect(h.chat.act).toHaveBeenCalledTimes(2);
@@ -1193,120 +1278,113 @@ describe('group settings', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('update', { name: '保留草稿' });
   });
 
-  it('edits a direct server group without management computer UI while chat stays direct', async () => {
+  it('edits a direct server group through the chat service while chat stays direct', async () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsMemberRemoval: true, revision: 5 });
-    data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
+    data.members[0] = { ...data.members[0], actorId: 'mimi', isSelf: true, isOwned: true, role: 'owner' };
     h.chat.server = true;
     const manage = vi.fn(async () => ({ effects: [] }));
-    h.management = { group: data, editable: true, loading: false, reason: null,
-      act: manage, refresh: vi.fn(), select: vi.fn() };
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: manage, refresh: vi.fn() };
     h.teammates = { rows: [{ key: 'new', host: { deviceId: 'pc', deviceName: 'PC' }, item: {
       ref: { collectionId: 'teammates', kind: 'bot', id: 'new-bot' }, revision: '1', display: { title: 'New bot' }, links: [],
     } }], loading: false, failed: false };
     await openSettings(data);
-    expect(h.inputs['botGroup.settings.name'].editable).toBe(true);
     expect(byId('botGroup.settings.management')).toBeNull();
-    expect(byId('botGroup.settings.connectedDot')).toBeNull();
     expect(byId('botGroup.settings.retry')).toBeNull();
-    expect(byId('botGroup.settings.body')?.style.opacity).toBe('');
+    await click('botGroup.settings.editAbout');
     await act(async () => { h.inputs['botGroup.settings.name'].onChangeText('Managed'); });
-    await act(async () => { await h.inputs['botGroup.settings.name'].onSubmitEditing(); });
-    expect(manage).toHaveBeenCalledWith('update', { name: 'Managed', expectedRevision: 5 });
+    await act(async () => { h.inputs['botGroup.settings.topic'].onChangeText('Launch'); });
+    await click('botGroup.settings.editSave');
+    expect(manage).toHaveBeenCalledWith('update', { name: 'Managed', topic: 'Launch', expectedRevision: 5 });
     expect(h.chat.act).not.toHaveBeenCalled(); expect(h.chat.reload).toHaveBeenCalled();
-    await click('botGroup.settings.add'); await click('botGroup.settings.addable.new-bot');
-    expect(manage).toHaveBeenLastCalledWith('add-member', { botId: 'new-bot', expectedRevision: 5 });
+    // Back on the first page: your own teammate joins from the one 邀请 menu.
+    await click('botGroup.settings.invite.action.bots');
+    await click('botGroup.settings.inviteBot.new-bot');
+    expect(manage).toHaveBeenLastCalledWith('add-member', { actorId: 'new-bot' });
+    expect(byId('botGroup.settings.notice')?.textContent).toContain('groupChat.groupSettings.inviteBotsAdded');
   });
 
-  // Cloud description drafts must survive a concurrent edit; role changes use the selected member.
-  it('preserves a conflicted cloud description and changes a member role', async () => {
+  // Cloud drafts must survive a concurrent edit; role changes use the selected member.
+  it('preserves a conflicted cloud draft and changes a member role', async () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, description: 'Original' });
     data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
-    data.members[1] = { ...data.members[1], actorId: 'member-actor', role: 'member' };
+    data.members[1] = { ...data.members[1], actorId: 'member-actor', actorKind: 'human', role: 'member' };
     const manage = vi.fn(async () => ({ effects: [] }));
     h.chat.server = true;
-    h.management = { group: data, editable: true, loading: false, reason: null, act: manage, refresh: vi.fn() };
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: manage, refresh: vi.fn() };
     await openSettings(data);
+    await click('botGroup.settings.editAbout');
     await act(async () => { h.inputs['botGroup.settings.description'].onChangeText('My draft'); });
     manage.mockRejectedValueOnce(new Error('REVISION_CONFLICT'));
-    await click('botGroup.settings.descriptionSave');
-    expect(manage).toHaveBeenLastCalledWith('update', { description: 'My draft', expectedRevision: 5 });
+    await click('botGroup.settings.editSave');
+    expect(manage).toHaveBeenLastCalledWith('update', expect.objectContaining({ description: 'My draft', expectedRevision: 5 }));
     expect(h.inputs['botGroup.settings.description'].value).toBe('My draft');
     expect(byId('botGroup.settings')?.textContent).toContain('groupChat.settings.conflict');
-    h.management.group = { ...data, description: 'Other edit', revision: 6 };
+    // Another manager renamed the group meanwhile: the retry sends only your field, never your stale name.
+    h.management.group = { ...data, name: 'Renamed elsewhere', description: 'Other edit', revision: 6 };
     await render(h.management.group);
     expect(h.inputs['botGroup.settings.description'].value).toBe('My draft');
-    await click('botGroup.settings.descriptionSave');
+    await click('botGroup.settings.editSave');
     expect(manage).toHaveBeenLastCalledWith('update', { description: 'My draft', expectedRevision: 6 });
-    await click(`botGroup.settings.memberMenu.${data.members[1].botId}.action.role:${data.members[1].botId}`);
+    await click('botGroup.settings.tab.members');
+    await click(`botGroup.settings.memberMenu.${data.members[1].botId}.action.role`);
     expect(manage).toHaveBeenLastCalledWith('set-member-role', { actorId: 'member-actor', role: 'admin' });
   });
 
   // Regression: native dismissal need not emit blur, so an edited description was lost.
-  // Unit tier uses the production settings component; no artificial onBlur is dispatched.
-  it('keeps an unblurred cloud draft open until saving succeeds or the user explicitly cancels', async () => {
+  it('keeps an unsaved cloud draft open until saving succeeds or the user goes back', async () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, description: 'Original' });
     data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
     let finish!: () => void;
     const manage = vi.fn(() => new Promise(resolve => { finish = () => resolve({ effects: [] }); }));
     h.chat.server = true;
-    h.management = { group: data, editable: true, loading: false, reason: null, act: manage, refresh: vi.fn() };
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: manage, refresh: vi.fn() };
     await openSettings(data);
-    await act(async () => { h.inputs['botGroup.settings.description'].onChangeText('Unblurred draft'); });
+    await click('botGroup.settings.editAbout');
+    await act(async () => { h.inputs['botGroup.settings.description'].onChangeText('Unsaved draft'); });
     await act(async () => { h.closeSettings?.(); });
     expect(byId('botGroup.settings')).not.toBeNull();
     expect(byId('botGroup.settings')?.dataset.preventDismiss).toBe('true');
     expect(manage).not.toHaveBeenCalled();
-    await click('botGroup.settings.descriptionSave');
-    expect(manage).toHaveBeenCalledWith('update', { description: 'Unblurred draft', expectedRevision: 5 });
+    await click('botGroup.settings.editSave');
+    expect(manage).toHaveBeenCalledWith('update', expect.objectContaining({ description: 'Unsaved draft', expectedRevision: 5 }));
     await act(async () => { h.closeSettings?.(); });
     expect(byId('botGroup.settings')).not.toBeNull();
     await act(async () => { finish(); });
     expect(byId('botGroup.settings')?.dataset.preventDismiss).toBe('false');
-    await act(async () => { h.closeSettings?.(); });
-    expect(byId('botGroup.settings')).toBeNull();
+    expect(byId('botGroup.settings.editSave')).toBeNull();
 
-    await click('botGroup.settingsButton');
     manage.mockRejectedValueOnce(new Error('NETWORK_ERROR'));
+    await click('botGroup.settings.editAbout');
     await act(async () => { h.inputs['botGroup.settings.description'].onChangeText('Retained on failure'); });
-    await click('botGroup.settings.descriptionSave');
+    await click('botGroup.settings.editSave');
     await act(async () => { h.closeSettings?.(); });
     expect(h.inputs['botGroup.settings.description'].value).toBe('Retained on failure');
     expect(byId('botGroup.settings')?.dataset.preventDismiss).toBe('true');
-    await click('botGroup.settings.descriptionCancel');
+    await click('botGroup.settings.back');
+    await act(async () => { h.closeSettings?.(); });
     expect(byId('botGroup.settings')).toBeNull();
-    await click('botGroup.settingsButton');
-    expect(h.inputs['botGroup.settings.description'].value).toBe('Original');
-    expect(byId('botGroup.settings.descriptionSave')).toBeNull();
   });
 
   it('explains unavailable management and offers retry without enabling edits', async () => {
     const refresh = vi.fn();
-    h.management = { editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh };
+    h.management = { editable: false, ready: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh };
     h.chat.server = true; await openSettings(group({ serverBacked: true }));
-    expect(h.inputs['botGroup.settings.name'].editable).toBe(false);
-    expect(byId('botGroup.settings.body')?.style.opacity).toBe('0.6');
     expect(byId('botGroup.settings.managementStatus')?.textContent).toBe('groupChat.settings.cloudStatus.unavailable');
-    expect(byId('botGroup.settings.computerName')).toBeNull();
-    expect(byId('botGroup.settings.retry')?.textContent).toBe('groupChat.settings.retry');
-    expect((byId('botGroup.settings.member.mimi') as HTMLButtonElement)?.disabled).toBe(true);
-    await click('botGroup.settings.add');
-    expect(byId('botGroup.settings.addable')).toBeNull();
+    expect(byId('botGroup.settings.editAbout')).toBeNull();
+    expect(byId('botGroup.settings.manage')).toBeNull();
     await click('botGroup.settings.retry'); expect(refresh).toHaveBeenCalledOnce();
-    expect(h.chat.act).not.toHaveBeenCalled();
-    expect(byId('botGroup.settings.delete')).toBeNull();
-    expect(byId('botGroup.settings.hide')?.disabled).toBe(true);
     expect(byId('botGroup.settings')?.textContent).toContain('groupChat.lifecycle.unavailable');
-    expect(byId('botGroup.settings')?.textContent).not.toContain('groupChat.settings.deleteNote');
+    await click('botGroup.settings.tab.members');
+    expect(byId('botGroup.settings.memberMenu.mimi')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
-  it.each(['permission', 'unavailable', 'loading'])('keeps the %s reason explicit in the compact status row', async reason => {
+  it.each(['unavailable', 'loading'])('keeps the %s state explicit in the compact status row', async reason => {
     const refresh = vi.fn();
     h.chat.server = true;
-    h.management = { editable: false, loading: reason === 'loading', reason: reason === 'loading' ? null : reason,
-      act: vi.fn(), select: vi.fn(), refresh };
+    h.management = { editable: false, ready: false, loading: reason === 'loading', reason: reason === 'loading' ? null : reason, act: vi.fn(), refresh };
     await openSettings(group({ serverBacked: true }));
     expect(byId('botGroup.settings.managementStatus')?.textContent).toBe(`groupChat.settings.cloudStatus.${reason}`);
-    expect(h.inputs['botGroup.settings.name'].editable).toBe(false);
     if (reason === 'loading') {
       expect(byId('botGroup.settings.connecting')).not.toBeNull();
       expect(byId('botGroup.settings.retry')).toBeNull();
@@ -1314,6 +1392,15 @@ describe('group settings', () => {
       expect(byId('botGroup.settings.connecting')).toBeNull();
       await click('botGroup.settings.retry'); expect(refresh).toHaveBeenCalledOnce();
     }
+  });
+
+  // Members are not warned that they cannot manage: 群管理 is simply not there.
+  it('shows no permission warning to a member', async () => {
+    h.chat.server = true;
+    h.management = { editable: false, ready: true, loading: false, reason: 'permission', act: vi.fn(), refresh: vi.fn() };
+    await openSettings(group({ serverBacked: true }));
+    expect(byId('botGroup.settings.management')).toBeNull();
+    expect(byId('botGroup.settings.manage')).toBeNull();
   });
 
   it('renames, changes the organizer and edits members on this computer', async () => {
@@ -1364,13 +1451,27 @@ describe('group settings', () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsGroupLeave: true, revision: 5 });
     data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role };
     await openSettings(data);
-    expect(h.inputs['botGroup.settings.name'].editable).toBe(role === 'admin');
-    expect(byId('botGroup.settings.add')?.disabled).toBe(role !== 'admin');
+    // Admins edit the group through 群管理; members only see their own settings.
+    expect(byId('botGroup.settings.manage') !== null).toBe(role === 'admin');
+    expect(byId('botGroup.settings.invite.action.bots') !== null).toBe(role === 'admin');
     expect(byId('botGroup.settings.delete')).toBeNull();
     expect(byId('botGroup.settings.leave')?.disabled).toBe(false);
     await click('botGroup.settings.leave');
     expect(h.chat.act).toHaveBeenCalledWith('leave', undefined);
     expect(h.leave).toHaveBeenCalledOnce();
+  });
+
+  // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.
+  it('renames through a computer without touching the description it cannot show', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, description: 'Kept on the server' });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'owner' };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    await click('botGroup.settings.rename');
+    expect(h.inputs['botGroup.settings.description']).toBeUndefined();
+    await act(async () => { h.inputs['botGroup.settings.name'].onChangeText('新名字'); });
+    await click('botGroup.settings.editSave');
+    expect(h.chat.act).toHaveBeenLastCalledWith('update', { expectedRevision: 5, name: '新名字' });
   });
 
   it('keeps explicit leave disabled when the computer is offline', async () => {
@@ -1384,32 +1485,50 @@ describe('group settings', () => {
     expect(h.chat.act).not.toHaveBeenCalled();
   });
 
-  it('keeps direct server settings archive owner-only', async () => {
-    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
-    data.members[0] = { ...data.members[0], isOwned: true, role: 'admin' };
+  // Like Desktop, admins archive; dissolving stays with the owner.
+  it.each(['admin', 'owner'] as const)('lets a direct %s archive and only the owner dissolve', async role => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsDissolve: true, revision: 5 });
+    data.members[0] = { ...data.members[0], isOwned: true, role };
     h.chat.server = true;
-    h.management = { group: data, editable: true, loading: false, reason: null,
-      act: vi.fn(), refresh: vi.fn() };
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: vi.fn(async () => ({})), refresh: vi.fn() };
     await openSettings(data);
-    expect(byId('botGroup.settings.delete')?.disabled).toBe(true);
-    await click('botGroup.settings.delete');
-    expect(h.management.act).not.toHaveBeenCalled();
+    await click('botGroup.settings.manage');
+    expect(byId('botGroup.settings.dissolve') !== null).toBe(role === 'owner');
+    await click('botGroup.settings.archive');
+    expect(h.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ destructive: true, confirmLabel: 'groupChat.groupSettings.archive' }));
+    expect(h.management.act).toHaveBeenCalledExactlyOnceWith('archive', { archived: true });
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   it('searches the host roster when adding a server group member', async () => {
     const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
-    data.members[0] = { ...data.members[0], isOwned: true, role: 'owner' };
+    data.members[0] = { ...data.members[0], actorId: 'mimi', isSelf: true, isOwned: true, role: 'owner' };
     await openSettings(data);
-    await click('botGroup.settings.add');
-    expect(h.inputs['botGroup.settings.memberSearch']).toBeDefined();
-    await act(async () => { h.inputs['botGroup.settings.memberSearch'].onChangeText('Beyond first page'); });
+    await click('botGroup.settings.invite.action.bots');
+    await act(async () => { h.inputs['botGroup.settings.inviteSearch'].onChangeText('Beyond first page'); });
     expect(h.teammateQuery).toBe('Beyond first page');
     h.teammates.rows = [{ key: 'beyond', host: { deviceId: 'pc', deviceName: 'PC' }, item: {
       ref: { collectionId: 'teammates', kind: 'bot', id: 'bot-201' }, revision: '1', display: { title: 'Beyond first page' }, links: [],
     } }];
     await render(data);
-    await click('botGroup.settings.addable.bot-201');
+    await click('botGroup.settings.inviteBot.bot-201');
     expect(h.chat.act).toHaveBeenLastCalledWith('add-member', { botId: 'bot-201', expectedRevision: 5 });
+  });
+
+  it('adds a companion from another computer through the host without duplicating existing actors', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'mimi', isSelf: true, isOwned: true, role: 'owner' };
+    data.members[1] = { ...data.members[1], actorId: 'actor-existing' };
+    h.cloudRows = [
+      { id: 'actor-linux', externalId: 'linux-bot', name: 'Linux', avatar: null, homeDeviceId: 'linux' },
+      { id: 'actor-existing', externalId: 'existing-remote', name: 'Already joined', avatar: null, homeDeviceId: 'linux' },
+      { id: 'actor-hidden', externalId: 'hidden-local', name: 'Hidden local', avatar: null, homeDeviceId: 'mac' },
+    ];
+    await openSettings(data); await click('botGroup.settings.invite.action.bots');
+    expect(byId('botGroup.settings.inviteBot.existing-remote')).toBeNull();
+    expect(byId('botGroup.settings.inviteBot.hidden-local')).toBeNull();
+    await click('botGroup.settings.inviteBot.linux-bot');
+    expect(h.chat.act).toHaveBeenLastCalledWith('add-member', { botId: 'linux-bot', expectedRevision: 5 });
   });
 
   it('deletes after the system confirmation, then leaves once the sheet has closed', async () => {
@@ -1444,7 +1563,7 @@ describe('group settings', () => {
 describe('offline computer', () => {
   it('says the computer is offline instead of spinning, and disables actions on a loaded group', async () => {
     vi.useFakeTimers();
-    h.chat = { ...h.chat, online: false };
+    h.chat = { pending: [], ...h.chat, online: false };
     await render(null, 'loading');
     expect(byId('botGroup.offline')?.textContent).toContain('devices.resources.hostOffline');
     expect(byId('spinner')).toBeNull();
@@ -1462,7 +1581,7 @@ describe('offline computer', () => {
 
 describe('direct server group presentation', () => {
   it.each([true, false])('aligns attachments with their message author (server=%s)', async (server) => {
-    h.chat = { ...h.chat, server, ...(server ? { media: vi.fn() } : {}) };
+    h.chat = { pending: [], ...h.chat, server, ...(server ? { media: vi.fn() } : {}) };
     const attachment = { id: 'media', name: 'brief.pdf', mimeType: 'application/pdf', size: 10, category: 'pdf' as const, url: null, path: null };
     await render(group({ messages: [
       message('mine', 1, { authorKind: 'user', isSelf: true, attachments: [attachment] }),
@@ -1474,7 +1593,7 @@ describe('direct server group presentation', () => {
     expect(all('attachmentStrip').map(strip => strip.getAttribute('data-align'))).toEqual(['right', 'left', 'left']);
   });
   it('uses server failure copy, keeps other humans incoming and loads older history', async () => {
-    h.chat = { ...h.chat, server: true, online: false, loadOlder: vi.fn(async () => {}) };
+    h.chat = { pending: [], ...h.chat, server: true, online: false, loadOlder: vi.fn(async () => {}) };
     await render(null, 'error');
     expect(byId('botGroup.loadFailed')?.textContent).toContain('groupChat.server.loadFailed');
     expect(node.textContent).not.toContain('devices.resources.hostOffline');
@@ -1494,7 +1613,7 @@ describe('direct server group presentation', () => {
     h.platform.OS = platform;
     const attachment = (id: string) => ({ id, name: `${id}.png`, category: 'file' as const, mimeType: '', size: 0, url: null, path: null });
     const media = vi.fn(async (id: string) => ({ ...attachment(id), category: 'image' as const, url: `https://media.example.invalid/${id}` }));
-    h.chat = { ...h.chat, server: true, media };
+    h.chat = { pending: [], ...h.chat, server: true, media };
     const data = (count: number) => group({ messages: Array.from({ length: count }, (_, n) => message(`m${n}`, n + 1,
       { authorKind: 'user', isSelf: false, attachments: [attachment(`image-${n}`)] })), plans: [], openPlan: null });
     const show = async (count: number) => {
@@ -1522,8 +1641,8 @@ describe('direct server group presentation', () => {
 
   it.each([undefined, 'thread-root'])('gates server previews by the viewport and reauthorizes on tap (thread=%s)', async (threadRootId) => {
     const attachment = { id: 'media', name: 'picture.png', mimeType: 'image/png', size: 10, category: 'image' as const, url: 'https://media.example.invalid/one-use', path: null };
-    h.chat = { ...h.chat, server: true, media: vi.fn(async () => attachment) };
-    await render(group({ messages: [message('picture', 1, { authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }), 'ready', threadRootId);
+    h.chat = { pending: [], ...h.chat, server: true, media: vi.fn(async () => attachment) };
+    await render(group({ messages: [message('picture', 1, { threadRootId, authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }), 'ready', threadRootId, threadRootId ? '' : 'mac');
     expect(h.chat.media).not.toHaveBeenCalled();
     let row = byId('attachmentStrip') as HTMLElement & { nativeLayout?: (event: unknown) => void };
     while (!row.nativeLayout) row = row.parentElement as typeof row;
@@ -1570,4 +1689,424 @@ it('renders component body as readable text without changing the message', async
   expect(body.textContent).toContain('After');
   expect(body.textContent).not.toContain('"op":"create"');
   expect(reply.content).toBe(content);
+});
+
+
+// Unit: the actual main/thread timeline must retain owner-only historical progress.
+// The remote resource parser and the disclosure state have separate regression coverage.
+it.each([
+  [undefined, undefined], ['thread-root', undefined], [undefined, 'original-mac'], ['thread-root', 'original-mac'],
+])('keeps group process above the final answer on its execution host (thread=%s, host=%s)', async (threadRootId, deviceId) => {
+  const process = { groupId: 'g1', executionId: 'execution', sessionId: 'lane', clientId: 'source', deviceId };
+  const data = group({ plans: [], openPlan: null, members: [{ ...group().members[0], isOwned: true, homeDeviceId: 'owner-mac' }],
+    messages: [message('result', 2, { authorBotId: 'mimi', content: 'Final answer', process, threadRootId })] });
+  h.processRead.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Help' },
+    { clientId: 'note', role: 'assistant', content: 'Progress note', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  h.chat.server = true;
+  await render(data, 'ready', threadRootId, '');
+  expect(h.processRead).toHaveBeenCalledWith(deviceId ?? 'owner-mac', 'local-db:messages:around-client-id', ['lane', 'source', { radius: 80 }]);
+  expect(node.textContent).toContain('Progress note');
+  const record = [...node.querySelectorAll('section')].find(section => section.textContent?.includes('Progress note'))!;
+  expect(record.textContent).not.toContain('Final answer');
+  expect(node.textContent!.indexOf('Progress note')).toBeLessThan(node.textContent!.indexOf('Final answer'));
+  h.processRead.mockClear();
+  await render({ ...data, members: [{ ...data.members[0], isOwned: false }] }, 'ready', threadRootId, '');
+  expect(node.textContent).not.toContain('Progress note');
+  expect(h.processRead).not.toHaveBeenCalled();
+  await render({ ...data, messages: [{ ...data.messages[0], process: { ...process, groupId: 'another-group' } }] }, 'ready', threadRootId, '');
+  expect(h.processRead).not.toHaveBeenCalled();
+});
+
+// D2 feature acceptance (unit, real Screen/Timeline/Composer entry): prior coverage
+// opened notifications but not user-created threads, remote rejection or return anchors.
+// Minimal cases distinguish quote vs thread scope, unrelated message filtering, and
+// a retained group scrolling while a thread is open; no native UI claim is made here.
+describe('mobile group threads', () => {
+  const rootId = '11111111-1111-4111-8111-111111111111';
+  const rootMessage = () => message(rootId, 1, { authorKind: 'user', isSelf: false, content: 'Original question', replyCount: 0 });
+  const threadGroup = (overrides: Partial<BotGroupRemoteChatData> = {}) => group({
+    messages: [rootMessage()], plans: [], openPlan: null, serverBacked: true, ...overrides,
+  });
+
+  // Unit: attachment-only messages retain footer actions without wrapping the attachment.
+  it.each(['user', 'bot'] as const)('opens a thread from an attachment-only %s message using More', async authorKind => {
+    h.chat.server = true;
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: '',
+      attachments: [{ id: 'media', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 9, url: null, path: null }],
+    })] }), 'ready', undefined, '');
+    await openTopicMenu(rootId);
+    await click(`botGroup.thread.context.${rootId}.action.thread`);
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId } });
+  });
+
+  // User correction, unit: removing message long press must keep the footer and topic entry together.
+  // Mixed attachments stay outside the native More trigger so preview taps reach their responder.
+  it.each(['user', 'bot'] as const)('keeps a %s attachment outside More while showing reply actions and the topic entry', async authorKind => {
+    h.chat.server = true;
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'See attachment', replyCount: 2,
+      attachments: [{ id: 'media', name: 'brief.pdf', category: 'pdf', mimeType: 'application/pdf', size: 9, url: null, path: null }],
+    })] }), 'ready', undefined, '');
+    const attachment = byId('attachment.file')!;
+    expect(attachment).not.toBeNull();
+    expect(attachment.closest('[data-testid^="botGroup.thread.context."]')).toBeNull();
+    expect(byId(`botGroup.thread.${rootId}`)).not.toBeNull();
+    expect(byId(`botGroup.thread.context.${rootId}.action.copy`)).not.toBeNull();
+    expect(byId(`botGroup.thread.${rootId}`)!.compareDocumentPosition(byId(`botGroup.thread.context.${rootId}.action.copy`)!)
+      & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    await click(`botGroup.thread.context.${rootId}.action.quote`);
+    expect(byId('botGroup.cancelReply')).not.toBeNull();
+    await openTopicMenu(rootId);
+    await click(`botGroup.thread.context.${rootId}.action.thread`);
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId } });
+    expect(all(`botGroup.thread.context.${rootId}`)).toHaveLength(1);
+  });
+
+  // Unit regression: thread routing must not turn my plain-text message into a
+  // teammate row, and posting my reply to main must not duplicate its author.
+  it('keeps my thread root and reply in normal user bubbles, preserving raw text and incoming authors', async () => {
+    h.chat.server = true;
+    await render(threadGroup({ messages: [
+      { ...rootMessage(), isSelf: true },
+      message('mine', 2, { threadRootId: rootId, authorKind: 'user', isSelf: true, content: '**literal**' }),
+      message('other', 3, { threadRootId: rootId, authorKind: 'user', isSelf: false, authorName: 'Other member', content: 'Incoming' }),
+    ] }), 'ready', rootId, '');
+    for (const id of [rootId, 'mine']) {
+      expect(byId(`botGroup.row.${id}`)?.querySelector('[data-testid="botGroup.message.userBubble"]')).not.toBeNull();
+      expect(byId(`botGroup.row.${id}`)?.querySelector('[data-testid="botGroup.message.bot"]')).toBeNull();
+    }
+    expect(byId('botGroup.row.mine')?.textContent).toContain('**literal**');
+    expect(byId('botGroup.row.other')?.textContent).toContain('Other member');
+    expect(byId('botGroup.row.other')?.querySelector('[data-testid="botGroup.message.userBubble"]')).toBeNull();
+  });
+
+  it('renders my resolved own post as a user message with the same thread summary as every thread share', async () => {
+    h.chat.server = true;
+    const share = { messageId: 'source', threadRootId: rootId, status: 'available' as const, authorKind: 'user' as const,
+      authorBotId: 'self', authorName: 'Me', sharedByAuthor: true, content: '**My reply**', attachments: [], createdAt: 1000, edited: true };
+    const posted = message('posted', 2, { authorKind: 'user', isSelf: true, content: 'UNTRUSTED FALLBACK', threadShare: share });
+    await render(threadGroup({ messages: [posted] }), 'ready', undefined, '');
+    expect(byId('botGroup.message.userBubble')?.textContent).toBe('**My reply**');
+    expect(byId('botGroup.thread.share')).toBeNull();
+    expect(node.textContent).not.toContain('UNTRUSTED FALLBACK');
+    expect(node.textContent).toContain('groupChat.thread.edited');
+    expect(byId('botGroup.thread.open.posted')).toBeNull();
+    expect(byId('botGroup.thread.posted')?.textContent).toContain('count=1');
+    await click('botGroup.thread.posted');
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId, messageId: 'source' } });
+    for (const threadShare of [{ ...share, sharedByAuthor: false, authorName: 'Other' }, { ...share, status: 'unavailable' as const }]) {
+      await render(threadGroup({ messages: [{ ...posted, threadShare }] }), 'ready', undefined, '');
+      expect(byId('botGroup.message.userBubble')).toBeNull();
+      expect(byId('botGroup.thread.share')).not.toBeNull();
+      expect(byId('botGroup.thread.context.posted.action.copy')?.disabled).toBe(threadShare.status !== 'available');
+      expect(byId('botGroup.thread.open.posted')).toBeNull();
+      expect(byId('botGroup.thread.posted')).not.toBeNull();
+      expect(node.textContent).not.toContain('UNTRUSTED FALLBACK');
+      if (threadShare.status === 'unavailable') expect(node.textContent).not.toContain('**My reply**');
+      else expect(node.textContent).toContain('Other');
+    }
+  });
+
+  // #7847 review, unit: the loading-source retry rendered a missing translation key.
+  // Check the actual button's label against every bundled locale, then activate it.
+  it('localizes the unresolved source retry and reloads the group', async () => {
+    const { i18n, SUPPORTED_LOCALES } = await import('@/i18n');
+    h.chat.server = true;
+    await render(threadGroup({ messages: [message('posted-loading', 2, { threadShare: {
+      messageId: 'source', threadRootId: rootId, status: 'loading', authorKind: 'user', authorBotId: null,
+      authorName: '', sharedByAuthor: false, content: '', attachments: [], createdAt: null, edited: false,
+    } })] }), 'ready', undefined, '');
+    const retry = byId('botGroup.thread.share')!.querySelector('button')!;
+    expect(retry).not.toBeNull();
+    for (const lng of SUPPORTED_LOCALES) {
+      expect(i18n.getResource(lng, 'common', retry.textContent!)).toBeTruthy();
+      expect(i18n.getFixedT(lng)(retry.textContent!)).not.toBe(retry.textContent);
+    }
+    await act(async () => retry.click());
+    expect(h.chat.reload).toHaveBeenCalled();
+  });
+
+  it('opens a direct thread independently of quote reply; unknown summaries do not invent counts', async () => {
+    h.chat.server = true;
+    const data = threadGroup();
+    await render(data, 'ready', undefined, '');
+    expect(byId(`botGroup.thread.${rootId}`)).toBeNull();
+    await openTopicMenu(rootId);
+    expect(byId(`botGroup.thread.context.${rootId}.action.thread`)?.textContent).toBe('groupChat.thread.create');
+    await click(`botGroup.thread.context.${rootId}.action.quote`);
+    expect(h.push).not.toHaveBeenCalled();
+    await act(async () => h.row.onChangeText('Quote in main'));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ quote: { messageId: rootId } }));
+    await openTopicMenu(rootId);
+    await click(`botGroup.thread.context.${rootId}.action.thread`);
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', threadRootId: rootId } });
+    data.messages[0]!.replyCount = undefined;
+    await render({ ...data }, 'ready', undefined, '');
+    expect(byId(`botGroup.thread.${rootId}`)).toBeNull();
+    await openTopicMenu(rootId);
+    expect(byId(`botGroup.thread.context.${rootId}.action.thread`)?.textContent).toBe('groupChat.thread.open');
+  });
+
+  it('shows the root before scoped replies and sends through the same thread hook without quote or group tools', async () => {
+    h.chat.server = true;
+    const reply = message('reply', 2, { threadRootId: rootId, authorKind: 'bot', content: 'Thread reply' });
+    await render(threadGroup({ messages: [reply, rootMessage(), message('other', 3, { content: 'Unrelated main message' })] }), 'ready', rootId, '');
+    expect(h.hookCalls).toHaveBeenLastCalledWith(expect.objectContaining({ deviceId: '' }), 'g1', rootId);
+    expect(node.textContent).toContain('Original question');
+    expect(node.textContent).toContain('Thread reply');
+    expect(node.textContent).not.toContain('Unrelated main message');
+    expect(node.textContent!.indexOf('Original question')).toBeLessThan(node.textContent!.indexOf('Thread reply'));
+    expect(byId(`botGroup.thread.context.${rootId}.action.quote`)).toBeNull();
+    expect(byId('botGroup.composer.more')).toBeNull();
+    await act(async () => h.row.onChangeText('Continue here'));
+    await click('botGroup.composer.send');
+    const payload = h.chat.act.mock.calls.at(-1)?.[1];
+    expect(payload.text).toBe('Continue here'); expect(payload.quote).toBeUndefined(); expect(payload.division).toBeUndefined();
+  });
+
+  it('marks only displayed replies at the visible thread tail, never its root', async () => {
+    h.chat.server = true;
+    h.chat.markRead = vi.fn(async () => {});
+    const data = threadGroup({ messages: [rootMessage(), message('reply', 2, {
+      threadRootId: rootId, authorKind: 'user', isSelf: false, content: 'Incoming reply',
+    })] });
+    await render(data, 'ready', rootId, '');
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(390, 1500);
+    });
+    expect(h.chat.markRead).not.toHaveBeenCalled();
+    await act(async () => h.scroll.onScroll({ nativeEvent: {
+      contentOffset: { y: 1000 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 500 },
+    } }));
+    expect(h.chat.markRead).toHaveBeenLastCalledWith(['reply']);
+    expect(h.markRead).not.toHaveBeenCalled();
+  });
+
+  it('keeps an empty thread writable, expands long roots, and disables replies when the root is unavailable', async () => {
+    h.chat.server = true;
+    const long = { ...rootMessage(), content: 'Long question '.repeat(80) + 'END OF QUESTION' };
+    await render(threadGroup({ messages: [long] }), 'ready', rootId, '');
+    expect(byId('botGroup.thread.empty')).not.toBeNull();
+    expect(node.textContent).not.toContain('END OF QUESTION');
+    await click('botGroup.thread.expandRoot');
+    expect(node.textContent).toContain('END OF QUESTION');
+    await act(async () => h.row.onChangeText('First reply'));
+    expect(byId('botGroup.composer.send')?.disabled).toBe(false);
+    await render(threadGroup({ messages: [] }), 'ready', rootId, '');
+    expect(byId('botGroup.thread.rootUnavailable')).not.toBeNull();
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+  });
+
+  it.each(['archived', 'dissolvedAt'] as const)('keeps %s thread history read-only with distinct lifecycle copy', async field => {
+    h.chat.server = true;
+    await render(threadGroup({ [field]: field === 'archived' ? true : '2026-10-27T00:00:00Z' }), 'ready', rootId, '');
+    expect(node.textContent).toContain(field === 'archived' ? 'groupChat.thread.archived' : 'groupChat.lifecycle.dissolved');
+    expect(node.textContent).toContain('Original question');
+    await act(async () => h.row.onChangeText('Cannot send'));
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+  });
+
+  it('rejects a remote topic before mounting the data hook and returns to the same computer', async () => {
+    await render(threadGroup(), 'ready', rootId, 'mac');
+    expect(h.hookCalls).not.toHaveBeenCalled();
+    expect(node.textContent).not.toContain('Original question');
+    expect(byId('botGroup.thread.unsupported')).not.toBeNull();
+    // C1 R07: both the actual header callback and Android system back retain
+    // the original computer. This host-primitive test does not validate iOS gestures.
+    const expected = { pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', deviceId: 'mac', deviceName: 'Mac' } };
+    await click('botGroup.back'); expect(h.replace).toHaveBeenLastCalledWith(expected);
+    await act(async () => { expect(h.hardwareBack?.()).toBe(true); });
+    expect(h.replace).toHaveBeenLastCalledWith(expected);
+    await click('botGroup.thread.back'); expect(h.replace).toHaveBeenLastCalledWith(expected);
+    expect(h.replace).toHaveBeenCalledTimes(3);
+    await render(threadGroup(), 'ready', undefined, 'mac');
+    expect(byId(`botGroup.thread.${rootId}`)).toBeNull();
+    expect(byId(`botGroup.thread.context.${rootId}.action.quote`)).not.toBeNull();
+    await click(`botGroup.thread.more.${rootId}`);
+    expect(byId(`botGroup.thread.context.${rootId}.sheet`)?.textContent)
+      .toContain(new Date(rootMessage().createdAt).toLocaleString());
+  });
+
+  it.each(['root', 'shared'] as const)('restores the retained group viewport without scrolling or marking it read after opening a %s topic entry', async entry => {
+    h.chat.server = true;
+    h.chat.markRead = vi.fn(async () => {});
+    const anchorId = entry === 'root' ? rootId : 'posted';
+    const data = entry === 'root' ? threadGroup() : threadGroup({ messages: [message('posted', 2, {
+      threadShare: { messageId: 'source', threadRootId: rootId, status: 'available', authorKind: 'user',
+        authorBotId: 'self', authorName: 'Me', sharedByAuthor: true, content: 'Shared reply', attachments: [], createdAt: 1000, edited: false },
+    })] });
+    await render(data, 'ready', undefined, '');
+    const layout = async (y: number) => act(async () => {
+      (byId(`botGroup.row.${anchorId}`) as unknown as HTMLElement & { nativeLayout: (event: unknown) => void })
+        .nativeLayout({ nativeEvent: { layout: { y, height: 200 } } });
+    });
+    await layout(300);
+    await act(async () => {
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
+      h.scroll.onContentSizeChange(390, 1500);
+      h.scroll.onScroll({ nativeEvent: { contentOffset: { y: 250 }, contentSize: { height: 1500 }, layoutMeasurement: { height: 500 } } });
+    });
+    if (entry === 'root') {
+      await openTopicMenu(rootId);
+      await click(`botGroup.thread.context.${rootId}.action.thread`);
+    } else {
+      await click('botGroup.thread.posted');
+    }
+    expect(h.push).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: {
+      groupId: 'g1', threadRootId: rootId, ...(entry === 'shared' ? { messageId: 'source' } : {}),
+    } });
+    h.scrollToEnd.mockClear(); h.chat.markRead.mockClear();
+    h.focused = false;
+    await render(data, 'ready', undefined, '');
+    await act(async () => h.scroll.onContentSizeChange(390, 1700));
+    await layout(320);
+    expect(h.scrollToEnd).not.toHaveBeenCalled();
+    expect(h.chat.markRead).not.toHaveBeenCalled();
+    h.focused = true;
+    await render(data, 'ready', undefined, '');
+    expect(h.scrollTo).toHaveBeenLastCalledWith({ y: 270, animated: false });
+    expect(h.chat.markRead).not.toHaveBeenCalled();
+  });
+
+  it('renders authoritative reply summary alongside the reply and More actions', async () => {
+    h.chat.server = true;
+    const root = { ...rootMessage(), replyCount: 17, threadUnread: { count: 2, mentioned: true }, threadPreview: {
+      replies: [{ id: 'reply', authorKind: 'user' as const, authorBotId: 'other', authorName: 'Other', isSelf: false,
+        text: 'Follow-up', attachments: [], createdAt: Date.now() - 120000 }],
+    } };
+    await render(threadGroup({ messages: [root] }), 'ready', undefined, '');
+    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('count=17');
+    expect(byId(`botGroup.thread.${rootId}`)?.textContent).toContain('groupChat.thread.mentioned');
+    expect(byId(`botGroup.thread.${rootId}`)?.textContent).not.toContain('lastMinutes');
+    await click(`botGroup.thread.${rootId}`); expect(h.push).toHaveBeenCalledOnce();
+    await click(`botGroup.thread.context.${rootId}.action.quote`);
+    expect(h.push).toHaveBeenCalledOnce(); expect(byId('botGroup.cancelReply')).not.toBeNull();
+  });
+
+  it.each(['ios', 'android'])('exposes follow/unfollow in the %s header independently of sending', async platform => {
+    h.platform.OS = platform;
+    h.chat.server = true; h.chat.followThread = vi.fn(async () => true);
+    h.chat.threadMeta = { threads: [], shares: {}, following: false, readSeq: '9007199254740993' };
+    await render(threadGroup(), 'ready', rootId, '');
+    const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
+    expect(follow()).not.toBeNull();
+    await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenCalledWith(true);
+    await click('botGroup.thread.alsoSend'); await act(async () => h.row.onChangeText('Both destinations'));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: 'Both destinations', alsoSendToMain: true }));
+    expect(h.chat.followThread).toHaveBeenCalledTimes(1);
+    h.chat.threadMeta.following = true;
+    await render(threadGroup(), 'ready', rootId, '');
+    await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenLastCalledWith(false);
+  });
+
+  it('uses a real self receipt for the posted footer and leaves someone else’s post independently shareable', async () => {
+    h.chat.server = true; h.chat.shareToMain = vi.fn(async () => {});
+    h.chat.threadMeta = { shares: { reply: { messageId: 'other-share', bySelf: false } }, threads: [] };
+    const data = threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, isSelf: true, content: 'Canonical reply' })] });
+    await render(data, 'ready', rootId, '');
+    await openTopicMenu('reply');
+    await click('botGroup.thread.context.reply.action.share'); expect(h.chat.shareToMain).toHaveBeenCalledWith('reply');
+    h.chat.pending = [{ item: { clientId: 'send-both', text: 'Canonical reply' }, chat: { messageId: 'reply', input: { threadRootId: rootId }, shareToMain: { state: 'sent', messageId: 'my-share' } } }];
+    await render(data, 'ready', rootId, '');
+    expect(byId('botGroup.thread.shared.reply')?.textContent).toContain('groupChat.thread.postedSelf');
+    await openTopicMenu('reply');
+    expect(byId('botGroup.thread.context.reply.action.share')?.textContent).toBe('groupChat.thread.showInGroup');
+    await click('botGroup.thread.shared.reply');
+    expect(h.replace).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', messageId: 'my-share' } });
+    expect(all('botGroup.row.reply')).toHaveLength(1);
+  });
+
+  it('loads old replies on upward browsing once and preserves the visible reply, not the changed tail height', async () => {
+    h.chat.server = true; let finish!: () => void;
+    h.chat.loadOlder = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const current = message('visible', 2, { threadRootId: rootId, serverSequence: '10', isSelf: false });
+    const data = threadGroup({ hasMoreBefore: true, messages: [rootMessage(), current] });
+    await render(data, 'ready', rootId, '');
+    const layout = (id: string, y: number) => (byId(`botGroup.row.${id}`) as any).nativeLayout({ nativeEvent: { layout: { y, height: 100 } } });
+    await act(async () => { layout(rootId, 0); layout('visible', 200); h.scroll.onContentSizeChange(390, 1200); h.scroll.onScrollBeginDrag(); });
+    const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
+    await act(async () => { h.scroll.onScroll(event); h.scroll.onScroll(event); });
+    expect(h.chat.loadOlder).toHaveBeenCalledTimes(1); expect(byId('botGroup.thread.loadOlder')).toBeNull();
+    h.scrollTo.mockClear(); await act(async () => h.scroll.onContentSizeChange(390, 1400)); expect(h.scrollTo).not.toHaveBeenCalled();
+    await render({ ...data, messages: [rootMessage(), message('older', 1, { threadRootId: rootId, serverSequence: '5' }), current] }, 'ready', rootId, '');
+    await act(async () => { layout('visible', 500); finish(); });
+    expect(h.scrollTo).toHaveBeenLastCalledWith({ y: 400, animated: false });
+  });
+
+  it('keeps failed second stages attached to their replies and retries only the selected stage', async () => {
+    h.chat.server = true; h.chat.pendingAction = vi.fn(async () => {});
+    h.chat.pending = [{ item: { clientId: 'both-failed', text: 'Already replied' }, chat: { messageId: 'reply', input: { threadRootId: rootId }, shareToMain: { state: 'failed' } } }];
+    await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Already replied' })] }), 'ready', rootId, '');
+    const panel = byId('botGroup.thread.delivery.both-failed')!;
+    await act(async () => Array.from(panel.querySelectorAll('button')).find(button => button.textContent === 'groupChat.thread.retryShare')!.click());
+    expect(h.chat.pendingAction).toHaveBeenCalledWith('both-failed', 'retry'); expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  // #7847 review, unit: sharing used to unmount the composer and lose its local draft/options.
+  // Both exits must preserve state through the real Screen/Composer entry, without sending the draft.
+  it.each(['cancel', 'share'] as const)('preserves the thread draft and destination after image share: %s', async exit => {
+    h.chat.server = true;
+    await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Only this reply' })] }), 'ready', rootId, '');
+    await act(async () => h.row.onChangeText('Keep my draft'));
+    await click('botGroup.thread.alsoSend');
+    await openTopicMenu('reply');
+    await click('botGroup.thread.context.reply.action.image');
+    expect(byId('session.shareImage.checkbox.reply')).not.toBeNull();
+    expect(byId('botGroup.thread.more.reply')).toBeNull();
+    await click('session.shareImage.selectAll');
+    expect(shareSelectionStore.getSelectedIds()).toEqual([rootId, 'reply']);
+    await click('session.shareImage.selectAll');
+    expect(shareSelectionStore.getSelectedIds()).toEqual(['reply']);
+    await click(`session.shareImage.checkbox.${rootId}`);
+    expect(shareSelectionStore.count()).toBe(2);
+    await click(`session.shareImage.checkbox.${rootId}`);
+    let finishShare!: () => void;
+    if (exit === 'share') h.sharedImage.mockImplementationOnce(() => new Promise<void>(resolve => { finishShare = resolve; }));
+    await click(`session.shareImage.${exit}`);
+    if (exit === 'share') {
+      expect(h.exported.at(-1)).toMatchObject([{ clientId: 'reply', body: 'Only this reply' }]);
+      expect(h.exported.at(-1)).toHaveLength(1);
+      expect(h.sharedImage).toHaveBeenCalledWith('file:///export.png', { mimeType: 'image/png' });
+      expect(byId('session.shareImage.bar')).toBeNull();
+      expect(byId('session.shareImage.selectAll')).toBeNull();
+      await act(async () => finishShare());
+    } else expect(h.sharedImage).not.toHaveBeenCalled();
+    expect(h.row.value).toBe('Keep my draft');
+    expect(byId('botGroup.composerContainer')?.style.display).not.toBe('none');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: 'Keep my draft', alsoSendToMain: true }));
+  });
+
+  // Session parity, unit: an opening failure restores the same selection without losing the draft.
+  it('restores selection when the system share sheet cannot open', async () => {
+    h.chat.server = true;
+    h.sharedImage.mockRejectedValueOnce(new Error('share unavailable'));
+    await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Reply' })] }), 'ready', rootId, '');
+    await act(async () => h.row.onChangeText('Keep my draft'));
+    await openTopicMenu('reply');
+    await click('botGroup.thread.context.reply.action.image');
+    await click('session.shareImage.share');
+    expect(byId('session.shareImage.bar')).not.toBeNull();
+    expect(shareSelectionStore.getSelectedIds()).toEqual(['reply']);
+    expect(h.alert).toHaveBeenCalledWith('session.screen.shareFailedTitle', 'session.screen.shareImageFailed');
+    await click('session.shareImage.cancel');
+    expect(h.row.value).toBe('Keep my draft');
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  it('returns to the retained group only when it is the previous route; cold notifications locate their own root', async () => {
+    h.chat.server = true;
+    await render(threadGroup(), 'ready', rootId, '');
+    await click('botGroup.back');
+    expect(h.replace).toHaveBeenLastCalledWith({ pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', messageId: rootId } });
+    h.navigation = { index: 1, routes: [{ params: { groupId: 'g1' } }, { params: { groupId: 'g1', threadRootId: rootId } }] };
+    await render(threadGroup(), 'ready', rootId, '');
+    await click('botGroup.back');
+    expect(h.leave).toHaveBeenLastCalledWith(expect.anything(), { pathname: '/companions/groups/[groupId]', params: { groupId: 'g1', messageId: rootId } });
+    await act(async () => { h.hardwareBack?.(); }); expect(h.leave).toHaveBeenCalledTimes(2);
+  });
 });

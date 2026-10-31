@@ -15,6 +15,8 @@ const binaryName = 'cindy-windows-taskbar.node';
 export interface WindowsTaskbarNative {
   setOverlayIcon(handle: Buffer, png: Buffer | null, description: string): void;
   taskbarButtonCreatedMessage(): number;
+  windowDragOffset(handle: Buffer): { x: number; y: number };
+  moveWindowAtCursor(handle: Buffer, offsetX: number, offsetY: number): boolean;
 }
 
 let loading: Promise<WindowsTaskbarNative> | undefined;

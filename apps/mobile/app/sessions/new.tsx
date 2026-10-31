@@ -1,3 +1,4 @@
+import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   reconcileNewSessionCatalogDraft,
@@ -1612,12 +1613,22 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setComposerVoiceHoldArmed(false);
     firstMessageInputRef.current?.blur();
   }, [collapseComposerImages]);
+  const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
+  const composerCardMaxHeight = Math.max(COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, windowDimensions.height
+    - (keyboardState.visible ? keyboardState.height : safeAreaInsets.bottom)
+    - safeAreaInsets.top - navigationChrome.target - spacing.xl);
+  // 附件托盘与文字同在卡片里:计入 chrome,文字超出时由输入框自己滚、裁掉上方文字。
+  const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
+    + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
-    autoMaxContentHeight: MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
+    autoMaxContentHeight: Math.max(
+      MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
+      Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
+    ),
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,
-    composerChromeHeight: composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT,
+    composerChromeHeight,
     contentHeight: composerInputContentHeight,
     keyboardHeight: keyboardState.visible ? keyboardState.height : 0,
     onSnapToAuto: handleComposerSnapToAuto,
@@ -5465,11 +5476,12 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
 
           </ScrollView>
             <View style={[styles.composerCard, {
-              maxHeight: Math.max(COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, windowDimensions.height
-                - (keyboardState.visible ? keyboardState.height : safeAreaInsets.bottom)
-                - safeAreaInsets.top - navigationChrome.target - spacing.xl),
+              maxHeight: composerCardMaxHeight,
               paddingBottom: composerDock.enabled ? 0 : spacing.md,
             }]} testID="newSession.composer">
+              <PluginUiEnablePrompt deviceId={selectedDeviceId || undefined} deviceName={selectedDeviceLabel}
+                online={deviceLinkStatus === 'online' && !!selectedDeviceId && getPresenceAvailability(selectedDeviceId) !== false}
+                active={isShareTargetFocused && !creating} />
               <ComposerPluginPalette
                 deviceId={selectedDeviceId || undefined}
                 workingDir={draft.workspaceKind === 'project' ? draft.workingDir.trim() : undefined}
@@ -5551,6 +5563,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
                   accessoryAbove={attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0 ? renderComposerAttachmentTray() : null}
+                  onAccessoryAboveHeightChange={setComposerAttachmentTrayHeight}
                   autoFocus={visualFocusComposer}
                   entryTransitionId={entryMorph?.id}
                   collapsedHeight={composerDock.enabled ? composerDock.pillHeight : undefined}

@@ -3,7 +3,7 @@
   "version": 1,
   "agentBackend": "claude-code",
   "agentBinaryPath": "../../bundle/linux-x64/bin/claude",
-  "agentBinaryVersion": "2.1.296",
+  "agentBinaryVersion": "2.1.312",
   "supportedModelIds": ["claude-sonnet-4-6"],
   "model": {
     "provider": "anthropic",

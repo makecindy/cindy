@@ -108,11 +108,6 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
     };
   }, [displaySrc, failedSrc]);
 
-  if (failedSrc === displaySrc) {
-    return <VideoUnavailablePlaceholder filename={filename} onRetry={() => setFailedSrc(null)} />;
-  }
-
-  const { style, className } = VARIANT_STYLES[variant];
   const canRevealInFolder =
     displaySrc.startsWith('xdt-video://') || displaySrc.startsWith('cindy-media://');
 
@@ -123,6 +118,20 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
     }
     setMenuPos(null);
   }
+
+  // 本机解不了的编码(典型:无 HEVC 解码的 Windows 上的 Seedance 2.5 1080p)只会走到这里,
+  // 文件本身是好的 —— 留一条"在文件夹中显示",用户才能交给系统播放器。
+  if (failedSrc === displaySrc) {
+    return (
+      <VideoUnavailablePlaceholder
+        filename={filename}
+        onRetry={() => setFailedSrc(null)}
+        onReveal={canRevealInFolder ? handleRevealInFolder : undefined}
+      />
+    );
+  }
+
+  const { style, className } = VARIANT_STYLES[variant];
 
   async function handleCopyVideo(): Promise<void> {
     const res = await window.electronAPI.copyMediaToClipboard({ url: displaySrc });
@@ -207,9 +216,14 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
 interface VideoUnavailablePlaceholderProps {
   filename: string;
   onRetry: () => void;
+  onReveal?: () => void;
 }
 
-function VideoUnavailablePlaceholder({ filename, onRetry }: VideoUnavailablePlaceholderProps) {
+function VideoUnavailablePlaceholder({
+  filename,
+  onRetry,
+  onReveal,
+}: VideoUnavailablePlaceholderProps) {
   const { t } = useTranslation();
   return (
     <div
@@ -233,6 +247,11 @@ function VideoUnavailablePlaceholder({ filename, onRetry }: VideoUnavailablePlac
       <Button variant="secondary" size="sm" compact onClick={onRetry}>
         {t('chat.errorBanner.retry')}
       </Button>
+      {onReveal ? (
+        <Button variant="secondary" size="sm" compact onClick={onReveal}>
+          {t('chat.media.revealVideo')}
+        </Button>
+      ) : null}
     </div>
   );
 }

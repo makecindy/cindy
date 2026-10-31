@@ -28,10 +28,15 @@ export interface GuestProviderRoute {
   providerId: string;
 }
 
+export interface GuestRequestUsage {
+  model: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number;
+}
 interface Binding extends GuestProviderRoute {
   token: string;
+  recordUsage?: (sample: GuestRequestUsage) => void;
   allowsModel?: (model: string) => boolean | Promise<boolean>;
   modelAccessRestricted?: () => boolean;
+  modelDenial?: (model: string) => { code: string; message: string } | null;
 }
 
 const byToken = new Map<string, Binding>();
@@ -45,9 +50,11 @@ export function registerGuestProviderRoute(
   providerId: string,
   allowsModel?: (model: string) => boolean | Promise<boolean>,
   modelAccessRestricted?: () => boolean,
+  modelDenial?: (model: string) => { code: string; message: string } | null,
+  recordUsage?: (sample: GuestRequestUsage) => void,
 ): { token: string; release(): void } {
   const token = randomBytes(32).toString('base64url');
-  const binding: Binding = { sessionId, providerId, token, allowsModel, modelAccessRestricted };
+  const binding: Binding = { sessionId, providerId, token, allowsModel, modelAccessRestricted, modelDenial, recordUsage };
   const previous = bySession.get(sessionId);
   if (previous) byToken.delete(previous.token);
   byToken.set(token, binding);
@@ -155,4 +162,40 @@ export function resetGuestProviderRoutesForTest(): void {
   for (const binding of bySession.values()) clearSessionProvider(binding.sessionId);
   byToken.clear();
   bySession.clear();
+}
+
+/** Only the authenticated, still-current binding may explain a member refusal. */
+export function guestProviderModelDenial(sessionId: string | null | undefined, model: string, kind?: AgentKind) {
+  if (!sessionId) return null;
+  const binding = bySession.get(sessionId);
+  if (!binding || getSessionProvider(sessionId) !== binding.providerId) return null;
+  try {
+    const provider = getActiveCatalog().providers.find(item => item.id === binding.providerId);
+    const catalogModel = kind ? findCatalogModel(provider, model, kind)?.id ?? model : model;
+    return binding.modelDenial?.(catalogModel) ?? null;
+  } catch { return null; }
+}
+
+/** Request-scoped native usage, including child requests. No response content is retained. */
+export function captureGuestRequestUsage(sessionId: string | null | undefined, model: string) {
+  const binding = sessionId ? bySession.get(sessionId) : undefined;
+  if (!binding?.recordUsage || !model) return undefined;
+  let settled = false;
+  return (value: unknown) => {
+    if (settled || bySession.get(binding.sessionId) !== binding || getSessionProvider(binding.sessionId) !== binding.providerId) return;
+    const record = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+    const frame = record(value);
+    if (!frame || (typeof frame.type === 'string' && frame.type.startsWith('response.')
+      && frame.type !== 'response.completed' && frame.type !== 'response.incomplete')) return;
+    const response = record(frame.response) ?? frame;
+    const usage = record(response.usage);
+    if (!usage) return;
+    const input = usage.input_tokens ?? usage.prompt_tokens;
+    const output = usage.output_tokens ?? usage.completion_tokens;
+    const cache = record(usage.input_tokens_details)?.cached_tokens ?? record(usage.prompt_tokens_details)?.cached_tokens ?? 0;
+    const valid = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+    if (!valid(input) || !valid(output) || !valid(cache) || cache > input) return;
+    settled = true;
+    binding.recordUsage!({ model, inputTokens: input - cache, outputTokens: output, cacheReadTokens: cache, cacheCreateTokens: 0 });
+  };
 }

@@ -1,19 +1,13 @@
-/**
- * 伙伴「近况」浮层（伙伴聊天头部的网格按钮）。只有三块，没有内容的块整块不出现：
- * - 电脑：伙伴在哪台上运行，点另一台在线的电脑就换过去；离线的收进「离线 N 台」。
- *   云端伙伴换主力电脑沿用原来的确认流程；Cindy 的多台副本直接打开那台上的她。
- * - 待办：主人要做的事。第一行「帮我查查」让伙伴现在去已连接的来源里找新待办（作为主人的一句话发进对话），
- *   下面一行开关让伙伴每个工作日早上自己查一次。待办本身没有按钮：点一条就作为引用放进输入框，
- *   由主人一句话交代；右键只能删除（可撤销）。到期的那条在期限前带红点，入口在主人还没看过时也亮同样的红点。
- * - 输出内容：伙伴开的任务做完时留下的成品文件，点开即打开；别的电脑上的打开来源任务。
+/** Partner glance: existing computer controls, nonempty owner todos, attributed tasks and outputs.
+ * Task attention and PR state are read-only projections of the ordinary task list stores.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, LayoutGrid, Monitor, ScanSearch } from 'lucide-react';
+import { Check, ChevronDown, LayoutGrid, Monitor, ScanSearch, MessageCircle, GitPullRequest, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { buildTodoReferenceHref } from '@cindy/maker-shared/agent-input-projection';
-import { todoDateLabel, todoDue, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
+import { todoDateLabel, todoDue, todoDueSoon, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
@@ -24,12 +18,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Switch } from '@/components/ui/switch';
+import { AttentionDot } from '@/components/sidebar/AttentionDot';
+import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
+import { useCCSessions } from '@/hooks/useCCSessions';
+import { usePrActions, usePrRefsForSessions, usePrStatuses } from '@/contexts/PrRefsContext';
+import { prStatusKey, sessionPrUrl, type SessionPrRef } from '@cindy/maker-shared';
+import { PR_STATUS_ICON, PR_STATUS_COLOR } from '@/features/cc-agent/gitContextPrVisuals';
+import { sessionActivityMs } from '@/features/cc-agent/lib/dateSessionGrouping';
+import { matchesTaskCreators, useTaskCreatorIndex } from './botFollowScopes';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as sessionService from '@/lib/sessionService';
-import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore, useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
+import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { insertTodoReferenceIntoComposer } from '@/lib/composerActionsBus';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
@@ -45,7 +47,7 @@ import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
 import { useCompanionCloud } from './companionCloudStore';
-import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
+import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot, taskCreatorFilterKey } from './cindyDeviceRoster';
 import {
   dueTodos,
   hasUnseenDue,
@@ -55,10 +57,11 @@ import {
   useGlanceTodos,
   type GlanceTodoHost,
 } from './botGlanceTodos';
-import { useRemoteBots } from './useRemoteBots';
+import { useRemoteBots, useRemoteCindyIds } from './useRemoteBots';
 
 /** 每块先列几条，其余收进「显示更多」。 */
-const TODO_PREVIEW = 5;
+const TODO_PREVIEW = 2;
+const TASK_PREVIEW = 5;
 const OUTPUT_PREVIEW = 3;
 const OUTPUT_LIMIT = 30;
 
@@ -67,10 +70,10 @@ function useToggle(): [boolean, () => void] {
   return [open, () => setOpen((value) => !value)];
 }
 
-function Section({ label, children, divided = true }: { label: string; children: ReactNode; divided?: boolean }) {
+function Section({ label, children, divided = true, action }: { label: string; children: ReactNode; divided?: boolean; action?: ReactNode }) {
   return (
-    <section className={cn('px-2 py-2', divided && 'border-t border-[var(--border-default)]')}>
-      <h3 className="px-2 pb-1 pt-0.5 text-12 font-normal text-[var(--text-tertiary)]">{label}</h3>
+    <section className={cn('px-2 py-1.5', divided && 'border-t border-[var(--border-default)]')}>
+      <div className="flex items-center justify-between px-2 pb-1 pt-0.5"><h3 className="text-12 font-normal text-[var(--text-tertiary)]">{label}</h3>{action}</div>
       <div className="flex flex-col">{children}</div>
     </section>
   );
@@ -80,6 +83,7 @@ function Row({
   icon,
   title,
   meta,
+  inlineMeta = false,
   trailing,
   muted = false,
   onClick,
@@ -90,6 +94,7 @@ function Row({
   icon?: ReactNode;
   title: string;
   meta?: string;
+  inlineMeta?: boolean;
   trailing?: ReactNode;
   muted?: boolean;
   onClick?: () => void;
@@ -102,22 +107,23 @@ function Row({
       {icon ? (
         <span className="flex w-5 shrink-0 justify-center text-[var(--text-secondary)]">{icon}</span>
       ) : null}
-      <span className="min-w-0 flex-1">
+      <span className={cn('min-w-0 flex-1', inlineMeta && 'flex items-baseline gap-2')}>
         <span
           title={title}
           className={cn(
-            'block truncate text-13',
+            'block min-w-0 truncate text-13 leading-5',
+            inlineMeta && 'flex-1',
             muted ? 'text-[var(--text-secondary)]' : 'text-[var(--text-primary)]',
           )}
         >
           {title}
         </span>
-        {meta ? <span title={meta} className="block truncate text-12 text-[var(--text-tertiary)]">{meta}</span> : null}
+        {meta ? <span title={meta} className={cn('block truncate text-12 leading-4 text-[var(--text-tertiary)]', inlineMeta && 'max-w-[40%] shrink-0')}>{meta}</span> : null}
       </span>
       {trailing ? <span className="flex shrink-0 items-center gap-1.5 pl-2 text-12 text-[var(--text-secondary)]">{trailing}</span> : null}
     </>
   );
-  const className = 'flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left';
+  const className = 'flex min-h-8 w-full items-center gap-3 rounded-lg px-2 py-1 text-left';
   if (!onClick)
     return (
       <div data-testid={testId} className={className}>
@@ -146,7 +152,7 @@ function FoldRow({ label, open, onClick, indent }: { label: string; open: boolea
       aria-expanded={open}
       onClick={onClick}
       className={cn(
-        'flex min-h-9 w-full items-center gap-1.5 rounded-lg px-2 text-left text-12 text-[var(--text-tertiary)] outline-none',
+        'flex min-h-8 w-full items-center gap-1.5 rounded-lg px-2 text-left text-12 text-[var(--text-tertiary)] outline-none',
         'hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
         indent && 'pl-10',
       )}
@@ -187,6 +193,7 @@ function ComputerRows({ rows }: { rows: ComputerRowModel[] }) {
       title={row.name}
       muted={!row.current && !row.online}
       meta={row.current ? t('bots.glance.runningHere') : row.online ? t('bots.glance.online') : t('bots.glance.offline')}
+      inlineMeta
       trailing={
         row.current ? (
           <Check size={14} className="text-[var(--text-primary)]" aria-label={t('bots.glance.current')} />
@@ -326,25 +333,21 @@ function sourceText(todo: TeammateTodo, t: (key: string) => string): string {
 
 function TodoRow({
   todo,
-  done,
   onOpen,
   onMenu,
 }: {
   todo: TeammateTodo;
-  done: boolean;
   onOpen: (todo: TeammateTodo) => void;
   onMenu: (todo: TeammateTodo, x: number, y: number, origin: HTMLButtonElement) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const due = !done && todoDue(todo);
-  const date = done ? '' : todoDateLabel(todo, i18n.language);
-  const completion = done ? todo.history[todo.history.length - 1]?.summary : undefined;
+  const due = todoDue(todo);
+  const date = todoDateLabel(todo, i18n.language);
   return (
     <Row
       testId="bot-glance-todo"
       title={todo.title}
-      muted={done}
-      meta={completion ? completion : sourceText(todo, t)}
+      meta={sourceText(todo, t)}
       trailing={
         date ? (
           <>
@@ -386,7 +389,7 @@ function DailyCheckSwitch({ host, todos }: { host: GlanceTodoHost; todos: Return
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const checked = todos.todos.dailyCheck;
-  if (checked === null) return null;
+  if (!checked) return null;
   const change = async (next: boolean) => {
     setBusy(true);
     try {
@@ -398,7 +401,7 @@ function DailyCheckSwitch({ host, todos }: { host: GlanceTodoHost; todos: Return
     }
   };
   return (
-    <label
+    <div
       data-testid="bot-glance-daily-check"
       className="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-[var(--surface-hover)]"
     >
@@ -407,8 +410,10 @@ function DailyCheckSwitch({ host, todos }: { host: GlanceTodoHost; todos: Return
         <span className="block truncate text-13 text-[var(--text-primary)]">{t('bots.glance.dailyCheck')}</span>
         <span className="block truncate text-12 text-[var(--text-tertiary)]">{t('bots.glance.dailyCheckMeta')}</span>
       </span>
-      <Switch checked={checked} disabled={busy} onCheckedChange={(next) => void change(next)} />
-    </label>
+      <button type="button" disabled={busy} aria-label={t('bots.glance.stopDailyCheck')}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+        onClick={() => void change(false)}><X size={16} /></button>
+    </div>
   );
 }
 
@@ -425,10 +430,11 @@ function Todos({
 }) {
   const { t } = useTranslation();
   const [showAll, toggleAll] = useToggle();
-  const [showDone, toggleDone] = useToggle();
   const [menu, setMenu] = useState<{ todo: TeammateTodo; x: number; y: number } | null>(null);
   const menuOrigin = useRef<HTMLButtonElement | null>(null);
-  const { open, done, doneTotal, openTotal } = todos.todos;
+  const now = new Date();
+  const open = todos.todos.open.filter(todo => todoDueSoon(todo, now));
+  const openTotal = open.length;
 
   const check = () => {
     onClose();
@@ -474,23 +480,21 @@ function Todos({
     }
   };
 
+  if (!todos.loaded) return null;
+  if (openTotal === 0) return todos.failed
+    ? <Section label={t('bots.glance.todos')}><Row title={t('bots.glance.loadFailed')} onClick={() => void todos.refresh()} /></Section>
+    : null;
   const visible = showAll ? open : open.slice(0, TODO_PREVIEW);
   const hiddenCount = Math.max(0, openTotal - TODO_PREVIEW);
   return (
-    <Section label={t('bots.glance.todos')}>
-      <Row
-        testId="bot-glance-check"
-        icon={<ScanSearch size={16} />}
-        title={t('bots.glance.check')}
-        meta={t('bots.glance.checkMeta')}
-        onClick={check}
-      />
+    <Section label={t('bots.glance.todos')} action={<button type="button" data-testid="bot-glance-check"
+      aria-label={t('bots.glance.check')} title={t('bots.glance.check')} onClick={check}
+      className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><ScanSearch size={16} /></button>}>
       <DailyCheckSwitch host={host} todos={todos} />
       {visible.map((todo) => (
         <TodoRow
           key={todo.id}
           todo={todo}
-          done={false}
           onOpen={quote}
           onMenu={(target, x, y, origin) => {
             menuOrigin.current = origin;
@@ -501,23 +505,6 @@ function Todos({
       {hiddenCount > 0 ? (
         <FoldRow indent={false} open={showAll} onClick={toggleAll} label={showAll ? t('bots.glance.showLess') : t('bots.glance.showMore')} />
       ) : null}
-      {doneTotal > 0 ? (
-        <FoldRow indent={false} open={showDone} onClick={toggleDone} label={t('bots.glance.doneCount', { count: doneTotal })} />
-      ) : null}
-      {showDone
-        ? done.map((todo) => (
-            <TodoRow
-              key={todo.id}
-              todo={todo}
-              done
-              onOpen={quote}
-              onMenu={(target, x, y, origin) => {
-                menuOrigin.current = origin;
-                setMenu({ todo: target, x, y });
-              }}
-            />
-          ))
-        : null}
       <DropdownMenu open={menu !== null} onOpenChange={(next) => { if (!next) setMenu(null); }}>
         {/* 锚点挂到 body：浮层带入场变换，fixed 元素放在里面会按浮层而不是窗口定位。 */}
         {createPortal(
@@ -594,21 +581,17 @@ function useOutputs(sessionId: string, botId: string): OutputFile[] {
   }, [botId, delegations]);
 }
 
-function dayLabel(at: number, language: string): string {
-  const now = new Date();
-  const date = new Date(at);
-  const startOf = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  const days = Math.round((startOf(now) - startOf(date)) / 86_400_000);
-  if (days >= 0 && days <= 1) return new Intl.RelativeTimeFormat(language, { numeric: 'auto' }).format(-days, 'day');
-  return new Intl.DateTimeFormat(language, { month: 'numeric', day: 'numeric' }).format(date);
-}
 
-function Outputs({ sessionId, botId, onClose }: { sessionId: string; botId: string; onClose: () => void }) {
-  const { t, i18n } = useTranslation();
+function Outputs({ sessionId, botId, onClose, prs }: { sessionId: string; botId: string; onClose: () => void; prs: SessionPrRef[] }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [showAll, toggleAll] = useToggle();
   const files = useOutputs(sessionId, botId);
-  if (files.length === 0) return null;
+  const outputs = [
+    ...files.map(file => ({ kind: 'file' as const, key: `file:${file.key}`, at: file.at, file })),
+    ...prs.map(pr => ({ kind: 'pr' as const, key: `pr:${prStatusKey(pr)}`, at: pr.lastSeenAt, pr })),
+  ].sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
+  if (outputs.length === 0) return null;
   const open = async (file: OutputFile) => {
     // 别的电脑上的伙伴：文件路径属于那台电脑，不在这台打开；改为打开那台上的来源任务。
     const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
@@ -628,24 +611,97 @@ function Outputs({ sessionId, botId, onClose }: { sessionId: string; botId: stri
     onClose();
     navigate(await resolveSessionRoute(childId));
   };
-  const visible = showAll ? files : files.slice(0, OUTPUT_PREVIEW);
+  const visible = showAll ? outputs : outputs.slice(0, OUTPUT_PREVIEW);
   return (
     <Section label={t('bots.glance.outputs')}>
-      {visible.map((file) => (
+      {visible.map(output => output.kind === 'pr' ? <PrOutput key={output.key} pr={output.pr} /> : (
         <Row
-          key={file.key}
+          key={output.key}
           testId="bot-glance-output"
-          icon={<FileTypeIcon name={file.name} />}
-          title={file.name}
-          meta={t('bots.glance.outputMeta', { time: dayLabel(file.at, i18n.language), task: file.taskTitle })}
-          onClick={() => void open(file)}
+          icon={<FileTypeIcon name={output.file.name} />}
+          title={output.file.name}
+          onClick={() => void open(output.file)}
         />
       ))}
-      {files.length > OUTPUT_PREVIEW ? (
+      {outputs.length > OUTPUT_PREVIEW ? (
         <FoldRow indent={false} open={showAll} onClick={toggleAll} label={showAll ? t('bots.glance.showLess') : t('bots.glance.showMore')} />
       ) : null}
     </Section>
   );
+}
+
+// ---------------------------------------------------------------- 近期任务与 PR：只投影已有任务、归属及未读缓存。
+function Activity({ bot, onClose }: { bot: BotChatIdentity; onClose(): void }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { sessions: local } = useCCSessions({ includeArchived: 'all' });
+  const remote = useRemoteProjectSessions();
+  const creators = useTaskCreatorIndex();
+  const cloud = useCompanionCloud();
+  const cindyIds = useRemoteCindyIds();
+  const key = taskCreatorFilterKey(cindyIds.has(bot.id) ? { ...bot, templateId: 'cindy' } : bot, cloud);
+  const remoteBots = useRemoteBots();
+  const hostsKey = JSON.stringify([...new Map(remoteBots.filter(row => row.online &&
+    taskCreatorFilterKey(cindyIds.has(row.id) ? { ...row, templateId: 'cindy' } : row, cloud) === key)
+    .map(row => [row.deviceId, row.deviceName])).entries()]);
+  useEffect(() => {
+    // Archived remote tasks are lazily loaded by the sidebar; glance needs both buckets.
+    for (const [id, name] of JSON.parse(hostsKey) as Array<[string, string]>) {
+      for (const status of ['active', 'archived'] as const)
+        void refreshRemoteDeviceSessions(id, name, { status, coalescingMode: 'weak' });
+    }
+  }, [hostsKey]);
+  const tasks = useMemo(() => [...local, ...remote]
+    .filter(task => task.id !== bot.sessionId && task.orcaRole !== 'worker'
+      && (task.status === 'active' || task.status === 'archived')
+      && matchesTaskCreators(task, [key], creators))
+    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a)).slice(0, OUTPUT_LIMIT), [local, remote, creators, key, bot.sessionId]);
+  const ids = useMemo(() => tasks.map(task => task.id), [tasks]);
+  const { registerPrConsumer } = usePrActions();
+  useEffect(() => {
+    const stops = tasks.map(task => registerPrConsumer(task.id, task.deviceLinkDeviceId));
+    return () => stops.forEach(stop => stop());
+  }, [tasks, registerPrConsumer]);
+  const refs = usePrRefsForSessions(ids);
+  const prs = useMemo(() => {
+    const unique = new Map<string, SessionPrRef>();
+    for (const ref of [...refs].sort((a, b) => b.lastSeenAt - a.lastSeenAt)) {
+      if (!unique.has(prStatusKey(ref))) unique.set(prStatusKey(ref), ref);
+    }
+    return [...unique.values()];
+  }, [refs]);
+  const [allTasks, toggleTasks] = useToggle();
+  const openTask = async (task: Session) => {
+    if (task.deviceLinkDeviceId) remoteProjectsStore.pinSessionOrigin(task.deviceLinkDeviceId, task.id);
+    onClose();
+    navigate(await resolveSessionRoute(task.id));
+  };
+  return <>
+    {tasks.length > 0 ? <Section label={t('bots.glance.recentTasks')}>
+      {(allTasks ? tasks : tasks.slice(0, TASK_PREVIEW)).map(task => <RecentTask key={task.id} task={task} onOpen={() => void openTask(task)} />)}
+      {tasks.length > TASK_PREVIEW ? <FoldRow indent open={allTasks} onClick={toggleTasks} label={t(allTasks ? 'bots.glance.showLess' : 'bots.glance.showMore')} /> : null}
+    </Section> : null}
+    <Outputs sessionId={bot.sessionId ?? ''} botId={bot.id} onClose={onClose} prs={prs} />
+  </>;
+}
+
+function RecentTask({ task, onOpen }: { task: Session; onOpen(): void }) {
+  const attention = useSessionAttentionKind(task.id);
+  const { t } = useTranslation();
+  return <Row testId="bot-glance-task" icon={<MessageCircle size={16} />} title={task.title}
+    onClick={onOpen}
+    trailing={attention === 'done' ? <span className="flex items-center" role="img" aria-label={t('bots.glance.unread')}><AttentionDot tone="done" /></span> : undefined} />;
+}
+
+function PrOutput({ pr }: { pr: SessionPrRef }) {
+  const { statuses, successfulStatuses } = usePrStatuses(pr.sessionId);
+  const result = statuses.get(prStatusKey(pr));
+  const status = result?.ok ? result : successfulStatuses.get(prStatusKey(pr));
+  const kind = status?.ok ? status.status : null;
+  const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
+  return <Row testId="bot-glance-pr" title={(status?.ok ? status.title?.trim() : undefined) || `${pr.owner}/${pr.repo}`}
+    icon={<Icon size={16} style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }} />}
+    onClick={() => void window.electronAPI.openExternal(sessionPrUrl(pr))} />;
 }
 
 // ---------------------------------------------------------------- 入口
@@ -697,12 +753,13 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
       <PopoverContent
         align="end"
         sideOffset={6}
+        collisionPadding={12}
         data-testid="bot-glance-popover"
         aria-label={t('bots.glance.open', { name: bot.name })}
         className="w-[360px] max-w-[calc(100vw-24px)] overflow-y-auto p-0"
-        style={{ maxHeight: 'min(640px, calc(100vh - 96px))', ...WINDOW_NO_DRAG_STYLE }}
+        style={{ maxHeight: 'var(--radix-popover-content-available-height, calc(100dvh - 24px))', ...WINDOW_NO_DRAG_STYLE }}
       >
-        <div className="flex items-center gap-3 px-4 pb-2 pt-4">
+        <div className="flex items-center gap-3 px-4 pb-1 pt-3">
           <BotAvatar bot={bot} size="md" />
           <span className="min-w-0 truncate text-15 font-medium text-[var(--text-primary)]">{bot.name}</span>
         </div>
@@ -716,7 +773,7 @@ export function BotGlanceButton({ bot, cloudHome }: { bot: BotChatIdentity; clou
           />
         </Section>
         <Todos host={host} sessionId={sessionId} todos={todos} onClose={() => setOpen(false)} />
-        <Outputs sessionId={sessionId} botId={bot.id} onClose={() => setOpen(false)} />
+        <Activity bot={bot} onClose={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
     {cloudHome ? <HomeSwitchConfirm bot={{ id: bot.id, name: bot.name }} state={homeSwitch} /> : null}

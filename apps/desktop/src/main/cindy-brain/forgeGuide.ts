@@ -2,6 +2,7 @@
  * Raw imports embed the same shipped Markdown in dev, tests and packaged builds.
  */
 import overview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-overview.md?raw';
+import sourceVerification from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-source-verification.md?raw';
 import routineEvents from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-routine-events.md?raw';
 import design from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-design.md?raw';
 import structure from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-structure.md?raw';
@@ -22,10 +23,12 @@ import settings from '../../../resources/system-skills/cindy-plugin-creator/refe
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
+import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
 import directoryPicker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-directory-picker.md?raw';
 import panelPreview from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-panel-preview.md?raw';
+import browserExtension from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-browser-extension.md?raw';
 import bundledSkillsLegacy from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-bundled-skills-legacy.md?raw';
 import workspaceSessions from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-workspace-sessions.md?raw';
 import confirmDialog from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-confirm-dialog.md?raw';
@@ -41,6 +44,7 @@ import compatibility from '../../../resources/system-skills/cindy-plugin-creator
 
 export const FORGE_GUIDE = [
   overview,
+  sourceVerification,
   routineEvents,
   design,
   structure,
@@ -65,12 +69,14 @@ export const FORGE_GUIDE = [
   sessionContext,
   directoryPicker,
   panelPreview,
+  browserExtension,
   bundledSkillsLegacy,
   workspaceSessions,
   confirmDialog,
   mainView,
   taskView,
   recommendations,
+  interactivePages,
   panels,
   mobilePages,
   sandbox,

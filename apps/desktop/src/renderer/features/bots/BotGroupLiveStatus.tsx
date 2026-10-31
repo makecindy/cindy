@@ -1,6 +1,7 @@
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { useNavigate } from 'react-router-dom';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
-/** Group progress stays above the composer. Each execution opens its original standard
+/** Group progress stays with the timeline. Each execution opens its original standard
  * task, locally or on its authenticated home computer; confirmations stay inline. */
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
@@ -18,7 +19,7 @@ import { isBotGroupNoReplyText, type BotGroupMemberView, type BotGroupSpeakerAct
 import { BotAvatar } from './BotAvatar';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { formatBotGroupElapsed, useBotGroupNow } from './BotGroupElapsed';
-import { BotGroupLivePreview } from './BotGroupLivePreview';
+import { BotGroupProcessNotes, BotGroupRemoteProcessNotes } from './BotGroupLivePreview';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import type { BotGroupRunningStep } from './BotGroupTimelineModel';
 
@@ -37,6 +38,7 @@ export interface BotGroupLiveSpeaker {
 function useSpeakerActivity(speaker: BotGroupLiveSpeaker | undefined) {
   const local = useAgentIslandActivity(speaker?.target ? '' : speaker?.sessionId ?? '');
   const remote = useRemoteSessionActivity(speaker?.sessionId ?? '', speaker?.target?.deviceId);
+  if (speaker?.executionStatus === 'queued') return null;
   return speaker?.target ? remote ? {
     ...remote, workingPhase: readWorkingPhase(remote.workingPhase) ?? undefined,
     startedAtMs: speaker.startedAt ?? null, currentActionSummary: remote.compactDetail, gracefulStopState: 'none',
@@ -57,11 +59,12 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
   const { member, sessionId, activity: speakerActivity } = speaker;
   const navigate = useNavigate();
   const live = useSpeakerActivity(speaker);
+  const queued = speaker.executionStatus === 'queued';
   const waiting = live?.phase === 'needs-interaction' || speaker.executionStatus === 'needs_input';
   const [mountedAt] = useState(() => Date.now());
   const now = useBotGroupNow(true);
   const since = live?.startedAtMs ?? speaker.startedAt ?? mountedAt;
-  if (speakerActivity !== 'planning' && now - since >= BOT_GROUP_PROGRESS_STRIP_DELAY_MS) {
+  if (speakerActivity !== 'planning' && (waiting || now - since >= BOT_GROUP_PROGRESS_STRIP_DELAY_MS)) {
     return <BotGroupSpeakerInteraction speaker={speaker} />;
   }
   return (
@@ -73,7 +76,7 @@ export function BotGroupSpeakingLine({ speaker, showStatus = true }: { speaker: 
         {showStatus ? (
           <p role="status" aria-live="polite" className="flex min-w-0 items-center gap-1.5 text-13 leading-5">
             <span className="shrink-0 font-medium text-[var(--text-primary)]">{speaker.displayName}</span>
-            {!waiting ? (
+            {queued ? <span className="text-[var(--text-secondary)]">{t('bots.groupChat.progress.queued')}</span> : !waiting ? (
               <span className="flex min-w-0 items-center gap-1 text-[var(--text-secondary)]">
                 {/* 呼吸只挂在 HTML 包装层上(DESIGN §7:常驻动画 compositor-only)。 */}
                 <span aria-hidden className="session-status-breathing inline-flex shrink-0">
@@ -152,7 +155,6 @@ function BotGroupSingleProgressStrip({
   stopPending,
 }: BotGroupProgressStripProps & { showStop?: boolean; stopPending?: boolean }) {
   const { t } = useTranslation();
-  const [mountedAt] = useState(() => Date.now());
   const navigate = useNavigate();
   const stepSpeaker = step
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === step.step.botId)
@@ -163,12 +165,21 @@ function BotGroupSingleProgressStrip({
   const lead = step ? stepSpeaker : speakers.find((speaker) => speaker.activity !== 'planning');
   const sessionId = lead?.sessionId ?? null;
   const live = useSpeakerActivity(lead);
-  const startedAt = live?.startedAtMs ?? lead?.startedAt ?? (step ? step.plan.updatedAt : null);
-  const since = startedAt ?? mountedAt;
+  const queued = lead?.executionStatus === 'queued';
+  // Server startedAt may be request creation time, not elapsed work's origin.
+  const startedAt = queued ? null : lead?.executionId
+    ? !lead.target && (live?.phase === 'running' || live?.phase === 'needs-interaction') ? live.startedAtMs : null
+    : live?.startedAtMs ?? lead?.startedAt;
+  const since = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0 ? startedAt : undefined;
+  // A request timestamp can bound process notes without becoming work elapsed.
+  const processSince = queued ? undefined : [live?.startedAtMs, lead?.startedAt].find(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0,
+  );
   const isStopping = stopping || lead?.stopping === true || (!!live?.gracefulStopState && live.gracefulStopState !== 'none');
   const buttonPending = stopPending ?? isStopping;
   const now = useBotGroupNow(true);
-  if (!step && (!lead || now - since < BOT_GROUP_PROGRESS_STRIP_DELAY_MS)) return null;
+  const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
+  if (!step && !lead) return null;
   const member = step ? step.member : lead?.member;
   const name = step ? step.displayName : lead?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
@@ -176,40 +187,25 @@ function BotGroupSingleProgressStrip({
   // The Session's compact detail may still be the previous turn's silence marker (NO_REPLY);
   // that is not an action anyone should read.
   const rawAction = live?.currentActionSummary?.trim() || live?.compactDetail?.trim() || '';
-  const action = isBotGroupNoReplyText(rawAction) ? '' : rawAction;
+  const action = queued || isBotGroupNoReplyText(rawAction) ? '' : rawAction;
   const canView = !!sessionId;
-  return (
-    <div data-testid="bot-group-work" className="shrink-0 px-5 pt-2">
-      <div
-        data-testid="bot-group-progress"
-        // Process opens the existing task page; the strip stays compact.
-        className="mx-auto flex min-w-0 flex-col border border-[var(--border-default)] bg-[var(--surface-elevated)] w-fit max-w-[min(760px,100%)] rounded-full"
-      >
-        <div className="flex min-h-9 min-w-0 items-center gap-2 py-1 pl-2 pr-1">
-          {member ? <BotAvatar bot={member} size="xs" /> : null}
-          <p role="status" aria-live="polite" className="flex min-w-0 flex-1 items-center gap-1 truncate text-12 leading-5 text-[var(--text-secondary)]">
-            {workStep ? (
-              <span className="shrink-0 font-medium text-[var(--text-primary)]">
-                {t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })}
-              </span>
-            ) : null}
-            <span className="min-w-0 truncate">
-              {workStep ? ` · ${name} ${workStep.step.task}` : name}
-            </span>
-            {!workStep || isStopping || live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input' ? <span className="min-w-0 truncate">
-              {isStopping
-                ? t('bots.groupChat.progress.stopping')
-                : lead?.executionStatus === 'queued'
-                  ? t('bots.groupChat.progress.queued')
-                : live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input'
-                  ? t('bots.groupChat.waitingConfirm', { name: '' })
-                  : <BotGenerationLabel sessionId={sessionId ?? undefined} remote={lead?.target ? { deviceId: lead.target.deviceId, botId: lead.target.botId } : undefined} phase={live?.workingPhase ?? 'processing'} startedAt={live?.startedAtMs ?? null} />}
-            </span> : null}
-            {startedAt !== null ? <span className="shrink-0 tabular-nums">
-              {' · '}
-              {t('bots.groupChat.progress.elapsed', { time: formatBotGroupElapsed(now - startedAt, t) })}
-            </span> : null}
-          </p>
+  const title = <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-2">
+    <span className="font-medium text-[var(--text-primary)]">{name}</span>
+    <span>{isStopping ? t('bots.groupChat.progress.stopping')
+      : lead?.executionStatus === 'queued' ? t('bots.groupChat.progress.queued')
+      : waiting ? t('bots.groupChat.waitingConfirm', { name: '' })
+      : since !== undefined ? t('chat.teammateProcess.elapsed', { duration: formatBotGroupElapsed(Math.max(0, now - since), t) })
+      : t('chat.teammateProcess.processing')}</span>
+  </span>;
+  return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">
+    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="xs" /></div> : null}
+    <div data-testid="bot-group-progress" className="min-w-0 flex-1">
+      <WorkGroupBlock journal isStreaming blockId={`group-process:${lead?.executionId ?? sessionId ?? name}`}
+        journalTitle={title} childItems={[{ kind: 'rendered', key: 'notes', prose: false, renderNode: () => <>
+          {workStep ? <p className="text-13 text-[var(--text-secondary)]">{t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })} · {workStep.step.task}</p> : null}
+          {sessionId && processSince !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} deviceId={lead.target.deviceId} since={processSince} />
+            : <BotGroupProcessNotes sessionId={sessionId} since={processSince} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
+        </> }]} />
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (
               <Button type="button" variant="secondary" tone="quiet" size="sm" compact onClick={() => sessionId && navigate(standardSessionRoute(sessionId, lead?.target?.deviceId))}>
@@ -250,18 +246,14 @@ function BotGroupSingleProgressStrip({
               </Button>
             )}
           </span>
-        </div>
-      </div>
-      {action ? <p data-testid="bot-group-work-action" className="mx-auto mt-1 max-w-[760px] truncate px-2 text-center text-13 leading-5 text-[var(--text-secondary)]" title={action}>{action}</p> : null}
-      {lead?.target ? <p className="mt-1 text-center text-12 leading-5 text-[var(--text-secondary)]">{lead.target.deviceName}</p> : null}
-      {sessionId && !lead?.target && live?.phase === 'running' ? <BotGroupLivePreview sessionId={sessionId} className="mx-auto mt-1 max-w-[760px] px-2" /> : null}
     </div>
-  );
+  </div>;
+
 }
 
 /** Header status: who is doing which step, or who is speaking or planning. */
 export function botGroupHeaderStatus(
-  group: Pick<BotGroupSummary, 'speakingBotIds' | 'planningBotId' | 'openPlan' | 'members'>,
+  group: Pick<BotGroupSummary, 'speakingBotIds' | 'planningBotId' | 'openPlan' | 'members' | 'round'>,
   displayName: (member: BotGroupMemberView) => string,
   t: (key: string, options?: Record<string, unknown>) => string,
 ): string | null {
@@ -269,14 +261,21 @@ export function botGroupHeaderStatus(
     const member = group.members.find((candidate) => candidate.botId === botId);
     return member ? displayName(member) : '';
   };
+  const executions = group.round?.speakers.filter(speaker => speaker.activity !== 'planning');
+  const queued = executions?.find(speaker => speaker.executionStatus === 'queued');
+  const queuedStep = executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus === 'queued')
+    && !executions?.some(speaker => speaker.activity === 'step' && speaker.executionStatus !== 'queued');
+  if (queued && executions?.every(speaker => speaker.executionStatus === 'queued') && !group.planningBotId) {
+    return t('bots.groupChat.header.queued', { name: nameOf(queued.botId) });
+  }
   const plan = group.openPlan;
-  if (plan?.status === 'running' && plan.currentStep !== null && plan.currentStepStatus === 'running') {
+  if (!queuedStep && plan?.status === 'running' && plan.currentStep !== null && plan.currentStepStatus === 'running') {
     // A queue's turn is someone speaking, not a step of work.
     if (plan.kind === 'talk') return t('bots.groupChat.header.speaking', { name: plan.currentBotName?.trim() || '' });
     return t('bots.groupChat.header.stepRunning', { name: plan.currentBotName?.trim() || '', step: plan.currentStep + 1 });
   }
   if (group.planningBotId) return t('bots.groupChat.header.planning', { name: nameOf(group.planningBotId) });
-  const speaker = group.speakingBotIds[0];
+  const speaker = executions?.find(speaker => speaker.executionStatus !== 'queued')?.botId ?? group.speakingBotIds[0];
   if (speaker) return t('bots.groupChat.header.speaking', { name: nameOf(speaker) });
   return null;
 }

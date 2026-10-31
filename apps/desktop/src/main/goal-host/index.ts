@@ -108,12 +108,16 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         agentMeta: { goalCompletion: summary },
       });
     },
-    // 主动配额检测:按会话所用订阅账号读用量快照(ChatGPT 订阅无论跑在 Codex、Claude Code
-    // bridge 还是 Pi 上都读同一份额度),判 limited + 取 resetAt(unix ms)。
+    // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
     getAccountLimit: async (agentKind, sessionId, turnError) => {
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
-      if (subscriptionFamilyOf(agentKind, providerId)) {
+      const family = subscriptionFamilyOf(agentKind, providerId);
+      // ChatGPT windows do not establish credit-backed admission, and cached credits
+      // may be stale or unknown. Let the next normal turn reach the provider; retain
+      // snapshot reset lookup after an actual rejection instead of retrying on credits.
+      if (family === 'codex' && turnError === undefined) return null;
+      if (family) {
         const otherMachineAccount = sessionUsesOtherMachineAccount(row);
         // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
         if (turnError !== undefined) {

@@ -121,7 +121,9 @@ const D_MEDIA = [
   "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
-  "展示、改图和附件交接都直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址，不需要本地路径。仅当用户明确询问文件存储位置或本地路径时，才调用 resolve_local_path 并原样传入 url；此调用会把该受管媒体的本机绝对路径返回给 Agent 并写入任务记录。Host 按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。不要假定稍后还会有确认卡；不要猜路径或扫描磁盘。",
+  "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
+  "为完成当前任务而查看、抽帧或分析已有媒体时，可主动调用 resolve_local_path 并原样传入 url，取得文件路径后自行选择工具或脚本；不要求用户先询问存储位置或另行口头同意查看。用户询问存储位置时也使用此动作。它把受管媒体的本机绝对路径返回给 Agent 并写入任务记录，Host 仍按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。路径属于 Cindy Host 所在电脑，不应当作 SSH 工作区路径；不要猜路径或扫描磁盘。只看视频帧不能声称已检查声音、对白或音画同步。",
+  "展示、改图和附件交接仍直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址；本机路径供 Agent 工作使用，不替代给用户的可播放媒体地址。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
@@ -140,6 +142,7 @@ const D_GHOST_FORGE_SCAFFOLD = [
   "template 可选:plain(普通沙箱工具)、agent-action(卡片点击后让 Agent 继续/分叉/新建)、",
   "node-json-rpc(普通随包 Node 服务)、node-mcp(随包 stdio MCP)。Node 模板只写零依赖示例",
   "源码，不会执行 npm install / npx / postinstall。生成后按需求修改，再调用 ghost_forge_pack。",
+  "四种模板均可叠加 withUi:true，生成标准 MCP Apps 交互页面和 main.js 工具；不需要页面构建。参见 §4.23。",
   "骨架不自动填写 ghost.json.releaseNotes；首次上架可省略，后续更新须补写相对上一已上架版本完整变化的纯文本说明，见 ghost_forge_guide 的第 2、7.3 章。",
   "会话工作目录内直接生成；工作目录外(例如相邻 worktree)走当前会话权限:",
   "本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认。不要因为目录在工作目录外就改换目录或空转重试。",
@@ -1099,6 +1102,7 @@ export async function handleForgeScaffold(
   input: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;
@@ -1408,7 +1412,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .max(4096)
         .optional()
-        .describe("resolve_local_path 时必填；原样传入 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址。调用会向 Agent 返回该媒体的本机绝对路径并写入任务记录，仅在用户明确询问时使用；按当前权限审核，不保证另有确认卡"),
+        .describe("resolve_local_path 时传 cindy-media://、xdt-image:// 或 xdt-video://；查看、抽帧、分析媒体或查询存储位置时使用，按当前权限返回 Host 本机路径，具体查看方式由 Agent 决定。"),
       invocation_id: z
         .string()
         .max(128)
@@ -1446,6 +1450,7 @@ export function createCindyGhostsMcpServer(
         .describe(
           "起步模板:普通插件 / Agent 交互卡 / 普通 Node 服务 / stdio MCP",
         ),
+      withUi: z.boolean().optional().describe("可选：叠加 MCP Apps 交互页面，最低版本不低于 0.1.122-beta"),
       id: z.string().describe("插件 id:小写字母、数字、连字符，1–32 位"),
       name: z.string().describe("给用户看的插件名称"),
       description: z

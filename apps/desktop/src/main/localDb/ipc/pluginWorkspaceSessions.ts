@@ -31,6 +31,7 @@ import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { pickSessionForWorkdir } from '../pluginWorkspaceDedupe';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import type { GhostErrandPermissionMode } from '../../../shared/ghost.js';
 
 const log = createLogger('plugin-workspace-sessions');
 
@@ -73,7 +74,7 @@ export async function createPluginDraftSession(params: {
    * 由宿主解析的完整模型配置；缺省时交普通 Session 入口读取当前新任务选择。
    */
   defaults?: {
-    permissionMode?: 'ask' | 'plan' | 'acceptEdits' | 'auto';
+    permissionMode?: GhostErrandPermissionMode;
     agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
@@ -146,7 +147,7 @@ export async function createPluginTaskSession(params: {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string | null;
-  permissionMode: 'ask' | 'plan' | 'acceptEdits' | 'auto';
+  permissionMode: GhostErrandPermissionMode;
   /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
   workingDir?: string;
   /**

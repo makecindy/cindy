@@ -59,6 +59,28 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
+// Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
+// including endpoint overrides and explicit user headers (not just a helper).
+it('attributes native Pi per model endpoint without lending identity to another service', () => {
+  const cfg: Cfg = { id: 'router', name: 'Router', runtimes: { pi: {
+    baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'router-model' }, { id: 'other-model', route: {
+      baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat',
+    } }],
+  } } };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  expect(result.providers[0].headers).toBeUndefined();
+  expect(result.providers[0].models[0].headers).toMatchObject({
+    'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+  });
+  expect(result.providers[0].models[1].headers).toBeUndefined();
+  cfg.runtimes.pi!.headers = { 'http-referer': 'https://custom.example', 'x-title': 'Custom app' };
+  const custom = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  const headers = custom.providers[0].models[0].headers!;
+  expect(headers['X-OpenRouter-Title']).toBeUndefined();
+  expect(custom.env[headers['x-title'].slice(1)]).toBe('Custom app');
+});
+
 it('never projects retired independent Claude accounts into Pi', () => {
   const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
   const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
@@ -276,6 +298,12 @@ describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
         compat: {
           requiresReasoningContentOnAssistantMessages: true,
           sendSessionAffinityHeaders: true,
+          // The loopback Gateway URL defeats Pi's deepseek.com detection. Without the exact
+          // DeepSeek row, V4.1 Flash sent `developer`, `max_completion_tokens` and no
+          // `thinking` toggle, so "thinking off" stayed on.
+          thinkingFormat: 'deepseek',
+          supportsDeveloperRole: false,
+          maxTokensField: 'max_tokens',
         },
       });
     }
@@ -551,6 +579,58 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
     } }], () => 'fixture-key');
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
+  it('strips an inherited /v1 suffix for a model-level Anthropic route (#7258)', () => {
+    // Test value: the production launch mapper materializes models.json. Existing coverage only
+    // protects Google's endpoint rewrite; this same-provider cross-API route was missing.
+    // The minimum failure input is one Anthropic API override on an OpenAI provider /v1 URL;
+    // without a model baseUrl Pi appends /v1/messages to /v1 and gets /v1/v1/messages. Unit tier.
+    const baseUrl = 'http://127.0.0.1:8000/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-api',
+      name: 'Mixed API',
+      runtimes: {
+        pi: piRuntime({
+          baseUrl,
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'anthropic-api-override',
+              api: 'anthropic-messages',
+            },
+            {
+              id: 'anthropic-route-override',
+              route: { baseUrl, wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-custom-route',
+              route: { baseUrl: 'https://gateway.example/proxy/v1', wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-request-path',
+              api: 'anthropic-messages',
+              route: { baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages' },
+            },
+            { id: 'openai-model', name: 'OpenAI model' },
+          ],
+        }),
+      },
+    }], () => 'fixture-key');
+
+    expect(providers[0]).toMatchObject({
+      baseUrl,
+      api: 'openai-completions',
+      models: [
+        { id: 'anthropic-api-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-route-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-custom-route', api: 'anthropic-messages', baseUrl: 'https://gateway.example/proxy/v1' },
+        { id: 'anthropic-request-path', api: 'anthropic-messages' },
+        { id: 'openai-model' },
+      ],
+    });
+    expect(providers[0]?.models?.[3]).not.toHaveProperty('baseUrl');
+    expect(providers[0]?.models?.[4]).not.toHaveProperty('baseUrl');
   });
 
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
@@ -2793,7 +2873,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       compat: id === 'deepseek-v4-pro' ? {
         supportsDeveloperRole: false, supportsStore: false,
         maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
-        thinkingFormat: 'deepseek',
+        thinkingFormat: 'deepseek', supportsStrictMode: true, supportsMidConvoSystemMessages: true,
       } : { supportsDeveloperRole: false },
     });
   });

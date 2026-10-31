@@ -103,42 +103,111 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
-  it.each(['missing', 'legacy', 'partial'])('replays remote report persistence with %s Worker schema', (shape) => {
-    const { db, cleanup } = createTempDb();
-    try {
-      // Later migrations need the sessions and task tables these Worker fixtures omit.
-      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)");
-      if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
-      db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
-      db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
-      const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135]);
-      expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
-      expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
-      expect(columnNames(db, 'sessions')).toContain('notifications_muted');
-      expect(columnNames(db, 'sessions')).toContain('last_activity_at');
-      expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
-      expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
-      expect(tableExists(db, 'plugin_usage_events')).toBe(true);
-      expect(columnNames(db, 'plugin_usage_events')).toContain('entry_kind');
-      expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
-      expect(tableExists(db, 'orca_remote_opens')).toBe(true);
-      if (shape !== 'missing') {
-        expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
-        expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
+  it.each(['missing', 'legacy', 'partial'])(
+    'replays remote report persistence with %s Worker schema',
+    (shape) => {
+      const { db, cleanup } = createTempDb();
+      try {
+        // Later migrations need the sessions and task tables these Worker fixtures omit.
+        db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+        if (shape !== 'missing') db.exec(`CREATE TABLE orca_workers (id TEXT PRIMARY KEY${shape === 'partial' ? ', pending_remote_report TEXT' : ''}); INSERT INTO orca_workers (id) VALUES ('worker-1');`);
+        db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+        db.exec("INSERT INTO sessions (id) VALUES ('legacy-session')");
+        // These reduced historical fixtures still need the group table present since schema 83.
+        db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+        db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+        db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
+        const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
+        expect(result.applied.map((migration) => migration.seq)).toEqual([
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
+        ]);
+        expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
+        expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
+        expect(columnNames(db, 'sessions')).toContain('notifications_muted');
+        expect(columnNames(db, 'sessions')).toContain('last_activity_at');
+        expect(db.prepare('SELECT last_activity_at FROM sessions').get()).toEqual({ last_activity_at: null });
+        expect(tableExists(db, 'plugin_usage_subjects')).toBe(true);
+        expect(tableExists(db, 'plugin_usage_events')).toBe(true);
+        expect(columnNames(db, 'plugin_usage_events')).toContain('entry_kind');
+        expect(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='plugin_usage_events_pending_idx'").get()).toEqual({ name: 'plugin_usage_events_pending_idx' });
+        expect(tableExists(db, 'orca_remote_opens')).toBe(true);
+        if (shape !== 'missing') {
+          expect(columnNames(db, 'orca_workers')).toEqual(expect.arrayContaining(['pending_remote_report', 'remote_stop_confirmed_at']));
+          expect(db.prepare('SELECT id FROM orca_workers').all()).toEqual([{ id: 'worker-1' }]);
+        }
+      } finally {
+        cleanup();
       }
-    } finally { cleanup(); }
-  });
+    },
+  );
+  // DB tier: a populated pre-138 PR row must survive the append-only migration.
+  // Fresh replay cannot catch losing an existing association or defaulting it hidden.
+  // Migration tier regression: replay 0138 through the production runner when
+  // a pre-138 database already has some/all columns; the old ALTER SQL failed.
+  // The existing fresh-schema test did not cover interrupted/replayed schemas.
+  it.each(['none', 'partial', 'all'])(
+    'preserves PR associations when %s management columns already exist',
+    (existing) => {
+      const { db, cleanup } = createTempDb();
+      try {
+        db.exec(
+          'CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY)',
+        );
+        db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
+        db.exec("INSERT INTO sessions (id) VALUES ('s')");
+        db.prepare('INSERT INTO session_pr_refs VALUES (?,?,?,?,?,?,?,?)').run(
+          'r',
+          's',
+          'example',
+          'repo',
+          1,
+          'https://github.com/example/repo/pull/1',
+          10,
+          20,
+        );
+        if (existing !== 'none') {
+          db.exec('ALTER TABLE session_pr_refs ADD pinned integer DEFAULT false NOT NULL');
+          db.exec('ALTER TABLE session_pr_refs ADD priority integer DEFAULT 0 NOT NULL');
+        }
+        if (existing === 'all') {
+          db.exec('ALTER TABLE session_pr_refs ADD manually_added integer DEFAULT false NOT NULL');
+          db.exec('ALTER TABLE session_pr_refs ADD removed_at integer');
+        }
+        runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 137 });
+        expect(db.prepare('SELECT * FROM session_pr_refs').get()).toEqual({
+          id: 'r',
+          session_id: 's',
+          owner: 'example',
+          repo: 'repo',
+          pr_number: 1,
+          url: 'https://github.com/example/repo/pull/1',
+          first_seen_at: 10,
+          last_seen_at: 20,
+          pinned: 0,
+          priority: 0,
+          manually_added: 0,
+          removed_at: null,
+        });
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
   it('keeps existing tool usage when upgrading the invocation ledger', () => {
     const { db, cleanup } = createTempDb();
     try {
-      db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)');
+      db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec(readFileSync(path.join(drizzleDir(), '0128_demonic_odin.sql'), 'utf-8'));
-      db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+      db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY)');
       db.prepare('INSERT INTO plugin_usage_subjects (id,source_kind,ghost_id,display_name,recording_started_at) VALUES (?,?,?,?,?)')
         .run('subject', 'manual', 'plugin', 'Plugin', 100);
       db.prepare('INSERT INTO plugin_usage_events (call_id,subject_id,history_generation,occurred_at,tool_name) VALUES (?,?,?,?,?)')
         .run('legacy-tool', 'subject', 0, 100, 'run');
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 131 });
       expect(db.prepare('SELECT call_id,subject_id,occurred_at,entry_kind FROM plugin_usage_events').all()).toEqual([
         { call_id: 'legacy-tool', subject_id: 'subject', occurred_at: 100, entry_kind: 'tool' },
@@ -195,6 +264,10 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, pinned_at INTEGER, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Visible', 'active', NULL, 1), ('b', 'Pinned', 'archived', 5, 2);");
       db.exec("CREATE TABLE bot_delegations (id TEXT PRIMARY KEY)");
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 125 });
       expect(result.applied.map((migration) => migration.seq)[0]).toBe(126);
       expect(columnNames(db, 'sessions')).toContain('hidden_at');
@@ -212,8 +285,14 @@ describeMigrationReplay('migration replay', () => {
       db.exec("CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL)");
       db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL); INSERT INTO sessions VALUES ('a', 'Loud', 'active', 1), ('b', 'Archived', 'archived', 2);");
       db.exec("CREATE TABLE plugin_usage_events (call_id TEXT PRIMARY KEY)");
+      // These reduced historical fixtures still need the group table present since schema 83.
+      db.exec(readFileSync(path.join(drizzleDir(), '0083_gray_katie_power.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0088_thankful_captain_midlands.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
-      expect(result.applied.map((migration) => migration.seq)).toEqual([130, 131, 132, 133, 134, 135]);
+      expect(result.applied.map((migration) => migration.seq)).toEqual([
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
+      ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
       expect(db.prepare('SELECT id, notifications_muted FROM sessions ORDER BY id').all()).toEqual([
@@ -561,6 +640,8 @@ describeMigrationReplay('migration replay', () => {
           (63, '0063_secret_dreaming_celestial.sql', 'd07bdac33796fe1ba80230207f0bf5834d0bf9c9df0c68fe372cbbba42bc7ee8', 1063),
           (64, '0064_amusing_white_tiger.sql', 'ef297d4140b49cb3f6e87d58ea76e7f5a427fc6b3857a02210b9108650dcab23', 1064);
       `);
+
+      db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
 
       const result = runMigrationReplay(db, {
         drizzleDir: drizzleDir(),

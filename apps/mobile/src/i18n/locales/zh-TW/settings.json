@@ -63,7 +63,35 @@
       "zh-TW": "繁體中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "簡繁與文風",
+      "hint": "AI 依所選文風作答；選「照常作答」時介面仍為文言，回答隨你的語言",
+      "scriptAriaLabel": "文言簡繁",
+      "styleAriaLabel": "AI 作答文風",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "文言（預設）",
+        "tang-poetry": "唐詩",
+        "song-ci": "宋詞",
+        "yuan-qu": "元曲",
+        "chu-ci": "楚辭",
+        "parallel-prose": "駢文",
+        "pre-qin": "先秦諸子",
+        "historian": "史傳",
+        "ming-qing-essay": "明清小品",
+        "plain": "照常作答"
+      }
     }
   },
   "version": {
@@ -96,9 +124,7 @@
   "betaChannel": {
     "title": "Beta 測試管道",
     "badge": "Beta",
-    "description": "提前接收即將發布的用戶端更新。",
-    "restartHint": "Beta 測試管道需要重新啟動客戶端後才能生效，請重新啟動應用。",
-    "ok": "我知道了",
+    "description": "提前接收即將發布的用戶端更新。內容更新會在下次檢查時下載，重新啟動 App 後生效。",
     "saveFailed": "儲存 Beta 測試管道設定失敗",
     "unavailable": "Beta 測試管道暫不可用，無法連接到 Beta 更新伺服器。"
   },

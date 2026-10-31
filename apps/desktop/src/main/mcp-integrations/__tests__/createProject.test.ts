@@ -87,7 +87,7 @@ vi.mock('../../sidebarSettingsStore.js', () => ({
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 
 import { createProject } from '../createProject.js';
-import { listProjects, renameProject, removeProject } from '../projectManagement.js';
+import { listProjects, renameProject, removeProject, resolveSessionProject, readCurrentSessionProject } from '../projectManagement.js';
 
 describe('createProject', () => {
   let directory: string;
@@ -117,6 +117,95 @@ describe('createProject', () => {
     await rm(directory, { recursive: true, force: true });
   });
   const run = (workingDir: string) => createProject({ callerSessionId: 'caller', workingDir });
+
+  // Unit: project self-inspection must agree with sidebar membership, including
+  // old managed worktrees, and must never leak across an account switch.
+  it.each([
+    { projectDir: '/repo', workingDir: '/sibling-worktree', workspaceKind: 'project', expected: '/repo', remoteHostId: null },
+    { projectDir: null, workingDir: '/repo/.cindy-worktrees/task', workspaceKind: 'project', expected: '/repo', remoteHostId: null },
+    { projectDir: '/old-project', workingDir: '/dialogue', workspaceKind: 'dialogue', expected: null, remoteHostId: null },
+    { projectDir: '/remote/repo', workingDir: '/remote/worktree', workspaceKind: 'project', expected: '/remote/repo', remoteHostId: 'ssh-host' },
+  ])('reads membership without registering cwd: $workingDir', async ({ expected, ...row }) => {
+    h.query.mockResolvedValue([row]);
+    expect(await readCurrentSessionProject('caller')).toEqual({
+      projectDir: expected, workspaceKind: row.workspaceKind, remoteHostId: row.remoteHostId,
+    });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  it('discards project membership when the account changes during lookup', async () => {
+    h.query.mockImplementationOnce(async () => {
+      h.owner.ownerGeneration += 1;
+      return [{ projectDir: '/private', workingDir: '/private', workspaceKind: 'project', remoteHostId: null }];
+    });
+    await expect(readCurrentSessionProject('caller')).rejects.toThrow('Active account changed');
+  });
+
+  // Unit regression: explicit conventional worktree projects are valid catalog
+  // entries; self-inspection must return the same selectable path, not its parent.
+  it('round-trips an explicitly registered worktree project through self-inspection', async () => {
+    const projectDir = path.join(directory, '.worktrees', 'feature');
+    await mkdir(projectDir, { recursive: true });
+    const normalized = projectDir.replaceAll('\\', '/');
+    h.registered = [{ path: normalized }];
+    h.query.mockResolvedValue([{
+      id: 'caller', projectDir: normalized, workingDir: directory,
+      workspaceKind: 'project', remoteHostId: null,
+    }]);
+    const current = await readCurrentSessionProject('caller');
+    expect(current.projectDir).toBe(normalized);
+    expect(await resolveSessionProject({ callerSessionId: 'caller', projectDir: current.projectDir! }))
+      .toEqual({ ok: true, projectDir: normalized });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  // Unit: selecting cwd previously registered it implicitly. A project choice
+  // must resolve from the catalog without adding/restoring anything.
+  it('resolves an existing visible project without changing the catalog', async () => {
+    expect(await resolveSessionProject({ callerSessionId: 'caller', projectDir: directory }))
+      .toEqual({ ok: true, projectDir: h.registered[0].path });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
+
+  // Unit: omitted membership inherits the persisted source, never the execution
+  // checkout; null explicitly opts out. Previously omission/null was rejected.
+  it.each(['project', 'legacy', 'dialogue', 'explicit-dialogue'] as const)(
+    'resolves inherited or projectless membership: %s', async mode => {
+      const projectDir = h.registered[0].path;
+      h.query.mockResolvedValue([{
+        id: 'caller', remoteHostId: null,
+        workspaceKind: mode === 'dialogue' ? 'dialogue' : 'project',
+        projectDir: mode === 'legacy' ? null : projectDir,
+        workingDir: mode === 'legacy' ? path.join(directory, '.cindy-worktrees', 'child') : '/other-checkout',
+      }]);
+      expect(await resolveSessionProject({ callerSessionId: 'caller',
+        ...(mode === 'explicit-dialogue' ? { projectDir: null } : {}),
+      })).toEqual({ ok: true, projectDir: mode.includes('dialogue') ? null : projectDir });
+      expect(h.upsert).not.toHaveBeenCalled();
+      expect(h.restore).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects unknown inherited membership instead of using an execution directory', async () => {
+    h.query.mockResolvedValue([{ id: 'caller', remoteHostId: null, workspaceKind: null,
+      projectDir: null, workingDir: directory }]);
+    expect(await resolveSessionProject({ callerSessionId: 'caller' })).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(h.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each(['unregistered', 'hidden', 'missing'] as const)('rejects a %s project without registering or restoring it', async state => {
+    if (state === 'unregistered') h.registered = [];
+    if (state === 'hidden') h.hiddenKeys = [`local:${h.registered[0].path}`];
+    const target = state === 'missing' ? path.join(directory, 'missing') : directory;
+    if (state === 'missing') h.registered = [{ path: target.replaceAll('\\', '/') }];
+    expect(await resolveSessionProject({ callerSessionId: 'caller', projectDir: target }))
+      .toMatchObject({ ok: false });
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.restore).not.toHaveBeenCalled();
+  });
 
   describe.each(['current', 'historical'])('%s workspace', (kind) => {
     it.each(['EIO', 'ENOTCONN', 'EACCES', 'EPERM', 'ENODEV', 'ESTALE', 'ETIMEDOUT'])(

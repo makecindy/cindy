@@ -2361,9 +2361,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.082353,
-              0.082353,
-              0.082353
+              0.933333,
+              0.933333,
+              0.933333
             ]
           },
           "$extensions": {
@@ -2396,9 +2396,9 @@
           "$value": {
             "colorSpace": "hsl",
             "components": [
-              0,
-              0,
-              93.3
+              214.3,
+              5.5,
+              24.9
             ]
           },
           "$extensions": {
@@ -5594,9 +5594,9 @@
           "$value": {
             "colorSpace": "srgb",
             "components": [
-              0.988235,
-              0.988235,
-              0.988235
+              0.160784,
+              0.164706,
+              0.172549
             ]
           },
           "$extensions": {
@@ -5630,8 +5630,8 @@
             "colorSpace": "hsl",
             "components": [
               214.3,
-              5.5,
-              24.9
+              6,
+              99
             ]
           },
           "$extensions": {

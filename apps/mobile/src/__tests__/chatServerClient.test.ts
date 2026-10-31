@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { resolveRemoteText } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentation';
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
+import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
+import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
   revision: 1, created_at: '2026-10-01', updated_at: '2026-10-09', response_mode: 'all', speaking_mode: 'auto' });
@@ -14,6 +16,65 @@ const message = (n: number): ChatMessage => ({ id: id(n), seq: String(9007199254
 const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099', messages: [], members: [
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
+
+describe('group list activity', () => {
+  it('refreshes pending execution state without a new message and tolerates an older server', async () => {
+    const request = vi.fn().mockResolvedValueOnce([{ status: 'running' }]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ status: 'needs_input' }]).mockResolvedValueOnce([])
+      .mockRejectedValueOnce(Object.assign(new Error('NOT_FOUND'), { status: 404 })).mockResolvedValueOnce([]);
+    const client = createChatServerClient(request);
+    const value = snapshot();
+    expect(await client.rosterActivity(value.room.id, value)).toEqual({ phase: 'running' });
+    const awaiting = await client.rosterActivity(value.room.id, value);
+    expect(chatRoomRow(value.room, value, undefined, awaiting).item.display.teammateActivity)
+      .toEqual({ phase: 'needs-interaction' });
+    expect(await client.rosterActivity(value.room.id, value)).toBeUndefined();
+    expect(request.mock.calls.every(([path]) => /\/(executions|plans)$/.test(path))).toBe(true);
+  });
+
+  it('places a newly created empty group and a group with a new topic ahead of an older main chat', () => {
+    const old = chatRoomRow(room(1), { ...snapshot(), messages: [{ ...message(20), createdAt: '2026-10-10T12:00:00Z' }] });
+    const fresh = chatRoomRow({ ...room(2), created_at: '2026-10-11T12:00:00Z' }, { ...snapshot(), messages: [] });
+    const topic = chatRoomRow(room(3), { ...snapshot(), messages: [{ ...message(21), threadRootId: id(20), createdAt: '2026-10-12T12:00:00Z' }] });
+    expect(orderedBotGroups([old, fresh, topic], '', 'zh-CN').map(row => row.item.ref.id)).toEqual([id(3), id(2), id(1)]);
+  });
+
+  it('orders a new empty group by creation, without inventing a creation message or bumping on edits', () => {
+    const empty = { ...room(), created_at: '2026-10-10T12:00:00Z', updated_at: '2026-10-20T12:00:00Z' };
+    const row = chatRoomRow(empty, { ...snapshot(), room: empty });
+    expect(row.item.display.timestamp).toBe(Date.parse(empty.created_at));
+    expect(row.item.display.preview).toBe('');
+    expect(chatRoomRow(empty).item.display.timestamp).toBe(Date.parse(empty.created_at));
+  });
+
+  it('uses the newest topic reply even when the snapshot is unordered, excluding deleted messages', () => {
+    const main = { ...message(20), createdAt: '2026-10-10T12:00:00Z' };
+    const topic = { ...message(21), threadRootId: main.id, createdAt: '2026-10-11T12:00:00Z' };
+    const deleted = { ...message(22), deleted: true, createdAt: '2026-10-12T12:00:00Z' };
+    const row = chatRoomRow(room(), { ...snapshot(), messages: [main, deleted, topic] });
+    expect(row.item.display).toMatchObject({ timestamp: Date.parse(topic.createdAt), preview: '21' });
+  });
+
+  it('localizes shared joins for every reader without adding unread replies, then yields to a new message', () => {
+    const reply = { ...message(20), createdAt: '2026-10-10T12:00:00Z' };
+    const joined: ChatMessage = { ...message(21), origin: 'system', createdAt: '2026-10-11T12:00:00Z',
+      content: [{ type: 'card', namespace: 'cindy.membership', schemaRevision: 1, fallback: 'Taylor joined the group',
+        data: { type: 'member.joined', actorId: id(12), displayName: 'Taylor' } }] };
+    const value = { ...snapshot(), messages: [reply, joined] };
+    for (const self of [id(11), id(12)]) {
+      const display = chatRoomRow(room(), value, self).item.display;
+      expect(display).toMatchObject({
+        timestamp: Date.parse(joined.createdAt), lastReplyAt: Date.parse(reply.createdAt),
+      });
+      expect(resolveRemoteText(display.preview!, 'zh-CN')).toBe('Taylor加入了群聊');
+    }
+    const later = { ...message(22), createdAt: '2026-10-12T12:00:00Z' };
+    expect(chatRoomRow(room(), { ...value, messages: [reply, joined, later] }).item.display)
+      .toMatchObject({ timestamp: Date.parse(later.createdAt), preview: '22' });
+    expect(chatRoomRow(room(), { ...value, messages: [{ ...joined, origin: 'user' }] }).item.display.preview)
+      .toBe('Taylor joined the group');
+  });
+});
 
 // Merge regression: history generation changes while execution state is read.
 // Production load must retry, retaining both the new revision and fresh work.
@@ -354,6 +415,30 @@ describe('direct Chat Server client', () => {
     });
     expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
   });
+  // Unit: broadcasts must override an implicit quoted companion and retain their wire audience.
+  it.each([true, false])('keeps human broadcasts directed with server capability=%s', async supported => {
+    const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Companion' } };
+    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined' };
+    const request = vi.fn(async (path: string, method?: string) => {
+      if (path === '/me') return { actor: { id: id(11), kind: 'human' }, capabilities: supported ? { groupMentionAudiences: 1 } : {} };
+      if (method === 'POST') return { id: id(21) };
+      return path.endsWith('/members') ? [member] : original;
+    });
+    const client = createChatServerClient(request as any);
+    const input = { clientId: 'broadcast', text: '@Everyone', mentions: { all: true, botIds: [] }, quote: { messageId: id(20) } };
+    await client.send(id(1), input);
+    const posted = request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>];
+    expect(posted[2].mentions).toEqual(supported ? [] : [id(11)]);
+    expect(posted[2].mentionAudience).toBe(supported ? 'humans' : undefined);
+    const bots = { ...input, clientId: 'bots', mentions: { all: false, allBots: true, botIds: [] } };
+    if (supported) {
+      await client.send(id(1), bots);
+      expect((request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>])[2]).toMatchObject({ mentionAudience: 'bots', mentions: [] });
+    } else {
+      await expect(client.send(id(1), bots)).rejects.toThrow('ALL_BOTS_MENTION_DISABLED');
+      expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    }
+  });
   // Product rule: quoting a present companion addresses that companion; a deleted
   // original must not send a stale quote or silently lose the user's reply.
   it('sends a fresh quote with the companion recipient and rejects a deleted original', async () => {
@@ -393,6 +478,17 @@ describe('direct Chat Server client', () => {
     await client.send(id(1), input);
     expect(request.mock.calls.at(-1)).toEqual(posted);
     expect(request.mock.calls.filter(([, method]) => method !== 'POST')).toHaveLength(2);
+  });
+  it.each(['', 'with files'])('sends sealed attachment IDs with text=%s and preserves the retry body', async text => {
+    const request = vi.fn().mockResolvedValue({ id: id(9) });
+    const client = createChatServerClient(request);
+    const input = { text, clientId: 'same-media-message', mentions: { all: false, botIds: [] },
+      attachments: [{ id: id(2), name: 'report.pdf', category: 'file' as const, path: '', ext: 'pdf', mimeType: 'application/pdf', size: 42 }] };
+    await client.send(id(1), input); await client.send(id(1), input);
+    expect(request.mock.calls[0][2]).toEqual({ operationId: 'same-media-message', mentions: [],
+      content: [...(text ? [{ type: 'text', text }] : []), { type: 'media', mediaId: id(2), caption: 'report.pdf' }] });
+    expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
+    expect(chatGroupView({ snapshot: snapshot(), messages: [], before: null }, id(10)).supportsAttachments).toBe(true);
   });
   it('reauthorizes and replaces loaded older history on refresh instead of retaining deleted text', async () => {
     const recent = Array.from({ length: 100 }, (_, n) => message(200 - n));
@@ -508,4 +604,261 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+});
+
+// Unit: group and thread projections retain the optional process locator while
+// old messages, human-authored cards and deleted replies keep their prior behavior.
+it('keeps process metadata out of the reply and preview, and exposes it only for a bot', () => {
+  const ref = { groupId: id(1), executionId: id(40), sessionId: 'lane', clientId: 'source' };
+  const reply = { ...message(20), author: { kind: 'bot' as const, name: 'Cindy' },
+    threadRootId: id(15), content: [{ type: 'text', text: 'Result' }, botGroupProcessCard(ref)] };
+  const page = { snapshot: snapshot(), messages: [reply], before: null } as ChatPage;
+  const [view] = chatGroupView(page, id(11)).messages;
+  expect(view).toMatchObject({ content: 'Result', process: ref, threadRootId: id(15) });
+  expect(chatRoomRow(room(), { ...snapshot(), messages: [reply] }, id(11)).item.display.preview).toBe('Result');
+  for (const changed of [{ ...reply, author: { kind: 'human' as const, name: 'Other' } }, { ...reply, deleted: true }]) {
+    expect(chatGroupView({ ...page, messages: [changed] }, id(11)).messages[0]?.process).toBeUndefined();
+  }
+});
+
+// Unit: invitation contract (bot-group-chat §10). Existing client tests covered joined rooms only.
+// A pre-join link must POST just its token to this account's server, never fetch members or accept implicitly.
+describe('invitation preview and explicit acceptance', () => {
+  const token = 'A'.repeat(43);
+  const preview = { groupId: id(1), name: 'Weekend', inviterName: 'Lin', joined: false, expiresAt: null, reusable: true };
+  it('previews only and preserves real optional identity without guessing missing counts', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, avatar: 'https://images.example.invalid/group.png', memberCount: 8 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberCount: -1 });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(`https://untrusted.example/chat-invite/join#${token}`)).toMatchObject({ memberCount: 8, avatar: 'https://images.example.invalid/group.png' });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/preview', 'POST', { token }, undefined, undefined);
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+    expect((await client.previewInvite(token)).memberCount).toBeUndefined();
+  });
+  // V9 summary is optional and bounded; a missing image is still a real member slot.
+  it('keeps ordered avatar slots and Unicode initials without granting a member-roster read', async () => {
+    const memberAvatars = [
+      { avatar: 'https://images.example.invalid/a.png', initial: '林' },
+      { avatar: 'cindy://avatar/preset/cindy', initial: 'C' },
+      { avatar: '🐱', initial: 'é' }, { avatar: null, initial: '👩🏽‍💻' }, { avatar: null, initial: '' },
+    ];
+    const request = vi.fn().mockResolvedValueOnce({ ...preview, memberAvatars, memberCount: 19 })
+      .mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, memberAvatars: [] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: 'invalid' })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [...memberAvatars, memberAvatars[0]] })
+      .mockResolvedValueOnce({ ...preview, memberAvatars: [{ avatar: {}, initial: '林' }, null] });
+    const client = createChatServerClient(request);
+    expect(await client.previewInvite(token)).toMatchObject({ memberAvatars, memberCount: 19 });
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([]);
+    expect((await client.previewInvite(token)).memberAvatars).toBeUndefined();
+    expect((await client.previewInvite(token)).memberAvatars).toEqual(memberAvatars);
+    expect((await client.previewInvite(token)).memberAvatars).toEqual([{ avatar: null, initial: '林' }, { avatar: null, initial: '' }]);
+    expect(request.mock.calls.every(call => call[0] === '/invite-links/preview' && call[1] === 'POST')).toBe(true);
+  });
+  it('rejects malformed links before HTTP and invalid responses before navigation', async () => {
+    const request = vi.fn().mockResolvedValue({ ...preview, groupId: 'not-a-room' });
+    const client = createChatServerClient(request);
+    await expect(client.previewInvite('https://example.invalid/other#secret')).rejects.toThrow('INVALID_INVITATION_LINK');
+    expect(request).not.toHaveBeenCalled();
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_ID');
+    request.mockResolvedValue({ ...preview, expiresAt: 'invalid' });
+    await expect(client.previewInvite(token)).rejects.toThrow('INVALID_CHAT_RESPONSE');
+  });
+  it('accepts through the existing operation contract and validates its room receipt', async () => {
+    const request = vi.fn().mockResolvedValueOnce({ groupId: id(1) }).mockResolvedValueOnce({ groupId: 'bad' });
+    const client = createChatServerClient(request);
+    const signal = new AbortController().signal;
+    expect(await client.acceptInvite(token, 'operation-1', signal)).toEqual({ groupId: id(1) });
+    expect(request).toHaveBeenCalledExactlyOnceWith('/invite-links/accept', 'POST', { token, operationId: 'operation-1' }, undefined, signal);
+    await expect(client.acceptInvite(token, 'operation-1')).rejects.toThrow('INVALID_CHAT_ID');
+  });
+});
+
+// D2 root-deletion regression (unit): production load used to classify every 404
+// as room access loss. Existing cache-reopen coverage only has a successful root.
+// Minimal input: an authorized reply page followed by a missing root lookup.
+it.each([false, true])('keeps authorized thread replies when the root is missing (stored=%s)', async stored => {
+  const reply = { ...message(21), threadRootId: id(20) };
+  const request = vi.fn().mockImplementation(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return snapshot();
+    if (path.startsWith('/changes?')) return { cursor: snapshot().cursor, changes: [], hasMore: false };
+    if (path.endsWith(`/messages/${id(20)}`)) throw { status: 404, code: 'MESSAGE_NOT_FOUND' };
+    if (path.includes('/messages?')) return [reply];
+    return [];
+  });
+  let saved: ChatHistoryState | undefined;
+  const history = createChatHistory({ api: request, current: () => true, newGeneration: () => 'topic',
+    store: { read: async () => saved, write: async (_, state) => { saved = state ?? undefined; } } });
+  const client = createChatServerClient(request, undefined, stored ? async () => history : undefined);
+  const page = await client.load(id(1), undefined, id(20));
+  expect(page.threadRootId).toBe(id(20));
+  expect(chatGroupView(page, id(11)).messages.map(m => m.id)).toEqual([id(21)]);
+});
+
+it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVERSATION_NOT_FOUND' }])(
+  'does not turn root lookup access failure $code into readable thread content', async error => {
+    const request = vi.fn().mockImplementation(async (path: string) => {
+      if (path.endsWith('/snapshot')) return snapshot();
+      if (path.endsWith(`/messages/${id(20)}`)) throw error;
+      if (path.includes('/messages?')) return [{ ...message(21), threadRootId: id(20) }];
+      return [];
+    });
+    await expect(createChatServerClient(request).load(id(1), undefined, id(20))).rejects.toEqual(error);
+  });
+
+// PC parity, unit: actual HTTP client/projection. Earlier tests never exercised
+// root summaries, explicit following, or trustworthy thread-share source resolution.
+it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
+  const root = { ...message(20), replyCount: 17 };
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
+  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
+  const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
+  const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
+    threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
+  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
+  expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
+    .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });
+});
+
+it('changes explicit following without advancing the existing read cursor', async () => {
+  const request = vi.fn(async (path: string, _method?: string, body?: any) => path.endsWith('/snapshot')
+    ? { ...snapshot(), reads: [{ thread_key: id(20), read_seq: '9007199254740993' }] } : { following: body.following });
+  const client = createChatServerClient(request as any);
+  await expect(client.followThread(id(1), id(20), true, 'follow-op')).resolves.toEqual({ following: true });
+  expect(request).toHaveBeenLastCalledWith(`/conversations/${id(1)}/read`, 'POST', {
+    operationId: 'follow-op', threadRootId: id(20), readSeq: '9007199254740993', following: true,
+  });
+});
+
+it('persists a self-directed share body before posting and retries identical bytes after source edits', async () => {
+  let stored: any;
+  let edited = false;
+  const bodies: any[] = [];
+  const request = vi.fn(async (path: string, method?: string, body?: any) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/members')) return snapshot().members;
+    if (path.endsWith(`/messages/${id(21)}`)) return { ...message(21), threadRootId: id(20), content: [{ type: 'text', text: edited ? 'changed' : '@bot original' }] };
+    if (method === 'POST') { expect(stored).toEqual(body); bodies.push(body); if (!edited) throw new Error('lost response'); return { id: id(22) }; }
+    throw new Error(path);
+  });
+  const client = createChatServerClient(request as any);
+  const save = async (body: any) => { stored = body; };
+  await expect(client.shareToMain(id(1), id(21), id(20), { save })).rejects.toThrow('lost response');
+  edited = true;
+  await expect(client.shareToMain(id(1), id(21), id(20), { body: stored, save })).resolves.toEqual({ messageId: id(22), alreadyShared: false });
+  expect(bodies[1]).toEqual(bodies[0]);
+  expect(bodies[0]).toMatchObject({ operationId: `thread-share:${id(21)}`, mentions: [id(11)], content: [{ data: { messageId: id(21), threadRootId: id(20) } }] });
+});
+
+// #7847 review, unit: an old share can be the only visible reference to its thread.
+// Earlier hydration tests kept a recent reply in the snapshot and missed this case.
+it('hydrates the root and latest replies for an old share outside the snapshot', async () => {
+  const root = { ...message(20), replyCount: 17 };
+  const source = { ...message(21), threadRootId: root.id };
+  const latest = { ...message(29), threadRootId: root.id, createdAt: '2026-10-29T12:00:00Z' };
+  const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+    data: { messageId: source.id, threadRootId: root.id }, fallback: '' }] };
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith(`/messages/${root.id}`)) return root;
+    if (path.endsWith(`/messages/${source.id}`)) return source;
+    if (path.includes(`threadRootId=${root.id}`)) return [latest, source];
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const page = { snapshot: { ...snapshot(), messages: Array.from({ length: 100 }, (_, i) => message(100 + i)) }, messages: [share], before: null };
+  const view = chatGroupView(await createChatServerClient(request as any).hydrateThreads(id(1), page), id(11));
+  expect(view.messages[0].threadShare).toMatchObject({ status: 'available', replyCount: 17,
+    threadPreview: { replies: [{ id: source.id }, { id: latest.id, createdAt: Date.parse(latest.createdAt) }] } });
+});
+
+it('resolves an off-window root and retries a failed source on its bounded deadline without leaking fallback', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-28T00:00:00Z'));
+  try {
+    const share = { ...message(30), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+      data: { messageId: id(21), threadRootId: id(20) }, fallback: 'private old text' }] };
+    const reply = { ...message(22), threadRootId: id(20) };
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith(`/messages/${id(20)}`)) return { ...message(20), replyCount: 17 };
+      throw new Error('offline');
+    });
+    const client = createChatServerClient(request as any);
+    const page = { snapshot: { ...snapshot(), messages: [reply, share], reads: [] }, messages: [share], before: null };
+    expect(chatGroupView(page, id(11)).messages[0]?.threadShare?.status).toBe('loading');
+    const hydrated = await client.hydrateThreads(id(1), page);
+    expect(chatGroupView(hydrated, id(11)).messages[0]?.threadShare?.replyCount).toBe(17);
+    expect(hydrated.threadRetryAt).toBe(Date.now() + 30000);
+    expect(chatGroupView(hydrated, id(11)).messages[0]).toMatchObject({ content: '', threadShare: { status: 'loading', content: '' } });
+    const sourceCalls = () => request.mock.calls.filter(([path]) => path.endsWith(`/messages/${id(21)}`)).length;
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(1);
+    vi.setSystemTime(Date.now() + 30000);
+    await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(2);
+    client.invalidateHistory(id(1), true); await client.hydrateThreads(id(1), page); expect(sourceCalls()).toBe(3);
+    expect(chatRoomRow(room(), page.snapshot, id(11)).item.display.preview).not.toContain('private old text');
+  } finally { vi.useRealTimers(); }
+});
+
+it('projects real cached read fields through load, not only a hand-built UI fixture', async () => {
+  const root = { ...message(20), replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }] };
+  const reply = { ...message(21), threadRootId: root.id };
+  const request = vi.fn(async (path: string) => {
+    if (path === '/me') return { actor: { id: id(11), kind: 'human' } };
+    if (path.endsWith('/snapshot')) return { ...snapshot(), messages: [reply, root], reads: [{ thread_key: root.id, read_seq: '0', following: true }] };
+    if (path.includes('/messages?')) return [root];
+    return [];
+  });
+  const history = createChatHistory({ api: request as any, current: () => true, newGeneration: () => 'projection', store: { read: async () => undefined, write: async () => {} } });
+  const client = createChatServerClient(request as any, undefined, async () => history);
+  const view = chatGroupView(await client.load(id(1)), id(11));
+  expect(view.messages[0]).toMatchObject({ replyCount: 3, reactions: [{ emoji: '👍', count: 2, me: true }], threadUnread: { count: 1 }, threadPreview: { replies: [{ id: reply.id }] } });
+});
+
+it.each([403, 404, 410])('treats source %s as terminal unavailability without posting', async status => {
+  const request = vi.fn().mockRejectedValue({ status });
+  await expect(createChatServerClient(request).shareToMain(id(1), id(21), id(20))).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls.every(call => call[1] !== 'POST')).toBe(true);
+});
+
+
+// A persisted post must not be replayed into a different root or wake other actors.
+it.each(['root', 'mentions'])('rejects a mismatched persisted share %s before POST', async changed => {
+  const { buildBotGroupThreadShareCard } = await import('@cindy/maker-shared/botGroupChat');
+  const body = { operationId: `thread-share:${id(21)}`, mentions: [changed === 'mentions' ? id(10) : id(11)], content: [
+    buildBotGroupThreadShareCard({ messageId: id(21), threadRootId: changed === 'root' ? id(99) : id(20), authorName: 'Author', text: 'Reply' }),
+  ] };
+  const request = vi.fn(async () => ({ actor: { id: id(11), kind: 'human' } }));
+  await expect(createChatServerClient(request as any).shareToMain(id(1), id(21), id(20), { body, save: async () => {} })).rejects.toThrow('SHARE_UNAVAILABLE');
+  expect(request.mock.calls).toEqual([['/me']]);
+});
+
+// Personal delegation is a separate server contract: viewing/AI output never consumes human unread (unit).
+describe('personal mask transport', () => {
+  it('does not call unsupported mask endpoints on an older server', async () => {
+    const request = vi.fn(async (_path: string) => ({ actor: { id: id(1), kind: 'human' } }));
+    const client = createChatServerClient(request as never);
+    expect(await client.mask(id(2))).toBeNull();
+    expect(await client.maskMentions(id(2))).toEqual({ mentions: [], hasMore: false });
+    expect(request.mock.calls.every(call => call[0] === '/me')).toBe(true);
+  });
+  it('pairs the original mention with its reply and acknowledges only the selected message', async () => {
+    const companion = { id: id(3), name: 'Cindy', avatarUrl: null };
+    const request = vi.fn(async (path: string, method?: string, body?: unknown) => {
+      if (path === '/me') return { actor: { id: id(1), kind: 'human' }, capabilities: { personalMask: 1 } };
+      if (path.endsWith('/read')) return {};
+      return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
+    });
+    const client = createChatServerClient(request as never);
+    expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
+    expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
+    await client.maskMentions(id(2), undefined, [id(20)], 'read-one');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toEqual([[`/conversations/${id(2)}/mentions/read`, 'POST', { operationId: 'read-one', messageIds: [id(20)] }]]);
+  });
+  it('keeps the human author and stand-in attribution in the actual mobile timeline', () => {
+    const attribution = { self: { id: id(10), name: 'Chris', avatarUrl: null }, companion: { id: id(3), name: 'Cindy', avatarUrl: null }, sourceMessageId: id(19) };
+    const page = { snapshot: snapshot(), messages: [{ ...message(20), maskAttribution: attribution }], before: null };
+    expect(chatGroupView(page, id(10)).messages[0]).toMatchObject({ authorKind: 'user', isSelf: true, maskAttribution: attribution });
+  });
 });

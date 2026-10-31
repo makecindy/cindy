@@ -23,6 +23,8 @@ export interface LocalMcpTarget {
 }
 
 export interface ReverseHttpRouterDeps {
+  /** The caller granted its own tools only, not access to native file/shell tools. */
+  hostToolsOnly?: boolean;
   executor: RemoteExecutor;
   /** 本任务可用的本机 MCP 服务，按名字查。 */
   mcpTarget(name: string): LocalMcpTarget | undefined;
@@ -163,6 +165,9 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
     signal?: AbortSignal,
   ): Promise<RemoteAgentReply> {
     const url = new URL(request.path, 'http://tunnel.invalid');
+    if (deps.hostToolsOnly && (!/^\/mcp\/[A-Za-z0-9_-]{1,64}$/.test(url.pathname) || url.pathname === `/mcp/${CINDY_EXEC_MCP_SERVER}`)) {
+      return json(403, { error: { code: 'EACCES', message: 'Only application tools are available in this session.' } });
+    }
     const body = request.body ? Buffer.from(request.body, 'base64') : undefined;
     const execMatch = /^\/exec\/([a-z]+\.[a-z]+)$/.exec(url.pathname);
     if (execMatch) {

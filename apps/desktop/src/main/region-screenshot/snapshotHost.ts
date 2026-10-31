@@ -32,6 +32,7 @@ export interface SnapshotWindow {
   pid: number | null;
   /** Windows 为物理像素, macOS 为全局 DIP; [left, top, right, bottom]。 */
   rect: [number, number, number, number];
+  snapRects?: [number, number, number, number][];
 }
 
 const binaryName =
@@ -127,6 +128,13 @@ interface Pending {
 
 /** 一次截图会话内的识别程序进程。所有请求失败都返回空结果, 不抛错。 */
 export class SnapshotHelper {
+  /** Resolve through input-transparent overlays, but only within the captured windows. */
+  async scrollTarget(candidates: readonly SnapshotWindow[], x: number, y: number): Promise<SnapshotWindow | null> {
+    const response = await this.request({ op: 'scroll-target', x, y });
+    return candidates.find(({ handle, pid, rect }) => handle === response?.hwnd && pid === response?.pid
+      && x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]) ?? null;
+  }
+
   /** One bounded wheel step in the captured window; never an arbitrary input bridge. */
   async scroll(window: SnapshotWindow, x: number, y: number, delta: number): Promise<boolean> {
     const response = await this.request({ op: 'scroll', hwnd: window.handle, pid: window.pid, x, y, delta });
@@ -213,24 +221,52 @@ export class SnapshotHelper {
     const windows: SnapshotWindow[] = [];
     for (const raw of list) {
       if (!raw || typeof raw !== 'object') continue;
-      const { hwnd, pid, rect } = raw as Record<string, unknown>;
+      const { hwnd, pid, rect, snapRects } = raw as Record<string, unknown>;
       if (typeof hwnd !== 'number' || !isRectTuple(rect)) continue;
-      windows.push({ handle: hwnd, pid: typeof pid === 'number' ? pid : null, rect });
+      windows.push({ handle: hwnd, pid: typeof pid === 'number' ? pid : null, rect,
+        ...(Array.isArray(snapRects) ? { snapRects: snapRects.slice(0, 256).filter(isRectTuple)
+          .filter((r) => r[0] >= rect[0] && r[1] >= rect[1] && r[2] <= rect[2] && r[3] <= rect[3]) } : {}),
+      });
     }
     return windows;
   }
 
+  /** Resolve only captured targets; an unknown native hit is an occluder, not a reason to look below it. */
+  async windowAt(
+    windows: readonly SnapshotWindow[], x: number, y: number, exclude: readonly number[],
+  ): Promise<SnapshotWindow | null> {
+    const contains = ({ rect }: SnapshotWindow) => x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3];
+    if (process.platform === 'darwin') {
+      const response = await this.request({ op: 'window-at', x, y, exclude });
+      if (typeof response?.hwnd === 'number') {
+        return windows.find((window) => window.handle === response.hwnd && contains(window)) ?? null;
+      }
+    }
+    // Windows already excludes click-through windows during enumeration. Old
+    // native helpers and unavailable helpers retain rectangle-only snapping.
+    return windows.find(contains) ?? null;
+  }
+
   /** 指针下的界面元素 (由内到外), 坐标系同 {@link SnapshotWindow.rect}。 */
-  async elements(window: SnapshotWindow, x: number, y: number): Promise<SnapshotWindow['rect'][]> {
+  async elements(window: SnapshotWindow, x: number, y: number): Promise<{
+    rects: SnapshotWindow['rect'][]; preferredRect?: SnapshotWindow['rect'];
+  }> {
     const response = await this.request({
       op: 'elements',
       hwnd: window.handle,
+      rect: window.rect,
       ...(window.pid !== null ? { pid: window.pid } : {}),
       x: Math.round(x),
       y: Math.round(y),
     });
     const rects = Array.isArray(response?.rects) ? response.rects : [];
-    return rects.filter(isRectTuple);
+    const preferred = response?.preferredRect;
+    const valid = (rect: unknown): rect is SnapshotWindow['rect'] => isRectTuple(rect)
+      && rect[0] <= x && x < rect[2] && rect[1] <= y && y < rect[3];
+    return {
+      rects: rects.filter(valid),
+      ...(valid(preferred) ? { preferredRect: preferred } : {}),
+    };
   }
 
   /** macOS: 截图前的前台应用进程号, 结束后把焦点还给它。 */

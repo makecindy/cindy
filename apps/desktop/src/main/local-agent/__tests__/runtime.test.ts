@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('@cindy/maker-core', () => ({ LOCAL_AGENT_CLIENT: Symbol('local-agent-client') }));
 import { createEventProjection } from '../runtime.js';
-import { localAgentModels } from '../catalog.js';
+import { localAgentModels, LOCAL_AGENT_ROUTE } from '../catalog.js';
 import type { ProviderView } from '@cindy/model-providers';
 
 describe('whole Cindy catalog projection', () => {
@@ -63,6 +63,18 @@ describe('whole Cindy catalog projection', () => {
       ['pi'],
     );
     expect(result[0]).toMatchObject({ provider: 'source-id', providerLabel: '我的 · 网关' });
+  });
+  it('keeps local, same-account and shared routes distinct without publishing routing metadata', () => {
+    const providers = [provider('openai', { models: { pi: [model] } } as never)];
+    const local = localAgentModels(providers, ['pi']);
+    const remote = localAgentModels(providers, ['pi'], { deviceId: 'device-a', label: '电脑 A' });
+    const shared = localAgentModels(providers, ['pi'], { deviceId: 'share:one', label: '来自 LiZi 的分享' });
+    expect(new Set([...local, ...remote, ...shared].map(m => m.id)).size).toBe(3);
+    expect(new Set([...local, ...remote, ...shared].map(m => m.provider)).size).toBe(3);
+    expect(shared[0].providerLabel).toBe('openai · 来自 LiZi 的分享');
+    expect(shared[0][LOCAL_AGENT_ROUTE]).toEqual({ deviceId: 'share:one', providerId: 'openai' });
+    expect(JSON.stringify(shared)).not.toContain('share:one');
+    expect(localAgentModels(providers, ['pi'], { deviceId: 'share:one', label: '改名' })[0].id).toBe(shared[0].id);
   });
   it('filters disconnected, suspended, disabled, retired and non-chat choices and keeps large catalogs fast', () => {
     const choices = [

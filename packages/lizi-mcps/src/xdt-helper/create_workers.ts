@@ -12,6 +12,7 @@ import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import { okPayload, errorPayload } from './_payload.js';
 import {
   createWorkerSpecSchema,
+  workerCreationRoutePayload,
   toHostAgentDeviceId,
   toWorkerLimitPayload,
   type CreateWorkerDeps,
@@ -45,7 +46,8 @@ const DESCRIPTION = [
   '结果包含 request_count / attempted_count / success_count / failure_count / skipped_count / not_created_count、hard limit 快照、确定生成的 user_report，以及每个 label 对应的 worker/session 或失败原因。success/failure/skipped 是互斥分区。',
   '工具返回后必须向用户逐字转告 user_report 并补充逐项结果；达到 hard limit 时同时转告 suggestions 中的调整设置、复用 Worker 或分批执行方案。',
   '每个 Worker 的 working_dir：可选，Worker 所在主机上已存在的绝对目录。省略时继承 Lead 任务记录的工作目录（启动时的目录），不会跟随之后 cd 进入的 worktree。希望共用你当前的 worktree（含 git worktree add 自建的）时，请显式传其绝对路径；需要独立的新 worktree 时用 new_worktree。显式 working_dir / new_worktree 按会话权限审批。指定 execution_device_id 时目录属于那台电脑，省略由那台分配；校验失败不回退。',
-  '每个 Worker 可传 new_worktree: {} 新建自有 worktree，source_branch 可选；仅支持本机有提交的 Git 项目，不支持 SSH / execution_device_id。逐项成功结果的 working_dir 是实际启动目录，worktree 是归档时按普通任务规则回收的自有检出目录和新分支。',
+  '每个 Worker 可传 new_worktree: {} 新建自有 worktree，source_branch 可选，与 Lead 同一仓库时使用目标目录当前分支或提交，其他仓库默认先用仓库源分支记忆，失效退回当前分支，worktree_source 返回实际分支与原因；仅支持本机有提交的 Git 项目，不支持 SSH / execution_device_id。逐项成功结果的 working_dir 是实际启动目录，worktree 是归档时按普通任务规则回收的自有检出目录和新分支。',
+  '每项 agent 可省略：使用用户在创建 Worker 面板手工提交过的组合；没选过需指定 agent。有适用的手工组合时，只传 model 可按目录推断 agent，歧义时须指定 agent；没有适用组合时需同时指定 agent。记忆不可用且无法确定 agent 时该项返回 INVALID_PARAMS，指定 agent 后重试即可；其他项继续创建。返回实际 agent/model/provider/位置与 defaults 来源和回退原因。',
   'create_workers 建的是持久、UI 可见的 Orca workers，不是一次性 subagent。',
 ].join('\n');
 
@@ -170,6 +172,7 @@ export function registerCreateWorkersTool(
           successCount += 1;
           results.push({
             ...baseResult(worker),
+            ...workerCreationRoutePayload(result, worker.agent),
             status: 'created',
             worker_id: result.workerId,
             worker_session_id: result.workerSessionId,

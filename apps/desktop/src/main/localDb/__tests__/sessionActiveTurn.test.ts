@@ -57,6 +57,8 @@ describe('sessionActiveTurn', () => {
         list_preview TEXT,
         list_preview_role TEXT,
         list_message_count INTEGER,
+        context_tokens INTEGER DEFAULT 0,
+        context_window INTEGER DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -78,6 +80,22 @@ describe('sessionActiveTurn', () => {
       CREATE INDEX idx_messages_rewind_at ON messages (rewind_at);
       CREATE INDEX idx_messages_active_error_tail ON messages (session_id, created_at)
         WHERE role = 'error' AND rewind_at IS NULL;
+
+      CREATE TABLE bot_profiles (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'active'
+      );
+
+      CREATE TABLE bot_session_links (
+        id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        profile_version INTEGER NOT NULL DEFAULT 1,
+        role TEXT NOT NULL,
+        route_key TEXT,
+        created_at INTEGER NOT NULL,
+        archived_at INTEGER
+      );
     `);
     const db = drizzle(dbHandle, { schema });
     const client: DbClient = {
@@ -539,7 +557,7 @@ describe('sessionActiveTurn', () => {
     await insert('m-4', 's-tools', 'tool_use', { toolName: 'Write', input: {} }, startedAt + 400, startedAt + 500);
     await insert('m-5', 's-silent', 'tool_use', { toolName: 'Read', input: {} }, startedAt - 1);
 
-    const rows = await listInterruptedResumeCandidateRows();
+    const rows = await listInterruptedResumeCandidateRows(() => true);
     expect(rows.sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
       { sessionId: 's-silent', interruptedAt: startedAt, lastToolUse: null },
       {
@@ -548,6 +566,51 @@ describe('sessionActiveTurn', () => {
         lastToolUse: { toolName: 'Bash', input: { command: 'pnpm test' } },
       },
     ]);
+  });
+
+  it('offers interrupted companion tasks for resume but keeps hidden lanes and red dots out', async () => {
+    const { listInterruptedResumeCandidateRows } = await import('../interruptedResumeCandidates.js');
+    const { listInterruptedPendingSessionIds } = await import('../sessionActiveTurn.js');
+    const { botSessionInputBlockReason, isShadowedCompanionSession } = await import('../../maker-ipc/botSessionInputGuard.js');
+    // 与 sessions:interrupted-resume-candidates 注入的守卫同构:伙伴降级到别的电脑时 shadowed。
+    const canResume = ({ botId, role, profileStatus }: { botId: string; role: string; profileStatus: string }) =>
+      botSessionInputBlockReason({ source: 'bot', role, profileStatus }) === null
+      && !isShadowedCompanionSession({ role, botId }, (id) => id === 'bot-shadowed');
+    const client = createTestDbClient();
+    const startedAt = Date.now() - 10_000;
+    await client.exec("INSERT INTO bot_profiles (id, status) VALUES ('bot-1', 'active'), ('bot-paused', 'paused'), ('bot-shadowed', 'active')");
+    await seedSession(client, 's-desktop', { startedAt });
+    for (const role of ['canonical', 'delegation', 'routine', 'channel', 'history', 'group', 'thread']) {
+      await seedSession(client, `bot-${role}`, { startedAt, source: 'bot' });
+      await client.exec(
+        'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
+        [`link-${role}`, 'bot-1', `bot-${role}`, role, startedAt],
+      );
+    }
+    // 伙伴未启用时继续会被 botSessionInputGuard 拒绝,不提示。
+    await seedSession(client, 'bot-paused-canonical', { startedAt, source: 'bot' });
+    await client.exec(
+      'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
+      ['link-paused', 'bot-paused', 'bot-paused-canonical', 'canonical', startedAt],
+    );
+    // 伙伴已降级到别的电脑:本机副本的主对话 / 例行发送一律被拒,不提示。
+    await seedSession(client, 'bot-shadowed-canonical', { startedAt, source: 'bot' });
+    await client.exec(
+      'INSERT INTO bot_session_links (id, bot_id, session_id, role, created_at) VALUES (?, ?, ?, ?, ?)',
+      ['link-shadowed', 'bot-shadowed', 'bot-shadowed-canonical', 'canonical', startedAt],
+    );
+    // 没有伙伴关联的 bot 来源会话无处打开,不提示。
+    await seedSession(client, 'bot-unlinked', { startedAt, source: 'bot' });
+
+    expect((await listInterruptedResumeCandidateRows(canResume)).map((r) => r.sessionId).sort()).toEqual([
+      'bot-canonical',
+      'bot-channel',
+      'bot-delegation',
+      'bot-routine',
+      's-desktop',
+    ]);
+    // 侧栏红点不展示伙伴任务,口径不变。
+    expect(await listInterruptedPendingSessionIds()).toEqual(['s-desktop']);
   });
 
   it('excludes plugin background tasks from both red-dot legs', async () => {
@@ -613,6 +676,59 @@ describe('sessionActiveTurn', () => {
     expect(await hasAssistantProgressAfterMessage('s-interaction', 'c-user3')).toBe(false);
     await insert('m-ask', 'ask_user', base + 100);
     expect(await hasAssistantProgressAfterMessage('s-interaction', 'c-user3')).toBe(true);
+  });
+
+  // Regression: model dividers must neither force continuation nor displace real
+  // progress from the bounded checkpoint. Exercise both production DB readers.
+  it('excludes empty model dividers from retry progress and checkpoint counts', async () => {
+    const { hasAssistantProgressAfterMessage, getRecoveryContextSnapshot } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-markers');
+    const insert = (id: string, role: string, content: string, meta: string | null) => client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, id, 's-markers', role, JSON.stringify(content), meta, 1000],
+    );
+    const meta = JSON.stringify({ modelChange: { fromModel: 'gpt-6-sol', toModel: 'gpt-6-astra', modelOnly: true } });
+    await insert('user', 'user', 'Continue', null);
+    await insert('switch', 'assistant', '', meta);
+    expect(await hasAssistantProgressAfterMessage('s-markers', 'user')).toBe(false);
+    expect(await getRecoveryContextSnapshot('s-markers', 'user')).toMatchObject({ progressCount: 0, recentProgress: [] });
+    await insert('real', 'assistant', 'Saved the file', meta);
+    for (let i = 0; i < 7; i += 1) await insert('switch-' + i, 'assistant', '', meta);
+    expect(await hasAssistantProgressAfterMessage('s-markers', 'user')).toBe(true);
+    expect(await getRecoveryContextSnapshot('s-markers', 'user')).toMatchObject({
+      progressCount: 1, recentProgress: [{ role: 'assistant', summary: 'Saved the file' }],
+    });
+    await insert('unknown', 'assistant', '', '{broken');
+    expect((await getRecoveryContextSnapshot('s-markers', 'user')).progressCount).toBe(2);
+  });
+
+  // A syntactically valid object is not enough to authorize replay. Exercise
+  // both persisted progress readers with incomplete/incorrect producer metadata.
+  it.each([
+    {},
+    { toModel: 'next', modelOnly: true },
+    { fromModel: 'previous', modelOnly: true },
+    { fromModel: 'previous', toModel: 'next' },
+    { fromModel: 1, toModel: 'next', modelOnly: true },
+    { fromModel: 'previous', toModel: null, modelOnly: true },
+    { fromModel: 'previous', toModel: 'next', modelOnly: false },
+    { fromModel: 'previous', toModel: 'next', modelOnly: 1 },
+    { fromModel: 'previous', toModel: 'next', modelOnly: 'true' },
+    [],
+  ])('retains an unknown model-change shape as durable progress (%j)', async (modelChange) => {
+    const { hasAssistantProgressAfterMessage, getRecoveryContextSnapshot } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    await seedSession(client, 's-unknown-marker');
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)',
+      ['user', 'user', 's-unknown-marker', 'user', JSON.stringify('Continue'), null, 1000,
+        'unknown', 'unknown', 's-unknown-marker', 'assistant', JSON.stringify(''), JSON.stringify({ modelChange }), 1001],
+    );
+    expect(await hasAssistantProgressAfterMessage('s-unknown-marker', 'user')).toBe(true);
+    expect(await getRecoveryContextSnapshot('s-unknown-marker', 'user')).toMatchObject({
+      progressCount: 1, recentProgress: [{ role: 'assistant', summary: '' }],
+    });
   });
 
   it('hasAssistantProgressAfterMessage uses rowid ordering for same-millisecond neighbors', async () => {

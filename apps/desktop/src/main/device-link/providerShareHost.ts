@@ -23,6 +23,7 @@ import { createLogger } from '../logger.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { providerShareApi, providerShareOwnerKey } from './providerShareApi.js';
+import { delegatedProviderShareGuestAccess } from './providerShareDelegatedAccess.js';
 import {
   PROVIDER_SHARE_REMOTE_LINK_WINDOW_MS,
   readProviderShareApprovalWindows,
@@ -46,6 +47,9 @@ export interface ProviderShareGuestAccess {
 }
 
 export interface ProviderShareHostEvents {
+  /** Durable membership fencing and cleanup run before this snapshot admits guests. */
+  prepareSnapshot?(shares: readonly ProviderShareOwned[]): Promise<void>;
+  memberReady?(member: ProviderShareMemberRef & { joinedAt: string }): boolean;
   /** 快照变化(管理页刷新)。 */
   changed(shares: readonly ProviderShareOwned[]): void;
   /**
@@ -99,6 +103,7 @@ interface Runtime {
   knownRequests: Set<string>;
   reconciled: boolean;
   stopped: boolean;
+  blockedMembers: Set<string>;
   /** 本机分享：供应商 → 另一台电脑生成的链接的窗口期截止时刻。 */
   quietUntil: Map<string, number>;
   /** 本机分享：服务端返回 linkId 时，按具体链接归属的窗口期截止时刻。 */
@@ -215,7 +220,7 @@ function schedule(rt: Runtime): void {
   (rt.timer as { unref?: () => void }).unref?.();
 }
 
-function applySnapshot(rt: Runtime, next: ProviderShareOwned[]): void {
+function applySnapshot(rt: Runtime, next: ProviderShareOwned[], prepared = false): void {
   const previous = rt.shares;
   if (JSON.stringify(previous) !== JSON.stringify(next)) accessRevision++;
   rt.shares = next;
@@ -225,7 +230,11 @@ function applySnapshot(rt: Runtime, next: ProviderShareOwned[]): void {
   for (const share of previous) {
     for (const member of share.members) {
       const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
-      if (!after) rt.events.revoked({ shareId: share.shareId, memberId: member.memberId }, true);
+      if (!after || after.joinedAt !== member.joinedAt) {
+        // The durable preparation hook has already queued/purged this incarnation.
+        // Do not launch a second asynchronous purge after admitting the new one.
+        if (!prepared) rt.events.revoked({ shareId: share.shareId, memberId: member.memberId }, true);
+      }
       else if (member.status === 'active' && after.status !== 'active') rt.events.revoked({ shareId: share.shareId, memberId: member.memberId }, false);
     }
   }
@@ -346,6 +355,7 @@ export function startProviderShareHost(events: ProviderShareHostEvents, options:
     knownRequests: new Set(),
     reconciled: false,
     stopped: false,
+    blockedMembers: new Set(),
     quietUntil: saved ? new Map(Object.entries(saved.quietUntil)) : retainedQuiet,
     quietLinks: saved
       ? new Map((saved.quietLinks ?? []).map((item) => [`${item.providerId}:${item.linkId}`, item.until]))
@@ -379,7 +389,16 @@ export function refreshProviderShareHost(reason: string): Promise<void> {
       const shares = await providerShareApi.listOwned();
       if (!current(rt)) return;
       const self = getDeviceId();
-      applySnapshot(rt, shares.filter((share) => !self || share.hostDeviceId === self));
+      const next = shares.filter((share) => !self || share.hostDeviceId === self);
+      const before = rt.shares;
+      for (const share of before) for (const member of share.members) {
+        const after = next.find((item) => item.shareId === share.shareId)?.members.find((item) => item.memberId === member.memberId);
+        if (!after || after.joinedAt !== member.joinedAt) rt.blockedMembers.add(JSON.stringify([share.shareId, member.memberId]));
+      }
+      await rt.events.prepareSnapshot?.(next);
+      if (!current(rt) || rt.shares !== before) return;
+      applySnapshot(rt, next, !!rt.events.prepareSnapshot);
+      rt.blockedMembers.clear();
       if (!rt.reconciled) {
         rt.reconciled = true;
         rt.events.reconcile(new Map(rt.shares.map((share) => [share.shareId, new Set(share.members.map((member) => member.memberId))])));
@@ -426,6 +445,22 @@ export function markProviderShareHostActive(durationMs = HOT_AFTER_LINK_MS): voi
 
 export function getProviderShareHostSnapshot(): readonly ProviderShareOwned[] {
   return runtime?.shares ?? [];
+}
+
+/** After S issues a pair grant, verify it did not authorize a newer incarnation
+ * than O's prepared snapshot. A cached snapshot alone cannot close that race. */
+export async function verifyProviderShareMemberGeneration(member: ProviderShareMemberRef & { joinedAt: string }): Promise<void> {
+  const rt = runtime;
+  if (!rt || !current(rt)) throw new Error('Provider share owner changed');
+  const shares = await providerShareApi.listOwned();
+  if (!current(rt)) throw new Error('Provider share owner changed');
+  const saved = shares.find((share) => share.shareId === member.shareId && share.hostDeviceId === getDeviceId())
+    ?.members.find((entry) => entry.memberId === member.memberId);
+  if (!saved || saved.status !== 'active' || saved.joinedAt !== member.joinedAt) {
+    rt.blockedMembers.add(JSON.stringify([member.shareId, member.memberId]));
+    void refreshProviderShareHost('membership-generation');
+    throw new Error('Provider share membership changed during grant');
+  }
 }
 
 /** 同账号另一台电脑经管理生成的链接：只将这条链接的申请交给那台弹窗。 */
@@ -511,6 +546,7 @@ export type ProviderShareGuestDenial =
   | 'share-unknown'
   | 'share-on-other-device'
   | 'member-not-active'
+  | 'member-cleanup-pending'
   | 'remote-control-off'
   | 'provider-not-remote';
 
@@ -529,6 +565,10 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
   if (self && share.hostDeviceId !== self) return { denied: 'share-on-other-device' };
   const member = share.members.find((item) => item.memberId === peer.memberId);
   if (!member || member.status !== 'active') return { denied: 'member-not-active' };
+  if (rt.blockedMembers.has(JSON.stringify([share.shareId, member.memberId]))
+    || rt.events.memberReady?.({ shareId: share.shareId, memberId: member.memberId, joinedAt: member.joinedAt }) === false) {
+    return { denied: 'member-cleanup-pending' };
+  }
   if (!readDeviceLinkSettings().remoteControlEnabled) return { denied: 'remote-control-off' };
   if (!isRemoteProviderInvocationAllowed(share.providerId)) return { denied: 'provider-not-remote' };
   return { access: { shareId: share.shareId, memberId: member.memberId, providerId: share.providerId } };
@@ -539,6 +579,12 @@ function checkGuestAccess(controller: string): GuestAccessCheck {
  * 「允许被远程调用」。任一不满足返回 null。
  */
 export function providerShareGuestAccess(controller: string): ProviderShareGuestAccess | null {
+  const result = checkGuestAccess(controller);
+  return 'access' in result ? result.access : delegatedProviderShareGuestAccess(controller);
+}
+
+/** An O-only decision must never use the executor's delegated fallback. */
+export function ownedProviderShareGuestAccess(controller: string): ProviderShareGuestAccess | null {
   const result = checkGuestAccess(controller);
   return 'access' in result ? result.access : null;
 }

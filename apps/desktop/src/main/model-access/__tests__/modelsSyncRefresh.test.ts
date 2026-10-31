@@ -36,7 +36,7 @@ describe('parseModelsSyncPayload', () => {
     };
     // Unit contract: refresh must preserve an optional summary, not only the existing table.
     const quote = { items: [{ label: 'Output', price: 0.5, unit: 'second', quantity: 1 }], summary: {
-      output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P' }],
+      output: [{ price: 6, maxPrice: 10, unit: 'token', quantity: 1000000, tier: '480P/720P', component: 'video' }],
     } };
     const response = { schemaVersion: 5, accountTier: 'paid', models: [{ ...model, displayPricing: quote }] };
     expect(parseModelsSyncPayload(response)).toMatchObject({ ok: true, models: [{ displayPricing: quote }] });
