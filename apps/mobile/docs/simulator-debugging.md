@@ -185,14 +185,17 @@ is absent, the scripts automatically reuse and validate it from a registered
 personal-client or main worktree without printing its values; if no valid copy
 exists, the file is created automatically from the blank
 `self-host-regions.json.example` template with a warning (built-in app
-identity, analytics and Google sign-in disabled). You do not need to
+identity, analytics disabled, Google sign-in through the system browser on
+Global). You do not need to
 inject those public values or endpoint variables into `.env` by hand.
 
 For local builds only the bundle identity fields of the selected region
 (`iosBundleId` / `androidPackage`) are required. `tapdb` and `global.google`
-may be left empty: analytics then no-ops at runtime and Google sign-in is
-skipped, so external contributors can build without TapDB or Google OAuth
-accounts. The self-host release scripts still require these fields.
+may be left empty: analytics then no-ops at runtime, and on Global the Google
+button uses the browser PKCE flow instead of the native SDK (as Apple does on
+Android; CN never offers Google), so external contributors can build and sign
+in without TapDB or Google OAuth accounts. The self-host release scripts still
+require these fields.
 
 The new-session build label reads the exact source fingerprint plus branch/commit
 from `EXPO_PUBLIC_XDT_GIT_*` (set by `mobile:sim:start`) and the Metro host from
