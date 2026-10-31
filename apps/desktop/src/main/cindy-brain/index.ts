@@ -8379,7 +8379,7 @@ export function registerGhostIpc(): void {
       mobilePluginPages.assertInteraction(pageId, ghostId, controllerId);
       return (await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt, pageId, formValues, formChange, mailUpload)).ok;
     },
-  });
+  }, async (sessionId, key) => (await import('../git-context/ipc.js')).readSessionPrStatus(sessionId, key));
   if (ipcRegistered) return;
   ipcRegistered = true;
   const readMail = createMailReader({

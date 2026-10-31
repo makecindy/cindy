@@ -2580,7 +2580,7 @@ export function getCindyGhostsMcpDeps(
       }
       const requestedImages = result.ok ? result.images : undefined;
       const plainResult: GhostToolCallResult = result.ok && result.images ? { ok: true, result: result.result } : result;
-      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId);
+      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId, cardService.isTurnEnd(callId));
       if (!finalized.ok) return finalized;
       const fitted = requestedImages?.length ? await fitGhostModelImages(requestedImages, compressInlineImage) : null;
       const modelImages = {

@@ -328,5 +328,22 @@
     "purpose": "確認互動頁之權柄",
     "updateHost": "請更新行事之機上之 Cindy，再於此確認。文字工具仍可用。",
     "failed": "互動之頁未能啟，請察連線與法器之版後再試。"
+  },
+  "openLinkHost": "啟 {{host}}",
+  "prStatus": {
+    "ciPassed": "CI 已過",
+    "ciFailed": "CI 未過",
+    "ciRunning": "CI 運行中",
+    "threadsOpen": "{{count}} 條意見待理",
+    "threadsNone": "無待理之意見",
+    "mergeReady": "可合併",
+    "mergeConflict": "有衝突",
+    "mergeBehind": "須同步目標分支",
+    "mergeApproval": "待批",
+    "mergeChanges": "須修改",
+    "mergeWaiting": "待合併",
+    "merged": "已合併",
+    "closed": "已閉",
+    "draft": "草稿"
   }
 }

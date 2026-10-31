@@ -90,6 +90,16 @@ cindy.onHostMessage(async function (msg) {
 - **PR 状态位**:`div` 加 `data-ghost-pr-status="owner/repo#123"`,主机用任务标题栏同一份 PR 状态
   (检查、未解决意见、能否合并)实时替换这个 `div` 的内容,并随标题栏定时刷新。`div` 里写你自己的
   状态快照作兜底:旧版主机、手机,或这条 PR 不在本任务的 PR 列表里时原样显示。
+- **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
+  - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
+  - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,
+    手机画成原生开关,点一下照常触发这个按钮的动作;
+  - 持续状态(如「跟进中」)所在的 `div` / `span` 加 `data-ghost-live-label="状态名"`,手机画成
+    带呼吸点的状态;
+  - 卡片的外链(`card.externalLinks` 声明后的 `<a href>`)在手机上显示为「打开 <域名>」,
+    正文里不再插入链接地址。
+  - `data-ghost-pr-status` 位在手机上同样用电脑端的 PR 状态填写,查不到时显示你写的快照。
+  - 声明了 `data-ghost-placement="turn-end"` 的卡,手机端也排到本轮回复之后。
 - **卡内音频播放器**:`<div data-ghost-audio="cindy-media://blobs/<指纹>.mp3">`
   (仅挂 div;mp3/wav/m4a,你名下已落库的地址,整串精确匹配)。主机会**清空该
   div 的子树**、注入与基座音频卡同款的标准播放器行(播放/暂停 + 进度 scrub +

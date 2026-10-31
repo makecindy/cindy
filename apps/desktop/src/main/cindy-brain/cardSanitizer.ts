@@ -296,6 +296,14 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
   const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
   if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
+  // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
+  if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');
+  // data-ghost-live-label:持续状态的名字(如「跟进中」),手机端画成带呼吸点的状态;只挂 div / span。
+  const liveLabel = tag === 'div' || tag === 'span' ? (attrs['data-ghost-live-label'] ?? '').trim() : '';
+  if (liveLabel && liveLabel.length <= 64) parts.push(` data-ghost-live-label="${escapeAttr(liveLabel)}"`);
+  const toggle = tag === 'button' ? (attrs['data-ghost-toggle'] ?? '').trim() : '';
+  if (toggle === 'on' || toggle === 'off') parts.push(` data-ghost-toggle="${toggle}"`);
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。

@@ -7623,6 +7623,12 @@ export const GHOST_CARD_REOPEN_WINDOW_MS = 600_000;
 export const GHOST_CARD_ID_KEY = 'xdt_card_id';
 
 /**
+ * 卡片声明了排到本轮末尾(isTurnEndGhostCardHtml)时,主机在同一结果里加 `true`。
+ * 手机端据此在列表里把这张卡排到本轮最后——它取卡是异步的,排序时还看不到卡片 html。
+ */
+export const GHOST_CARD_TURN_END_KEY = 'xdt_card_turn_end';
+
+/**
  * notify 槽的提示语气(→ 主机 Toast 的 variant;缺省 'info')。
  * 只影响图标与配色,不改变"轻提示、自动消失、无按钮"的形态。
  */

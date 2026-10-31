@@ -13,6 +13,23 @@ export { UI_MOCK_SHOWCASE_PROJECTS };
 /** Every seeded id starts with this prefix, except the Mobile state ids below. */
 export const UI_MOCK_ID_PREFIX = 'ui-mock-';
 
+/** GitHub 插件 PR 卡片的演示卡位(手机 mock 按这些 id 返回卡片内容)。 */
+export const UI_MOCK_PR_CARD_IDS = {
+  ask: `${UI_MOCK_ID_PREFIX}pr-card-ask`,
+  draft: `${UI_MOCK_ID_PREFIX}pr-card-draft`,
+  following: `${UI_MOCK_ID_PREFIX}pr-card-following`,
+  merged: `${UI_MOCK_ID_PREFIX}pr-card-merged`,
+} as const;
+
+function prCardCall(card: keyof typeof UI_MOCK_PR_CARD_IDS, args: Record<string, unknown>): UiMockMessage {
+  return {
+    role: 'tool',
+    name: 'mcp__cindy__ghost_call',
+    input: { ghost_id: 'cindy-github', namespace: null, tool: 'pr_card', args },
+    result: JSON.stringify({ ok: true, xdt_card_id: UI_MOCK_PR_CARD_IDS[card], xdt_card_turn_end: true }),
+  };
+}
+
 export interface UiMockProject {
   /** Directory name; Desktop creates it under the sandbox, Mobile shows it as a remote path. */
   name: string;
@@ -182,6 +199,37 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
         result: 'The file src/login.tsx has been updated.',
       },
       { role: 'assistant', text: RICH_ANSWER },
+    ],
+  },
+  {
+    id: `${UI_MOCK_ID_PREFIX}pr-card`,
+    title: 'PR 卡片各状态',
+    project: 'cindy-demo',
+    agentKind: 'cc',
+    model: 'claude-sonnet-5',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 40,
+    messages: [
+      { role: 'user', text: '登录页改完先别发，用 PR 卡片问我。' },
+      {
+        role: 'tool',
+        name: 'Edit',
+        input: { file_path: 'src/login.tsx', old_string: 'width: 420px', new_string: 'max-width: 24rem' },
+        result: 'The file src/login.tsx has been updated.',
+      },
+      prCardCall('ask', { repo: 'cindy-demo/web', head: 'fix/login-width', base: 'main', commits: 1, files_total: 1 }),
+      { role: 'assistant', text: '表单改成随窗口收缩，已提交到 fix/login-width。要不要发出去，在卡片里选。' },
+      { role: 'user', text: '发成草稿。' },
+      prCardCall('draft', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '草稿 PR #42 已创建，任务标题也改好了。' },
+      { role: 'user', text: '转成正式，并自动跟进到合并。' },
+      prCardCall('following', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42', following: true }),
+      { role: 'assistant', text: '已转为正式 PR，后台每 10 分钟检查一次，有变化再叫我。' },
+      { role: 'user', text: '合并了吗？' },
+      prCardCall('merged', { card_id: UI_MOCK_PR_CARD_IDS.ask, pr: 'https://github.com/cindy-demo/web/pull/42' }),
+      { role: 'assistant', text: '#42 已合并，跟进已结束。' },
     ],
   },
   {

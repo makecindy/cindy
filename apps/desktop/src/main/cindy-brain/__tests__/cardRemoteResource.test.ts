@@ -243,3 +243,48 @@ describe('plugin identity for mobile annotations', () => {
     expect(readIdentity).not.toHaveBeenCalled();
   });
 });
+
+// Unit: on the phone the PR card read as a raw URL glued to its title, a row of identical grey
+// buttons and "开启「…」" buttons for its settings. Newer phones ask for `plugin-card-rich` and get
+// the parts they draw natively; older phones keep the plain projection (minus the raw link URL).
+describe('plugin-card-rich projection', () => {
+  const html = '<div><div><a data-ghost-link="https://github.com/o/r/pull/9">#9 Fix login</a></div>'
+    + '<div data-ghost-pr-status="O/R#9"><div>CI 运行中</div><div>等待合并</div></div>'
+    + '<div data-ghost-live-label="跟进中"><span data-ghost-live=""></span>跟进中</div>'
+    + '<button data-ghost-action="pr:ready" aria-label="转为正式 PR" data-ghost-primary=""></button>'
+    + '<button data-ghost-action="prset:rename" data-ghost-toggle="on" aria-label="关闭「自动改名」"><div>自动改名</div><div>改成 PR 号</div></button></div>';
+  const provider = (prStatus = vi.fn(async () => undefined as never)) => createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'github', html, v: 2, height: 100 }),
+    authorize: async () => {}, captureScope: () => () => true, prStatus,
+    interactions: { externalLinks: () => true, dispatch: vi.fn(async () => true) },
+  });
+  const read = async (primitives: string[], prStatus?: Parameters<typeof provider>[0]) => {
+    const resource = await provider(prStatus).get!(context, { ...request, client: { protocolVersion: 1, primitives } });
+    const text = resource.blocks?.find(block => block.id === 'text')?.fallbackMarkdown.replace(/\\(.)/g, '$1');
+    return { text, data: resource.blocks?.find(block => block.id === 'actions')?.data as Record<string, unknown> };
+  };
+
+  it('keeps older phones on the plain projection without the raw link address', async () => {
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms']);
+    expect(text).toBe('#9 Fix login\nCI 运行中\n等待合并\n\n跟进中\n自动改名\n改成 PR 号');
+    expect(data.items).toEqual([
+      { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false },
+    ]);
+    expect(data).not.toHaveProperty('live');
+  });
+
+  it('gives newer phones switches, the primary action, the live label and the title bar PR status', async () => {
+    const status = { ok: true as const, owner: 'o', repo: 'r', prNumber: 9, status: 'open' as const, title: '', htmlUrl: '', branch: '', unresolvedCount: 0 };
+    const lookup = vi.fn(async () => status as never);
+    const { text, data } = await read(['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'], lookup);
+    expect(text).toBe('#9 Fix login');
+    expect(lookup).toHaveBeenCalledWith('s', 'o/r#9');
+    expect(data).toMatchObject({ live: '跟进中', prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中', '等待合并'], status }] });
+    expect((data.items as Array<Record<string, unknown>>).slice(1)).toEqual([
+      { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+      { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+    ]);
+  });
+});

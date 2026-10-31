@@ -6,6 +6,7 @@
  * 永远一致,也不必等 Agent 下一轮回写。插件写在里面的内容是兜底:旧版宿主、手机,或这条
  * PR 不在本任务的 PR 列表里(宿主查不到)时原样显示。
  */
+import { prStatusItemKeys, type PrStatusItemTone } from '@cindy/maker-shared';
 import type { PrStatusResult } from '@/lib/gitContext.types';
 
 const SLOT_SELECTOR = 'div[data-ghost-pr-status]';
@@ -13,7 +14,7 @@ const SLOT_ATTR_RE = / data-ghost-pr-status="([^"]+)"/;
 const SLOT_VALUE_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/;
 const GREEN = 'light-dark(#2ea043,#3fb950)';
 
-type Tone = 'good' | 'bad' | 'wait';
+type Tone = PrStatusItemTone;
 type Label = (key: string, options?: Record<string, unknown>) => string;
 
 /** 状态位的值 → prStatusKey 形式(owner/repo 小写)。不合格返回 null。 */
@@ -28,33 +29,10 @@ export function readPrStatusSlotKey(html: string): string | null {
   return m ? prStatusSlotKey(m[1]) : null;
 }
 
-/** 与 GitHub 插件的状态行同一套措辞和取舍:CI、未解决意见、能否合并。 */
+/** 状态条目的取舍与手机端共用(maker-shared prStatusItemKeys),这里只负责翻译。 */
 export function prStatusItems(status: Extract<PrStatusResult, { ok: true }>, t: Label): Array<[Tone, string]> {
-  const items: Array<[Tone, string]> = [];
-  const checks = status.checks;
-  if (checks && checks.total > 0) {
-    if (checks.failed > 0) items.push(['bad', t('chat.ghostCall.prStatus.ciFailed')]);
-    else if (checks.pending > 0) items.push(['wait', t('chat.ghostCall.prStatus.ciRunning')]);
-    else items.push(['good', t('chat.ghostCall.prStatus.ciPassed')]);
-  }
-  if (status.unresolvedCount !== null) {
-    items.push(status.unresolvedCount > 0
-      ? ['wait', t('chat.ghostCall.prStatus.threadsOpen', { count: status.unresolvedCount })]
-      : ['good', t('chat.ghostCall.prStatus.threadsNone')]);
-  }
-  if (status.status === 'merged') items.push(['good', t('chat.ghostCall.prStatus.merged')]);
-  else if (status.status === 'closed') items.push(['wait', t('chat.ghostCall.prStatus.closed')]);
-  else if (status.status === 'draft') items.push(['wait', t('chat.ghostCall.prStatus.draft')]);
-  // 旧版宿主(远程电脑)不带这两个字段:不猜,省掉这一项。
-  else if (status.mergeState !== undefined || status.reviewDecision !== undefined) {
-    if (status.mergeState === 'DIRTY') items.push(['bad', t('chat.ghostCall.prStatus.mergeConflict')]);
-    else if (status.mergeState === 'BEHIND') items.push(['wait', t('chat.ghostCall.prStatus.mergeBehind')]);
-    else if (status.mergeState === 'CLEAN') items.push(['good', t('chat.ghostCall.prStatus.mergeReady')]);
-    else if (status.reviewDecision === 'CHANGES_REQUESTED') items.push(['wait', t('chat.ghostCall.prStatus.mergeChanges')]);
-    else if (status.reviewDecision === 'REVIEW_REQUIRED') items.push(['wait', t('chat.ghostCall.prStatus.mergeApproval')]);
-    else items.push(['wait', t('chat.ghostCall.prStatus.mergeWaiting')]);
-  }
-  return items;
+  return prStatusItemKeys(status).map(({ tone, key, count }) =>
+    [tone, t(`chat.ghostCall.prStatus.${key}`, count === undefined ? undefined : { count })]);
 }
 
 /**

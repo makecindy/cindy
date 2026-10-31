@@ -328,5 +328,22 @@
     "purpose": "Berechtigungen interaktiver Seiten prüfen",
     "updateHost": "Aktualisiere Cindy auf dem ausführenden Computer, um hier zu bestätigen. Text-Tools bleiben verfügbar.",
     "failed": "Interaktive Seiten konnten nicht aktiviert werden. Prüfe die Verbindung und die Plugin-Version und versuche es erneut."
+  },
+  "openLinkHost": "{{host}} öffnen",
+  "prStatus": {
+    "ciPassed": "CI bestanden",
+    "ciFailed": "CI fehlgeschlagen",
+    "ciRunning": "CI läuft",
+    "threadsOpen": "Offene Review-Threads: {{count}}",
+    "threadsNone": "Keine offenen Review-Threads",
+    "mergeReady": "Bereit zum Mergen",
+    "mergeConflict": "Hat Konflikte",
+    "mergeBehind": "Hinter dem Basis-Branch",
+    "mergeApproval": "Wartet auf Freigabe",
+    "mergeChanges": "Änderungen angefordert",
+    "mergeWaiting": "Wartet auf Merge",
+    "merged": "Gemergt",
+    "closed": "Geschlossen",
+    "draft": "Entwurf"
   }
 }

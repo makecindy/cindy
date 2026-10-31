@@ -47,6 +47,15 @@ vi.mock("react-native", () => {
     },
     Alert: { alert: vi.fn() },
     Linking: { openURL: vi.fn() },
+    Switch: ({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange(): void; accessibilityLabel?: string }) =>
+      createElement("input", { type: "checkbox", checked: value, onChange: onValueChange, "aria-label": accessibilityLabel }),
+    AccessibilityInfo: { isReduceMotionEnabled: async () => true },
+    Animated: {
+      Value: class { interpolate() { return 0; } },
+      View,
+      loop: () => ({ start() {}, stop() {} }),
+      timing: () => ({}),
+    },
   };
 });
 vi.mock("@/components/AppText", () => ({
@@ -96,6 +105,41 @@ afterEach(() => {
   h.mode = 'light';
   vi.clearAllMocks();
 });
+// Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
+// buttons. A rich host now sends switches, the primary action, a live state and the title bar's
+// PR status; the phone draws them natively and a switch still goes through the card action.
+describe("rich plugin card hints", () => {
+  it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {
+    const dispatch = vi.fn(async (_input: unknown) => ({ effects: [] }));
+    h.invoke.mockImplementation(async (_d: string, _c: string, args: any[]) => {
+      if (args[0].collectionId === 'plugin-results') return dispatch(args[0]);
+      if (args[0].actionId === 'open-interaction') return { result: { pageId: 'page' } };
+      return { result: { confirms: [] } };
+    });
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => act(() => root.unmount());
+    const status = { ok: true, status: 'open', unresolvedCount: 2, checks: { total: 1, passed: 1, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' };
+    await act(async () => root.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's', callId: 'c', data: {
+      pluginId: 'github', revision: '1', form: null, live: '跟进中',
+      prStatus: [{ key: 'o/r#9', fallback: ['CI 运行中'], status }],
+      items: [
+        { id: 'link:0', label: '#9 Fix login', url: 'https://github.com/o/r/pull/9', disabled: false },
+        { id: 'pr:ready', label: '转为正式 PR', disabled: false, primary: true },
+        { id: 'prset:rename', label: '关闭「自动改名」', disabled: false, toggle: { on: true, title: '自动改名', hint: '改成 PR 号' } },
+      ],
+    } })));
+    const text = container.textContent ?? '';
+    for (const part of ['plugins.prStatus.ciPassed', 'plugins.prStatus.threadsOpen', 'plugins.prStatus.mergeApproval', '跟进中', '自动改名', '改成 PR 号', 'plugins.openLinkHost', '转为正式 PR'])
+      expect(text).toContain(part);
+    expect(text).not.toContain('CI 运行中');
+    expect(text).not.toContain('关闭「自动改名」');
+    const toggle = container.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(toggle.checked).toBe(true);
+    await act(async () => { toggle.click(); });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ actionId: 'prset:rename' }));
+  });
+});
+
 describe("native plugin card deliberate actions", () => {
   // Mobile parity regression: typing must use the real form delivery, update
   // both MIME alternatives and retain the authored HTML/CID bytes (unit).

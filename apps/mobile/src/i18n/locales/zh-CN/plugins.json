@@ -328,5 +328,22 @@
     "purpose": "确认交互页面权限",
     "updateHost": "请更新执行电脑上的 Cindy，再在此确认。文字工具仍可使用。",
     "failed": "交互页面未能启用，请检查连接和插件版本后重试。"
+  },
+  "openLinkHost": "打开 {{host}}",
+  "prStatus": {
+    "ciPassed": "CI 通过",
+    "ciFailed": "CI 未通过",
+    "ciRunning": "CI 运行中",
+    "threadsOpen": "{{count}} 条意见待处理",
+    "threadsNone": "没有待处理意见",
+    "mergeReady": "可以合并",
+    "mergeConflict": "有冲突",
+    "mergeBehind": "需要同步目标分支",
+    "mergeApproval": "等待审批",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合并",
+    "merged": "已合并",
+    "closed": "已关闭",
+    "draft": "草稿"
   }
 }

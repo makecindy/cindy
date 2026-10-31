@@ -328,5 +328,22 @@
     "purpose": "Revisar los permisos de la página interactiva",
     "updateHost": "Actualice Cindy en la computadora de ejecución para confirmar aquí. Las herramientas de texto siguen estando disponibles.",
     "failed": "No se pudieron habilitar las páginas interactivas. Verifique la conexión y la versión del complemento, luego inténtelo nuevamente."
+  },
+  "openLinkHost": "Abrir {{host}}",
+  "prStatus": {
+    "ciPassed": "CI superada",
+    "ciFailed": "CI fallida",
+    "ciRunning": "CI en curso",
+    "threadsOpen": "Hilos de revisión abiertos: {{count}}",
+    "threadsNone": "Sin hilos de revisión abiertos",
+    "mergeReady": "Lista para fusionar",
+    "mergeConflict": "Tiene conflictos",
+    "mergeBehind": "Por detrás de la rama base",
+    "mergeApproval": "Esperando aprobación",
+    "mergeChanges": "Cambios solicitados",
+    "mergeWaiting": "Esperando la fusión",
+    "merged": "Fusionada",
+    "closed": "Cerrada",
+    "draft": "Borrador"
   }
 }

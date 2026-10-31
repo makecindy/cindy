@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { prStatusItemKeys, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
   parseMailCard,
@@ -17,7 +18,9 @@ import {
   type GhostCardFormField,
 } from "@cindy/maker-shared/ghost-card-form";
 import {
+  AccessibilityInfo,
   Alert,
+  Animated,
   AppState,
   Linking,
   KeyboardAvoidingView,
@@ -25,6 +28,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Switch,
   View,
 } from "react-native";
 import { useIsFocused } from "expo-router";
@@ -64,6 +68,40 @@ interface Action {
   url?: string;
   disabled: boolean;
   submit?: boolean;
+  /** Rich hints from hosts that honour `plugin-card-rich`. */
+  primary?: boolean;
+  toggle?: { on: boolean; title: string; hint?: string };
+}
+interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+/** The host sends the title bar's PR status; keep only fields the status row reads. */
+function parsePrStatus(value: unknown): PrStatusSlot["status"] {
+  const v = value as Record<string, unknown> | null;
+  if (!v || v.ok !== true || !["open", "draft", "merged", "closed"].includes(v.status as string)) return undefined;
+  const checks = v.checks as Record<string, unknown> | null | undefined;
+  const validChecks = checks && ["total", "failed", "passed", "pending", "skipped"].every((k) => isCount(checks[k]));
+  const text = (x: unknown) => (typeof x === "string" ? x : null);
+  return {
+    ok: true, owner: "", repo: "", prNumber: 0, title: "", htmlUrl: "", branch: "",
+    status: v.status as "open" | "draft" | "merged" | "closed",
+    unresolvedCount: isCount(v.unresolvedCount) ? v.unresolvedCount : null,
+    checks: validChecks ? (checks as unknown as NonNullable<Extract<PrStatusResult, { ok: true }>["checks"]>) : null,
+    ...("mergeState" in v ? { mergeState: text(v.mergeState) } : {}),
+    ...("reviewDecision" in v ? { reviewDecision: text(v.reviewDecision) } : {}),
+  };
+}
+function parsePrStatusSlots(value: unknown): PrStatusSlot[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 4).flatMap((slot) => {
+    const s = slot as Record<string, unknown> | null;
+    if (!s || typeof s.key !== "string" || !Array.isArray(s.fallback)) return [];
+    const fallback = s.fallback.filter((x): x is string => typeof x === "string" && x.length <= 200).slice(0, 8);
+    const status = parsePrStatus(s.status);
+    return [{ key: s.key, fallback, ...(status ? { status } : {}) }];
+  });
 }
 function parse(value: unknown): {
   pluginId: string;
@@ -74,6 +112,8 @@ function parse(value: unknown): {
   mail?: MailCardData | null;
   legacyMail?: boolean;
   mailUpload?: boolean;
+  live?: string;
+  prStatus: PrStatusSlot[];
 } | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -94,7 +134,11 @@ function parse(value: unknown): {
       typeof item.disabled === "boolean" &&
       (item.prompt === undefined || typeof item.prompt === "string") &&
       (item.submit === undefined || typeof item.submit === "boolean") &&
-      (item.url === undefined || typeof item.url === "string"),
+      (item.url === undefined || typeof item.url === "string") &&
+      (item.primary === undefined || typeof item.primary === "boolean") &&
+      (item.toggle === undefined || (typeof item.toggle === "object" && item.toggle !== null &&
+        typeof item.toggle.on === "boolean" && typeof item.toggle.title === "string" && item.toggle.title.length <= 200 &&
+        (item.toggle.hint === undefined || (typeof item.toggle.hint === "string" && item.toggle.hint.length <= 400)))),
   );
   return {
     mail: parseMailCard(data.mail),
@@ -106,6 +150,8 @@ function parse(value: unknown): {
     form: parseGhostCardForm(data.form),
     changeAction:
       typeof data.changeAction === "string" ? data.changeAction : undefined,
+    live: typeof data.live === "string" && data.live.length <= 64 ? data.live : undefined,
+    prStatus: parsePrStatusSlots(data.prStatus),
   };
 }
 export function PluginCardActions({
@@ -142,11 +188,15 @@ function CardControls({
   pluginId,
   revision,
   items,
+  live,
+  prStatus,
   deviceId,
   sessionId,
   callId,
   onOpenAttachment,
 }: {
+  live?: string;
+  prStatus: PrStatusSlot[];
   form: GhostCardFormField[] | null;
   changeAction?: string;
   mail?: MailCardData | null;
@@ -600,16 +650,34 @@ function CardControls({
             <Text style={styles.note}>{mailCardStatus(mail, countdownNow)}</Text>
           </View>
         ) : null}
+        {prStatus.map((slot) => <PrStatusRow key={slot.key} slot={slot} />)}
+        {(history ? [] : items).filter((action) => action.toggle).map((action) => (
+          <View key={action.id} style={styles.toggleRow}>
+            <View style={styles.toggleText}>
+              <Text style={styles.label}>{action.toggle!.title}</Text>
+              {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
+            </View>
+            <Switch
+              accessibilityLabel={action.toggle!.title}
+              value={action.toggle!.on}
+              disabled={action.disabled || busy || unknown || status !== "online"}
+              onValueChange={() => choose(action)}
+            />
+          </View>
+        ))}
         <View style={styles.actions}>
-          {(history ? [] : items).map((action) => {
+          {(history ? [] : items).filter((action) => !action.toggle).map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
+            const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
+            const host = action.url ? linkHost(action.url) : undefined;
+            const label = host ? t("plugins.openLinkHost", { host }) : action.label;
             return (
               <Pressable
                 key={action.id}
-                accessibilityRole="button"
-                accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : action.label}
+                accessibilityRole={action.url ? "link" : "button"}
+                accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
                 disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
-                style={[styles.button, mail && action.id === `mail:send:${mail.key}` && styles.sendButton, sendNow && styles.sendNowButton]}
+                style={[styles.button, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
                 onPress={() => choose(action)}
               >
                 {sendNow && mail ? (
@@ -617,10 +685,11 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, mail && action.id === `mail:send:${mail.key}` && styles.sendLabel]}>{action.label}</Text>
+                <Text style={[styles.label, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
               </Pressable>
             );
           })}
+          {live ? <LiveStatus label={live} /> : null}
         </View>
       </View>
       {unknown ? (
@@ -687,6 +756,64 @@ function CardControls({
     </View>
   );
 }
+/** A plugin link reads as "open github.com" instead of repeating the card's title. */
+function linkHost(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.host.replace(/^www\./, "") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** PR checks from the title bar's status (desktop host); the plugin's snapshot otherwise. */
+function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const items = slot.status
+    ? prStatusItemKeys(slot.status).map(({ tone, key, count }) => ({ tone, label: t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count }) }))
+    : slot.fallback.map((label) => ({ tone: undefined, label }));
+  if (!items.length) return null;
+  return (
+    <View style={styles.statusRow}>
+      {items.map((item, index) => (
+        <View key={`${index}:${item.label}`} style={styles.statusItem}>
+          <View style={[styles.statusDot, item.tone === "good" ? styles.dotGood : item.tone === "bad" ? styles.dotBad : styles.dotWait]} />
+          <Text style={[styles.note, item.tone === "good" && styles.statusGoodText]}>{item.label}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** A long-running state (e.g. following a PR) with a breathing dot; still when motion is reduced. */
+function LiveStatus({ label }: { label: string }) {
+  const styles = useThemedStyles(makeStyles);
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let loop: Animated.CompositeAnimation | undefined;
+    let cancelled = false;
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduced) => {
+      if (cancelled || reduced) return;
+      loop = Animated.loop(Animated.timing(pulse, { toValue: 1, duration: 1800, useNativeDriver: true }));
+      loop.start();
+    });
+    return () => { cancelled = true; loop?.stop(); };
+  }, [pulse]);
+  return (
+    <View style={styles.liveStatus} accessibilityRole="text" accessibilityLabel={label}>
+      <View style={styles.liveDotWrap}>
+        <Animated.View style={[styles.liveDot, styles.dotGood, {
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.6] }) }],
+        }]} />
+        <View style={[styles.liveDot, styles.dotGood]} />
+      </View>
+      <Text style={styles.note}>{label}</Text>
+    </View>
+  );
+}
+
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     root: { gap: spacing.sm },
@@ -732,6 +859,20 @@ const makeStyles = (c: ThemeColors) =>
     },
     actions: { flexDirection: "row", flexWrap: "wrap", justifyContent: 'flex-end', gap: spacing.sm },
     sendButton: { backgroundColor: c.cta },
+    quietButton: { backgroundColor: "transparent", paddingHorizontal: spacing.sm },
+    quietLabel: { color: c.textSecondary },
+    toggleRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
+    toggleText: { flex: 1, minWidth: 0 },
+    statusRow: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.lg, rowGap: spacing.xs },
+    statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
+    statusDot: { width: 7, height: 7, borderRadius: 4 },
+    statusGoodText: { color: c.textPrimary },
+    dotGood: { backgroundColor: c.statusDone },
+    dotBad: { backgroundColor: c.statusError },
+    dotWait: { borderWidth: 1.5, borderColor: c.textTertiary },
+    liveStatus: { flexDirection: "row", alignItems: "center", gap: spacing.sm, minHeight: 44, paddingHorizontal: spacing.xs },
+    liveDotWrap: { width: 7, height: 7 },
+    liveDot: { position: "absolute", width: 7, height: 7, borderRadius: 4 },
     sendLabel: { color: c.ctaText },
     countdownFill: { height: "100%", backgroundColor: c.textPrimary, opacity: 0.14 },
     sendNowButton: { backgroundColor: c.surface, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },

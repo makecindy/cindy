@@ -397,6 +397,17 @@ describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
   });
 });
 
+// 手机端按这两个提示画主按钮和开关;只认 button 上的固定写法。
+describe('sanitizeGhostCardHtml · 手机呈现提示(data-ghost-primary / data-ghost-toggle)', () => {
+  it('button 上放行,其它值和标签只丢属性', () => {
+    expect(ok('<button data-ghost-action="a" data-ghost-primary="x" data-ghost-toggle="on">x</button>'))
+      .toBe('<button data-ghost-primary="" data-ghost-toggle="on" data-ghost-action="a" type="button">x</button>');
+    expect(ok('<div data-ghost-live-label="跟进中">x</div><b data-ghost-live-label="x">y</b>')).toBe('<div data-ghost-live-label="跟进中">x</div><b>y</b>');
+    expect(ok('<button data-ghost-toggle="maybe">a</button><div data-ghost-primary data-ghost-toggle="on">b</div>'))
+      .toBe('<button type="button">a</button><div>b</div>');
+  });
+});
+
 // 宿主把标题栏的 PR 状态填进这个位置;只认 owner/repo#编号,别的值连同它可能夹带的内容都只丢属性。
 describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
   it('div 上放行 owner/repo#编号,其它值和标签只丢属性', () => {

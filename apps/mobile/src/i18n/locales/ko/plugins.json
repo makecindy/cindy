@@ -328,5 +328,22 @@
     "purpose": "대화형 페이지 권한 확인",
     "updateHost": "실행 컴퓨터의 Cindy를 업데이트한 뒤 여기서 확인해 주세요. 텍스트 도구는 계속 사용할 수 있습니다.",
     "failed": "대화형 페이지를 활성화하지 못했습니다. 연결과 플러그인 버전을 확인한 뒤 다시 시도해 주세요."
+  },
+  "openLinkHost": "{{host}} 열기",
+  "prStatus": {
+    "ciPassed": "CI 통과",
+    "ciFailed": "CI 실패",
+    "ciRunning": "CI 실행 중",
+    "threadsOpen": "처리할 리뷰 의견 {{count}}개",
+    "threadsNone": "처리할 리뷰 의견 없음",
+    "mergeReady": "병합 가능",
+    "mergeConflict": "충돌 있음",
+    "mergeBehind": "기준 브랜치 동기화 필요",
+    "mergeApproval": "승인 대기 중",
+    "mergeChanges": "수정 요청됨",
+    "mergeWaiting": "병합 대기 중",
+    "merged": "병합됨",
+    "closed": "닫힘",
+    "draft": "초안"
   }
 }

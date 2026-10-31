@@ -4403,3 +4403,14 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 （`data-ghost-pr-status`）用它显示「可以合并 / 有冲突 / 等待审批」。旧控制端忽略字段；新控制端连接旧宿主时字段缺失，
 卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
 回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。
+
+## 插件卡片的手机原生呈现（`plugin-card-rich`）
+
+手机读取 `plugin-results` 卡片时在 `client.primitives` 里多声明 `plugin-card-rich`。只有声明了的手机，宿主才在
+`plugin-card-actions` 的 `data` 里附带：动作的 `primary` / `toggle`、`live` 状态名，以及 `prStatus`。`prStatus`
+包含状态位、插件快照，并在能查到时附上与标题栏同源的 `PrStatusResult`。这些部分的文字同时移出文本块。
+旧手机不声明，照旧收纯文字投影；新手机连旧宿主时收不到这些字段，回到纯文字和普通按钮。
+文本块对声明了 `card.externalLinks` 的插件不再插入链接地址，这对新旧手机一致，链接仍作为可点的动作下发。
+ghost_call 结果新增可选布尔 `xdt_card_turn_end`（MCP 层与手机工具投影同步放行）。手机据此把卡片排到本轮回复之后；
+旧手机忽略。不改握手、relay、服务端或数据库。回归入口：`cardRemoteResource.test.ts`、`messageRender.test.ts`、
+`pluginCardActions.test.tsx`。

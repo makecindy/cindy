@@ -328,5 +328,22 @@
     "purpose": "インタラクティブページの権限を確認",
     "updateHost": "実行元のパソコンで Cindy を更新してから、ここで確認してください。テキストのツールは引き続き使えます。",
     "failed": "インタラクティブページを有効にできませんでした。接続とプラグインのバージョンを確認し、再試行してください。"
+  },
+  "openLinkHost": "{{host}} を開く",
+  "prStatus": {
+    "ciPassed": "CI 成功",
+    "ciFailed": "CI 失敗",
+    "ciRunning": "CI 実行中",
+    "threadsOpen": "未解決のレビュー {{count}} 件",
+    "threadsNone": "未解決のレビューなし",
+    "mergeReady": "マージ可能",
+    "mergeConflict": "コンフリクトあり",
+    "mergeBehind": "ベースブランチとの同期が必要",
+    "mergeApproval": "承認待ち",
+    "mergeChanges": "修正依頼あり",
+    "mergeWaiting": "マージ待ち",
+    "merged": "マージ済み",
+    "closed": "クローズ済み",
+    "draft": "下書き"
   }
 }

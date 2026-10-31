@@ -25,6 +25,7 @@ import type {
 } from '@/device-link/mobileMakerTransport';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { pluginVisualFixture } from '@/debug/pluginVisualFixture';
+import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
@@ -259,6 +260,8 @@ async function visualMockInvoke<T = unknown>(
   const realData = await loadVisualRealDataSnapshot();
   const pluginResult = realData ? undefined : pluginVisualFixture(channel, args);
   if (pluginResult !== undefined) return pluginResult as T;
+  const prCardResult = realData ? undefined : prCardVisualFixture(channel, args);
+  if (prCardResult !== undefined) return prCardResult as T;
   const teammateResult = realData ? undefined : teammateVisualFixture(channel, args);
   if (teammateResult !== undefined) return teammateResult as T;
   if (channel === 'local-db:task-tags:execute') {

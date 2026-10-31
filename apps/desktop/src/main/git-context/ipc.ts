@@ -20,6 +20,7 @@
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { GithubClient } from '@cindy/github-client';
+import { prStatusKey } from '@cindy/maker-shared';
 import { eq } from 'drizzle-orm';
 
 import { createLogger } from '../logger.js';
@@ -380,6 +381,28 @@ export async function readSessionPrStatuses(
   return prStatusService.getStatuses(
     refs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
   );
+}
+
+/**
+ * 手机查看插件卡片的 PR 状态位用：只查该任务已记录的 PR(与远程 PR_STATUS 同一过滤),
+ * 走同一服务与缓存。查不到或失败返回 undefined,卡片保留插件写的快照。
+ */
+export async function readSessionPrStatus(
+  sessionId: string,
+  key: string,
+): Promise<PrStatusResult | undefined> {
+  if (!prStatusService) return undefined;
+  try {
+    const ref = (await listPrRefs(sessionId)).find((item) => prStatusKey(item) === key);
+    if (!ref) return undefined;
+    const [status] = await prStatusService.getStatuses(
+      [{ owner: ref.owner, repo: ref.repo, prNumber: ref.prNumber }],
+      { remote: true },
+    );
+    return status;
+  } catch {
+    return undefined;
+  }
 }
 
 /** 应用退出时清理 watcher 订阅。 */
