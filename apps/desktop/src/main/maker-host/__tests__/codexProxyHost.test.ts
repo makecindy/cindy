@@ -104,13 +104,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     createActiveStripTransform: (...args: Parameters<typeof actual.createActiveStripTransform>) =>
       mockState.realStripTransforms ? actual.createActiveStripTransform(...args) : (() => null),
     createThreadStripController: actual.createThreadStripController,
-    createEncryptedContentRecoveryRule: (opts: { enabled: () => boolean }) => ({
-      id: 'encrypted_content',
-      enabled: opts.enabled,
-      matches: (text: string) =>
-        /invalid_encrypted_content|could not decrypt the provided encrypted_content/i.test(text),
-      strip: () => null,
-    }),
+    createEncryptedContentRecoveryRule: actual.createEncryptedContentRecoveryRule,
     createImageGenerationIdRecoveryRule: () => ({
       id: 'image_generation_id',
       enabled: () => true,
@@ -2987,6 +2981,14 @@ describe('codex proxy host', () => {
       const resolve = mockState.createAnthropicCompatProxy.mock.calls[0][0].resolveWebSocketUpstream;
       expect(resolve({ headers: { 'thread-id': 'remote-thread' } })).toBeNull();
       expect(resolve({ headers: { 'thread-id': 'local-thread' } })).toBe('https://chatgpt.com/backend-api/codex');
+      // #6717 review 4349611761: native WS support can remain enabled while
+      // this proxy forces hosted-owner traffic to HTTP before any WS proof.
+      const recovery = { message: 'invalid_encrypted_content', httpOnly: false };
+      host.registerComposed('local-owner', 'local-thread', 'prompt');
+      expect(host.armCodexHttpRecovery({ ...recovery, sessionId: 'local-owner', threadId: 'local-thread' })).toBeNull();
+      expect(host.armCodexHttpRecovery({ ...recovery, sessionId: 'local-owner', threadId: 'remote-thread' })).toBeNull();
+      expect(host.armCodexHttpRecovery({ ...recovery, sessionId: 'remote-owner', threadId: 'remote-thread' })).toBe('encrypted_content');
+      expect(resolve({ headers: { 'thread-id': 'local-thread' } })).toBe('https://chatgpt.com/backend-api/codex');
     } finally { binding.release(); }
   });
 
@@ -3616,6 +3618,97 @@ describe('codex proxy host', () => {
       })).toBe('https://chatgpt.com/backend-api/codex');
     },
   );
+
+  // #6711: real HTTP proxy + frozen API route, no WS handshake. Existing WS
+  // fixtures cannot reproduce a 200 SSE error on an HTTP-only native thread.
+  // Unit tier: loopback port 0, synthetic history, no credentials or native DB.
+  it.each([200, 400, 422])('recovers HTTP-only reasoning and classifies compaction without changing tool data (status=%s)', async (compactStatus) => {
+    const host = await freshCodexProxyHost(true);
+    const threadA = 'thread-http-a-' + compactStatus;
+    const threadB = 'thread-http-b-' + compactStatus;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createAnthropicCompatProxy.mockImplementation(actual.createAnthropicCompatProxy);
+    const received: Array<{ input: Array<Record<string, unknown>> }> = [];
+    const errorMessage = 'Encrypted content could not be decrypted or parsed.';
+    const upstream = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      received.push(body);
+      const rejected = body.input.some((item: Record<string, unknown>) =>
+        (item.type === 'reasoning' && item.encrypted_content === 'old-provider-blob') || item.type === 'compaction');
+      if (compactStatus !== 200 && body.input.some((item: Record<string, unknown>) => item.type === 'compaction')) {
+        res.writeHead(compactStatus, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { code: 'invalid_encrypted_content', message: errorMessage } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(rejected
+        ? `event: response.failed\ndata: ${JSON.stringify({ type: 'response.failed', response: { error: { code: 'invalid_encrypted_content', message: errorMessage } } })}\n\n`
+        : 'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n');
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({ id: 'recovery-api', name: 'Recovery API', runtimes: { codex: {
+      baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
+      wireProtocol: 'openai-responses', supportsImageGeneration: true, models: [{ id: 'gpt-6.1-sol', name: 'Sol' }],
+    } } });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    setCustomProviderKeyReader(() => 'fixture-api-key');
+    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    const message = { role: 'user', content: 'continue' };
+    const tool = { type: 'function_call_output', call_id: 'call_kept', output: { encrypted_content: 'business-data' } };
+    const compact = { type: 'compaction', encrypted_content: 'compact-kept' };
+    const history = [message, { type: 'reasoning', summary: [], encrypted_content: 'old-provider-blob' }, tool];
+    try {
+      await host.ensureCodexCustomContextProxyReady('http-recovery', 'env-key', [route]);
+      host.registerComposed('session-http-a', threadA, 'PRODUCT_PROMPT');
+      host.registerComposed('session-http-b', threadB, 'PRODUCT_PROMPT');
+      const endpoint = host.getCodexCustomContextProxyEndpoint('http-recovery');
+      const send = async (thread: string, input: unknown[]) => {
+        const response = await fetch(`${endpoint}/_cindy/custom-provider/${route.routeId}/responses`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': thread },
+          body: JSON.stringify({ model: 'gpt-6.1-sol', input }),
+        });
+        return response.text();
+      };
+      expect(await send(threadA, history)).toContain('invalid_encrypted_content');
+      expect(received).toHaveLength(1); // SSE error was forwarded; no proxy replay.
+      const settings = await import('../silent-encrypted-retry-store.js');
+      const disabled = vi.spyOn(settings, 'readSilentEncryptedRetrySettings').mockReturnValue({ enabled: false });
+      try {
+        expect(host.armCodexHttpRecovery({ sessionId: 'session-http-a', threadId: threadA, message: errorMessage, httpOnly: true })).toBeNull();
+      } finally { disabled.mockRestore(); }
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-http-b', threadId: threadA, message: errorMessage, httpOnly: true })).toBeNull();
+      expect(host.armCodexHttpRecovery({ sessionId: 'unknown', threadId: 'unregistered', message: errorMessage, httpOnly: true })).toBeNull();
+      expect(host.armCodexHttpRecovery({ sessionId: 'session-http-a', threadId: threadA, message: errorMessage, httpOnly: true })).toBe('encrypted_content');
+      const healthy = [message, { type: 'reasoning', summary: [], encrypted_content: 'target-provider-blob' }, tool];
+      expect(await send(threadB, healthy)).toContain('response.completed');
+      expect(received[1]!.input).toEqual(healthy);
+      expect(await send(threadA, history)).toContain('response.completed');
+      expect(received[2]!.input).toEqual([message, tool]);
+      // Active recovery never removes compacted context, even on later sends.
+      const compactError = compactStatus === 200 ? 'invalid_encrypted_content' : 'CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE';
+      expect(await send(threadA, [...history, compact])).toContain(compactError);
+      expect(received[3]!.input).toEqual([message, tool, compact]);
+      // Also classify a cold thread with no reasoning to strip: a business
+      // encrypted_content field must not hide the opaque compaction failure.
+      expect(await send(threadB, [message, tool, compact])).toContain(compactError);
+      expect(received[4]!.input).toEqual([message, tool, compact]);
+      expect(received).toHaveLength(5); // No replay of an opaque compact failure.
+    } finally {
+      host.unregister('session-http-a'); host.unregister('session-http-b');
+      await host.disposeCodexProxy();
+      setCustomProviderKeyReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
 
   it('keeps native websocket behavior when no scoped socket can be recovered safely', async () => {
     const host = await freshCodexProxyHost();

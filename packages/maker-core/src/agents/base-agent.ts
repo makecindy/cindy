@@ -1400,7 +1400,7 @@ export interface AgentDeps {
 
   /**
    * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
-   * 该 thread 的后续 WS upgrade 导回 HTTP。
+   * 该 thread 的后续 WS upgrade 导回 HTTP；已确定仅走 HTTP 的代理线程无需 WS 证据。
    *
    * 宿主负责按自己的 recovery rules 识别错误并登记 transport policy；返回稳定
    * reason 表示已登记，null 表示不匹配。调用必须同步、纯内存且不得抛错。
@@ -1411,6 +1411,8 @@ export interface AgentDeps {
     threadId: string;
     message: string;
     additionalDetails?: string | null;
+    /** Frozen native transport is HTTP-only and this Host uses the local proxy. */
+    httpOnly?: boolean;
   }) => string | null;
 
   /**
