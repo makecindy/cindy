@@ -1242,5 +1242,8 @@ function createPayloadToolDiff(
 
 function countPayloadChangedLines(value: string): number {
   if (!value) return 0;
-  return value.split('\n').filter((line) => line.length > 0).length || 1;
+  // 中间空行也是改动行；只去掉结尾换行切出的哨兵空段。
+  const lines = value.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  return lines.length;
 }

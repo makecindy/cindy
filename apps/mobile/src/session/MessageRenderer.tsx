@@ -1,4 +1,5 @@
-import { AnimatedContentHeight } from './AnimatedContentHeight';
+import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
+import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { VideoSitePreview } from './VideoSitePreview';
 import { InlineVideoPlayer } from './InlineVideoPlayer';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
@@ -10,13 +11,17 @@ import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
 import { MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
+import { MessageContentLongPressContext } from './messageContentLongPress';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
+import type { ErrorDiagnosisSource } from './errorDiagnosisPrompt';
 import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
+import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
@@ -33,8 +38,8 @@ import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/make
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
-import { CompanionEntering, useMessageEntrances, useRetainedMessageRows } from '@/session/CompanionEntering';
-import { localSendStartedAt } from '@/session/localSendMotion';
+import { CompanionEntering } from '@/session/CompanionEntering';
+import { LOCAL_SEND_FRESH_MS, localSendStartedAt } from '@/session/localSendMotion';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
 import { createScrollDebugSampler } from '@/debug/scrollDebugSampler';
 import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
@@ -99,18 +104,13 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import { UITextView } from 'react-native-uitextview';
 import {
+  LegendList,
   useRecyclingState,
   type LegendListMetrics,
   type OnViewableItemsChangedInfo,
   type LegendListRef,
 } from '@legendapp/list/react-native';
-import { AnimatedLegendList } from '@legendapp/list/reanimated';
-import { useSmoothMessageFollow } from './useSmoothMessageFollow';
-import { NativeKeyboardViewport, type KeyboardViewportTransition, type ViewportInsetChange } from './NativeKeyboardViewport';
-import { NativeChatViewport, nativeChatManualFollowAvailable, nativeAndroidComposerViewportAvailable, type NativeChatViewportHandle } from './NativeChatViewport';
-import { DockKeyboardLift } from './ComposerDockKeyboardFollow';
 import { tokenizeCode, type CodeTokenKind } from '@/session/codeHighlight';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
 import { useFoldableExpandedState } from '@/session/expandedBlockMemory';
@@ -131,15 +131,15 @@ import {
   usesSystemActionMenu,
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
+import { MessageUsageCost } from '@/session/MessageUsageCost';
+import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
   ShareMessageCheckbox,
-  useCancelShareSelectionRowTap,
   MessageBodyText,
 } from '@/session/ShareMessageCheckbox';
 import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
-import { selectableTextVerticalOffset } from '@/session/selectableTextAlignment';
 import {
   composerDocumentFromSerializedMessage,
   type ComposerDocument,
@@ -149,17 +149,13 @@ import {
   sentInlineTokensDisplayText,
   type SentInlineToken,
 } from '@/session/sentMessageAtoms';
-import {
-  selectionQuoteMenuLabel,
-  SelectionQuoteContext,
-  handleSelectionQuoteMenuAction,
-} from '@/session/selectionQuote';
-import { SelectionMenuText } from '@/session/SelectionMenuText';
+import { SelectionQuoteContext } from '@/session/selectionQuote';
+import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
 import {
   MOBILE_COMPOSER_CONTROL_SIZE,
   MOBILE_COMPOSER_VOICE_ANCHOR_RIGHT,
 } from '@/session/MobileComposerInputRow';
-import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
+import { Text } from '@/components/AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type {
   NormalizedAttachment,
@@ -384,13 +380,11 @@ import {
   MOBILE_MESSAGE_LIST_BOTTOM_PADDING,
   type MessageScrollMetrics,
   mobileMessageListBottomPadding,
-  mobileMessageListEndOffset,
   resolveMobileNearBottomOnScroll,
   shouldAutoLoadEarlier,
   shouldPreserveMobileHistoryBrowseIntent,
   shouldUnpinMobileFollowOnDrag,
   mobileMessageListNearBottomThreshold,
-  mobileNativeScrollMetrics,
 } from '@/session/messageScroll';
 import { createMobileTailFollower, type MobileTailFollower } from '@/session/messageTailFollower';
 import {
@@ -481,8 +475,9 @@ const MOBILE_MESSAGE_DRAW_DISTANCE = 800;
 const FOLDABLE_HEADER_HIT_SLOP = { bottom: 10, left: 4, right: 4, top: 10 };
 
 function mobileMessageListItemType(item: MobileMessageRenderItem): MobileMessageRenderItem['type'] {
-  // An acknowledgement is the same list cell. Changing LegendList's item type here
-  // discards its measured row just as the local bubble becomes a persisted message.
+  // A confirmed local send keeps the same logical row as its optimistic bubble.
+  // Reusing the message pool preserves the measured height while the item data
+  // changes from pending_send to the persisted message.
   return item.type === 'pending_send' ? 'message' : item.type;
 }
 
@@ -534,115 +529,6 @@ const stylesStatic = StyleSheet.create({
   },
 });
 
-/**
- * 消息正文可选中文本块的双端实现:
- * - iOS:RN 官方 Text 底层是 UILabel,selectable 只有「长按拷贝整块」、没有系统选择手柄
- *   (部分选择做不到,facebook/react-native#13938)。换用 react-native-uitextview
- *   (Bluesky 开源,真 UITextView):长按出系统手柄、支持块内部分选择,嵌套 span 样式与 onPress 保留。
- * - Android:RN Text selectable 本身就有系统选择手柄,维持 AppText(带全局字体缩放限幅)。
- * 选中高亮双端都刻意**不**覆写 selectionColor,交给系统:iOS UITextView 本就用系统高亮;
- * Android 不传则回落 Activity 主题的 textColorHighlight(accent 色 ~26% 透明度的半透明
- * tint),选区可见性与选中文字可读性天然兼得。历史教训(#1427):曾逐 view 覆写不透明
- * token —— surfaceChip 近白,浅色主题选区与底色仅 1.04:1,选了看不见;换 inputCaret 纯蓝,
- * 选中文字对比度跌到 2.6:1,看得见但读不了 —— 不透明覆写两头都讨不到好。props 类型
- * Omit 掉 selectionColor 挡编译期,messageSelectionHighlight.test.ts 锁文件级不再覆写。
- */
-type MarkdownSelectableTextProps = Omit<ComponentProps<typeof Text>, 'selectionColor'> & {
-  /**
-   * iOS 是否使用可部分选中的 UITextView。普通任务的超长展开正文回退 RN Text:
-   * UITextView 在折叠→展开时骤增为超高复用视图会偶发只留下巨高空白容器。
-   */
-  allowIosUITextView?: boolean;
-  /** Decorated table cells must stay on the row grid, including their borders. */
-  adjustVerticalAlignment?: boolean;
-  /** Include larger inline headings when aligning a combined text run. */
-  alignmentTextStyles?: readonly StyleProp<TextStyle>[];
-};
-
-function MarkdownSelectableText({
-  allowIosUITextView = true,
-  adjustVerticalAlignment = true,
-  alignmentTextStyles,
-  selectable,
-  ...rest
-}: MarkdownSelectableTextProps) {
-  // chat-text-quote:宿主(MessageRenderer)启用采集时,给 iOS UITextView 传
-  // menuActionLabel(系统选择菜单里插入「添加到对话」项,iOS 16+)并挂
-  // onTextLayout(缓存逐行渲染文本)+ onMenuAction(菜单点按时按选区偏移切
-  // 文本提交)。context 为 null(宿主未启用 / 非会话场景)时零开销走原路径。
-  const quoteCtx = useContext(SelectionQuoteContext);
-  const renderedLinesRef = useRef<readonly string[]>([]);
-  const { fontScale } = useWindowDimensions();
-  if (selectable && allowIosUITextView && Platform.OS === 'ios') {
-    const typography = [rest.style, ...(alignmentTextStyles ?? [])]
-      .map((style) => StyleSheet.flatten(style) ?? {});
-    const top = selectableTextVerticalOffset(typography, rest.allowFontScaling === false ? 1 : fontScale);
-    // Position only the selectable root. RN Text already centers its leading;
-    // shifting the bubble itself would also shift pending/Android text and chips.
-    const alignedStyle: StyleProp<TextStyle> = adjustVerticalAlignment ? [rest.style, { top }] : rest.style;
-    if (!quoteCtx) {
-      return (
-        <UITextView
-          maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-          selectable
-          uiTextView
-          {...rest}
-          style={alignedStyle}
-        />
-      );
-    }
-    return (
-      <UITextView
-        maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-        selectable
-        uiTextView
-        {...rest}
-        style={alignedStyle}
-        onTextLayout={(e) => {
-          // uitextview 自定义 spec 的 lines 是 string[](RN 核心 Text 是对象数组),
-          // 双形态防御:确保缓存的是纯字符串行。
-          const rawLines = e.nativeEvent.lines as unknown as readonly (string | { text: string })[];
-          renderedLinesRef.current = rawLines.map((line) => (typeof line === 'string' ? line : line.text));
-          rest.onTextLayout?.(e);
-        }}
-        // menuActionLabel / onMenuAction 是 uitextview patch 的扩展 prop,不在
-        // RN Text props 里,组件内部私有附加(经 {...rest} 透传到原生组件)。
-        {...{
-          menuActionLabel: selectionQuoteMenuLabel(),
-          sideChatMenuActionLabel: quoteCtx.askInSideChat ? i18n.t('session.sideChat.title') : '',
-          onMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
-            handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx);
-          },
-          onSideChatMenuAction: (event: { nativeEvent: { target: number; start: number; end: number } }) => {
-            handleSelectionQuoteMenuAction(event, renderedLinesRef.current, quoteCtx, 'side-chat');
-          },
-        }}
-      />
-    );
-  }
-  return <SelectionMenuText selectable={selectable} {...rest} />;
-}
-
-/**
- * iOS 可选中块里的嵌套 span:必须也是 UITextView(经库内祖先上下文渲染为原生 child),
- * 混入 RN Text 会破坏原生文本树。仅由 renderInline 在「块可选中且 iOS」时使用。
- */
-function MarkdownSelectableSpan(props: ComponentProps<typeof Text>) {
-  const cancelShareSelectionRowTap = useCancelShareSelectionRowTap();
-  const handlePress = props.onPress
-    ? (event: GestureResponderEvent) => {
-      cancelShareSelectionRowTap?.();
-      props.onPress?.(event);
-    }
-    : undefined;
-  return (
-    <UITextView
-      maxFontSizeMultiplier={MAX_FONT_SIZE_MULTIPLIER}
-      {...props}
-      onPress={handlePress}
-    />
-  );
-}
 
 function isTextRunContinuationGroup(group: MobileMarkdownBlockGroup): boolean {
   return group.type === 'text_run' && group.textRunContinuation === true;
@@ -684,13 +570,13 @@ interface CompanionQuoteActions extends CompanionQuoteOptions {
 interface MessageActions {
   onRetryImageDelivery?: (imageId: string) => Promise<void>;
   companion?: boolean;
+  intermediateProcess?: boolean;
   companionQuoteActions?: CompanionQuoteActions;
-  enteringMessageKeys?: ReadonlyMap<string, number>;
-  exitingMessageKeys?: ReadonlySet<string>;
-  onMessageExited?: (key: string) => void;
+  companionThreads?: CompanionThreads;
   onCompanionReadThrough?: (at: number) => void;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
+  companionAttentionLabel?: string;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
   /** First visible message of each five-minute teammate time group → its timestamp. */
@@ -705,6 +591,7 @@ interface MessageActions {
   /** Insert this message's anchored link as an atom in the active composer. */
   onAddMessageToComposer?: (clientId: string) => void;
   onSideChatMessage?: (text: string) => void;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /**
    * chat-text-quote:选中消息文字 → 系统选择菜单「添加到对话」项的采集回调
    * (会话页写入 chatQuoteStore)。未传时选区采集整体关闭(context 为 null,
@@ -765,7 +652,10 @@ interface MessageActions {
 export function MessageRenderer({
   companion = false,
   companionQuote,
+  companionThreads,
+  conversationHeader,
   companionWorkingLabel,
+  companionAttentionLabel,
   onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
@@ -779,6 +669,7 @@ export function MessageRenderer({
   onCopyMessageLink,
   onAddMessageToComposer,
   onSideChatMessage,
+  onDiagnoseError,
   onForkMessage,
   onDeleteMessage,
   onLoadEarlier,
@@ -810,8 +701,6 @@ export function MessageRenderer({
   bottomOverlayHeight,
   contentBottomInset,
   renderScrollComponent,
-  nativeKeyboardViewport = false,
-  composerSurfaceId,
   isSessionStreaming,
   makerTurnRunning,
   continuationTurnClientId,
@@ -831,8 +720,11 @@ export function MessageRenderer({
   companion?: boolean;
   /** Companion private chats only; ordinary tasks keep their existing message actions. */
   companionQuote?: CompanionQuoteOptions;
+  companionThreads?: CompanionThreads;
+  conversationHeader?: ReactNode;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
+  companionAttentionLabel?: string;
   companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
   /** Offscreen preload and disappearing native screens must not replace the user's bookmark. */
@@ -840,9 +732,6 @@ export function MessageRenderer({
   bottomOverlayHeight?: number;
   /** 列表滚动容器；任务页用它让聊天记录往下拖到输入框顶边时交给输入框（composerPullThrough）。 */
   renderScrollComponent?: (props: ScrollViewProps) => ReactElement<ScrollViewProps>;
-  /** iOS native inset/offset transaction instead of resizing the Fabric viewport. */
-  nativeKeyboardViewport?: boolean;
-  composerSurfaceId?: string;
   /** Floating composers reserve a stable tail gap while their expanded surface overlays history. */
   contentBottomInset?: number;
   /** 顶部 chrome(绝对定位半透明工具栏)实测高度:内容顶部按此让位,详见 mobileMessageListTopPadding。 */
@@ -986,6 +875,7 @@ export function MessageRenderer({
   const programmaticScrollGenerationRef = useRef(0);
   const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollInFlightRef = useRef(false);
+  const programmaticAnimatedScrollInFlightRef = useRef(false);
   const programmaticScrollSettleAtRef = useRef(0);
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
@@ -1064,6 +954,7 @@ export function MessageRenderer({
     mvcpSettleAtRef.current = 0;
     programmaticScrollGenerationRef.current += 1;
     programmaticScrollInFlightRef.current = false;
+    programmaticAnimatedScrollInFlightRef.current = false;
     programmaticScrollSettleAtRef.current = 0;
     if (programmaticScrollTimerRef.current !== null) {
       clearTimeout(programmaticScrollTimerRef.current);
@@ -1090,10 +981,6 @@ export function MessageRenderer({
     setHasNewMessagesState(next);
   }, []);
   const [isAwayFromBottom, setIsAwayFromBottomState] = useState(false);
-  const nativeTailRef = useRef<NativeChatViewportHandle | null>(null);
-  const { scrollRef: animatedScrollRef, move: moveTail, cancel: cancelTailMotion } = useSmoothMessageFollow(listRevealed && !isAwayFromBottom && historyPositioning, nativeKeyboardViewport,
-    nativeChatManualFollowAvailable ? nativeTailRef : undefined);
-
   const isAwayFromBottomRef = useRef(false);
   const setIsAwayFromBottom = useCallback((next: boolean) => {
     if (isAwayFromBottomRef.current === next) return;
@@ -1161,6 +1048,7 @@ export function MessageRenderer({
       : MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS;
     programmaticScrollGenerationRef.current = generation;
     programmaticScrollInFlightRef.current = true;
+    programmaticAnimatedScrollInFlightRef.current = animated;
     programmaticScrollSettleAtRef.current = Date.now() + settleMs;
     if (programmaticScrollTimerRef.current !== null) {
       clearTimeout(programmaticScrollTimerRef.current);
@@ -1169,20 +1057,21 @@ export function MessageRenderer({
       if (programmaticScrollGenerationRef.current !== generation) return;
       programmaticScrollTimerRef.current = null;
       programmaticScrollInFlightRef.current = false;
+      programmaticAnimatedScrollInFlightRef.current = false;
       programmaticScrollSettleAtRef.current = 0;
     }, settleMs);
   }, []);
 
   const clearProgrammaticScroll = useCallback(() => {
-    cancelTailMotion();
     programmaticScrollGenerationRef.current += 1;
     programmaticScrollInFlightRef.current = false;
+    programmaticAnimatedScrollInFlightRef.current = false;
     programmaticScrollSettleAtRef.current = 0;
     if (programmaticScrollTimerRef.current !== null) {
       clearTimeout(programmaticScrollTimerRef.current);
       programmaticScrollTimerRef.current = null;
     }
-  }, [cancelTailMotion]);
+  }, []);
 
   const markMobileMvcpSettle = useCallback(() => {
     mvcpSettleAtRef.current = mobileMvcpSettleDeadline(
@@ -1208,8 +1097,6 @@ export function MessageRenderer({
     setListRevealed(true);
   }, [initialRevealProgress]);
 
-  const nativeKeyboardTransition = useRef(false);
-  const nativeKeyboardInset = useRef(0);
   const getTailFollower = useCallback(() => {
     if (!tailFollowerRef.current) {
       tailFollowerRef.current = createMobileTailFollower({
@@ -1217,27 +1104,18 @@ export function MessageRenderer({
           metrics: scrollMetricsRef.current,
           stickToLatest: nearBottomRef.current,
           userControllingScroll: isUserControllingScroll(),
-          preservingHistory: nativeKeyboardTransition.current || readingOlderRef.current || !historyPositioningRef.current,
+          preservingHistory: readingOlderRef.current || !historyPositioningRef.current,
           layoutSettleAt: mvcpSettleAtRef.current,
-          // Live motion is retargetable on the UI thread. Waiting for the old
-          // UIKit animation deadline freezes streaming follow for half a second.
-          animatedScrollUntil: 0,
+          animatedScrollUntil: programmaticAnimatedScrollInFlightRef.current
+            ? programmaticScrollSettleAtRef.current : 0,
         }),
         seekEnd: (animated) => {
           markProgrammaticScroll(animated);
-          if (initialAnchorDoneRef.current && !initialRevealAnimationRef.current) {
-            // Live sends and explicit return-to-bottom use the same trajectory
-            // as streaming corrections. A second UIKit scroll animation can
-            // outlive/counteract the height-following worklet.
-            moveTail(mobileMessageListEndOffset(scrollMetricsRef.current), animated);
-            return;
-          }
-          cancelTailMotion();
-          return listRef.current?.scrollToEnd({ animated: false });
+          return listRef.current?.scrollToEnd({ animated });
         },
         correctOffset: (offset) => {
           markProgrammaticScroll(false);
-          moveTail(offset, initialAnchorDoneRef.current && !initialRevealAnimationRef.current);
+          void listRef.current?.scrollToOffset({ animated: false, offset });
         },
         onMeasurementOscillation: () => console.warn(
           '[message-list] contentSize follow-pin circuit tripped: oscillating item measurements suspected',
@@ -1246,7 +1124,7 @@ export function MessageRenderer({
       });
     }
     return tailFollowerRef.current;
-  }, [isUserControllingScroll, markProgrammaticScroll, revealPositionedHistory, moveTail, cancelTailMotion]);
+  }, [isUserControllingScroll, markProgrammaticScroll, revealPositionedHistory]);
 
   const scrollToEndProgrammatically = useCallback((
     animated: boolean,
@@ -1262,17 +1140,15 @@ export function MessageRenderer({
   }, [getTailFollower, readingPosition]);
 
   const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
-    cancelTailMotion();
     markProgrammaticScroll(animated);
     void listRef.current?.scrollToOffset({ animated, offset });
-  }, [markProgrammaticScroll, cancelTailMotion]);
+  }, [markProgrammaticScroll]);
 
   const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number, animated = true) => {
-    cancelTailMotion();
     dragStartOffsetYRef.current = null;
     markProgrammaticScroll(animated);
     return listRef.current?.scrollToIndex({ animated, index, viewPosition });
-  }, [markProgrammaticScroll, cancelTailMotion]);
+  }, [markProgrammaticScroll]);
 
   const getCurrentHistoryTopOffsetAdjustment = useCallback(() => {
     const listState = listRef.current?.getState();
@@ -1629,9 +1505,7 @@ export function MessageRenderer({
   // 与 main 保持一致：完整历史从首次挂载起就在同一个 LegendList 中，屏外 cell 交给
   // LegendList 虚拟化/回收。不能用业务尾窗代替完整数据，否则短尾窗未撑满首屏时
   // Android 无法产生有效滚动，运行中任务会重现“上半屏空白且历史不可拖动”。
-  const retainedRows = useRetainedMessageRows(items, scrollResetKey,
-    listRevealed && historyPositioning && historyActive && !loadingEarlier && !syncingWhileEmpty);
-  const listData = retainedRows.rows;
+  const listData = items;
   const listDataRef = useRef(listData);
   listDataRef.current = listData;
   const prevListLengthRef = useRef(listData.length);
@@ -1649,7 +1523,7 @@ export function MessageRenderer({
   }
   const itemKeys = useMemo(
     () => listDataRef.current.map((item) => item.key),
-    [listData],
+    [itemStructureIdentity],
   );
   const itemKeysSignature = useMemo(
     () => mobileMessageListKeysSignature(itemKeys),
@@ -1772,11 +1646,7 @@ export function MessageRenderer({
   const initialLightboxImage = lightboxImages
     ? lightboxImages[galleryImageIndexForPayload(lightboxImages, payload)]
     : undefined;
-  const nativeAndroidComposer = nativeAndroidComposerViewportAvailable && !!composerSurfaceId;
-  const nativeAndroidComposerRef = useRef(nativeAndroidComposer);
-  nativeAndroidComposerRef.current = nativeAndroidComposer;
-  const bottomPadding = (nativeKeyboardViewport || nativeAndroidComposer) && composerSurfaceId ? spacing.md
-    : mobileMessageListBottomPadding(bottomOverlayHeight, contentBottomInset);
+  const bottomPadding = mobileMessageListBottomPadding(bottomOverlayHeight, contentBottomInset);
   const topPadding = mobileMessageListTopPadding(topOverlayHeight);
   listBottomPaddingRef.current = bottomPadding;
   listTopPaddingRef.current = topPadding;
@@ -1857,18 +1727,13 @@ export function MessageRenderer({
     isLastReplyFor: (assistantClientId) => lastReplies.has(assistantClientId),
     };
   }, [companion, companionQuote, lastCompanionReplyKey]);
-  const entranceSignature = listData.map(item => item.key).join('\0');
-  const entranceKeys = useMemo(() => entranceSignature ? entranceSignature.split('\0') : [], [entranceSignature]);
-  const enteringMessageKeys = useMessageEntrances(entranceKeys, scrollResetKey,
-    !syncingWhileEmpty && historyPositioning && historyActive && !loadingEarlier);
   const actions: MessageActions & { firstUserMessageClientId?: string } = useMemo(() => ({
     companion,
     companionQuoteActions,
-    enteringMessageKeys,
-    exitingMessageKeys: retainedRows.exiting,
-    onMessageExited: retainedRows.onExited,
+    companionThreads,
     companionWorkingLabel,
-  onOpenCompanionSettings,
+    companionAttentionLabel,
+    onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1876,6 +1741,7 @@ export function MessageRenderer({
     remoteDeviceId,
     onAddMessageToComposer,
     onSideChatMessage,
+    onDiagnoseError,
     onCopyMessageLink,
     onForkMessage,
     onDeleteMessage,
@@ -1910,11 +1776,10 @@ export function MessageRenderer({
   }), [
     companion,
     companionQuoteActions,
-    enteringMessageKeys,
-    retainedRows.exiting,
-    retainedRows.onExited,
+    companionThreads,
     companionWorkingLabel,
-  onOpenCompanionSettings,
+    companionAttentionLabel,
+    onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1931,6 +1796,7 @@ export function MessageRenderer({
     onCopyMessageLink,
     onAddMessageToComposer,
     onSideChatMessage,
+    onDiagnoseError,
     onDeleteMessage,
     onForkMessage,
     onOpenForkOrigin,
@@ -2048,6 +1914,25 @@ export function MessageRenderer({
     setHasNewMessages(false);
     scrollToEndProgrammatically(true, 'explicit');
   }, [cancelHistoryPrependTransaction, scrollToEndProgrammatically]);
+
+  // The send-time follow runs before the local bubble exists, so the bubble would then land through
+  // the instant tail correction. Follow once more, animated, the moment it is in the list: the list
+  // carries the bubble up while it eases in.
+  const followedLocalSendKeysRef = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    if (!historyActive) return;
+    const now = Date.now();
+    for (let index = listData.length - 1; index >= Math.max(0, listData.length - 3); index--) {
+      const item = listData[index];
+      if (item.type !== 'pending_send' && item.type !== 'message') continue;
+      const sentAt = localSendStartedAt(item.key);
+      if (sentAt === null || now - sentAt >= LOCAL_SEND_FRESH_MS) continue;
+      if (followedLocalSendKeysRef.current.has(item.key)) return;
+      followedLocalSendKeysRef.current.add(item.key);
+      scrollToBottom();
+      return;
+    }
+  }, [historyActive, listData, scrollToBottom]);
 
   // A retained list must not replay requests issued while another task was active.
   const followRequestWasActiveRef = useRef(historyActive);
@@ -2310,11 +2195,12 @@ export function MessageRenderer({
     const isDragSample = isDraggingRef.current
       || (isFinalDragSample && dragStartOffsetYRef.current !== null);
     nativeScrollEventSequenceRef.current += 1;
-    const metrics = mobileNativeScrollMetrics(nativeAndroidComposerRef.current
-      ? { ...event.nativeEvent, contentInset: { ...event.nativeEvent.contentInset, bottom: nativeKeyboardInset.current } }
-      : event.nativeEvent);
+    const metrics = {
+      contentHeight: event.nativeEvent.contentSize.height,
+      offsetY: event.nativeEvent.contentOffset.y,
+      viewportHeight: event.nativeEvent.layoutMeasurement.height,
+    };
     const previousOffsetY = scrollMetricsRef.current.offsetY;
-    if (!nativeAndroidComposerRef.current) nativeKeyboardInset.current = event.nativeEvent.contentInset?.bottom ?? 0;
     scrollMetricsRef.current = metrics;
     // A native acknowledgment ends reopening, not merely its reveal animation.
     // Otherwise later measurements keep replaying the old bookmark after the
@@ -2498,9 +2384,11 @@ export function MessageRenderer({
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     richContent?.onScroll();
     reopeningAnchorRef.current = null;
-    const nativeMetrics = mobileNativeScrollMetrics(nativeAndroidComposerRef.current
-      ? { ...event.nativeEvent, contentInset: { ...event.nativeEvent.contentInset, bottom: nativeKeyboardInset.current } }
-      : event.nativeEvent);
+    const nativeMetrics = {
+      contentHeight: event.nativeEvent.contentSize.height,
+      offsetY: event.nativeEvent.contentOffset.y,
+      viewportHeight: event.nativeEvent.layoutMeasurement.height,
+    };
     clearProgrammaticScroll();
     isMomentumScrollingRef.current = false;
     isDraggingRef.current = true;
@@ -2571,46 +2459,14 @@ export function MessageRenderer({
     attemptAutoLoadEarlier();
   }, [attemptAutoLoadEarlier, loadEarlierEvaluationVersion]);
 
-  const handleNativeKeyboardTransition = useCallback(({ nativeEvent }: KeyboardViewportTransition) => {
-    nativeKeyboardTransition.current = nativeEvent.active;
-    cancelTailMotion();
-    tailFollowerRef.current?.reset();
-    if (!nativeEvent.active) {
-      const previous = nativeKeyboardInset.current;
-      nativeKeyboardInset.current = nativeEvent.bottom;
-      scrollMetricsRef.current = { ...scrollMetricsRef.current,
-        viewportHeight: scrollMetricsRef.current.viewportHeight + previous - nativeEvent.bottom };
-      // At start, bottom is a destination, not the native inset yet. Publishing
-      // it early lets LegendList seek to a range UIKit has not opened.
-      listRef.current?.reportContentInset({ bottom: nativeEvent.bottom });
-      getTailFollower().contentChanged();
-    }
-  }, [cancelTailMotion, getTailFollower]);
-
-  const handleViewportInsetChange = useCallback(({ nativeEvent }: ViewportInsetChange) => {
-    // Native updates the reservation and any pinned offset in one transaction.
-    // A reply may still be growing beyond that position; resume the same tail
-    // trajectory after cancelling its stale coordinates, rather than abandoning
-    // follow when the recommendation reappears at the end of the reply.
-    if (!nativeAndroidComposerRef.current) cancelTailMotion();
-    nativeKeyboardInset.current = nativeEvent.bottom;
-    scrollMetricsRef.current = {
-      contentHeight: nativeEvent.contentHeight,
-      viewportHeight: nativeEvent.viewportHeight,
-      offsetY: nativeEvent.offsetY,
-    };
-    listRef.current?.reportContentInset({ bottom: nativeEvent.bottom });
-    getTailFollower().contentChanged();
-  }, [cancelTailMotion, getTailFollower]);
-
   const handleListLayout = useCallback((event: LayoutChangeEvent) => {
-    const viewportHeight = event.nativeEvent.layout.height - nativeKeyboardInset.current;
+    const viewportHeight = event.nativeEvent.layout.height;
     if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return;
     scrollMetricsRef.current = { ...scrollMetricsRef.current, viewportHeight };
     markMobileMvcpSettle();
-    if (nearBottomRef.current) getTailFollower().contentChanged();
+    if (nearBottomRef.current) runStickToLatestVerify();
     acknowledgeCompanionReadRef.current();
-  }, [markMobileMvcpSettle, getTailFollower]);
+  }, [markMobileMvcpSettle, runStickToLatestVerify]);
 
   const handleListMetricsChange = useCallback((metrics: LegendListMetrics) => {
     listMetricsRef.current = metrics;
@@ -2673,9 +2529,6 @@ export function MessageRenderer({
     if (listData.length === 0) {
       initialRevealProgress.setValue(1);
       setListRevealed(true);
-      // An already-open empty task is positioned. Its first live message must
-      // not restart the whole-history hidden/reveal cycle.
-      if (!syncingWhileEmpty && historyPositioning) initialAnchorDoneRef.current = true;
       return;
     }
 
@@ -2739,8 +2592,6 @@ export function MessageRenderer({
     markProgrammaticScroll,
     initialRevealProgress,
     listData.length,
-    syncingWhileEmpty,
-    historyPositioning,
     scrollResetKey,
     scrollToEndProgrammatically,
   ]);
@@ -2914,18 +2765,7 @@ export function MessageRenderer({
       onTouchCancel={handleHistoryTouchCancel}
     >
       <Animated.View style={[styles.messageList, { opacity: initialRevealOpacity }]}>
-      <NativeChatViewport ref={nativeTailRef} style={styles.messageList} autoFollow={false}
-        composerSurfaceId={nativeAndroidComposer ? composerSurfaceId : undefined} composerContentPadding={bottomPadding}
-        getObservedInset={() => nativeKeyboardInset.current} onViewportInsetChange={handleViewportInsetChange}
-        active={listRevealed && historyPositioning}
-        followLatest={listRevealed && !isAwayFromBottom && !readingOlderRef.current && historyPositioning}>
-      <NativeKeyboardViewport style={styles.messageList} enabled={nativeKeyboardViewport && historyActive}
-        composerSurfaceId={composerSurfaceId} composerContentPadding={bottomPadding}
-        onViewportInsetChange={handleViewportInsetChange}
-        followLatest={listRevealed && !isAwayFromBottom && !readingOlderRef.current && historyPositioning}
-        onKeyboardTransition={handleNativeKeyboardTransition}>
-      <AnimatedLegendList
-        refScrollView={animatedScrollRef}
+      <LegendList
         keyboardShouldPersistTaps="handled"
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
@@ -2942,16 +2782,17 @@ export function MessageRenderer({
         // 内容形态下会与布局结算互相触发,形成无限 onScroll 风暴把 JS 线程打满——表现为
         // 冷开会话消息区空白、无 loading、返回键无响应,只能杀 App(2026-07 模拟器逐项
         // 二分实锤,3.3.2 / 3.3.3 均复现)。
-        alignItemsAtEnd
+        alignItemsAtEnd={!conversationHeader}
         maintainScrollAtEnd={false}
         // iOS uses LegendList/RN's atomic data/size anchoring while reading history. Android history
         // prepends temporarily disable the whole prop because RN exposes one native switch: leaving
         // either flag on would race the app-owned key/offset correction there.
         maintainVisibleContentPosition={historyPrependNativeMvcpDisabled
           ? false
-          : { data: anchorVisibleRowsOnDataChange, size: anchorVisibleRowsOnDataChange }}
+          : { data: anchorVisibleRowsOnDataChange, size: true }}
         contentContainerStyle={[
           styles.messages,
+          conversationHeader ? styles.messagesWithRoot : undefined,
           { paddingBottom: bottomPadding, paddingTop: topPadding },
           viewportLayout.wideViewport && styles.messagesWide,
           viewportLayout.wideViewport && { maxWidth: viewportLayout.contentMaxWidth },
@@ -2959,8 +2800,9 @@ export function MessageRenderer({
         ListEmptyComponent={syncingWhileEmpty
           ? <SyncingMessages />
           : <EmptyMessages testID={emptyTestID} copy={emptyMessage} />}
-        ListHeaderComponent={
-          loadEarlierAction.visible ? (
+        ListHeaderComponent={<>
+          {conversationHeader}
+          {loadEarlierAction.visible ? (
             <MessageListActionButton
               accessibilityLabel={loadEarlierAction.accessibilityLabel}
               disabled={loadEarlierAction.disabled}
@@ -2970,8 +2812,8 @@ export function MessageRenderer({
             >
               <Text style={styles.loadEarlierText}>{loadEarlierAction.label}</Text>
             </MessageListActionButton>
-          ) : null
-        }
+          ) : null}
+        </>}
         ListFooterComponent={queueFooter ? <>{queueFooter}</> : null}
         onLayout={handleListLayout}
         onMetricsChange={handleListMetricsChange}
@@ -2991,8 +2833,6 @@ export function MessageRenderer({
         onViewableItemsChanged={handleViewableItemsChanged}
         renderScrollComponent={renderScrollComponent}
       />
-      </NativeKeyboardViewport>
-      </NativeChatViewport>
       </Animated.View>
       {shareSelectionActive && stickyShareClientId ? (
         // 与分享消息行同构，保持吸顶 check 和行内 check 水平对齐。
@@ -3015,8 +2855,6 @@ export function MessageRenderer({
       {hasNewMessages || showJumpToLatest ? (
         // 跳到底部浮标(Telegram 风):右下角半透明圆形 chevron,弱存在感;
         // 有未读新消息时不换样式,只在圆标右上角加一颗 CTA 色小圆点提示。
-        <DockKeyboardLift active={nativeKeyboardViewport} restingBottom={0} keyboardGap={0}
-          pointerEvents="box-none" style={StyleSheet.absoluteFill}>
         <MessageListActionButton
           accessibilityLabel={hasNewMessages ? t('message.renderer.newMessagesToBottom') : t('message.renderer.jumpToBottom')}
           onPress={scrollToBottom}
@@ -3026,7 +2864,6 @@ export function MessageRenderer({
           <ChevronDown color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.regular} />
           {hasNewMessages ? <View style={styles.scrollToBottomDot} testID="message.newMessageDot" /> : null}
         </MessageListActionButton>
-        </DockKeyboardLift>
       ) : null}
       {imageLightboxOpen && payload?.kind === 'media' && lightboxImages ? (
         // 图片 / 视频走 IM 级全屏查看器(手势缩放/下滑关闭/横滑翻页);其余 payload 走通用查看器。
@@ -3148,7 +2985,7 @@ const RenderItemView = memo(function RenderItemView({
       node = <AgentTaskCard item={item} screenWidth={actions.screenWidth} />;
       break;
     case 'work_group':
-      node = <WorkGroupCard item={item} actions={actions} />;
+      node = item.teammateJournal ? <TeammateProcessCard item={item} actions={actions} /> : <WorkGroupCard item={item} actions={actions} />;
       break;
     case 'subagent_group':
       node = <SubagentCard item={item} actions={actions} />;
@@ -3214,15 +3051,21 @@ const RenderItemView = memo(function RenderItemView({
   const alignWithReplies = !!actions.companionAvatar && actions.companion
     && (item.type === 'work_group' || (item.type === 'message' && !!item.message.companion));
   const aligned = alignWithReplies ? <View style={styles.companionAvatarInset}>{node}</View> : node;
-  // The timestamp and work/status headers occupy space too. Keep the entire row
-  // inside one stable entrance shell across sending, acknowledgement and reply.
+  // Your own send eases in once, as its local bubble (both chats). Its echo keeps the same key and
+  // wrapper, so it neither remounts nor replays. Companion chats also ease in a new message or
+  // finished reply (M4 / M5).
+  const localSendAt = item.type === 'pending_send' || item.type === 'message'
+    ? localSendStartedAt(item.key) : null;
+  const entering = localSendAt !== null
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={localSendAt} kind="send">{aligned}</CompanionEntering>
+    : actions.companion && item.type === 'message' && !item.message.systemCardType
+    && (item.message.kind === 'user' || item.message.kind === 'assistant')
+    ? <CompanionEntering key={item.key} id={item.key} createdAt={item.message.createdAt} kind={item.message.kind === 'user' ? 'send' : 'reply'}>{aligned}</CompanionEntering>
+    : aligned;
   return (
     <View style={focused ? styles.focusedItem : undefined} testID={focused ? 'message.focusedItem' : undefined}>
-      <CompanionEntering key={item.key} id={item.key} arrivedAt={actions.enteringMessageKeys?.get(item.key)}
-        open={!actions.exitingMessageKeys?.has(item.key)} onExited={actions.onMessageExited}>
-        {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
-        {aligned}
-      </CompanionEntering>
+      {groupTimestamp !== undefined ? <CompanionTimeGroupStamp timestamp={groupTimestamp} /> : null}
+      {entering}
     </View>
   );
 });
@@ -3635,7 +3478,7 @@ function MessageBubble({
   // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
   // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
   // 不挂。分享态只保留与导出图片一致的消息内容,不显示操作图标、时间或费用。
-  // 流式期间不显示操作，但保留它最终占用的位置，避免收尾时把正在看的正文推走。
+  // 流式回复不显示操作，但保留最终操作行的占位，收尾时不把正在看的正文推走。
   const showCompletedActionBar = !shareSelectionActive && mobileMessageShowsActionBar({
     hasSystemCard: !!item.message.systemCardType,
     isStreamingAssistant,
@@ -3646,8 +3489,11 @@ function MessageBubble({
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
+  const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
+    (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCost(item.message.turnMoney)
+    ? moneySplit ? [moneySplit.conversation.amount > 1e-9 ? formatMessageTurnCost(moneySplit.conversation) : '',
+        ...moneySplit.additional.map(formatMessageTurnCost)].filter(Boolean).join(' + ') : ''
     : '';
   // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
   const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
@@ -3756,7 +3602,14 @@ function MessageBubble({
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
-  const hasActions = actionBar.items.length > 0 || canShare;
+  const threadEligible = !actions.intermediateProcess && actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
+    && !!companionReplyQuoteFor(item.message);
+  const hasActions = !actions.intermediateProcess && (actionBar.items.length > 0 || canShare || !!threadEligible);
+  const reserveActionSlot = !actions.intermediateProcess && !shareSelectionActive
+    && !actions.companion
+    && isStreamingAssistant
+    && !item.message.systemCardType
+    && !hasActions;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const forkBusy = actionBusy && actions.busyAction === 'fork';
   const disabled = !!actions.busyClientId;
@@ -3870,16 +3723,12 @@ function MessageBubble({
     </Text>
   ) : null;
   const costText = turnCost ? (
-    <Text
+    <MessageUsageCost key="cost" label={turnCost} style={styles.messageActionMeta}
       accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
         ? t('message.renderer.turnCostEstimate', { cost: turnCost })
         : t('message.renderer.turnCost', { cost: turnCost })}
-      key="cost"
-      style={styles.messageActionMeta}
-      testID="message.turnCostText"
-    >
-      {turnCost}
-    </Text>
+      deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
+      clientId={item.message.source.clientId} />
   ) : turnTokens ? (
     <Text
       accessibilityLabel={t('message.renderer.turnTokens', { tokens: turnTokens })}
@@ -3923,6 +3772,7 @@ function MessageBubble({
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
+        actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
         isUser && !item.message.systemCardType && userBubbleColors
           && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
@@ -4160,9 +4010,15 @@ function MessageBubble({
       ) : null}
       {item.message.role === 'error' ? (
         <ErrorNotice message={displayBubbleBody}>
-          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError} /> : null}
+          {item.message.rawError ? <AgentErrorDetails key={item.message.key} message={item.message.rawError}
+            onDiagnose={actions.onDiagnoseError ? () => actions.onDiagnoseError!({
+              message: displayBubbleBody, details: item.message.rawError!,
+            }) : undefined} /> : null}
         </ErrorNotice>
       ) : bubbleShown ? bubble : null}
+      {threadEligible && actions.companionThreads ? <View style={styles.companionThreadSummary}>
+        <CompanionThreadSummary message={item.message} topics={actions.companionThreads} />
+      </View> : null}
       {actions.companion && item.message.kind === 'assistant' && item.message.body.trim() ? (
         <CompanionLearningFooter receipts={item.message.source.agentMeta?.botLearning}
           onOpenSettings={actions.onOpenCompanionSettings} />
@@ -4189,6 +4045,7 @@ function MessageBubble({
       {hasActions && actions.companion ? <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[
+          ...(threadEligible ? [{ id: 'thread', title: t(actions.companionThreads?.threads.has(clientId) ? 'groupChat.thread.open' : 'groupChat.thread.create'), image: 'bubble.left.and.bubble.right', disabled: actions.companionThreads?.busy }] : []),
           ...(canCopy ? [{ id: 'copy', title: copyActionLabel(copyState), image: 'doc.on.doc', disabled: copyState === 'copying' }] : []),
           ...(canShare ? [{ id: 'share', title: t('session.shareImage.shareMessage'), image: 'square.and.arrow.up' }] : []),
           // Desktop's teammate action bar omits fork and per-turn cost/tokens: the Bot owns its one timeline.
@@ -4198,23 +4055,21 @@ function MessageBubble({
         onAction={id => {
           // Reply quotes what can be quoted; other rows (errors, system cards) keep inserting their link.
           const quote = id === 'add-to-chat' && companionQuote ? companionReplyQuoteFor(item.message) : null;
-          if (quote) companionQuote?.onQuote(quote);
+          if (id === 'thread') actions.companionThreads?.open(item.message);
+          else if (quote) companionQuote?.onQuote(quote);
           else if (id === 'copy') selectControlAction(id);
           else if (id === 'share') actions.onEnterShareSelection?.(clientId);
           else if (messageMenu.some(item => item.id === id)) selectMenuAction(id as MobileMessageMenuActionId);
-        }} /> : (
-        <View style={styles.messageActionHeight}>
-        <AnimatedContentHeight open={hasActions || (!actions.companion && isStreamingAssistant && !shareSelectionActive)}>
-        <View style={styles.messageActionSpacing}>
+        }} /> : hasActions || reserveActionSlot ? (
         <View
           style={[
             styles.messageActionBar,
-            styles.messageActionSlot,
+            reserveActionSlot && styles.messageActionSlot,
             actionBar.align === 'right' ? styles.userMessageActionBar : styles.agentMessageActionBar,
           ]}
-          testID="message.actionBar"
+          testID={hasActions ? 'message.actionBar' : 'message.actionSlot'}
         >
-          {actionBar.items.map((id) => {
+          {hasActions ? actionBar.items.map((id) => {
             if (id === 'time') return timeText;
             if (id === 'cost') return costText;
             if (id === 'more') {
@@ -4266,8 +4121,8 @@ function MessageBubble({
               );
             }
             return null;
-          })}
-          {canShare && !actionBar.items.includes('copy') ? (
+          }) : null}
+          {hasActions && canShare && !actionBar.items.includes('copy') ? (
             <MessageShareButton
               buttonSize={actionBar.buttonSize}
               iconSize={actionBar.iconSize}
@@ -4275,10 +4130,7 @@ function MessageBubble({
             />
           ) : null}
         </View>
-        </View>
-        </AnimatedContentHeight>
-        </View>
-      )}
+      ) : null}
       <MessageActionSheet
         disabledActions={actionBusy ? ['rewind', 'delete'] : undefined}
         items={messageMenu}
@@ -4912,6 +4764,69 @@ function AgentTaskCard({
   );
 }
 
+/** Teammate-specific presentation; ordinary task folds keep their existing contract. */
+function TeammateProcessCard({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+  const title = useTeammateElapsedTitle(item.isStreaming === true, item.startedAtMs, item.durationMs);
+  return <TeammateProcess id={item.key} running={item.isStreaming} title={item.isStreaming && actions.companionAttentionLabel || title}>
+    <TeammateProcessContents item={item} actions={actions} />
+  </TeammateProcess>;
+}
+
+function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const flattened = useMemo(() => {
+    const leaves: MobileWorkGroupItem['children'] = [];
+    const loaders: NonNullable<MobileWorkGroupItem['deferred']>[] = [];
+    const walk = (group: MobileWorkGroupItem) => {
+      if (group.deferred) loaders.push(group.deferred);
+      group.children.forEach(child => child.type === 'work_group' ? walk(child) : leaves.push(child));
+    };
+    walk(item);
+    return { leaves, loaders };
+  }, [item]);
+  const loadersRef = useRef(flattened.loaders);
+  loadersRef.current = flattened.loaders;
+  const loaderKey = flattened.loaders.map(loader => `${loader.owner}:${loader.key}`).join('|');
+  useLayoutEffect(() => {
+    const loaders = loadersRef.current;
+    const releases = loaders.map(loader => {
+      if (loader.setVisible) return loader.setVisible(true, false);
+      if (!loader.expanded) loader.toggle();
+      return undefined;
+    });
+    return () => releases.forEach(release => release?.());
+  }, [loaderKey]);
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined, intermediateProcess: true }), [actions]);
+  const segments = useMemo(() => segmentTeammateWork(flattened.leaves, child => child.type === 'thinking' || child.type === 'tool_group'), [flattened.leaves]);
+  return <>
+    {segments.map((segment, index) => segment.kind === 'content'
+      ? <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
+      : <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
+          streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />)}
+    {flattened.loaders.some(loader => loader.loading) && <ActivityIndicator color={colors.textSecondary} />}
+    {flattened.loaders.filter(loader => loader.failed).map(loader => <Pressable key={loader.key} accessibilityRole="button"
+      onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>)}
+    {item.isStreaming && segments.at(-1)?.kind === 'content' && <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} failed={false} />}
+  </>;
+}
+function TeammateProcessActivities({ id, items, actions, streaming, last }: {
+  id: string; items: MobileWorkGroupItem['children']; actions: MessageActions; streaming: boolean; last: boolean;
+}) {
+  const { t } = useTranslation();
+  const projection = useMemo(() => projectMobileWorkActivities(items, streaming, true), [items, streaming]);
+  const summary = useMemo(() => summarizeTeammateWork(projection.activities), [projection]);
+  const title = teammateWorkSummaryText({ ...summary, thinking: summary.thinking || items.some(child => child.type === 'thinking') }, streaming, t);
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
+  return <TeammateWorkSegment id={id} title={title} running={streaming && (summary.running || !summary.toolCount)} last={last}
+    hasTools={summary.toolCount > 0} failed={summary.failedCount > 0}>
+    {items.map(child => child.type === 'tool_group' ? <View key={child.key}>
+      {(projection.toolActivitiesByChildKey.get(child.key) ?? []).map(activity => <WorkToolActivityRow key={activity.key}
+        activity={activity} actions={actions} contentLayout={layout} />)}
+    </View> : null)}
+  </TeammateWorkSegment>;
+}
+
 function WorkGroupCard({
   item,
   actions,
@@ -4934,11 +4849,11 @@ function WorkGroupCard({
   const lineMode = lines !== undefined;
   const deferredRef = useRef(item.deferred);
   deferredRef.current = item.deferred;
-  useLayoutEffect(() => {
-    const current = deferredRef.current;
-    current?.setVisible?.(expanded, isStreaming && !lineMode);
-    return () => current?.setVisible?.(false, false);
-  }, [item.deferred?.owner, item.deferred?.key, expanded, isStreaming, lineMode]);
+  // The read tail regroups this item, so its own isStreaming must not drive the read.
+  useLayoutEffect(
+    () => deferredRef.current?.setVisible?.(expanded, true),
+    [item.deferred?.owner, item.deferred?.key, item.deferred?.livePreview, expanded],
+  );
   const layout = useMemo(() => buildMessageHierarchyLayout({
     screenWidth: actions.screenWidth,
     summaryCount: header.summaryCount,
@@ -5116,7 +5031,7 @@ function WorkGroupElapsed({ sinceIso }: { sinceIso: string | undefined }) {
   const elapsedMs = useLiveElapsedMs(true, sinceIso);
   return elapsedMs === null
     ? null
-    : <Text numberOfLines={1} style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>;
+    : <Text style={styles.workGroupElapsed}>{formatLocalizedDuration(elapsedMs)}</Text>;
 }
 
 const WorkToolActivityRow = memo(function WorkToolActivityRow({
@@ -5229,10 +5144,7 @@ function SubagentCard({
   const styles = useThemedStyles(makeStyles);
   const [expanded, toggleExpanded] = useFoldableExpandedState(item.key, false);
   const deferred = item.deferred;
-  useEffect(() => {
-    deferred?.setVisible?.(expanded, false);
-    return () => deferred?.setVisible?.(false, false);
-  }, [deferred?.owner, deferred?.key, expanded]);
+  useEffect(() => deferred?.setVisible?.(expanded, false), [deferred?.owner, deferred?.key, expanded]);
   const title = item.header.subagentType
     ? t('message.renderer.subagentTyped', { type: item.header.subagentType })
     : t('message.renderer.subagent');
@@ -5383,7 +5295,7 @@ function FoldablePanel({
         {chevronPosition === 'trailing' ? chevron : null}
       </FoldableHeaderButton>
       {footer}
-      <AnimatedContentHeight open={expanded || !!collapsedBody}>
+      {expanded ? (
         <View style={[
           styles.foldBody,
           variant === 'plain'
@@ -5393,9 +5305,21 @@ function FoldablePanel({
               paddingHorizontal: layout.foldBodyPaddingHorizontal,
             },
         ]}>
-          {expanded ? children : collapsedBody}
+          {children}
         </View>
-      </AnimatedContentHeight>
+      ) : collapsedBody ? (
+        <View style={[
+          styles.foldBody,
+          variant === 'plain'
+            ? styles.foldBodyPlain
+            : {
+              paddingBottom: layout.foldBodyPaddingBottom,
+              paddingHorizontal: layout.foldBodyPaddingHorizontal,
+            },
+        ]}>
+          {collapsedBody}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -5544,10 +5468,10 @@ function MobileAgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
               <Text style={styles.agentSwitchModel} numberOfLines={1}>{toModel}</Text>
             </>
           ) : null}
-          {resumed ? (
+          {resumed || data?.nativeHistory === 'fallback' ? (
             <>
               <Text style={styles.agentSwitchDot}>·</Text>
-              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t('message.renderer.sessionResumedPill')}</Text>
+              <Text style={styles.agentSwitchPillText} numberOfLines={1}>{t(data?.nativeHistory === 'fallback' ? 'message.renderer.sessionFallbackPill' : 'message.renderer.sessionResumedPill')}</Text>
             </>
           ) : null}
           {handoff ? (
@@ -6399,6 +6323,7 @@ function LinkPathChipSpan({
   return (
     <ChatPathChipSpan
       candidate={candidate}
+      explicitLink={!bare}
       chipStyle={
         codeStyled
           ? [baseStyle, styles.markdownInlineCode, underlineDecoration(styles, baseStyle, styles.markdownPathChip)]
@@ -6781,8 +6706,8 @@ export function AttachmentStrip({
  * ToolMediaBlock — tool 产出媒体的独立视觉消息(对齐桌面 'tool_media' RenderItem):
  * agent 出的图 / 视频(lizi_art、飞书拉图等)跳出 tool_group 折叠卡,紧跟其后作为
  * 独立块渲染,用户不展开工具行也能一眼看到。图片走 attachment 变体(原始宽高比
- * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);video/audio 保持占位
- * 卡片、点开查看器播放。媒体按 url 去重(与 shared 发射判定同一口径)。
+ * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);视频共用正文的原生预览，
+ * 音频保留卡片。媒体按 url 去重(与 shared 发射判定同一口径)。
  */
 function ToolMediaBlock({
   item,
@@ -6924,7 +6849,7 @@ function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize,
  * 图片:可直接预览的(http/data:)直接渲染缩略图;桌面端媒体(xdt-image://)mount 时
  * 经取件队列懒取件后渲染缩略图(取件中为同尺寸静默占位帧,失败回落占位卡片文案但
  * 保持同尺寸帧避免列表 reflow)。点击一律走 onOpen 打开 payload 查看器看原图。
- * video/audio 与非桌面端不可预览图片保持占位卡片现状。
+ * 视频与正文组件共用原生首帧预览；audio 与不可预览图片保留占位卡片。
  *
  * variant(对齐桌面版 ChatImageView 的两档):
  *   - 'card'      :工具产出媒体,固定小帧 cover 裁切;
@@ -6955,6 +6880,7 @@ function MediaPreview({
   usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const visible = useContext(MessageHeavyContentVisibilityContext);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
   const durableUri = media.kind === 'image' && variant === 'attachment'
     ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
@@ -7037,6 +6963,11 @@ function MediaPreview({
     attachmentIntrinsicSizeCache.set(media.url, { width, height });
     setIntrinsicSize({ width, height });
   }, [media.url, setIntrinsicSize]);
+
+  if (media.kind === 'video' && !presentationOnly) {
+    return <InlineVideoPlayer key={media.url} url={media.url} label={label}
+      width={layout.markdownTableAvailableWidth} visible={visible} resolve={onResolveRemoteMedia} onOpen={onOpen} />;
+  }
 
   if (localUri) {
     return (
@@ -7327,6 +7258,7 @@ function MessageContentOpenButton({
 }) {
   const styles = useThemedStyles(makeStyles);
   const interactionDisabled = disabled || !onPress;
+  const onLongPress = useContext(MessageContentLongPressContext);
   if (presentationOnly) return <View style={style} testID={testID}>{children}</View>;
   return (
     <Pressable
@@ -7335,6 +7267,8 @@ function MessageContentOpenButton({
       accessibilityState={{ disabled: interactionDisabled }}
       disabled={interactionDisabled}
       onPress={interactionDisabled ? undefined : onPress}
+      onLongPress={interactionDisabled ? undefined : onLongPress}
+      delayLongPress={350}
       style={({ pressed }) => [
         style,
         pressed && styles.pressed,
@@ -7517,7 +7451,7 @@ function MessagePayloadModal({
             testID="message.payloadMermaidDiagram"
             zoomable
           />
-          <View style={[styles.payloadFloatingActions, { top: modalSafeArea.paddingTop }]}>
+          <View style={[styles.payloadFloatingActions, { top: modalSafeArea.paddingTop, right: safeAreaInsets.right + spacing.lg }]}>
             {imageAnnotation ? (
               <PayloadHeaderActionButton
                 accessibilityLabel={t('message.renderer.annotateSendToChat')}
@@ -7571,6 +7505,9 @@ function MessagePayloadModal({
           styles.payloadModal,
           {
             paddingBottom: modalSafeArea.paddingBottom,
+            // Landscape side insets hold the notch or a vertical system bar (Duo).
+            paddingLeft: safeAreaInsets.left,
+            paddingRight: safeAreaInsets.right,
             paddingTop: modalSafeArea.paddingTop,
           },
         ]}
@@ -8810,6 +8747,7 @@ function headingSizeStyle(
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageFrame: { flex: 1, minHeight: 0 },
   messageList: { flex: 1 },
+  messagesWithRoot: { justifyContent: 'flex-start' },
   messages: {
     flexGrow: 1,
     // Anchor a short conversation to the bottom (just above the composer) like a normal chat,
@@ -8877,23 +8815,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     maxWidth: '100%',
   },
+  companionThreadSummary: { maxWidth: '100%', marginTop: -2 },
   userMessageItem: {
     alignItems: 'flex-end',
   },
   agentMessageItem: {
     alignItems: 'stretch',
   },
-  bubble: {
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.xs,
-    padding: spacing.md,
-  },
-  bubbleCompact: {
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
+  bubble: messageBubbleBase,
+  bubbleCompact: compactMessageBubble,
   bubbleRich: {
     gap: spacing.sm,
   },
@@ -8912,14 +8842,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     marginTop: spacing.sm,
     textAlign: 'center',
   },
-  userBubble: {
-    alignSelf: 'flex-end',
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    maxWidth: '86%',
-    minWidth: 0,
-    overflow: 'hidden',
-  },
+  userBubble: userMessageBubble(colors),
   agentBubble: {
     alignSelf: 'stretch',
     backgroundColor: colors.surface,
@@ -9483,15 +9406,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     gap: 2,
     marginTop: 0,
   },
+  // Keep the row occupied while a reply streams so completion controls can appear
+  // without changing the message's measured height in the middle of a turn.
   messageActionSlot: { minHeight: MESSAGE_CONTROL_TOUCH_SIZE },
-  // Keep the slot mounted when an intermediate reply finishes without actions.
-  // Its adjacent gap exits with the row instead of disappearing in one frame.
-  // User rows align children to the right. The height animator measures an
-  // absolutely positioned child, so its wrapper cannot derive an intrinsic
-  // width from that child: without stretching, the buttons wrap into a tall
-  // zero-width column and add/remove a large blank area during acknowledgement.
-  messageActionHeight: { alignSelf: 'stretch', marginTop: -2 },
-  messageActionSpacing: { paddingTop: 2 },
   userMessageActionBar: { justifyContent: 'flex-end' },
   agentMessageActionBar: { justifyContent: 'flex-start' },
   messageIconAction: {
@@ -9807,7 +9724,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     position: 'absolute',
-    right: spacing.lg,
   },
   // 浮动按钮需要实底色,否则悬在图表线条上看不清。
   payloadFloatingButton: {
@@ -10027,13 +9943,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
 export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const instanceKey = useId();
   const origin = useContext(ChatFilePathContext);
-  const renderMedia = (node: RichNode) => <RichAnswerMedia node={node} body={props} />;
+  const heavyContentVisible = useContext(MessageHeavyContentVisibilityContext);
+  const withVisibility = (content: ReactNode, visible: boolean) =>
+    <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>;
+  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={props} />, visible);
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
   if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
   return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
+        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
     : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
 }
 
@@ -10049,7 +9968,7 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
   const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
   const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
   const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
-  // Images outside workdir retain explicit-open. Video resolves only on explicit play.
+  // Images outside workdir retain explicit-open. Managed videos prepare a paused preview.
   if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
   const label = richString(node, 'alt', node.kind);
   const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
@@ -10069,7 +9988,8 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
     mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
   return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
     {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
-      width={width} visible={visible} resolve={resolver} />
+      width={width} visible={visible} resolve={resolver}
+      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} />
       : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
       onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}

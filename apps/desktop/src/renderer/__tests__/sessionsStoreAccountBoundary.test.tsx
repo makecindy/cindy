@@ -11,22 +11,65 @@ type SpendPayload = {
 };
 type OwnerStamp = { dataOwnerId: string | null; ownerGeneration: number };
 
+const stickyOrigin = vi.hoisted(() => ({
+  deviceBySession: new Map<string, string>(),
+}));
+
+vi.mock('@/features/device-link/stickySessionOrigin', () => ({
+  getStickySessionDeviceId: (sessionId: string | null | undefined): string | undefined =>
+    sessionId ? stickyOrigin.deviceBySession.get(sessionId) : undefined,
+}));
+
 const mocks = vi.hoisted(() => {
   let spendListener: ((payload: SpendPayload, ownerStamp?: OwnerStamp) => void) | undefined;
+  let sessionPatchListener:
+    | ((payload: { sessionId: string; patch: Partial<Session> }, ownerStamp?: OwnerStamp) => void)
+    | undefined;
+  let sessionCreatedListener:
+    | ((payload: { sessionId: string }, ownerStamp?: OwnerStamp) => void)
+    | undefined;
   const onUsageSessionSpendChanged = vi.fn(
     (listener: (payload: SpendPayload, ownerStamp?: OwnerStamp) => void) => {
       spendListener = listener;
       return vi.fn();
     },
   );
+  const onSessionPatched = vi.fn(
+    (
+      listener: (payload: { sessionId: string; patch: Partial<Session> }, ownerStamp?: OwnerStamp) => void,
+    ) => {
+      sessionPatchListener = listener;
+      return vi.fn();
+    },
+  );
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { onUsageSessionSpendChanged },
+    value: {
+      onUsageSessionSpendChanged,
+      localDb: {
+        sessionsPush: {
+          onPatched: onSessionPatched,
+          onCreated: vi.fn((listener: typeof sessionCreatedListener) => {
+            sessionCreatedListener = listener;
+            return vi.fn();
+          }),
+        },
+      },
+    },
   });
   return {
     list: vi.fn(),
+    emitSessionCreated(sessionId: string, ownerStamp?: OwnerStamp): void {
+      sessionCreatedListener?.({ sessionId }, ownerStamp);
+    },
     emitSessionSpend(payload: SpendPayload, ownerStamp?: OwnerStamp): void {
       spendListener?.(payload, ownerStamp);
+    },
+    emitSessionPatch(
+      payload: { sessionId: string; patch: Partial<Session> },
+      ownerStamp?: OwnerStamp,
+    ): void {
+      sessionPatchListener?.(payload, ownerStamp);
     },
   };
 });
@@ -42,16 +85,20 @@ import {
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { emitRefresh } from '@/lib/sessionsBus';
 
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
 } {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function session(id: string, partial: Partial<Session> = {}): Session {
@@ -61,6 +108,7 @@ function session(id: string, partial: Partial<Session> = {}): Session {
 describe('sessionsStore account boundaries', () => {
   beforeEach(() => {
     mocks.list.mockReset();
+    stickyOrigin.deviceBySession.clear();
     sessionsStore.reset();
   });
 
@@ -68,6 +116,242 @@ describe('sessionsStore account boundaries', () => {
     cleanup();
     sessionsStore.reset();
     dataOwnerTesting.reset();
+  });
+
+  // TD-2, unit: real bus / preload listener -> store -> useCCSessions. Existing
+  // owner tests do not cover creation during an initial read or refresh. Delay
+  // the old A snapshot, deliver a notification for B, then finish out of order.
+  // The rendered hook must retain A+B without another user refresh.
+  it.each([
+    { source: 'bus', preloaded: false },
+    { source: 'bus', preloaded: true },
+    { source: 'created push', preloaded: false },
+    { source: 'created push', preloaded: true },
+  ])('keeps new tasks from $source during a pending read (preloaded=$preloaded)', async ({ source, preloaded }) => {
+    setDataOwnerGeneration('owner-a', 1);
+    const a = session('a', { status: 'active' });
+    const b = session('b', { status: 'active' });
+    if (preloaded) {
+      mocks.list.mockResolvedValueOnce([a]);
+      await sessionsStore.ensureByFilter('active');
+    }
+    const oldRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(oldRead.promise).mockResolvedValue([a, b]);
+    const view = renderHook(() => useCCSessions());
+    const announce = () => {
+      if (source === 'bus') emitRefresh();
+      else mocks.emitSessionCreated('b', { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    };
+    if (preloaded) act(announce);
+    await act(async () => { announce(); });
+    await act(async () => { oldRead.resolve([a]); });
+    expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['a', 'b']);
+    expect(view.result.current.isLoading).toBe(false);
+    expect(view.result.current.error).toBeNull();
+    // fresh is the existing IPC contract that bypasses Main's old in-flight read.
+    expect(mocks.list).toHaveBeenLastCalledWith(1000, 'active', { fresh: true });
+    expect(sessionsStore.getByFilter('archived')).toBeNull();
+  });
+
+  // PR #7749 review: initial hook -> bus / created push -> hook loading/error.
+  // The successful-response cases above miss replacement failures and stale errors.
+  // Unit: controlled reads settle in either order, including a still-pending old read.
+  it.each([true, false])('reports a replacement failure without waiting for the superseded read (oldFirst=%s)', async (oldFirst) => {
+    const oldRead = deferred<Session[]>();
+    const freshRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(freshRead.promise);
+    const view = renderHook(() => useCCSessions());
+    act(() => emitRefresh());
+    const refresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
+    if (oldFirst) await act(async () => { oldRead.resolve([session('old')]); });
+    expect(view.result.current.isLoading).toBe(true);
+
+    const failure = new Error('replacement failed');
+    await act(async () => {
+      freshRead.reject(failure);
+      await refresh;
+    });
+    expect(view.result.current.isLoading).toBe(false);
+    expect(view.result.current.error).toBe(failure);
+    expect(view.result.current.sessions).toEqual([]);
+    if (!oldFirst) {
+      await act(async () => { oldRead.resolve([session('old')]); });
+      expect(view.result.current.error).toBe(failure);
+      expect(view.result.current.isLoading).toBe(false);
+    }
+  });
+
+  it.each([true, false])('ignores a superseded initial read failure around replacement success (oldFirst=%s)', async (oldFirst) => {
+    const oldRead = deferred<Session[]>();
+    const freshRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(freshRead.promise);
+    const view = renderHook(() => useCCSessions());
+    act(() => emitRefresh());
+    const refresh = sessionsStore.ensureByFilter('active');
+    if (oldFirst) {
+      await act(async () => { oldRead.reject(new Error('superseded failure')); });
+      expect(view.result.current.error).toBeNull();
+      expect(view.result.current.isLoading).toBe(true);
+    }
+    await act(async () => {
+      freshRead.resolve([session('new')]);
+      await refresh;
+    });
+    if (!oldFirst) await act(async () => { oldRead.reject(new Error('superseded failure')); });
+    expect(view.result.current.sessions.map(({ id }) => id)).toEqual(['new']);
+    expect(view.result.current.isLoading).toBe(false);
+    expect(view.result.current.error).toBeNull();
+  });
+
+  it('keeps initial subscribers on the latest request across consecutive replacements', async () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const oldRead = deferred<Session[]>();
+    const middleRead = deferred<Session[]>();
+    const latestRead = deferred<Session[]>();
+    mocks.list.mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(middleRead.promise).mockReturnValueOnce(latestRead.promise);
+    const view = renderHook(() => [useCCSessions(), useCCSessions()]);
+    act(() => emitRefresh());
+    const firstRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
+    act(() => mocks.emitSessionCreated('new', { dataOwnerId: 'owner-a', ownerGeneration: 1 }));
+    const lastRefresh = sessionsStore.ensureByFilter('active').catch((error: unknown) => error);
+    const failure = new Error('latest read failed');
+    await act(async () => {
+      latestRead.reject(failure);
+      expect(await firstRefresh).toBe(failure);
+      expect(await lastRefresh).toBe(failure);
+    });
+    for (const hook of view.result.current) {
+      expect(hook.error).toBe(failure);
+      expect(hook.isLoading).toBe(false);
+    }
+    await act(async () => {
+      oldRead.resolve([session('old')]);
+      middleRead.reject(new Error('middle failure'));
+    });
+    for (const hook of view.result.current) {
+      expect(hook.error).toBe(failure);
+      expect(hook.sessions).toEqual([]);
+    }
+    expect(mocks.list).toHaveBeenCalledTimes(3);
+  });
+
+  it('refreshes cached and pending filters once each without loading untouched filters', async () => {
+    const a = session('a', { status: 'active' });
+    const z = session('z', { status: 'archived' });
+    mocks.list.mockResolvedValueOnce([a]).mockResolvedValueOnce([z]);
+    await sessionsStore.ensureByFilter('active');
+    await sessionsStore.ensureByFilter('archived');
+    const oldRead = deferred<Session[]>();
+    mocks.list.mockReset();
+    mocks.list.mockReturnValueOnce(oldRead.promise);
+    // A fresh background read retains its cached snapshot, so active is present
+    // in both sets. It must not cause two replacement queries.
+    const loading = sessionsStore.ensureByFilter('active', { fresh: true });
+    const b = session('b', { status: 'active' });
+    mocks.list.mockImplementation(async (_limit, filter) => filter === 'active' ? [a, b] : [z]);
+    await sessionsStore.forceRefreshAll();
+    oldRead.resolve([a]);
+    await loading;
+    expect(sessionsStore.getByFilter('active')?.map(({ id }) => id)).toEqual(['a', 'b']);
+    expect(sessionsStore.getByFilter('archived')?.map(({ id }) => id)).toEqual(['z']);
+    expect(mocks.list.mock.calls.map((call) => call[1])).toEqual(['active', 'active', 'archived']);
+    expect(sessionsStore.getByFilter('all')).toBeNull();
+  });
+
+  it('rejects an old hook patch callback after the data owner changes', async () => {
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    setDataOwnerGeneration('owner-a', 1);
+    mocks.list.mockResolvedValueOnce([
+      session('same-id', { pinnedAt, summary: 'owner-a summary' }),
+    ]);
+    const view = renderHook(() => useCCSessions());
+    await waitFor(() => expect(view.result.current.sessions).toHaveLength(1));
+    const oldPatchLocal = view.result.current.patchLocal;
+
+    const newRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => newRequest.promise);
+    setDataOwnerGeneration('owner-b', 2);
+    act(() => sessionsStore.reset());
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+
+    act(() => {
+      oldPatchLocal('same-id', { pinnedAt: null, summary: null });
+    });
+    newRequest.resolve([
+      session('same-id', { pinnedAt, summary: 'owner-b summary' }),
+    ]);
+    await waitFor(() => {
+      expect(view.result.current.sessions).toEqual([
+        expect.objectContaining({
+          id: 'same-id',
+          pinnedAt,
+          summary: 'owner-b summary',
+        }),
+      ]);
+    });
+  });
+
+  it('ignores a stale owner-stamped local sessions push', async () => {
+    setDataOwnerGeneration('owner-b', 2);
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    mocks.list.mockResolvedValueOnce([
+      session('same-id', { pinnedAt, summary: 'owner-b summary' }),
+    ]);
+    await sessionsStore.ensureByFilter('active');
+
+    act(() => {
+      mocks.emitSessionPatch(
+        { sessionId: 'same-id', patch: { pinnedAt: null, summary: null } },
+        { dataOwnerId: 'owner-a', ownerGeneration: 1 },
+      );
+    });
+    expect(sessionsStore.findById('same-id')).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'owner-b summary' }),
+    );
+
+    act(() => {
+      mocks.emitSessionPatch(
+        { sessionId: 'same-id', patch: { pinnedAt: null, summary: null } },
+        { dataOwnerId: 'owner-b', ownerGeneration: 2 },
+      );
+    });
+    expect(sessionsStore.findById('same-id')).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
+  });
+
+  it('rejects a remote device-link patchLocal while a same-id local refresh is in flight', async () => {
+    const sessionId = 'same-id';
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    stickyOrigin.deviceBySession.set(sessionId, 'device-a');
+    setDataOwnerGeneration('owner-b', 2);
+    const pinned = session(sessionId, { pinnedAt, summary: 'local summary' });
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+    const view = renderHook(() => useCCSessions());
+
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleLoad = sessionsStore.forceRefresh('active');
+    act(() => {
+      view.result.current.patchLocal(sessionId, { pinnedAt: null, summary: null });
+    });
+    await act(async () => {
+      staleRequest.resolve([pinned]);
+      await staleLoad;
+    });
+    expect(sessionsStore.findById(sessionId)).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'local summary' }),
+    );
+
+    stickyOrigin.deviceBySession.delete(sessionId);
+    act(() => {
+      view.result.current.patchLocal(sessionId, { pinnedAt: null, summary: null });
+    });
+    expect(sessionsStore.findById(sessionId)).toEqual(
+      expect.objectContaining({ pinnedAt: null, summary: null }),
+    );
   });
 
   it('does not let a request started before reset repopulate the cache', async () => {
@@ -164,6 +448,25 @@ describe('sessionsStore account boundaries', () => {
     await staleLoad;
 
     expect(sessionsStore.getByFilter('all')?.map(({ id }) => id)).toEqual(['keep']);
+  });
+
+  it('clears pin metadata overrides when a removed session id is reused', async () => {
+    const pinnedAt = '2026-08-27T01:00:00.000Z';
+    const pinned = session('reused-id', { pinnedAt, summary: 'old summary' });
+    mocks.list.mockResolvedValueOnce([pinned]);
+    await sessionsStore.ensureByFilter('active');
+
+    const staleRequest = deferred<Session[]>();
+    mocks.list.mockImplementationOnce(() => staleRequest.promise);
+    const staleLoad = sessionsStore.forceRefresh('active');
+    sessionsStore.patchLocal('reused-id', { pinnedAt: null, summary: null });
+    sessionsStore.removeLocal('reused-id');
+
+    staleRequest.resolve([pinned]);
+    await staleLoad;
+    expect(sessionsStore.findById('reused-id')).toEqual(
+      expect.objectContaining({ pinnedAt, summary: 'old summary' }),
+    );
   });
 
   it('patches only the matching cached session when persisted spend changes', async () => {

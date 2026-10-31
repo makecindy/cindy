@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readDesktopInputPermission } from '../inputHost';
+import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -43,6 +44,7 @@ describe('desktop input permission detection', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('bounds a slow cold build and lets later polls reuse it without prompting', async () => {
@@ -102,6 +104,25 @@ describe('desktop input permission detection', () => {
   it('does not probe Accessibility on Windows', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
     expect(await readDesktopInputPermission()).toBe('notRequired');
+    expect(mocks.exec).not.toHaveBeenCalled();
+  });
+  // Capability must come from the authenticated helper, not just a DISPLAY variable.
+  it('probes XTest without granting control to missing helpers or XWayland', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    vi.stubEnv('DISPLAY', ':9');
+    vi.stubEnv('XDG_SESSION_TYPE', 'x11');
+    vi.stubEnv('WAYLAND_DISPLAY', '');
+    vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', '');
+    expect(await readLinuxDesktopInputSupport()).toBe(true);
+    expect(mocks.exec).toHaveBeenLastCalledWith(expect.any(String), ['--x11', '--check'], {
+      timeout: 3000,
+      maxBuffer: 1024,
+    });
+    mocks.exec.mockRejectedValue(new Error('helper unavailable'));
+    expect(await readLinuxDesktopInputSupport()).toBe(false);
+    mocks.exec.mockClear();
+    vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+    expect(await readLinuxDesktopInputSupport()).toBe(false);
     expect(mocks.exec).not.toHaveBeenCalled();
   });
 });

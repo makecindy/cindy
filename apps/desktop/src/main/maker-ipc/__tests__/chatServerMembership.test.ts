@@ -121,6 +121,15 @@ describe('Chat Server membership notices', () => {
     expect(result.ok && result.group.lastReplyAt).toBe(Date.parse(replyAt));
   });
 
+  it('uses the latest visible topic activity for the sidebar, not snapshot array order or a deleted message', async () => {
+    const topic = { ...joined(), id: '40000000-0000-4000-8000-000000000002', seq: '9007199254740993',
+      origin: 'user', threadRootId: joined().id, createdAt: '2026-10-09T00:00:00Z',
+      content: [{ type: 'text', text: 'Latest topic reply' }] } as unknown as ReturnType<typeof joined>;
+    messages = [joined(), { ...joined(), seq: '9007199254740994', deleted: true }, topic];
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.lastMessage).toMatchObject({ preview: 'Latest topic reply', createdAt: Date.parse(topic.createdAt) });
+  });
+
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {
     messages = [{ ...joined(), id: '40000000-0000-4000-8000-000000000002', seq: '20' }, joined()];
     const result = await service.getGroup(roomId);

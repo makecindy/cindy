@@ -1,0 +1,117 @@
+{
+  "picker": {
+    "title": "模型",
+    "permissionTitle": "權柄",
+    "searchAccessibility": "尋模型",
+    "searchPlaceholder": "尋模型…",
+    "noResults": "無相合之模型",
+    "emptyDefault": "暫無可用之模型",
+    "loadingDefault": "方載模型…",
+    "subscriptionBadge": "訂",
+    "subscriptionBadgeCompact": "訂",
+    "backToModels": "歸模型錄",
+    "agentSwitchHint": "擇模型之後，次訊將轉至 {{agent}}",
+    "crossAgentEmptyHint": "請先於遠端裝置連 {{agent}} 之模型來源",
+    "permissionModeAccessibility": "權柄之式：{{mode}}",
+    "selectProviderModelAccessibility": "擇來源 {{provider}} 之模型 {{model}}",
+    "selectModelAccessibility": "擇模型 {{model}}",
+    "configureAccessibility": "設 {{model}}",
+    "budgetDisabledHint": "此模型須先於遠端裝置設 API key，方可用之",
+    "priceLine": "入 {{input}} · 出 {{output}} / 百萬 token",
+    "priceTitle": "每百萬 token",
+    "priceAmounts": "入 {{input}} · 出 {{output}}",
+    "discountedVsStandard": "方折價，較常價省 {{percent}}%",
+    "contextSuffix": "{{size}} 上下文",
+    "fastTag": "疾"
+  },
+  "options": {
+    "speed": {
+      "label": "速",
+      "standard": "常速",
+      "fast": "疾",
+      "ultrafast": "迅極"
+    },
+    "fastMode": "疾行之式",
+    "fastModeAccessibility": "疾行之式 {{model}}",
+    "reasoningEffort": "思之深淺",
+    "reasoningEffortAccessibility": "思之深淺 {{label}}",
+    "effortLevels": {
+      "minimal": "至淺",
+      "low": "淺",
+      "medium": "中",
+      "high": "深",
+      "xhigh": "甚深",
+      "max": "至深",
+      "ultra": "極"
+    }
+  },
+  "contextWindowSwitch": {
+    "title": "此模型容不下今之言談",
+    "remoteTitle": "今遠端差事不能安然易模型",
+    "description": "今之言談已用 {{used}}，逾新模型所容之 {{total}}（約 {{pct}}%）。若仍易之，Cindy 將先作簡要再續；言談錄仍存，惟不復逐字遣予新模型。",
+    "remoteDescription": "今遠端差事之上下文已用 {{used}} / {{total}}（約 {{pct}}%），不能安然易至此小窗之模型。請守今模型，或新開差事後再擇。",
+    "cancel": "守今模型",
+    "confirm": "易而續之"
+  },
+  "switchOutcome": {
+    "applied": "模型來源之易已生效。",
+    "failed": "模型來源之易未成，請重擇。"
+  },
+  "agentSwitch": {
+    "browseAccessibility": "覽 {{agent}} 模型",
+    "confirmTitle": "轉至 {{agent}} 乎？",
+    "confirmMessage": "次訊遣出之時，{{appName}} 將以今差事交 {{agent}}。二 Agent 於上下文與工具之解或有不同，請確認後再擇目標模型。",
+    "cancel": "罷",
+    "confirm": "續擇"
+  },
+  "agentRelocation": {
+    "titleOther": "改於「{{device}}」行 Agent 乎？",
+    "titleHost": "改歸「{{host}}」行 Agent 乎？",
+    "titleHostUnnamed": "改歸差事所在之機行 Agent 乎？",
+    "message": "原機之言談錄不可攜來，將整為交接摘要以續，所思之類不保盡承。次訊遣出時生效。",
+    "confirm": "易機行之",
+    "cancel": "仍舊"
+  },
+  "unified": {
+    "favoriteConfiguration": "藏此設定",
+    "savedConfiguration": "已藏 · 點之則去",
+    "currentConfiguration": "今之設定",
+    "usingRecommended": "用所薦之設定",
+    "customized": "已自定",
+    "resetScopeHint": "復所薦，則重設引擎、思之深淺與 Fast，已藏者不變。",
+    "saveFavoriteHint": "存此組參數，他日自所藏信手取用。",
+    "removeFavoriteHint": "去之唯除捷徑，今之參數不變。",
+    "editFavorite": "修原藏",
+    "editFavoriteHint": "唯修此藏，存後生效；方用之設定不變。",
+    "saveFavorite": "存所藏",
+    "cancelEdit": "罷修",
+    "originalFavoriteKept": "參數已調，原藏猶存。",
+    "parametersSaved": "參數已存。",
+    "restoredHint": "已復所薦之設定；君之所藏，吾分毫未動。",
+    "favoriteRemoved": "已去所藏，今之參數不變。",
+    "favoriteSaved": "此組設定已藏。",
+    "favoriteUpdated": "所藏已更，方用之設定不變。",
+    "favoriteChanged": "原藏已遭改易或刪除。罷修後重啟再試。",
+    "favoriteExists": "已有同設之藏。罷修即可徑用。",
+    "favorites": "所藏",
+    "all": "諸模型",
+    "recommended": "所薦",
+    "source": "所自",
+    "remoteProvider": "{{provider}} · {{device}}",
+    "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
+    "providerGroup": "{{provider}} · {{group}}",
+    "groupBadge_one": "供方組 · {{count}} 機",
+    "groupBadge_other": "供方組 · {{count}} 機",
+    "harness": "Harness",
+    "restoreRecommended": "復所薦",
+    "saveFailed": "存之未成，請再試。",
+    "configure": "設",
+    "syncFailed": "所藏未能同步。請重啟再試；遠方之機上之 Cindy 或須更新。",
+    "timeUnit": {
+      "day": "日",
+      "hour": "時",
+      "minute": "分",
+      "second": "秒"
+    }
+  }
+}

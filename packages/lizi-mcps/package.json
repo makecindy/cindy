@@ -8,7 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./computer": "./src/computer/index.ts"
+    "./computer": "./src/computer/index.ts",
+    "./inline-images": "./src/shared/inlineImages.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

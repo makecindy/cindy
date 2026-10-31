@@ -217,6 +217,8 @@ export interface Schedule {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源
@@ -287,6 +289,17 @@ export interface Schedule {
   nextFireAt?: number;
   expireAt?: number;
 }
+
+/** Complete persisted definition captured when a host approval is shown.
+ *
+ * `effectiveWorkingDir` is runtime-only metadata for a bound pre-run hook. It
+ * is intentionally excluded from the persisted schedule comparison, but is
+ * carried to the runner so the target session directory is checked again at
+ * the execution boundary.
+ */
+export type ScheduleMutationGuard = Readonly<Schedule> & {
+  effectiveWorkingDir?: string;
+};
 
 export interface ScheduleRun {
   id: string;
@@ -359,6 +372,8 @@ export interface CreateScheduleInput {
   agentKind: AgentKind;
   /** Explicit model-picker Harness. Absent on legacy schedules: bound tasks keep their live Harness. */
   modelAgentKind?: AgentKind;
+  /** Agent location for an explicit model choice: absent = inherit the bound task; '' = task host. */
+  modelAgentDeviceId?: string;
   model?: string;
   /**
    * 显式选定的供应商(来源)id。undefined / 空 → 回落该 agent 原生默认来源

@@ -39,6 +39,7 @@ const DRIZZLE_PROXY_SCHEMA = [
       cleared_at INTEGER,
       pinned_at INTEGER,
       hidden_at INTEGER,
+      notifications_muted INTEGER NOT NULL DEFAULT 0,
       user_send_at INTEGER,
       last_activity_at INTEGER,
       agent_kind TEXT NOT NULL DEFAULT 'cc',

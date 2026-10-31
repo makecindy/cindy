@@ -60,7 +60,9 @@ export function TaskTagsSheet({
       expanded
       showDone={false}
       onExpandedChange={() => {}}
-      renderExpanded={ios ? (state) => <NativeTaskTagsExpanded state={state} /> : undefined}
+      renderExpanded={ios ? (state) => (
+        <NativeTaskTagsExpanded state={state} onSortingChange={tagPage.onSortingChange} />
+      ) : undefined}
       onPageChange={ios ? tagPage.onPageChange : undefined}
     />
   );
@@ -78,6 +80,7 @@ export function TaskTagsSheet({
         onClose={onClose}
         onClosed={onClosed}
         nativeContent
+        nativeEditMode={tagPage.sorting}
         testID="taskTags.sheet"
       >
         {panel}

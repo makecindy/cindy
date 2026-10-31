@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-10-24T03:51:23.033Z",
+  "updatedAt": "2026-10-31T03:14:42.037Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -3311,19 +3311,272 @@
       ],
       "nativeApi": "openai-responses",
       "modelRef": "xd/auto"
+    },
+    {
+      "id": "agnes/agnes-3.0-flash",
+      "name": "Agnes 3.0 Flash",
+      "modelRef": "agnes/agnes-3.0-flash",
+      "status": "active",
+      "sortOrder": 100,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-3.0-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-openai-completions"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro",
+      "name": "Agnes 2.5 Pro",
+      "modelRef": "agnes/agnes-2.5-pro",
+      "status": "active",
+      "sortOrder": 101,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-pro",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-openai-completions"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro-beta",
+      "name": "Agnes 2.5 Pro Beta",
+      "modelRef": "agnes/agnes-2.5-pro-beta",
+      "status": "active",
+      "sortOrder": 102,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-pro-beta",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-openai-completions"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-flash",
+      "name": "Agnes 2.5 Flash",
+      "modelRef": "agnes/agnes-2.5-flash",
+      "status": "active",
+      "sortOrder": 103,
+      "defaultEnabled": false,
+      "nativeApi": "openai-completions",
+      "nativeApis": [
+        "anthropic-messages",
+        "openai-responses",
+        "openai-completions"
+      ],
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-2.5-flash",
+          "agents": [
+            "claude-code",
+            "codex"
+          ],
+          "referencePriceGroup": "global",
+          "interfaces": [
+            {
+              "profileId": "agnes-anthropic-messages"
+            },
+            {
+              "profileId": "agnes-openai-responses"
+            },
+            {
+              "profileId": "agnes-openai-completions"
+            }
+          ],
+          "preferredInterfaces": {
+            "claude-code": [
+              "agnes-anthropic-messages"
+            ],
+            "codex": [
+              "agnes-openai-responses"
+            ],
+            "pi": [
+              "agnes-openai-completions"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.0-flash",
+      "name": "Agnes Image 2.0 Flash",
+      "modelRef": "agnes/agnes-image-2.0-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.0-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.1-flash",
+      "name": "Agnes Image 2.1 Flash",
+      "modelRef": "agnes/agnes-image-2.1-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.1-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.5-flash",
+      "name": "Agnes Image 2.5 Flash",
+      "modelRef": "agnes/agnes-image-2.5-flash",
+      "mode": "image_generation",
+      "status": "active",
+      "nativeApi": "openai-images",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-image-2.5-flash",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-video-2.5",
+      "name": "Agnes Video 2.5",
+      "modelRef": "agnes/agnes-video-2.5",
+      "mode": "video_generation",
+      "status": "active",
+      "nativeApi": "openai-videos",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-video-2.5",
+          "agents": []
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-video-2.5-flash",
+      "name": "Agnes Video 2.5 Flash",
+      "modelRef": "agnes/agnes-video-2.5-flash",
+      "mode": "video_generation",
+      "status": "active",
+      "nativeApi": "openai-videos",
+      "routes": [
+        {
+          "providerId": "agnes",
+          "modelId": "agnes-video-2.5-flash",
+          "agents": []
+        }
+      ]
     }
   ],
   "nativeApiRules": [
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "google/gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
-    {
-      "providerId": "xd",
-      "modelIdPrefix": "gemini-4-argon",
-      "nativeApi": "openai-responses"
-    },
     {
       "providerId": "xd",
       "modelIdPrefix": "google/gemini-",
@@ -9096,6 +9349,292 @@
       "defaults": {
         "name": "Auto"
       }
+    },
+    {
+      "id": "agnes/agnes-3.0-flash",
+      "aliases": [
+        "agnes-3.0-flash"
+      ],
+      "defaults": {
+        "name": "Agnes 3.0 Flash",
+        "mode": "chat",
+        "contextWindow": 512000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-30-flash"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.15,
+              "cacheReadPerMtok": 0.005,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro",
+      "aliases": [
+        "agnes-2.5-pro"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Pro",
+        "mode": "chat",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-pro"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.45,
+              "outputPerMtok": 0.9,
+              "cacheReadPerMtok": 0.045,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-pro-beta",
+      "aliases": [
+        "agnes-2.5-pro-beta"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Pro Beta",
+        "mode": "chat",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-pro-beta"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.1,
+              "outputPerMtok": 0.3,
+              "cacheReadPerMtok": 0.01,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-2.5-flash",
+      "aliases": [
+        "agnes-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes 2.5 Flash",
+        "mode": "chat",
+        "contextWindow": 512000,
+        "maxOutputTokens": 65536,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true,
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-25-flash"
+      },
+      "referencePriceGroups": [
+        {
+          "id": "global",
+          "prices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.15,
+              "cacheReadPerMtok": 0.005,
+              "source": {
+                "kind": "provider-official",
+                "url": "https://wiki.agnes-ai.com/en/docs/pricing",
+                "verifiedAt": "2026-10-27"
+              },
+              "effectiveFrom": "2026-10-27"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "agnes/agnes-image-2.0-flash",
+      "aliases": [
+        "agnes-image-2.0-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.0 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-20-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-image-2.1-flash",
+      "aliases": [
+        "agnes-image-2.1-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.1 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-21-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-image-2.5-flash",
+      "aliases": [
+        "agnes-image-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Image 2.5 Flash",
+        "mode": "image_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "image"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-image-25-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-video-2.5",
+      "aliases": [
+        "agnes-video-2.5"
+      ],
+      "defaults": {
+        "name": "Agnes Video 2.5",
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-video-25"
+      }
+    },
+    {
+      "id": "agnes/agnes-video-2.5-flash",
+      "aliases": [
+        "agnes-video-2.5-flash"
+      ],
+      "defaults": {
+        "name": "Agnes Video 2.5 Flash",
+        "mode": "video_generation",
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio"
+          ],
+          "output": [
+            "video"
+          ]
+        },
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-video-25-flash"
+      }
+    },
+    {
+      "id": "agnes/agnes-3.0-pro",
+      "aliases": [
+        "agnes-3.0-pro"
+      ],
+      "defaults": {
+        "name": "Agnes 3.0 Pro",
+        "mode": "chat",
+        "officialDocs": "https://wiki.agnes-ai.com/en/docs/agnes-30-pro"
+      }
     }
   ],
   "interfaceProfiles": [
@@ -9206,6 +9745,19 @@
       ]
     },
     {
+      "id": "deepseek-openai-responses",
+      "providerId": "deepseek",
+      "api": "openai-responses",
+      "baseUrl": "https://api.deepseek.com",
+      "inputBaseUrls": [
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/anthropic"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "deepseek-openai-completions",
       "providerId": "deepseek",
       "api": "openai-completions",
@@ -9215,7 +9767,6 @@
         "https://api.deepseek.com"
       ],
       "defaultFor": [
-        "codex",
         "pi"
       ]
     },
@@ -9269,7 +9820,8 @@
       "baseUrl": "https://api.z.ai/api/anthropic",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/paas/v4"
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -9279,13 +9831,29 @@
       ]
     },
     {
+      "id": "zhipu-glm-global-openai-responses",
+      "providerId": "zhipu-glm-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.z.ai/api/v1",
+      "inputBaseUrls": [
+        "https://api.z.ai/api/anthropic",
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zhipu-glm-global-openai-completions",
       "providerId": "zhipu-glm-global",
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/paas/v4",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/paas/v4"
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9298,7 +9866,8 @@
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "inputBaseUrls": [
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9323,6 +9892,36 @@
       "legacyApis": [
         "openai-completions"
       ]
+    },
+    {
+      "id": "moonshot-kimi-cn-openai-responses",
+      "providerId": "moonshot-kimi-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "inputBaseUrls": [
+        "https://api.moonshot.cn/anthropic",
+        "https://api.moonshot.cn/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "kimi-k3.1-pro",
+        "kimi-k3.1-pro-highspeed",
+        "kimi-k3"
+      ],
+      "defaults": {
+        "supportsImageInput": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        }
+      }
     },
     {
       "id": "moonshot-kimi-cn-openai-completions",
@@ -9370,6 +9969,36 @@
       "legacyApis": [
         "openai-completions"
       ]
+    },
+    {
+      "id": "moonshot-kimi-global-openai-responses",
+      "providerId": "moonshot-kimi-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.moonshot.ai/v1",
+      "inputBaseUrls": [
+        "https://api.moonshot.ai/anthropic",
+        "https://api.moonshot.ai/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "kimi-k3.1-pro",
+        "kimi-k3.1-pro-highspeed",
+        "kimi-k3"
+      ],
+      "defaults": {
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "supportsImageInput": true
+      }
     },
     {
       "id": "moonshot-kimi-global-openai-completions",
@@ -9425,9 +10054,7 @@
         "https://api.kimi.com/coding",
         "https://api.kimi.com/coding/v1"
       ],
-      "defaultFor": [
-        "codex"
-      ],
+      "defaultFor": [],
       "compatibility": [
         "chat-image-v1"
       ],
@@ -9515,11 +10142,42 @@
       "api": "anthropic-messages",
       "baseUrl": "https://dashscope.aliyuncs.com/apps/anthropic",
       "inputBaseUrls": [
-        "https://dashscope.aliyuncs.com/apps/anthropic"
+        "https://dashscope.aliyuncs.com/apps/anthropic",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
       ],
       "defaultFor": [
         "claude-code",
         "pi"
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-cn-openai-responses",
+      "providerId": "aliyun-model-studio-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://dashscope.aliyuncs.com/apps/anthropic",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.8-omni-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.7-flash",
+        "qwen3.6-plus",
+        "qwen3.6-flash",
+        "qwen3.5-plus",
+        "qwen3.5-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "glm-5.3",
+        "glm-5.2",
+        "kimi-k3"
       ]
     },
     {
@@ -9540,11 +10198,42 @@
       "api": "anthropic-messages",
       "baseUrl": "https://dashscope-intl.aliyuncs.com/apps/anthropic",
       "inputBaseUrls": [
-        "https://dashscope-intl.aliyuncs.com/apps/anthropic"
+        "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
       ],
       "defaultFor": [
         "claude-code",
         "pi"
+      ]
+    },
+    {
+      "id": "aliyun-model-studio-global-openai-responses",
+      "providerId": "aliyun-model-studio-global",
+      "api": "openai-responses",
+      "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://dashscope-intl.aliyuncs.com/apps/anthropic",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "qwen3.8-omni-flash",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "qwen3.7-flash",
+        "qwen3.6-plus",
+        "qwen3.6-flash",
+        "qwen3.5-plus",
+        "qwen3.5-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "glm-5.3",
+        "glm-5.2",
+        "kimi-k3"
       ]
     },
     {
@@ -9606,6 +10295,19 @@
       ]
     },
     {
+      "id": "aliyun-bailian-token-plan-cn-openai-responses",
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "aliyun-bailian-token-plan-cn-openai-completions",
       "providerId": "aliyun-bailian-token-plan-cn",
       "api": "openai-completions",
@@ -9636,6 +10338,19 @@
       ]
     },
     {
+      "id": "aliyun-bailian-token-plan-team-cn-openai-responses",
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "inputBaseUrls": [
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "aliyun-bailian-token-plan-team-cn-openai-completions",
       "providerId": "aliyun-bailian-token-plan-team-cn",
       "api": "openai-completions",
@@ -9656,7 +10371,8 @@
       "baseUrl": "https://open.bigmodel.cn/api/anthropic",
       "inputBaseUrls": [
         "https://open.bigmodel.cn/api/anthropic",
-        "https://open.bigmodel.cn/api/coding/paas/v4"
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -9666,13 +10382,28 @@
       ]
     },
     {
+      "id": "zhipu-coding-plan-cn-openai-responses",
+      "providerId": "zhipu-coding-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://open.bigmodel.cn/api/v1",
+      "inputBaseUrls": [
+        "https://open.bigmodel.cn/api/anthropic",
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zhipu-coding-plan-cn-openai-completions",
       "providerId": "zhipu-coding-plan-cn",
       "api": "openai-completions",
       "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
       "inputBaseUrls": [
         "https://open.bigmodel.cn/api/anthropic",
-        "https://open.bigmodel.cn/api/coding/paas/v4"
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        "https://open.bigmodel.cn/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9686,7 +10417,8 @@
       "baseUrl": "https://api.z.ai/api/anthropic",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "claude-code"
@@ -9696,13 +10428,28 @@
       ]
     },
     {
+      "id": "zai-coding-plan-global-openai-responses",
+      "providerId": "zai-coding-plan-global",
+      "api": "openai-responses",
+      "baseUrl": "https://api.z.ai/api/v1",
+      "inputBaseUrls": [
+        "https://api.z.ai/api/anthropic",
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "zai-coding-plan-global-openai-completions",
       "providerId": "zai-coding-plan-global",
       "api": "openai-completions",
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "inputBaseUrls": [
         "https://api.z.ai/api/anthropic",
-        "https://api.z.ai/api/coding/paas/v4"
+        "https://api.z.ai/api/coding/paas/v4",
+        "https://api.z.ai/api/v1"
       ],
       "defaultFor": [
         "codex",
@@ -9723,6 +10470,19 @@
       ],
       "legacyApis": [
         "openai-completions"
+      ]
+    },
+    {
+      "id": "xiaomi-mimo-api-cn-openai-responses",
+      "providerId": "xiaomi-mimo-api-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://api.xiaomimimo.com/v1",
+      "inputBaseUrls": [
+        "https://api.xiaomimimo.com/anthropic",
+        "https://api.xiaomimimo.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
       ]
     },
     {
@@ -9756,6 +10516,19 @@
       ]
     },
     {
+      "id": "xiaomi-mimo-token-plan-cn-openai-responses",
+      "providerId": "xiaomi-mimo-token-plan-cn",
+      "api": "openai-responses",
+      "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+      "inputBaseUrls": [
+        "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "https://token-plan-cn.xiaomimimo.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "xiaomi-mimo-token-plan-cn-openai-completions",
       "providerId": "xiaomi-mimo-token-plan-cn",
       "api": "openai-completions",
@@ -9786,6 +10559,19 @@
       ]
     },
     {
+      "id": "volcengine-agent-plan-openai-responses",
+      "providerId": "volcengine-agent-plan",
+      "api": "openai-responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "inputBaseUrls": [
+        "https://ark.cn-beijing.volces.com/api/plan",
+        "https://ark.cn-beijing.volces.com/api/plan/v3"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "volcengine-agent-plan-openai-completions",
       "providerId": "volcengine-agent-plan",
       "api": "openai-completions",
@@ -9813,6 +10599,19 @@
       ],
       "legacyApis": [
         "openai-completions"
+      ]
+    },
+    {
+      "id": "volcengine-coding-plan-openai-responses",
+      "providerId": "volcengine-coding-plan",
+      "api": "openai-responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "inputBaseUrls": [
+        "https://ark.cn-beijing.volces.com/api/coding",
+        "https://ark.cn-beijing.volces.com/api/coding/v3"
+      ],
+      "defaultFor": [
+        "codex"
       ]
     },
     {
@@ -9969,6 +10768,18 @@
       ]
     },
     {
+      "id": "longcat-openai-responses",
+      "providerId": "longcat",
+      "api": "openai-responses",
+      "baseUrl": "https://api.longcat.chat/openai/v1",
+      "inputBaseUrls": [
+        "https://api.longcat.chat/openai/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ]
+    },
+    {
       "id": "longcat-openai-completions",
       "providerId": "longcat",
       "api": "openai-completions",
@@ -9977,7 +10788,7 @@
         "https://api.longcat.chat/openai/v1"
       ],
       "defaultFor": [
-        "codex"
+        "pi"
       ]
     },
     {
@@ -10222,7 +11033,9 @@
         "https://api.kimi.com/coding",
         "https://api.kimi.com/coding/v1"
       ],
-      "defaultFor": [],
+      "defaultFor": [
+        "codex"
+      ],
       "defaults": {
         "modalities": {
           "input": [
@@ -10236,6 +11049,435 @@
         "supportsImageInput": true,
         "supportsToolCalls": true
       }
+    },
+    {
+      "id": "agnes-anthropic-messages",
+      "providerId": "agnes",
+      "api": "anthropic-messages",
+      "baseUrl": "https://apihub.agnes-ai.com",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [
+        "claude-code"
+      ],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
+    },
+    {
+      "id": "agnes-openai-responses",
+      "providerId": "agnes",
+      "api": "openai-responses",
+      "baseUrl": "https://apihub.agnes-ai.com/v1",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [
+        "codex"
+      ],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
+    },
+    {
+      "id": "agnes-openai-completions",
+      "providerId": "agnes",
+      "api": "openai-completions",
+      "baseUrl": "https://apihub.agnes-ai.com/v1",
+      "inputBaseUrls": [
+        "https://apihub.agnes-ai.com",
+        "https://apihub.agnes-ai.com/v1"
+      ],
+      "defaultFor": [
+        "pi"
+      ],
+      "modelIds": [
+        "agnes-3.0-flash",
+        "agnes-2.5-pro",
+        "agnes-2.5-pro-beta",
+        "agnes-2.5-flash"
+      ]
+    }
+  ],
+  "recommendedAgents": [
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-coding",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-bailian-token-plan-team-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-cn",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "aliyun-model-studio-global",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "minimax-cn",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "minimax-global",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-cn",
+      "modelIdPrefix": "kimi-k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-code",
+      "modelIdPrefix": "k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-code",
+      "modelIdPrefix": "kimi-for-coding",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "moonshot-kimi-global",
+      "modelIdPrefix": "kimi-k3",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "minimax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode",
+      "modelIdPrefix": "step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "MiniMax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "minimax-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "opencode-go",
+      "modelIdPrefix": "step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "bytedance-seed/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "qwen/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "stepfun/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "tencent/hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "openrouter",
+      "modelIdPrefix": "z-ai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "hunyuan",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "tencentcloud-coding-plan",
+      "modelIdPrefix": "tc-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "alibaba/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "bytedance/seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "stepfun/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "vercel-ai-gateway",
+      "modelIdPrefix": "zai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "ark-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "doubao-seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-agent-plan",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "ark-code",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "doubao-seed",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "volcengine-coding-plan",
+      "modelIdPrefix": "kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "bytedance-seed/seed-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "minimax/",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshot/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "moonshotai/kimi-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "qwen/qwen",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "stepfun/step-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "tencent/hy",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "xd",
+      "modelIdPrefix": "z-ai/glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zai-coding-plan-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-coding-plan-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-glm-cn",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
+    },
+    {
+      "providerId": "zhipu-glm-global",
+      "modelIdPrefix": "glm-",
+      "agent": "claude-code"
     }
   ]
 }

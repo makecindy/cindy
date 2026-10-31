@@ -1,3 +1,5 @@
+import type { ProviderAccountUsageResult } from '../../shared/providerAccountUsage.js';
+import { kimiUsageWindowMinutes } from '../../shared/kimiCodingUsage.js';
 /**
  * Turns Cindy's existing usage readers into the menu bar builder's inputs.
  *
@@ -34,6 +36,7 @@ import {
   type MenubarSubscriptionInput,
   type MenubarTaskInput,
   type MenubarUsageInput,
+  type MenubarModelSeries,
   type MenubarUsageScopeInput,
   type MenubarWalletPools,
   type MenubarWindowInput,
@@ -72,6 +75,7 @@ export interface MenubarSessionRow {
 export interface MenubarCollectDeps {
   nowMs: number;
   listProviders(): Promise<ProviderView[]>;
+  readKimi?(providerId: string): Promise<ProviderAccountUsageResult>;
   readCodex(providerId: string): Promise<CodexAccountUsagePayload | RateLimitSnapshot | null>;
   readClaude(providerId: string): Promise<ClaudeSubscriptionUsageSnapshot | null>;
   readXai(providerId: string): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -114,6 +118,7 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
     safe('remote', async () => (await deps.readRemoteSubscriptions?.()) ?? [], [] as MenubarSubscriptionInput[]),
   ]);
 
+  const modelNames = modelDisplayNames(providers);
   const sources: MenubarSourceInput[] = [];
   if (balance) sources.push(balanceSource(balance));
   const subscriptionReads = providers.map(async (provider): Promise<MenubarSourceInput | null> => {
@@ -133,6 +138,10 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
       const snapshot = await safe(`claude:${provider.id}`, () => deps.readClaude(provider.id), null);
       return claudeSource(provider, snapshot, deps.nowMs);
     }
+    if (kind === 'kimi') {
+      const result = await safe(`kimi:${provider.id}`, async () => await deps.readKimi?.(provider.id) ?? null, null);
+      return kimiSource(provider, result, deps.nowMs);
+    }
     if (kind === 'xai') {
       const snapshot = await safe(`xai:${provider.id}`, () => deps.readXai(provider.id), null);
       return xaiSource(provider, snapshot, deps.nowMs);
@@ -149,8 +158,8 @@ export async function collectMenubarInputs(deps: MenubarCollectDeps): Promise<Me
   const usage: MenubarUsageInput = {
     days,
     scopes: {
-      local: usageScope(localUsage, days, [{ name: deps.selfDeviceName, isSelf: true, syncedAtMs: null }]),
-      all: usageScope(allUsage ?? localUsage, days, devicesOf(allUsage, deps.selfDeviceName)),
+      local: usageScope(localUsage, days, [{ name: deps.selfDeviceName, isSelf: true, syncedAtMs: null }], modelNames),
+      all: usageScope(allUsage ?? localUsage, days, devicesOf(allUsage, deps.selfDeviceName), modelNames),
     },
   };
 
@@ -527,11 +536,38 @@ function emptyScope(days: readonly string[], devices: MenubarUsageScopeInput['de
   };
 }
 
+/** Usage rows store wire ids; one model reached through different routes shares a key. */
+export function usageModelKey(id: string): string {
+  return id.trim().toLowerCase()
+    .replace(/\[[^\]]*\]\s*$/, '') // SDK route suffix such as [1m]
+    .replace(/-\d{6,8}$/, '') // trailing release date
+    .replace(/^.*\//, ''); // provider namespace: anthropic/, xai/, codex/, openai-codex/ …
+}
+
+/** Catalog display names by usage key, so usage reads "GPT-6 Astra" rather than a wire id. */
+export function modelDisplayNames(providers: readonly ProviderView[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const provider of providers) {
+    for (const models of Object.values(provider.models ?? {})) {
+      for (const model of models ?? []) {
+        const key = usageModelKey(model.id);
+        const name = model.name?.trim();
+        // Providers may brand the same model ("Codex GPT-6.1 Sol"); the plainest name wins.
+        const current = names.get(key);
+        if (name && usageModelKey(name) !== key && (!current || name.length < current.length)) names.set(key, name);
+      }
+    }
+  }
+  return names;
+}
+
 export function usageScope(
   payload: UsageHistoryPayload | null,
   days: readonly string[],
   devices: MenubarUsageScopeInput['devices'],
+  modelNames: ReadonlyMap<string, string> = new Map(),
 ): MenubarUsageScopeInput {
+  const label = (model: string) => modelNames.get(usageModelKey(model)) ?? formatModelShort(model);
   const scope = emptyScope(days, devices);
   if (!payload) return scope;
   const indexOfDay = new Map(days.map((day, index) => [day, index]));
@@ -550,12 +586,51 @@ export function usageScope(
     const age = days.length - 1 - index;
     for (const window of windows) {
       if (age < Number(window)) {
-        modelRows[window].push({ name: formatModelShort(row.model), harness, money, tokens: finite(row.tokens) });
+        modelRows[window].push({ name: label(row.model), harness, money, tokens: finite(row.tokens) });
       }
     }
   }
   for (const window of windows) scope.models[window] = topModels(modelRows[window]);
+  scope.modelSeries = modelSeries(payload, indexOfDay, days.length, label);
   return scope;
+}
+
+const SERIES_MODELS = 5;
+const SERIES_DAYS = 30;
+
+/** Per-model daily value and tokens: the top models by tokens over the last 30 days, the rest summed last. */
+function modelSeries(
+  payload: UsageHistoryPayload,
+  indexOfDay: Map<string, number>,
+  dayCount: number,
+  label: (model: string) => string,
+): MenubarModelSeries {
+  type Entry = { harness: MenubarHarness; money: number[]; tokens: number[]; recent: number };
+  const byModel = new Map<string, Entry>();
+  for (const row of payload.modelDaily) {
+    const index = indexOfDay.get(row.day);
+    if (index === undefined) continue;
+    const name = label(row.model);
+    const entry = byModel.get(name)
+      ?? { harness: harnessOf(row.agentKind), money: new Array<number>(dayCount).fill(0), tokens: new Array<number>(dayCount).fill(0), recent: 0 };
+    const tokens = finite(row.tokens);
+    entry.money[index] += finite(row.money?.amount);
+    entry.tokens[index] += tokens;
+    if (dayCount - 1 - index < SERIES_DAYS) entry.recent += tokens;
+    byModel.set(name, entry);
+  }
+  const ranked = [...byModel.entries()].filter(([, entry]) => entry.recent > 0).sort((a, b) => b[1].recent - a[1].recent);
+  const top = ranked.slice(0, SERIES_MODELS).map(([, entry]) => entry);
+  const rest = ranked.slice(SERIES_MODELS).map(([, entry]) => entry);
+  const split = (pick: (entry: Entry) => number[]) => Array.from({ length: dayCount }, (_, day) => [
+    ...top.map((entry) => pick(entry)[day]),
+    rest.reduce((sum, entry) => sum + pick(entry)[day], 0),
+  ]);
+  return {
+    models: ranked.slice(0, SERIES_MODELS).map(([name, entry]) => ({ name, harness: entry.harness })),
+    daily: split((entry) => entry.money),
+    tokens: split((entry) => entry.tokens),
+  };
 }
 
 function devicesOf(payload: UsageHistoryPayload | null, selfName: string): MenubarUsageScopeInput['devices'] {
@@ -652,4 +727,18 @@ async function collectTasks(
     rows.push(...batch.filter((row): row is MenubarTaskInput => row !== null));
   }
   return rows.slice(0, MAX_TASK_ROWS);
+}
+
+export function kimiSource(provider: ProviderView, result: ProviderAccountUsageResult | null, nowMs: number): MenubarSubscriptionInput {
+  const snapshot = result?.status === 'ready' && !result.stale && result.snapshot.kind === 'kimi-coding-quota' ? result.snapshot : null;
+  return {
+    kind: 'subscription', id: provider.id, providerId: provider.id, family: 'kimi',
+    logoSvg: providerLogo(provider.id, provider.name, provider.routing), brand: provider.name || 'Kimi Code', account: null, plan: null,
+    windows: snapshot?.windows.filter(w => w.resetsAt === null || w.resetsAt > nowMs).map(w => ({
+      kind: w.id === 'limit_5h' ? 'session' : w.id === 'limit_7d' ? 'week' : 'period',
+      label: w.id, usedPercent: w.usedPercent, resetsAtMs: w.resetsAt,
+      windowMinutes: kimiUsageWindowMinutes(w.id) ?? 0,
+    })) ?? [],
+    credits: null, creditsUnlimited: false, prepaidUsd: null, updatedAtMs: snapshot?.fetchedAt ?? null,
+  };
 }

@@ -6,7 +6,8 @@
  *
  * 远程控制下新建任务(建到被控电脑上)同样可以选第三台电脑的模型:任务建出来就带 agentDeviceId。
  *
- * 这里只放纯判定,接线在 CCAgentSessionView / NewMakerDraftRoute / ChatInput。
+ * 这里保留旧主机的直接读取判定。支持 maker:model-catalog:read 的主机由
+ * useModelRouteDevices 提供权威名单和目录，不使用控制端可读性限制。
  */
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 

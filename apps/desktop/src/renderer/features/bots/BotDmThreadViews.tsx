@@ -120,6 +120,7 @@ export function BotDmThreadPanel({ bot, rootSessionId, rootClientId, state, ment
             messageStreamHeader={threadRoot}
             compact
             compactToolbar
+            focusComposerOnOpen
             viewVisible
             navigationMode="sidebar-embedded"
             sidebarTargetSessionId={rootSessionId}

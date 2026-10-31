@@ -92,7 +92,7 @@ describe('buildTextOneshotPinOptions', () => {
       catalogOf(
         provider({
           id: 'xd',
-          name: 'Cindy Gateway',
+          name: 'Cindy AI · 心动',
           models: { codex: [chat('codex/gpt-5.5', { name: 'GPT 5.5 折扣' })] },
         }),
         provider({
@@ -109,8 +109,8 @@ describe('buildTextOneshotPinOptions', () => {
     expect(options).toEqual([
       {
         id: 'cat:xd:codex:codex/gpt-5.5',
-        label: 'Codex · GPT 5.5 折扣 · Cindy AI',
-        group: 'Cindy AI',
+        label: 'Codex · GPT 5.5 折扣 · Cindy AI · 心动',
+        group: 'Cindy AI · 心动',
         providerId: 'xd',
         agentKind: 'codex',
         modelId: 'codex/gpt-5.5',

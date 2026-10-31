@@ -2,6 +2,19 @@
 
 > 权威入口：先读本页，再按问题打开专题。Server 为独立仓库，文档不代表已部署。
 
+## Cindy AI 身份图标
+
+供应商 ID 仍为 `xd`；个人、其他企业和未知身份默认使用 Chrome 插件的 Cindy 剪影。
+来源电脑按既有 `isXdOrgUser` 识别心动身份，临时投影 `logoKind: xd`，渲染原来的
+单色心动 SVG；其他身份投影 `logoKind: cindy`。心动图形跟随主题和选中状态的前景色。
+组织头像 `orgLogoUrl` 不用于模型图标，不新增图片 URL、图片请求或加载失败状态。
+
+同账号远程与手机沿用来源电脑的图标；跨账号分享清除企业图标身份，与名称后缀的
+边界一致。复用既有可选 `logoKind` 与能力协商；旧客户端不认识 `cindy` 时按既有
+provider ID 回退。中转只转发原目录载荷，无新帧、权限或恢复协议。
+显式模型品牌优先，`cindy/xd` 模型品牌使用 Cindy 剪影；不改 Auto 路由或 provider ID。
+企业专用模型图标配置需后续由服务端独立提供，不复用组织头像。
+
 ## 数据流
 
 ```text
@@ -54,6 +67,11 @@ Catalog (version)
 | 某个用户的显式设置 | 本机 `model-catalog-overrides.json` 等既有偏好 | 不写回 Server；刷新保留，恢复默认删除 override |
 | 新执行协议、SDK 参数、token 计量 | 本仓对应 host / harness / bridge | 加目录字段不会自动获得执行能力 |
 
+模型高级设置的「图片输入」可选跟随目录、支持、不支持。显式选择按账号、供应商、模型及引擎
+保存到本地覆盖；同一模型行的对话引擎别名一并更新。目录刷新保留选择，恢复默认只删除图片输入
+覆盖，保留其它自定义资料。已有任务的接口快照保留原传输协议，图片声明继续读取本地覆盖。
+这只修正客户端的能力声明，不改变上游服务实际能接收的内容。
+
 结构例外：条目没有 `models[].defaults`；Registry agents / perAgent 只接受 Claude Code、Codex，
 Pi 走 `providers[].models.pi`（用户补丁 perAgent.pi 另属合法 schema）。媒体 route 使用 `agents: []`。
 `contextWindowMax` 是客户端容量投影，不能填进 Registry；容量与工作预算见 [运行时细则](model-catalog-runtime.md)。
@@ -101,6 +119,28 @@ V6 请求使用 `registrySchemaVersion=6&registryMedia=1&registryLocalRuntimes=1
 （真实 HTTP 目录→解析→三接口出站、快照冷恢复）、`codexProxyHost`、`piProviderTransport`。
 “客户端已实现”“服务已部署”“账号真实推理通过”是三个独立结论。
 
+Agnes AI 离线副本与 Server 正本同步：四个聊天型号用官方 Messages / Responses / Chat 接口，
+Messages 使用域名根路径（适配器追加 `/v1/messages`），Responses / Chat 保留 `/v1` base，
+模型发现保持 `/v1/models`；不能把三接口机械地写成同一个 base，否则 Messages 会重复 `/v1`。
+Pi 自动默认采用 Chat Completions，Claude Code / Codex 分别保持 Messages / Responses。
+显式接口选择和已运行任务的接口快照保持原值；本次默认调整不代表真实账号的 Chat 思考参数已验证。
+Flash 上限按官方 512K 保守记为 512,000，2.5 Pro / Pro Beta 为 1,000,000，输出 65,536。
+原有连接仅补缺失资料，不重置显式窗口、协议或启用开关。三个图片、两个视频型号本次仅收录
+身份、类型和官方文档，尚未添加 Agnes 专属媒体执行路径；3.0 Pro 的 coming-soon 身份不构成
+可用模型。新增供应商与接口模板由 Server 常规发布流程下发，不走型号变更的自动直提捷径。
+
+### 推荐引擎（`recommendedAgents`）
+
+推荐哪个引擎由 Server 正本 `source/registry/recommended-agents.json` 维护：每条规则是
+`providerId` + `modelId`（精确）或 `modelIdPrefix`（前缀）+ `agent`，精确优先，其次最长前缀。
+`providerId` 用路由来源：Cindy AI 为 `xd`，目录预设为预设 ID，内置订阅为其目录身份。
+依据官方与社区推荐填写，不靠协议推断；只写与默认推断不同的家族即可。客户端按目录推荐选中
+引擎，用户手动换过的引擎按来源与模型记住；推荐的引擎在该来源只能走兼容模式时不采用。
+
+字段只在请求带 `registryRecommendedAgents=1` 时下发：已发布的 V6 解析器拒收未知字段，
+服务端对其余请求剥离此字段，旧客户端拿到的目录不变。客户端升级后离线启动可回退到升级前
+URL 缓存的 V6 快照。
+
 ### Gateway 复杂价目展示
 
 Model Access V5 通过 `X-Cindy-Model-Capabilities: display_pricing` 协商可选 `displayPricing`。
@@ -118,9 +158,14 @@ Desktop 设置页模型详情有 `displayPricing.summary` 时优先按输入、�
 所有角色报价段数，且每个 item 能按 unit、quantity、price 一一匹配不同的摘要报价，
 匹配报价没有 maxPrice 或 tier。其余情况保留在摘要下方。设置页列表对带 displayPricing 的
 模型不显示价格；选择器、浮层和聊天价格档位逻辑保持原样。详情中的有效折扣仍单列显示。
+摘要的可选 `component` 标明收费项类别，与计价单位独立。格式为 `^[a-z][a-z0-9_]{0,31}$`；
+格式不合法只丢该字段，报价与摘要保留。合法但未知的类别保留在数据中，界面按缺失处理。
+已知类别为 text / image / audio / video：同一角色类别一致时显示「类别 + 方向」，混合类别时
+保留方向名并在各条报价金额前显示已知类别名；不从单位推断类别。唯一键沿用
+unit + quantity + tier，不加入 component；旧端忽略新增字段，协议版本不变。
 摘要的 tier 单独一行使用次要文字，金额、原价区间和单位分别保持完整，同一角色的多段报价逐条换行、靠右对齐，不插入分隔点。
 `price` / `maxPrice` 为每 `quantity` 个 `unit` 的折扣前报价，只在展示时应用一次折扣，保留币种
-与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化，label、tier、notes 仅按纯文本呈现，未知单位不猜换算。
+与“约”的语义；items 另外保留“起价”语义。角色和已知单位本地化；已发布的 Text / Image / Audio / Video 输入输出、Text 缓存读写、Image 缓存读取及 Duration 输入输出明细 label 本地化，其他 label、tier、notes 原样按纯文本呈现，未知单位不猜换算。
 数量 1 省略，百万按语言简写，其余按本地数字格式显示。共享目录可传递这些可选展示字段，旧端
 缺字段仍合法，不新增能力声明；此 UI 仅覆盖 Desktop 设置页。解析与展示回归见
 `modelDisplayPricing.test.ts`、`DisplayPricingDetails.test.tsx` 与 `ModelAdvancedDrawer.test.tsx`。
@@ -264,8 +309,9 @@ Pi 的空来源代表 Cindy AI，先按该身份尝试组 Auto 跟随，再走�
   所以新出的型号一定可见。客户端发现代码不按型号写死隐藏例外（2026-09-26 起移除了
   `gpt-5.4-mini`、Haiku、bridge `gpt-5.4` 等硬编码）。
 - 保留的是按状态或引擎的规则，不针对具体型号：`deprecated`、`requires_payment` 默认关闭；
-  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与自定义连接的兼容引擎默认关闭，
-  Registry `perAgent` 可显式打开。
+  跨 Harness bridge（如 Claude Code 里的 `chatgpt/*`）与需要 Cindy 本地转换的兼容引擎默认关闭，
+  Registry `perAgent` 可显式打开。上游提供的接口一律视为可直接使用，相应引擎默认开启
+  （2026-10-30 起，Gateway / 聚合渠道的多入口同样如此）。
 - **XD 路由一律使用独立的 `xd/*` 条目**，不与订阅或其他供应商共用条目：服务端生成
   Gateway `/models` 时读取 XD 路由所在条目的名称、排序与 `defaultEnabled`，共用会让订阅侧
   调整连带改动 XD。型号规格经 `modelRef` 继承同一公共型号，不重复维护。

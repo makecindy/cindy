@@ -49,6 +49,12 @@ export interface ClaudeSpawnFlagsContext {
   nativeAuth?: string;
   /** 是否连了 Claude.ai 订阅。惰性回调:gateway-key 分支不调用、不产生钥匙串读。 */
   oauthConnected: () => boolean;
+  /**
+   * 用户显式配置的 ENABLE_TOOL_SEARCH(宿主环境或 settings.json env,issue #7524)。
+   * 有值时压过按来源推导的默认值;未提供 / 返回 undefined 时保持 fail-closed 默认。
+   * 惰性回调,远端 spawn 不传(远端机器的用户配置不归本机读取)。
+   */
+  userToolSearch?: () => string | undefined;
 }
 
 export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Record<string, string> {
@@ -63,7 +69,10 @@ export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Recor
   // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
   return {
     ...STATIC_CLAUDE_BEHAVIOR_FLAGS,
-    ENABLE_TOOL_SEARCH: claudeToolSearchMode(ctx.providerId, ctx.credentialMode, ctx.nativeAuth),
+    // 用户显式配置优先:否则 Cindy 的 'false' 默认会静默覆盖 settings.json 里的选择(#7524)。
+    // 默认值仍是 #2929 的 fail-closed 防线,只有用户明确写了才放开。
+    ENABLE_TOOL_SEARCH:
+      ctx.userToolSearch?.() ?? claudeToolSearchMode(ctx.providerId, ctx.credentialMode, ctx.nativeAuth),
     CLAUDE_CODE_ATTRIBUTION_HEADER: keepAttribution ? '1' : '0',
   };
 }

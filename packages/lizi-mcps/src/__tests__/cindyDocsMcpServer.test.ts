@@ -2710,6 +2710,29 @@ describe('inspect_pdf', () => {
     expect(result.verdict).not.toBe('ok');
   });
 
+  it('单页文字提取失败时给 warning 并指明页码,不当成空白或生成失败', async () => {
+    const client = await withPdf({
+      numPages: 2,
+      pagesInspected: 2,
+      pages: [
+        page(),
+        page({
+          page: 2,
+          textChars: 0,
+          textPreview: '',
+          blank: false,
+          visibilityUnverified: true,
+          textError: "Cannot read properties of null (reading 'name')",
+        }),
+      ],
+    });
+    const result = await callTool(client, 'inspect_pdf', { path: 'out.pdf' });
+    expect(result.verdict).toBe('warning');
+    expect(result.blankPages).toEqual([]);
+    expect(result.visibilityUnverifiedPages).toEqual([2]);
+    expect(result.warning).toContain('第 2 页是解析器读不出文字');
+  });
+
   it('横向与非标准纸张都翻译成人能对照的说法', async () => {
     const client = await withPdf({
       numPages: 2,
@@ -2858,7 +2881,9 @@ describe('inspect_pdf', () => {
     });
     const failed = await callTool(broken, 'inspect_pdf', { path: 'out.pdf' });
     expect(failed.errorCode).toBe('INSPECT_FAILED');
+    // 解析器缺陷也会走到这里:提示仍要求坏文件重做,但不能断言生成环节一定出错。
     expect((failed.data as Record<string, string>).hint).toContain('重做');
+    expect((failed.data as Record<string, string>).hint).toContain('兼容性');
   });
 });
 

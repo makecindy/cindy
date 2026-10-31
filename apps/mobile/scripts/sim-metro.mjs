@@ -31,22 +31,48 @@ export function parseWindowsNetstatListener(output, port) {
   return null;
 }
 
-export function listenerPid(port) {
-  if (process.platform === 'win32') {
-    try {
-      const output = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
-      return parseWindowsNetstatListener(output, port);
-    } catch {
-      // Fall through to the platform-neutral unknown-owner result.
-    }
-    return null;
-  }
+/**
+ * One bounded socket snapshot for whoami; a failed probe is not an empty port.
+ * @param {number[]} ports
+ * @param {{ platform?: NodeJS.Platform, run?: (command: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string }} options
+ */
+export function inspectMetroListeners(ports, { platform = process.platform, run = execFileSync } = {}) {
+  const pids = {};
   try {
-    return execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' })
-      .trim().split('\n')[0] || null;
-  } catch {
-    return null;
+    // Socket names do not need filesystem stat/readlink. -b avoids blocked mounts;
+    // -w suppresses the expected filesystem warnings from that mode.
+    const output = String(run(platform === 'win32' ? 'netstat' : 'lsof',
+      platform === 'win32' ? ['-ano', '-p', 'tcp']
+        : ['-b', '-w', '-nP', `-iTCP:${ports.join(',')}`, '-sTCP:LISTEN', '-Fpn'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, killSignal: 'SIGKILL' }));
+    if (platform === 'win32') {
+      for (const port of ports) {
+        const pid = parseWindowsNetstatListener(output, port);
+        if (pid) pids[port] = pid;
+      }
+    } else {
+      let pid = null;
+      for (const line of output.split(/\r?\n/)) {
+        if (/^p\d+$/.test(line)) pid = line.slice(1);
+        const match = line.match(/^n.*:(\d+)$/);
+        const port = match ? Number(match[1]) : null;
+        if (pid && ports.includes(port) && !pids[port]) pids[port] = pid;
+      }
+    }
+    return { healthy: true, code: 'ready', pids };
+  } catch (error) {
+    // lsof exits 1 when the requested ports have no listeners.
+    if (platform !== 'win32' && error.status === 1 && !error.signal && !error.code
+      && !String(error.stderr ?? '').trim() && !String(error.stdout ?? '').trim()) {
+      return { healthy: true, code: 'ready', pids };
+    }
+    return { healthy: false, code: error.code === 'ETIMEDOUT'
+      ? 'METRO_LISTENERS_TIMEOUT' : 'METRO_LISTENERS_UNAVAILABLE', pids };
   }
+}
+
+export function listenerPid(port) {
+  return inspectMetroListeners([port]).pids[port] ?? null;
 }
 
 const metroOwnerDir = join(tmpdir(), 'cindy-metro-owners');
@@ -104,11 +130,23 @@ function processAlive(pid) {
   }
 }
 
+/** @typedef {{ stage: string, code: string, pid?: number, timeoutMs?: number }} MetroProbeError */
+/** @typedef {{ execFile?: (file: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string, onProbeError?: (error: MetroProbeError) => void }} MetroProcessProbeOptions */
+
+// Preserve the old fail-closed return values while exposing bounded diagnostics
+// to whoami. Never include command output or process environment in the receipt.
+function reportProcessProbeError(error, stage, pid, options) {
+  const timedOut = error?.code === 'ETIMEDOUT';
+  options.onProbeError?.({ stage, code: timedOut ? 'METRO_PROCESS_TIMEOUT' : 'METRO_PROCESS_UNAVAILABLE',
+    ...(pid != null ? { pid: Number(pid) } : {}), ...(timedOut ? { timeoutMs: 5000 } : {}) });
+}
+
 /**
  * Snapshot only process identity, avoiding command lines and environment data.
  * @param {(file: string, args: string[], options: import('node:child_process').ExecFileSyncOptionsWithStringEncoding) => string} [run]
+ * @param {MetroProcessProbeOptions} [options]
  */
-export function windowsProcessSnapshot(run = execFileSync) {
+export function windowsProcessSnapshot(run = execFileSync, options = {}) {
   try {
     const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       "$ErrorActionPreference = 'Stop'; Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, @{Name='StartedAtMs';Expression={([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}} | ConvertTo-Json -Compress",
@@ -119,7 +157,8 @@ export function windowsProcessSnapshot(run = execFileSync) {
       parentPid: entry.ParentProcessId,
       startedAtMs: entry.StartedAtMs,
     }));
-  } catch {
+  } catch (error) {
+    reportProcessProbeError(error, 'process-snapshot', null, options);
     return [];
   }
 }
@@ -160,9 +199,9 @@ export function probeMetroOwnership(port, options = {}) {
   const pid = (options.listenerPid ?? listenerPid)(port);
   if (!pid) return null;
   if ((options.platform ?? process.platform) !== 'win32') {
-    if (!(options.isMetroPid ?? isMetroPid)(pid)) return { pid, cwd: null, source: null };
-    const cwd = cwdOfPid(pid);
-    const source = gitSourceOfPid(pid);
+    if (!(options.isMetroPid ?? isMetroPid)(pid, options)) return { pid, cwd: null, source: null };
+    const cwd = cwdOfPid(pid, options);
+    const source = gitSourceOfPid(pid, options);
     const owner = (options.readOwner ?? readMetroOwner)(port);
     const worktreeRoot = cwd ? path.resolve(cwd, '../..') : null;
     const ownerRoot = owner?.worktreeRoot ? path.resolve(owner.worktreeRoot) : null;
@@ -183,7 +222,7 @@ export function probeMetroOwnership(port, options = {}) {
   }
   const owner = (options.readOwner ?? readMetroOwner)(port);
   if (!owner || !windowsOwnerOwnsListener(owner, pid,
-    (options.processSnapshot ?? windowsProcessSnapshot)())) {
+    (options.processSnapshot ?? windowsProcessSnapshot)(options.execFile ?? execFileSync, options))) {
     return { pid, cwd: null, source: null };
   }
   return {
@@ -199,20 +238,24 @@ export function probeMetroOwnership(port, options = {}) {
 
 // 进程工作目录(用 cwd 判 worktree,而非解析命令行 —— 命令行常是 `pnpm exec expo`、取不到
 // worktree,且各 checkout 目录名不同)。macOS:lsof -a -p <pid> -d cwd -Fn。
-export function cwdOfPid(pid) {
+/** @param {string | number} pid @param {MetroProcessProbeOptions} [options] */
+export function cwdOfPid(pid, options = {}) {
   try {
-    const out = execFileSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' });
+    const out = (options.execFile ?? execFileSync)('lsof', ['-b', '-w', '-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
     const line = out.split('\n').find((l) => l.startsWith('n'));
     return line ? line.slice(1) : null;
-  } catch {
+  } catch (error) {
+    reportProcessProbeError(error, 'cwd', pid, options);
     return null;
   }
 }
 
-export function commandOfPid(pid) {
+/** @param {string | number} pid @param {MetroProcessProbeOptions} [options] */
+export function commandOfPid(pid, options = {}) {
   try {
-    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim();
-  } catch {
+    return (options.execFile ?? execFileSync)('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' }).trim();
+  } catch (error) {
+    reportProcessProbeError(error, 'command', pid, options);
     return '';
   }
 }
@@ -240,8 +283,9 @@ export function processGroupMembers(groupId) {
   }
 }
 
-export function isMetroPid(pid) {
-  return /expo|metro/i.test(commandOfPid(pid));
+/** @param {string | number} pid @param {MetroProcessProbeOptions} [options] */
+export function isMetroPid(pid, options = {}) {
+  return /expo|metro/i.test(commandOfPid(pid, options));
 }
 
 function normalizeComparablePath(value) {
@@ -328,12 +372,14 @@ export async function terminateMetro(pid, options = {}) {
 }
 
 /** Read the exact source token injected by sim:start from a running Metro. */
-export function gitSourceOfPid(pid) {
+/** @param {string | number} pid @param {MetroProcessProbeOptions} [options] */
+export function gitSourceOfPid(pid, options = {}) {
   try {
-    const out = execFileSync('ps', ['-ww', '-E', '-p', pid], { encoding: 'utf8' });
+    const out = (options.execFile ?? execFileSync)('ps', ['-ww', '-E', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
     const match = out.match(/EXPO_PUBLIC_XDT_GIT_SOURCE=(\S*)/);
     return match ? match[1] : null;
-  } catch {
+  } catch (error) {
+    reportProcessProbeError(error, 'source', pid, options);
     return null;
   }
 }
@@ -349,6 +395,8 @@ export function gitSourceIdentity(worktreeRoot, options = {}) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     maxBuffer: 64 * 1024 * 1024,
+    timeout: 30_000,
+    killSignal: 'SIGKILL',
     ...extra,
   })).trim();
 

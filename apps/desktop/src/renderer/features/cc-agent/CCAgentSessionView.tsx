@@ -1,3 +1,7 @@
+import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
+import { PluginUiEnablePrompt } from '@/components/new-chat/PluginUiEnablePrompt';
+import { McpSetupPrompt, useMcpSetupRequest } from '@/components/new-chat/McpSetupPrompt';
+import { deviceDisplayName } from '@/lib/deviceName';
 import { CompanionVoicePanel } from '../bots/voice/CompanionVoicePanel';
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { voiceTaskFailure } from '../bots/voice/VoiceReplyTracker';
@@ -24,7 +28,6 @@ import { canContinueFailedTurn } from '@cindy/maker-shared/synthetic-trigger';
  * F-FP-5:   workingDir read-only display
  */
 
-import { useCodexContextWindow } from '@/hooks/useCodexContextWindow';
 import {
   Profiler,
   useCallback,
@@ -82,7 +85,6 @@ import {
 
 import { cn, basename } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
-import { Collapse } from '@/components/ui/collapse';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
@@ -167,7 +169,7 @@ import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSilentEncryptedRetry } from '@/hooks/useSilentEncryptedRetry';
 import { TodaySpendChip } from '@/components/status/TodaySpendChip';
-import { ContextWindowBudgetChip } from '@/components/status/ContextWindowBudgetChip';
+import { ContextCapacityRing, formatTokenCount, getModelContextWindow } from '@/components/status/ContextCapacityRing';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
@@ -190,6 +192,8 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import {
   controlledTaskAgentLocationReadable,
   controlledTaskReadableShareIds,
@@ -219,6 +223,7 @@ import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionT
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
+import { WorkingDirectoryTip } from './WorkingDirectoryTip';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
 import {
@@ -307,7 +312,7 @@ import {
 } from '@/lib/workLouderCodexTaskActions';
 import { useSessionHardwareTaskActions } from './lib/sessionHardwareTaskActions';
 import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
-import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
+import { getModelById, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import {
@@ -561,6 +566,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
+  focusComposerOnOpen?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -844,6 +851,7 @@ function CCAgentSessionContent({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  focusComposerOnOpen = false,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -1240,7 +1248,7 @@ function CCAgentSessionContent({
   const remoteSync = useRemoteSessionSync(sessionId, remoteDeviceId);
   // 远程会话连接健康(本机断链重连中 / 被控端离线)→ 顶部 banner 提示 + 手动重新同步。
   const remoteConn = useRemoteSessionConnection(remoteDeviceId);
-  const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId);
+  const remoteLinkIssue = useDeviceLinkConnectionIssue(!!remoteDeviceId, remoteDeviceId);
   const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline';
   const remoteWritesBlocked = remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   const showRemoteWriteBlockedToast = useCallback(() => {
@@ -1866,6 +1874,7 @@ function CCAgentSessionContent({
     errorIsRecoverable,
     errorRetryText,
     errorCanContinue,
+    errorPersistId,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -2208,6 +2217,12 @@ function CCAgentSessionContent({
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
   const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
+  const controlledModelRoute = useModelRouteDevices({
+    controlledDeviceId: remoteDeviceId,
+    leadAgentDeviceId: session?.agentDeviceId,
+    pendingAgentDeviceId,
+    sshRemote: !!session?.remoteHostId,
+  });
   // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
   // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
   const {
@@ -2237,12 +2252,12 @@ function CCAgentSessionContent({
     !session?.remoteHostId &&
     !isSharedTaskPeer(remoteDeviceId) &&
     controlledTaskSupportsAgentLocation(session) &&
-    controlledTaskAgentLocationReadable({
+    (!!controlledModelRoute.catalogHostDeviceId || controlledTaskAgentLocationReadable({
       agentDeviceId: session?.agentDeviceId,
       pendingAgentDeviceId,
       selfDeviceId,
       ...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),
-    });
+    }));
   /** 被控电脑上的任务里 Agent 现在所在的电脑(undefined = 被控电脑本身)。 */
   const controlledAgentDeviceId = controlledAgentLocation
     ? (session?.agentDeviceId ?? undefined)
@@ -2250,6 +2265,7 @@ function CCAgentSessionContent({
   const remoteAgentDevices = useMemo(() => {
     if (session?.remoteHostId) return undefined;
     if (remoteDeviceId) {
+      if (controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;
       return controlledAgentLocation
         ? selectControlledTaskAgentDevices({
             devices: selectableDevices,
@@ -2274,6 +2290,7 @@ function CCAgentSessionContent({
   }, [
     selectableDevices,
     providerShareDevices,
+    controlledModelRoute,
     remoteDeviceId,
     session?.remoteHostId,
     controlledAgentLocation,
@@ -2285,7 +2302,8 @@ function CCAgentSessionContent({
   ]);
   const shownAgentDeviceId = agentDeviceId ?? controlledAgentDeviceId;
   const agentDeviceName = shownAgentDeviceId
-    ? (selectableDevices.find((device) => device.deviceId === shownAgentDeviceId)?.name ??
+    ? (controlledModelRoute.devices?.find((device) => device.deviceId === shownAgentDeviceId)?.name ??
+      selectableDevices.find((device) => device.deviceId === shownAgentDeviceId)?.name ??
       providerShareDeviceName(shownAgentDeviceId))
     : null;
   /** 被控电脑的名字(换 Agent 所在电脑时「改回那台」的确认文案用)。 */
@@ -2319,7 +2337,9 @@ function CCAgentSessionContent({
       session?.remoteHostId,
     ],
   );
-  const catalogDeviceId = controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId;
+  const catalogDeviceId = modelCatalogKey(
+    controlledAgentDeviceId ?? remoteDeviceId ?? agentDeviceId, controlledModelRoute.catalogHostDeviceId,
+  );
   const { providers: deviceProviders } = useDeviceProviders(catalogDeviceId);
   const providers = catalogDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
@@ -3976,6 +3996,8 @@ function CCAgentSessionContent({
       mentions?: MentionedResource[],
       opts?: {
         deliveryMode?: MessageDeliveryMode;
+        providerId?: string | null;
+        baselineRecovery?: boolean;
         literalText?: boolean;
         independent?: boolean;
         beforeEnqueue?: () => Promise<boolean>;
@@ -4132,7 +4154,13 @@ function CCAgentSessionContent({
       // 的认证弹窗/导航闭包塞进 outbox：弱网时先建立稳定 clientId 的本地乐观消息，
       // 重连后由被控端 enqueue / steer 路径做权威校验。这样离开任务后旧 outbox 也不会
       // 再弹出旧页面的认证对话框或导航回旧路由。
-      if (!remoteDeviceId) {
+      // The old Harness may no longer be authenticated. Only the unchanged
+      // host-offered route may defer this UI precheck to main's recovery.
+      const recoveringBaseline = opts?.baselineRecovery === true && session?.source === 'bot' &&
+        session.runtimeBaselineRecoveryPending === true && !session.runtimePending && !agentSwitchIntent &&
+        model === session.runtimeEffective?.model && displayAgentKind === session.runtimeEffective.agentKind &&
+        (opts.providerId ?? null) === (session.runtimeEffective.providerId ?? null);
+      if (!remoteDeviceId && !recoveringBaseline) {
         const authVendor = displayAgentKind === 'pi' ? 'pi' : isCodex ? 'codex' : 'cc';
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
@@ -4341,6 +4369,8 @@ function CCAgentSessionContent({
       readOnly,
       t,
       vendorAuthGate,
+      displayAgentKind,
+      agentSwitchIntent,
       confirmWithCheckbox,
       remoteDeviceId,
       sessionHandoffPreparing,
@@ -5263,11 +5293,13 @@ function CCAgentSessionContent({
       requestChatTaskFocus(sessionId, clientId);
     }
   }, [pendingQueue, sessionId, setQueueExpanded]);
+  const pendingMcpSetup = useMcpSetupRequest(sessionId ?? null, !remoteDeviceId && !readOnly);
   const messageStreamEl = (
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
       header={messageStreamHeader}
+      footer={pendingMcpSetup ? <McpSetupPrompt key={pendingMcpSetup.requestId} request={pendingMcpSetup} /> : null}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5276,6 +5308,7 @@ function CCAgentSessionContent({
       agentKind={session?.agentKind}
       remoteHostId={session?.remoteHostId ?? null}
       sessionSource={session?.source}
+      onDiagnoseError={canDiagnoseError ? handleDiagnoseError : undefined}
       // text-lightbox-trigger-extension F1/F2: cwd flows from session
       // owner down through MessageStream → AssistantMessage / UserMessage.
       // The spec guarantees `session.workingDir` is set; `?? ''` is purely
@@ -5287,6 +5320,7 @@ function CCAgentSessionContent({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
+      activeErrorClientId={!readOnly && error ? errorPersistId : null}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
@@ -5595,6 +5629,7 @@ function CCAgentSessionContent({
               className="mx-auto grid grid-cols-1 grid-rows-1 items-center"
               style={{ width: inputWidth }}
             >
+              {!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (
                 <RunningStatusBar
                   key={sessionId}
                   sessionKey={sessionId ?? null}
@@ -5639,6 +5674,7 @@ function CCAgentSessionContent({
                   }
                   className="col-start-1 row-start-1"
                 />
+              ) : null}
               <div
                 data-composer-center-group="true"
                 className="pointer-events-none relative z-10 col-start-1 row-start-1 flex max-w-full -translate-y-1 items-center justify-center gap-2"
@@ -5783,6 +5819,7 @@ function CCAgentSessionContent({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  onDiagnose={canDiagnoseError ? handleDiagnoseError : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
@@ -5869,10 +5906,14 @@ function CCAgentSessionContent({
             />
 
             <div
-              className="mx-auto flex flex-col items-center gap-[10px]"
+              className="relative mx-auto flex flex-col items-center gap-[10px]"
               style={{ width: inputWidth }}
               data-chat-composer-stack
             >
+              {!readOnly && sessionId && <McpAppPermissionPrompt sessionId={sessionId} floating />}
+              {!readOnly && !session?.remoteHostId && (
+                <PluginUiEnablePrompt key={`${sessionId}:${remoteDeviceId ?? agentDeviceId ?? 'local'}`} deviceId={remoteDeviceId ?? agentDeviceId ?? undefined} />
+              )}
               {/* FP-7 / F-PERM-2 / F7.4: mutually exclusive prompts.
                  Plan review takes precedence — the SDK won't interleave it with
                  other tool calls, but explicit priority guards against layout
@@ -6073,6 +6114,8 @@ function CCAgentSessionContent({
                     <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
                       getMessage={getQuoteMessage} names={botQuoteNames} />
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  // Picking 「回复」 brings the caret here, ready to type the reply.
+                  focusRequest={pendingReplyQuote}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
@@ -6085,6 +6128,7 @@ function CCAgentSessionContent({
                   // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
                   runtimeAgentKind={session ? dbToMakerAgentKind(session.agentKind) : null}
                   runtimeEffective={session?.runtimeEffective}
+                  allowBaselineRecovery={session?.source === 'bot' && session.runtimeBaselineRecoveryPending === true}
                   baselineEffort={session?.runtimeBaseline?.effort ?? null}
                   runtimePending={session?.runtimePending}
                   // session 未加载时保留 undefined 未知态；Orca 原地切换与换电脑分别门控。
@@ -6097,6 +6141,7 @@ function CCAgentSessionContent({
                   agentDeviceId={session?.agentDeviceId ?? null}
                   agentDeviceName={agentDeviceName}
                   {...(remoteAgentDevices ? { remoteAgentDevices } : {})}
+                  catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
                   modelMemoryOverride={remoteModelMemoryOverride}
                   initialModel={session?.model}
                   initialProviderId={session?.providerId ?? null}
@@ -6136,7 +6181,7 @@ function CCAgentSessionContent({
                       : botChatIdentity
                       ? t(botChatIdentity.deviceId ? 'bots.devicePicker.remotePlaceholder' : botComposerPlaceholderKey(botChatIdentity.name), {
                           name: botChatIdentity.name,
-                          device: botChatIdentity.deviceName || botChatIdentity.deviceId,
+                          device: deviceDisplayName(botChatIdentity.deviceId ?? '', botChatIdentity.deviceName),
                         })
                       : t('ccAgent.layout.chatPlaceholder')
                   }
@@ -6167,8 +6212,8 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail || disableAutofocus}
-                  focusOnStorageKeyChange={ownsRoute}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
                   // (worker 自己不能再开协同)。
@@ -6286,24 +6331,11 @@ function CCAgentSessionContent({
                       </div>
                     </Tip>
                   ) : (
-                    <Tip
-                      text={
-                        composerDir ? (
-                          session?.remoteHostId ? (
-                            // 远端 session: Tip 顶部加一行 "Host: <alias>" 让用户在
-                            // 同 workingDir 跨多 host 撞合场景下也能区分。hostId 即
-                            // SSH alias (HostConfig.id), 不需要额外 lookup。
-                            <>
-                              <div>Host: {session.remoteHostId}</div>
-                              <div>{composerDir}</div>
-                            </>
-                          ) : (
-                            composerDir
-                          )
-                        ) : null
-                      }
-                      mono
-                      side="top"
+                    <WorkingDirectoryTip
+                      path={composerDir}
+                      deviceId={remoteDeviceId ?? session?.deviceLinkDeviceId}
+                      deviceName={session?.deviceLinkDeviceName}
+                      remoteHostId={session?.remoteHostId}
                     >
                       {isRemoteWorktreeSession ? (
                         <div className="flex min-w-0 items-center gap-1.5">
@@ -6319,7 +6351,7 @@ function CCAgentSessionContent({
                           {workingDirChipContent}
                         </button>
                       )}
-                    </Tip>
+                    </WorkingDirectoryTip>
                   )}
 
                   {/* Right: Context capacity indicator */}
@@ -6346,29 +6378,12 @@ function CCAgentSessionContent({
                       deviceLinkDeviceId={remoteDeviceId ?? null}
                       usageAccount={usageAccount}
                     />
-                    {/* device-link 远程任务的档位走 maker:set-context-window-budget 隧道命令，
-                        在偏好文件落盘并应用到活实例；老被控端不支持时由 chip 提示版本不支持。
-                        当前档位与可选档位一起来自权威边界查询（本地 main / 远程被控端）。 */}
-                    {sessionId && (
-                      <ContextWindowBudgetChip
-                        sessionId={sessionId}
-                        contextTokens={agentStatus.contextTokens}
-                        model={agentSwitchIntent?.model ?? session?.model ?? ''}
-                        providerId={
-                          agentSwitchIntent
-                            ? agentSwitchIntent.providerId
-                            : (session?.providerId ?? null)
-                        }
-                        agentKind={normalizeDbAgentKind(displayAgentKind)}
-                        providers={{ providers }}
-                        deviceId={remoteDeviceId}
-                        disabled={readOnly || !session}
-                      />
-                    )}
                     <ContextCapacityRing
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}
-                      providerId={session?.providerId}
+                      providerId={agentSwitchIntent ? agentSwitchIntent.providerId : session?.providerId}
+                      providers={{ providers }}
+                      disabled={readOnly || !session}
                       contextTokens={agentStatus.contextTokens}
                       model={agentSwitchIntent?.model ?? session?.model ?? ''}
                       vendorKey={normalizeDbAgentKind(displayAgentKind)}
@@ -6475,6 +6490,7 @@ function CCAgentSessionContent({
         // 面板里列出与输入框同一份其他电脑 / 分享的供应商，可以换到本机或别处。
         leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
         remoteAgentDevices={remoteAgentDevices}
+        catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
@@ -6811,22 +6827,22 @@ function RunningStatusBar({
         !backgroundTasksRunning &&
         usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // Retain the outgoing row while its occupied height closes. Returning null
-  // after the opacity fade removed the whole row in one frame.
-  const rowVisible = Boolean(rightLeadingSlot) || (!suppressContent && (!isHidden || ratePanelPinned));
+  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
+  // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
   //   claude tool 进度会拼成 `mcp__x__y running...` 长串,窄宽时左段靠 span truncate;
   // - 右段 justify-self-end + min-w-0:elapsed / token 是低优先级信息,必要时可溢出。
   return (
-    <Collapse
-      open={rowVisible}
-      animateResize
-      className={cn('mx-auto', className)}
+    <div
+      className={cn(
+        'mx-auto grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]',
+        className,
+      )}
       style={{ width: inputWidth }}
     >
-    <div className="grid select-none grid-cols-[minmax(0,1fr)_auto] items-center px-2 py-[6px]">
       <div
         // cadenced shimmer:key 重挂载 = 重播一次呼吸(见上方 shimmerCycle 说明)。
         // 左段只有 icon + 一行文字,1.5s 一次的重挂载成本可忽略。
@@ -6878,7 +6894,7 @@ function RunningStatusBar({
         {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
-            className="flex min-w-0 items-center gap-[6px] whitespace-nowrap tabular-nums"
+            className="flex min-w-0 items-center gap-[6px]"
             style={ratePanelPinned ? undefined : fadeStyle}
             aria-hidden={isHidden && !ratePanelPinned}
           >
@@ -6945,201 +6961,7 @@ function RunningStatusBar({
         )}
       </div>
     </div>
-    </Collapse>
   );
 }
 
-// ---------------------------------------------------------------------------
-// ContextCapacityRing — circular token usage indicator
-// ---------------------------------------------------------------------------
-
-/** Format a token count with K/M suffix: 200000 → "200K", 1000000 → "1M". */
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) {
-    const m = n / 1_000_000;
-    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
-  }
-  if (n >= 1_000) {
-    const k = n / 1_000;
-    return `${Number.isInteger(k) ? k : k.toFixed(1)}K`;
-  }
-  return n.toString();
-}
-
-/**
- * 从 maker capabilities cache 查模型 contextWindow。
- * 拿不到时返回 undefined，由 display resolver 兜底到 200K。
- */
-function getModelContextWindow(
-  model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
-  deviceId?: string,
-): number | undefined {
-  const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
-  return found?.contextWindow;
-}
-
-function ContextCapacityRing({
-  isRunning,
-  sessionId,
-  providerId,
-  contextTokens,
-  model,
-  vendorKey,
-  sdkContextWindow,
-  verifiedContextWindow,
-  deviceId,
-  onCompact,
-}: {
-  isRunning?: boolean;
-  sessionId?: string;
-  providerId?: string | null;
-  contextTokens: number;
-  model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
-  /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
-  sdkContextWindow: number;
-  verifiedContextWindow?: number | null;
-  /** device-link 远程会话所属被控端 id;按被控端能力查 contextWindow(本机会话 undefined,行为不变)。 */
-  deviceId?: string;
-  /** 提供时圆环可点击 — 点击后(经用户确认)向 agent 发送 /compact 压缩上下文。 */
-  onCompact?: () => void;
-}) {
-  const { t } = useTranslation();
-  const [contextInspection, setContextInspection] = useState(0);
-  const codexContext = useCodexContextWindow({
-    enabled: vendorKey === 'codex' && !deviceId && Boolean(sessionId),
-    providerId,
-    modelId: model,
-    sessionId,
-    reportedWindow: sdkContextWindow,
-    refreshKey: `${isRunning}:${contextInspection}`,
-  });
-  const contextWindow = resolveDisplayContextWindow({
-    sdkContextWindow,
-    verifiedContextWindow,
-    runtimeWindowAuthoritative: vendorKey === 'codex',
-    nativeContextWindow: codexContext?.contextWindow,
-    nativeContextPending: codexContext?.pendingApply,
-    modelContextWindow: getModelContextWindow(model, vendorKey, deviceId),
-  });
-  const pct =
-    contextWindow > 0
-      ? Math.min(Math.max(Math.round((contextTokens / contextWindow) * 100), 0), 100)
-      : 0;
-
-  // Ring geometry: outer diameter 20px, strokeWidth 2.5
-  const size = 20;
-  const strokeWidth = 2.5;
-  const radius = (size - strokeWidth) / 2; // 8.75
-  const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (circumference * pct) / 100;
-
-  // Color thresholds per spec
-  const fillColor =
-    pct > 90
-      ? 'var(--error-flat)'
-      : pct > 70
-        ? 'var(--warning-fg)'
-        : 'var(--msg-tool-card-chevron)';
-
-  const usedTokens = Math.max(0, contextTokens);
-  const tooltipText =
-    contextWindow > 0
-      ? `Context — ${formatTokenCount(usedTokens)} / ${formatTokenCount(contextWindow)} (${pct}%)`
-      : 'No context data yet';
-
-  const ringContent = (
-    <>
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        className="shrink-0"
-        aria-hidden="true"
-        focusable="false"
-      >
-        {/* Track (background circle) */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke="var(--msg-tool-card-border)"
-          strokeWidth={strokeWidth}
-        />
-        {/* Fill arc — starts at 12 o'clock, sweeps clockwise */}
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={radius}
-          fill="none"
-          stroke={fillColor}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={dashOffset}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </svg>
-      <span className="text-12 font-medium leading-none" style={{ color: fillColor }}>
-        {contextWindow > 0 ? `${pct}%` : '—'}
-      </span>
-    </>
-  );
-
-  return (
-    <Tip
-      text={
-        onCompact ? (
-          <>
-            <div>{tooltipText}</div>
-            <div>{t('ccAgent.layout.contextRing.compactHint')}</div>
-          </>
-        ) : vendorKey === 'codex' ? (
-          // Native Codex manages compaction; this control only reads its capacity.
-          <>
-            <div>
-              {codexContext?.pendingApply
-                ? t('ccAgent.layout.contextRing.codexPendingHint')
-                : tooltipText}
-            </div>
-            <div>
-              {codexContext
-                ? t('settings.providers.models.advanced.codexContextValues', {
-                    total: codexContext.contextWindow.toLocaleString(),
-                    usable: codexContext.usableContextWindow.toLocaleString(),
-                    compact: codexContext.autoCompactTokenLimit.toLocaleString(),
-                  })
-                : t('settings.providers.models.advanced.codexContextUnknown')}
-            </div>
-            <div>{t('ccAgent.layout.contextRing.codexAutoHint')}</div>
-          </>
-        ) : (
-          tooltipText
-        )
-      }
-    >
-      {onCompact ? (
-        <button
-          type="button"
-          onClick={onCompact}
-          aria-label={t('ccAgent.layout.contextRing.compactHint')}
-          className="flex shrink-0 cursor-pointer items-center gap-1 transition-opacity hover:opacity-75 active:opacity-60"
-        >
-          {ringContent}
-        </button>
-      ) : (
-        <div
-          className="flex shrink-0 items-center gap-1"
-          onMouseEnter={() => {
-            if (vendorKey === 'codex') setContextInspection((n) => n + 1);
-          }}
-        >
-          {ringContent}
-        </div>
-      )}
-    </Tip>
-  );
-}
 import { isSharedTaskPeer } from '@cindy/device-link';

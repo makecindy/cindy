@@ -31,6 +31,9 @@ export interface BotAutonomyHostDeps {
   readSessionExecution(sessionId: string): BotAutonomyExecution | null;
   /** A durable terminal receipt owns this event's execution, including pending delivery. */
   isCompletionHandledByTeammate(sessionId: string, botId: string, execution: BotAutonomyExecution): Promise<boolean | null>;
+  hasTaskDeliveryOrigin?(sessionId: string): Promise<boolean>;
+  restoreTaskDeliveries?(): void;
+  noteTaskDelivery?(sessionId: string, execution: BotAutonomyExecution, final: boolean): boolean;
   /** 某个本机任务当前挂起的交互请求（只读）。 */
   getPendingInteractions(sessionId: string): readonly unknown[];
   getMainWindow(): BrowserWindow | null;
@@ -54,6 +57,7 @@ export function getActiveBotAutonomy(): typeof current {
 
 export function setActiveBotAutonomy(next: typeof current): void {
   current = next;
+  if (next && scopeIsCurrent(next.scope)) hostDeps.restoreTaskDeliveries?.();
 }
 
 export function scopeIsCurrent(scope: string): boolean {
@@ -65,6 +69,34 @@ export function noteBotAutonomyInputProjection(projection: unknown): void {
   const runtime = current?.runtime;
   if (!runtime || !projection || typeof projection !== 'object') return;
   runtime.watch.applyInputProjection(projection as BotAutonomyInputProjection);
+}
+
+/** Followed work and tasks with a recorded origin share the same delivery report. */
+export async function readTaskDeliveryNote(sessionId: string): Promise<string | null> {
+  const active = current;
+  if (!active || !scopeIsCurrent(active.scope)) return null;
+  const ownership = await readTaskOwnership(ownerScopedUserDataPath());
+  if (current !== active || !scopeIsCurrent(active.scope)) return null;
+  if ([...ownership.bots.values()].some(bot => bot.canonicalSessionId === sessionId)) return null;
+  const hasOrigin = await hostDeps.hasTaskDeliveryOrigin?.(sessionId);
+  if (current !== active || !scopeIsCurrent(active.scope)) return null;
+  if (!ownership.creatorBySession.has(sessionId) && !active.runtime.watch.getSchedulerBotId() && !hasOrigin) return null;
+  return '[Task delivery] Host bookkeeping, not a user message: before your final answer in every turn, call cindy_helper.call_tool({name:"report_task_delivery",args:{final_delivery:true|false}}). Judge whether this turn newly delivers the requested result: PR delivered for human review, merged/closed, or goal achieved is true; intermediate review fixes, waiting for CI, or repeated status is false. A true report followed by normal completion is delivered by the host to the recorded original conversation, or uses existing follow-up when no origin is recorded.';
+}
+
+export function reportTaskDelivery(sessionId: string, finalDelivery: boolean, sessionInstanceId?: string):
+  { ok: true } | { ok: false; errorCode: string; message: string } {
+  const active = current;
+  const execution = hostDeps.readSessionExecution?.(sessionId);
+  if (!active || !scopeIsCurrent(active.scope) || !execution
+    || (sessionInstanceId !== undefined && sessionInstanceId !== execution.instanceId)) {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The current task execution is not running.' };
+  }
+  const originReported = hostDeps.noteTaskDelivery?.(sessionId, execution, finalDelivery) ?? false;
+  if (!active.runtime.watch.reportDelivery(sessionId, execution, finalDelivery) && !originReported) {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'The current task execution is not running.' };
+  }
+  return { ok: true };
 }
 
 export function getBotAutonomyGlance(

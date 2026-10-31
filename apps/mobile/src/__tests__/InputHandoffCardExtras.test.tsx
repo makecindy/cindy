@@ -291,6 +291,23 @@ it("hands a QR code from the computer to this phone: open its link here, or save
   expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 4 });
 });
 
+// ask_owner kind=scan with the agent's screenshot (2026-10-30): the host cannot see that
+// screen, so the sheet says where the picture came from, has nothing to tap, and the
+// owner hands back after confirming the sign-in on this phone.
+it("labels a code from the agent's screenshot and lets the owner hand back after scanning", async () => {
+  const { container, onDecision } = mount(step({ controls: [], picture: true, qr: "scan", agentPicture: true, agentControlled: true }));
+  await press(container, "interaction.inputHandoff.action.scan");
+  expect(container.textContent).toContain("interaction.inputHandoff.agentPicture");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.agentControlled");
+  expect(container.textContent).not.toContain("interaction.inputHandoff.qr.hintLink");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.picture");
+  const code = container.querySelector('[data-testid="interaction.inputHandoff.qr.code"]') as HTMLButtonElement;
+  await act(async () => code.click());
+  expect(answers).toEqual([]);
+  await press(container, "interaction.inputHandoff.action.done");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "done", expectedRevision: 2 });
+});
+
 it("opens an app link here first, the way the phone camera would", async () => {
   const appLink = "weixin://dl/login?t=1";
   openPicture.mockImplementationOnce(async (_snapshot, answer) => {

@@ -15,7 +15,7 @@ import type {
 } from '../../shared/conversationSearch.js';
 import { conversationSearchTitle } from '../../shared/conversationSearch.js';
 import type { SessionSource } from '../../shared/sessionSource.js';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
+import { normalizeWorkingDirForComparison, normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
 import { getDbClient } from './client/current.js';
 import { botProfiles, botSessionLinks, messages, projectAliases, sessions } from './schema.js';
 import { searchChatHistoryHybrid } from './chatHistorySearch.js';
@@ -135,7 +135,7 @@ export async function searchConversations(
       // renderer 渲染时调同一个 conversationSearchTitle,两端逐字一致。
       let match = fuzzyTitleMatch(conversationSearchTitle(row.title, request.unnamedLabel), query);
       if (!match && row.workspaceKind === 'project' && !row.remoteHostId && row.workingDir
-        && aliasesByPath.get(normalizeProjectOrderPath(row.workingDir))?.includes(query.toLowerCase())) {
+        && aliasesByPath.get(normalizeProjectOrderPath(row.projectDir ?? row.workingDir))?.includes(query.toLowerCase())) {
         // Alias-only hits have no highlight positions in the task's title.
         match = { score: 0, indices: [] };
       }
@@ -335,9 +335,9 @@ function applyWorkingDirFilter(
   workingDirs: string[] | null,
 ): SessionRow[] {
   if (workingDirs == null) return rows;
-  const allowed = new Set(workingDirs);
+  const allowed = new Set(workingDirs.map((dir) => normalizeWorkingDirForComparison(dir)));
   return rows.filter((row) => {
-    const key = normalizeWorkingDirForGrouping(row.workingDir);
+    const key = normalizeWorkingDirForComparison(row.projectDir ?? row.workingDir);
     return key != null && allowed.has(key);
   });
 }
@@ -433,6 +433,7 @@ function sessionSummaryFromRow(
     id: row.id,
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: row.workspaceKind,
     agentKind: normalizeDbAgentKind(row.agentKind),
     status: row.status,

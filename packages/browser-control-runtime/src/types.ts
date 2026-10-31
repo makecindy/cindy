@@ -95,6 +95,8 @@ export interface BrowserActRequest {
   textGone?: string;
   timeoutMs?: number;
   fn?: string;
+  /** Host-built structured read. Runtimes without this optimization use fn. */
+  domRead?: import('./dom-read.js').BrowserDomRead;
 }
 
 export interface BrowserControlRequest {

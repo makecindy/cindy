@@ -21,6 +21,7 @@ import {
   accessibilityElement,
   accessibilityHidden,
   disabled,
+  environment,
   opacity,
   scrollDisabled,
   contentShape,
@@ -54,6 +55,7 @@ export function ComposerSheet({
   onBack,
   backDisabled = false,
   backLabel,
+  headerTrailing,
   children,
   aboveContent,
   aboveContentTitle,
@@ -62,6 +64,7 @@ export function ComposerSheet({
   nativeContent,
   contentScrolls,
   nativeList,
+  nativeEditMode,
   nativeHeader,
   nativeRoot,
   preventDismiss = false,
@@ -73,6 +76,12 @@ export function ComposerSheet({
   // UIKit disables the medium detent in compact-height landscape. Never bind
   // selection to an unavailable detent, including after rotating an open sheet.
   const landscape = width > height;
+  // The hosted RN tree keeps its first detent's layout, so a pinned footer is pushed below a
+  // medium sheet or under the home indicator after resizing. Such sheets always open large.
+  const largeOnly = landscape || (!!contentScrolls && !!footer);
+  const editModeModifiers = nativeEditMode === undefined
+    ? []
+    : [environment('editMode', nativeEditMode ? 'active' : 'inactive')];
   return (
     <Host
       colorScheme={mode}
@@ -89,7 +98,7 @@ export function ComposerSheet({
       >
         <Group
           modifiers={[
-            presentationDetents(landscape ? ["large"] : ["medium", "large"], { selection: landscape ? "large" : "medium" }),
+            presentationDetents(largeOnly ? ["large"] : ["medium", "large"], { selection: largeOnly ? "large" : "medium" }),
             presentationDragIndicator("visible"),
             interactiveDismissDisabled(preventDismiss),
           ]}
@@ -116,7 +125,7 @@ export function ComposerSheet({
               <Spacer />
               <Text modifiers={[font({ textStyle: "headline" })]}>{title}</Text>
               <Spacer />
-              {onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null}
+              {headerTrailing ?? (onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null)}
             </HStack> : null}
             {!nativeRoot && nativeHeader}
             {aboveContent && aboveContentTitle ? (
@@ -156,7 +165,7 @@ export function ComposerSheet({
                   {nativeRoot.header}
                   <Form
                     testID={testID ? `${testID}.list` : undefined}
-                    modifiers={[containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                    modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
                   >
                     {nativeRoot.content}
                   </Form>
@@ -171,7 +180,7 @@ export function ComposerSheet({
                     {nativeHeader}
                     <Form
                       testID={testID}
-                      modifiers={[containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
+                      modifiers={[...editModeModifiers, containerRelativeFrame({ axes: 'horizontal' }), scrollContentBackground("hidden")]}
                     >
                       {children}
                     </Form>
@@ -180,6 +189,7 @@ export function ComposerSheet({
               </ZStack>
             ) : nativeContent && nativeList ? (
               <List testID={testID} modifiers={[
+                ...editModeModifiers,
                 containerRelativeFrame({ axes: 'horizontal' }),
                 listStyle("plain"),
                 scrollContentBackground("hidden"),
@@ -189,6 +199,7 @@ export function ComposerSheet({
               </List>
             ) : nativeContent ? (
               <Form testID={testID} modifiers={[
+                ...editModeModifiers,
                 containerRelativeFrame({ axes: 'horizontal' }),
                 scrollContentBackground("hidden"),
                 ...(aboveContent ? [padding({ top: -12 })] : []),

@@ -2,7 +2,7 @@
  * 群聊「引用回复」的引用块（docs/product-rules/bot-group-chat.md §10「引用回复」）。
  *
  * 同一个块用在两处：输入框上方的待发引用（可取消，不动正文），以及已发消息里的引用
- * （原消息可定位时点击跳过去）。左侧竖线与 Markdown 引用块同一 token；摘要只占一到两行，
+ * （原消息可定位时点击跳过去）。左侧竖线与 Markdown 引用块同一 token；摘要最多一行，
  * 长消息不会撑开时间线。原消息已删除时只显示作者与「原消息已删除」，不再露出快照。
  */
 import { Paperclip, X } from 'lucide-react';
@@ -40,7 +40,7 @@ function QuoteLines({ display, compact }: { display: BotGroupQuoteDisplay; compa
         )}
       >
         {attachmentsOnly ? <Paperclip size={12} aria-hidden className="shrink-0" /> : null}
-        <span className={cn('min-w-0 break-words [overflow-wrap:anywhere]', compact || attachmentsOnly ? 'truncate' : 'line-clamp-2')}>
+        <span className="min-w-0 truncate">
           {summary}
         </span>
       </span>

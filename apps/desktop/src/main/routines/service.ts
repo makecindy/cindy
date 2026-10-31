@@ -9,6 +9,8 @@ import {
   type Routine,
   type RoutineRun,
   type RoutineInput,
+  type RoutineModel,
+  type RoutineDeliveryTarget,
   type Schedule,
   type ScheduleStorage,
   type Scheduler,
@@ -33,10 +35,9 @@ import { currentFollowUpEvents } from '../bot-autonomy/hub.js';
 import {
   BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
-  BUILTIN_TODO_CHECK_ROUTINE_PREFIX,
   ROUTINE_TRIGGER_DATA_LEAD,
 } from '../../shared/botAutonomy.js';
-import { TODO_CHECK_PROMPT_VERSION, buildTodoCheckRoutineInput, builtinTodoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
+import { buildTodoCheckRoutineInput, localizedLegacyTodoCheck, todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
 import {
   NIGHTLY_LEARNING_BUILTIN_VERSION,
   buildNightlyLearningRoutineInput,
@@ -47,11 +48,20 @@ import { readNightlyLearningState, updateNightlyLearningState } from '../maker-i
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
 export interface RoutineHostDeps {
+  deliveryTargets?(botId: string): Promise<RoutineDeliveryTarget[]>;
+  deliverResult?(input: { routine: Routine; runId: string; sessionId: string; targetSessionId: string; text: string; assertCurrent(): void }): Promise<void>;
   assertImportedAutomationReady?: typeof import('../bot-import/host.js').ensureImportedAutomationReady;
   prepareImportedAutomation?: typeof import('../bot-import/automationRuntime.js').prepareImportedAutomation;
   finishImportedAutomation?: typeof import('../bot-import/automationRuntime.js').finishImportedAutomation;
   recoverImports?: () => Promise<void>;
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
+  ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
+  closeRoutineSession?(sessionId: string): Promise<void>;
+  /**
+   * Fresh 任务未被派发给模型时回收：它与普通任务一样出现在任务列表里，
+   * 留着就只是一条永远不会被打开的空壳。
+   */
+  deleteRoutineSession?(sessionId: string): Promise<void>;
   getScheduler(): Pick<Scheduler, 'runNow' | 'pause' | 'delete'> | null;
   getScheduleStorage(): Pick<ScheduleStorage, 'get' | 'insert' | 'update' | 'listRuns'>;
 }
@@ -142,7 +152,7 @@ async function waitForStartupDependency<T>(
   }
 }
 
-/** Resolve the current canonical task at dispatch time, preserving its actual model and permissions. */
+/** Each standing instruction owns one persistent companion lane. */
 async function execute(scope: string, routine: Routine, run: RoutineRun, signal: AbortSignal, canDispatch: () => boolean) {
   assertScope(scope);
   const scheduler = getRoutineHost().getScheduler();
@@ -188,10 +198,56 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   if (imported?.deferred) return { deferred: true };
   if (imported?.exhausted) return { skipped: true, disableRoutine: true };
   if (imported?.skipped) return { skipped: true };
+  let delivery: RoutineRun['delivery'];
+  const deliver = async (text: string, sessionId: string, silenced = false) => {
+    delivery = { status: 'suppressed' };
+    if (signal.aborted || silenced || !text.trim() || routine.delivery?.kind === 'none') return;
+    try {
+      const send = getRoutineHost().deliverResult;
+      if (!send) throw new Error('Routine delivery is unavailable');
+      await send({ routine, runId: run.id, sessionId, targetSessionId: bot.canonicalSessionId!, text,
+        assertCurrent: () => { assertScope(scope); if (signal.aborted || !canDispatch()) throw new Error('Routine delivery cancelled'); },
+      });
+      delivery = { status: 'delivered' };
+    } catch (error) {
+      delivery = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+    }
+  };
   if (imported?.direct !== undefined) {
-    const exhausted = await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, imported.direct, true, signal, () => assertScope(scope));
-    return { resultText: imported.direct, ...(exhausted ? { disableRoutine: true } : {}) };
+    const exhausted = await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, imported.direct, true, signal, () => assertScope(scope),
+      routine.delivery ? text => deliver(text, bot.canonicalSessionId!) : undefined);
+    return { resultText: imported.direct, ...(delivery ? { delivery } : {}), ...(exhausted ? { disableRoutine: true } : {}) };
   }
+  const persistent = routine.sessionMode !== 'fresh';
+  // Fresh mode still creates a host-owned lane so it inherits the same bot
+  // permissions and model route; the lane is closed after this trigger.
+  const lane = await getRoutineHost().ensureRoutineSession({
+    botId: routine.botId,
+    routineId: persistent ? routine.id : `${routine.id}:${randomUUID()}`,
+    title: routine.name,
+    modelOverride: routine.modelOverride,
+  });
+  assertScope(scope);
+  if (!lane.ok) throw new Error(lane.message);
+  /**
+   * fresh 的独立任务只在「模型从未被派发」时回收（pre-run hook 判跳过、批次延后、
+   * 派发前取消、backing schedule 写入失败）：它们永远不会有过程内容，留着只在
+   * 任务列表里堆空壳。真实跑过的（成功 / 失败 / 中途取消）一律保留，「查看任务」
+   * 回放完整过程；persistent 专线承载上下文，只归档不自动删。
+   */
+  const discardFreshLane = async (): Promise<void> => {
+    if (persistent) return;
+    const closeRoutineSession = getRoutineHost().closeRoutineSession;
+    if (closeRoutineSession) {
+      await closeRoutineSession(lane.sessionId).catch((error) =>
+        log.warn('fresh routine session close failed', { sessionId: lane.sessionId, error: String(error) }));
+    }
+    const deleteRoutineSession = getRoutineHost().deleteRoutineSession;
+    if (deleteRoutineSession) {
+      await deleteRoutineSession(lane.sessionId).catch((error) =>
+        log.warn('fresh routine session delete failed', { sessionId: lane.sessionId, error: String(error) }));
+    }
+  };
   const storage = getRoutineHost().getScheduleStorage();
   const id = `routine-${routine.id}`;
   const now = Date.now();
@@ -208,7 +264,7 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     agentKind: 'pi',
     workspaceKind: 'dialogue',
     useWorktree: false,
-    targetSessionId: bot.canonicalSessionId,
+    targetSessionId: lane.sessionId,
     // Rules saved before this preference existed were quiet; only new omissions
     // are persisted as false by RoutineEngine.
     silentWhenIdle: routine.silentWhenIdle ?? true,
@@ -218,12 +274,6 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     createdAt: now,
     updatedAt: now,
   };
-  const existing = await storage.get(id);
-  assertScope(scope);
-  if (existing) await storage.update(id, { ...schedule, createdAt: existing.createdAt });
-  else await storage.insert(schedule);
-  assertScope(scope);
-  if (signal.aborted) throw new Error('Routine cancelled');
   let cancellation: Promise<unknown> | undefined;
   const abort = () => {
     cancellation = scheduler
@@ -232,18 +282,53 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   };
   signal.addEventListener('abort', abort, { once: true });
   try {
+    // backing schedule 写入失败 ⇒ 这轮不可能派发给模型；空壳任务回收。
+    try {
+      const existing = await storage.get(id);
+      assertScope(scope);
+      if (existing) await storage.update(id, { ...schedule, createdAt: existing.createdAt });
+      else await storage.insert(schedule);
+      assertScope(scope);
+    } catch (error) {
+      await discardFreshLane();
+      throw error;
+    }
+    if (signal.aborted) {
+      await discardFreshLane();
+      throw new Error('Routine cancelled');
+    }
+    if (!canDispatch()) {
+      await discardFreshLane();
+      return { deferred: true };
+    }
     const result = await scheduler.runNow(id, { deferToCaller: true, internalRoutine: true, canDispatch });
     assertScope(scope);
     // The routine queue owns this batch and its retry delay, not the backing schedule.
-    if (result.deferred) return { deferred: true };
+    // 延后＝本轮没有模型轮次，空壳任务不保留（重试会建新任务）。
+    if (result.deferred) {
+      await discardFreshLane();
+      return { deferred: true };
+    }
     const rows = await storage.listRuns(id, 10);
     const completed = rows.find((row) => row.id === result.runId);
     if (!completed) throw new Error('Routine execution record is missing');
+    // pre-run hook 判跳过：模型从未被派发，回收 fresh 空壳。真实跑过的（成功 / 失败 /
+    // 中途取消）一律保留，历史里的「查看任务」回放完整过程。
+    if (completed.status === 'skipped') await discardFreshLane();
+    // 只有真的回收了才省略 sessionId；persistent 跳过时任务还在，历史入口必须保留。
+    const discarded = !persistent && completed.status === 'skipped';
     const exhausted = imported && completed.status === 'success'
-      ? await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, completed.resultText ?? '', false, signal, () => assertScope(scope)) : false;
+      ? await getRoutineHost().finishImportedAutomation?.(root, routine, lane.sessionId, run.id, completed.resultText ?? '', false, signal, () => assertScope(scope),
+        routine.delivery ? text => deliver(text, lane.sessionId, result.silenced) : undefined) : false;
+    // Imported output is redacted by its existing finish path before selected delivery.
+    if (!imported && (routine.delivery || !routine.builtin) && completed.status === 'success')
+      await deliver(completed.resultText ?? '', lane.sessionId, result.silenced);
     return {
+      ...(delivery ? { delivery } : {}),
       ...(exhausted ? { disableRoutine: true } : {}),
       scheduleRunId: result.runId,
+      // 已回收的空壳不回填 sessionId，历史不挂「查看任务」死链；其余照常带回。
+      ...(discarded ? {} : { sessionId: lane.sessionId }),
       skipped: completed.status === 'skipped',
       resultText: completed.resultText,
       ...(completed?.status === 'success' || completed?.status === 'skipped'
@@ -253,6 +338,13 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   } finally {
     signal.removeEventListener('abort', abort);
     await cancellation;
+    if (!persistent) {
+      const closeRoutineSession = getRoutineHost().closeRoutineSession;
+      if (closeRoutineSession) {
+        await closeRoutineSession(lane.sessionId).catch((error) =>
+          log.warn('fresh routine session close failed', { sessionId: lane.sessionId, error: String(error) }));
+      }
+    }
   }
 }
 
@@ -321,6 +413,7 @@ export async function getRoutineEngine(): Promise<RoutineEngine> {
     }
     const engine = new RoutineEngine({
       load: async () => saved,
+      legacyTodoCheckContent: localizedLegacyTodoCheck,
       save: async (state) => {
         assertScope(scope);
         if (epoch !== generation) throw new Error('Routine service was reset');
@@ -455,6 +548,7 @@ export function registerRoutinesIpc(): void {
     remove: routineTools.remove,
     'run-now': routineTools.runNow,
     history: routineTools.history,
+    'delivery-targets': routineTools.deliveryTargets,
   };
   for (const [method, handler] of Object.entries(methods)) {
     ipcMain.handle(`routines:${method}`, async (event, botId: unknown, ...args: unknown[]) => {
@@ -507,11 +601,26 @@ async function assertRoutineHookSyntax(input: RoutineInput): Promise<void> {
   if (input.preRunHook?.command?.trim()) await assertPreRunHookCommandSyntax(input.preRunHook.command);
 }
 
+async function assertRoutineDelivery(botId: string, input: RoutineInput, previous?: Routine): Promise<void> {
+  if (input.delivery?.kind !== 'im' || !input.enabled) return;
+  if (previous?.delivery?.kind === 'im' && previous.delivery.targetId === input.delivery.targetId) return;
+  const targetId = input.delivery.targetId;
+  const targets = await getRoutineHost().deliveryTargets?.(botId) ?? [];
+  if (!targets.some(target => target.id === targetId))
+    throw new Error('Choose an available routine delivery destination');
+}
+
 export const routineTools = {
+  deliveryTargets: (botId: string) => withBot(botId, async (_engine, scope) => {
+    const targets = await getRoutineHost().deliveryTargets?.(botId) ?? [];
+    assertScope(scope);
+    return targets;
+  }),
   list: (botId: string) => withBot(botId, (engine) => engine.list(botId)),
   createOnce: (botId: string, input: RoutineInput, creationId: string) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === creationId));
       if (input.enabled) await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, creationId, () => assertScope(scope), { input });
       assertScope(scope);
       return engine.createOnce(botId, input, creationId);
@@ -519,6 +628,7 @@ export const routineTools = {
   save: (botId: string, input: RoutineInput, id?: string, expectedRevision?: number) =>
     withBot(botId, async (engine, scope) => {
       await assertRoutineHookSyntax(input);
+      await assertRoutineDelivery(botId, input, engine.list(botId).find(routine => routine.id === id));
       if (id && input.enabled) {
         const recoveredRevision = await getRoutineHost().assertImportedAutomationReady?.(ownerScopedUserDataPath(), botId, id, () => assertScope(scope), { input, expectedRevision });
         if (recoveredRevision !== undefined) expectedRevision = recoveredRevision;
@@ -543,23 +653,21 @@ export const routineTools = {
       return engine.history(id);
     }),
   sources: async () => (await getRoutineEngine()).listSources(),
-  /** 近况里「每天帮我查一次」：内置「每天查待办」是否存在且开着。 */
+  /** 近况里「每天帮我查一次」：「每天查待办」是否存在且开着。 */
   todoCheckEnabled: (botId: string) => withBot(botId, (engine) =>
-    engine.list(botId).some((routine) => routine.id === builtinTodoCheckRoutineId(botId) && routine.enabled)),
+    engine.list(botId).some((routine) => routine.id === todoCheckRoutineId(botId) && routine.enabled)),
   /**
-   * 打开时按模板落地（首次创建，或模板版本变化时重写）并恢复；关掉只暂停，保留同一条。
-   * 内置规则只能经 ensureBuiltin 写内容，这里的 put 只切换 enabled。
+   * 没有这条时，打开按默认内容新建；已有时只切换 enabled，保留主人或伙伴改过的名称、指令与时间。
    */
-  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine, scope) => {
-    const id = builtinTodoCheckRoutineId(botId);
-    let routine = engine.list(botId).find((row) => row.id === id) ?? null;
-    if (enabled) {
+  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine) => {
+    const id = todoCheckRoutineId(botId);
+    const routine = engine.list(botId).find((row) => row.id === id) ?? null;
+    if (!routine) {
+      if (!enabled) return false;
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      routine = await engine.ensureBuiltin(botId, 'todo-check', buildTodoCheckRoutineInput(timezone), id, TODO_CHECK_PROMPT_VERSION);
-      assertScope(scope);
-      if (!routine) throw new Error('The teammate is paused');
+      return (await engine.createOnce(botId, buildTodoCheckRoutineInput(timezone), id)).enabled;
     }
-    if (!routine || routine.enabled === enabled) return enabled && !!routine;
+    if (routine.enabled === enabled) return enabled;
     const { name, prompt, triggers, silentWhenIdle, preRunHook } = routine;
     const saved = await engine.put(botId, { name, prompt, triggers, silentWhenIdle, preRunHook, enabled }, id, routine.revision);
     return saved.enabled;
@@ -646,7 +754,9 @@ export async function listCompanionRoutines(botId: string, selfDeviceId: string 
     id: routine.id,
     input: { name: routine.name, prompt: routine.prompt, enabled: routine.enabled, triggers: routine.triggers,
       ...(routine.silentWhenIdle !== undefined ? { silentWhenIdle: routine.silentWhenIdle } : {}),
-      ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}) },
+      ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}),
+      ...(routine.modelOverride !== undefined ? { modelOverride: routine.modelOverride } : {}),
+      ...(routine.sessionMode !== undefined ? { sessionMode: routine.sessionMode } : {}) },
     originDeviceId: selfDeviceId,
   }));
 }
@@ -665,7 +775,6 @@ export async function importCompanionRoutines(botId: string, routines: Companion
   const now = Date.now();
   for (const routine of routines) {
     if (builtinIds.has(routine.id) || routine.id.startsWith(BUILTIN_FOLLOW_UP_ROUTINE_PREFIX)
-      || routine.id.startsWith(BUILTIN_TODO_CHECK_ROUTINE_PREFIX)
       || routine.id.startsWith(BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX)) continue;
     const foreignHook = !!routine.input.preRunHook?.command?.trim() && routine.originDeviceId !== selfDeviceId;
     const passed = routine.input.triggers.some((trigger) => trigger.kind === 'once' && trigger.at <= now);
@@ -674,4 +783,22 @@ export async function importCompanionRoutines(botId: string, routines: Companion
     else await routineTools.createOnce(botId, input, routine.id);
   }
   for (const id of remove) if (existing.has(id) && !builtinIds.has(id)) await routineTools.remove(botId, id);
+}
+
+const FRESH_LANE_KEY = /^(routine:.+):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Read without starting the scheduler: previews and manual sends may precede engine startup. */
+export async function readRoutineLaneModel(botId: string, routeKey: string | null): Promise<RoutineModel | null> {
+  if (!routeKey?.startsWith('routine:')) return null;
+  const scope = activeOwnerScopeKey();
+  assertScope(scope);
+  const routines = current?.scope === scope ? current.engine.list(botId)
+    : (await new RoutineFileStore(ownerScopedUserDataPath()).load())?.routines ?? [];
+  assertScope(scope);
+  const owned = routines.filter((routine) => routine.botId === botId);
+  // Fresh-session lanes append `:<uuid>` per trigger; they still use the routine's model.
+  const freshKey = FRESH_LANE_KEY.exec(routeKey)?.[1];
+  const match = owned.find((routine) => `routine:${routine.id}` === routeKey)
+    ?? (freshKey ? owned.find((routine) => `routine:${routine.id}` === freshKey) : undefined);
+  return match?.modelOverride ?? null;
 }

@@ -49,9 +49,9 @@ async function listFiles(dir: string): Promise<string[]> {
 
 describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server', () => {
   // 本机应用复用真实 app-server 夹具；历史 hhh namespace 验证 v1 兼容，不读取用户凭据。
-  it.each([true, false, 'local-host-only', 'local-native'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
+  it.each([true, false, 'local-host-only', 'local-native', 'hosted-client-only'] as const)('keeps this computer\'s Codex home out of the session (guest: %s)', async (variant) => {
     const guest = variant === true;
-    const localHostOnly = variant === 'local-host-only';
+    const localHostOnly = variant === 'local-host-only' || variant === 'hosted-client-only';
     const localClient = localHostOnly || variant === 'local-native';
     const root = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'cindy-codex-guest-native-')));
     const hostHome = path.join(root, 'host-codex-home');
@@ -140,8 +140,9 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
           '-c', `model_providers.fixture={ name = "Fixture", base_url = "${endpoint}", wire_api = "responses", requires_openai_auth = false, request_max_retries = 0, supports_websockets = false }`,
           '-c', 'check_for_update_on_startup=false',
           '-c', 'analytics.enabled=false',
-          // A private Cindy MCP must never enter an external client's model request.
-          ...(localClient ? ['-c', `mcp_servers.private_canary={url="${endpoint}/mcp",enabled=true}`] : []),
+          // Provider defaults must stay excluded after native rewind/fork too.
+          ...(localClient || guest ? ['-c', `mcp_servers.private_canary={url="${endpoint}/mcp",enabled=true}`] : []),
+          ...(guest ? ['-c', 'features.apps=true'] : []),
           // 本机用户开了智能子代理调配时 host 会带上的配置；受邀者的 app-server 不接受。
           '-c', 'features.multi_agent_v2.expose_spawn_agent_model_overrides=true',
         ],
@@ -184,6 +185,7 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
     };
     try {
       const handle = await agent.startSession({
+        ...(variant === 'hosted-client-only' ? { deviceHosted } : {}),
         sessionId: guest ? 'guest-native' : 'owner-native',
         model: 'gpt-5.5',
         ...(guest ? { providerId: 'xd' } : {}),
@@ -280,7 +282,42 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         await other.close();await handle.close();return;
       }
       expect(['shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'multi_agent'].filter((name) => !enabled.has(name))).toEqual([]);
+
+      // Regression: native fork reloads process defaults. Exercise the production
+      // rewind entry and a subsequent turn, then inspect the new native runtime.
+      // Existing startup-only assertions missed restored apps and provider MCP.
+      const previousThreadId = handle.id;
+      const turns = await threadHost.request('thread/turns/list', { threadId: previousThreadId, limit: 10 }) as { data: Array<{ id: string }> };
+      expect(turns.data).toHaveLength(1);
+      const rewound = await handle.commitRewindFiles!('', '', { tailTurnsToDrop: 1, lastTurnId: turns.data[0]!.id });
+      expect(rewound?.sdkSessionId).not.toBe(previousThreadId);
+      const rewindDone = (async () => {
+        for await (const event of handle.events()) {
+          if (event.type === 'error') throw new Error(JSON.stringify(event));
+          if (event.type === 'done') return;
+        }
+      })();
+      await handle.send({ type: 'user', content: 'continue after rewind' }, { throwOnStartFailure: true });
+      await rewindDone;
+      if (guest) {
+        const afterRewindFeatures = await listCodexFeatures(cursor => threadHost.request(
+          'experimentalFeature/list', { threadId: rewound!.sdkSessionId, limit: 200, ...(cursor ? { cursor } : {}) },
+        ));
+        expect(afterRewindFeatures.filter(feature => feature.enabled && feature.stage !== 'removed'
+          && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)).map(feature => feature.name)).toEqual([]);
+        expect(bodies.join('')).not.toContain('private_canary');
+      }
       await handle.close();
+
+      if (guest) {
+        const requestCount = bodies.length;
+        const forked = await agent.forkSdkSession({
+          sourceSdkSessionId: rewound!.sdkSessionId!, upToMessageId: undefined,
+          lastTurnId: turns.data[0]!.id, workingDir, hostedGuestHome: guestHome, providerId: 'xd', model: 'gpt-5.5',
+        });
+        expect(forked.newSdkSessionId).not.toBe(rewound!.sdkSessionId);
+        expect(bodies).toHaveLength(requestCount);
+      }
 
       expect(bodies.length).toBeGreaterThan(0);
       const sent = bodies.join('\n');

@@ -7,7 +7,7 @@ import { createDirectRtcRuntime } from '../directRtcRuntime.js';
 // Production bridge/negotiator lifetimes absent from #6825: native queue pressure,
 // stale callbacks, pending handshake cancellation and authenticated stream binding.
 // Unit tier: in-memory native messages, fake time, no sockets or platform processes.
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const observers = () => ({ open: vi.fn(), message: vi.fn(), drained: vi.fn(), closed: vi.fn() });
 
 it('counts UTF-8 bytes still crossing the native bridge and ignores stale buffer acknowledgements', async () => {
@@ -84,6 +84,137 @@ it('binds incoming negotiation to both current transport streams', async () => {
   expect(parseDirectSignal({ action: 'offer', id: 'valid', stream: 'a', targetStream: 'b', sdp: 'x'.repeat(128 * 1024 + 1) })).toBeNull();
   expect(parseDirectSignal({ action: 'offer', id: 'valid', stream: 'a', targetStream: 'b' })).toBeNull();
   controller.clear();
+});
+
+// Direct-link recovery contract (protocol-compatibility.md): failed LAN attempts
+// retry independently without blocking relay traffic. Existing tests fence stale
+// offers but do not cover retry timing, cancellation or stable-connection reset.
+// Unit tier: virtual time and an in-memory runtime, with no sockets or real waits.
+function negotiationFixture(identity = 'a') {
+  const sessions: Array<{ events: DirectRuntimeEvents; close: ReturnType<typeof vi.fn> }> = [];
+  const create = vi.fn((_id: string, events: DirectRuntimeEvents) => {
+    const close = vi.fn();
+    sessions.push({ events, close });
+    return { offer: async () => 'offer', accept: async () => 'answer', answer: async () => {},
+      send() {}, bufferedAmount: 0, close };
+  });
+  const signal = vi.fn();
+  let nextId = 0;
+  const controller = new DirectLinkNegotiator({
+    runtime: { create }, identity: () => identity,
+    streams: () => ({ local: 'local', remote: 'remote' }), id: () => `attempt-${++nextId}`,
+    signal, attach: () => ({ receive() {}, drained() {}, closed() {}, isActive: () => true }),
+  });
+  return { controller, create, signal, sessions };
+}
+
+it('spreads simultaneous failed peers across the first retry window', async () => {
+  vi.useFakeTimers();
+  let sample = 0;
+  vi.spyOn(Math, 'random').mockImplementation(() => (sample++ % 16) / 16);
+  const fixture = negotiationFixture();
+  const started = Date.now();
+  const retries: number[] = [];
+  fixture.create.mockImplementation(() => {
+    retries.push(Date.now() - started);
+    throw new Error('runtime unavailable');
+  });
+  try {
+    for (let i = 0; i < 16; i++) fixture.controller.ready(`b-${i}`);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const wave = retries.slice(16);
+    expect(wave).toHaveLength(16);
+    expect(wave.every(delay => delay >= 4_000 && delay <= 5_000)).toBe(true);
+    const buckets = new Map<number, number>();
+    for (const delay of wave) {
+      const bucket = Math.floor(delay / 100);
+      buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+    }
+    expect(Math.max(...buckets.values())).toBeLessThanOrEqual(2);
+  } finally { fixture.controller.clear(); }
+});
+
+it.each([0, 0.999999])('bounds jittered exponential retries through the capped stage (random=%s)', async random => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(random);
+  const fixture = negotiationFixture();
+  fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
+  try {
+    fixture.controller.ready('b');
+    for (const base of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]) {
+      const before = fixture.create.mock.calls.length;
+      const delay = Math.floor(base * (0.8 + random * 0.2));
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(fixture.create).toHaveBeenCalledTimes(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fixture.create).toHaveBeenCalledTimes(before + 1);
+    }
+  } finally { fixture.controller.clear(); }
+});
+
+it('times out negotiation and schedules only one retry for repeated ready hints', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const fixture = negotiationFixture();
+  try {
+    fixture.controller.ready('b');
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(fixture.sessions[0].close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.sessions[0].close).toHaveBeenCalledOnce();
+    for (let i = 0; i < 5; i++) fixture.controller.ready('b');
+    await vi.advanceTimersByTimeAsync(4_499);
+    expect(fixture.create).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.create).toHaveBeenCalledTimes(2);
+    expect(fixture.signal.mock.calls.filter(([, signal]) => signal.action === 'offer')).toHaveLength(2);
+  } finally { fixture.controller.clear(); }
+});
+
+it.each(['forget', 'clear'] as const)('cancels a pending direct retry on %s', async action => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const fixture = negotiationFixture();
+  fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
+  fixture.controller.ready('b');
+  if (action === 'forget') fixture.controller.forget('b');
+  else fixture.controller.clear();
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fixture.create).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('leaves retry initiation to the offerer when an incoming offer fails', async () => {
+  vi.useFakeTimers();
+  const fixture = negotiationFixture('b');
+  fixture.create.mockImplementation(() => { throw new Error('runtime unavailable'); });
+  try {
+    fixture.controller.receive('a', { action: 'offer', id: 'incoming', stream: 'remote', targetStream: 'local', sdp: 'offer' });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(fixture.create).toHaveBeenCalledOnce();
+    expect(fixture.signal).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { fixture.controller.clear(); }
+});
+
+it.each([59_999, 60_000])('resets retry backoff only after a connection stays open for 60 seconds (open=%ims)', async duration => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const fixture = negotiationFixture();
+  fixture.create.mockImplementationOnce(() => { throw new Error('runtime unavailable'); });
+  try {
+    fixture.controller.ready('b');
+    await vi.advanceTimersByTimeAsync(4_500);
+    expect(fixture.create).toHaveBeenCalledTimes(2);
+    fixture.sessions[0].events.open();
+    await vi.advanceTimersByTimeAsync(duration);
+    fixture.sessions[0].events.closed();
+    const delay = duration < 60_000 ? 9_000 : 4_500;
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(fixture.create).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fixture.create).toHaveBeenCalledTimes(3);
+  } finally { fixture.controller.clear(); }
 });
 
 it.each(['small-then-large', 'progress-under-pressure'])('reports native RTC drain through the real bridge (%s)', async mode => {

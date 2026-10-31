@@ -8,7 +8,7 @@
  *   - `adaptive` 只当默认值:省略 ratio 时**不写 `--ratio`**,而它不进
  *     supportedRatios(协议层枚举不认,显式传进不来);
  *   - 给了具体画幅就**原样透传**,不按 refMode 拦(passthrough,由上游裁决);
- *   - 时长 4–30、分辨率没有 1080p。
+ *   - 时长 4–30、分辨率 480p / 720p / 1080p。
  *
  * alias 与 provider.id 是两个东西,本文件都钉:alias 是对外契约
  * `bytedance/seedance-2.5`(Art 插件按它点名),provider.id 是内部标识
@@ -74,9 +74,8 @@ describe('seedance 2.5 · capabilities', () => {
     expect(p.id).toBe('seedance-2.5');
   });
 
-  it('分辨率只有 480p / 720p —— **没有 1080p**(照抄 2.0 三档就会放行必被上游拒的值)', () => {
-    expect(p.capabilities.supportedResolutions).toEqual(['480p', '720p']);
-    expect(p.capabilities.supportedResolutions).not.toContain('1080p');
+  it('分辨率 480p / 720p / 1080p(方舟 2026-08-17 起开放 2.5 原生 1080p)', () => {
+    expect(p.capabilities.supportedResolutions).toEqual(['480p', '720p', '1080p']);
   });
 
   it('时长覆盖 4–30 的每个整数秒,边界内含 4 与 30、外侧不含 3 与 31', () => {
@@ -224,6 +223,11 @@ describe('seedance 2.5 · submit body shape', () => {
     expect(withImage).toContain('--duration 30');
   });
 
+  it('1080p 原样写进后缀串', async () => {
+    const text = await promptTextOf({ prompt: 'p', duration: 4, resolution: '1080p' });
+    expect(text).toBe('p --duration 4 --resolution 1080p');
+  });
+
   it('音频开关走顶层 generate_audio,三态(不传就不写这个键)', async () => {
     const { fetchMock, bodyOf } = makeSubmitMock();
     const p = makeProvider(fetchMock);
@@ -339,18 +343,6 @@ describe('seedance 2.5 · 经执行器端到端', () => {
     return r;
   }
 
-  it('1080p 在提交前就被明拒,一个请求都不发(话术自带该型号可用值)', async () => {
-    const fetchMock = vi.fn() as unknown as typeof fetch;
-    await expect(
-      submitAndAwaitVideo(makeRegistry(fetchMock), {
-        alias: 'bytedance/seedance-2.5',
-        prompt: 'p',
-        resolution: '1080p',
-      }),
-    ).rejects.toThrow(/does not support resolution 1080p/);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('时长 30 秒走得通,而 31 秒被拒(4–30 的边界在执行器上生效)', async () => {
     const fetchMock = vi.fn() as unknown as typeof fetch;
     await expect(
@@ -411,7 +403,7 @@ describe('seedance 2.5 · 经执行器端到端', () => {
  * 上面那些 case 只注册 2.5 一个 provider,证明的是"2.5 自己的值域对"。但两代共用
  * 一份 capabilities 的真实危害是**双向污染**:2.0 的窄值域会卡死 2.5 的长片,2.5
  * 的宽值域又会替 2.0 放宽。所以这里按真实装配同时注册两代,拿同一个执行器、同一
- * 组参数正反各打一次 —— 一份 capabilities 的实现下,这四条里必然有两条会翻。
+ * 组参数正反各打一次 —— 一份 capabilities 的实现下,时长那组正反断言必然有一侧会翻。
  */
 describe('两代值域互不放宽(同一执行器下的隔离)', () => {
   /** 按 cindyProxyMedia.ts 的真实装配顺序注册两代。 */
@@ -466,10 +458,10 @@ describe('两代值域互不放宽(同一执行器下的隔离)', () => {
     expect(v25.fetched).toBe(true);
   });
 
-  it('1080p:2.0 放行,2.5 明拒(2.0 的三档没有漏给 2.5)', async () => {
+  it('1080p:两代都放行,走到提交', async () => {
     const v25 = await rejection('bytedance/seedance-2.5', { resolution: '1080p' });
-    expect(v25.message).toMatch(/does not support resolution 1080p/);
-    expect(v25.fetched).toBe(false);
+    expect(v25.message).not.toMatch(/does not support resolution/);
+    expect(v25.fetched).toBe(true);
 
     const v20 = await rejection('seedance-fast', { resolution: '1080p' });
     expect(v20.message).not.toMatch(/does not support resolution/);

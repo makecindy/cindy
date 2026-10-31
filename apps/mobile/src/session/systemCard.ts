@@ -241,7 +241,8 @@ function formatAgentSwitchCard(data: Record<string, unknown> | undefined): Syste
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
   const rows = toModel ? [{ label: i18n.t('message.systemCard.modelLabel'), value: toModel }] : [];
   // Phase 2:resumed = 目标引擎续接了自己的停泊原生会话(增量交接)。
-  if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
+  if (data?.nativeHistory === 'fallback') rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.renderer.sessionFallbackPill') });
+  else if (data?.resumed === true) rows.push({ label: i18n.t('message.systemCard.sessionLabel'), value: i18n.t('message.systemCard.sessionResumed') });
   return {
     title: formatAgentSwitchLocationLabel(data, (key, options) => i18n.t(key, options))
       ?? i18n.t('message.systemCard.agentSwitch', { from, to }),

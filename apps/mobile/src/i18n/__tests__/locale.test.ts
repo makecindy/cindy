@@ -15,4 +15,20 @@ describe("mobile locale resolution", () => {
     expect(resolveSystemLocale("zh-HK")).toBe("zh-TW");
     expect(resolveSystemLocale("zh-Hant")).toBe("zh-TW");
   });
+
+  // The phone stamps each turn with this value; a classical edition folding into
+  // zh-TW / zh-CN would silently drop the classical reply style on the computer.
+  it("keeps a chosen classical edition instead of folding it into modern Chinese", () => {
+    expect(resolveSystemLocale("zh-Hant-x-lzh")).toBe("zh-Hant-x-lzh");
+    expect(resolveSystemLocale("zh-Hans-x-lzh")).toBe("zh-Hans-x-lzh");
+  });
+
+  // #8142: keep mobile OS selection aligned with Desktop, including Portuguese regions.
+  it.each([
+    ["es-MX", "es"], ["es-419", "es"], ["fr-CA", "fr"], ["de-AT", "de"],
+    ["pt-PT", "pt-PT"], ["pt-BR", "pt-BR"], ["PT_br", "pt-BR"],
+    ["pt-Latn-BR", "pt-BR"], ["pt-AO", "pt-PT"], ["pt", "pt-PT"],
+  ])("resolves %s to %s", (tag, expected) => {
+    expect(resolveSystemLocale(tag)).toBe(expected);
+  });
 });

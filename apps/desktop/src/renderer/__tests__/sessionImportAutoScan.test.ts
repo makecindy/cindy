@@ -4,11 +4,13 @@ import { StrictMode, createElement } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { MemoryRouter } from 'react-router-dom';
+
 import { SessionImportSection } from '@/components/settings/SessionImportSection';
 
 vi.mock('react-i18next', () => {
   const t = (key: string) => key;
-  return { useTranslation: () => ({ t }) };
+  return { useTranslation: () => ({ t, i18n: { language: 'en' } }) };
 });
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 // The sharing wizard is a separate entry; keep the scanned-list UI real.
@@ -21,22 +23,33 @@ const scan = vi.fn<typeof window.electronAPI.localDb.sessionImport.scan>();
 
 function scanResult(title: string): ScanResult {
   return {
-    sources: { codexHomes: [], claudeRoots: [] },
     candidates: [{
       key: 'codex:' + title,
       source: 'codex',
       id: title,
       title,
-      cwd: '',
-      updatedAt: '2026-10-16T00:00:00.000Z',
+      cwd: null,
+      groupKey: 'dialogue',
+      groupName: '',
+      groupPath: null,
+      dialogue: true,
+      updatedAt: Date.parse('2026-10-16T00:00:00.000Z'),
       archived: false,
-      workspaceKind: 'dialogue',
-      sidebarBucket: 'dialogue',
-      projectDir: null,
+      sizeBytes: 1024,
+      missingDir: false,
+      hidden: null,
+      unsupportedVersion: null,
     }],
-    rejected: { codex: 0, claude: 0, existing: 0 },
-    currentProjectDirs: [],
+    hiddenCounts: { cindy: 0, temp: 0, internal: 0, imported: 0 },
+    sources: [{ id: 'codex', label: 'Codex', count: 1 }],
+    sourceErrors: [],
+    scannedAt: 0,
   };
+}
+
+function renderSection(strict = false) {
+  const tree = createElement(MemoryRouter, null, createElement(SessionImportSection));
+  return render(strict ? createElement(StrictMode, null, tree) : tree);
 }
 
 function pendingScan() {
@@ -47,7 +60,10 @@ function pendingScan() {
 
 beforeEach(() => {
   scan.mockReset();
-  vi.stubGlobal('electronAPI', { localDb: { sessionImport: { scan } } });
+  vi.stubGlobal('electronAPI', {
+    platform: 'darwin',
+    localDb: { sessionImport: { scan, status: async () => null, onProgress: () => () => undefined } },
+  });
 });
 
 afterEach(() => {
@@ -66,10 +82,10 @@ describe('SessionImportSection automatic scans', () => {
     const request = pendingScan();
     scan.mockReturnValueOnce(request.promise);
 
-    render(createElement(StrictMode, null, createElement(SessionImportSection)));
+    renderSection(true);
 
-    expect(scan).toHaveBeenCalledExactlyOnceWith(undefined);
-    expect((screen.getByRole('button', { name: 'settings.sessionImport.scan' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(scan).toHaveBeenCalledExactlyOnceWith({ force: false });
+    expect((screen.getByRole('button', { name: 'settings.sessionImport.rescan' }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       request.resolve(scanResult('Found on mount'));
@@ -78,20 +94,20 @@ describe('SessionImportSection automatic scans', () => {
 
     expect(screen.getByText('Found on mount')).toBeTruthy();
     expect(scan).toHaveBeenCalledTimes(1);
-    expect((screen.getByRole('button', { name: 'settings.sessionImport.scan' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'settings.sessionImport.rescan' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('keeps cached candidates visible on reentry until the automatic refresh finishes', async () => {
     const initialScan = Promise.resolve(scanResult('Cached candidate'));
     scan.mockReturnValueOnce(initialScan);
-    const first = render(createElement(SessionImportSection));
+    const first = renderSection();
     await act(async () => { await initialScan; });
     expect(screen.getByText('Cached candidate')).toBeTruthy();
     first.unmount();
 
     const refresh = pendingScan();
     scan.mockReturnValueOnce(refresh.promise);
-    render(createElement(SessionImportSection));
+    renderSection();
 
     expect(scan).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Cached candidate')).toBeTruthy();

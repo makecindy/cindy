@@ -25,11 +25,11 @@ export interface ErrorDiagnosisSource {
 
 export function buildErrorDiagnosisPrompt(
   t: TFunction,
-  sessionUrl: string,
+  sessionUrl: string | null,
   source: ErrorDiagnosisSource,
 ): string {
   const details = redactSensitiveText(source.details).trim();
-  return t('chat.errorBanner.diagnosePrompt', {
+  return t(sessionUrl ? 'chat.errorBanner.diagnosePrompt' : 'chat.errorBanner.diagnosePromptWithoutSession', {
     sessionUrl,
     message: redactSensitiveText(source.message).trim(),
     details: source.reason

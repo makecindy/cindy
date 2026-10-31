@@ -6,18 +6,15 @@
  * "prepare this thread before resume" hook.
  */
 
-import { projectNativeSessionMetadata, type NativeSessionScope } from './native-session-metadata.js';
 import { historyHomeForRollout } from './codex-thread-locations.js';
 import { app } from 'electron';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
-import { createReadStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
 import { parse as parseToml } from 'smol-toml';
 
 import {
@@ -28,34 +25,21 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 
 import {
   CodexResumePreparationBlockedError,
-  finalizeCodexCitationText,
   isOversizedLiveTailStats,
   measureRolloutLiveTailStats,
 } from '@cindy/maker-core';
 
-import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
+import { getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import { createLogger } from '../logger.js';
-import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
-import {
-  cacheImportedBase64Image,
-  importedUserContent,
-  parseImageDataUrl,
-  stripCompleteIdeOpenedFileBlocks,
-  type ImportedImageRef,
-} from './imported-user-content.js';
 
 const log = createLogger('codex-local-sessions');
 
-const LOCAL_SESSION_ID_PREFIX = 'codex-';
-const MAX_THREADS_PER_HOME = 1000;
 const SQLITE_BUSY_TIMEOUT_MS = 3000;
 // Codex can create a rollout before writing session_meta and keep that file at
 // zero bytes for several minutes. Recovery must not fork a still-live writer.
 const EMPTY_ROLLOUT_RECOVERY_GRACE_MS = 15 * 60_000;
 const MAX_RECOVERY_PATH_ATTEMPTS = 8;
-const codexMessageImportFileCache = new Map<string, ExternalImportFileCacheEntry>();
 
 function isNonEmptyRolloutFile(filePath: string, threadId: string): boolean {
   const state = readRegularRolloutPathState(filePath);
@@ -203,24 +187,30 @@ function nonEmptyRolloutStillMatches(
 }
 
 /** Bounded-memory equality check used only for Cindy-owned immutable candidates. */
-function filesHaveSameContents(leftPath: string, rightPath: string): boolean {
+function filesHaveSameContents(leftPath: string, rightPath: string, prefixBytes?: number): boolean {
   let leftFd: number | null = null;
   let rightFd: number | null = null;
   try {
     const leftStat = fs.statSync(leftPath);
     const rightStat = fs.statSync(rightPath);
-    if (!leftStat.isFile() || !rightStat.isFile() || leftStat.size !== rightStat.size) return false;
+    if (!leftStat.isFile() || !rightStat.isFile()) return false;
+    if (prefixBytes === undefined ? leftStat.size !== rightStat.size
+      : leftStat.size < prefixBytes || rightStat.size < prefixBytes) return false;
     leftFd = fs.openSync(leftPath, 'r');
     rightFd = fs.openSync(rightPath, 'r');
     const left = Buffer.allocUnsafe(64 * 1024);
     const right = Buffer.allocUnsafe(64 * 1024);
-    for (;;) {
-      const leftRead = fs.readSync(leftFd, left, 0, left.length, null);
-      const rightRead = fs.readSync(rightFd, right, 0, right.length, null);
+    let remaining = prefixBytes ?? leftStat.size;
+    while (remaining > 0) {
+      const length = Math.min(left.length, remaining);
+      const leftRead = fs.readSync(leftFd, left, 0, length, null);
+      const rightRead = fs.readSync(rightFd, right, 0, length, null);
       if (leftRead !== rightRead) return false;
-      if (leftRead === 0) return true;
+      if (leftRead === 0) return false;
       if (!left.subarray(0, leftRead).equals(right.subarray(0, rightRead))) return false;
+      remaining -= leftRead;
     }
+    return true;
   } catch {
     return false;
   } finally {
@@ -298,10 +288,10 @@ function readPrivateExactRolloutSnapshot(
   }
 }
 
-type SqlScalar = string | number | bigint | Buffer | null;
-type SqlRow = Record<string, SqlScalar | undefined>;
+export type SqlScalar = string | number | bigint | Buffer | null;
+export type SqlRow = Record<string, SqlScalar | undefined>;
 
-interface CodexThreadSummary {
+export interface CodexThreadSummary {
   threadId: string;
   sourceHome: string;
   sourceDbPath: string | null;
@@ -325,103 +315,11 @@ interface CodexSessionIndexEntry {
   updatedAt: number | null;
 }
 
-interface ExternalImportFileCacheEntry {
-  scope: string;
-  path: string;
-  mtimeMs: number;
-  size: number;
-}
 
-type ExternalImportFileStat = Pick<ExternalImportFileCacheEntry, 'mtimeMs' | 'size'>;
 
-export interface CodexExternalImportResult {
-  homes: number;
-  scanned: number;
-  inserted: number;
-  updated: number;
-}
 
-export interface CodexExternalSessionCandidate extends NativeSessionScope {
-  source: 'codex';
-  id: string;
-  title: string;
-  cwd: string;
-  workspaceKind: 'project' | 'dialogue';
-  updatedAt: number;
-  archived: boolean;
-  sourceHome: string;
-}
 
-export interface CodexExternalScanResult {
-  homes: string[];
-  candidates: CodexExternalSessionCandidate[];
-  rejectedCount: number;
-}
 
-/** 设置导入页使用的只读扫描，不写入 xdt-maker DB。 */
-export async function scanExternalCodexSessions(): Promise<CodexExternalScanResult> {
-  const homes = await discoverExternalCodexHomes();
-  const candidatesById = new Map<string, CodexExternalSessionCandidate>();
-  let rejectedCount = 0;
-  for (const home of homes) {
-    const dbPath = findLatestStateDb(home);
-    const projectlessThreadIds = readProjectlessThreadIds(home);
-    const dbResult = dbPath ? readThreads(home, dbPath, projectlessThreadIds) : null;
-    const knownDbArchivedByThreadId = dbResult
-      ? new Map(dbResult.threads.map((thread) => [thread.threadId, thread.archived]))
-      : undefined;
-    const readResults = [
-      ...(dbResult ? [dbResult] : []),
-      await readThreadsFromRollouts(home, projectlessThreadIds, knownDbArchivedByThreadId),
-    ];
-    for (const readResult of readResults) {
-      rejectedCount += readResult.rejectedThreadIds.length;
-      for (const thread of readResult.threads) {
-        const candidate: CodexExternalSessionCandidate = {
-          source: 'codex',
-          id: thread.threadId,
-          title: thread.title,
-          cwd: thread.cwd,
-          workspaceKind: thread.workspaceKind,
-          updatedAt: thread.updatedAt,
-          archived: thread.archived,
-          sourceHome: thread.sourceHome,
-        };
-        const existing = candidatesById.get(candidate.id);
-        if (!existing) {
-          candidatesById.set(candidate.id, candidate);
-        } else {
-          // 选 updatedAt 更新的那份做"主体"，但 archived 标志 sticky：
-          // 同一 thread 同时出现在 sessions/ 和 archived_sessions/ 里，
-          // 只要任一份是 archived 就视为 archived（避免按 mtime 判断时
-          // 较新的 sessions/ 拷贝把 archived 状态盖掉）。
-          const winner = existing.updatedAt < candidate.updatedAt ? candidate : existing;
-          const archived = existing.archived || candidate.archived;
-          if (winner !== existing || archived !== existing.archived) {
-            candidatesById.set(candidate.id, { ...winner, archived });
-          }
-        }
-      }
-    }
-  }
-  return { homes, candidates: await projectNativeSessionMetadata('codex', [...candidatesById.values()]), rejectedCount };
-}
-
-/** Import the selected external Codex sessions into xdt-maker's session table. */
-export async function importExternalCodexSessions(threadIds: string[]): Promise<CodexExternalImportResult> {
-  const out: CodexExternalImportResult = { homes: 0, scanned: 0, inserted: 0, updated: 0 };
-  const uniqueIds = [...new Set(threadIds)].filter(isLikelyThreadId);
-  out.homes = discoverExternalCodexHomesSync().length;
-  out.scanned = uniqueIds.length;
-  for (const threadId of uniqueIds) {
-    const thread = findExternalThreadById(threadId);
-    if (!thread) continue;
-    const action = await upsertLocalSession(thread);
-    if (action === 'inserted') out.inserted += 1;
-    else if (action === 'updated') out.updated += 1;
-  }
-  return out;
-}
 
 /** Locate existing history without adopting, copying or reconstructing it. */
 export function readCodexThreadStorageForArchive(threadId: string): {
@@ -455,6 +353,14 @@ export function readCodexThreadStorageForArchive(threadId: string): {
 
 /** Ensure a Codex thread from another local CODEX_HOME is visible to xdt-maker's app-server. */
 export async function prepareExternalCodexSessionForResume(threadId: string): Promise<string | undefined> {
+  const prepared = await prepareExternalCodexSessionStorage(threadId);
+  // Keep the existing snapshot/namespace handoff intact. Its Cindy-owned stage
+  // must be promoted before native resume (and repaired after an interrupted
+  // promotion), since paginated Codex derives rollout identity from the basename.
+  return prepared ? prepareCodexRolloutForResume(threadId, prepared, getDesktopCodexHome(), true) : prepared;
+}
+
+async function prepareExternalCodexSessionStorage(threadId: string): Promise<string | undefined> {
   if (!isLikelyThreadId(threadId)) return;
   const targetHome = getDesktopCodexHome();
   const targetDbPath = findLatestStateDb(targetHome);
@@ -630,6 +536,11 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
         );
         if (!adopted) {
           throw resumePreparationBlocked(threadId, 'external rollout changed during private adoption');
+        }
+        // Save the exact source before SQLite stops pointing at it. A custom
+        // history root need not be discoverable, including after a failed retry.
+        if (readPaginatedBase(threadId, adopted.path)) {
+          rememberCodexHistorySource(threadId, targetHome, adopted.path, targetRollout);
         }
         if (handoffThreadToCopiedRollout(
           targetDbPath,
@@ -1213,7 +1124,10 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
 
 /** 为外部 thread 派生当前 Codex HOME 内的稳定 rollout 路径。 */
 function targetRolloutPathForExternalThread(thread: CodexThreadSummary, targetHome: string): string {
-  const relative = path.relative(thread.sourceHome, thread.rolloutPath);
+  const relative = path.relative(
+    normalizeCodexWindowsPath(thread.sourceHome),
+    normalizeCodexWindowsPath(thread.rolloutPath),
+  );
   const firstSegment = relative.split(path.sep)[0];
   const isSafeCodexRelativePath = relative !== ''
     && relative !== '..'
@@ -1225,6 +1139,281 @@ function targetRolloutPathForExternalThread(thread: CodexThreadSummary, targetHo
   const directory = thread.archived ? 'archived_sessions' : 'sessions';
   const filename = path.basename(thread.rolloutPath) || `rollout-migrated-${thread.threadId}.jsonl`;
   return path.join(targetHome, directory, filename);
+}
+
+/** Normalize only Win32 filesystem aliases, including extended UNC paths. */
+export function normalizeCodexWindowsPath(value: string): string {
+  if (/^\\\\\?\\UNC\\/i.test(value)) return `\\\\${value.slice(8)}`;
+  return /^\\\\\?\\[a-z]:\\/i.test(value) ? value.slice(4) : value;
+}
+
+function originalCodexRolloutName(file: string): string {
+  return path.basename(file).replace(/^(?:rollout-cindy-(?:adopted|empty-recovery|synthetic)(?:-\d+)?-)+/, '');
+}
+
+function nativeRolloutIdentity(file: string): { threadId: string; rolloutId: string } | undefined {
+  const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  const match = originalCodexRolloutName(file).match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, 'i'));
+  return match ? { threadId: match[1]!.toLowerCase(), rolloutId: (match[2] ?? match[1])!.toLowerCase() } : undefined;
+}
+
+interface CodexHistoryBase {
+  thread_id: string;
+  end_ordinal_exclusive: number;
+  end_byte_offset: number;
+}
+
+function readPaginatedBase(threadId: string, file: string): CodexHistoryBase | undefined {
+  const line = readFirstLineSync(file);
+  if (!line) return;
+  let record: unknown;
+  try { record = JSON.parse(line); } catch { return; }
+  if (!isRecord(record) || record.type !== 'session_meta' || !isRecord(record.payload)
+    || record.payload.history_mode !== 'paginated' || record.payload.history_base == null) return;
+  const base = record.payload.history_base;
+  if (!isRecord(base) || typeof base.thread_id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(base.thread_id)
+    || !Number.isSafeInteger(base.end_ordinal_exclusive) || (base.end_ordinal_exclusive as number) <= 0
+    || !Number.isSafeInteger(base.end_byte_offset) || (base.end_byte_offset as number) <= 0) {
+    throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor reference');
+  }
+  return base as unknown as CodexHistoryBase;
+}
+
+/** Finish a native history handoff before resume, including old indexed imports. */
+export async function prepareCodexRolloutForResume(
+  threadId: string, rolloutPath: string, sqliteHome: string, verifyExternalSource = false,
+): Promise<string> {
+  const dbPath = findLatestStateDb(sqliteHome);
+  const expected = dbPath ? readThreadRolloutPath(dbPath, threadId) : null;
+  await ensureCodexHistoryAncestors(threadId, rolloutPath, verifyExternalSource);
+  if (dbPath && readThreadRolloutPath(dbPath, threadId) !== expected) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed during ancestor import');
+  }
+  return repairCodexRolloutPath(threadId, rolloutPath, sqliteHome);
+}
+
+function rememberCodexHistorySource(threadId: string, targetHome: string, rolloutPath: string, sourcePath: string): void {
+  const file = `${rolloutPath}.source.json`;
+  const contents = JSON.stringify({ sourceHome: historyHomeForRollout(sourcePath), rootLine: readFirstLineSync(rolloutPath) });
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
+    try { fs.linkSync(temporary, file); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    if (!readPrivateNonEmptyRolloutSnapshot(targetHome, file) || fs.readFileSync(file, 'utf8') !== contents) {
+      throw resumePreparationBlocked(threadId, 'conflicting paginated history source');
+    }
+  } finally { fs.rmSync(temporary, { force: true }); }
+}
+
+async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string, verifyExternalSource: boolean): Promise<void> {
+  const targetHome = historyHomeForRollout(rolloutPath);
+  const rootSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, rolloutPath);
+  if (!rootSnapshot) return; // Preserve existing missing/empty/unsafe recovery behavior.
+  // Most histories are self-contained. Do not scan external homes on this path.
+  let base = readPaginatedBase(threadId, rolloutPath);
+  if (!base) return;
+  const rootLine = readFirstLineSync(rolloutPath);
+  const rootIdentity = nativeRolloutIdentity(rolloutPath);
+  if (!rootIdentity || rootIdentity.threadId !== threadId.toLowerCase()) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated history has an invalid identity');
+  }
+  const filesByHome = new Map<string, string[]>();
+  const files = (home: string) => {
+    let value = filesByHome.get(home);
+    if (!value) { value = collectRolloutFiles(home, samePath(home, targetHome)); filesByHome.set(home, value); }
+    return value;
+  };
+  let sourceHome: string | undefined;
+  let searchedSource = false;
+  const source = () => {
+    if (!searchedSource) {
+      searchedSource = true;
+      // Anchor recovery to the exact imported child's immutable metadata and
+      // rollout identity. Never pick a similarly named thread or reimport its tail.
+      const sourceFile = `${rolloutPath}.source.json`;
+      let candidates: string[];
+      if (fs.existsSync(sourceFile)) {
+        if (!readPrivateNonEmptyRolloutSnapshot(targetHome, sourceFile)) {
+          throw resumePreparationBlocked(threadId, 'unsafe paginated history source');
+        }
+        const saved: unknown = JSON.parse(fs.readFileSync(sourceFile, 'utf8'));
+        if (!isRecord(saved) || typeof saved.sourceHome !== 'string' || !path.isAbsolute(saved.sourceHome)
+          || saved.rootLine !== rootLine) {
+          throw resumePreparationBlocked(threadId, 'invalid paginated history source');
+        }
+        candidates = [saved.sourceHome];
+      } else {
+        candidates = discoverExternalCodexHomesSync();
+      }
+      const homes = candidates.filter(home => !samePath(home, targetHome)
+        && files(home).some(file => path.basename(file) === originalCodexRolloutName(rolloutPath)
+          && !!readPrivateNonEmptyRolloutSnapshot(home, file) && readFirstLineSync(file) === rootLine));
+      if (homes.length > 1) throw resumePreparationBlocked(threadId, 'ambiguous paginated history source');
+      sourceHome = homes[0];
+    }
+    return sourceHome;
+  };
+  if (verifyExternalSource) source();
+  const find = (home: string, id: string) => {
+    const matches = files(home).filter(file => nativeRolloutIdentity(file)?.rolloutId === id.toLowerCase())
+      .sort((a, b) => Number(path.basename(a) !== originalCodexRolloutName(a)) - Number(path.basename(b) !== originalCodexRolloutName(b)));
+    if (matches.some(file => !sameRegularFileIdentity(file, matches[0]!))) {
+      throw resumePreparationBlocked(threadId, 'ambiguous paginated history ancestor');
+    }
+    return matches[0];
+  };
+  const seen = new Set([rootIdentity.rolloutId]);
+  const plan: Array<{ sourcePath?: string; localAlias?: string; destination: string; snapshot: NonEmptyRolloutSnapshot }> = [];
+  while (base) {
+    const id = base.thread_id.toLowerCase();
+    if (seen.has(id)) throw resumePreparationBlocked(threadId, 'cyclic paginated history ancestry');
+    seen.add(id);
+    const local = find(targetHome, id);
+    if (!local) source();
+    const external = sourceHome ? find(sourceHome, id) : undefined;
+    const selected = external ?? local;
+    const home = external ? sourceHome! : targetHome;
+    if (!selected) throw resumePreparationBlocked(threadId, 'missing paginated history ancestor');
+    const snapshot = readPrivateNonEmptyRolloutSnapshot(home, selected);
+    if (!snapshot || snapshot.size < base.end_byte_offset) {
+      throw resumePreparationBlocked(threadId, 'paginated history ancestor is unsafe or shorter than its referenced range');
+    }
+    const metaLine = readFirstLineSync(selected);
+    let meta: unknown;
+    try { meta = metaLine ? JSON.parse(metaLine) : undefined; }
+    catch { throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor metadata'); }
+    if (!isRecord(meta) || meta.type !== 'session_meta' || !isRecord(meta.payload)
+      || meta.payload.history_mode !== 'paginated' || typeof meta.payload.id !== 'string'
+      || meta.payload.id.toLowerCase() !== nativeRolloutIdentity(selected)?.threadId) {
+      throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor metadata');
+    }
+    if (local && external) {
+      const localSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, local);
+      if (!localSnapshot || !filesHaveSameContents(local, external, base.end_byte_offset)
+        || !nonEmptyRolloutStillMatches(local, localSnapshot) || !nonEmptyRolloutStillMatches(external, snapshot)) {
+        throw resumePreparationBlocked(threadId, 'paginated history ancestor conflicts with local history');
+      }
+      plan.push({ localAlias: local, destination: path.join(path.dirname(local), originalCodexRolloutName(local)), snapshot: localSnapshot });
+    } else if (local) {
+      plan.push({ localAlias: local, destination: path.join(path.dirname(local), originalCodexRolloutName(local)), snapshot });
+    } else {
+      const relative = path.relative(normalizeCodexWindowsPath(home), normalizeCodexWindowsPath(selected));
+      const destination = path.join(targetHome, relative);
+      if (!isPathInside(targetHome, destination)) throw resumePreparationBlocked(threadId, 'invalid paginated ancestor destination');
+      plan.push({ sourcePath: selected, destination, snapshot });
+    }
+    base = readPaginatedBase(threadId, selected);
+  }
+  // Validate the entire chain before publishing anything. Ancestors are published
+  // oldest-first without replacement; interrupted attempts can reuse exact copies.
+  const publications: PrivateRolloutPublication[] = [];
+  for (const entry of plan.reverse()) {
+    if (!entry.sourcePath) {
+      if (entry.localAlias && !samePath(entry.localAlias, entry.destination)) {
+        // A parent may itself be an old imported task with a live writer/index.
+        // Give that same inode a native name; copying would strand its own resume.
+        const original = { path: entry.localAlias, created: false, snapshot: entry.snapshot };
+        if (!privateRolloutPublicationStillMatches(targetHome, original)
+          || !isPathInside(targetHome, entry.destination)) {
+          throw resumePreparationBlocked(threadId, 'paginated history ancestor changed before publication');
+        }
+        try { await fsp.link(entry.localAlias, entry.destination); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+        if (!privateRolloutPublicationOwnsPath(targetHome, original, entry.destination)) {
+          throw resumePreparationBlocked(threadId, 'paginated history ancestor conflicts with local history');
+        }
+        publications.push(original);
+      }
+      publications.push({ path: entry.destination, created: false, snapshot: entry.snapshot });
+      continue;
+    }
+    if (!nonEmptyRolloutStillMatches(entry.sourcePath, entry.snapshot)) {
+      throw resumePreparationBlocked(threadId, 'paginated history ancestor changed during import');
+    }
+    const publication = await copyExternalRolloutAtomically(entry.sourcePath, entry.destination, threadId,
+      { allowSibling: false, targetHome, sourceSnapshot: entry.snapshot });
+    if (!publication) throw resumePreparationBlocked(threadId, 'paginated history ancestor changed or conflicts during import');
+    publications.push(publication);
+  }
+  if (!privateRolloutPublicationOwnsPath(targetHome, { path: rolloutPath, created: false, snapshot: rootSnapshot })
+    || readFirstLineSync(rolloutPath) !== rootLine
+    || publications.some(publication => !privateRolloutPublicationStillMatches(targetHome, publication))) {
+    throw resumePreparationBlocked(threadId, 'paginated history changed before resume');
+  }
+}
+
+/**
+ * Repair #7436 at the native-resume boundary, using only the selected history.
+ * A hard link keeps both names on the same inode: interrupted index publication
+ * and an already-open writer cannot strand newer bytes on an obsolete copy.
+ * Never overwrite a conflicting canonical file or rediscover an external HOME.
+ */
+export function repairCodexRolloutPath(threadId: string, rolloutPath: string, sqliteHome: string): string {
+  const originalName = path.basename(rolloutPath);
+  if (!originalName.startsWith('rollout-cindy-')) return rolloutPath;
+  const historyHome = historyHomeForRollout(rolloutPath);
+  const snapshot = readPrivateNonEmptyRolloutSnapshot(historyHome, rolloutPath);
+  // Missing/empty paths retain the existing native recovery behavior. Never
+  // read metadata through a final symlink or an escaped sessions ancestor.
+  if (!snapshot) {
+    if (readPrivateRolloutPathState(historyHome, rolloutPath) === 'unsafe') {
+      throw resumePreparationBlocked(threadId, 'the selected rollout is not a private regular file');
+    }
+    return rolloutPath;
+  }
+  const line = readFirstLineSync(rolloutPath);
+  if (!line) return rolloutPath;
+  let meta: unknown;
+  try { meta = JSON.parse(line); } catch { return rolloutPath; }
+  if (!isRecord(meta) || meta.type !== 'session_meta' || !isRecord(meta.payload)
+    || meta.payload.history_mode !== 'paginated') return rolloutPath;
+  if (meta.payload.id !== threadId) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated rollout belongs to another thread');
+  }
+
+  const filename = originalCodexRolloutName(rolloutPath);
+  // Native revert uses <threadId>_<rolloutId>. Preserve both IDs, not a newly
+  // generated UUID or the last UUID extracted by the legacy scanner.
+  const match = filename.match(/^rollout-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?\.jsonl$/i);
+  const timestamp = match?.[1]?.replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+  if (!match || match[2]!.toLowerCase() !== threadId.toLowerCase() || !timestamp
+    || !Number.isFinite(Date.parse(`${timestamp}Z`))
+    || new Date(`${timestamp}Z`).toISOString().slice(0, 19) !== timestamp) {
+    throw resumePreparationBlocked(threadId, 'the original paginated rollout filename cannot be recovered');
+  }
+
+  const canonical = path.join(path.dirname(rolloutPath), filename);
+  if (!isPathInside(historyHome, canonical)) {
+    throw resumePreparationBlocked(threadId, 'the selected paginated rollout is not a private regular file');
+  }
+  const dbPath = findLatestStateDb(sqliteHome);
+  if (!dbPath) throw resumePreparationBlocked(threadId, 'the selected Codex state database is unavailable');
+  const current = readThreadRolloutPath(dbPath, threadId);
+  const normalized = (value: string) => path.resolve(normalizeCodexWindowsPath(value));
+  if (!current || (normalized(current) !== normalized(rolloutPath) && normalized(current) !== normalized(canonical))) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed before filename repair');
+  }
+
+  try { fs.linkSync(rolloutPath, canonical); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw resumePreparationBlocked(threadId, 'the canonical rollout could not be published');
+    }
+  }
+  const publication: PrivateRolloutPublication = { path: canonical, created: false, snapshot };
+  const validateIdentity = () => {
+    if (!privateRolloutPublicationOwnsPath(historyHome, publication)
+      || !privateRolloutPublicationOwnsPath(historyHome, publication, rolloutPath)) {
+      throw resumePreparationBlocked(threadId, 'the canonical rollout conflicts with the selected history');
+    }
+  };
+  validateIdentity();
+  if (!handoffThreadToNativeRollout(dbPath, threadId, historyHome, current, publication, validateIdentity)) {
+    throw resumePreparationBlocked(threadId, 'the selected Codex state changed during filename repair');
+  }
+  validateIdentity();
+  return canonical;
 }
 
 /** Resolve a missing path through its nearest existing ancestor, including symlinks. */
@@ -1476,12 +1665,12 @@ async function copyExternalRolloutAtomically(
   sourcePath: string,
   preferredPath: string,
   threadId: string,
-  opts: { allowSibling: boolean; skipPreferred?: boolean },
+  opts: { allowSibling: boolean; skipPreferred?: boolean; targetHome?: string; sourceSnapshot?: NonEmptyRolloutSnapshot },
 ): Promise<PrivateRolloutPublication | null> {
   if (samePath(sourcePath, preferredPath)) return null;
-  const targetHome = getDesktopCodexHome();
+  const targetHome = opts.targetHome ?? getDesktopCodexHome();
   if (!isPathInside(targetHome, preferredPath)) return null;
-  const sourceSnapshot = readNonEmptyRolloutSnapshot(sourcePath);
+  const sourceSnapshot = opts.sourceSnapshot ?? readNonEmptyRolloutSnapshot(sourcePath);
   if (!sourceSnapshot) return null;
 
   await fsp.mkdir(path.dirname(preferredPath), { recursive: true });
@@ -3305,7 +3494,7 @@ function syntheticRowForLocalRecoverySource(source: LocalCodexRecoverySource): S
   return {
     created_at_ms: source.recoveryCreatedAt,
     cwd: source.session.workingDir,
-    originator: 'xdt-maker',
+    originator: 'cindy',
     source: 'cli',
     model: source.session.model,
   };
@@ -3536,7 +3725,7 @@ async function writeFileAtomicallyIfAbsent(
 }
 
 /** 读 state DB threads 表的原始整行(用于重建 session_meta)。 */
-function readRawThreadRow(dbPath: string, threadId: string): SqlRow | null {
+export function readRawThreadRow(dbPath: string, threadId: string): SqlRow | null {
   let db: Database.Database | null = null;
   try {
     db = openReadonlyDb(dbPath);
@@ -3605,6 +3794,7 @@ function extractXdtMessageText(content: string | null): string {
 function buildSyntheticRollout(threadId: string, row: SqlRow, messages: SyntheticRolloutMessage[]): string {
   const createdMs = timestampMs(row.created_at_ms, row.created_at) ?? messages[0]?.createdAt ?? 0;
   const metaIso = isoFromMs(createdMs);
+  const recordedOriginator = stringValue(row.originator);
   const sessionMeta = {
     timestamp: metaIso,
     type: 'session_meta',
@@ -3613,7 +3803,11 @@ function buildSyntheticRollout(threadId: string, row: SqlRow, messages: Syntheti
       id: threadId,
       timestamp: metaIso,
       cwd: stringValue(row.cwd) || os.homedir(),
-      originator: stringValue(row.originator) || 'xdt-maker',
+      // Normalize missing/legacy-Cindy identity to `cindy`, but keep a genuine
+      // external Codex originator: recovery must not silently change the
+      // outbound identity of an imported thread.
+      originator: recordedOriginator && recordedOriginator.toLowerCase() !== 'xdt-maker'
+        ? recordedOriginator : 'cindy',
       // 当前 Codex SessionMeta 反序列化要求这三项存在;未知版本用 0.0.0 明确标记
       // 为恢复生成,provider / base instructions 则用合法的空 Option。
       cli_version: stringValue(row.cli_version) || '0.0.0',
@@ -3673,128 +3867,12 @@ export async function classifyCodexHistoryOversized(
   }
 }
 
-/**
- * 为外部 Codex thread 创建的本地会话按需导入可读消息。
- * 源 rollout 文件未变化时直接短路；文件变化后按行号 upsert，刷新已导入行并追加新行。
- */
-export async function importExternalCodexMessagesForSession(sessionId: string): Promise<void> {
-  const session = await getDbClient().queryOne<{
-    id: string;
-    agentKind: string;
-    sdkSessionId: string | null;
-    model: string;
-  }>(`
-    SELECT id, agent_kind AS agentKind, sdk_session_id AS sdkSessionId, model
-    FROM sessions
-    WHERE id = ?
-    LIMIT 1
-  `, [sessionId]);
-  if (session?.agentKind !== 'codex') return;
-  if (!session.sdkSessionId) return;
-  if (!session.id.startsWith(LOCAL_SESSION_ID_PREFIX)) return;
 
-  const importClientIdPrefix = `codex-import:${session.sdkSessionId}:`;
-  const cacheScope = getCurrentDbClientUserId();
-  const cachedImportFile = codexMessageImportFileCache.get(sessionId);
-  if (cacheScope && cachedImportFile?.scope === cacheScope) {
-    const cachedStat = await statImportFile(cachedImportFile.path);
-    if (cachedStat && isCachedImportFileUnchanged(cachedImportFile, cachedStat)) return;
-    codexMessageImportFileCache.delete(sessionId);
-  } else if (cachedImportFile) {
-    codexMessageImportFileCache.delete(sessionId);
-  }
 
-  const rolloutPath = resolveRolloutPath(session.sdkSessionId);
-  const rolloutStat = rolloutPath ? await statImportFile(rolloutPath) : null;
-  if (!rolloutPath || !rolloutStat) {
-    log.debug('message import skipped: rollout path missing', {
-      sessionId,
-      threadId: session.sdkSessionId,
-    });
-    return;
-  }
 
-  const imported = await readCodexRolloutMessages(rolloutPath, session.id);
-  if (imported.length === 0) {
-    if (cacheScope) {
-      codexMessageImportFileCache.set(sessionId, { scope: cacheScope, path: rolloutPath, ...rolloutStat });
-    }
-    return;
-  }
-  const { changed } = await getDbClient().tx('codex.importMessages', {
-    sessionId,
-    importClientIdPrefix,
-    sdkSessionId: session.sdkSessionId,
-    model: session.model,
-    rows: imported.map((row) => ({
-      lineNo: row.lineNo,
-      role: row.role,
-      text: row.text,
-      content: row.content,
-      createdAt: row.createdAt,
-    })),
-  });
-  if (cacheScope) {
-    codexMessageImportFileCache.set(sessionId, { scope: cacheScope, path: rolloutPath, ...rolloutStat });
-  }
-  if (changed === 0) return;
-  log.info('imported external Codex messages', {
-    sessionId,
-    threadId: session.sdkSessionId,
-    count: changed,
-  });
-  // session-git-pr-context:导入消息不经 createMessage,在这里补 PR 链接提取
-  // (fire-and-forget;upsert 幂等,重复导入刷新无副作用)。
-  void recordPrRefsForImportedMessages(
-    sessionId,
-    imported.map((row) => ({
-      role: row.role,
-      content: row.content ?? row.text,
-      createdAt: row.createdAt,
-    })),
-  ).catch(() => undefined);
-}
 
-async function discoverExternalCodexHomes(): Promise<string[]> {
-  const targetHome = getDesktopCodexHome();
-  const candidates = externalCodexHomeCandidates(targetHome);
 
-  const targetReal = await realpathOrNull(targetHome);
-  const out: string[] = [];
-  const seenReal = new Set<string>();
-  for (const candidate of candidates) {
-    const real = await realpathOrNull(candidate);
-    if (!real) continue;
-    if (targetReal && real === targetReal) continue;
-    if (seenReal.has(real)) continue;
-    if (!hasCodexSessionArtifactsSync(real)) continue;
-    seenReal.add(real);
-    out.push(real);
-  }
-  return out;
-}
-
-async function realpathOrNull(p: string): Promise<string | null> {
-  try {
-    return await fsp.realpath(p);
-  } catch {
-    return null;
-  }
-}
-
-async function statImportFile(file: string): Promise<ExternalImportFileStat | null> {
-  const stat = await fsp.stat(file).catch(() => null);
-  return stat ? { mtimeMs: stat.mtimeMs, size: stat.size } : null;
-}
-
-function isCachedImportFileUnchanged(
-  cached: ExternalImportFileCacheEntry,
-  stat: ExternalImportFileStat,
-): boolean {
-  return cached.mtimeMs === stat.mtimeMs && cached.size === stat.size;
-}
-
-function findLatestStateDb(home: string): string | null {
+export function findLatestStateDb(home: string): string | null {
   try {
     const entries = fs.readdirSync(home, { withFileTypes: true });
     const matches = entries
@@ -3819,7 +3897,7 @@ function hasCodexSessionArtifactsSync(home: string): boolean {
   return false;
 }
 
-function getDesktopCodexHome(): string {
+export function getDesktopCodexHome(): string {
   try {
     const userData = app?.getPath?.('userData');
     if (userData) return path.join(userData, 'codex-home');
@@ -3838,80 +3916,8 @@ function getDesktopCodexHome(): string {
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'), dirName, 'codex-home');
 }
 
-interface CodexThreadReadResult {
-  threads: CodexThreadSummary[];
-  rejectedThreadIds: string[];
-}
 
-function readThreads(
-  home: string,
-  dbPath: string,
-  projectlessThreadIds: ReadonlySet<string>,
-): CodexThreadReadResult | null {
-  let db: Database.Database | null = null;
-  try {
-    db = openReadonlyDb(dbPath);
-    if (!tableExists(db, 'threads')) return null;
-    const index = readSessionIndex(home);
-    const orderSql = buildThreadOrderSql(db);
-    const rows = db.prepare(`
-      SELECT *
-      FROM threads
-      ${orderSql}
-    `).all() as SqlRow[];
-    const threads: CodexThreadSummary[] = [];
-    const rejectedThreadIds = new Set<string>();
-    for (const row of rows) {
-      if (!isTopLevelThreadRow(row)) {
-        addRejectedThreadId(row, rejectedThreadIds);
-        continue;
-      }
-      if (threads.length >= MAX_THREADS_PER_HOME) continue;
-      const thread = normalizeThreadRow(home, dbPath, row, projectlessThreadIds, index);
-      if (thread) threads.push(thread);
-    }
-    return { threads, rejectedThreadIds: [...rejectedThreadIds] };
-  } catch (err) {
-    log.warn('failed to read external Codex threads', {
-      dbPath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  } finally {
-    closeDbQuietly(db);
-  }
-}
 
-// 扫描路径专用:异步枚举 + 异步首行读取,避免在 main 事件循环里做同步 IO
-// (设置页「会话导入」扫描直接跑在 main 进程,冷缓存下同步版会卡死窗口)。
-// 导入路径的同步 helper(collectRolloutFiles / readFirstLineSync)保留给
-// findExternalThreadById 等同步调用链。
-async function readThreadsFromRollouts(
-  home: string,
-  projectlessThreadIds: ReadonlySet<string>,
-  knownDbArchivedByThreadId?: ReadonlyMap<string, boolean>,
-): Promise<CodexThreadReadResult> {
-  const index = readSessionIndex(home);
-  const files = await collectRolloutFilesAsync(home);
-  const out: CodexThreadSummary[] = [];
-  const rejectedThreadIds = new Set<string>();
-  for (const { file, mtime } of files) {
-    const fileThreadId = threadIdFromRolloutPath(file);
-    const knownDbArchived = fileThreadId ? knownDbArchivedByThreadId?.get(fileThreadId) : undefined;
-    if (knownDbArchived === true || (knownDbArchived === false && !isArchivedRolloutPath(file))) continue;
-
-    const row = rolloutThreadRowFromFirstLine(file, await readFirstLineAsync(file), index, mtime);
-    if (!row) continue;
-    if (!isTopLevelThreadRow(row)) {
-      addRejectedThreadId(row, rejectedThreadIds);
-      continue;
-    }
-    if (out.length >= MAX_THREADS_PER_HOME) continue;
-    const thread = normalizeThreadRow(home, null, row, projectlessThreadIds, index);
-    if (thread) out.push(thread);
-  }
-  return { threads: out, rejectedThreadIds: [...rejectedThreadIds] };
-}
 
 /**
  * session_index.jsonl 解析缓存(review #3673 P2):按 ID 导入路径对每个所选
@@ -3926,7 +3932,7 @@ const sessionIndexCache = new Map<
   { mtimeMs: number; size: number; entries: Map<string, CodexSessionIndexEntry> }
 >();
 
-function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
+export function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
   const indexPath = path.join(home, 'session_index.jsonl');
   let stat: fs.Stats;
   try {
@@ -3980,7 +3986,7 @@ function parseSessionIndexFile(
   return out;
 }
 
-function readProjectlessThreadIds(home: string): Set<string> {
+export function readProjectlessThreadIds(home: string): Set<string> {
   // Codex Desktop does not model projectless threads as `cwd = null`.
   // Every thread still has an execution cwd, while the product-level
   // "not a project" decision lives in this global state list.
@@ -4028,7 +4034,7 @@ function isCindyRolloutArtifactFileName(name: string): boolean {
     || name.startsWith('.cindy-state-less-recovery');
 }
 
-function collectRolloutFiles(home: string): string[] {
+function collectRolloutFiles(home: string, includeCindyArtifacts = false): string[] {
   const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
   const files: Array<{ file: string; mtime: number }> = [];
   const visit = (dir: string, depth: number) => {
@@ -4047,7 +4053,7 @@ function collectRolloutFiles(home: string): string[] {
         entry.isFile()
         && entry.name.endsWith('.jsonl')
         && entry.name.includes('rollout-')
-        && !isCindyRolloutArtifactFileName(entry.name)
+        && (includeCindyArtifacts || !isCindyRolloutArtifactFileName(entry.name))
       ) {
         try {
           files.push({ file: full, mtime: fs.statSync(full).mtimeMs });
@@ -4061,40 +4067,6 @@ function collectRolloutFiles(home: string): string[] {
   return files.sort((a, b) => b.mtime - a.mtime).map((x) => x.file);
 }
 
-// collectRolloutFiles 的异步版(扫描路径用),额外带回 mtime 供 updated_at
-// 兜底,免去每文件二次 stat。
-async function collectRolloutFilesAsync(home: string): Promise<Array<{ file: string; mtime: number }>> {
-  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
-  const files: Array<{ file: string; mtime: number }> = [];
-  const visit = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 6) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(full, depth + 1);
-      } else if (
-        entry.isFile()
-        && entry.name.endsWith('.jsonl')
-        && entry.name.includes('rollout-')
-        && !isCindyRolloutArtifactFileName(entry.name)
-      ) {
-        try {
-          files.push({ file: full, mtime: (await fsp.stat(full)).mtimeMs });
-        } catch {
-          /* ignore unreadable rollout */
-        }
-      }
-    }
-  };
-  for (const root of roots) await visit(root, 0);
-  return files.sort((a, b) => b.mtime - a.mtime);
-}
 
 function normalizeRolloutFile(
   home: string,
@@ -4180,34 +4152,6 @@ function readFirstLineSync(file: string): string | null {
   }
 }
 
-// readFirstLineSync 的异步版(扫描路径用):同样最多读 2MB 找首行。
-async function readFirstLineAsync(file: string): Promise<string | null> {
-  let fh: Awaited<ReturnType<typeof fsp.open>> | null = null;
-  try {
-    fh = await fsp.open(file, 'r');
-    const chunks: Buffer[] = [];
-    const buf = Buffer.allocUnsafe(64 * 1024);
-    let total = 0;
-    let position = 0;
-    while (total < 2 * 1024 * 1024) {
-      const { bytesRead } = await fh.read(buf, 0, buf.length, position);
-      if (bytesRead <= 0) break;
-      position += bytesRead;
-      const newline = buf.subarray(0, bytesRead).indexOf(10);
-      if (newline >= 0) {
-        chunks.push(Buffer.from(buf.subarray(0, newline)));
-        return Buffer.concat(chunks).toString('utf-8');
-      }
-      chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
-      total += bytesRead;
-    }
-    return chunks.length > 0 ? Buffer.concat(chunks).toString('utf-8') : null;
-  } catch {
-    return null;
-  } finally {
-    await fh?.close().catch(() => undefined);
-  }
-}
 
 function threadIdFromRolloutPath(file: string): string {
   const m = path.basename(file).match(/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$/);
@@ -4760,7 +4704,7 @@ function findExternalThreadByIdFromRollouts(home: string, threadId: string): Cod
   return normalizeRolloutFile(home, file, index, projectlessThreadIds);
 }
 
-function discoverExternalCodexHomesSync(): string[] {
+export function discoverExternalCodexHomesSync(): string[] {
   const targetHome = getDesktopCodexHome();
   const candidates = externalCodexHomeCandidates(targetHome);
 
@@ -4817,17 +4761,13 @@ function isTopLevelThreadRow(row: SqlRow): boolean {
   return threadRejectionReason(row) === null;
 }
 
-function threadRejectionReason(row: SqlRow): 'thread-source' | 'internal-source' | null {
+export function threadRejectionReason(row: SqlRow): 'thread-source' | 'internal-source' | null {
   const threadSource = stringValue(row.thread_source).trim();
   if (threadSource && threadSource !== 'user') return 'thread-source';
   if (isInternalCodexSource(row)) return 'internal-source';
   return null;
 }
 
-function addRejectedThreadId(row: SqlRow, out: Set<string>): void {
-  const id = stringValue(row.id);
-  if (isLikelyThreadId(id) && threadRejectionReason(row) !== null) out.add(id);
-}
 
 function isInternalCodexSource(row: SqlRow): boolean {
   const source = stringValue(row.source).trim();
@@ -4860,7 +4800,7 @@ function unknownContainsInternalSource(value: unknown): boolean {
   ));
 }
 
-function normalizeThreadRow(
+export function normalizeThreadRow(
   home: string,
   dbPath: string | null,
   row: SqlRow,
@@ -4909,80 +4849,6 @@ function normalizeThreadRow(
   };
 }
 
-async function upsertLocalSession(thread: CodexThreadSummary): Promise<'inserted' | 'updated' | 'skipped'> {
-  const existingBySdkRows = await getDbClient().query<{ id: string; updatedAt: number; status: string }>(`
-    SELECT id, updated_at AS updatedAt, status
-    FROM sessions
-    WHERE agent_kind = 'codex' AND sdk_session_id = ?
-  `, [thread.threadId]);
-  // skip 只认「存活」的非本地行(与 claude 侧 upsertLocalSession 同一口径,
-  // 理由见彼处注释):软删残留不该挡 CLI 导入。
-  if (existingBySdkRows.some((row) => row.status !== 'deleted' && !row.id.startsWith(LOCAL_SESSION_ID_PREFIX))) {
-    return 'skipped';
-  }
-  const existingBySdk = existingBySdkRows.find((row) => row.id.startsWith(LOCAL_SESSION_ID_PREFIX));
-
-  const localId = existingBySdk?.id ?? `${LOCAL_SESSION_ID_PREFIX}${thread.threadId}`;
-  const existingById = await getDbClient().queryOne<{ id: string }>(
-    'SELECT id FROM sessions WHERE id = ? LIMIT 1',
-    [localId],
-  );
-  const existed = !!existingBySdk || !!existingById;
-  const result = await getDbClient().exec(`
-    INSERT INTO sessions (
-      id, title, working_dir, model, effort, permission_mode, status, sdk_session_id,
-      total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-      cleared_at, pinned_at, user_send_at, agent_kind, parent_session_id,
-      forked_at_message_id, worktree_path, source, feishu_open_id, feishu_bot_app_id,
-      used_project_context, extra_dirs, workspace_kind, created_at, updated_at
-    )
-    VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, 0, 0, 0, 0,
-      NULL, NULL, ?, 'codex', NULL,
-      NULL, NULL, 'desktop', NULL, NULL,
-      0, '[]', ?, ?, ?
-    )
-    ON CONFLICT(id) DO UPDATE SET
-      -- 复活语义(#3548,与 claude 侧同口径):旧行已软删时按全新导入对待,
-      -- 元数据与 updated_at 一并收敛回源值,不残留删除时刻的旧快照。
-      title = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
-      working_dir = CASE WHEN sessions.status = 'archived' THEN sessions.working_dir WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
-      -- Active imports follow native classification; archived tasks retain the
-      -- project and directory scope they must restore with.
-      workspace_kind = CASE WHEN sessions.status = 'archived' THEN sessions.workspace_kind ELSE excluded.workspace_kind END,
-      model = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
-      effort = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
-      permission_mode = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
-      status = CASE
-        WHEN sessions.status = 'deleted' THEN excluded.status
-        ELSE sessions.status
-      END,
-      sdk_session_id = excluded.sdk_session_id,
-      total_token_usage = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
-      user_send_at = COALESCE(sessions.user_send_at, excluded.user_send_at),
-      updated_at = CASE WHEN sessions.status = 'deleted' THEN excluded.updated_at ELSE MAX(sessions.updated_at, excluded.updated_at) END
-  `, [
-    localId,
-    thread.title,
-    // 存储级归一(#537):Codex rollout 里的 cwd 在 Windows 上是反斜杠,直接入库会与
-    // sessions:create 归一后的正斜杠写法并存,同一物理目录裂成两种 workingDir。
-    normalizeWorkingDirForStorage(thread.cwd) ?? thread.cwd,
-    thread.model,
-    thread.effort,
-    thread.permissionMode,
-    thread.archived ? 'archived' : 'active',
-    thread.threadId,
-    thread.tokensUsed,
-    thread.updatedAt,
-    thread.workspaceKind,
-    thread.createdAt,
-    thread.updatedAt,
-  ]);
-  if (!existed && result.changes > 0) return 'inserted';
-  if (existed && result.changes > 0) return 'updated';
-  return 'skipped';
-}
 
 interface CopyThreadStateOptions {
   replaceExisting?: boolean;
@@ -5136,149 +5002,11 @@ function resolveRolloutPath(threadId: string): string | null {
   return findExternalThreadById(threadId)?.rolloutPath ?? null;
 }
 
-interface ImportedCodexMessage {
-  lineNo: number;
-  role: 'user' | 'assistant';
-  text: string;
-  content: unknown;
-  createdAt: number;
-}
 
-async function readCodexRolloutMessages(
-  rolloutPath: string,
-  sessionId: string,
-): Promise<ImportedCodexMessage[]> {
-  const input = createReadStream(rolloutPath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input, crlfDelay: Infinity });
-  const out: ImportedCodexMessage[] = [];
-  let lineNo = 0;
-  for await (const line of rl) {
-    lineNo += 1;
-    const msg = await parseCodexRolloutMessageLineForImport(line, lineNo, sessionId);
-    if (msg) out.push(msg);
-  }
-  return out;
-}
 
-export function parseCodexRolloutMessageLine(
-  line: string,
-  lineNo: number,
-): ImportedCodexMessage | null {
-  if (!line.trim()) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(obj)) return null;
-  if (obj.type !== 'response_item' || !isRecord(obj.payload)) return null;
-  const payload = obj.payload;
-  if (payload.type !== 'message') return null;
-  const role = payload.role === 'assistant' ? 'assistant' : payload.role === 'user' ? 'user' : null;
-  if (!role) return null;
-  const rawText = extractContentText(payload.content);
-  // assistant 正文与流式 completed 同口径:剥截断残尾 + citation 归一化——rollout
-  // 存的是含 `:codex-file-citation{...}` 内部语法的原文(生成被打断时还带未闭合
-  // 残尾),直接入库会把它漏给用户(#785)。
-  const text = (
-    role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
-      : finalizeCodexCitationText(rawText)
-  ).trim();
-  if (!text) return null;
-  return {
-    lineNo,
-    role,
-    text,
-    content: text,
-    createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
-  };
-}
 
-async function parseCodexRolloutMessageLineForImport(
-  line: string,
-  lineNo: number,
-  sessionId: string,
-): Promise<ImportedCodexMessage | null> {
-  if (!line.trim()) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(obj)) return null;
-  if (obj.type !== 'response_item' || !isRecord(obj.payload)) return null;
-  const payload = obj.payload;
-  if (payload.type !== 'message') return null;
-  const role = payload.role === 'assistant' ? 'assistant' : payload.role === 'user' ? 'user' : null;
-  if (!role) return null;
 
-  const rawText = extractContentText(payload.content);
-  // assistant 正文与流式 completed 同口径:剥截断残尾 + citation 归一化——rollout
-  // 存的是含 `:codex-file-citation{...}` 内部语法的原文(生成被打断时还带未闭合
-  // 残尾),直接入库会把它漏给用户(#785)。
-  const text = (
-    role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
-      : finalizeCodexCitationText(rawText)
-  ).trim();
-  const images = role === 'user'
-    ? await extractCodexUserImages(payload.content, sessionId, lineNo)
-    : [];
-  if (!text && images.length === 0) return null;
-  return {
-    lineNo,
-    role,
-    text,
-    content: role === 'user' ? importedUserContent(text, images) : text,
-    createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
-  };
-}
 
-function extractContentText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = stringValue(block.type);
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join('\n\n');
-}
-
-async function extractCodexUserImages(
-  content: unknown,
-  sessionId: string,
-  lineNo: number,
-): Promise<ImportedImageRef[]> {
-  if (!Array.isArray(content)) return [];
-  const out: ImportedImageRef[] = [];
-  let imageIndex = 0;
-  for (const block of content) {
-    if (!isRecord(block) || stringValue(block.type) !== 'input_image') continue;
-    const imageUrl = stringValue(block.image_url);
-    const payload = imageUrl ? parseImageDataUrl(imageUrl) : null;
-    if (!payload) continue;
-    const ref = await cacheImportedBase64Image({
-      sessionId,
-      source: 'codex',
-      lineNo,
-      partIndex: 0,
-      imageIndex,
-      mimeType: payload.mimeType,
-      base64Data: payload.base64Data,
-    });
-    imageIndex += 1;
-    if (ref) out.push(ref);
-  }
-  return out;
-}
 
 function openReadonlyDb(file: string): Database.Database {
   const db = createBetterSqliteDatabase(file, { readonly: true, fileMustExist: true });
@@ -5305,17 +5033,6 @@ function getTableColumns(db: Database.Database, table: string): string[] {
   return rows.map((row) => row.name);
 }
 
-function buildThreadOrderSql(db: Database.Database): string {
-  const cols = new Set(getTableColumns(db, 'threads'));
-  if (cols.has('updated_at_ms') && cols.has('updated_at')) {
-    return 'ORDER BY COALESCE("updated_at_ms", "updated_at" * 1000) DESC';
-  }
-  if (cols.has('updated_at_ms')) return 'ORDER BY "updated_at_ms" DESC';
-  if (cols.has('updated_at')) return 'ORDER BY "updated_at" DESC';
-  if (cols.has('created_at_ms')) return 'ORDER BY "created_at_ms" DESC';
-  if (cols.has('created_at')) return 'ORDER BY "created_at" DESC';
-  return '';
-}
 
 function intersectColumns(source: string[], target: string[]): string[] {
   const targetSet = new Set(target);

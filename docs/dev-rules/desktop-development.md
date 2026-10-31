@@ -58,6 +58,10 @@ Agent 没有 TTY 时，dev 会在新开的 Terminal（macOS）／cmd（Windows�
 只保留前 8MB，足够覆盖启动过程；之后的运行日志看按天轮转的 `main-*.log`），窗口关掉后仍可查；启动失败时命令会直接打印日志末尾，verdict 带 `log=` 指向该文件。
 排查启动失败先读这份日志，不要靠反复重启猜原因。
 
+停止旧实例后的 macOS Terminal 标签页清理，只访问已经运行的 Terminal，并按旧实例的精确
+TTY 匹配标签页；Terminal 未运行时直接跳过，不能因清理 iTerm 等终端的 TTY 而将它启动。
+实现与回归见 `scripts/restart-desktop-remote.mjs` 和 `scripts/__tests__/restart-desktop-remote.test.mjs`。
+
 Desktop 连接的是你自己的 Cindy 云端账号（remote）。这与登录页中免 Cindy 账号的
 「跳过登录」（应用内显示为「未登录」，无需账号即可使用本机 agent；代码内部标识仍为
 `local` mode）不是同一个概念。Agent 不得自行改用
@@ -71,6 +75,16 @@ worktree 时可以起隔离沙箱；从另一个 checkout 的 desktop dev 里起
 checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户。
 
 ## 可选启动参数
+
+只调试本机设备互联服务、仍使用真实账号登录时，保持 `restart:desktop:remote`，
+仅在本次启动环境按账号区域设置 `XDT_DEVICE_LINK_CN_LOCAL_URL=http://127.0.0.1:<端口>`
+和／或 `XDT_DEVICE_LINK_GLOBAL_LOCAL_URL=http://127.0.0.1:<另一个端口>`。
+此覆盖只供未打包的开发版使用，只接受带显式端口、无凭据/路径的 IPv4/IPv6 回环地址，
+仅作用于对应区域的当前会话及按区域读取的设备互联端点。旧 `XDT_DEVICE_LINK_LOCAL_URL`
+只作为 CN 的兼容别名，不能把 Global Access Token 发往 CN 服务。正式版忽略这些覆盖；认证、SSO 双区发现、
+模型与其他服务仍按原清单和账号区域运行。跨电脑可使用经明确授权的临时回环隧道。
+不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
+本机服务，不能承载真实双区企业 SSO。
 
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
@@ -165,6 +179,37 @@ checkout 的启动器顶掉）。因此并行多开的标准姿势是：**每个
 
 Agent 自身仍只走 restart 命令，不直接调 human-only 的 `dev:desktop*`。共享同一 userData
 多开时，非 primary 实例用 `--passive` 让出定时任务调度（见上）。
+
+### 开发深链与系统关联
+
+未打包的 Desktop（`app.isPackaged === false`）不注册 `cindy://` 或历史
+`xdt-maker://` 的 OS 默认处理程序，也不改写 Windows 协议显示名。这与区域、
+`--isolated`、`--shared`、`--passive` 以及 `process.defaultApp` 是否存在无关。
+隔离 userData 不能隔离系统 URL 关联；临时 checkout 退出或删除后，系统关联仍会保留。
+
+macOS 的 `setAsDefaultProtocolClient` 不保存 `path` / `args`（这两个参数仅适用于
+Windows）。把默认处理程序设为 stock `Electron.app` 后，冷启动它没有项目入口，可能
+只显示 Electron 欢迎页。Windows 虽能保存入口命令，也不能让临时 checkout 接管正式链接。
+不在退出时调用 `removeAsDefaultProtocolClient` 来“恢复”：该 API 只移除当前默认处理程序，
+不承诺还原之前的应用，异常退出也不会执行清理。参见
+[Electron 协议注册 API](https://www.electronjs.org/docs/latest/api/app#appsetasdefaultprotocolclientprotocol-path-args)。
+
+开发验证分两层：
+
+- URL / argv 解析、登录前 pending 和导航分发继续使用既有入口；本次只跳过 OS 注册，
+  `open-url`、`second-instance` 和冷启动 argv 接收不变。用现有深链定向测试验证这些行为。
+- 浏览器点击、冷启动和运行中唤起须用 packaged macOS / Windows 验证。运行 dev 时直接
+  点击系统链接仍交给原有安装版，不能把它当作当前 checkout 的验收。
+
+已被旧开发版覆盖关联时，先正常关闭那份旧 dev。保存正式版中的工作后，从安装位置
+（macOS 通常为 `/Applications/Cindy.app`，按实际区域/版本选择）正常退出并重新启动
+对应的打包版，再重试链接；打包版启动会重新注册其协议。仅切换到已经运行的窗口不会
+重新执行注册。Windows 若仍未恢复，在系统“默认应用”中检查这两个协议的目标应用。
+不要批量注销所有 Electron 应用、删除用户 profile 或重置整个 LaunchServices 数据库。
+
+实现与回归见 [deepLink.ts](../../apps/desktop/src/main/deepLink.ts) 和
+[deepLink.test.ts](../../apps/desktop/src/main/__tests__/deepLink.test.ts)。该修复防止新的
+开发实例覆盖关联，不会扫描或自动修复旧 checkout 留下的系统记录。
 
 ### 使用统计（TapDB）在 dev 下不上报
 
@@ -279,9 +324,13 @@ Linux 主窗口创建时注册 Electron Tray，提供显示主窗口、打开日
 实现见 `main/linuxTrayLifecycle.ts` 与 `bootstrap-electron.ts`，回归见
 `main/__tests__/linuxTrayLifecycle.test.ts`。
 
-图标创建成功不代表桌面面板一定显示它，因此关闭主窗口仍保留 Linux 原有的
-「最小化／退出」选择，不自动隐藏到托盘，也不迁移用户已有偏好。无托盘宿主或初始化失败
-不阻止主窗口使用。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
+关闭主窗口仍保留 Linux 原有的「最小化／退出」选择，不迁移用户已有偏好。
+Hyprland（包括 Omarchy）没有原生最小化能力，因此主窗口的「最小化」及关闭时的
+「最小化」选择统一隐藏到 Linux 托盘；其他桌面与副窗口仍使用原生最小化。
+策略与回归见 `main/mainWindowCloseBehavior.ts`、`main/__tests__/mainWindowCloseBehavior.test.ts`。
+托盘初始化失败时提示并保留窗口。图标创建成功不代表桌面面板一定显示它；自定义 Hyprland
+配置未启用托盘宿主时，可再次打开同一安装、同一配置的 Cindy，经已有 single-instance
+入口恢复窗口。托盘实际显示、激活、菜单与退出须在 Linux 桌面验证；macOS 上的
 单测不能替代 Omarchy/Hyprland、GNOME 或 KDE 的实机验收。
 
 ## Windows 窗口恢复实验

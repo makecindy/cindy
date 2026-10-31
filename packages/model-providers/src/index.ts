@@ -117,6 +117,7 @@ export {
   decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelNativeApi,
+  resolveRecommendedAgent,
   resolveCatalogModelNativeApi,
   resolveModelReferencePrice,
   resolveBaseModelReferencePrice,

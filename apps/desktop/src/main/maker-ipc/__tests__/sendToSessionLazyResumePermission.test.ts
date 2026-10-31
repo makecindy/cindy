@@ -1,4 +1,4 @@
-import { isShadowedCompanionCanonical } from '../botSessionInputGuard.js';
+import { isShadowedCompanionSession } from '../botSessionInputGuard.js';
 import { createScheduledModelScope } from '../scheduledModelSelection.js';
 import { assertTaskActionCurrent, hasTaskActionAuthorization } from '../taskActionAuthorization.js';
 /**
@@ -23,6 +23,7 @@ import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGATED_CONTINUATION, TurnDispatchRejectedError, type SendOptions } from '@cindy/maker-core';
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
+import { createWireNoteMemory } from '../wireNoteMemory.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -180,6 +181,7 @@ function botTaskDispatchHarness(
     isCindyMakeWorktreePath: () => false,
     app: { getPath: () => '/fixture' },
     agentHandoffPending: { peek: asyncNoop },
+    wireNoteMemory: createWireNoteMemory(),
     shouldPrependMobileClientPromptNote: () => false,
     noteChannelTurnSource: () => noop,
     channelTurnSourceFor: noop,
@@ -210,7 +212,7 @@ function botTaskDispatchHarness(
     sessions: {},
     // 云端伙伴副本门:合成库里没有关联行,目标不是被接管的副本。
     botSessionLinks: {},
-    isShadowedCompanionCanonical: () => false,
+    isShadowedCompanionSession: () => false,
     isCompanionShadowed: () => false,
     SHADOWED_COMPANION_INPUT_MESSAGE: 'shadowed',
     and: noop,
@@ -231,6 +233,7 @@ function botTaskDispatchHarness(
     waitForSendToSessionLock: async () => undefined,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
     inputCoordinator: { ensureQueueRestored: asyncNoop, shouldQueueNewTurn: () => false },
+    enqueueSendToSessionMessage: vi.fn(asyncNoop),
     BOT_GROUP_CLIENT_ID_PREFIX: 'bot-group:',
     agentSwitchPending: new Map(),
     notifyAgentIslandUserPrompt: noop,
@@ -242,6 +245,7 @@ function botTaskDispatchHarness(
       await callback?.();
     },
     contextOverflowRolloverHolder: undefined,
+    taskCompletionDeliveryForOwner: () => null,
     buildCreateOptsWithStderr: (opts: Record<string, unknown>) => ({ ...opts }),
     synthesizeOrcaVendorOptionsFromDb: asyncNoop,
     readSessionExtraDirsFromDb: async () => [],
@@ -267,7 +271,7 @@ function botTaskDispatchHarness(
       throw new ReferenceError(`unstubbed dependency of the production slice: ${String(key)}`);
     },
   });
-  return { ...loadBotTaskDispatch(scope), bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
+  return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
 
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {
@@ -284,16 +288,16 @@ it('advances an accepted send_to_session with a dispatcher without touching huma
 // this existing guard fixture); assert the route used to send, not call strings.
 describe('companion internal delivery after automation', () => {
   // #6895: rejected input must not bootstrap the old primary or consume its restore.
-  it.each(['already-shadowed', 'shadowed-while-waiting'] as const)('preserves automation state when %s', async (timing) => {
+  it.each(['canonical', 'routine'].flatMap(role => ['already-shadowed', 'shadowed-while-waiting'].map(timing => ({ role, timing }))))('preserves $role automation state when $timing', async ({ role, timing }) => {
     let shadowed = timing === 'already-shadowed';
     let baseline: string | null = 'saved-pi-route';
     const restore = vi.fn(async () => { baseline = null; });
     const reconcile = vi.fn(async () => undefined);
     const dbChain = { from: () => dbChain, where: () => dbChain,
-      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+      limit: async () => [{ role, botId: 'companion' }] };
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {}, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
       scheduledModelScope: { restore }, reconcileBotModelRoute: reconcile,
       waitForSendToSessionLock: async () => { shadowed = true; },
     });
@@ -308,16 +312,16 @@ describe('companion internal delivery after automation', () => {
 
   // #6895: hand-over may finish while restore awaits, before a turn exists.
   // Exercise both consumers of the post-restore routing decision, without timers.
-  it.each(['live', 'queued'] as const)('rejects %s delivery when demoted during restoration', async (path) => {
+  it.each(['canonical', 'routine'].flatMap(role => ['live', 'queued'].map(path => ({ role, path }))))('rejects $role $path delivery when demoted during restoration', async ({ role, path }) => {
     let shadowed = false;
     const dbChain = { from: () => dbChain, where: () => dbChain,
-      limit: async () => [{ role: 'canonical', botId: 'companion' }] };
+      limit: async () => [{ role, botId: 'companion' }] };
     const enqueue = vi.fn(async () => undefined);
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } }, {
       child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' },
     }, {
       getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-      isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+      isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
       scheduledModelScope: { restore: async () => { shadowed = true; } },
       inputCoordinator: { ensureQueueRestored: async () => undefined, shouldQueueNewTurn: () => path === 'queued' },
       enqueueSendToSessionMessage: enqueue,
@@ -338,7 +342,7 @@ describe('companion internal delivery after automation', () => {
     const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
       path === 'live' ? { child: { id: 'child', agentKind: 'pi', isTurnRunning: () => false, getStatus: () => 'active' } } : {}, {
         getDbClient: () => ({ drizzle: { select: () => dbChain } }),
-        isShadowedCompanionCanonical, isCompanionShadowed: () => shadowed,
+        isShadowedCompanionSession, isCompanionShadowed: () => shadowed,
         createDbMessage: async () => { shadowed = true; },
       });
     expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Late cloud input' }))
@@ -378,9 +382,62 @@ describe('companion internal delivery after automation', () => {
 });
 
 // PR #6514: source receipts must not promote a prior owner's deployment permission.
+// Guard: execute the production create closure with separate membership and cwd.
+// Both ordinary and managed-worktree tasks must persist the chosen project.
+it.each([
+  { projectDir: '/selected-project', workingDir: '/tmp/checkout', useWorktree: false },
+  { projectDir: '/selected-project', workingDir: '/tmp/checkout', useWorktree: true },
+  { projectDir: null, workingDir: '/tmp/checkout', useWorktree: false },
+  { projectDir: null, workingDir: '/tmp/checkout', useWorktree: true },
+  { projectDir: null, workingDir: undefined, useWorktree: false },
+])('preserves resolved membership during creation ($projectDir, cwd=$workingDir, worktree=$useWorktree)', async ({ projectDir, workingDir, useWorktree }) => {
+  const executionDir = useWorktree ? '/repo/.cindy-worktrees/child' : workingDir ?? '/managed/dialogues/new-child';
+  const workspaceKind = projectDir === null ? 'dialogue' : 'project';
+  const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false, workingDir: executionDir, workspaceKind };
+  const open = vi.fn(async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
+    ({ row, value: await create(row, async () => {}) }));
+  const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
+    openSession: open,
+    validateHandoffWorkingDir: async (dir: string) => ({ ok: true, dir }),
+    broadcastSessionCreated: vi.fn(),
+    worktreeManager: {},
+    resolveFreshSourceBranch: vi.fn(),
+    prepareHandoffWorktree: async () => ({ ok: true, sessionId: 'new-child', meta: { path: executionDir } }),
+  });
+  const result = await h.sendToSessionInternal({ dispatcherSessionId: 'source', message: 'Work',
+    projectDir, workingDir, useWorktree, forceQueue: true });
+  expect(result).toMatchObject({ ok: true, projectDir, workingDir: executionDir, workspaceKind });
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ body: expect.objectContaining({
+    projectDir, workingDir: workingDir === undefined ? '' : executionDir, workspaceKind,
+  }) }), expect.any(Function));
+  expect(h.bootstrapped[0]).toMatchObject({ projectDir, workingDir: executionDir });
+});
+
 // Existing cold-start tests omitted the receipt. Execute the actual production dispatch closure
 // for both idle branches; guard tier because register.ts has no separately exported entry.
 describe('idle forwarded request authorization', () => {
+  // 2026-10-27 / unit: a new recipient must accept the same durable provenance as
+  // an existing one; direct send previously left its next handoff without a source.
+  it('queues the first verified request of a newly created task', async () => {
+    const broadcast = vi.fn();
+    const row = { id: 'new-child', permissionMode: 'auto', planModeEnabled: false };
+    const enqueue = vi.fn(async (input: { onAccepted?: () => Promise<void> }) => { await input.onAccepted?.(); });
+    const h = botTaskDispatchHarness({ 'new-child': row }, {}, {
+      openSession: async (_input: unknown, create: (row: object, guard: () => Promise<void>) => Promise<unknown>) =>
+        ({ row, value: await create(row, async () => {}) }),
+      enqueueSendToSessionMessage: enqueue,
+      broadcastSessionCreated: broadcast,
+    });
+    const receipt = { kind: 'agent-request', request: {
+      userText: 'Inspect fixtures', sessionId: 'owner', clientId: 'u1', ownerVerified: true } };
+    expect(await h.sendToSessionInternal({ message: 'envelope', autoReviewUserText: receipt,
+      createDefaults: { agentKind: 'codex', model: 'fixture', workingDir: '/tmp/fixture', permissionMode: 'auto' },
+    })).toMatchObject({ ok: true, targetSessionId: 'new-child', wakeKind: 'created' });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'new-child', autoReviewUserText: receipt }));
+    expect(h.sendOptions).toHaveLength(0);
+    expect(broadcast).toHaveBeenCalledWith('new-child');
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
   it.each([
     ['live', 'agent-request'], ['resumed', 'agent-request'],
     ['live', 'delegated-continuation'], ['resumed', 'delegated-continuation'],
@@ -411,7 +468,7 @@ describe('idle forwarded request authorization', () => {
 
   // Incident 2026-10-23: the owner's relayed "可以提交 pr" reached the task with an empty
   // review intent. A relay the sending host verified carries exactly the owner's words.
-  it.each(['live', 'resumed'] as const)('%s dispatch reviews a verified owner relay against the owner words', async path => {
+  it.each(['live', 'resumed'] as const)('%s dispatch keeps a verified owner relay on the durable input path', async path => {
     const live: Record<string, object> = path === 'live' ? { child: {
       id: 'child', agentKind: 'claude-code', remoteHostId: null,
       isTurnRunning: () => false, getStatus: () => 'active',
@@ -422,7 +479,11 @@ describe('idle forwarded request authorization', () => {
       autoReviewUserText: { kind: 'agent-request', request: {
         userText: 'Submit the PR.', sessionId: 'source', clientId: 'owner-input', ownerVerified: true } },
     });
-    expect(h.sendOptions[0]?.[AUTO_REVIEW_USER_INTENT]).toBe('Submit the PR.');
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'child', autoReviewUserText: { kind: 'agent-request', request: {
+        userText: 'Submit the PR.', sessionId: 'source', clientId: 'owner-input', ownerVerified: true } },
+    }));
+    expect(h.sendOptions).toHaveLength(0);
     expect(h.readAutoReviewHistory).not.toHaveBeenCalled();
   });
 });

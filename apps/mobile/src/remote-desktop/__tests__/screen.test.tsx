@@ -76,6 +76,7 @@ vi.mock("../useLockOnExitPreference", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../useLockOnExitPreference")>();
   return {
+    useIdleTimeoutPreference: actual.useIdleTimeoutPreference,
     useRemoteDesktopPreference: () => [false, vi.fn(), true],
     useLockOnExitPreference: (deviceId: string) =>
       fixture.lockPreferenceFromStorage
@@ -119,6 +120,7 @@ const fixture = vi.hoisted(() => ({
   lockOnExit: false,
   lockPreferenceFromStorage: false,
   lockSupported: true,
+  idleSupported: false,
   alert: vi.fn(),
   resetUnlockAttempt: vi.fn(),
   maybeUnlock: vi.fn(async (_beforeAuthentication?: () => Promise<void>) => {}),
@@ -463,6 +465,7 @@ beforeEach(async () => {
   fixture.lockOnExit = false;
   fixture.lockPreferenceFromStorage = false;
   fixture.lockSupported = true;
+  fixture.idleSupported = false;
   fixture.views = {};
   fixture.keyboardListeners = {};
   fixture.webViewProps = null;
@@ -486,6 +489,7 @@ beforeEach(async () => {
         return {
           version: 1,
           lockOnExit: fixture.lockSupported,
+          idleLock: fixture.idleSupported,
           trickleIce: fixture.trickleIce,
           automaticReconnect: true,
           connectionTakeover: true,
@@ -1019,6 +1023,49 @@ describe("remote desktop controls", () => {
     mounted = false;
     expect(fixture.playback).toHaveBeenLastCalledWith(false);
   });
+  // Unit: a reserved PiP transition skips the initial background handler; all
+  // failed exits must still lock and disable recovery when protection is on.
+  it.each(["failure", "timeout", "reject", "close"])(
+    "locks after protected background PiP preparation ends with %s", async (outcome) => {
+      fixture.nativeMedia = true;
+      fixture.idleSupported = true;
+      act(() => root.render(<RemoteDesktopScreen />));
+      await connect();
+      await nativePresentation("pipCapability", { supported: true });
+      act(() => button("operations").click());
+      await act(async () => button("smallWindow").click());
+      let grant!: (value: unknown) => void;
+      let reject!: (cause: Error) => void;
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "presentation" && args[2][0].enabled
+          ? new Promise((resolve, fail) => { grant = resolve; reject = fail; })
+          : original(...args),
+      );
+      await nativePresentation("presentationStarting");
+      await nativePresentation("presentation", { active: true });
+      await act(async () => {
+        AppState.currentState = "background";
+        fixture.appState!("background");
+      });
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+      if (outcome === "failure") await nativePresentation("presentationFailed");
+      if (outcome === "timeout") await act(async () => vi.advanceTimersByTimeAsync(4000));
+      if (outcome === "reject") await act(async () => reject(new Error("denied")));
+      if (outcome === "close") await nativePresentation("presentation", { active: false });
+      expect(requests().filter((r) => r.op === "stop")).toEqual([
+        { op: "stop", lease: "lease", lockScreen: true },
+      ]);
+      await act(async () => grant({}));
+      await act(async () => {
+        AppState.currentState = "active";
+        fixture.appState!("active");
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(sent().filter((m) => m.type === "pipPolicy" && m.authorized)).toHaveLength(0);
+    },
+  );
   it("prepares native video playback even when the host has no audio", async () => {
     fixture.nativeMedia = true;
     fixture.systemAudio = false;
@@ -3382,17 +3429,19 @@ describe("remote desktop controls", () => {
       });
     },
   );
-  it.each([false, true])(
-    "waits for the saved lock policy before starting, enabled=%s",
-    async (enabled) => {
+  it.each([null, "false", "true", "unreadable"])(
+    "waits for the saved lock policy before starting, stored=%s",
+    async (stored) => {
       act(() => root.unmount());
       fixture.lockPreferenceFromStorage = true;
       let finish!: (value: string | null) => void;
+      let fail!: (error: Error) => void;
       const original = storage.getItem;
       const read = vi.spyOn(storage, "getItem").mockImplementation((key) =>
         key.includes(".lock-on-exit.")
-          ? new Promise<string | null>((resolve) => {
+          ? new Promise<string | null>((resolve, reject) => {
               finish = resolve;
+              fail = reject;
             })
           : original(key),
       );
@@ -3404,9 +3453,14 @@ describe("remote desktop controls", () => {
         );
         expect(finish).toBeTypeOf("function");
         expect(requests().filter((r) => r.op === "start")).toHaveLength(0);
-        await act(async () => finish(String(enabled)));
+        await act(async () =>
+          stored === "unreadable"
+            ? fail(new Error("STORAGE_UNAVAILABLE"))
+            : finish(stored),
+        );
+        // A failed read is not an opt-out, so it follows the default (on).
         expect(requests().filter((r) => r.op === "start")).toEqual([
-          { op: "start", displayId: "display", lockOnExit: enabled },
+          { op: "start", displayId: "display", lockOnExit: stored !== "false" },
         ]);
       } finally {
         read.mockRestore();
@@ -3495,6 +3549,100 @@ describe("remote desktop controls", () => {
     act(() => root.unmount());
     mounted = false;
     expect(requests().filter((r) => r.lockScreen)).toHaveLength(1);
+  });
+  // Unit: the real screen loads per-computer policy before connecting and never
+  // automatically reopens a protected connection after leaving the foreground.
+  it("sends the default idle policy, saves changes, and locks on background without reopening", async () => {
+    fixture.idleSupported = true;
+    fixture.nativeMenus = true;
+    await connect();
+    expect(requests().find((r) => r.op === "start")).toMatchObject({ idleTimeoutMinutes: 5 });
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    await act(async () => (host.querySelector('[data-testid="native-menu.1"]') as HTMLButtonElement).click());
+    expect(storage.items.get("cindy.mobile.remote-desktop.idle-timeout.v1.computer")).toBe("1");
+    expect(requests().filter((r) => r.op === "heartbeat").at(-1)).toMatchObject({ idleTimeoutMinutes: 1 });
+    await act(async () => fixture.appState?.("inactive"));
+    expect(requests().some((r) => r.lockScreen)).toBe(false);
+    await act(async () => fixture.appState?.("background"));
+    expect(requests().filter((r) => r.op === "stop")).toEqual([{ op: "stop", lease: "lease", lockScreen: true }]);
+    await act(async () => fixture.appState?.("active"));
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(host.textContent).toContain("remoteDesktop.backgroundDisconnected");
+  });
+  it("keeps the host idle clock alive during a transient protected reconnect", async () => {
+    fixture.idleSupported = true;
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let first = true;
+    fixture.invoke.mockImplementation((...args) => {
+      if (args[2][0].op === "heartbeat" && first) {
+        first = false;
+        return Promise.reject(new Error("DESKTOP_LEASE_EXPIRED"));
+      }
+      return original(...args);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(requests().filter((r) => r.op === "start").at(-1)).toMatchObject({ resume: true, idleTimeoutMinutes: 5 });
+  });
+  // Unit: backgrounding before start returns must retain the same lock intent
+  // as a connected viewer; ordinary late-lease cleanup would disable host expiry.
+  it("locks a late start reply after protected background exit without reopening", async () => {
+    fixture.idleSupported = true;
+    let finish!: (value: unknown) => void;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "start"
+        ? new Promise((resolve) => { finish = resolve; })
+        : original(...args),
+    );
+    await act(async () => fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } }));
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    await act(async () => {
+      AppState.currentState = "background";
+      fixture.appState!("background");
+    });
+    await act(async () => finish({ lease: "late", display, controlling: true }));
+    expect(requests().filter((r) => r.op === "stop")).toEqual([
+      { op: "stop", lease: "late", lockScreen: true },
+    ]);
+    await act(async () => {
+      AppState.currentState = "active";
+      fixture.appState!("active");
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+  });
+  // Unit: saved-password preparation previously preceded the host's resume
+  // refusal and could unlock a host that had already ended the protected lease.
+  it.each(["linux", "darwin"])("does not auto-unlock %s while recovering a protected connection", async (platform) => {
+    fixture.hostPlatform = platform;
+    fixture.idleSupported = true;
+    await connect();
+    expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) => {
+      if (args[2][0].op === "heartbeat") return Promise.reject(new Error("DESKTOP_LEASE_EXPIRED"));
+      if (args[2][0].op === "start" && args[2][0].resume)
+        return Promise.reject(new Error("DESKTOP_STOPPED"));
+      return original(...args);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(requests().filter((r) => r.op === "start").at(-1)).toMatchObject({ resume: true });
+    expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+    expect(host.textContent).toContain("remoteDesktop.hostDisconnected");
+  });
+  it("reads an explicit never override before starting a protected-capable host", async () => {
+    act(() => root.unmount());
+    storage.items.set("cindy.mobile.remote-desktop.idle-timeout.v1.computer", "0");
+    fixture.idleSupported = true;
+    root = createRoot(host);
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await connect();
+    expect(requests().find((r) => r.op === "start")).toMatchObject({ idleTimeoutMinutes: 0 });
   });
   it("does not lock for Face ID inactivity or background recovery", async () => {
     fixture.lockOnExit = true;
@@ -5525,6 +5673,46 @@ describe("remote desktop controls", () => {
     ).toBeGreaterThanOrEqual(82);
     expect(render(geometry)).toMatchObject({ top: 26, left: 16 });
   });
+  // Android fold support: exercise the real screen (not a layout copy). Previous
+  // coverage used iOS only and missed its platform-gated skin selector. Folding,
+  // keyboard resize and unfolding must not replace the viewer/control lease.
+  it("offers the same tabletop keyboard on Android and retains the viewer across posture changes", async () => {
+    fixture.platform = "android";
+    fixture.size = { width: 700, height: 900 };
+    fixture.safe = { top: 24, bottom: 24, left: 0, right: 0 };
+    const geometry: WindowGeometry = {
+      ...fixture.size, insets: fixture.safe, regularWidth: true, regularHeight: true,
+      barEdge: "none", reservedRegionsSupported: true,
+      regions: [{ kind: "division", x: 0, y: 450, width: 700, height: 0 }],
+    };
+    const render = (g: WindowGeometry) => act(() => root.render(
+      <GeometryContext.Provider value={g}><RemoteDesktopScreen /></GeometryContext.Provider>,
+    ));
+    render(geometry);
+    await connect();
+    const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
+    const starts = requests().filter((r) => r.op === "start").length;
+    const stops = requests().filter((r) => r.op === "stop").length;
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
+    const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
+    const touch = { nativeEvent: { identifier: 1, changedTouches: [{ identifier: 1 }] } };
+    act(() => letter.onTouchStart(touch));
+    act(() => letter.onTouchEnd(touch));
+    expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
+    // Android IME resizes the window instead of adding an iOS keyboard inset.
+    fixture.size = { width: 700, height: 550 };
+    render({ ...geometry, ...fixture.size });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    fixture.size = { width: 700, height: 900 };
+    render(geometry);
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    render({ ...geometry, regions: [] });
+    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+  });
   it("folding and unfolding preserve the viewer and control lease", async () => {
     const geometry: WindowGeometry = {
       width: 900,
@@ -6241,6 +6429,7 @@ describe("remote desktop controls", () => {
   });
   it.each([
     "DESKTOP_STOPPED",
+    "DESKTOP_IDLE_TIMEOUT",
     "DESKTOP_DISABLED",
     "DESKTOP_ACCESSIBILITY_PERMISSION",
   ])("does not retry a terminal host decision: %s", async (error) => {

@@ -1,0 +1,1010 @@
+{
+  "management": {
+    "title": "Gerenciamento de dispositivos",
+    "openDevice": "Ver detalhes de {{name}}",
+    "details": "Detalhes do dispositivo",
+    "retry": "Tentar novamente",
+    "unknown": "Indisponível",
+    "notFound": "Este dispositivo não está mais na sua conta.",
+    "deleteDevice": "Excluir dispositivo",
+    "deleteTitle": "Excluir {{name}}?",
+    "deleteMessage": "Remova este dispositivo da sua conta e desconecte o acesso remoto. Suas sessões e arquivos serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+    "deleteFailed": "Não foi possível excluir o dispositivo.",
+    "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
+    "deleteRejectedWhileOffline": "Não foi possível excluir o dispositivo: o servidor ainda o lista como online, embora apareça como offline aqui.",
+    "currentlyOnline": "Online no momento",
+    "availableSection": "Online",
+    "offlineSection": "Offline",
+    "showAllOffline": "Mostrar tudo ({{count}})",
+    "showFewerOffline": "Mostrar menos",
+    "nameTooLong": "Os nomes dos dispositivos devem ter no máximo {{limit}} caracteres.",
+    "fields": {
+      "name": "Nome",
+      "status": "Status",
+      "platform": "Plataforma",
+      "model": "Modelo",
+      "systemVersion": "Versão do sistema",
+      "appVersion": "Versão do Cindy",
+      "cpu": "Processador",
+      "memory": "Memória",
+      "lastSeen": "Última vez online",
+      "deviceId": "ID do dispositivo"
+    }
+  },
+  "common": {
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "delete": "Excluir",
+    "create": "Novo"
+  },
+  "resources": {
+    "connectionUnknown": "Conexão desconhecida",
+    "hostOffline": "Offline",
+    "titleFallback": "Recursos",
+    "loading": "Carregando…",
+    "emptyTitle": "Nada aqui ainda",
+    "emptyCopy": "Este computador ainda não forneceu nenhum item aqui.",
+    "loadFailed": "Não foi possível carregar estes itens",
+    "noHosts": "Nenhum computador compatível disponível.",
+    "noConversation": "Este item não tem uma sessão para abrir no momento.",
+    "openFailed": "Não foi possível abrir a sessão",
+    "resolving": "Abrindo a sessão mais recente…",
+    "retry": "Tentar novamente",
+    "hostCount": "{{count}} computadores",
+    "stale": "Estes itens podem estar desatualizados. Não foi possível atualizar."
+  },
+  "presentation": {
+    "deviceList": {
+      "headerAvailable": "{{count}} computadores controláveis",
+      "headerUnavailable": "{{count}} computadores indisponíveis no momento",
+      "waitingForDesktop": "Aguardando um computador ficar online",
+      "filterAvailable": "Dispositivos controláveis",
+      "filterEmpty": "Nenhum dispositivo controlável",
+      "filterMeta": "{{available}} disponíveis",
+      "filterMetaWithUnavailable": "{{available}} disponíveis · {{unavailable}} precisam de atenção",
+      "showUnavailableReason": "Expanda um dispositivo para ver por que ele está indisponível",
+      "emptyCopy": "Entre na mesma conta no computador e ative “Permitir que dispositivos da mesma conta controlem este computador” em Configurações → Conexão remota.",
+      "emptyTitle": "Nenhum computador para mostrar ainda",
+      "hideUnavailableA11y": "Ocultar computadores indisponíveis",
+      "showUnavailableA11y": "Mostrar computadores indisponíveis",
+      "availableOnly": "Somente disponíveis",
+      "unavailableCount": "Indisponíveis {{count}}",
+      "status": {
+        "ready": "Controlável",
+        "busy": "Em execução",
+        "offline": "Offline",
+        "remoteDisabled": "Controle remoto desativado",
+        "accessRevoked": "Acesso revogado",
+        "self": "Este dispositivo"
+      },
+      "detail": {
+        "accessRevoked": "Restaure o acesso deste celular no computador",
+        "remoteDisabled": "Ative o controle remoto nas configurações do computador",
+        "self": "Celular atual",
+        "busy": "O computador está executando uma tarefa",
+        "ready": "O controle remoto está permitido"
+      },
+      "lastSeen": {
+        "never": "Nunca esteve online",
+        "unknown": "Horário da última conexão desconhecido",
+        "justNow": "Online agora mesmo",
+        "minutesAgo": "Online há {{count}} minutos",
+        "hoursAgo": "Online há {{count}} horas",
+        "daysAgo": "Online há {{count}} dias",
+        "onDate": "Última vez online em {{date}}"
+      }
+    },
+    "sessionList": {
+      "section": {
+        "pinned": "Fixadas",
+        "dialogue": "Conversa"
+      },
+      "filterWithCount": "{{label}} {{count}}",
+      "controlsSummary": "{{filter}} · Agrupado por {{group}}",
+      "automation": "Automação",
+      "sessionCount": "{{count}} sessões",
+      "messageCount": "{{count}} mensagens",
+      "status": {
+        "archived": "Arquivadas",
+        "deleted": "Excluído"
+      },
+      "preview": {
+        "permission": "Aguardando permissão",
+        "planReview": "Aguardando revisão do plano",
+        "answer": "Aguardando sua resposta",
+        "attention": "Aguardando você",
+        "automationRunning": "Automação em execução",
+        "running": "Em execução"
+      },
+      "context": {
+        "matchingTasks": "{{count}} sessões correspondentes",
+        "tasks": "{{count}} sessões",
+        "noMatchingTasks": "Nenhuma sessão correspondente",
+        "noResults": "Nenhum resultado para este filtro",
+        "rows": " · {{count}} linhas",
+        "detail": "{{result}}{{rows}} · {{filter}} · Agrupado por {{group}}",
+        "searchResults": "Resultados da busca",
+        "title": {
+          "active": "Sessões ativas",
+          "waiting": "Sessões pendentes",
+          "automation": "Sessões de automação",
+          "archived": "Sessões arquivadas",
+          "all": "Todas as sessões"
+        },
+        "hint": {
+          "search": "A busca inclui títulos, caminhos de projetos, modelos, nomes de automações e prévias de mensagens.",
+          "active": "Abra uma sessão para continuar controlando-a ou toque e segure para selecionar várias sessões.",
+          "waiting": "Permissões, revisões de planos e perguntas que precisam de confirmação no celular aparecem aqui.",
+          "automation": "As sessões de automação são agrupadas por tarefa; expanda um grupo para abrir uma execução individual.",
+          "archived": "Toque e segure uma sessão arquivada para restaurar ou excluir várias de uma vez.",
+          "all": "Sessões ativas, arquivadas e de automação são exibidas juntas para consulta rápida."
+        }
+      },
+      "empty": {
+        "search": {
+          "title": "Nenhuma sessão correspondente",
+          "copy": "Tente outro título, caminho de projeto, modelo ou palavra-chave de mensagem."
+        },
+        "waiting": {
+          "title": "Nenhuma solicitação pendente",
+          "copy": "Solicitações de permissão, revisões de planos e perguntas aparecerão aqui."
+        },
+        "automation": {
+          "title": "Nenhuma sessão de automação",
+          "copy": "Sessões criadas por automações serão agrupadas aqui após uma execução."
+        },
+        "archived": {
+          "title": "Nenhuma sessão arquivada",
+          "copy": "Toque e segure uma sessão para arquivar ou excluir várias de uma vez."
+        },
+        "active": {
+          "title": "Nenhuma sessão ativa neste computador",
+          "copy": "Crie ou continue uma sessão no computador e ela aparecerá aqui."
+        }
+      },
+      "time": {
+        "unknown": "Horário da atividade recente desconhecido",
+        "justNow": "Agora mesmo",
+        "minutesAgo_one": "Há {{count}} minuto",
+        "minutesAgo_other": "Há {{count}} minutos",
+        "hoursAgo_one": "Há {{count}} hora",
+        "hoursAgo_other": "Há {{count}} horas",
+        "daysAgo_one": "Há {{count}} dia",
+        "daysAgo_other": "Há {{count}} dias",
+        "minutes": "{{count}} min",
+        "hours": "{{count}} h",
+        "days": "{{count}} d",
+        "weeks": "{{count}} sem",
+        "months": "{{count}} mês",
+        "years": "{{count}} ano",
+        "minutesAgo_many": "Há {{count}} minutos",
+        "hoursAgo_many": "Há {{count}} horas",
+        "daysAgo_many": "Há {{count}} dias"
+      }
+    },
+    "home": {
+      "allDevices": "Todas",
+      "allComputers": "Todos os dispositivos",
+      "waitingCount": "{{count}} pendentes",
+      "synced": "Sincronizado",
+      "unknownComputer": "Dispositivo desconhecido",
+      "uncategorizedProject": "Projeto sem categoria",
+      "cindyMake": "Cindy Make",
+      "empty": {
+        "search": {
+          "title": "Nenhum resultado",
+          "copy": "Tente outro nome de projeto, título de sessão, nome de computador ou palavra-chave de mensagem."
+        },
+        "waiting": {
+          "title": "Nenhuma solicitação pendente",
+          "copy": "Solicitações de permissão, revisões de planos e perguntas aparecerão aqui."
+        },
+        "automation": {
+          "title": "Nenhuma sessão de automação",
+          "copy": "Sessões criadas por automações serão agrupadas aqui por projeto."
+        },
+        "archived": {
+          "title": "Nenhuma sessão arquivada",
+          "copy": "Mude para Todas ou Ativas para continuar navegando pelos seus projetos e sessões atuais."
+        },
+        "noSession": {
+          "title": "Ainda não há sessões",
+          "copy": "Crie ou continue uma sessão no computador e o projeto dela aparecerá aqui."
+        }
+      },
+      "noDevice": {
+        "accessRevoked": {
+          "title": "Acesso revogado",
+          "copy": "{{names}} revogou o acesso remoto deste celular. Tente acessar novamente ou permita o acesso no computador para reconectar automaticamente."
+        },
+        "remoteDisabled": {
+          "title": "Permita o controle remoto no computador",
+          "copy": "{{names}} está online. Falta uma etapa: ative o controle pelo celular no computador."
+        },
+        "offline": {
+          "title": "Abra o Cindy no computador",
+          "copy": "Seus computadores conectados estão offline. Abra o Cindy e mantenha sua conta conectada; o celular se reconectará automaticamente."
+        },
+        "firstRun": {
+          "title": "Conecte o Cindy no computador",
+          "copy": "O Cindy atualmente funciona no computador. O aplicativo móvel usa acesso remoto para você trabalhar com os Agents nesse computador."
+        }
+      }
+    },
+    "bulk": {
+      "action": {
+        "archive": "Arquivar",
+        "delete": "Excluir",
+        "pin": "Fixar",
+        "restore": "Restaurar",
+        "unpin": "Desafixar"
+      },
+      "title": "{{action}} {{count}} sessões",
+      "description": "Aplicar {{action}} às {{count}} sessões selecionadas.",
+      "descriptionWithSkipped": "Aplicar {{action}} a {{count}} sessões selecionadas; {{skippedCount}} sessões não aplicáveis serão ignoradas."
+    }
+  },
+  "list": {
+    "projectActions": {
+      "newTask": "Nova tarefa",
+      "allTasks": "Todas as tarefas",
+      "search": "Pesquisar"
+    },
+    "taskSuggestions": {
+      "connected": "Computador conectado",
+      "title": "Longe do computador?\nVocê ainda pode começar.",
+      "copy": "Peça ao Cindy para trabalhar no computador e acompanhe o progresso pelo celular.",
+      "footerTitle": "Em que seu computador pode ajudar agora?",
+      "footerCopy": "Inicie uma nova sessão e acompanhe o progresso aqui.",
+      "newTask": "Nova sessão",
+      "tryThese": "Experimentar uma nova tarefa",
+      "shuffle": "Mostrar mais ideias",
+      "syncHint": "Sessões iniciadas no computador também aparecerão aqui.",
+      "items": {
+        "findFile": {
+          "label": "Encontre um arquivo no computador",
+          "hint": "Sem precisar voltar para procurá-lo",
+          "prompt": "Ajude-me a encontrar um arquivo neste computador. Primeiro, pergunte por palavras-chave no nome, pelo tipo ou pela data aproximada de modificação. Depois, pesquise e liste possíveis correspondências."
+        },
+        "computerStatus": {
+          "label": "Veja o quanto seu computador está ocupado",
+          "hint": "Verifique a atividade e o uso de recursos",
+          "prompt": "Verifique o uso de CPU, memória e disco neste computador, identifique programas que consomem muitos recursos e faça um resumo em linguagem simples."
+        },
+        "projectProgress": {
+          "label": "Coloque-se em dia com um projeto",
+          "hint": "Revise alterações recentes e o trabalho restante",
+          "prompt": "Ajude-me a me atualizar sobre um projeto neste computador. Primeiro, deixe-me escolher o projeto. Depois, revise as alterações recentes e o trabalho pendente e faça um breve resumo."
+        },
+        "downloads": {
+          "label": "Veja o que há em Downloads",
+          "hint": "Confira os arquivos antes de organizar",
+          "prompt": "Revise os arquivos na pasta Downloads deste computador, resuma-os por tipo e data e sugira como organizá-los. Não mova nem exclua arquivos ainda."
+        },
+        "summarizeDocument": {
+          "label": "Resuma um documento longo",
+          "hint": "Receba os pontos principais no celular",
+          "prompt": "Resuma um documento neste computador. Primeiro, pergunte o nome ou a localização do arquivo. Depois, extraia os pontos principais, as conclusões e as ações necessárias."
+        },
+        "storageUsage": {
+          "label": "Descubra o que ocupa espaço no disco",
+          "hint": "Localize arquivos e pastas grandes",
+          "prompt": "Analise o uso de disco neste computador, liste as maiores pastas e arquivos e sugira formas de organizá-los. Não exclua nada ainda."
+        }
+      }
+    },
+    "thisComputer": "Este dispositivo",
+    "allConversations": "Todas as sessões",
+    "syncFailed": "Falha na sincronização",
+    "requestFailed": "Falha na solicitação",
+    "loading": "Carregando dispositivos disponíveis",
+    "untitled": "Sessão sem título",
+    "connection": {
+      "connecting": "Conectando",
+      "disconnected": "Desconectado"
+    },
+    "error": {
+      "sessionDeviceNotFound": "Não foi possível encontrar o dispositivo desta sessão. Sincronize novamente e tente outra vez.",
+      "taskDeviceNotFound": "Não foi possível encontrar o dispositivo desta tarefa. Sincronize novamente e tente outra vez.",
+      "noDevice": "Nenhum dispositivo disponível. Ative o controle remoto no computador e sincronize novamente."
+    },
+    "alert": {
+      "cacheSaveFailed": "Não foi possível salvar o cache offline",
+      "cacheSaveFailedDetail": "Verifique o armazenamento disponível no celular. Você pode continuar online, mas alguns conteúdos podem ficar indisponíveis offline.",
+      "actionFailed": "Falha na ação",
+      "renameFailed": "Falha ao renomear",
+      "deleteTitle": "Excluir sessão?",
+      "deleteMessage": "Isso exclui \"{{title}}\" e não pode ser desfeito."
+    },
+    "a11y": {
+      "selectScope": "Selecionar escopo das sessões",
+      "openMenu": "Abrir menu",
+      "closeMenu": "Fechar menu",
+      "openDisplaySettings": "Abrir configurações de exibição",
+      "openDisplaySettingsWithStatus": "Abrir configurações de exibição (mostrando: {{status}})",
+      "openSearch": "Pesquisar",
+      "openSettings": "Abrir configurações",
+      "syncing": "Sincronizando",
+      "sync": "Sincronizar novamente",
+      "pinnedConversations": "{{count}} sessões fixadas",
+      "newRemoteConversation": "Nova sessão",
+      "renameDevice": "Renomear {{label}}",
+      "project": "Projeto {{title}}",
+      "dialogue": "Conversa",
+      "openAutomationLatest": "Abrir a sessão mais recente da automação {{title}}",
+      "automationTask": "Automação {{title}}",
+      "openConversation": "Abrir sessão {{title}}",
+      "followedBy": ", sob os cuidados de {{names}}",
+      "collapse": "Recolher {{title}}",
+      "expand": "Expandir {{title}}",
+      "taskError": "Falha na tarefa",
+      "awaitingYou": "Aguardando você",
+      "doneUnread": "Concluída, não lida",
+      "running": "Em execução",
+      "close": "Fechar",
+      "cancelRename": "Cancelar renomeação",
+      "createdBy": "Criado por {{name}}",
+      "ownedBy": "Pertence a {{name}}"
+    },
+    "accounts": {
+      "title": "Trocar de conta",
+      "add": "Entrar em outra conta",
+      "syncFailed": "Não foi possível atualizar as informações da conta",
+      "runningTitle": "Trocar de conta?",
+      "runningMessage": "Algumas sessões ainda estão em execução. Elas continuarão no computador, mas este celular deixará de recebê-las e controlá-las após a troca.",
+      "switchConfirm": "Continuar"
+    },
+    "menu": {
+      "groupDialogue": "Conversa",
+      "dialogueFolder": "Conversa",
+      "search": "Pesquisar",
+      "settings": "Configurações",
+      "remoteSettings": "Configurações de conexão remota",
+      "displaySettings": "Configurações de exibição",
+      "groupHeading": "Agrupamento",
+      "sortHeading": "Ordenação de tarefas",
+      "projectOrderHeading": "Ordenação de projetos",
+      "projectOrderManualTip": "Toque e segure uma linha de projeto e arraste para reordenar. As tarefas dentro dele continuam seguindo a ordenação acima.",
+      "statusHeading": "Status da tarefa",
+      "showDeviceTasks": "Mostrar tarefas",
+      "openDevice": "Abrir",
+      "renameDevice": "Renomear",
+      "groupProject": "Projeto",
+      "sortBy": {
+        "priority": "Prioridade",
+        "recency": "Atividade recente",
+        "created": "Data de criação"
+      },
+      "sortByPriorityTip": "Primeiro as que aguardam você, depois as não lidas, as em execução e, por fim, por horário",
+      "projectOrder": {
+        "activity": "Seguir tarefas",
+        "custom": "Manual"
+      },
+      "status": {
+        "active": "Ativo",
+        "archived": "Arquivadas",
+        "all": "Todas"
+      },
+      "filterHeading": "Filtros",
+      "filterSummaryActive": "{{count}} ativos",
+      "filterReset": "Redefinir filtros",
+      "filterAll": "Todas",
+      "filterProjectsHeading": "Projetos",
+      "filterAllProjects": "Todos os projetos",
+      "filterSelectedProjects": "{{count}} selecionadas",
+      "filterVendorHeading": "Harness",
+      "filterVendor": {
+        "all": "Todas",
+        "cc": "Claude Code",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "filterLastActivityHeading": "Última atividade",
+      "filterLastActivity": {
+        "1d": "1d",
+        "3d": "3d",
+        "7d": "7d",
+        "30d": "30d",
+        "all": "Todas"
+      },
+      "showCollapsedTeammateAvatars": "Mostrar avatares quando recolhido",
+      "displayHeading": "Exibição",
+      "view": {
+        "text": "Texto",
+        "list": "Lista"
+      },
+      "taskInfoHeading": "Informações da tarefa",
+      "taskInfo": {
+        "time": "Tempo",
+        "pr": "Status do PR",
+        "tokens": "Tokens",
+        "cost": "Custo"
+      },
+      "summaryNone": "Nenhum",
+      "summarySeparator": ", ",
+      "filterEmptyCopy": "Ajuste ou redefina os filtros nas configurações de exibição.",
+      "filterTeammatesHeading": "Colegas",
+      "filterAnySource": "Todas",
+      "filterHideAllTeammates": "Ocultar tudo",
+      "filterSelectedTeammates": "{{count}} selecionadas"
+    },
+    "search": {
+      "placeholder": "Buscar títulos ou conteúdo…",
+      "filterA11y": "Filtros de busca",
+      "filterAria": "Filtros de busca e ordenação (Ordenação: {{sort}}, Status: {{status}}, Agent: {{agent}}, Última atividade: {{lastActivity}}, Projetos: {{projects}})",
+      "filter": {
+        "label": "Critérios de busca",
+        "reset": "Redefinir",
+        "sortHeading": "Ordenar por",
+        "statusHeading": "Status",
+        "projectsHeading": "Projetos",
+        "agentHeading": "Agent",
+        "lastActivityHeading": "Última atividade",
+        "allProjects": "Todos os projetos",
+        "selectedProjects": "{{count}} selecionadas",
+        "sort": {
+          "relevance": "Relevância",
+          "activityDesc": "Atividade mais recente",
+          "activityAsc": "Atividade mais antiga"
+        },
+        "status": {
+          "active": "Ativo",
+          "archived": "Arquivadas",
+          "all": "Todas"
+        },
+        "agent": {
+          "all": "Todas",
+          "cc": "Claude Code",
+          "codex": "Codex",
+          "pi": "Pi"
+        },
+        "lastActivity": {
+          "1d": "1d",
+          "3d": "3d",
+          "7d": "7d",
+          "30d": "30d",
+          "all": "Todas"
+        }
+      }
+    },
+    "renameDevice": {
+      "title": "Renomear dispositivo",
+      "placeholder": "Nome do dispositivo",
+      "savingA11y": "Salvando nome do dispositivo",
+      "saveA11y": "Salvar nome do dispositivo"
+    },
+    "renameSession": {
+      "title": "Renomear sessão",
+      "placeholder": "Título da sessão",
+      "savingA11y": "Salvando título da sessão",
+      "saveA11y": "Salvar título da sessão"
+    },
+    "revoked": {
+      "title": "Acesso revogado",
+      "body": "\"{{deviceName}}\" revogou o acesso remoto deste dispositivo. Autorize este dispositivo novamente nas configurações do {{appName}} nesse computador e toque em \"Tentar acessar novamente\".",
+      "retry": "Tentar acessar novamente"
+    },
+    "viewAllConversations": "Ver todas as {{count}} sessões",
+    "viewAllRuns": "Ver todas as {{count}} execuções",
+    "preview": {
+      "needAttention": "{{count}} precisam de atenção",
+      "waiting": "{{count}} aguardando",
+      "automationRunning": "Automação em execução",
+      "totalRuns": "{{count}} execuções no total",
+      "runCount": "{{count}} execuções",
+      "nextRunMinutes": "Executa em {{count}} min",
+      "nextRunHours": "Executa em {{count}} h",
+      "nextRunDays": "Executa em {{count}} d",
+      "imminent": "Em execução em breve",
+      "stopped": "Interrompido"
+    }
+  },
+  "detail": {
+    "filter": {
+      "active": "Ativo",
+      "waiting": "Pendente",
+      "automation": "Automação",
+      "archived": "Arquivadas",
+      "all": "Todas",
+      "a11y": "Filtrar sessões: {{label}}"
+    },
+    "group": {
+      "project": "Projeto",
+      "date": "Data",
+      "label": "Agrupamento",
+      "a11y": "Agrupar por {{label}}"
+    },
+    "metric": {
+      "active": "Ativo",
+      "waiting": "Pendente",
+      "automation": "Automação",
+      "activeA11y": "Filtrar sessões ativas",
+      "waitingA11y": "Filtrar sessões pendentes",
+      "automationA11y": "Filtrar sessões de automação"
+    },
+    "search": {
+      "openA11y": "Buscar sessões remotas",
+      "closeA11y": "Fechar busca de sessões remotas",
+      "label": "Pesquisar",
+      "placeholder": "Buscar títulos ou conteúdo…",
+      "clearA11y": "Limpar busca",
+      "closeInputA11y": "Fechar busca",
+      "clear": "Limpar",
+      "close": "Fechar"
+    },
+    "filters": {
+      "collapseA11y": "Recolher filtros de sessão",
+      "expandA11y": "Expandir filtros de sessão",
+      "label": "Filtrar"
+    },
+    "selection": {
+      "count": "{{count}} sessões selecionadas",
+      "canAct": "Ações disponíveis",
+      "cannotAct": "Nenhuma ação disponível",
+      "clearA11y": "Limpar seleção de sessões"
+    },
+    "bulk": {
+      "pinning": "Fixando",
+      "unpinning": "Desafixando",
+      "archiving": "Arquivando",
+      "restoring": "Restaurando",
+      "deleting": "Excluindo",
+      "pinA11y": "Fixar sessões selecionadas",
+      "unpinA11y": "Desafixar sessões selecionadas",
+      "archiveA11y": "Arquivar sessões selecionadas",
+      "restoreA11y": "Restaurar sessões selecionadas",
+      "deleteA11y": "Excluir sessões selecionadas",
+      "cancelA11y": "Cancelar ação em lote",
+      "partialFailure": "{{done}} processadas, {{failed}} falharam (restauradas, você pode tentar novamente).",
+      "noArchivable": "Nenhuma sessão ativa que possa ser arquivada na seleção.",
+      "noPinnable": "Nenhuma sessão ativa que possa ser fixada na seleção.",
+      "noRestorable": "Nenhuma sessão arquivada que possa ser restaurada na seleção.",
+      "noUnpinnable": "Nenhuma sessão fixada na seleção.",
+      "noDeletable": "Nenhuma sessão que possa ser excluída na seleção.",
+      "noneModifiable": "Nenhuma das sessões selecionadas pode ser alterada."
+    },
+    "automationScope": {
+      "eyebrow": "Automação",
+      "title": "Automação",
+      "emptyCopy": "Após a execução da tarefa, a sessão de cada execução aparece aqui.",
+      "emptyTitle": "Esta tarefa ainda não tem histórico de execução"
+    },
+    "projectScope": {
+      "eyebrow": "Projeto",
+      "emptyCopy": "Inicie uma nova sessão neste projeto.",
+      "emptyTitle": "Este projeto ainda não tem sessões"
+    },
+    "subtitle": {
+      "deviceActive": "{{deviceName}} · {{count}} sessões ativas",
+      "activeAndProjects": "{{count}} sessões ativas · {{projects}} projetos"
+    },
+    "row": {
+      "a11yAutomationGroup": "Grupo de automação {{title}}",
+      "a11ySession": "Sessão {{title}}",
+      "a11yCollapse": "Recolher {{title}}",
+      "a11yExpand": "Expandir {{title}}",
+      "collapse": "Recolher",
+      "expand": "Expandir"
+    },
+    "badge": {
+      "waiting": "Pendentes {{count}}",
+      "automationPrefix": "Automação",
+      "sessionCount": "{{count}} sessões",
+      "aggregate": "Agrupadas",
+      "running": "Em execução",
+      "unread": "Não lidas {{count}}"
+    },
+    "child": {
+      "openA11y": "Abrir sessão de automação {{title}}"
+    },
+    "viewAllRuns": "Ver todas as {{count}} execuções"
+  },
+  "companions": {
+    "section": {
+      "showAll": "Mostrar tudo",
+      "showAllA11y": "Mostrar todas as {{count}}",
+      "showLess": "Mostrar menos"
+    },
+    "noCreateHosts": "Nenhum computador compatível disponível. Abra o Cindy em um computador e entre com a mesma conta para criar um colega.",
+    "messageSent": "Mensagem enviada à tarefa em segundo plano",
+    "sentTo": "Mensagem enviada para {{name}}",
+    "receivedFrom": "Mensagem de {{name}}",
+    "backgroundTask": "Tarefa em segundo plano",
+    "openTask": "Abrir tarefa",
+    "viewPr": "Ver PR",
+    "stale": "Os detalhes podem estar desatualizados. Não foi possível atualizar.",
+    "artifactCount": "{{count}} arquivos",
+    "prCount": "{{count}} PRs",
+    "artifactCount_one": "{{count}} arquivo",
+    "artifactCount_other": "{{count}} arquivos",
+    "prCount_one": "{{count}} PR",
+    "prCount_other": "{{count}} PRs",
+    "duration": {
+      "seconds": "{{n}}s",
+      "minutes": "{{n}} min",
+      "hoursMinutes": "{{h}} h {{m}} min"
+    },
+    "retrying": "Ainda não começou — tentando novamente…",
+    "stopTask": "Interromper tarefa",
+    "actionFailed": "Não foi possível carregar ou concluir esta ação",
+    "messages": "Mensagens",
+    "readOnly": "Somente leitura",
+    "directEmpty": "Ainda não há mensagens para visualizar.",
+    "directLimitReached": "Esta conversa entre colegas atingiu o limite; ambos voltaram às suas tarefas principais",
+    "directUnavailable": "Esta conversa entre colegas não está mais disponível.",
+    "unread": "Nova resposta",
+    "status": {
+      "queued": "Primeiros passos",
+      "running": "Em execução",
+      "waiting": "Aguardando sua resposta",
+      "completed": "Concluído",
+      "failed": "Falhou",
+      "cancelled": "Interrompido",
+      "timed-out": "Tempo limite esgotado",
+      "unknown": "Status desconhecido"
+    },
+    "title": "Colegas",
+    "search": "Pesquisar colegas",
+    "startChat": "Iniciar a conversa",
+    "automation": {
+      "unsavedTitle": "Descartar alterações?",
+      "unsavedBody": "Suas alterações não foram salvas.",
+      "discard": "Descartar alterações"
+    },
+    "openProfile": "Ver perfil de {{name}}",
+    "switchCompanion": "Trocar de colega",
+    "activity": {
+      "thinking": "Pensando",
+      "typing": "Digitando",
+      "helping": "Trabalhando nisso"
+    },
+    "working": {
+      "thinking": "Raciocinando…",
+      "replying": "Respondendo…",
+      "processing": "Processando…",
+      "compacting": "Organizando a conversa…",
+      "reading-memory": "Lendo a memória…",
+      "saving-memory": "Salvando memória…",
+      "deleting-memory": "Excluindo memória…",
+      "organizing-memory": "Organizando a memória…",
+      "reading-file": "Lendo arquivos…",
+      "saving-file": "Atualizando arquivos…",
+      "searching": "Pesquisando na web…",
+      "reading-web": "Lendo páginas da web…",
+      "searching-files": "Buscando arquivos…",
+      "testing": "Executando testes…",
+      "checking": "Verificando código…",
+      "reviewing-memory": "Verificando memória…",
+      "reviewing-files": "Revisando arquivos…",
+      "reviewing-sources": "Verificando fontes da web…",
+      "reviewing-checks": "Revisando resultados das verificações…"
+    },
+    "invitation": {
+      "title": "Preparando o encontro",
+      "waiting": "Até breve, {{name}}",
+      "background": "Pode sair à vontade. A preparação continua em segundo plano.",
+      "profile": "Escrevendo uma história pessoal",
+      "skills": "Preparando um computador para {{name}}",
+      "avatar": "{{name}} está escolhendo um novo retrato",
+      "welcome": "Preparando a primeira saudação",
+      "failed": "Preparação pausada. Tudo o que foi concluído até agora está salvo. Você pode tentar novamente.",
+      "retryFailed": "Não foi possível tentar novamente agora. Tente daqui a pouco.",
+      "leave": "Sair por enquanto",
+      "avatarSkipped": "Usando o retrato padrão por enquanto. Você pode alterá-lo a qualquer momento."
+    },
+    "viewResult": "Ver resultado",
+    "noWrittenResult": "Nenhum resultado escrito.",
+    "errorDetails": "Detalhes do erro",
+    "createTeammate": "Novo colega",
+    "createMenu": "Novo",
+    "awaiting": "Precisa da sua aprovação",
+    "taskResult": "Resultado da tarefa",
+    "collapseResult": "Ocultar resultado",
+    "avatarStatus": {
+      "awaiting": "Precisa da sua confirmação",
+      "error": "Precisa de atenção",
+      "running": "Trabalhando",
+      "done": "Concluído",
+      "unread": "Não lido"
+    },
+    "artifactCount_many": "{{count}} arquivos",
+    "prCount_many": "{{count}} PRs"
+  },
+  "companionProfile": {
+    "avatar": "Avatar",
+    "emptyEditor": "Nada aqui ainda.",
+    "searchOptions": "Pesquisar",
+    "changed": "Alterado em outro lugar. Suas edições não salvas foram mantidas.",
+    "discardAndReload": "Descartar edições e recarregar",
+    "memoryEntries": "Memórias salvas",
+    "memorySearch": "Buscar memórias",
+    "memoryEmpty": "Ainda não há memórias",
+    "memoryNoResults": "Nenhuma memória correspondente",
+    "memoryDisabled": "A memória está desativada. Seu colega não lerá nem salvará memórias; as memórias salvas ainda podem ser visualizadas e excluídas.",
+    "memoryLoadFailed": "Não foi possível carregar as memórias",
+    "memoryToday": "Hoje",
+    "memoryUpdated": "Atualizada {{time}}",
+    "memoryEdit": "Editar",
+    "memoryDone": "Concluído",
+    "memoryTooLong": "Muito longo. Encurte para salvar.",
+    "memoryRequired": "É necessário informar um título e conteúdo.",
+    "memoryChanged": "{{name}} acabou de atualizar esta memória",
+    "memoryUseLatest": "Usar versão mais recente",
+    "memoryKeepMine": "Manter minhas alterações",
+    "memorySaved": "Salvo",
+    "memorySaveFailed": "Não salvo. Suas edições foram mantidas.",
+    "memoryMissing": "Esta memória não existe mais.",
+    "memoryDeleteFailed": "Não foi possível excluir a memória",
+    "create": "Novo colega",
+    "createFailed": "A criação ainda não foi confirmada. Tente novamente para verificar.",
+    "title": "Colega",
+    "profile": "Perfil e personalidade",
+    "memory": "Memória",
+    "skills": "Skills e conexões",
+    "artifacts": "Artefatos",
+    "direct": "Mensagens de colegas",
+    "settings": "Modelos e permissões",
+    "search": "Buscar mensagens",
+    "models": "Cadeia de modelos",
+    "permissions": "Permissões de operação",
+    "personalSkills": "Skills pessoais",
+    "connections": "Skills e conexões referenciadas",
+    "save": "Salvar alterações",
+    "offline": "Reconecte-se a {{deviceName}} para continuar. Suas edições foram mantidas.",
+    "hostUpgrade": "Atualize o Cindy em {{deviceName}} e tente novamente, ou edite as configurações deste colega lá.",
+    "readFailed": "Não foi possível confirmar o estado mais recente. Atualize antes de tentar novamente; a ação pode já ter sido concluída. Suas edições foram mantidas.",
+    "deleteFailed": "O colega não foi excluído.",
+    "artifactsEmpty": "Ainda não há artefatos. Peça ao seu colega para criar algo.",
+    "openSourceTask": "Abrir sessão de origem",
+    "modelFollowsDefault": "Seguir a cadeia de modelos padrão",
+    "taskModel": "Modelo da tarefa",
+    "taskInheritsPrimary": "Herdar modelo principal",
+    "modelOverride": "Usando a cadeia de modelos própria deste colega",
+    "modelsUnavailable": "Nenhum modelo utilizável. Verifique as configurações de modelo deste colega no computador e atualize.",
+    "artifactsRecovery": "Abra arquivos pelos cartões de mensagem ou navegue por eles em {{deviceName}}.",
+    "directRecovery": "Não foi possível carregar as mensagens do colega. Atualize o Cindy em {{deviceName}} e tente novamente.",
+    "directEmpty": "Ainda não há mensagens do colega.",
+    "skillsEmpty": "Ainda não há Skills pessoais. Peça ao seu colega para lembrar uma forma de trabalhar.",
+    "connectionsEmpty": "Nenhuma Skill ou conexão selecionada.",
+    "largeProfileRecovery": "Este perfil é longo demais para editar aqui. Edite o perfil completo em {{deviceName}}.",
+    "addModel": "Adicionar modelo alternativo",
+    "removeModel": "Remover modelo",
+    "moveModelUp": "Mover modelo para cima",
+    "backupModels": "Modelos de reserva ({{count}})",
+    "settingsTitle": "Configurações do colega",
+    "name": "Nome",
+    "portraitNumber": "Retrato {{number}}",
+    "uploadAvatar": "Enviar avatar",
+    "avatarFailed": "Não foi possível abrir esta imagem. Tente outra.",
+    "nameTaken": "Esse nome já está em uso. Escolha outro.",
+    "home": "Computador principal",
+    "chat": "Conversa",
+    "showReplyTarget": "Mostrar a qual mensagem uma resposta se refere",
+    "showReplyTargetHint": "Acima da resposta de um colega, mostrar a qual das suas mensagens ela se refere. Aplica-se a todos os colegas. Respostas antigas não mostram isso.",
+    "channels": "Plataformas de mensagens",
+    "channelsEmpty": "Nenhuma plataforma de mensagens conectada",
+    "channelTasksEmpty": "Nenhuma tarefa ainda",
+    "channelPlatforms": {
+      "telegram": "Telegram",
+      "feishu": "Feishu",
+      "lark": "Lark",
+      "wecom": "WeCom",
+      "dingtalk": "DingTalk",
+      "discord": "Discord"
+    }
+  },
+  "companionImport": {
+    "title": "Importar um colega",
+    "entry": "Importar um Agent",
+    "description": "Escolha o que trazer do Hermes ou do OpenClaw.",
+    "empty": "Nenhum Agent instalado foi encontrado neste computador.",
+    "personality": "Personalidade e hábitos",
+    "memory": "Memórias",
+    "skills": "Skills",
+    "connections": "Ambiente e conexões",
+    "automations": "Automações",
+    "paused": "Manter pausadas",
+    "itemAttention": "Precisa de atenção",
+    "takeover": "Verificar e assumir automações após a importação",
+    "takeoverNote": "As tarefas de origem só são pausadas após a verificação das conexões de dados. Dependências não selecionadas mantêm a tarefa de origem em execução.",
+    "submit": "Importar",
+    "back": "Voltar",
+    "open": "Abrir colega",
+    "running": "Importando e verificando conexões…",
+    "complete": "Importação salva",
+    "attention": "Alguns itens precisam de atenção. Veja os detalhes abaixo.",
+    "error": "Não foi possível concluir a importação. Tente novamente com a mesma seleção.",
+    "keptAtSource": "A transferência de controle não foi concluída",
+    "retry": "Repetir verificações",
+    "missingSelection": "Um item obrigatório não foi selecionado.",
+    "authRefresh": "A autorização original precisa de uma conexão de renovação compatível.",
+    "toolMapping": "As restrições de ferramentas originais precisam ser mapeadas antes da transferência de controle.",
+    "modelMapping": "A configuração de modelo original precisa ser mapeada.",
+    "contextMapping": "O contexto de trabalho original precisa ser mapeado.",
+    "deliveryFailed": "O destino de entrega original não foi verificado.",
+    "sourceChanged": "A tarefa de origem mudou. Recarregue a prévia.",
+    "credentialFailed": "Não foi possível salvar as credenciais com segurança.",
+    "scriptMissing": "Um script obrigatório está ausente.",
+    "sourceCommand": "O comando original do Agent está indisponível.",
+    "readFailed": "A consulta de dados obrigatória não foi verificada.",
+    "search": "Pesquisar",
+    "selectAll": "Selecionar tudo",
+    "previous": "Anterior",
+    "next": "Próximo",
+    "chatSetup": "Suas informações importadas estão salvas. Podemos começar a conversar. Alguns itens ainda precisam de login ou verificação; podemos concluir isso quando você quiser. As automações de origem permanecem inalteradas até a transferência de controle.",
+    "chatReady": "Suas informações foram importadas. Podemos começar a conversar.",
+    "partial": "Parte do conteúdo não foi totalmente importada",
+    "details": "Ver detalhes da importação",
+    "partlySaved": "Salvo parcialmente",
+    "savedNeedsSetup": "Salvo; falta configurar ou ativar",
+    "notSaved": "Não salvo",
+    "databaseDriver": "Não foi possível carregar o driver do banco de dados. Atualize ou repare o Cindy e tente novamente.",
+    "databaseUnavailable": "Não foi possível ler o banco de dados de origem. Os dados originais não foram alterados; tente novamente após o reparo.",
+    "fileTooLarge": "Um arquivo ou esta importação excede o limite de leitura. O conteúdo não foi truncado.",
+    "memoryMetadata": "O resumo ou o título da memória excede os limites de armazenamento.",
+    "memoryWrite": "Falha ao gravar a memória ou verificar sua integridade. Você pode tentar novamente.",
+    "memoryChanged": "A memória salva foi alterada e não foi sobrescrita.",
+    "attachmentUnsupported": "Este formato de anexo ainda não é compatível. O original permanece na origem.",
+    "diskFull": "Espaço em disco insuficiente. Libere espaço e tente novamente.",
+    "permissionDenied": "Falta permissão para ler ou salvar este item. Corrija as permissões e tente novamente.",
+    "setupDeferred": "Continue o login e a verificação na conversa com o colega.",
+    "automationInvalid": "Não foi possível converter a definição da automação; ela não foi criada.",
+    "itemFailed": "Este item está incompleto. Tente novamente ou veja os detalhes da importação.",
+    "chatPartial": "Seu colega foi criado, mas parte do conteúdo não foi totalmente salva. Os itens abaixo ainda precisam de atenção; os demais conteúdos e a conversa continuam disponíveis.",
+    "imBotOwnerMissing": "Nenhum ID de usuário do proprietário foi encontrado. Conclua a conexão deste bot na página Plataformas de mensagens do colega.",
+    "imBotGatewayRunning": "O gateway original ainda está usando este bot. Pare-o e conecte o bot em Plataformas de mensagens.",
+    "imBotInUse": "Este bot já está conectado neste computador, em Configurações → Bots de mensagens ou em outro colega.",
+    "imBotConnectFailed": "Não foi possível conectar este bot. Tente novamente na página Plataformas de mensagens do colega.",
+    "imBotSourceStopUnconfirmed": "O bot original ainda não parou, por isso não foi transferido para o colega. Você pode conectá-lo depois na página Plataformas de mensagens do colega.",
+    "imBotSourceChanged": "O bot original mudou após a prévia, por isso não foi parado. Recarregue a prévia e importe novamente.",
+    "bots": "Bots de mensagens",
+    "botsNote": "Após a importação, estes bots são parados em {{source}} e o colega assume o controle deles.",
+    "sourceDisabled": "Já desativado",
+    "botOwner": "ID do proprietário {{id}}"
+  },
+  "glance": {
+    "open": "Visão geral de {{name}}",
+    "dueUnseen": "Uma pendência está vencendo",
+    "computers": "Computadores",
+    "runningHere": "Em execução aqui",
+    "online": "Online",
+    "offline": "Offline",
+    "current": "Atual",
+    "offlineCount_one": "{{count}} offline",
+    "offlineCount_other": "{{count}} offline",
+    "todos": "Pendências",
+    "showMore": "Mostrar mais",
+    "showLess": "Mostrar menos",
+    "doneCount_one": "{{count}} concluídas",
+    "doneCount_other": "{{count}} concluídas",
+    "delete": "Excluir",
+    "deleted": "Excluída. Ela não será adicionada novamente.",
+    "undo": "Desfazer",
+    "undoFailed": "Não foi possível desfazer. Tente novamente.",
+    "deleteFailed": "Não foi possível excluir. Tente novamente.",
+    "check": "Verificar para mim",
+    "checkMeta": "Buscar novas pendências nos e-mails e conversas conectados",
+    "checkPrompt": "Verifique minhas fontes conectadas, como e-mails e mensagens, em busca de algo novo que eu precise resolver e adicione às minhas pendências.",
+    "dailyCheck": "Verificar todos os dias",
+    "dailyCheckMeta": "Dias úteis às 9:00, sem avisos quando não houver novidades",
+    "recentTasks": "Tarefas recentes",
+    "unread": "Resultado não lido",
+    "stopDailyCheck": "Parar verificação diária",
+    "openFailed": "Não foi possível abrir este link",
+    "dailyCheckFailed": "Não foi possível salvar. Tente novamente.",
+    "loadFailed": "Não foi possível carregar as pendências",
+    "outputs": "Resultados",
+    "outputMeta": "{{time}} · {{task}}",
+    "source": {
+      "conversation": "Você pediu",
+      "mail": "Do e-mail",
+      "feishu": "Do Feishu",
+      "github": "Do GitHub",
+      "community": "Da comunidade",
+      "task": "De uma tarefa"
+    },
+    "offlineCount_many": "{{count}} offline",
+    "doneCount_many": "{{count}} concluídas"
+  },
+  "cloudCompanion": {
+    "homeOffline": "O computador principal “{{device}}” está offline",
+    "switchAction": "Continuar em outro computador",
+    "composerHint": "O computador principal está offline. Mude para outro computador para continuar.",
+    "readOnlyNote": "Esta conversa está salva na nuvem e é somente leitura.",
+    "empty": "Ainda não há conversa na nuvem.",
+    "loadFailed": "Não é possível carregar a conversa da nuvem agora.",
+    "loadOlder": "Carregar mensagens anteriores",
+    "noTargets": "Nenhum outro computador disponível. Abra o Cindy em outro computador, entre na mesma conta e ative “Permitir que dispositivos da mesma conta controlem este computador”. Depois, tente novamente.",
+    "devicesFailed": "Não é possível carregar seus computadores agora. Tente novamente mais tarde.",
+    "preparing": "Preparando em “{{device}}”…",
+    "preparingHint": "Esse computador assume o colega a partir do perfil na nuvem e o abre quando estiver pronto.",
+    "timeout": "“{{device}}” ainda não está pronto. Verifique se o Cindy está aberto e online nesse computador e tente novamente.",
+    "conflict": "{{name}} já foi transferido para “{{device}}”.",
+    "switchFailed": "Não é possível alterar o computador principal agora. Tente novamente mais tarde.",
+    "unknownDevice": "outro computador",
+    "runsOn": "Executado em “{{device}}”",
+    "homeTitle": "Computador principal",
+    "moveTo": "Mover para “{{device}}”",
+    "moveTitle": "Executar {{name}} em “{{device}}”?",
+    "moveDescription": "A partir de agora, {{name}} será executado em “{{device}}”, junto com o histórico de conversa. Diretórios de trabalho, conexões e arquivos locais permanecem nos computadores onde estão.",
+    "moveAction": "Mover para “{{device}}”",
+    "moving": "Movendo {{name}} para “{{device}}”…",
+    "busyTitle": "{{name}} ainda está respondendo",
+    "busyDescription": "Mova para “{{device}}” quando esta resposta terminar, ou interrompa a resposta e mova agora.",
+    "busyWait": "Mover ao terminar",
+    "busyStop": "Parar e mover",
+    "transferBusy": "{{name}} ainda está preparando uma resposta. Mova após o término da resposta",
+    "switchConflict": "O computador principal de {{name}} já mudou, por isso a transferência não foi feita",
+    "homeOutdated": "O computador principal “{{device}}” executa uma versão mais antiga do Cindy. Atualize-a ou altere o computador principal por lá",
+    "homeUnreachable": "Não é possível acessar “{{device}}”. Ele precisa estar online com “Permitir que dispositivos da mesma conta controlem esta máquina” ativado",
+    "sendUnreachable": "Sua mensagem não chegou ao computador principal “{{device}}”; ele pode estar offline. Você pode continuar em outro computador."
+  },
+  "sessionImport": {
+    "search": "Buscar sessões ou pastas",
+    "rescan": "Buscar novamente",
+    "emptyDescription": "O Cindy pode importar sessões destas ferramentas. Depois de usar uma delas, volte e busque novamente.",
+    "noMatch": "Nenhuma sessão correspondente",
+    "dialogue": "Conversa",
+    "archived": "Arquivada",
+    "unsupported": "Formato ainda não compatível",
+    "import": "Importar",
+    "failure": {
+      "read-failed": "Não foi possível importar: o histórico original não pode ser lido",
+      "unsupported-version": "Não foi possível importar: o formato do histórico desta versão ainda não é compatível",
+      "empty": "Não foi possível importar: o histórico original não tem mensagens",
+      "not-found": "Não foi possível importar: o histórico original não existe mais",
+      "disk-full": "Não foi possível importar: espaço em disco insuficiente",
+      "native-unloadable": "Não foi possível importar: o histórico original não pode ser carregado"
+    },
+    "folderMissing": "Pasta não encontrada",
+    "retry": "Tentar novamente",
+    "done": "Concluído",
+    "readyNative": "Pronta para continuar em {{harness}}",
+    "readyHandoff": "Pronta — {{harness}} continua; você pode mudar a qualquer momento",
+    "cancelled": "Interrompida antes da importação",
+    "stop": "Parar",
+    "queued": "Aguardando",
+    "copy": "Copiando o histórico original",
+    "verify": "Verificando se é possível continuar",
+    "groupTasks_one": "{{count}} sessão",
+    "selected_one": "{{count}} selecionada · {{size}}",
+    "importCount_one": "Importar {{count}} sessão",
+    "progressTitle_one": "Importando {{count}} sessão",
+    "messages_one": "Salvando {{count}} mensagem",
+    "resultTitle_one": "{{count}} sessão importada",
+    "sumReady_one": "{{count}} pronta para continuar",
+    "sumAction_one": "{{count}} precisa da sua atenção",
+    "sumFailed_one": "{{count}} falhou",
+    "groupTasks_other": "{{count}} sessões",
+    "selected_other": "{{count}} selecionadas · {{size}}",
+    "importCount_other": "Importar {{count}} sessões",
+    "progressTitle_other": "Importando {{count}} sessões",
+    "messages_other": "Salvando {{count}} mensagens",
+    "resultTitle_other": "{{count}} sessões importadas",
+    "sumReady_other": "{{count}} prontas para continuar",
+    "sumAction_other": "{{count}} precisam da sua atenção",
+    "sumFailed_other": "{{count}} falharam",
+    "entry": "Importar de outras ferramentas",
+    "found_one": "Encontrada {{count}} sessão em {{device}}",
+    "found_other": "Encontradas {{count}} sessões em {{device}}",
+    "scanning": "Buscando sessões no computador…",
+    "loadFailed": "Não foi possível ler as sessões no computador. Tente novamente.",
+    "emptyTitle": "Não há sessões para importar no computador",
+    "confirmBody_one": "Isso importa {{count}} sessão e usa até {{size}} de espaço em disco. A importação ocorre em segundo plano no computador; você pode pará-la a qualquer momento. Toque novamente para começar.",
+    "confirmBody_other": "Isso importa {{count}} sessões e usa até {{size}} de espaço em disco. A importação ocorre em segundo plano no computador; você pode pará-la a qualquer momento. Toque novamente para começar.",
+    "background": "Você pode fechar este painel. A importação continua no computador.",
+    "missingDir": "A pasta original não existe mais. Escolha uma pasta no computador para continuar.",
+    "title": "Importar de outras ferramentas",
+    "groupTasks_many": "{{count}} sessões",
+    "selected_many": "{{count}} selecionadas · {{size}}",
+    "importCount_many": "Importar {{count}} sessões",
+    "progressTitle_many": "Importando {{count}} sessões",
+    "messages_many": "Salvando {{count}} mensagens",
+    "resultTitle_many": "{{count}} sessões importadas",
+    "sumReady_many": "{{count}} prontas para continuar",
+    "sumAction_many": "{{count}} precisam da sua atenção",
+    "sumFailed_many": "{{count}} falharam",
+    "found_many": "Encontradas {{count}} sessões em {{device}}",
+    "confirmBody_many": "Isso importa {{count}} sessões e usa até {{size}} de espaço em disco. A importação ocorre em segundo plano no computador; você pode pará-la a qualquer momento. Toque novamente para começar."
+  }
+}

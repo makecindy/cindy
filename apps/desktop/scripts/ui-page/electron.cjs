@@ -5,11 +5,12 @@ const path = require('node:path');
 const profile = process.env.CINDY_UI_PROFILE;
 const bundleDir = process.env.CINDY_UI_BUNDLE_DIR;
 const evidenceDir = process.env.CINDY_UI_EVIDENCE_DIR;
+const preview = process.env.CINDY_UI_PREVIEW === '1';
 if (![profile, bundleDir, evidenceDir].every((dir) => dir && path.isAbsolute(dir)))
   throw new Error('Missing isolated UI profile, bundle or evidence directory');
 // Same policy the runner sends with the page document in Chromium mode.
 const csp =
-  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 app.setPath('sessionData', profile);
@@ -34,11 +35,23 @@ const types = {
   '.otf': 'font/otf',
 };
 // Background checks must not take focus or add a Dock icon to the user's desktop.
-if (process.env.CINDY_UI_PREVIEW !== '1') app.dock?.hide();
+if (!preview) app.dock?.hide();
 app.whenReady().then(() => {
   const ownSession = session.fromPartition('ui-check');
-  ownSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-  ownSession.setPermissionCheckHandler(() => false);
+  const allowsFullscreen = (wc, permission, requestingUrl) => {
+    if (permission !== 'fullscreen' || !wc) return false;
+    try {
+      return new URL(requestingUrl).origin === origin && new URL(wc.getURL()).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  ownSession.setPermissionRequestHandler((wc, permission, callback, details) =>
+    callback(allowsFullscreen(wc, permission, details.requestingUrl)),
+  );
+  ownSession.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
+    Boolean(allowsFullscreen(wc, permission, requestingOrigin)),
+  );
   ownSession.on('will-download', (event) => event.preventDefault());
   ownSession.webRequest.onBeforeRequest((details, callback) => {
     const url = new URL(details.url);
@@ -69,30 +82,50 @@ app.whenReady().then(() => {
       return new Response(null, { status: 404 });
     }
   });
-  const win = new BrowserWindow({
+  const createWindow = (size) => {
+    const win = new BrowserWindow({
+      width: size.width,
+      height: size.height,
+      useContentSize: true,
+      // Native decorations round at forced 2x DPI on Windows (400 CSS px became
+      // 401). Background captures need only the content, not a platform frame.
+      frame: preview,
+      show: preview,
+      title: 'Cindy UI Check',
+      webPreferences: {
+        // A hidden native Windows window can retain its old renderer size and
+        // stop producing frames. Offscreen rendering keeps checks hidden while
+        // allowing exact resizing and screenshots without showing a native window.
+        offscreen: !preview && process.platform === 'win32',
+        // Exercise the real DOM fullscreen/top layer without asking an invisible
+        // offscreen native window to enter OS fullscreen.
+        // Native fullscreen transitions remain a full-Desktop acceptance check.
+        disableHtmlFullscreenWindowResize: !preview,
+        session: ownSession,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        nodeIntegrationInWorker: false,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        experimentalFeatures: false,
+        plugins: false,
+        navigateOnDragDrop: false,
+      },
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.on('will-navigate', (event, url) => {
+      if (new URL(url).origin !== origin) event.preventDefault();
+    });
+    void win.loadURL('about:blank');
+    return win;
+  };
+  // Main-process test harness only; no renderer IPC or app bootstrap is exposed.
+  app.on('ui-check:create-window', createWindow);
+  createWindow({
     width: Number(process.env.CINDY_UI_WIDTH),
     height: Number(process.env.CINDY_UI_HEIGHT),
-    useContentSize: true,
-    show: process.env.CINDY_UI_PREVIEW === '1',
-    title: 'Cindy UI Check',
-    webPreferences: {
-      session: ownSession,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      nodeIntegrationInSubFrames: false,
-      nodeIntegrationInWorker: false,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      experimentalFeatures: false,
-      plugins: false,
-      navigateOnDragDrop: false,
-    },
   });
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin !== origin) event.preventDefault();
-  });
-  void win.loadURL('about:blank');
 });
 app.on('window-all-closed', () => app.quit());

@@ -487,7 +487,12 @@ describe('pi translator', () => {
     }));
   });
 
-  it('classifies a prompt_cache_retention rejection for provider compat self-heal', () => {
+  it.each([
+    ['English', '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
+      + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}'],
+    ['Chinese (#6649)', '400: {"code":"UNKNOWN_FIELD","message":"未知请求字段：prompt_cache_retention",'
+      + '"data":{"field":"prompt_cache_retention"}}'],
+  ])('classifies a %s prompt_cache_retention rejection for provider compat self-heal', (_label, errorMessage) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
@@ -498,9 +503,7 @@ describe('pi translator', () => {
           role: 'assistant',
           content: [],
           stopReason: 'error',
-          errorMessage:
-            '400: {"param":"prompt_cache_retention","type":"invalid_request_error","message":'
-            + '"prompt_cache_retention is not supported by this endpoint; use prompt_cache_options"}',
+          errorMessage,
           usage: { input: 0, output: 0 },
         },
       }),
@@ -2458,5 +2461,18 @@ it('retains tool image bytes and a video resource alongside text', () => {
       { kind: 'video', url: 'https://example.com/clip.mp4' },
     ],
   });
+  disposePiTranslateContext(ctx);
+});
+
+// A second 400 must remain terminal; Desktop may not add the old process replay.
+it('projects native cache recovery ownership onto the terminal error', () => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error',
+    errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}', cindyCacheRecoveryHandled: true } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.filter(event => event.type === 'error')).toHaveLength(1);
+  expect(events.find(event => event.type === 'error')?.data).toMatchObject({ piCacheRecoveryHandled: true, isTerminal: true });
   disposePiTranslateContext(ctx);
 });

@@ -1,5 +1,5 @@
-/** Chat-stream video player. Native controls keep play, pause and seeking in
- * the message; fullscreen remains the browser player's optional action. */
+/** Chat-stream video player. Keep the browser controls, including native video
+ * fullscreen, so its icon, position, keyboard handling and playback stay native. */
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
 import { useEffect, useRef, useState } from 'react';
@@ -14,8 +14,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
+import { useVideoContextMenu } from './useVideoContextMenu';
 
 export type ChatVideoVariant = 'tool-output';
 
@@ -41,8 +43,7 @@ const VARIANT_STYLES: Record<
     // (50vw/40vh 相对窗口,列宽约束只有这档提供);maxHeight 收紧到
     // min(40vh, 420px) 防竖版视频占半屏。与 ChatImageView 保持一致。
     style: { maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' },
-    className:
-      'rounded-xl border border-[var(--msg-tool-card-border)] object-contain',
+    className: 'rounded-xl border border-[var(--msg-tool-card-border)] object-contain',
   },
 };
 
@@ -50,10 +51,15 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
   const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   // 远程会话改写到 cindy-remote-media://(OSS range 流式);本地原样。下游统一用 displaySrc。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
-  useEffect(() => { setFailedSrc(null); }, [displaySrc]);
+  const { menuPos, setMenuPos, portalContainer, restoreVideoFocus } = useVideoContextMenu(
+    videoRef,
+    displaySrc,
+  );
+  useEffect(() => {
+    setFailedSrc(null);
+  }, [displaySrc]);
 
   // Navigation and hidden/recycled rows must not leave an invisible player running.
   useEffect(() => {
@@ -61,12 +67,32 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
     if (!video) return;
     const unregister = registerMedia(video);
     const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) video.pause();
+      if (!entry.isIntersecting && document.fullscreenElement !== video) video.pause();
     });
-    const onVisibility = () => { if (document.hidden) video.pause(); };
+    let wasFullscreen = document.fullscreenElement === video;
+    const onFullscreenChange = () => {
+      const isFullscreen = document.fullscreenElement === video;
+      if (wasFullscreen && !isFullscreen) {
+        // A hidden notification ignored during fullscreen may not repeat on
+        // exit. Resubscribe for a fresh sample of the restored inline bounds.
+        observer.unobserve(video);
+        observer.observe(video);
+      }
+      wasFullscreen = isFullscreen;
+    };
+    const onVisibility = () => {
+      if (document.hidden) video.pause();
+    };
     observer.observe(video);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
     document.addEventListener('visibilitychange', onVisibility);
-    return () => { unregister(); observer.disconnect(); document.removeEventListener('visibilitychange', onVisibility); video.pause(); };
+    return () => {
+      unregister();
+      observer.disconnect();
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('visibilitychange', onVisibility);
+      video.pause();
+    };
   }, [displaySrc, failedSrc]);
 
   // A transient failure should recover when the window/network becomes available;
@@ -76,14 +102,12 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
     const retry = () => setFailedSrc(null);
     window.addEventListener('online', retry);
     window.addEventListener('focus', retry);
-    return () => { window.removeEventListener('online', retry); window.removeEventListener('focus', retry); };
+    return () => {
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+    };
   }, [displaySrc, failedSrc]);
 
-  if (failedSrc === displaySrc) {
-    return <VideoMissingPlaceholder filename={filename} />;
-  }
-
-  const { style, className } = VARIANT_STYLES[variant];
   const canRevealInFolder =
     displaySrc.startsWith('xdt-video://') || displaySrc.startsWith('cindy-media://');
 
@@ -94,6 +118,20 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
     }
     setMenuPos(null);
   }
+
+  // 本机解不了的编码(典型:无 HEVC 解码的 Windows 上的 Seedance 2.5 1080p)只会走到这里,
+  // 文件本身是好的 —— 留一条"在文件夹中显示",用户才能交给系统播放器。
+  if (failedSrc === displaySrc) {
+    return (
+      <VideoUnavailablePlaceholder
+        filename={filename}
+        onRetry={() => setFailedSrc(null)}
+        onReveal={canRevealInFolder ? handleRevealInFolder : undefined}
+      />
+    );
+  }
+
+  const { style, className } = VARIANT_STYLES[variant];
 
   async function handleCopyVideo(): Promise<void> {
     const res = await window.electronAPI.copyMediaToClipboard({ url: displaySrc });
@@ -133,6 +171,7 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
       </div>
       {canRevealInFolder ? (
         <DropdownMenu
+          modal={!portalContainer}
           open={menuPos !== null}
           onOpenChange={(open) => {
             if (!open) setMenuPos(null);
@@ -152,7 +191,13 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
               }}
             />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" sideOffset={2}>
+          <DropdownMenuContent
+            align="start"
+            sideOffset={2}
+            portalContainer={portalContainer}
+            style={portalContainer ? { pointerEvents: 'auto' } : undefined}
+            onCloseAutoFocus={restoreVideoFocus}
+          >
             <DropdownMenuItem onClick={handleCopyVideo}>
               <Copy className="mr-2 h-4 w-4" />
               {t('chat.media.copyVideo')}
@@ -168,11 +213,17 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
   );
 }
 
-interface VideoMissingPlaceholderProps {
+interface VideoUnavailablePlaceholderProps {
   filename: string;
+  onRetry: () => void;
+  onReveal?: () => void;
 }
 
-function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
+function VideoUnavailablePlaceholder({
+  filename,
+  onRetry,
+  onReveal,
+}: VideoUnavailablePlaceholderProps) {
   const { t } = useTranslation();
   return (
     <div
@@ -189,12 +240,18 @@ function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
       <div className="text-xs font-medium">{t('chat.media.videoUnavailable')}</div>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">
-            {filename}
-          </div>
+          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</div>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>
+      <Button variant="secondary" size="sm" compact onClick={onRetry}>
+        {t('chat.errorBanner.retry')}
+      </Button>
+      {onReveal ? (
+        <Button variant="secondary" size="sm" compact onClick={onReveal}>
+          {t('chat.media.revealVideo')}
+        </Button>
+      ) : null}
     </div>
   );
 }

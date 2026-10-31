@@ -133,6 +133,9 @@ export function startSessionListTokenRefresh(
 
 /** sessions:created reseed 防抖(被控端短时间多次创建会话 / orca 起多 worker 时合并重拉)。 */
 const RESEED_DEBOUNCE_MS = 300;
+// Limit only the startup route's discovery wait, not the request or peer lifetime.
+// Matches the background device directory's 10s budget; late results still apply.
+const INITIAL_DISCOVERY_WAIT_MS = 10_000;
 
 /**
  * best-effort push 的窗口内 anti-entropy 周期。列表、置顶、归档/删除走 sessions:patched /
@@ -423,6 +426,8 @@ export function useDeviceLinkRemoteProjects(
     }
 
     let disposed = false;
+    const finishInitialDiscovery = remoteProjectsStore.beginInitialDiscovery();
+    const initialDiscoveryTimer = setTimeout(finishInitialDiscovery, INITIAL_DISCOVERY_WAIT_MS);
     /**
      * 「已明确离场、不许被冷缓存种回来」的设备 id。删除 / 撤销访问 / 关闭被控 / 本机停用控制
      * 路径都会往里加 —— 它们清盘是异步的,而 mount 时那次 readCachedSessionList 可能早已
@@ -720,9 +725,9 @@ export function useDeviceLinkRemoteProjects(
     };
 
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
-    const reseed = (): void => {
+    const reseed = (): Promise<void> => {
       const generation = directoryGeneration;
-      void window.electronAPI.deviceLink
+      return window.electronAPI.deviceLink
         .listDevices()
         .then(({ devices }) => {
           if (disposed || generation !== directoryGeneration) return;
@@ -774,7 +779,7 @@ export function useDeviceLinkRemoteProjects(
     // 账号里删掉设备的情形,都靠补这一轮收敛(reseed 末尾还会清掉权威列表中缺席的分片)。
     // 仍在 listDevices 里但离线的设备照既有语义保留为 disconnected —— 与「断连保留最近
     // 一次快照让 All Sessions 稳定」一致,不是本次引入的行为。
-    void readCachedSessionList().then((devices) => {
+    const initialCacheRead = readCachedSessionList().then((devices) => {
       if (disposed || devices.length === 0) return;
       // 读快照这一跳期间被**明确移除**的设备(撤销访问 / 关闭被控 / 本机停用控制)不许种回来:
       // 那些路径已经删了分片并清了盘,而这次种入拿的是它们之前读到的旧快照;紧随的 reseed
@@ -782,8 +787,8 @@ export function useDeviceLinkRemoteProjects(
       const usable = devices.filter((device) => !cacheHydrationBlocked.has(device.deviceId));
       if (usable.length === 0) return;
       remoteProjectsStore.hydrateFromCache(usable);
-      reseed();
-    });
+      return reseed();
+    }).catch((err) => log.debug('initial remote cache read failed', err));
 
     // 用户点击失败态重试 → 重走 subscribe + bootstrap，恢复 loading 与完整重试语义。
     setRemoteSessionBootstrapRetryImpl((deviceId) => {
@@ -879,7 +884,7 @@ export function useDeviceLinkRemoteProjects(
       }
     });
 
-    void window.electronAPI.deviceLink
+    const initialDirectoryRead = window.electronAPI.deviceLink
       .getState()
       .then((state) => {
         if (disposed) return;
@@ -887,7 +892,7 @@ export function useDeviceLinkRemoteProjects(
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
-          remoteProjectsStore.markAllDisconnected();
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
           for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
@@ -898,12 +903,20 @@ export function useDeviceLinkRemoteProjects(
             unresponsiveDevicesStore.apply(deviceId, true);
           }
         }
-        reseed();
+        return reseed();
       })
       .catch((err) => {
         log.debug('getState before device-link reseed failed', err);
-        if (!disposed) reseed();
+        if (!disposed) return reseed();
       });
+
+    // Neither an empty bootstrap set nor the first completed read alone proves
+    // the remembered remote task is absent. Per-device loading takes over once
+    // discovery starts bootstrap; failures and cleanup must release this gate.
+    void Promise.allSettled([initialCacheRead, initialDirectoryRead]).then(() => {
+      clearTimeout(initialDiscoveryTimer);
+      finishInitialDiscovery();
+    });
 
     const offPresence = window.electronAPI.deviceLink.onPresenceChanged((snap) => {
       applyDevice({
@@ -970,7 +983,7 @@ export function useDeviceLinkRemoteProjects(
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
         if (p.status === 'connecting') {
-          remoteProjectsStore.markAllDisconnected();
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
           return;
         }
         // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
@@ -978,14 +991,21 @@ export function useDeviceLinkRemoteProjects(
         // 已空,整份快照被写成 [],main 侧据此把 session-list.json 删掉。于是「relay 停服
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
-        remoteProjectsStore.clear();
-        remoteProjectAliases.clear();
+        clearTimeout(initialDiscoveryTimer);
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId));
+        for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
+          if (!isSharedTaskPeer(deviceId)) remoteProjectAliases.remove(deviceId);
+        }
         cancelSessionListPersist();
-        clearRemoteSessionActivity();
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
-        if (p.status === 'stopped') revokedDevicesStore.clearAll();
+        if (p.status === 'stopped') {
+          for (const deviceId of revokedDevicesStore.getSnapshot()) {
+            if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
+          }
+        }
         return;
       }
       if (wasOnline) return;
@@ -1070,6 +1090,7 @@ export function useDeviceLinkRemoteProjects(
 
     return () => {
       disposed = true;
+      clearTimeout(initialDiscoveryTimer);
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
       wakeRemoteReconcileRef.current = () => undefined;

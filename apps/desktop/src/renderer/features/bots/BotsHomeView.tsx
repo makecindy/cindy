@@ -102,7 +102,7 @@ export function BotSettings({
   beforeCloseRef,
   initialPage = 'home',
 }: {
-  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels';
+  initialPage?: 'home' | 'memory' | 'capabilities' | 'model' | 'voice' | 'channels' | 'routines';
   bot: BotProfile;
   beforeCloseRef?: { current: (() => Promise<boolean>) | null };
   onBack: () => void;
@@ -781,6 +781,7 @@ export function BotSettings({
           <BotRoutines
             embedded
             botId={bot.id}
+            inheritedRoute={displayedModelChain[0]}
             beforeLeaveRef={routineLeaveRef}
             backRef={routineBackRef}
             header={

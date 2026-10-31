@@ -101,7 +101,7 @@ describe('listAvailableMediaModels', () => {
   // Existing fixtures had no pricing; minimal regression is a Gateway image with one summary.output quote.
   it('preserves the optional summary through media parsing and provider projection', async () => {
     const displayPricing = { items: [{ label: 'Output', price: 0.3, unit: 'image', quantity: 1 }],
-      summary: { input: [{ price: 0.02, unit: 'image', quantity: 1 }], output: [{ price: 0.3, unit: 'image', quantity: 1 }] } };
+      summary: { input: [{ price: 0.02, unit: 'image', quantity: 1, component: 'image' }], output: [{ price: 0.3, unit: 'image', quantity: 1, component: 'image' }] } };
     serverApiFetchMock.mockResolvedValue({ ...payload, models: [{ ...payload.models[0], displayPricing, costDiscount: 0.2 }] });
     await expect(listAvailableMediaModels()).resolves.toMatchObject([{ displayPricing, costDiscount: 0.2, currency: 'CNY', providerId: 'xd' }]);
   });

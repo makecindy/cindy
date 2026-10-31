@@ -94,6 +94,7 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  errorMsg?: string;
   failureRecovered?: boolean;
 }
 
@@ -455,18 +456,37 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return inserted;
   }
 
-  async update(id: string, patch: Partial<Schedule>): Promise<Schedule | null> {
+  async update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null> {
     const db = this.getDb();
-    const setObj = schedulePatchToRow(patch);
+    const setObj = {
+      ...schedulePatchToRow(patch),
+      // Completion time is a watermark, including ordinary writes after a
+      // recovery loses CAS. Compare in the write, never in a prior SELECT.
+      ...(patch.lastFinishedAt !== undefined ? {
+        lastFinishedAt: sql`MAX(COALESCE(${schedules.lastFinishedAt}, ${patch.lastFinishedAt}), ${patch.lastFinishedAt})`,
+      } : {}),
+    };
+    const where = and(
+      eq(schedules.id, id),
+      expected ? and(
+        sql`${schedules.lastFiredAt} IS ${expected.lastFiredAt ?? null}`,
+        sql`${schedules.nextFireAt} IS ${expected.nextFireAt ?? null}`,
+        eq(schedules.status, expected.status),
+        eq(schedules.recurring, expected.recurring),
+        eq(schedules.manual, expected.manual ?? false),
+        eq(schedules.cronExpr, expected.cronExpr),
+        eq(schedules.timezone, expected.timezone),
+        sql`${schedules.intervalMs} IS ${expected.intervalMs ?? null}`,
+      ) : undefined,
+    );
     if (Object.keys(setObj).length === 0) {
-      // patch 为空：不发 UPDATE，但仍然返回当前 row（或 null）以保持语义一致
-      return this.get(id);
+      const [current] = await db.select().from(schedules).where(where).limit(1);
+      return current ? scheduleToCamel(current) : null;
     }
-    await db.update(schedules).set(setObj).where(eq(schedules.id, id));
-    // drizzle update 不会 throw "not found"——主动 SELECT 验证
-    const updated = await this.get(id);
-    if (updated) this.bumpSidebarIndexCache();
-    return updated;
+    const [updated] = await db.update(schedules).set(setObj).where(where).returning();
+    if (!updated) return null;
+    this.bumpSidebarIndexCache();
+    return scheduleToCamel(updated);
   }
 
   async delete(id: string): Promise<void> {
@@ -553,6 +573,37 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         updatedAt: new Date(patch.finishedAt).toISOString(),
       });
     }
+    if (row) this.bumpSidebarIndexCache();
+    return row ? scheduleRunToCamel(row) : null;
+  }
+
+  /** Claim only the interrupted turn in the task the user chose to continue.
+   * Ordinary user input, completed/cleared turns and another running owner
+   * invalidate the claim. Later runs in other tasks do not rewrite this run. */
+  async claimInterruptedRun(sessionId: string, heartbeatAt: number): Promise<ScheduleRun | null> {
+    const [row] = await this.getDb().update(scheduleRuns).set({
+      status: 'running', heartbeatAt, finishedAt: null, errorMsg: null, readAt: null,
+    }).where(sql`${scheduleRuns.id} = (
+      SELECT r.id FROM schedule_runs r
+      JOIN schedules s ON s.id = r.schedule_id
+      JOIN sessions t ON t.id = r.session_id
+      WHERE r.session_id = ${sessionId}
+        AND r.status = 'interrupted' AND r.error_msg = 'app restarted'
+        AND s.status = 'active' AND s.source != 'bot'
+        AND COALESCE(s.execution_mode, 'agent') = 'agent'
+        AND COALESCE(s.job_type, 'prompt') = 'prompt'
+        AND t.status = 'active'
+        AND t.active_turn_started_at > COALESCE(t.last_turn_ended_at, 0)
+        AND t.active_turn_started_at > COALESCE(t.cleared_at, 0)
+        AND (SELECT CASE WHEN json_valid(m.agent_meta)
+               THEN json_extract(m.agent_meta, '$.origin.runId') END
+             FROM messages m WHERE m.session_id = t.id AND m.role = 'user'
+               AND m.rewind_at IS NULL
+             ORDER BY m.created_at DESC, m.id DESC LIMIT 1) = r.id
+        AND NOT EXISTS (SELECT 1 FROM schedule_runs owner
+          WHERE owner.session_id = r.session_id AND owner.status = 'running')
+      ORDER BY r.fired_at, r.id LIMIT 1
+    )`).returning();
     if (row) this.bumpSidebarIndexCache();
     return row ? scheduleRunToCamel(row) : null;
   }
@@ -727,6 +778,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       firedAt: scheduleRuns.firedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
+      errorMsg: scheduleRuns.errorMsg,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
@@ -797,6 +849,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        errorMsg: row.errorMsg ?? undefined,
       } : {}),
     }));
 
@@ -1191,6 +1244,25 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           ...(scheduleId !== undefined ? [eq(scheduleRuns.scheduleId, scheduleId)] : []),
         ),
       )
+      .limit(1);
+    return Boolean(row);
+  }
+
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    const [row] = await this.getDb()
+      .select({ id: scheduleRuns.id })
+      .from(scheduleRuns)
+      .where(and(eq(scheduleRuns.scheduleId, scheduleId), or(
+        // A live owner may not have committed its input yet. After the stale
+        // sweep, only the existing accepted-input ledger consumes the trigger.
+        eq(scheduleRuns.status, 'running'),
+        and(eq(scheduleRuns.status, 'interrupted'), sql`EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.session_id = ${scheduleRuns.sessionId} AND m.role = 'user'
+            AND CASE WHEN json_valid(m.agent_meta)
+              THEN json_extract(m.agent_meta, '$.origin.runId') END = ${scheduleRuns.id}
+        )`),
+      )))
       .limit(1);
     return Boolean(row);
   }

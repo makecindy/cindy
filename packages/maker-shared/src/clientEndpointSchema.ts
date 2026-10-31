@@ -103,6 +103,8 @@ export const CLIENT_ENDPOINT_KEYS = [
   'cindySkillHubApiBaseUrl',
   // plugin-server(Plugin/Skill 市场、组织管理与发布)的 API 基址。
   'pluginApiBaseUrl',
+  // Independent sharing website. Missing disables preparation; never guess a domain.
+  'shareBaseUrl',
   // 更新/hotfix 链的 CDN base(manifest-*.json / hotfix 包 / agent 二进制)。
   'cdnBaseUrl',
   // 自建线手机整包发现的 mobile-update-server 基址(`${base}/latest`)。仅
@@ -167,6 +169,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   skillhubApiBaseUrl: ['https:'],
   cindySkillHubApiBaseUrl: ['https:'],
   pluginApiBaseUrl: ['https:'],
+  shareBaseUrl: ['https:'],
   cdnBaseUrl: ['https:'],
   mobileUpdateBaseUrl: ['https:'],
 };

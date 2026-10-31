@@ -100,6 +100,9 @@ const SCHEDULER_DDL = [
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
       user_send_at INTEGER,
+      active_turn_started_at INTEGER,
+      last_turn_ended_at INTEGER,
+      cleared_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL,
@@ -141,6 +144,7 @@ const SCHEDULER_DDL = [
       interval_ms INTEGER,
       agent_kind TEXT NOT NULL,
       model_agent_kind TEXT,
+      model_agent_device_id TEXT,
       model TEXT,
       provider_id TEXT,
       agent_device_id TEXT,
@@ -277,6 +281,35 @@ function createStorageHarness(queries?: { query: string; params: unknown[] }[]) 
   };
 }
 
+// DB-tier regression for app-exit recovery: claim the original run exactly once,
+// and respect user takeover/stop and the current task owner. The old storage had no
+// recovery claim; a successful continuation could never repair its failed run.
+it.each(['eligible', 'paused', 'archived', 'finished', 'manual-continue', 'running-owner', 'newer-other-task', 'script'])('claims only resumable interrupted runs: %s', async (mode) => {
+  const h = createStorageHarness();
+  try {
+    h.sqlite.prepare(`INSERT INTO sessions (id, title, active_turn_started_at, last_turn_ended_at, status)
+      VALUES ('task', 'task', 20, ?, ?)`).run(mode === 'finished' ? 30 : 0, mode === 'archived' ? 'archived' : 'active');
+    await h.storage.insert(baseSchedule({ status: mode === 'paused' ? 'paused' : 'active',
+      executionMode: mode === 'script' ? 'script' : 'agent' }));
+    await h.storage.insertRun({ id: 'interrupted', scheduleId: 'sch-1', sessionId: 'task',
+      firedAt: 10, finishedAt: 25, status: 'interrupted', errorMsg: 'app restarted' });
+    const origin = mode === 'manual-continue' ? {} : { origin: { kind: 'scheduler', scheduleId: 'sch-1', runId: 'interrupted' } };
+    h.sqlite.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+      VALUES ('input', 'input', 'task', 'user', 'continue', ?, 15)`).run(JSON.stringify(origin));
+    if (mode === 'running-owner' || mode === 'newer-other-task') await h.storage.insertRun({
+      id: 'newer', scheduleId: 'sch-1', sessionId: mode === 'running-owner' ? 'task' : undefined,
+      firedAt: 40, status: 'running',
+    });
+    expect(await h.storage.claimInterruptedRun('another-task', 49)).toBeNull();
+    const claimed = await h.storage.claimInterruptedRun('task', 50);
+    if (mode === 'eligible' || mode === 'newer-other-task') {
+      expect(claimed).toMatchObject({ id: 'interrupted', sessionId: 'task', firedAt: 10, status: 'running', heartbeatAt: 50 });
+      expect(claimed?.errorMsg).toBeUndefined();
+      expect(await h.storage.claimInterruptedRun('task', 51)).toBeNull();
+    } else expect(claimed).toBeNull();
+  } finally { h.close(); }
+});
+
 it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
   const harness = createStorageHarness();
   try {
@@ -325,6 +358,29 @@ function enableLegacySessionFallback(
 }
 
 describe('DrizzleScheduleStorage (in-memory)', () => {
+  // discussion_r4419060204: public UPDATE must reject an old completion after
+  // another writer changes its nullable/non-null trigger watermark. DB tier.
+  it.each([undefined, 100])('guards recovery schedule writes against a changed watermark (%s)', async (lastFiredAt) => {
+    const harness = createStorageHarness();
+    try {
+      const original = await harness.storage.insert(baseSchedule({ lastFiredAt }));
+      const newer = await harness.storage.update(original.id, { lastFiredAt: 200, nextFireAt: 400 });
+      expect(await harness.storage.update(original.id, {
+        lastFiredAt: 50, nextFireAt: undefined, status: 'expired',
+      }, original)).toBeNull();
+      expect(await harness.storage.get(original.id)).toEqual(newer);
+      expect(await harness.storage.update(original.id, {}, original)).toBeNull();
+      expect(await harness.storage.update(original.id, { lastFinishedAt: 300 }, newer!))
+        .toMatchObject({ lastFiredAt: 200, nextFireAt: 400, status: 'active', lastFinishedAt: 300 });
+      // discussion_r4419409168: a late older completion (including CAS fallback)
+      // must not regress the latest completion, even through an ordinary update.
+      expect(await harness.storage.update(original.id, { lastFinishedAt: 250 }))
+        .toMatchObject({ lastFinishedAt: 300 });
+      expect(await harness.storage.update(original.id, { lastFinishedAt: 350 }))
+        .toMatchObject({ lastFinishedAt: 350 });
+    } finally { harness.close(); }
+  });
+
   it('round-trips schedule and run CRUD through SQLite', async () => {
     const harness = createStorageHarness();
     const schedule = baseSchedule({
@@ -627,7 +683,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
         stderrTruncated: false, timedOut: false, aborted: false } as const;
       const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
         harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
-      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2 });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2, errorMsg: 'provider mismatch' });
+      expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a'))
+        .toMatchObject({ errorMsg: 'provider mismatch' });
       await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
       const before = await harness.storage.listSidebarIndexRuns();
       expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
@@ -900,6 +958,14 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
 
       // 二次认领 → 判负
       expect(await storage.claimDueFire('sch-proxy', due)).toBeNull();
+      // Recovery completion uses the same UPDATE RETURNING through real RPC.
+      const stale = (await storage.get('sch-proxy'))!;
+      const newer = await storage.update('sch-proxy', { lastFiredAt: due, nextFireAt: due + 1000 });
+      expect(await storage.update('sch-proxy', { status: 'expired' }, stale)).toBeNull();
+      expect(await storage.update('sch-proxy', { lastFinishedAt: due + 1 }, newer!))
+        .toMatchObject({ status: 'active', lastFiredAt: due, nextFireAt: due + 1000 });
+      expect(await storage.update('sch-proxy', { lastFinishedAt: due }))
+        .toMatchObject({ lastFinishedAt: due + 1 });
     } finally {
       await client.dispose();
     }
@@ -1025,6 +1091,62 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       harness.close();
     }
   });
+
+  // discussion_r4420812422 / db: startup checks the real SQLite statuses, not
+  // a bounded history page. Newer finished runs cannot hide an unfinished Once.
+  it.each(['running', 'interrupted'] as const)('finds unfinished %s runs beyond the history window', async (status) => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'unfinished-once', recurring: false }));
+      await harness.storage.insert(baseSchedule({ id: 'other-once', recurring: false }));
+      harness.sqlite.prepare("INSERT INTO sessions (id, title) VALUES ('unfinished-task', 'task')").run();
+      await harness.storage.insertRun({ id: 'unfinished', scheduleId: 'unfinished-once', sessionId: 'unfinished-task', firedAt: 1, status });
+      harness.sqlite.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+        VALUES ('accepted', 'accepted', 'unfinished-task', 'user', 'prompt', ?, 1)`)
+        .run(JSON.stringify({ origin: { kind: 'scheduler', runId: 'unfinished' } }));
+      for (let i = 0; i < 60; i++) {
+        await harness.storage.insertRun({ id: `finished-${i}`, scheduleId: 'unfinished-once', firedAt: i + 2, status: 'success' });
+      }
+      expect(await harness.storage.hasUnfinishedRuns('unfinished-once')).toBe(true);
+      expect(await harness.storage.hasUnfinishedRuns('other-once')).toBe(false);
+      await harness.storage.updateRun('unfinished', { status: 'success' });
+      expect(await harness.storage.hasUnfinishedRuns('unfinished-once')).toBe(false);
+    } finally { harness.close(); }
+  });
+
+  // discussion_r4420988894 / db: a pre-accept crash must not consume Once
+  // forever. Use the same persisted run/message and stale sweep as production;
+  // a later manual input blocks Continue but must not replay an accepted prompt.
+  it.each(['absent', 'accepted', 'other-run', 'other-task', 'later-input', 'invalid-json'] as const)(
+    'only accepted input keeps a swept Once claimed: %s', async (mode) => {
+      const h = createStorageHarness();
+      try {
+        h.sqlite.prepare(`INSERT INTO sessions (id, title, active_turn_started_at)
+          VALUES ('once-task', 'task', 20), ('other-task', 'other', 20)`).run();
+        await h.storage.insert(baseSchedule({ recurring: false, nextFireAt: undefined }));
+        await h.storage.insertRun({ id: 'pending-once', scheduleId: 'sch-1', sessionId: 'once-task',
+          firedAt: 10, heartbeatAt: 10, status: 'running' });
+        if (mode !== 'absent') {
+          const meta = mode === 'invalid-json' ? '{' : JSON.stringify({
+            origin: { kind: 'scheduler', runId: mode === 'other-run' ? 'other' : 'pending-once' },
+          });
+          h.sqlite.prepare(`INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at)
+            VALUES ('input', 'input', ?, 'user', 'prompt', ?, 15)`)
+            .run(mode === 'other-task' ? 'other-task' : 'once-task', meta);
+        }
+        if (mode === 'later-input') h.sqlite.prepare(`INSERT INTO messages
+          (id, client_id, session_id, role, content, created_at)
+          VALUES ('later', 'later', 'once-task', 'user', 'manual input', 30)`).run();
+        // Fresh running owners remain protected even before their input commit.
+        expect(await h.storage.hasUnfinishedRuns('sch-1')).toBe(true);
+        expect(await h.storage.markRunningAsInterrupted(11)).toEqual(['sch-1']);
+        expect(await h.storage.hasUnfinishedRuns('sch-1')).toBe(mode === 'accepted' || mode === 'later-input');
+        const claimed = await h.storage.claimInterruptedRun('once-task', 40);
+        if (mode === 'accepted') expect(claimed?.id).toBe('pending-once');
+        else expect(claimed).toBeNull();
+      } finally { h.close(); }
+    },
+  );
 
   it('touchRunHeartbeats: 只给 running 行续心跳,终态行不补写', async () => {
     const harness = createStorageHarness();

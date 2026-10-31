@@ -3104,6 +3104,18 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       expect(JSON.stringify(replace.mock.calls)).not.toContain('cindy-ui');
     });
 
+    it('keeps a machine-local image path out of live card updates', async () => {
+      const replace = vi.fn();
+      mocks.feishuIm.startStreamingText.mockResolvedValue({
+        messageId: 'rich', append: vi.fn(), replace, finalize: vi.fn(), close: vi.fn(),
+      });
+      const h = setupSession(async () => ({ accepted: true }));
+      await runDefaultTurn();
+      h.emit({ type: 'text', data: { text: 'Look ![preview](/Users/alice/private/preview.png)', isFinal: false } });
+      await waitForAssertion(() => expect(replace).toHaveBeenCalledWith('Look preview'));
+      expect(JSON.stringify(replace.mock.calls)).not.toContain('/Users/alice');
+    });
+
     it.each([
       ['```cindy-ui\n{"version":', 'Some content could not be displayed.', false],
       ['```cindy-ui\ninvalid\n```', 'Some content could not be displayed.', false],

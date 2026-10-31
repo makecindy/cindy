@@ -309,6 +309,9 @@ export const MAKER_INVOKE = {
    * (远程改被控端全局设置越权)。
    */
   MODEL_CONTEXT_LIMIT_GET: 'maker:model-context-limit:get',
+  MODEL_IMAGE_INPUT_GET: 'maker:model-image-input:get',
+  MODEL_IMAGE_INPUT_SET: 'maker:model-image-input:set',
+  MODEL_COMPACTION_SET: 'maker:model-compaction:set',
   MODEL_CONTEXT_LIMIT_SET: 'maker:model-context-limit:set',
   MODEL_CONTEXT_LIMIT_RESET: 'maker:model-context-limit:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
@@ -592,6 +595,7 @@ export const MAKER_INVOKE = {
   LLAMACPP_STOP: 'maker:llamacpp:stop',
   LLAMACPP_CANCEL: 'maker:llamacpp:cancel',
   PROVIDER_IMPORT_PREVIEW: 'maker:provider:import:preview',
+  PROVIDER_IMPORT_FILE: 'maker:provider:import:file',
   PROVIDER_IMPORT_CONFIRM: 'maker:provider:import:confirm',
   PROVIDER_IMPORT_CANCEL: 'maker:provider:import:cancel',
   /**
@@ -839,6 +843,8 @@ export const MAKER_INVOKE = {
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
   CHAT_SERVER_MANAGE: 'maker:chat-server:manage',
+  CHAT_SERVER_MASK: 'maker:chat-server:mask',
+  CHAT_SERVER_MENTIONS: 'maker:chat-server:mentions',
   CHAT_SERVER_OWNEDBOTS: 'maker:chat-server:ownedBots',
   CHAT_SERVER_REFRESHPROFILE: 'maker:chat-server:refreshProfile',
   CHAT_SERVER_STATUS: 'maker:chat-server:status',

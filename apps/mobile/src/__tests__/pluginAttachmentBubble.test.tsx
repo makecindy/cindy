@@ -6,21 +6,15 @@ import { describe, expect, it, vi } from 'vitest';
 const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
 
 // Keep site-video's native surface out of this Node message-rendering test.
-// Adapt only the native animation/list surfaces. These suites keep the real
-// attachment/message gates; native motion has separate hook and device coverage.
-vi.mock('@legendapp/list/reanimated', async () => ({ AnimatedLegendList: (await import('@legendapp/list/react-native')).LegendList }));
-vi.mock('@/session/AnimatedContentHeight', () => ({ AnimatedContentHeight: ({ open = true, children }: any) => open ? children : null }));
-vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardLift: ({ children }: any) => children }));
-vi.mock('@/session/useSmoothMessageFollow', async () => {
-  const { useRef, useCallback } = await import('react');
-  return { useSmoothMessageFollow: () => ({ scrollRef: useRef(null), move: useCallback(() => {}, []), cancel: useCallback(() => {}, []) }) };
-});
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-modules-core', () => ({
+  requireOptionalNativeModule: () => null,
+  requireNativeViewManager: () => () => null,
+}));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
@@ -33,11 +27,7 @@ vi.mock('react-native', async () => {
     View: view, Text: view, Pressable: view, ScrollView: view, Modal: () => null,
     Image: Object.assign(view, { getSize() {} }), ActivityIndicator: view,
     Animated: { Value, View: view, Text: view, createAnimatedComponent: (c: any) => c,
-      timing: () => ({ start(callback: any) {
-        // Decorative entrances call start() without a completion callback;
-        // they must not overwrite the history reveal completion under test.
-        if (typeof callback === 'function') viewportHarness.finishReveal = callback;
-      }, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
+      timing: () => ({ start(callback: any) { viewportHarness.finishReveal = callback; }, stop() {} }), loop: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
@@ -182,7 +172,7 @@ describe('running work group expansion', () => {
       expect(html).not.toContain('Thinking step 0');
     }
   });
-  it.each([undefined, []])('requests an old-Host preview only when running lines are absent: %j', (lines) => {
+  it.each([undefined, []])('shows cached old-Host activity only when running lines are absent: %j', (lines) => {
     const setVisible = vi.fn();
     const items = buildMobileMessageRenderItems([
       msg('thought', 'thinking', { text: 'Cached thinking', durationMs: 1 }),
@@ -190,7 +180,8 @@ describe('running work group expansion', () => {
       .map(item => ({ ...item, deferred: { owner: {}, key: item.key, expanded: false,
         loading: false, failed: false, lines, setVisible, toggle() {}, retry() {} } }));
     const html = renderClient(<MessageRenderer items={companionConversationItems(items)} companion isSessionStreaming />);
-    expect(setVisible).toHaveBeenCalledWith(false, lines === undefined);
+    // The controller, not this regrouped row, decides from the Host lines whether a tail is read.
+    expect(setVisible).toHaveBeenCalledWith(false, true);
     expect(html.includes('Cached thinking')).toBe(lines === undefined);
   });
   const render = (awaitingDetails: boolean) => {
@@ -373,11 +364,6 @@ describe('companion native read position', () => {
         visible();
         viewportHarness.list.onLayout({ nativeEvent: { layout: { height: 500 } } });
         viewportHarness.list.onContentSizeChange(400, 300);
-        // A keyed native list reports its reset offset. Programmatic motion
-        // completion alone is no longer allowed to fabricate read position.
-        viewportHarness.list.onScroll({ nativeEvent: {
-          contentSize: { height: 300 }, layoutMeasurement: { height: 500 }, contentOffset: { y: 0 },
-        } });
       });
       expect(acknowledge).not.toHaveBeenCalled();
       await act(async () => { viewportHarness.finishReveal?.({ finished: true }); });

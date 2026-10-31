@@ -171,6 +171,28 @@ describe('Agent Island device sessions', () => {
     ]);
   });
 
+  // Screenshot regression: a remote host had already flattened and shortened
+  // the rich fence. Exercise IPC parsing and native display projection together.
+  it('hides flattened remote component operations during output and completion', () => {
+    const state = createAgentIslandState();
+    const detail = '```cindy-ui {"version":1,"seq":1,"op":"create","id":"device-preview-link","kind":"markdown","props":...';
+    const sync = (phase: 'running' | 'completed', text: string, now: number) =>
+      syncAgentIslandDeviceSessions(state, parseAgentIslandRemoteSessions([remote(phase, { detail: text })])!, now);
+    sync('running', detail, 1_000);
+    const running = buildAgentIslandDisplayState(state, 1_000).sessions[0];
+    expect(running?.detail).toBe('');
+    expect(running?.compactDetail).not.toContain('cindy-ui');
+    sync('completed', detail, 2_000);
+    expect(buildAgentIslandDisplayState(state, 2_000).sessions[0]?.activityLines)
+      .toEqual([expect.objectContaining({ kind: 'status', text: 'Done' })]);
+    sync('completed', '**预览已完成**', 3_000);
+    expect(buildAgentIslandDisplayState(state, 3_000).sessions[0]?.compactDetail).toBe('预览已完成');
+    sync('completed', detail, 4_000);
+    expect(buildAgentIslandDisplayState(state, 4_000).sessions[0]?.compactDetail).toBe('Done');
+    sync('completed', '更新完成 ' + detail, 5_000);
+    expect(buildAgentIslandDisplayState(state, 5_000).sessions[0]?.compactDetail).toBe('更新完成');
+  });
+
   it('does not repeat events for an unchanged phase', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('running')], 1_000);

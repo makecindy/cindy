@@ -1,3 +1,5 @@
+import { CONTRIBUTION_ERROR_CODES } from './pluginContributionContract';
+import { WRITABLE_DIRECTORY_GRANT_ERROR_CODES, type WritableDirectoryGrantErrorCode } from './writableDirectoryGrantError';
 import type { BrowserOpenForLoginErrorCode } from './browserBackend';
 
 /** main / preload / renderer 共用的 IPC 错误类型。 */
@@ -70,6 +72,8 @@ export const COMPANION_IMPORT_ERROR_CODES = [
 ] as const;
 
 export type IpcErrorCode =
+  | WritableDirectoryGrantErrorCode
+  | (typeof CONTRIBUTION_ERROR_CODES)[number]
   | (typeof COMPANION_IMPORT_ERROR_CODES)[number]
   // 通用错误
   | 'INVALID_PARAMS'
@@ -77,9 +81,16 @@ export type IpcErrorCode =
   | 'INTERNAL'
   | 'ALREADY_EXISTS'
   | 'PRECONDITION_FAILED'
+  | 'OFFICIAL_PLUGIN_GITHUB_REQUIRED' // 客户端提审限制，不扩展服务端 wire 错误
   | 'VOICE_SPEECH_TIMEOUT' // 本机语音合成等待响应或音频读取超时
   | 'PROVIDER_GROUP_CHANGED' // 编辑期间组设置已变化，拒绝覆盖，需重新读取
+  | 'SHARE_NOT_CONFIGURED'
+  | 'SHARE_UNAVAILABLE'
+  | 'SHARE_READ_FAILED'
   | 'HTML_PREVIEW_TOO_LARGE'
+  | 'PROVIDER_IMPORT_FILE_TOO_LARGE'
+  | 'PROVIDER_IMPORT_FILE_INVALID'
+  | 'PROVIDER_IMPORT_FILE_READ_FAILED'
   | 'HTML_PREVIEW_UNSUPPORTED'
   // 本地模型切换窗口保护的可行动失败原因。device-link 继续降级为
   // PRECONDITION_FAILED，避免把新增 Electron IPC code 变成跨版本 wire 契约。
@@ -336,16 +347,25 @@ export interface IpcError {
 }
 
 const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
+  ...WRITABLE_DIRECTORY_GRANT_ERROR_CODES,
   ...COMPANION_IMPORT_ERROR_CODES,
+  ...CONTRIBUTION_ERROR_CODES,
   'INVALID_PARAMS',
   'NOT_FOUND',
   'INTERNAL',
   'ALREADY_EXISTS',
   'IDENTITY_CONFLICT',
   'PRECONDITION_FAILED',
+  'OFFICIAL_PLUGIN_GITHUB_REQUIRED',
   'VOICE_SPEECH_TIMEOUT',
   'PROVIDER_GROUP_CHANGED',
+  'SHARE_NOT_CONFIGURED',
+  'SHARE_UNAVAILABLE',
+  'SHARE_READ_FAILED',
   'HTML_PREVIEW_TOO_LARGE',
+  'PROVIDER_IMPORT_FILE_TOO_LARGE',
+  'PROVIDER_IMPORT_FILE_INVALID',
+  'PROVIDER_IMPORT_FILE_READ_FAILED',
   'HTML_PREVIEW_UNSUPPORTED',
   'MODEL_CONTEXT_USAGE_UNKNOWN',
   'MODEL_VISIBILITY_NOT_READY',

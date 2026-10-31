@@ -414,6 +414,10 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
 
   return <>{modelPicker}<CompanionSheet visible={visible && modelStage === 'profile'} onClosed={afterClosed} onClose={dismiss}
       preventDismiss={dirty || busy || !!confirmation || memory.dirty || memory.busy}
+      trailingAction={page === 'models' && panel?.action && !editorLoading && !deleted && !confirmation ? {
+        label: t('devices.common.save'), busy, testID: 'companionProfile.models.save',
+        disabled: !online || !dirty || conflict?.page === page, onPress: () => void submit(panel),
+      } : undefined}
       onBack={page !== 'home' || confirmation ? () => void leave(false) : undefined}
       title={confirmation?.action?.confirmation ? label(confirmation.action.confirmation.title) : page === 'editor' && editor ? label(editor.resource.display.title) : t(`devices.companionProfile.${titleKey}`)} testID="companionProfile">
     <View style={styles.content}>
@@ -430,7 +434,7 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         <MainWindowActionButton action={{ label: label(confirmation.action.confirmation.confirmLabel ?? confirmation.action.label), busy, disabled: !online || confirmation.id === 'delete' && values.confirmName !== name, tone: confirmation.action.tone === 'destructive' ? 'danger' : 'primary', onPress: () => void submit(confirmation, true) }} />
         <MainWindowActionButton action={{ label: t('devices.common.cancel'), disabled: busy, onPress: () => confirm(null) }} />
       </> : page === 'home' ? home : editorLoading ? spinner : page === 'editor' ? editorView
-        : page === 'models' ? panel?.action ? <>{models}{save(panel, false)}</> : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
+        : page === 'models' ? panel?.action ? models : noteText(panel?.text || t('devices.companionProfile.hostUpgrade', { deviceName }))
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}

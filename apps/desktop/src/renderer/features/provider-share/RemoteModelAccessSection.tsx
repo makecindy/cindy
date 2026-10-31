@@ -1,5 +1,8 @@
+import { MemberBudgetEditor } from './MemberBudgetEditor';
+import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../../shared/providerShareBudget';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { unifiedModelKeyId } from '@cindy/model-providers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ErrorNotice } from '@/components/ui/error-notice';
@@ -10,6 +13,20 @@ import type { RemoteModelAccessView, RemoteModelSelection } from '../../../share
 import { ProviderShareDialog, ProviderShareDialogFooter, ProviderShareDialogTitle } from './ProviderShareDialog';
 
 const key = 'providerShare.modelAccess.';
+
+// Group display rows only. Permissions and runtime routing still use every exact
+// catalog ID, including the chatgpt/ ID required by Pi and Claude Code.
+function modelAccessRows(models: RemoteModelAccessView['availableModels']) {
+  const rows = new Map<string, { id: string; name: string; ids: string[] }>();
+  for (const model of models) {
+    const id = unifiedModelKeyId(model.id);
+    const row = rows.get(id);
+    if (row) {
+      if (!row.ids.includes(model.id)) row.ids.push(model.id);
+    } else rows.set(id, { id, name: model.name, ids: [model.id] });
+  }
+  return [...rows.values()];
+}
 
 export function RemoteModelAccessSection({ providerId, deviceId }: { providerId: string; deviceId?: string }) {
   const { t } = useTranslation();
@@ -48,7 +65,7 @@ export function RemoteModelAccessSection({ providerId, deviceId }: { providerId:
       <p className="mt-1 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(key + 'description')}</p>
       <div className="mt-3 flex items-center justify-between gap-4 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-3">
         <span className="text-13 leading-[1.5] text-[var(--text-primary)]">
-          {currentView ? t(key + (currentView.models === null ? 'all' : 'selected'), { count: currentView.models?.length ?? 0 }) : t(key + 'loading')}
+          {currentView ? t(key + (currentView.models === null ? 'all' : 'selected'), { count: new Set(currentView.models?.map(unifiedModelKeyId)).size }) : t(key + 'loading')}
         </span>
         <Button ref={trigger} variant="secondary" size="sm" disabled={!currentView || Boolean(error)} onClick={() => setOpen(true)}>{t(key + 'choose')}</Button>
       </div>
@@ -67,6 +84,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   const [storedView, setView] = useState<RemoteModelAccessView | null>(null);
   const loadedOwner = useRef<ReturnType<typeof getDataOwnerGeneration> | null>(null);
   const [models, setModels] = useState<RemoteModelSelection>(null);
+  const [memberBudget, setMemberBudget] = useState<ProviderShareMemberBudget | null>(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -82,7 +100,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
       if (request !== sequence.current || !isDataOwnerGenerationCurrent(owner)) return;
       if (next?.version !== 1) { setError(key + 'needsUpdate'); return; }
       loadedOwner.current = owner;
-      setView(next); setModels(next.models); setError(null);
+      setView(next); setModels(next.models); setMemberBudget(next.memberBudget ?? null); setError(null);
     }, (reason) => {
       if (request === sequence.current && isDataOwnerGenerationCurrent(owner)) setError(key + (isProviderManagementOutdated(reason) ? 'needsUpdate' : 'loadFailed'));
     });
@@ -93,13 +111,15 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   const available = view?.availableModels ?? [];
   // Preserve explicit selections for temporarily missing models; users can remove them without silently expanding a grant.
   const missing = (view ? models ?? [] : []).filter((id) => !available.some((model) => model.id === id)).map((id) => ({ id, name: id }));
-  const rows = [...available, ...missing].filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(search.toLowerCase()));
+  const availableIds = new Set(available.map(model => model.id));
+  const rows = modelAccessRows([...available, ...missing]).filter((model) => `${model.name} ${model.ids.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
   const save = async () => {
     if (inFlight.current || !view) return;
+    if (memberBudget && !isProviderShareMemberBudget(memberBudget)) { setError('providerShare.memberBudget.invalid'); return; }
     inFlight.current = true; setSaving(true); setError(null);
     const request = ++sequence.current;
     try {
-      const next = await providerShareManagementCommand({ action: 'set-model-access', providerId, memberId, models }, deviceId);
+      const next = await providerShareManagementCommand({ action: 'set-model-access', providerId, memberId, models, ...(memberId && view.budgetSupported ? { memberBudget } : {}) }, deviceId);
       if (request === sequence.current && isDataOwnerGenerationCurrent(owner)) {
         if (next?.version !== 1) { setError(key + 'needsUpdate'); return; }
         if (onSaved) onSaved(next); else onClose();
@@ -110,21 +130,26 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
   };
   return (
     <ProviderShareDialog open busy={saving} returnFocusTo={returnFocusTo} initialFocusRef={searchRef} onOpenChange={(next) => { if (!next) onClose(); }} maxWidth={520}>
-      <ProviderShareDialogTitle>{t(key + (memberId ? 'memberTitle' : 'choose'))}</ProviderShareDialogTitle>
+      <ProviderShareDialogTitle className="shrink-0">{view?.providerName ? `${view.providerName} · ` : ''}{t(key + (memberId ? 'memberTitle' : 'choose'))}</ProviderShareDialogTitle>
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
       <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t(key + (memberId ? 'memberDescription' : 'description'), { name: memberName })}</p>
       <label className="mt-4 flex min-h-8 items-center gap-2 text-13 leading-[1.5] text-[var(--text-primary)]">
         <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" checked={models === null} disabled={!view || saving} onChange={(event) => setModels(event.target.checked ? null : [])} />
         {t(key + (memberId ? 'inherit' : 'allFuture'))}
       </label>
       <div className="mt-3"><Input inputRef={searchRef} value={search} onChange={setSearch} placeholder={t(key + 'search')} aria-label={t(key + 'search')} disabled={!view || saving} /></div>
-      <div className="mt-2 max-h-72 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-default)] p-2" aria-busy={!view}>
+      <div className="mt-2 max-h-72 shrink-0 overflow-y-auto overscroll-contain rounded-lg border border-[var(--border-default)] p-2" aria-busy={!view}>
         {rows.map((model) => {
-          const allowed = providerAllows(model.id);
-          const checked = models === null ? allowed : models.includes(model.id);
+          const allowedIds = model.ids.filter(id => availableIds.has(id) && providerAllows(id));
+          const selectedIds = models === null ? allowedIds : model.ids.filter(id => models.includes(id));
+          const allowed = allowedIds.length > 0;
+          const checked = selectedIds.length > 0 && allowedIds.every(id => selectedIds.includes(id));
+          const partial = selectedIds.length > 0 && !checked;
           return <label key={model.id} className="flex min-h-9 items-center gap-3 rounded-lg px-2 py-2 text-13 leading-[1.5] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]">
-            <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" aria-label={model.name} checked={checked} disabled={!view || saving || (!allowed && !checked)} onChange={(event) => {
+            <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" aria-label={model.name} aria-checked={partial ? 'mixed' : checked}
+              ref={input => { if (input) input.indeterminate = partial; }} checked={checked} disabled={!view || saving || (!allowed && selectedIds.length === 0)} onChange={(event) => {
               const current = models ?? available.filter((entry) => providerAllows(entry.id)).map((entry) => entry.id);
-              setModels(event.target.checked ? [...new Set([...current, model.id])] : current.filter((id) => id !== model.id));
+              setModels(event.target.checked ? [...new Set([...current, ...allowedIds])] : current.filter((id) => !model.ids.includes(id)));
             }} />
             <span className="min-w-0 flex-1 break-words">{model.name}{model.name !== model.id && <span className="block text-11 leading-[1.5] text-[var(--text-tertiary)]">{model.id}</span>}</span>
             {!allowed && <span className="text-11 leading-[1.5] text-[var(--text-secondary)]">{t(key + 'notOpen')}</span>}
@@ -132,8 +157,13 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
         })}
         {rows.length === 0 && <p role="status" className="p-2 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(key + (view ? 'empty' : 'loading'))}</p>}
       </div>
+      {memberId && view?.budgetSupported && <MemberBudgetEditor value={memberBudget} onChange={setMemberBudget}
+        budgetModelIds={view.budgetModelIds} recommendationModelIds={view.recommendationModelIds}
+        models={available.filter(model => providerAllows(model.id) && (models === null || models.includes(model.id)))}
+        disabled={saving} canAddRules={view.budgetAvailable === true} status={view.budgetStatus} />}
       {models?.length === 0 && <p className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">{t(key + 'none')}</p>}
       {error && <ErrorNotice role="alert" className="mt-3" message={t(error)} />}
+      </div>
       <ProviderShareDialogFooter>
         <Button variant="secondary" disabled={saving} onClick={onClose}>{t('settings.providers.button.cancel')}</Button>
         <Button variant="primary" disabled={!view || saving} onClick={() => { void save(); }}>{t('settings.providers.custom.save')}</Button>

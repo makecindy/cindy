@@ -310,13 +310,19 @@ describe('selectVisibleDeviceSessions', () => {
     const detail = ts.createSourceFile('device.tsx', readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const names = new Set(['sessions', 'filterCounts', 'sections']);
     const declarations: string[] = [];
-    function visit(node: ts.Node) {
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && names.has(node.name.text) && node.initializer) {
-        declarations.push('const ' + node.getText(detail) + ';');
+    // Only the component's derived rows feed its sections. A nested sync read
+    // also calls its response `sessions`; it must not enter this lexical scope.
+    const component = detail.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'DeviceDetailScreenContent');
+    if (!component?.body) throw new Error('Missing device detail component');
+    for (const statement of component.body.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      for (const node of statement.declarationList.declarations) {
+        if (ts.isIdentifier(node.name) && names.has(node.name.text) && node.initializer) {
+          declarations.push('const ' + node.getText(detail) + ';');
+        }
       }
-      ts.forEachChild(node, visit);
     }
-    visit(detail);
     const allSessions = [
       session({ id: 'lead', orcaRole: 'lead', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/cindy' }),
       session({ id: 'worker', orcaRole: 'worker', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/cindy' }),

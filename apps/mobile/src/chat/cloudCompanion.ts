@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 /**
  * 云端伙伴（docs/product-rules/cloud-companions.md §3.1）在手机上的纯逻辑：哪一行能在主力电脑离线时
  * 打开云端对话、同一伙伴只在主力电脑名下列一行（没见过的主力电脑补一行离线入口）、换电脑后的等待与超时。
@@ -51,7 +52,7 @@ export function cloudCompanionRows(items: readonly HostedRemoteCollectionItem[],
     const deviceId = actor.homeDeviceId!;
     if (listed.some(row => row.item.ref.kind === 'bot' && row.item.ref.id === actor.externalId && row.host.deviceId === deviceId)) return [];
     const ref = { collectionId: TEAMMATES, kind: 'bot', id: actor.externalId };
-    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceNames.get(deviceId) ?? deviceId },
+    return [{ key: JSON.stringify([deviceId, ref.collectionId, ref.kind, ref.id]), host: { deviceId, deviceName: deviceDisplayName(deviceId, deviceNames.get(deviceId)) },
       item: { ref, display: { title: actor.name, avatar: cloudAvatar(actor) }, links: [], revision: CLOUD_ROW_REVISION } }];
   });
   return [...listed, ...added];

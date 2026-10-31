@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   owner: 'owner:1:global', current: true, readDeviceList: vi.fn(),
-  capabilities: vi.fn(), actors: vi.fn(),
+  capabilities: vi.fn(), actors: vi.fn(), cindyCompanionIds: vi.fn(),
   disk: new Map<string, string>(),
 }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
@@ -24,7 +24,7 @@ vi.mock('@/chat/useChatServer', async () => {
   const { useMemo } = await import('react');
   return { useChatClient: () => useMemo(() => ({ owner: h.owner, enabled: true,
     userId: h.owner.split(':')[0], realm: h.owner.split(':')[2],
-    current: () => h.current, client: { capabilities: h.capabilities, actors: h.actors } }), [h.owner]) };
+    current: () => h.current, client: { capabilities: h.capabilities, actors: h.actors, cindyCompanionIds: h.cindyCompanionIds } }), [h.owner]) };
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ readDeviceList: h.readDeviceList }) }));
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
@@ -39,6 +39,7 @@ const actor = { id: 'actor', kind: 'bot', externalId: 'writer', name: 'Writer', 
 beforeEach(async () => {
   await clearRemoteResourceCache();
   vi.resetAllMocks(); h.owner = 'owner:1:global'; h.current = true;
+  h.cindyCompanionIds.mockResolvedValue([]);
   h.capabilities.mockResolvedValue({ companionHome: true }); h.actors.mockResolvedValue([actor]);
   h.readDeviceList.mockResolvedValue({ devices: [{ deviceId: 'studio', name: 'Mac Studio' }] });
   root = createRoot(document.createElement('div'));
@@ -92,4 +93,20 @@ it('ignores a late directory result after a newer refresh wins', async () => {
   await act(async () => result.refresh());
   await act(async () => { complete({ devices: [{ deviceId: 'studio', name: 'Old name' }] }); await pending; });
   expect(result.deviceNames.get('studio')).toBe('New name');
+});
+
+// Unit: delayed cloud identity must enrich without replacing independently read names.
+it('retains preset identities alongside computer labels and drops them across accounts', async () => {
+  let finish: (ids: string[]) => void = () => {};
+  h.cindyCompanionIds.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  expect(result.actors).toEqual([actor]);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+  await act(async () => finish(['writer']));
+  expect(result.cindyIds).toEqual(['writer']);
+  expect(result.deviceNames.get('studio')).toBe('Mac Studio');
+  h.owner = 'another:2:global';
+  h.capabilities.mockImplementation(() => new Promise(() => {}));
+  await render();
+  expect(result.cindyIds).toEqual([]);
 });

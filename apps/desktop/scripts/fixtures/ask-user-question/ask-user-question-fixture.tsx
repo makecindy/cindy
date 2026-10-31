@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { mountPage, forbid } from '../../ui-page/harness';
+import { mountPage, forbid, subscription } from '../../ui-page/harness';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 import { AskUserQuestionPrompt } from '../../../src/renderer/components/new-chat/AskUserQuestionPrompt';
 import type { AskUserDraft, AskUserViewerState } from '../../../src/renderer/lib/makerChatStore';
 import type { VoiceQuestionTarget } from '../../../src/renderer/components/new-chat/voiceQuestionSelection';
@@ -34,6 +35,18 @@ function Fixture({ question, voice, multi }: { question: string; voice?: boolean
 
 void mountPage({
   host: {
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('darwin'), playInteractionSound: false, muteSystemAudio: false } }),
+      getMicrophonePermissionCached: () => ({ ok: true, status: 'granted' }),
+      getSystemPermissionsCached: () => ({ microphone: { ok: true }, accessibility: { ok: true } }),
+      getReadinessCached: () => ({ ok: true }),
+      getHistoryForRefinement: () => [],
+      onEvent: subscription('voice'),
+      start: async () => ({ ok: true, runId: 'fixture-voice' }),
+      stop: async () => ({ ok: true }),
+      cancel: async () => ({ ok: true }),
+      drainAudioQueue: async () => ({ ok: true }),
+    },
     resolvePathBatch: async ({ hrefs }: { hrefs: string[] }) => Object.fromEntries(hrefs.map((href) => [href,
       href === 'missing.html' ? { status: 'none', candidates: [] }
         : href === 'ambiguous.html' ? { status: 'multiple', candidates: ['/project/a/ambiguous.html', '/project/b/ambiguous.html'] }

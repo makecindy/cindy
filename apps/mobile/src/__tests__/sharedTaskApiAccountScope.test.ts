@@ -6,12 +6,22 @@ import { ApiError, apiFetchRaw, registerAccountUnavailableHandler, type ApiFetch
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { SharedTaskScopeChangedError } from '@cindy/device-link';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import {
+  __testing as relayRoutingTesting,
+  deviceLinkMediaApiBaseUrl,
+  isSelfHostedRelayBaseUrl,
+  setActiveSelfHostedRelay,
+} from '@/device-link/selfHostedRelayRouting';
 
 type ApiFetch = <T>(path: string, opts: Omit<ApiFetchOptions, 'token'>) => Promise<T>;
 const auth = vi.hoisted(() => ({ apiFetch: null as unknown as ApiFetch, accountGeneration: 1 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('react', () => ({ useMemo: (factory: () => unknown) => factory() }));
-vi.mock('@/config/env', () => ({ DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid' }));
+vi.mock('@/config/env', () => ({
+  DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
+  getOfficialDeviceLinkApiBaseUrl: () => 'https://official.example.invalid',
+  setDeviceLinkApiBaseOverride: () => {},
+}));
 
 // Execute the provider callback with in-memory auth dependencies, without native
 // login/storage. The shared-task hook and HTTP transport remain real.
@@ -44,9 +54,9 @@ beforeEach(() => {
   refresh.mockResolvedValue('fake-refreshed-a');
   fetchMock.mockResolvedValue(response());
   vi.stubGlobal('fetch', fetchMock);
-  auth.apiFetch = new Function('getAccessToken', 'refresh', 'terminateSession', 'userRef', 'ApiError', 'apiFetchRaw', compiled + '; return request;')(getAccessToken, refresh, terminateSession, { current: { id: 'account-a' } }, ApiError, apiFetchRaw);
+  auth.apiFetch = new Function('getAccessToken', 'refresh', 'terminateSession', 'userRef', 'ApiError', 'apiFetchRaw', 'isSelfHostedRelayBaseUrl', compiled + '; return request;')(getAccessToken, refresh, terminateSession, { current: { id: 'account-a' } }, ApiError, apiFetchRaw, isSelfHostedRelayBaseUrl);
 });
-afterEach(() => { vi.unstubAllGlobals(); setMobileAuthOwner(null); });
+afterEach(() => { vi.unstubAllGlobals(); setMobileAuthOwner(null); relayRoutingTesting.reset(); });
 
 describe('shared-task HTTP account fence', () => {
   it('sends and refreshes once while the originating account remains current', async () => {
@@ -100,5 +110,30 @@ describe('shared-task HTTP account fence', () => {
     fetchMock.mockResolvedValueOnce(response(401));
     await expect(auth.apiFetch('/resource', { baseUrl: 'https://relay.example.invalid' })).resolves.toEqual(closed);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+  // Shared-task membership lives on the official service (docs/self-hosted-relay-plan.md §7): the
+  // API and its attachments stay there with the account token while a self-hosted relay is active.
+  it('keeps shared-task requests and attachments on the official service while a self-hosted relay is active', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.home.example', credential: 'relay-credential', signing: null });
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ sharedTasks: [] }) } as unknown as Response);
+    await expect(useSharedTaskApi().list()).resolves.toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://official.example.invalid/api/device-link/shared-tasks');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toMatch(/^Bearer /);
+    expect(deviceLinkMediaApiBaseUrl('cindy/device-link/shared-task/task-a/member/file.png')).toBe('https://official.example.invalid');
+    expect(deviceLinkMediaApiBaseUrl('cindy/device-link/account/file.png')).toBe('https://relay.example.invalid');
+  });
+
+  // Self-hosted relay (docs/self-hosted-relay-plan.md §5.3): even a proxy-style 401 (HTTP_401, normally
+  // refreshable) from the relay must not fetch, refresh or send the account token, nor end the session.
+  it('sends self-hosted relay requests with the relay credential only, without refresh or sign-out on 401', async () => {
+    setActiveSelfHostedRelay({ relayId: 'relay-1', name: 'Home', baseUrl: 'https://relay.home.example', credential: 'relay-credential', signing: null });
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => null } as unknown as Response);
+    await expect(auth.apiFetch('/api/device-link/devices', { baseUrl: 'https://relay.home.example' }))
+      .rejects.toMatchObject({ code: 'RELAY_CREDENTIAL_INVALID', status: 401 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('CindyRelay relay-credential');
+    expect(getAccessToken).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(terminateSession).not.toHaveBeenCalled();
   });
 });

@@ -63,6 +63,7 @@ export function buildAgentIslandRemoteSessionInputs(
       deviceName: session.deviceLinkDeviceName ?? null,
       title: session.title?.trim() || null,
       workingDir: session.workingDir,
+      ...(session.projectDir !== undefined ? { projectDir: session.projectDir } : {}),
       workspaceKind: session.workspaceKind,
       agentKind: session.agentKind,
       ...remoteActivityInput(activity),
@@ -73,12 +74,13 @@ export function buildAgentIslandRemoteSessionInputs(
 
 function remoteActivityInput(activity: RemoteSessionActivity): Pick<
   AgentIslandRemoteSessionInput,
-  'phase' | 'detail' | 'completionNotification' | 'completionToken' | 'workingPhase' | 'interactionKind'
+  'phase' | 'detail' | 'summaryFormat' | 'completionNotification' | 'completionToken' | 'workingPhase' | 'interactionKind'
 > {
   return {
     phase: activity.phase,
     ...(activity.completionToken ? { completionToken: activity.completionToken } : {}),
     detail: activity.compactDetail,
+    ...(activity.summaryFormat ? { summaryFormat: activity.summaryFormat } : {}),
     ...(activity.completionNotification ? { completionNotification: activity.completionNotification } : {}),
     ...(activity.workingPhase ? { workingPhase: activity.workingPhase } : {}),
     ...(activity.interactionKind

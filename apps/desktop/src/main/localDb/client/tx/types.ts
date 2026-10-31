@@ -7,9 +7,8 @@ export type DbTxName =
   | 'usage.recordMediaSpend'
   | 'authorization.readProjection'
   | 'pluginUsage.execute'
+  | 'sessionImport.execute'
   | 'taskTags.execute'
-  | 'codex.importMessages'
-  | 'claude.importMessages'
   | 'rewind.commit'
   | 'session.treeRehydrate'
   | 'fork.session'
@@ -62,6 +61,7 @@ export type DbTxName =
   | 'bots.persistSessionPermission'
   | 'bots.createGroupLane'
   | 'bots.createChannelLane'
+  | 'bots.createRoutineLane'
   | 'bots.createThreadLane'
   | 'bots.archiveChannelLanes'
   | 'botGroups.create'
@@ -93,35 +93,6 @@ export type DbTxName =
   | 'skillUsage.applyMutation'
   | 'session.importShare';
 
-export interface CodexImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  model: string;
-  rows: Array<{
-    lineNo: number;
-    role: 'user' | 'assistant';
-    text: string;
-    content: unknown;
-    createdAt: number;
-  }>;
-}
-
-export interface ClaudeImportMessagesArgs {
-  sessionId: string;
-  importClientIdPrefix: string;
-  sdkSessionId: string;
-  rows: Array<{
-    lineNo: number;
-    partIndex: number;
-    role: string;
-    content: unknown;
-    toolUseId: string | null;
-    agentMeta: Record<string, unknown> | null;
-    createdAt: number;
-  }>;
-}
-
 export interface RewindCommitArgs {
   sessionId: string;
   targetCreatedAt: number;
@@ -146,6 +117,15 @@ export interface RewindCommitArgs {
    * 省略或 null 表示当时会话未被清空。
    */
   expectedClearedAt?: number | null;
+  /**
+   * Claude 目标之前没有可续接的回复：与软删同一事务清掉 sdk_session_id，并追加隐藏
+   * context_rebuild 标记(内容含交接文本)，下次发送开全新原生会话并注入保留下来的历史。
+   */
+  nativeContextReset?: {
+    markerId: string;
+    markerClientId: string;
+    markerContent: string;
+  };
   now: number;
 }
 
@@ -713,6 +693,7 @@ export interface BotsReplaceCanonicalSessionArgs {
     id: string;
     title: string;
     workingDir: string | null;
+    projectDir?: string | null;
     workspaceKind: string;
     model: string;
     effort: string;
@@ -1378,6 +1359,7 @@ export type SkillUsageApplyMutationArgs =
   | { kind: 'promote'; analyzerVersion: string };
 
 export interface MediaSpendArgs {
+  providerName?: string;
   day: string;
   model: string;
   amount: number;
@@ -1390,8 +1372,6 @@ export interface MediaSpendArgs {
 export type DbTxArgsByName = {
   'usage.recordMediaSpend': MediaSpendArgs;
   'authorization.readProjection': { sessionId: string; leadId: string };
-  'codex.importMessages': CodexImportMessagesArgs;
-  'claude.importMessages': ClaudeImportMessagesArgs;
   'rewind.commit': RewindCommitArgs;
   'session.treeRehydrate': SessionTreeRehydrateArgs;
   'fork.session': ForkSessionArgs;
@@ -1414,6 +1394,7 @@ export type DbTxArgsByName = {
   'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
   'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
   'pluginUsage.execute': PluginUsageTransaction;
+  'sessionImport.execute': SessionImportTransactionArgs;
   'chatCache.execute': ChatCacheTransaction;
   'taskTags.execute': TaskTagRequest & { newId?: string; callerSessionId?: string };
   'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
@@ -1447,6 +1428,7 @@ export type DbTxArgsByName = {
   'bots.persistSessionPermission': { sessionId: string; mode: string };
   'bots.createGroupLane': BotGroupsCreateLaneArgs;
   'bots.createChannelLane': BotsCreateChannelLaneArgs;
+  'bots.createRoutineLane': BotsCreateChannelLaneArgs;
   'bots.createThreadLane': BotsCreateThreadLaneArgs;
   'bots.archiveChannelLanes': BotsArchiveChannelLanesArgs;
   'botGroups.create': BotGroupsCreateArgs;
@@ -1487,8 +1469,6 @@ export type DbTxResultByName = {
     approximate: number;
   } | null;
   'authorization.readProjection': import('../../autoReviewProjection.js').StoredAutoReviewProjection;
-  'codex.importMessages': { changed: number };
-  'claude.importMessages': { changed: number };
   'rewind.commit': undefined;
   'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
@@ -1511,6 +1491,7 @@ export type DbTxResultByName = {
   'recentWorkdirs.mergeWindowsIdentity': undefined;
   'recentWorkdirs.removeWindowsIdentity': { changes: number };
   'pluginUsage.execute': PluginUsageHandle | null;
+  'sessionImport.execute': SessionImportTransactionResult;
   'chatCache.execute': ChatCacheResult;
   'taskTags.execute': TaskTagResult;
   'projectAliases.replaceIdentity': {
@@ -1548,6 +1529,7 @@ export type DbTxResultByName = {
   'bots.persistSessionPermission': { updated: boolean };
   'bots.createGroupLane': BotGroupsCreateLaneResult;
   'bots.createChannelLane': BotGroupsCreateLaneResult;
+  'bots.createRoutineLane': BotGroupsCreateLaneResult;
   'bots.createThreadLane': BotGroupsCreateLaneResult;
   'bots.archiveChannelLanes': { archivedSessionIds: string[] };
   'botGroups.create': undefined;
@@ -1579,3 +1561,70 @@ export type DbTxResultByName = {
   'skillUsage.applyMutation': undefined;
   'session.importShare': { messageCount: number };
 };
+
+/** session-import 事务（实现见 worker/opHandlers/sessionImportTx.ts）。 */
+export type SessionImportTransactionArgs =
+  | {
+      action: 'begin';
+      now: number;
+      session: {
+        id: string;
+        title: string;
+        workingDir: string | null;
+        workspaceKind: 'project' | 'dialogue';
+        model: string;
+        providerId: string | null;
+        effort: string;
+        permissionMode: string;
+        status: 'active' | 'archived';
+        tokensUsed: number;
+        userSendAt: number;
+        agentKind: 'cc' | 'codex' | 'pi';
+        createdAt: number;
+        updatedAt: number;
+      };
+      record: {
+        source: string;
+        sourceSessionId: string;
+        fingerprint: string | null;
+        version: string | null;
+        mode: 'native' | 'handoff';
+        originalCwd: string | null;
+        requestId: string | null;
+      };
+    }
+  | {
+      action: 'messages';
+      sessionId: string;
+      clientIdPrefix: string;
+      idPrefix: string;
+      rows: Array<{
+        key: string;
+        role: string;
+        content: string;
+        toolUseId: string | null;
+        agentMeta: string | null;
+        agentKind: string | null;
+        createdAt: number;
+      }>;
+    }
+  | {
+      action: 'commit';
+      sessionId: string;
+      now: number;
+      status: 'ready' | 'action' | 'failed';
+      mode?: 'native' | 'handoff';
+      issue: string | null;
+      unhide: boolean;
+      sessionPatch?: { sdkSessionId?: string | null; workingDir?: string };
+      marker?: { id: string; clientId: string; content: string; createdAt: number };
+    }
+  | { action: 'adopt'; sessionId: string; source: string; sourceSessionId: string; now: number }
+  | { action: 'abort'; sessionId: string; requestId?: string };
+
+export type SessionImportTransactionResult =
+  | { created: boolean }
+  | { changed: number }
+  | { ok: true }
+  | { removed: number }
+  | { adopted: boolean };

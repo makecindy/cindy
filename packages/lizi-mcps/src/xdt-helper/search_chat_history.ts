@@ -29,6 +29,7 @@ import { z } from 'zod';
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperHistoryDeps, HistoryRole } from './_history_types.js';
 import { okPayload, errorPayload } from './_payload.js';
+import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { resolveHistoryScope } from './_history_scope.js';
 import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } from './_history_devices.js';
@@ -71,6 +72,7 @@ const DESCRIPTION = [
   '  - vector_used / vector_skip_reason / pool_size / pool_capped 诊断字段。',
   '',
   '【分页】游标分页, 默认 limit=10(最大 50)。hasMore=true 时用 nextCursor 再调拿下一页。',
+  '源设备可按完整命中及其上下文的 64 KiB 软预算提前分页；不截断单个命中，单条超大命中仍完整返回。limit 是上限，结束以 hasMore 为准。',
   'pool_capped=true 表示候选池已达上限, 更靠后的相关结果可能未进池(可缩小过滤范围再搜)。',
 ].join('\n');
 
@@ -164,7 +166,10 @@ export function registerSearchChatHistoryTool(
       const cursorWasBad = cursor !== undefined && cursor !== '' && offset === null;
       const effectiveRoles: HistoryRole[] = roles ?? [...DEFAULT_QA_ROLES];
 
-      const res = await deps.history.searchChatHistory({
+      // Host-only hint travels with normalized args through the existing local
+      // adapter (and the source device's tool registry). Public input has no knob.
+      // Internal UI/learn callers omit it and keep count-based result pages.
+      const searchArgs = {
         query: query.trim(),
         sessionIds: scope.sessionIds,
         ...(args.teammate_id ? { teammateId: args.teammate_id } : {}),
@@ -177,7 +182,9 @@ export function registerSearchChatHistoryTool(
         contextRadius: context_radius,
         limit,
         offset: offset ?? 0,
-      });
+        historyToolPageBudget: true,
+      };
+      const res = await deps.history.searchChatHistory(searchArgs);
       if (!res.ok) {
         if (res.errorCode === 'HOST_NOT_READY') {
           return errorPayload(
@@ -249,13 +256,6 @@ export function registerSearchChatHistoryTool(
       });
     },
   });
-}
-
-function parseIsoMs(s: string | undefined): number | null | 'invalid' {
-  if (s === undefined || s === '') return null;
-  const t = new Date(s).getTime();
-  if (!Number.isFinite(t)) return 'invalid';
-  return t;
 }
 
 /**

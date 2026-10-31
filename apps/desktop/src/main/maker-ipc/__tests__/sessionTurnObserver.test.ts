@@ -31,6 +31,7 @@ function setup(fields: { remoteHostId?: string | null; agentDeviceId?: string | 
     agentDeviceId: fields.agentDeviceId ?? null,
     setTurnLifecycleObserver: (next: Observer | null) => { observer = next; },
     claimHostTurnContinuation: vi.fn(),
+    getCurrentTurnOrigin: () => null,
   } as unknown as Session;
   const deps = {
     beforeLocalProviderStart: vi.fn(async () => undefined),

@@ -206,7 +206,8 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     // 无挂载 hook 的后台缓存写入路径(DeviceLinkContext provider:changed)也必须
     // mark epoch——否则断线前旧目录被当「首次挂载缓存命中」采信、永不刷新
     // (codex review P1)。捕获 epoch 在 fetch 前、mark 在成功后(失败不 mark)。
-    expect(ctxSrc).toContain('connectionEpoch: () => connectionEpochRef.current');
+    // The real Provider catalog regression in historyViewProvider.test.tsx
+    // verifies the cached epoch belongs to the peer's connection.
     const ctxBlock = ctxSrc.slice(
       ctxSrc.indexOf('onProviderChanged: (deviceId) => {'),
       ctxSrc.indexOf('onProviderChanged: (deviceId) => {') + 1400,

@@ -52,11 +52,34 @@ import {
   pruneAnthropicCompatForGateway,
   type PiBundledModelInfo,
 } from '../pi-host.js';
+import * as gatewayModelCatalog from '../pi-gateway-model-catalog.js';
 import { getActiveCatalog, setActiveCatalog, setCustomProviderConfigs, setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels, setXaiDiscoveredModels, setLocalCatalogOverrides } from '../active-catalog.js';
 import { EMPTY_MODEL_CATALOG_OVERRIDES, sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
+
+// Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
+// including endpoint overrides and explicit user headers (not just a helper).
+it('attributes native Pi per model endpoint without lending identity to another service', () => {
+  const cfg: Cfg = { id: 'router', name: 'Router', runtimes: { pi: {
+    baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'router-model' }, { id: 'other-model', route: {
+      baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat',
+    } }],
+  } } };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  expect(result.providers[0].headers).toBeUndefined();
+  expect(result.providers[0].models[0].headers).toMatchObject({
+    'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+  });
+  expect(result.providers[0].models[1].headers).toBeUndefined();
+  cfg.runtimes.pi!.headers = { 'http-referer': 'https://custom.example', 'x-title': 'Custom app' };
+  const custom = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  const headers = custom.providers[0].models[0].headers!;
+  expect(headers['X-OpenRouter-Title']).toBeUndefined();
+  expect(custom.env[headers['x-title'].slice(1)]).toBe('Custom app');
+});
 
 it('never projects retired independent Claude accounts into Pi', () => {
   const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
@@ -114,6 +137,9 @@ it('materializes a separate native ChatGPT provider for each independent account
   expect(account.inheritModels).toBe(false);
   expect(account.api).toBe('openai-codex-responses');
   expect(account.headers).toMatchObject({ 'x-cindy-pi-provider-id': 'openai-second' });
+  expect(account.apiKeyEnvVar).not.toBe(builtin.apiKeyEnvVar);
+  const placeholderAccount = (envKey: string) => JSON.parse(Buffer.from(result.env[envKey]!.split('.')[1], 'base64url').toString())['https://api.openai.com/auth'].chatgpt_account_id;
+  expect(placeholderAccount(account.apiKeyEnvVar!)).not.toBe(placeholderAccount(builtin.apiKeyEnvVar!));
   expect(account.models.length).toBeGreaterThan(0);
   expect(account.models.every((model) => model.api === 'openai-codex-responses')).toBe(true);
   expect(account.models.map((model) => model.id)).toEqual(builtin.models.map((model) => model.id));
@@ -252,6 +278,90 @@ describe('ChatGPT image capability authority (#2674)', () => {
       }
     },
   );
+});
+
+describe('CindyAI DeepSeek reasoning replay (#7296)', () => {
+  // Test value: the production Gateway spec must enable Pi's native empty-reasoning fallback.
+  // Existing Gateway coverage omitted Flash/V4.1; the minimal input is either exact Chat ID
+  // with no native compat row. Unit tier: no binary, network or account access.
+  it.each([
+    'deepseek/deepseek-v4.1-flash',
+    'deepseek/deepseek-flash',
+    'deepseek/deepseek-v4-pro',
+    'deepseek/deepseek-v4-flash-vision-exp',
+    'deepseek/deepseek-v4-flash',
+  ])('supplies replay compatibility for %s locally and remotely', (id) => {
+    setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+    for (const remote of [false, true]) {
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote })).toMatchObject({
+        api: 'openai-completions',
+        compat: {
+          requiresReasoningContentOnAssistantMessages: true,
+          sendSessionAffinityHeaders: true,
+          // The loopback Gateway URL defeats Pi's deepseek.com detection. Without the exact
+          // DeepSeek row, V4.1 Flash sent `developer`, `max_completion_tokens` and no
+          // `thinking` toggle, so "thinking off" stayed on.
+          thinkingFormat: 'deepseek',
+          supportsDeveloperRole: false,
+          maxTokensField: 'max_tokens',
+        },
+      });
+    }
+  });
+
+  it.each([undefined, false, true])('fills only an undeclared replay flag (%s)', (replay) => {
+    const id = 'deepseek/deepseek-v4.1-flash';
+    const compat = {
+      supportsDeveloperRole: false,
+      ...(replay === undefined ? {} : { requiresReasoningContentOnAssistantMessages: replay }),
+    };
+    const profile = { api: 'openai-completions' as const, compat, thinkingLevelMap: { high: 'high' } };
+    const probe = vi.spyOn(gatewayModelCatalog, 'resolveBundledPiGatewayModelProfile').mockReturnValue(profile);
+    try {
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({
+        ...profile,
+        compat: {
+          ...compat,
+          requiresReasoningContentOnAssistantMessages: replay ?? true,
+          sendSessionAffinityHeaders: true,
+        },
+      });
+      expect(compat).not.toHaveProperty('sendSessionAffinityHeaders');
+      expect(compat.requiresReasoningContentOnAssistantMessages).toBe(replay);
+    } finally { probe.mockRestore(); }
+  });
+
+  it.each(['openai-responses', 'anthropic-messages'] as const)(
+    'does not add Chat replay metadata to %s', (api) => {
+      const id = 'deepseek/deepseek-v4.1-flash';
+      setActiveCatalog({
+        ...BUNDLED_CATALOG,
+        modelRegistry: {
+          schemaVersion: 3, updatedAt: '2026-10-26T00:00:00.000Z',
+          models: [{ id: 'xd/deepseek-fixture', name: 'DeepSeek fixture', nativeApi: api,
+            routes: [{ providerId: 'xd', modelId: id, agents: ['codex'] }] }],
+        },
+      });
+      setXdGatewayModels([{ id, agents: ['pi'] }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe(api);
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it.each(['other/deepseek-v4.1-flash', 'deepseek/future-model', 'deepseek-flash'])(
+    'does not infer replay compatibility from the name %s', (id) => {
+      setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+      const spec = resolvePiCindyGatewayModelSpec('xd', id, { remote: true });
+      expect(spec?.api).toBe('openai-completions');
+      expect(spec?.compat ?? {}).not.toHaveProperty('requiresReasoningContentOnAssistantMessages');
+    },
+  );
+
+  it('does not make an unavailable Gateway model selectable', () => {
+    expect(resolvePiCindyGatewayModelSpec('xd', 'deepseek/deepseek-v4.1-flash')).toBeUndefined();
+  });
 });
 
 describe('resolvePiCindyGatewayModelApi', () => {
@@ -469,6 +579,58 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       pi: piRuntime({ baseUrl, wireProtocol: 'openai-chat', models: [{ id: 'gemini-3.6-flash', name: 'Gemini', piApi: 'google-generative-ai' }] }),
     } }], () => 'fixture-key');
     expect(providers[0].models[0].baseUrl ?? providers[0].baseUrl).toBe(baseUrl);
+  });
+
+  it('strips an inherited /v1 suffix for a model-level Anthropic route (#7258)', () => {
+    // Test value: the production launch mapper materializes models.json. Existing coverage only
+    // protects Google's endpoint rewrite; this same-provider cross-API route was missing.
+    // The minimum failure input is one Anthropic API override on an OpenAI provider /v1 URL;
+    // without a model baseUrl Pi appends /v1/messages to /v1 and gets /v1/v1/messages. Unit tier.
+    const baseUrl = 'http://127.0.0.1:8000/v1';
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'mixed-api',
+      name: 'Mixed API',
+      runtimes: {
+        pi: piRuntime({
+          baseUrl,
+          wireProtocol: 'openai-chat',
+          models: [
+            {
+              id: 'anthropic-api-override',
+              api: 'anthropic-messages',
+            },
+            {
+              id: 'anthropic-route-override',
+              route: { baseUrl, wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-custom-route',
+              route: { baseUrl: 'https://gateway.example/proxy/v1', wireProtocol: 'anthropic-messages' },
+            },
+            {
+              id: 'anthropic-request-path',
+              api: 'anthropic-messages',
+              route: { baseUrl, wireProtocol: 'anthropic-messages', requestPath: '/custom/messages' },
+            },
+            { id: 'openai-model', name: 'OpenAI model' },
+          ],
+        }),
+      },
+    }], () => 'fixture-key');
+
+    expect(providers[0]).toMatchObject({
+      baseUrl,
+      api: 'openai-completions',
+      models: [
+        { id: 'anthropic-api-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-route-override', api: 'anthropic-messages', baseUrl: 'http://127.0.0.1:8000' },
+        { id: 'anthropic-custom-route', api: 'anthropic-messages', baseUrl: 'https://gateway.example/proxy/v1' },
+        { id: 'anthropic-request-path', api: 'anthropic-messages' },
+        { id: 'openai-model' },
+      ],
+    });
+    expect(providers[0]?.models?.[3]).not.toHaveProperty('baseUrl');
+    expect(providers[0]?.models?.[4]).not.toHaveProperty('baseUrl');
   });
 
   it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
@@ -2711,7 +2873,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       compat: id === 'deepseek-v4-pro' ? {
         supportsDeveloperRole: false, supportsStore: false,
         maxTokensField: 'max_tokens', requiresReasoningContentOnAssistantMessages: true,
-        thinkingFormat: 'deepseek',
+        thinkingFormat: 'deepseek', supportsStrictMode: true, supportsMidConvoSystemMessages: true,
       } : { supportsDeveloperRole: false },
     });
   });

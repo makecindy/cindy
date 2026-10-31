@@ -72,6 +72,27 @@ describe("display pricing contract", () => {
 // Minimum input: one summary.input quote. Invalid roles must drop the summary, preserving the full table.
 describe("optional primary quote summary", () => {
   const quote = { price: 0, unit: "image", quantity: 1 };
+  // Unit contract: component is an optional hint, never a reason to lose a quote or table.
+  // Earlier parser cases had no category; one input quote exercises preservation and field-only fallback.
+  it.each(["text", "image", "audio", "video", "future_type2", "a".repeat(32)])(
+    "preserves a valid component identifier: %s", (component) => {
+      const summary = { input: [{ ...quote, component }] };
+      expect(parseModelDisplayPricing({ ...table, summary })).toEqual({ ...table, summary });
+    },
+  );
+  it.each([undefined, null, "", "Text", "text-input", "text\n", "a".repeat(33), 42, {}, []])(
+    "drops only an invalid or absent component: %j", (component) => {
+      expect(parseModelDisplayPricing({ ...table, summary: { input: [{ ...quote, component }] } }))
+        .toEqual({ ...table, summary: { input: [quote] } });
+    },
+  );
+  it("does not add component to the quote uniqueness key or item fields", () => {
+    expect(parseModelDisplayPricing({ ...table, summary: {
+      input: [{ ...quote, component: "text" }, { ...quote, component: "image" }],
+    } })).toEqual(table);
+    expect(parseModelDisplayPricing({ items: [{ ...table.items[0], component: "video" }] }))
+      .toEqual({ items: table.items });
+  });
   it("preserves all roles, ranges, units and conditions but strips unknown fields", () => {
     const summary = {
       input: [quote, { price: 140, unit: "character", quantity: 1000000 }],
@@ -105,6 +126,12 @@ describe("optional primary quote summary", () => {
     { input: [] },
     { input: Array(5).fill(quote) },
     { input: [quote, quote] },
+    {
+      input: [
+        { ...quote, tier: "<=200k" },
+        { ...quote, tier: "<=200k" },
+      ],
+    },
     ...[
       { price: -1 },
       { price: Infinity },
@@ -126,6 +153,17 @@ describe("optional primary quote summary", () => {
     ].map((patch) => ({ output: [quote], input: [{ ...quote, ...patch }] })),
   ])("drops absent or invalid summary only: %j", (summary) => {
     expect(parseModelDisplayPricing({ ...table, summary })).toEqual(table);
+  });
+  it("preserves distinct tiers that share a denominator", () => {
+    const summary = {
+      input: [
+        { ...quote, price: 1, unit: "token", quantity: 1000000, tier: "<=200k" },
+        { ...quote, price: 2, unit: "token", quantity: 1000000, tier: ">200k" },
+      ],
+    };
+    expect(parseModelDisplayPricing({ ...table, summary })?.summary).toEqual(
+      summary,
+    );
   });
   it("allows four distinct denominators and preserves unknown units", () => {
     const summary = {

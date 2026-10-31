@@ -1,10 +1,10 @@
 /**
- * piIdleReleaseWatcher —— 桌面普通 pi 会话的空闲运行时回收。
+ * piIdleReleaseWatcher —— 桌面普通及插件 pi 会话的空闲运行时回收。
  *
  * 背景(2026-10 实测 + upstream #5830)：`pi --mode rpc` 子进程每个约 150~300MB，
  * 普通会话此前没有任何 Idle TTL/LRU —— 只有退出应用、切换 Agent 或 Orca 工人
  * 走各自路径才会回收，长时间使用后进程数与内存持续累积、整机变卡、重启才恢复。
- * 这里为「本机、桌面来源、非 Orca/bot」的 pi 会话补一个与
+ * 这里为「本机、桌面普通或插件来源、非 Orca/bot」的 pi 会话补一个与
  * `orcaIdleReleaseWatcher` 同构的 watcher。
  *
  * 候选由 SQL 给出(闲置起点取 max(updated_at, last_turn_ended_at, user_send_at))，
@@ -17,6 +17,25 @@
  * 释放后下一次发送走既有 lazy create-session 透明重建(resume 自 sdk_session_id)，
  * 与冷启动语义一致，见 docs/dev-rules/pi-harness.md。
  */
+
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { sessions } from '../localDb/schema.js';
+
+/** Shared by the initial scan and the lock-protected recheck. */
+export const piIdleReleaseIdleSince = () =>
+  sql<number>`max(${sessions.updatedAt}, coalesce(${sessions.lastTurnEndedAt}, 0), coalesce(${sessions.userSendAt}, 0))`;
+
+export const piIdleReleaseCandidateWhere = () =>
+  and(
+    eq(sessions.agentKind, 'pi'),
+    inArray(sessions.status, ['active', 'archived']),
+    // Plugin tasks are intentionally hidden, but their processes are host-owned.
+    // Keep other hidden tasks and specialized lifecycle owners out of this scan.
+    or(and(eq(sessions.source, 'desktop'), isNull(sessions.hiddenAt)), eq(sessions.source, 'plugin')),
+    isNull(sessions.orcaRole),
+    isNull(sessions.remoteHostId),
+    isNull(sessions.agentDeviceId),
+  );
 
 /** 普通 pi 会话进入空闲回收前的闲置时长(分钟)。与远端 pi daemon 的 30min 口径一致。 */
 export const DEFAULT_PI_IDLE_RELEASE_MINUTES = 30;

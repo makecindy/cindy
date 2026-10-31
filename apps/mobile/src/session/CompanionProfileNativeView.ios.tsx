@@ -1,6 +1,6 @@
 import { iconSize, spacing } from '@/theme';
-import { Fragment, useEffect } from 'react';
-import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle, useNativeState } from '@expo/ui/swift-ui';
+import { Fragment } from 'react';
+import { Button, HStack, Image, Picker, ProgressView, RNHostView, Spacer, Text, TextField, Toggle } from '@expo/ui/swift-ui';
 import { accessibilityLabel, alignmentGuide, buttonStyle, contentShape, shapes, disabled, font, foregroundStyle, frame, lineLimit, listRowInsets, pickerStyle, tag, tint } from '@expo/ui/swift-ui/modifiers';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText, type RemoteActionField } from '@cindy/device-link';
@@ -11,8 +11,10 @@ import { ComposerSheet } from './ComposerSheet';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import type { CompanionProfileNativeViewProps } from './CompanionProfileNativeView';
 import type { ProfilePanel, ProfileValues } from './companionProfileData';
+import { useNativeTextDraft } from './nativeTextDraft';
 import { CompanionPortraitPicker } from './CompanionPortraitPicker';
 import { CompanionNativeContent } from './CompanionNativeContent.ios';
+import { useNativeGlassButtonStyle } from '@/platform/chrome/nativeGlassButtonStyle.ios';
 import { saveCompanionReplyTargetPreference, useCompanionReplyTargetPreference } from './companionReplyTargetPreference';
 
 export function CompanionNativeField({ field, values, onChange, busy }: { field: RemoteActionField; values: ProfileValues; onChange(values: ProfileValues): void; busy: boolean }) {
@@ -20,15 +22,14 @@ export function CompanionNativeField({ field, values, onChange, busy }: { field:
   const { colors } = useTheme();
   const label = resolveRemoteText(field.label, i18n.language);
   const value = typeof values[field.id] === 'string' ? values[field.id] as string : '';
-  const text = useNativeState(value);
-  useEffect(() => { if (text.get() !== value) text.set(value); }, [value, text]);
-  const update = (value: string | boolean) => onChange({ ...values, [field.id]: value });
+  const update = (next: string | boolean) => onChange({ ...values, [field.id]: next });
+  const draft = useNativeTextDraft(value, next => update(next));
   if (field.id === 'avatarImageBase64') return <Section title={label}><CompanionNativeContent><CompanionPortraitPicker value={value} onChange={update} disabled={busy} /></CompanionNativeContent></Section>;
   if (field.kind === 'toggle') return <Toggle label={label} isOn={values[field.id] === true} onIsOnChange={update} modifiers={[disabled(busy), tint(colors.inputCaret)]} />;
   if (field.kind === 'select') return <Picker label={label} selection={value} onSelectionChange={next => update(String(next))} modifiers={[pickerStyle('menu'), disabled(busy)]}>
     {(field.options ?? []).map(option => <Text key={option.value} modifiers={[tag(option.value)]}>{resolveRemoteText(option.label, i18n.language)}</Text>)}
   </Picker>;
-  return <Section title={label}><TextField text={text} onTextChange={update} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
+  return <Section title={label}><TextField text={draft.text} onTextChange={draft.onTextChange} axis={field.kind === 'multiline' ? 'vertical' : 'horizontal'}
     maxLength={field.id === 'name' || field.id === 'confirmName' ? 200 : field.id === 'body' ? 55000 : 12000} testID={`companionProfile.field.${field.id}`}
     modifiers={[disabled(busy), accessibilityLabel(label), ...(field.kind === 'multiline' ? [lineLimit({ min: 3, max: 8 })] : [])]} /></Section>;
 }
@@ -41,6 +42,13 @@ const Field = CompanionNativeField;
 export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
   const { t, i18n } = useTranslation(); const { colors } = useTheme();
   const showReplyTargets = useCompanionReplyTargetPreference();
+  const saveButtonStyle = useNativeGlassButtonStyle();
+  const modelSave = p.page === 'models' && p.panel?.action && !p.loading && !p.deleted && !p.confirmation
+    ? <Button onPress={() => p.onSubmit(p.panel!)} testID="companionProfile.models.save"
+        modifiers={[...saveButtonStyle, disabled(p.busy || !p.dirty || !p.online || p.conflict)]}>
+        <Text modifiers={[frame({ minWidth: 44, minHeight: 44 }), contentShape(shapes.rectangle())]}>{t('devices.common.save')}</Text>
+      </Button>
+    : undefined;
   const tr = (key: string) => t(`devices.companionProfile.${key}`, { deviceName: p.deviceName });
   const label = (value: Parameters<typeof resolveRemoteText>[0]) => resolveRemoteText(value, i18n.language);
   const note = (text: string, error = false) => <Section><Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(error ? colors.errorText : colors.textSecondary)]}>{text}</Text></Section>;
@@ -72,6 +80,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
     {p.online && p.data && !p.data.panels.some(item => item.id === 'profile') ? note(tr('hostUpgrade')) : null}
   </>;
   return <ComposerSheet visible={p.visible} title={p.title} onClose={p.onClose} onClosed={p.onClosed} onBack={p.onBack}
+    headerTrailing={modelSave}
     nativeContent preventDismiss={p.dirty || p.busy || !!p.confirmation} testID="companionProfile">
     {!p.online ? note(tr('offline')) : null}
     {p.error ? <>{note(p.errorLabel || tr('readFailed'), true)}<Section>{action(t('devices.resources.retry'), p.onRetry, !p.online)}{p.dirty ? action(t('devices.companions.automation.discard'), () => p.onDiscard(false), false, true) : null}</Section></> : null}
@@ -84,7 +93,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
         {action(t('devices.common.cancel'), () => p.onConfirm(null))}</Section>
       {p.busy ? <Section><ProgressView /></Section> : null}
     </> : p.page === 'home' ? home : p.loading ? <Section><ProgressView /></Section> : p.page === 'editor' ? p.panel ? <>{panel(p.panel)}{p.editor?.panels.filter(item => item.id === 'remove' && item.action).map(item => <Section key={item.id}>{action(label(item.action!.label), () => p.onConfirm(item), !p.online, true)}</Section>)}</> : <Section>{p.editor?.panels.flatMap(item => item.entries?.length ? item.entries.map(entry => <Fragment key={`${item.id}:${entry.resourceId}`}>{action(label(entry.title), () => p.onEditor(entry.resourceId))}</Fragment>) : [item.action ? <Fragment key={item.id}>{action(label(item.title ?? item.action.label), () => p.onEditorPanel(item))}</Fragment> : <Text key={item.id}>{item.text || tr('emptyEditor')}</Text>])}</Section>
-      : p.page === 'models' ? <>{p.panel?.action ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : null}{p.panel?.action ? <Section>{action(tr('save'), () => p.onSubmit(p.panel!), !p.dirty || !p.online || p.conflict)}</Section> : note(p.panel?.text || tr('hostUpgrade'))}</>
+      : p.page === 'models' ? p.panel?.action ? <Section><CompanionNativeContent>{p.models}</CompanionNativeContent></Section> : note(p.panel?.text || tr('hostUpgrade'))
       : p.page === 'settings' ? <Section>{row('permissions', 'hand.raised')}</Section>
       : p.page === 'skills' ? <>{p.data?.panels.find(item => item.id === 'skills')?.entries?.length ? <Section>{row('personalSkills', 'sparkles')}</Section> : note(p.data?.panels.find(item => item.id === 'skills')?.text || tr('skillsEmpty'))}{p.data?.panels.find(item => item.id === 'connections')?.entries?.length ? <Section>{row('connections', 'link')}</Section> : note(p.data?.panels.find(item => item.id === 'connections')?.text || tr('emptyEditor'))}</>
       : p.page === 'channels' ? <Section><CompanionNativeContent>{p.channels}</CompanionNativeContent></Section>

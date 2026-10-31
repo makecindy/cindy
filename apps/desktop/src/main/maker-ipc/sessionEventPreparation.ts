@@ -1,6 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
-import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
+import { isQuietScheduledOutput, revealScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
 import type { BotCompactRuntimeRefreshCoordinator } from './botCompactRuntimeRefresh.js';
 import type {
@@ -52,9 +52,9 @@ import {
 import type { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 
-/** Bot DMs and group-lane turns answer an internal channel, not the user watching this Session. */
+/** Group-lane output belongs in its group. A DM input is hidden, but its answer belongs to the owner. */
 function isBotPrivateInput(clientId: string): boolean {
-  return clientId.startsWith('bot-dm:') || isBotGroupClientId(clientId);
+  return isBotGroupClientId(clientId);
 }
 
 interface DismissedInteraction {
@@ -120,7 +120,7 @@ export interface PrepareSessionEventDeps {
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
     'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'getAcceptedInputProvenance' | 'isActiveTaskCoordination'
-  > | null;
+  > & Partial<Pick<AgentInputCoordinator, 'isActiveInputOwnerAuthored'>> | null;
   readonly handleSilentStopTurnEnd: (
     session: Session,
     doneAt: number,
@@ -184,6 +184,10 @@ export function prepareSessionEvent(
       },
     };
   }
+  if (event.turnScope !== 'background'
+    && deps.agentInputCoordinatorHolder?.isActiveInputOwnerAuthored?.(session.id, event.sessionTurnGeneration)) {
+    revealScheduledOutput(event.turnOrigin);
+  }
   const taskCoordination = event.turnScope !== 'background'
     && (deps.agentInputCoordinatorHolder?.isActiveTaskCoordination?.(session.id, event.sessionTurnGeneration) ?? false);
   if (event.type === 'text' && event.standaloneText === true) {
@@ -210,6 +214,9 @@ export function prepareSessionEvent(
     deps.interruptedTurnAutoResumeGuard.noteAttemptEvent(session.id, event.turnAttemptToken);
   }
   // Snapshot before onTurnEvent releases the active input and drains the next queue item.
+  const pluginTargetInputIds = event.turnScope !== 'background'
+    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
+      .filter(id => id.startsWith('plugin-target:')) : [];
   const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
     ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
       .filter(id => taskResultClientIdForInput(id) !== null) : [];
@@ -610,6 +617,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    pluginTargetInputIds,
     groupLaneInputClientId,
     broadcastEvent,
     eventAgentMeta,

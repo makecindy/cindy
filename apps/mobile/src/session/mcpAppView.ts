@@ -1,11 +1,12 @@
 import { getRandomBytes } from 'expo-crypto';
-import { McpAppController, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
+import { McpAppController, McpAppHeightGuard, mcpAppFailureKey, type AppRpc } from '@cindy/maker-shared/mcp-app-controller';
 import { MCP_APPS_INVOKE, type McpAppDocument } from '@cindy/maker-shared/mcp-apps';
 import { prepareMcpAppNativeDocument, type McpAppNativeDocument } from './mcpAppNativeDocument';
 
 export interface McpAppViewState {
   loading: boolean;
   height: number;
+  filesUnavailable?: boolean;
   error?: ReturnType<typeof mcpAppFailureKey> | 'mcpApps.mobileUpdateRequired';
 }
 type Invoke = (device: string, channel: string, args: unknown[]) => Promise<unknown>;
@@ -23,6 +24,7 @@ export class McpAppView {
   disposed = false;
   inject?: (script: string) => void;
   private listeners = new Set<(state: McpAppViewState) => void>();
+  private readonly heightGuard = new McpAppHeightGuard(() => console.warn('[mcp-apps] App height feedback loop bounded'));
   private closePromise?: Promise<void>;
 
   constructor(
@@ -35,6 +37,10 @@ export class McpAppView {
       (id, input) => invoke(deviceId, MCP_APPS_INVOKE, [id, input]), sessionId, clientId,
       (message) => {
         if (this.disposed) return;
+        if (!this.closing && hasExecutionComputerFile(message)) {
+          this.localFilesUnavailable();
+          return;
+        }
         const serialized = JSON.stringify(JSON.stringify(message)).replace(/</g, '\\u003c');
         this.inject?.(`window.dispatchEvent(new MessageEvent('message',{data:JSON.parse(${serialized}),source:window}));true;`);
       },
@@ -43,7 +49,7 @@ export class McpAppView {
         if (message.method === 'ui/notifications/initialized') this.update({ loading: false });
         if (message.method === 'ui/notifications/size-changed' &&
             typeof message.params?.height === 'number' && Number.isFinite(message.params.height))
-          this.update({ height: Math.max(80, Math.min(1_200, Math.ceil(message.params.height))) });
+          this.update({ height: this.heightGuard.accept(message.params.height) });
       },
       (error) => this.fail(error), openLink,
     );
@@ -57,6 +63,7 @@ export class McpAppView {
   setWidth(width: number): void {
     if (Number.isFinite(width) && width > 0 && width !== this.width && !this.disposed) {
       this.width = width;
+      this.heightGuard.resize(width);
       this.changed();
     }
   }
@@ -88,8 +95,13 @@ export class McpAppView {
       else this.controller.receive(envelope.message);
     } catch { this.fail(new Error('MCP_APP_INVALID_MESSAGE')); }
   }
+  private localFilesUnavailable(): void {
+    this.update({ loading: false, error: undefined, filesUnavailable: true });
+    void this.close();
+  }
   fail(error: unknown): void {
     if (this.closing) return;
+    if (/MCP_APP_FILES_LOCAL_ONLY/.test(String(error))) { this.localFilesUnavailable(); return; }
     this.update({ loading: false, error: /MCP_APP_NATIVE_UPDATE_REQUIRED/.test(String(error))
       ? 'mcpApps.mobileUpdateRequired' : mcpAppFailureKey(error) });
     void this.close();
@@ -116,4 +128,17 @@ export class McpAppView {
       await this.nativeDocument?.close().catch(() => {});
     }
   }
+}
+
+/** Never deliver execution-computer-only file links to a native View that cannot serve them. */
+function hasExecutionComputerFile(message: AppRpc): boolean {
+  let budget = 50_000;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (--budget < 0 || depth > 24 || !value || typeof value !== 'object') return false;
+    const object = value as Record<string, unknown>;
+    if (object.type === 'resource_link' && typeof object.uri === 'string'
+      && /^(?:cindy-media:|library:)/i.test(object.uri)) return true;
+    return Object.values(object).some((child) => visit(child, depth + 1));
+  };
+  return visit(message.params, 0) || visit(message.result, 0);
 }

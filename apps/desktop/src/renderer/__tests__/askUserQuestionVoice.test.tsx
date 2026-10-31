@@ -2,7 +2,7 @@
 
 import { createElement, useState } from 'react';
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import i18n from '@/i18n';
 import type { AskUserQuestionItem, PendingAskUser } from '@/lib/makerChatStore';
@@ -12,6 +12,7 @@ import type { VoiceQuestionBridge } from '../components/new-chat/voiceQuestionSe
 
 const start = vi.fn(() => true);
 const stop = vi.fn(async () => true);
+const cancel = vi.fn(async () => undefined);
 let finalTranscript = '完整回答';
 let idleBeforeStop = false;
 
@@ -22,6 +23,7 @@ vi.mock('../components/new-chat/useAskUserDictation', () => ({
     const [state, setState] = useState<'idle' | 'listening'>('idle');
     return {
       state,
+      captureReady: true,
       isBusy: state === 'listening',
       liveText: null,
       lastError: null,
@@ -37,12 +39,14 @@ vi.mock('../components/new-chat/useAskUserDictation', () => ({
         setState('idle');
         return ok;
       },
+      cancel: async () => { await cancel(); setState('idle'); },
     };
   },
 }));
 
 beforeEach(async () => {
   start.mockClear();
+  cancel.mockClear();
   stop.mockReset().mockResolvedValue(true);
   finalTranscript = '完整回答';
   idleBeforeStop = false;
@@ -69,6 +73,58 @@ function renderAsk(questions: PendingAskUser['questions']) {
 }
 
 describe('AskUserQuestion voice entry', () => {
+  // Unit: real answer field/gesture; previous card tests covered only mic
+  // clicks. Holding must share composer semantics without hijacking selection.
+  // PR #7438: native selected-text drags can omit subsequent pointer events.
+  it('records on hold, stops on release, and leaves ordinary drag selection alone', async () => {
+    vi.useFakeTimers();
+    const previous = window.electronAPI;
+    let micGranted = false;
+    window.electronAPI = {
+      voiceInput: { getMicrophonePermissionCached: () => ({ ok: micGranted, status: 'not-determined' }) },
+    } as unknown as typeof window.electronAPI;
+    onTestFinished(() => { window.electronAPI = previous; });
+    const { view, onAnswer } = renderAsk([{ question: '回答？' }]);
+    const input = view.getByRole('textbox');
+    // 2026-10-30: before the microphone is authorized a hold is an ordinary press.
+    fireEvent.pointerDown(input, { button: 0, pointerId: 9 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.pointerUp(window, { pointerId: 9 });
+    micGranted = true;
+    fireEvent.change(input, { target: { value: '已有回答' } });
+    (input as HTMLTextAreaElement).setSelectionRange(0, 2);
+    fireEvent.pointerDown(input, { button: 0, pointerId: 0 });
+    expect(fireEvent.dragStart(input)).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(start).not.toHaveBeenCalled();
+    expect((input as HTMLTextAreaElement).value).toBe('已有回答');
+    fireEvent.pointerDown(input, { button: 0, pointerId: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(start).toHaveBeenCalledOnce();
+    expect(fireEvent.dragStart(input)).toBe(false);
+    expect(stop).not.toHaveBeenCalled();
+    fireEvent.pointerUp(window, { pointerId: 1 });
+    await act(async () => {});
+    expect(stop).toHaveBeenCalledOnce();
+    expect(onAnswer).not.toHaveBeenCalled();
+    fireEvent.pointerDown(input, { button: 0, pointerId: 2, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(window, { pointerId: 2, clientX: 20, clientY: 0 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(start).toHaveBeenCalledOnce();
+  });
+
+  it('Escape cancels dictation without skipping the question or discarding the typed answer', async () => {
+    const { view, onAnswer } = renderAsk([{ question: '回答？' }]);
+    const input = view.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '已有回答' } });
+    fireEvent.click(view.getByTestId('ask-user-voice'));
+    await act(async () => { fireEvent.keyDown(input, { key: 'Escape' }); });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(onAnswer).not.toHaveBeenCalled();
+    expect((input as HTMLTextAreaElement).value).toBe('已有回答');
+  });
   it('shows a voice button on the pinned free-text row and starts dictation from it', async () => {
     const { view } = renderAsk([
       { question: '选哪个？', options: [{ label: '甲' }, { label: '乙' }] },

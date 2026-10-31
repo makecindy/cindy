@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import type { RemoteSession } from '@/session/types';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { i18n } from '@/i18n';
@@ -22,9 +23,13 @@ export function buildMobileHomePresentation(options: MobileHomeOptions): MobileH
   const selectedDeviceId = options.selectedDeviceId && isSharedTaskPeer(options.selectedDeviceId)
     ? null : options.selectedDeviceId;
   const base = buildMobileHomePresentationShared({ ...options, selectedDeviceId, localizer: mobilePresentationLocalizer });
-  const deviceFilters = base.deviceFilters.filter((filter) => !filter.deviceId || !isSharedTaskPeer(filter.deviceId)).map((filter) => ({
+  const ownDeviceFilters = base.deviceFilters.filter((filter) => !filter.deviceId || !isSharedTaskPeer(filter.deviceId));
+  const deviceNameSources = ownDeviceFilters.flatMap((filter) => filter.deviceId ? [{
+    deviceId: filter.deviceId, name: filter.label,
+  }] : []);
+  const deviceFilters = ownDeviceFilters.map((filter) => ({
     ...filter,
-    label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : filter.label,
+    label: filter.deviceId === null ? i18n.t('devices.presentation.home.allDevices') : deviceDisplayName(filter.deviceId, filter.label, deviceNameSources),
     statusLabel: filter.waitingCount > 0
       ? i18n.t('devices.presentation.home.waitingCount', { count: filter.waitingCount })
       : filter.deviceId === null
@@ -52,7 +57,7 @@ export function buildMobileHomePresentation(options: MobileHomeOptions): MobileH
           : undefined);
       const deviceName = sourceDeviceName == null
         ? i18n.t('devices.presentation.home.unknownComputer')
-        : project.deviceName;
+        : deviceDisplayName(project.deviceId ?? '', project.deviceName);
       const workingDir = project.workingDir;
       return {
         ...project,
@@ -114,7 +119,7 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
  * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
  */
 export function selectVisibleDeviceSessions<
-  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir'>,
+  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir' | 'projectDir'>,
 >(
   sessions: readonly T[],
   deviceId: string,
@@ -122,5 +127,5 @@ export function selectVisibleDeviceSessions<
 ): T[] {
   return excludeOrcaWorkerSessions(sessions).filter((session) =>
     (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(session.workingDir, projectWorkingDir)));
+    && (!projectWorkingDir || sessionMatchesProjectDir(session, projectWorkingDir)));
 }

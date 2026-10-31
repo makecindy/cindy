@@ -80,6 +80,8 @@ export interface HandoffResult {
   finalOrigin?: string;
   /** Device that answered the last applied step; absent when no values were applied. */
   answeredOn?: InputHandoffHolder;
+  /** A QR code from the agent's own screenshot: the owner reports the scan, Cindy cannot see it. */
+  scanned?: true;
 }
 
 /** The window a live view shows, located by the host when the owner opens it. */
@@ -146,6 +148,36 @@ function sameHolder(a: InputHandoffHolder, b: InputHandoffHolder): boolean {
 }
 
 const AUTOMATION_FLAGS = /--(remote-debugging-(port|pipe)|enable-automation|headless)\b/;
+
+const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastIndexOf('.') + 1).toLowerCase();
+
+/**
+ * The window a handoff works on: by pid, else by app name or bundle id, else
+ * the frontmost app; never Cindy itself. Shared with the request-time check so
+ * a bad target is reported to the agent at once instead of minutes later.
+ */
+export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | null {
+  const candidates = list.apps.filter((app) => app.pid !== hostPid && app.windows.some((w) => !w.minimized));
+  let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
+  if (!app && spec.app) {
+    const wanted = spec.app.trim().toLowerCase();
+    app = candidates.find((entry) => entry.app.toLowerCase() === wanted || entry.bundleId.toLowerCase() === wanted)
+      ?? candidates.find((entry) => entry.app.toLowerCase().includes(wanted))
+      // Agents name apps in English while a localized desktop lists 访达 for
+      // Finder; the bundle id's last part (com.apple.finder) still says it.
+      ?? candidates.find((entry) => bundleTail(entry.bundleId) === wanted)
+      ?? (wanted.length >= 3 ? candidates.find((entry) => bundleTail(entry.bundleId).includes(wanted)) : undefined);
+  }
+  if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
+  if (!app) return null;
+  const visibleWindows = app.windows.filter((window) => !window.minimized);
+  const title = spec.windowTitle?.toLowerCase();
+  const window = (title ? visibleWindows.find((w) => w.title.toLowerCase().includes(title)) : undefined)
+    ?? visibleWindows.find((w) => w.focused)
+    ?? visibleWindows[0];
+  if (!window) return null;
+  return { pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title } };
+}
 
 /**
  * One 代输入 request: a loop of read step → owner answers → act → wait for
@@ -894,23 +926,7 @@ export class InputHandoffSession {
   }
 
   private resolveTarget(list: NativeWindowList): HandoffTarget | null {
-    const spec = this.options.target;
-    const candidates = list.apps.filter((app) => app.pid !== this.options.hostPid && app.windows.some((w) => !w.minimized));
-    let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
-    if (!app && spec.app) {
-      const wanted = spec.app.trim().toLowerCase();
-      app = candidates.find((entry) => entry.app.toLowerCase() === wanted || entry.bundleId.toLowerCase() === wanted)
-        ?? candidates.find((entry) => entry.app.toLowerCase().includes(wanted));
-    }
-    if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
-    if (!app) return null;
-    const visibleWindows = app.windows.filter((window) => !window.minimized);
-    const title = spec.windowTitle?.toLowerCase();
-    const window = (title ? visibleWindows.find((w) => w.title.toLowerCase().includes(title)) : undefined)
-      ?? visibleWindows.find((w) => w.focused)
-      ?? visibleWindows[0];
-    if (!window) return null;
-    return { pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title } };
+    return resolveHandoffTarget(list, this.options.target, this.options.hostPid);
   }
 
   private async useTarget(target: HandoffTarget): Promise<void> {

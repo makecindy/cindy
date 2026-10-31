@@ -257,6 +257,7 @@
     "voiceSenderNotReady": "지금은 메시지를 보낼 수 없습니다. 뒤로 갔다가 세션을 다시 여세요.",
     "voiceStopAndSend": "음성 입력 종료 후 전송",
     "sendMessage": "원격 메시지 보내기",
+    "inputSyncFailed": "입력 내용을 모두 읽지 못했습니다. 내용은 유지되니 다시 시도해 주세요.",
     "voiceStartInput": "음성 입력 시작",
     "stopSession": "원격 세션 중지",
     "sessionNotFoundResync": "현재 원격 세션을 찾을 수 없습니다. 다시 동기화한 후 보내세요.",
@@ -561,6 +562,7 @@
     "toolUseLoopDetectedPingPongWithCount": "모델이 여러 도구 호출 사이를 오가며 반복하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "toolUseLoopDetectedRotationWithCount": "모델이 여러 도구 호출을 계속 순환하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "codexThreadLost": "Codex 인증 모드가 전환되어 이 세션을 계속할 수 없습니다. 새 세션을 만드세요.",
+    "remoteCompactEncryptedContent": "모델이 기록의 암호화된 내용을 읽지 못해 컨텍스트 압축에 실패했습니다. 자동으로 이어가지 못했습니다. 다시 시도하여 복구할 수 있습니다.",
     "encryptedContentInvalid": "제공자 변경으로 암호화를 사용할 수 없게 되어 이 세션은 원래 제공자에서만 사용할 수 있습니다. 컴퓨터에서 처리하세요('여기서 새 세션 시작'으로 프로토콜 암호화 콘텐츠를 버린 후 새 세션에서 계속할 수 있습니다)."
   },
   "row": {
@@ -624,6 +626,7 @@
     "REMOTE_AGENT_RESUME_LOST": "상대 컴퓨터의 이전 대화에 다시 연결하지 못해 Agent가 그 맥락 없이 계속합니다.",
     "REMOTE_AGENT_UNSUPPORTED": "상대 컴퓨터에서는 이 Agent를 사용할 수 없습니다. 그 컴퓨터에서 설치하거나 로그인한 뒤 다시 시도하거나, 다른 Agent를 선택하세요.",
     "REMOTE_AGENT_INVALID": "Agent를 실행하는 컴퓨터와 통신하는 중 오류가 발생했습니다. 다시 시도하고, 계속되면 두 컴퓨터의 Cindy를 모두 최신 버전으로 업데이트하세요.",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "이 모델은 공유자가 설정한 모델 사용 비율 한도에 도달했습니다. 다른 사용 가능한 모델로 계속하세요.",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "그 컴퓨터에서 이 제공자의 원격 사용을 허용하지 않았습니다. 그 컴퓨터의 설정 → 모델 제공자에서 원격 사용 허용을 켜거나 다른 모델을 선택하세요.",
     "REMOTE_AGENT_FORK_FAILED": "Agent를 실행하는 컴퓨터에서 여기서 새 세션을 시작하지 못했습니다. 다시 시도하거나 다른 메시지로 시도해 주세요.",
     "REMOTE_AGENT_SHARE_PAUSED": "공유한 사람이 나에 대한 공유를 일시 중지해서 재개될 때까지 이 모델을 사용할 수 없습니다. 다른 모델로 바꿔 계속할 수 있습니다.",

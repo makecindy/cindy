@@ -8,6 +8,7 @@ import { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 import { MODEL_ACCESS_WIRE_PROTOCOLS } from './modelAccessBean.js';
 import type {
   ModelAccessV2Agent,
+  ModelAgent,
   ModelPriceVariant,
   ModelReferencePrice,
   ModelRegistry,
@@ -17,6 +18,34 @@ import type {
 
 export type ModelRegistryRevisionRelation =
   "newer" | "older" | "same" | "conflict" | "invalid-incoming";
+
+/** Same owned subscription aliases as the native API lookup; Gateway namespaces stay intact. */
+function registryRouteModelId(providerId: string, modelId: string): string {
+  const rawId = modelId.replace(/\[1m\]$/, "");
+  return providerId === "openai"
+    ? rawId.replace(/^chatgpt\//, "")
+    : providerId === "xai" && !rawId.startsWith("xai/")
+      ? `xai/${rawId}`
+      : rawId;
+}
+
+/** Catalog-recommended engine for one source and model: exact IDs win over the longest prefix.
+ * The result is advice only; callers still choose among engines this route actually offers. */
+export function resolveRecommendedAgent(
+  registry: ModelRegistry | undefined,
+  providerId: string,
+  modelId: string,
+): ModelAgent | undefined {
+  const rules = registry?.recommendedAgents?.filter((rule) => rule.providerId === providerId);
+  if (!rules?.length) return undefined;
+  const id = registryRouteModelId(providerId, modelId);
+  return (
+    rules.find((rule) => rule.modelId === id) ??
+    rules
+      .filter((rule) => rule.modelIdPrefix !== undefined && id.startsWith(rule.modelIdPrefix))
+      .sort((a, b) => b.modelIdPrefix!.length - a.modelIdPrefix!.length)[0]
+  )?.agent;
+}
 
 /** Explicit entries win, then the most specific rule for this exact provider route.
  * Missing data stays unknown; a retired or explicitly unverified entry suppresses family rules.

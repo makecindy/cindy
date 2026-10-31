@@ -6,7 +6,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import ts from 'typescript';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
-import { Collapse } from '@/components/ui/collapse';
 import {
   RunningTokenRatePopover,
   useRunningTokenRateHistory,
@@ -18,7 +17,6 @@ import {
 } from '@/features/cc-agent/lib/runningTokenUsage';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
 // Execute the actual status bar without loading the entire session view's IPC/store graph.
 const source = readFileSync(
@@ -42,7 +40,6 @@ const compiled = ts.transpileModule(component.getText(ast), {
 const Icon = () => null;
 const deps = {
   React,
-  Collapse,
   useCallback,
   useEffect,
   useRef,

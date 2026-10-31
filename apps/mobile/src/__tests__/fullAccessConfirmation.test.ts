@@ -31,6 +31,9 @@ describe("getFullAccessConfirmationCopy", () => {
       "開啟完全訪問？",
     );
     expect(getFullAccessConfirmationCopy("fr").title).toBe(
+      "Activer l'accès complet ?",
+    );
+    expect(getFullAccessConfirmationCopy("it").title).toBe(
       "Enable Full access?",
     );
   });

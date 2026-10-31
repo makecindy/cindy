@@ -40,6 +40,7 @@ export interface ChannelGroupWindowEntry {
   author: { name: string; isBot?: boolean };
   text: string;
   fileNames?: string[];
+  imageRefs?: import('@cindy/im').TelegramHistoryImageRef[];
   sentAt: number;
 }
 
@@ -110,6 +111,7 @@ export function createChannelGroupWindow(options: {
           author: entry.author,
           text: entry.text,
           fileNames: entry.fileNames,
+          imageRefs: entry.imageRefs,
           sentAt: entry.sentAt,
         },
         retention,

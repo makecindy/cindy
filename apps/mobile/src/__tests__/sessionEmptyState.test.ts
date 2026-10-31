@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { readTeammateTasks } from '@/session/readTeammateTasks';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
 import {
   resolveSessionMessageEmptyState,
@@ -76,7 +78,10 @@ it.each(['resolve', 'reject'])('keeps a new filter pending when the old request 
   const listQueryScopeRef = { current: firstScope };
   let finish!: (rows: unknown[]) => void;
   let fail!: (error: Error) => void;
-  const invoke = vi.fn(() => new Promise<unknown[]>((yes, no) => { finish = yes; fail = no; }));
+  const invoke = vi.fn((_device: string, channel: string) => channel === 'local-db:sessions:list'
+    ? new Promise<unknown[]>((yes, no) => { finish = yes; fail = no; })
+    : Promise.resolve(channel === 'local-db:history:query'
+      ? { ok: true, sessions: [] } : { collectionId: 'teammates', items: [] }));
   const published: unknown[][] = [];
   let syncedScope: unknown = null;
   let loading = false;
@@ -84,14 +89,20 @@ it.each(['resolve', 'reject'])('keeps a new filter pending when the old request 
   const compile = (listQueryScope: typeof firstScope) => {
     const bindings = {
       deviceId: 'mac', deviceName: 'Mac', listQueryScope, listQueryScopeRef,
+      getMobileAuthOwner, isMobileAuthOwnerCurrent, readTeammateTasks,
       requestedListFilter: listQueryScope.filter, automationScopeKey: null, statusFilter: listQueryScope.filter,
       remoteListStatusFilter: (filter: string) => filter,
       LIST_LIMIT: 200, invoke, subscribe: async () => undefined,
       withTransientRemoteRetry: (read: () => Promise<unknown>) => read(),
       remoteSessionStore: {
+        getHomeSessions: () => [],
         captureDeviceSessionListMutationEpoch: () => 0,
         isDeviceSessionListMutationEpochCurrent: () => true,
-        setDeviceSessions: (_id: string, _name: string, rows: unknown[]) => published.push(rows),
+        // The real store coalesces identical preliminary/final snapshots.
+        // Any stale first publication still reaches the assertion below.
+        setDeviceSessions: (_id: string, _name: string, rows: unknown[]) => {
+          if (JSON.stringify(published.at(-1)) !== JSON.stringify(rows)) published.push(rows);
+        },
       },
       remoteScheduleEventStore: { clearDeviceMirrorInvalidation: () => undefined },
       invalidateOfflineScheduleIndexFailureFor: () => undefined,

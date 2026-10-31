@@ -38,14 +38,14 @@ export async function ownerChannelInputEvidence(
   return text?.trim() ? { clientId: lane.inputClientId, authoredText: text } : null;
 }
 
-/** Only companion task instructions opt in. Accepted input wins over queued text; model labels are not evidence. */
+/** Host request handoffs opt in. Accepted input wins over queued text; model labels are not evidence. */
 export async function captureAgentRequest(
   sessionId: string,
   supplement: string,
   active: RequestInputEvidence | null,
   readLatestInput: () => Promise<AutoReviewHistoryMessage[]>,
   preserveUserRequest = false,
-  /** The Host admitted this call as the owner's own request (teammate principal `owner`). */
+  /** The host admitted this call as the owner's request or its accepted continuation. */
   ownerVerified = false,
 ): Promise<CapturedAgentRequest> {
   if (!preserveUserRequest) return { message: supplement, autoReviewUserText: { kind: 'agent-request' } };
@@ -66,10 +66,12 @@ export async function captureAgentRequest(
       ...(delegated ? { delegatedRequest: delegated } : {}),
     }) : { userText: null };
   }
-  // Verification belongs to this relay's turn, never to an earlier receipt it carries forward.
+  // An accepted relay still names the same owner request. Only the current
+  // input can carry that evidence; a historical fallback cannot revive it.
   const request: ForwardedRequestSource = { ...source };
   delete request.ownerVerified;
-  if (ownerVerified && request.userText !== null) request.ownerVerified = true;
+  if ((ownerVerified || active?.delegatedRequest?.ownerVerified === true) && request.userText !== null)
+    request.ownerVerified = true;
   return { message: formatForwardedRequest(request, supplement),
     autoReviewUserText: { kind: 'agent-request', request } };
 }

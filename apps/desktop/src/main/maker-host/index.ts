@@ -1,10 +1,12 @@
+import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
+import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
 import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
-import { createCompanionConnectionsProvider } from '../bot-import/connectionProvider.js';
+import { COMPANION_CONNECTIONS_MCP_NAME, createCompanionConnectionsProvider, readCompanionConnectionsAvailability } from '../bot-import/connectionProvider.js';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { ensureCodexCliLauncher } from '../agent-binaries/codex-cli-launcher.js';
@@ -23,6 +25,7 @@ import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
  */
 
 import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
+import { setPluginModelPickerAgentProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.js';
 import { ownerCodexThreadLocations, readCodexThreadStorageReadOnly } from './codex-thread-storage.js';
 import { createSessionArchiveSync, prepareArchiveSessions } from './session-archive-sync.js';
@@ -121,9 +124,11 @@ import type { MakerSessionCreateOpts } from '../maker-ipc/sessionRequest.js';
 import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
+  captureLocalWorkerReport,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
+  isActiveInputAccountScoped,
   isSessionInTurn,
   wireSessionToIpc,
   releaseSessionBindingsForOwnerBoundary,
@@ -133,7 +138,8 @@ import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
@@ -204,7 +210,7 @@ import {
   resolveVerifiedContextWindow,
   resolveModelDefaultContextWindow,
 } from './catalog-to-descriptors.js';
-import { readModelContextLimit } from './model-context-limit-store.js';
+import { readModelContextLimit, resolveModelCompactionPct } from './model-context-limit-store.js';
 import { resolveDesktopModelContextProviderId, resolveDesktopModelEfforts, readStoredSessionContextWindowBudget, resolveConfiguredContextWindow, applySessionContextWindowBudgetToCreateOpts } from './model-context-settings.js';
 import {
   prepareCodexCustomContextCatalog,
@@ -313,6 +319,7 @@ import {
   getActiveCodexBridgeServerNames,
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
@@ -351,6 +358,7 @@ import {
 import {
   buildCodexProxySpawnArgs,
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -414,6 +422,7 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+setPluginModelPickerAgentProvider(() => _maker?.listAvailableAgents() ?? []);
 let remoteWorkerBridge: ReturnType<typeof createOrcaRemoteWorkerBridge> | null = null;
 
 export function handleRemoteWorkerBridge(
@@ -1065,8 +1074,9 @@ export function getMaker(): Maker {
             const entry = catalog.find((item) => item.name === provider.name);
             const remoteBridgeMissing = context.remoteHostId && agentKind !== 'pi'
               && entry?.source === 'builtin' && !REMOTE_ALLOWED_SERVER_NAMES.has(provider.name);
-            return entry?.available === false || remoteBridgeMissing
-              ? 'transport-unavailable-for-current-runtime' : null;
+            if (entry?.available === false || remoteBridgeMissing) return 'transport-unavailable-for-current-runtime';
+            return provider.name === COMPANION_CONNECTIONS_MCP_NAME
+              ? readCompanionConnectionsAvailability(context) : null;
           },
           // The caller's own engine is the only evidence of what this task can call.
           (server) => session.readMcpServerTools(server));
@@ -1133,7 +1143,20 @@ export function getMaker(): Maker {
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return null;
         const snapshot = resolveGhostFsSessionSnapshot((id) => _maker?.getSession(id), sessionId, sessionInstanceId);
+        const accountInput = isActiveInputAccountScoped(sessionId);
         return {
+          contributionAccountAllowed: async (acceptedOperation = false) => {
+            const current = () => !isAppSessionBoundaryPending() && _maker?.getSession(sessionId) === session
+              && (acceptedOperation ? accountInput : isActiveInputAccountScoped(sessionId));
+            if (!current()) return false;
+            const db = getCurrentDbClientSnapshot();
+            if (!db) return false;
+            // An authorized upload outlives the input that started it. Recheck
+            // task, account, helper surface and permissions before completion.
+            const surface = await resolveHelperSurface(db.client, sessionId);
+            return surface !== 'restricted' && db === getCurrentDbClientSnapshot()
+              && current();
+          },
           permissionMode: session.stablePermissionModeState?.mode ?? null,
           remoteHostId: session.remoteHostId,
           isCurrent: () => !!snapshot && !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan'
@@ -1298,6 +1321,7 @@ export function getMaker(): Maker {
         };
       },
       dispatchInterAgentMessage,
+      captureLocalWorkerReport,
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
@@ -1450,6 +1474,10 @@ export function getMaker(): Maker {
         const source = resolveDesktopModelContextProviderId(catalog, 'claude-code', providerId, modelId);
         return source ? readModelContextLimit('claude-code', source, modelId)
           ?? resolveModelDefaultContextWindow(catalog, 'claude-code', source, modelId) : null;
+      },
+      resolveModelCompactionPct: (providerId, modelId) => {
+        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'claude-code', providerId, modelId);
+        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'claude-code', source, modelId);
       },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'claude-code',
@@ -1796,6 +1824,10 @@ export function getMaker(): Maker {
         const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
         return source ? readModelContextLimit('codex', source, modelId) : null;
       },
+      resolveModelCompactionPct: (providerId, modelId) => {
+        const source = resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId);
+        return resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, modelId);
+      },
       resolveVerifiedContextWindow: (providerId, modelId) =>
         resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex',
           resolveDesktopModelContextProviderId(getDesktopSelectableCatalog(), 'codex', providerId, modelId), modelId),
@@ -2109,6 +2141,7 @@ export function getMaker(): Maker {
               modelId,
               contextWindow,
               modelIds: catalog.providers.find(provider => provider.id === source)?.models.codex?.map(model => model.id),
+              resolveCompactionPct: (id) => resolveModelCompactionPct(getDesktopSelectableCatalog(), 'codex', source, id),
               resolveContextWindow: (nativeModelId) => {
                 return (source ? readModelContextLimit('codex', source, nativeModelId) : null)
                   ?? resolveModelDefaultContextWindow(catalog, 'codex', source, nativeModelId);
@@ -2173,6 +2206,7 @@ export function getMaker(): Maker {
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
           ...(smartSubagentConfig
@@ -2215,7 +2249,6 @@ export function getMaker(): Maker {
         sessionInstanceId,
         mcpCallerKind,
         mcpCallerAttested,
-        nativeHarnessHook,
         workingDir,
         memoryScopeKey,
         remoteHostId,
@@ -2232,7 +2265,6 @@ export function getMaker(): Maker {
           sessionId,
           mcpCallerKind,
           mcpCallerAttested,
-          ...(nativeHarnessHook ? { nativeHarnessHook } : {}),
           ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           ...(memoryScopeKey ? { memoryScopeKey } : {}),
@@ -2245,6 +2277,7 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
+      prepareCodexMcpToolCancellation,
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
@@ -2531,7 +2564,7 @@ export function getMaker(): Maker {
     // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
     // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
-    _initialCustomMcpRefresh = refreshCustomMcpProviders();
+    _initialCustomMcpRefresh = refreshCustomMcpProviders().then(() => { refreshInstalledPluginApps(); });
 
     // Store mutations are serialized; each settled callback consumes the exact
     // latest-byte-edge runtime snapshot for its durable mutation.
@@ -2903,6 +2936,8 @@ export function getMaker(): Maker {
       startDeviceAgentSession: createDeviceAgentStarter({
         readImageDeliveryEpoch: readGeneratedImageEpoch,
         remoteInvoke: remoteBackgroundInvoke,
+        renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
+          ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),
         rgPath: getRipgrepBinaryPath,
         // 对方的 Codex 把本机当 exec-server 执行环境：用本机随包的同一个 codex。
         codexPath: () => getCachedBinaryStatus('codex').binaryPath ?? undefined,

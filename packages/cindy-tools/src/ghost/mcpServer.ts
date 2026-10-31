@@ -121,7 +121,9 @@ const D_MEDIA = [
   "插件已返回用户配置的 model_id/provider_id 时必须原样传给 prepare，再按目标 capability 走 prepare → request；provider_id 用于区分不同 Provider 下的同名模型。没有已配置模型时，先用 list_models 查询。Gateway 模型的 prepare 会由 Server 根据 model_id 返回 Guide，并在 Guide 不存在或不支持该 capability 时明确报错。",
   "异步任务的 request 返回 pending 时，再按 recommended_poll_after_ms 调 poll；同步任务会直接返回 xdt_image_urls / xdt_video_urls。",
   "Core 图片完成结果由当前 Agent 控制呈现：在最终回复中用返回的受管地址只嵌入展示一次，不要同时重复口播或再次附同一图片。",
-  "展示、改图和附件交接都直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址，不需要本地路径。仅当用户明确询问文件存储位置或本地路径时，才调用 resolve_local_path 并原样传入 url；此调用会把该受管媒体的本机绝对路径返回给 Agent 并写入任务记录。Host 按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。不要假定稍后还会有确认卡；不要猜路径或扫描磁盘。",
+  "生成结果返回受管媒体地址和元数据，不会自动把图片送给模型。是否查看图片或视频由 Agent 按任务需要决定；需要查看时先用 resolve_local_path 取得路径，再使用已有的文件查看或分析工具。",
+  "为完成当前任务而查看、抽帧或分析已有媒体时，可主动调用 resolve_local_path 并原样传入 url，取得文件路径后自行选择工具或脚本；不要求用户先询问存储位置或另行口头同意查看。用户询问存储位置时也使用此动作。它把受管媒体的本机绝对路径返回给 Agent 并写入任务记录，Host 仍按当前权限处理：Ask 需点击确认，Auto 由当前审批负责人审核，本地 Full Access 自动允许。路径属于 Cindy Host 所在电脑，不应当作 SSH 工作区路径；不要猜路径或扫描磁盘。只看视频帧不能声称已检查声音、对白或音画同步。",
+  "展示、改图和附件交接仍直接使用 cindy-media:// / xdt-image:// / xdt-video:// 受管地址；本机路径供 Agent 工作使用，不替代给用户的可播放媒体地址。",
   "模型 id、endpoint、Authorization 和 wire model 均由 Host 管理，不要写进 body，不要猜测或覆盖。",
   "Guide 缺失、能力不匹配或当前客户端不支持协议时，结果会带稳定 errorCode、retryable、outcomeKnown 和 allowedActions；可按 allowedActions 换模型、改用其它已授权工具或仍存在的旧链路，不要把 INTERNAL 当成协议能力结论。",
   "prepare 返回的 invocation_id 是一次性付费提交令牌；request 超时或返回 SUBMISSION_OUTCOME_UNKNOWN 时不要自动重提，以免重复扣费。",
@@ -132,6 +134,7 @@ const D_GHOST_FORGE_GUIDE = [
   "创建、修改、调试、打包或发布 Cindy 插件时使用该 Skill；本工具保留按章读取同一份资料的兼容入口。",
   '不传参数返回目录，传 section（章号如 "4.7" 或标题关键词如 "network"）返回单章正文。',
   "本工具只读文档，不安装或发布插件。",
+  "发布前另读 §2 的 releaseNotes、§7.3 个人发布和 §7.4 平台署名。",
 ].join("\n");
 
 const D_GHOST_FORGE_SCAFFOLD = [
@@ -139,6 +142,8 @@ const D_GHOST_FORGE_SCAFFOLD = [
   "template 可选:plain(普通沙箱工具)、agent-action(卡片点击后让 Agent 继续/分叉/新建)、",
   "node-json-rpc(普通随包 Node 服务)、node-mcp(随包 stdio MCP)。Node 模板只写零依赖示例",
   "源码，不会执行 npm install / npx / postinstall。生成后按需求修改，再调用 ghost_forge_pack。",
+  "四种模板均可叠加 withUi:true，生成标准 MCP Apps 交互页面和 main.js 工具；不需要页面构建。参见 §4.23。",
+  "骨架不自动填写 ghost.json.releaseNotes；首次上架可省略，后续更新须补写相对上一已上架版本完整变化的纯文本说明，见 ghost_forge_guide 的第 2、7.3 章。",
   "会话工作目录内直接生成；工作目录外(例如相邻 worktree)走当前会话权限:",
   "本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认。不要因为目录在工作目录外就改换目录或空转重试。",
 ].join("\n");
@@ -147,6 +152,7 @@ const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy。只生成产物，不安装或更新插件。",
   "缺省只打包并返回产物路径；intent=publish 时额外返回一次性 publishToken。",
   "intent=publish 仅企业组织成员可用；个人账号仍可使用缺省的纯打包模式。",
+  "releaseNotes 若填写须为 ghost.json 顶层纯文本；缺字段仍可打包、安装；首次上架可省略，曾上架插件的后续提审必须非空。打包成功不代表通过发布预检，个人发布从已安装实例走 ghost_contribution_prepare，见手册 §7.3。",
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
   "隐藏文件 / *.cindy)。会话工作目录内直接打包；工作目录外走当前会话权限",
   "(本地 Full Access 自动放行,Auto 交审阅,Ask 向用户确认),不要因此改换目录或空转重试。",
@@ -166,6 +172,7 @@ const D_GHOST_FORGE_INSTALL = [
   "dir 传插件源码目录绝对路径(工作目录外走与 pack 相同的会话权限)。成功返回本次真实执行的是 installed 还是 updated；",
   "仅当用户明确选择 AI 生成图标时，可像 ghost_forge_pack 一样传 icon_source。",
   "失败返回打包校验或 Host 安装事务的结构化错误。ghost_forge_pack 始终只打包，不受本工具影响。",
+  "用户明确要求把自己开发并使用的插件发布到社区时，安装后调用 ghost_contribution_prepare，再用 ghost_contribution_submit 提审；本工具自身不发布。",
 ].join("\n");
 
 const D_GHOST_FORGE_PUBLISH = [
@@ -1095,6 +1102,7 @@ export async function handleForgeScaffold(
   input: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;
@@ -1246,23 +1254,6 @@ export function createCindyGhostsMcpServer(
     name: "cindy",
     version: "1.0.0",
   });
-
-  if (deps.nativeHarnessHook) server.tool(
-    "harness_hook",
-    "Internal callback for configured Codex native hooks. Ordinary model tool calls are rejected.",
-    {
-      event: z.enum(["PreToolUse", "PreCompact"]),
-      session: z.string().min(1),
-      turn: z.string().min(1),
-      tool_name: z.string().optional(),
-      tool_use_id: z.string().optional(),
-      tool_input: z.unknown().optional(),
-    },
-    async (input, extra) => {
-      try { return textResult(await deps.nativeHarnessHook!(input, extra._meta)); }
-      catch { return textResult({ errorCode: "NATIVE_HOOK_UNAVAILABLE" }, true); }
-    },
-  );
 
   // 花名册快照:装配时取一次,拼进 ghost_list 描述(语义召回的数据源);
   // system/developer 段由 host 在 session 装配时单独取数,两处共用同一序列化格式。
@@ -1421,7 +1412,7 @@ export function createCindyGhostsMcpServer(
         .string()
         .max(4096)
         .optional()
-        .describe("resolve_local_path 时必填；原样传入 cindy-media://、xdt-image:// 或 xdt-video:// 受管地址。调用会向 Agent 返回该媒体的本机绝对路径并写入任务记录，仅在用户明确询问时使用；按当前权限审核，不保证另有确认卡"),
+        .describe("resolve_local_path 时传 cindy-media://、xdt-image:// 或 xdt-video://；查看、抽帧、分析媒体或查询存储位置时使用，按当前权限返回 Host 本机路径，具体查看方式由 Agent 决定。"),
       invocation_id: z
         .string()
         .max(128)
@@ -1459,6 +1450,7 @@ export function createCindyGhostsMcpServer(
         .describe(
           "起步模板:普通插件 / Agent 交互卡 / 普通 Node 服务 / stdio MCP",
         ),
+      withUi: z.boolean().optional().describe("可选：叠加 MCP Apps 交互页面，最低版本不低于 0.1.122-beta"),
       id: z.string().describe("插件 id:小写字母、数字、连字符，1–32 位"),
       name: z.string().describe("给用户看的插件名称"),
       description: z
@@ -1529,6 +1521,42 @@ export function createCindyGhostsMcpServer(
     },
     async (input) => handleForgePublishStatus(deps, input),
   );
+
+  const contribute = async (input: Parameters<NonNullable<CindyGhostsMcpDeps['communityContribution']>>[0]) => {
+    try {
+      const result = deps.communityContribution ? await deps.communityContribution(input) : { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' };
+      return textResult(result, !!result && typeof result === 'object' && 'ok' in result && result.ok === false);
+    } catch {
+      return textResult({ ok: false, errorCode: 'INTERNAL' }, true);
+    }
+  };
+  const contributionId = z.string().min(1).max(256);
+  server.registerTool('ghost_contribution_prepare', {
+    description: '为用户自己开发、已安装并使用的确切插件固定临时快照并进行发布预检。此工具只读取原插件，不修改 ghost.json、插件源码或用户文件，不上传、不提审，也不自动补写更新说明。返回 preparedId、包摘要、包内 ghost.json.releaseNotes 和 blockers。首次上架不要求更新说明，插件用途写在 description；曾上架后再提审须用顶层纯文本 releaseNotes 完整覆盖相对上一已上架版本的变化（v2/v3 均支持）。仅更新缺失时按已有 Forge 开发流程修改作者源码，再用 ghost_forge_install 安装更新后重新预检，不改 Host 管理的安装目录。成功受理后的版本号永久占用，预检或未受理的上传失败不占号；同一插件只能有一个待审版本。用户已明确委托公开发布且 blockers 为空时，直接接 ghost_contribution_submit，不要求用户重新授权或手动完成最后一步。首次发布只接受 Host 可核实的本地包或 Forge 开发安装，属于人工审核申请，不代表作者认证。市场下载与可读历史不授予提交权；公共市场更新须有当前服务端精确提交授权和 Host 来源关联，Git/本地自定义市场、私域或来源不明不能转作首发。冲突按 ghost.json.id 判断，不是显示名称。预检或提交返回 PLUGIN_GHOST_ID_CONFLICT 时停止继续提交：新插件经用户同意才可修改作者源码中的 ID，沿原 Forge 流程重新打包、安装后预检；已有插件更新保留 ID，核对发布账号及 ghost_my_plugins 返回的当前提交权限，无权限就说明并停止，不自动切换账号或换发布入口绕过；无法判断先询问用户，不重复提交相同请求。完整规则见手册 §7.3。官方 public 插件不允许经客户端或本工具提审；须通过 GitHub 仓库提交修改，保证仓库源码完整并便于后续维护。',
+    inputSchema: z.object({ ghost_id: contributionId, namespace: ghostNamespaceInput }).strict() },
+    async ({ ghost_id, namespace }) => contribute({ action: 'prepare', ghostId: ghost_id, namespace }));
+  server.registerTool('ghost_contribution_submit', {
+    description: '把 ghost_contribution_prepare 刚准备的确切插件提交审核。用户已明确委托公开发布时沿当前任务的 Full Access / Auto / Ask 权限执行，不额外要求用户重新授权或最后手动点击；只有安装委托不等于发布委托。不接受文件路径、独立文案、账号或票据。返回本次提交的进度标识，接 ghost_contribution_status 查询到结束；202/处理中不等于已提交审核。提交失败后先用 ghost_my_plugins 核对该版本是否已有提审记录，已受理则查看真实审核结果，不绕过版本或待审限制再次提交；仅预检仍允许提审时 Host 才核对尚未确认的同包请求。权限拒绝时说明原因并停止，不改权限模式重试。官方 public 插件须通过 GitHub 仓库提交修改，以保证源码完整、便于维护；客户端与 Agent 工具均不得提审。',
+    inputSchema: z.object({ prepared_id: contributionId }).strict() },
+    async ({ prepared_id }) => contribute({ action: 'submit', id: prepared_id }));
+  server.registerTool('ghost_contribution_status', {
+    description: '查询本次提交的进度。只跟随当前提交，结束后通过 ghost_my_plugins 查看审核结果，不轮询人工审核。成功回执 outcome、修订审核状态与市场可用事实分别解释，上传 SHA 不一定是实际 Release SHA。',
+    inputSchema: z.object({ local_id: contributionId }).strict() },
+    async ({ local_id }) => contribute({ action: 'status', id: local_id }));
+  server.registerTool('ghost_contribution_stop', {
+    description: '停止本次上传。停止不代表取消已提交的审核，也不改变审核结果；已提交内容通过 ghost_my_plugins 查看。',
+    inputSchema: z.object({ local_id: contributionId }).strict() }, async ({ local_id }) => contribute({ action: 'cancel', id: local_id }));
+  server.registerTool('ghost_cancel_plugin_review', {
+    description: '取消本人仍有发布授权的精确待审版本。先从 ghost_my_plugins 读取当前版本、SHA 和 revision；取消不影响当前上架包，且该版本号以后不能再次提审。与停止上传不同；同一次取消可安全重试，批准/驳回已先完成时返回真实审核结果。依任务 Ask/Auto/Full Access 权限执行。',
+    inputSchema: z.object({ plugin_id: contributionId, release_id: contributionId, sha256: z.string().regex(/^[a-f0-9]{64}$/), revision: z.string().datetime() }).strict() },
+    async ({ plugin_id, release_id, sha256, revision }) => contribute({ action: 'cancel-review', pluginId: plugin_id, release: { releaseId: release_id, sha256, revision } }));
+  server.registerTool('ghost_my_plugins', {
+    description: '读取当前登录账号本人向公开市场提交的插件列表或精确详情。个人和组织成员均可使用，组织管理员不因此获得其他成员投稿的管理权。搜索/筛选/分页由服务端执行；详情分当前市场、最近提交、已留存内容和独立处理历史，退回原因完整返回。只查询本人，不审核、不代修、不发通知。修改作者源码后重新安装并使用，再从当前实例准备发布更新，不直接修改 Host 管理的安装目录。历史内容和 releaseNotes 取对应版本提审快照。个人投稿的展示署名暂由服务端返回为空，作者绑定和提审昵称仍完整记录。不从 ghost.json.author 或当前账号昵称补齐。客户端界面与本工具不提供匿名设置；官方 Cindy 与组织规则不变。',
+    inputSchema: z.object({ plugin_id: contributionId.optional(), submission_id: contributionId.optional(), query: z.string().max(200).optional(), filter: z.enum(['all', 'pending', 'needs_action', 'published']).optional(), cursor: z.string().max(4096).optional() }).strict() },
+    async ({ plugin_id, submission_id, ...input }) => {
+      if (submission_id && !plugin_id) return textResult({ ok: false, errorCode: 'INVALID_ARGUMENT' }, true);
+      return contribute(plugin_id ? submission_id ? { action: 'submission', pluginId: plugin_id, submissionId: submission_id } : { action: 'detail', pluginId: plugin_id, cursor: input.cursor } : { action: 'list', ...input });
+    });
 
   return server;
 }

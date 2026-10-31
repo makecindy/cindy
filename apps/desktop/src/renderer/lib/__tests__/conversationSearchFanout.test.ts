@@ -691,6 +691,12 @@ describe('requestForOrigin', () => {
 });
 
 describe('filterResultsByWorkingDirs', () => {
+  it('uses explicit membership for indexed search without changing cwd', () => {
+    const page = response([result('checkout', 1, { projectDir: '/project', workingDir: '/tmp/checkout' })]);
+    expect(filterResultsByWorkingDirs(page, ['/project']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(page, ['/tmp/checkout']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(page, ['/project'])).toBe(false);
+  });
   it('drops remote hits that belong to another project', () => {
     const page = filterResultsByWorkingDirs(
       response([
@@ -739,6 +745,40 @@ describe('filterResultsByRequestFilters', () => {
       },
     );
     expect(page.results.map((item) => item.session.id)).toEqual(['keep']);
+  });
+
+  it('matches Windows drive and UNC case variants without folding POSIX paths', () => {
+    const windowsPage = response([
+      result('drive', 1, { workingDir: 'C:/work/repo' }),
+      result('unc', 1, { workingDir: '//SERVER/Share/Work/Repo' }),
+      result('other', 1, { workingDir: 'C:/work/other' }),
+    ]);
+    const windowsRequest = {
+      filters: { workingDirs: ['c:\\Work\\Repo', '\\\\server\\share\\work\\repo'] },
+    };
+    expect(
+      filterResultsByRequestFilters(windowsPage, windowsRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['drive', 'unc']);
+    expect(
+      remoteIndexedSearchIgnoredWorkingDirs(
+        response(windowsPage.results.slice(0, 2)),
+        windowsRequest.filters.workingDirs,
+      ),
+    ).toBe(false);
+
+    const posixPage = response([
+      result('posix-lower', 1, { workingDir: '/work/repo' }),
+      result('posix-upper', 1, { workingDir: '/Work/Repo' }),
+    ]);
+    const posixRequest = { filters: { workingDirs: ['/work/repo'] } };
+    expect(
+      filterResultsByRequestFilters(posixPage, posixRequest).results.map(
+        (item) => item.session.id,
+      ),
+    ).toEqual(['posix-lower']);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(posixPage, ['/work/repo'])).toBe(true);
   });
 
   it('keeps a remote hit when updatedAt is recent but userSendAt is old', () => {

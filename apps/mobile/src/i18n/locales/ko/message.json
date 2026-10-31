@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "로컬 앱 “{{name}}”에서 전송",
+    "sourceLocalAppId": "앱 ID: {{id}}",
     "failedSamplingAttempt": "완료되지 않은 답변입니다. 내용은 참고용으로만 확인해 주세요.",
     "moreActions": "추가 메시지 작업",
     "reply": "답장",
@@ -104,6 +106,7 @@
     "subagentSummary": "하위 에이전트 요약",
     "agentSwitchLabel": "{{from}}에서 {{to}}(으)로 전환됨",
     "agentSwitchViewHandoff": "{{label}}, 인계 내용 보기",
+    "sessionFallbackPill": "요약으로 이어감",
     "sessionResumedPill": "원래 세션을 재개함",
     "handoffContentDesc": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
     "handoffContentDescEnglishSource": "인계 내용——전환 시 새 엔진에 전달되는 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)",
@@ -417,8 +420,26 @@
     "sent": "제출됨",
     "sendFailed": "메시지가 제출되지 않았습니다. 입력한 내용은 유지됩니다.",
     "playVideo": "동영상 재생",
+    "downloadVideo": "동영상 다운로드",
     "openVideoSource": "원본 동영상 열기",
     "calculationUnavailable": "이 값을 계산할 수 없습니다.",
     "incomplete": "일부 내용을 표시하지 못했습니다."
+  },
+  "usageCost": {
+    "title": "비용 내역",
+    "conversation": "채팅",
+    "additional": "추가 비용",
+    "unknownModel": "모델 미기록",
+    "estimate": "추정 가치",
+    "charged": "사용량 요금",
+    "loading": "내역 불러오는 중…",
+    "unavailable": "이 기록의 내역을 확인할 수 없습니다.",
+    "explanation": "모델과 경로별로 집계합니다. 구독 가치는 추정치이며 추가 청구 금액이 아닙니다. 기록된 비용만 포함되며 과거 내역은 불완전할 수 있습니다.",
+    "source": {
+      "subscription": "구독 계정",
+      "cindy-ai": "Cindy AI",
+      "provider": "API 제공자",
+      "unknown": "경로 미기록"
+    }
   }
 }

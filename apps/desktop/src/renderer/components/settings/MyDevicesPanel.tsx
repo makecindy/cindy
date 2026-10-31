@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 /**
  * MyDevicesPanel —— 「远程控制」页统一的「我的设备」面板。
@@ -352,7 +353,7 @@ export function MyDevicesPanel({
                 </div>
               ) : (
                 <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-                  {self?.name || t('settings.devices.thisDevice')}
+                  {self?.name?.trim() && self.name.trim() !== self.deviceId ? self.name.trim() : t('settings.devices.thisDevice')}
                 </span>
               )}
               <span className="text-11 text-[var(--text-tertiary)]">
@@ -362,11 +363,6 @@ export function MyDevicesPanel({
                     })
                   : `${t('settings.devices.thisDevice')} · ${t(`settings.devices.linkStatus.${s.linkStatus}`)}`}
               </span>
-              {self ? (
-                <span className="break-all text-11 text-[var(--text-tertiary)]">
-                  {self.deviceId}
-                </span>
-              ) : null}
               {activeConnectionIssue ? (
                 <span className="text-11 text-[var(--error-fg)]">
                   {t(`settings.devices.connectionIssue.${activeConnectionIssue.kind}`)}
@@ -480,14 +476,11 @@ export function MyDevicesPanel({
                       </div>
                     ) : (
                       <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-                        {d.name}
+                        {deviceDisplayName(d.deviceId, d.name, s.devices ?? [])}
                       </span>
                     )}
                     <span className="break-words text-11 text-[var(--text-tertiary)]">
                       {deviceSubtitle(d, t, { isControlling })}
-                    </span>
-                    <span className="break-all text-11 text-[var(--text-tertiary)]">
-                      {d.deviceId}
                     </span>
                   </div>
                   {editingId !== d.deviceId && (
@@ -572,6 +565,7 @@ export function MyDevicesPanel({
         description={t('settings.devices.deleteMessage')}
         confirmText={t('settings.devices.delete')}
         confirmVariant="destructive"
+        autoFocusConfirm
         loading={deleting}
         onConfirm={() => void handleDelete()}
       />

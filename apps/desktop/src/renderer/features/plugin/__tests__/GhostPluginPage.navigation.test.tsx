@@ -1,11 +1,12 @@
 /** @vitest-environment jsdom */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 
 import type { PluginMarketDetail } from '../../../../shared/pluginMarket';
+import type { ContributionTransferView, MyPluginDetailView, MyPluginReleasePageView } from '../../../../shared/pluginContributions';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import { __resetInstalledGhostsStoreForTest } from '@/cindy-brain/useInstalledGhosts';
 import {
@@ -22,7 +23,8 @@ import { leadingSlashInvocation, loadAllCommands, rewriteAgentSkillInvocationFor
 import { toast } from '@/lib/toast';
 import { getDraft as getWorkspaceDraft, patchDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
-const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
+const { auth, translation, pickAndUpdateGhost, catalog } = vi.hoisted(() => ({
+  catalog: { device: null as { deviceId: string; name: string } | null },
   pickAndUpdateGhost: vi.fn(),
   auth: { user: { membershipKind: 'personal' }, mode: 'local', dataOwnerId: 'navigation-owner' },
   translation: {
@@ -30,6 +32,9 @@ const { auth, translation, pickAndUpdateGhost } = vi.hoisted(() => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
   },
 }));
+
+vi.mock('../useCatalogDevice', () => ({ CatalogDeviceScope: ({ children }: { children: (...args: unknown[]) => unknown }) =>
+  children(catalog.device, false, 1, { selected: catalog.device, onSelect: vi.fn(), directory: { candidates: [], online: false, relayOnline: false } }) }));
 
 vi.mock('../GhostPagePanelHost', () => ({
   GhostPagePanelHost: ({ ghost }: { ghost: { manifest: { id: string } } }) => (
@@ -94,7 +99,10 @@ const loadDetail = vi.fn<() => Promise<PluginMarketDetail>>();
 const listAgentSkills = vi.fn();
 
 beforeEach(() => {
+  catalog.device = null;
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  auth.mode = 'local';
+  auth.user.membershipKind = 'personal';
   translation.i18n.language = 'en';
   translation.i18n.resolvedLanguage = 'en';
   cancelPendingPluginSuggestion();
@@ -116,6 +124,7 @@ beforeEach(() => {
     },
     ghosts: {
       listSync: () => ({ ghosts: [] }),
+      legacyRecoveryStatus: vi.fn().mockResolvedValue({ state: 'none' }),
       recentUsageSync: () => ({ ids: [] }),
       onChanged: () => () => {},
       onRecentUsageChanged: () => () => {},
@@ -132,6 +141,13 @@ beforeEach(() => {
     },
     setApplicationMenuLocale: async () => {},
   });
+});
+
+it('opens a shared package before the selected remote plugin catalogue', async () => {
+  catalog.device = { deviceId: 'remote-computer', name: 'Remote Computer' };
+  render(<MemoryRouter initialEntries={['/plugins?share=' + 's'.repeat(32)]}><GhostPluginPage /></MemoryRouter>);
+  expect(await screen.findByRole('button', { name: 'sharing.localSignIn' })).toBeTruthy();
+  expect(loadDetail).not.toHaveBeenCalled();
 });
 
 afterEach(() => {
@@ -242,6 +258,30 @@ async function openFromCatalog() {
 }
 
 describe('plugin page return navigation', () => {
+  // Public-share deep links must open the existing installation without starting
+  // an install. Catalog-only cases below cannot cover this query entry (unit).
+  it.each(['installed', 'update-available'] as const)(
+    'opens the local detail for a shared %s plugin without installing it',
+    async (installState) => {
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, name: 'Installed Plugin', version: '0.9.0' },
+        dir: path.join('plugins', detail.ghostId),
+        enabled: true,
+        approval: { state: 'approved', revision: 'market-navigation-revision' },
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      loadDetail.mockResolvedValue({ ...detail, installState });
+      const install = vi.fn();
+      Object.assign(window.electronAPI.pluginMarket, { install });
+
+      render(page(`/plugins?market=${detail.pluginId}`));
+
+      await screen.findByRole('heading', { level: 1, name: 'Installed Plugin' });
+      expect(loadDetail).toHaveBeenCalledWith(detail.pluginId);
+      expect(install).not.toHaveBeenCalled();
+    },
+  );
+
   // Regression #2871 (98929118d6): the real market-detail install flow must refresh
   // the current page after an update/replacement. The card helper only checks the
   // navigation decision; it cannot catch clearing marketDetail in the parent.
@@ -288,7 +328,8 @@ describe('plugin page return navigation', () => {
         };
       });
       Object.assign(window.electronAPI.pluginMarket, { install });
-      render(page(`/plugins?market=${detail.pluginId}`));
+      render(page('/plugins'));
+      await openFromCatalog();
       await screen.findByRole('heading', { level: 1, name: detail.name });
       const marketPage = screen.getByRole('main');
       const snapshotsBeforeInstall = snapshot.mock.calls.length;
@@ -323,6 +364,160 @@ describe('plugin page return navigation', () => {
       }) as HTMLButtonElement).disabled).toBe(true);
     },
   );
+
+  it.each([
+    { state: 'installed', author: 'Published nickname', installedAuthor: undefined, expected: 'Published nickname' },
+    { state: 'installed', author: null, installedAuthor: undefined, expected: null },
+    { state: 'update-available', author: 'New release nickname', installedAuthor: 'Installed release nickname', expected: 'Installed release nickname' },
+    { state: 'update-available', author: 'New release nickname', installedAuthor: null, expected: null },
+  ] as const)('preserves installed attribution and anonymity ($state, $expected)', async ({ state, author, installedAuthor, expected }) => {
+    const installed: InstalledGhost = {
+      manifest: { ...detail.manifest, author: 'Package author must not leak' },
+      dir: '/tmp/brain/' + detail.ghostId,
+      namespace: null, namespaceState: 'confirmed', enabled: true,
+      publishingSource: { kind: 'public-market', pluginId: detail.pluginId },
+      approval: { state: 'approved', revision: 'revision' },
+    };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    window.electronAPI.pluginMarket.snapshot = async () => ({
+      items: [{ ...detail, namespace: null, installState: state, author, installedAuthor,
+        version: state === 'update-available' ? '1.1.0' : detail.version }],
+      unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [],
+    });
+    render(page('/plugins'));
+    const card = screen.getByRole('button', { name: detail.name });
+    await within(card).findByText('settings.ghosts.page.origin.public');
+    if (expected) expect(within(card).getByText(expected)).toBeTruthy();
+    if (author !== expected && author) expect(within(card).queryByText(author)).toBeNull();
+    expect(within(card).queryByText('Package author must not leak')).toBeNull();
+  });
+
+  it.each(['local', 'public-market'] as const)('keeps the original local author fallback without exposing an unconfirmed public author (%s)', async (kind) => {
+    const installed: InstalledGhost = {
+      manifest: { ...detail.manifest, author: 'Local package author' },
+      dir: '/tmp/brain/' + detail.ghostId,
+      namespace: null, namespaceState: 'confirmed', enabled: true,
+      publishingSource: kind === 'local'
+        ? { kind: 'local', source: 'manual' }
+        : { kind: 'public-market', pluginId: detail.pluginId },
+      approval: { state: 'approved', revision: 'revision' },
+    };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    window.electronAPI.pluginMarket.snapshot = async () => ({
+      items: [], unavailableReason: 'OFFLINE', customSourceNames: [], unavailableCustomSourceNames: [],
+    });
+    render(page('/plugins'));
+    const card = screen.getByRole('button', { name: detail.name });
+    await within(card).findByText('settings.ghosts.page.origin.local');
+    expect(Boolean(within(card).queryByText('Local package author'))).toBe(kind === 'local');
+  });
+
+  it.each([
+    { id: 'cindy-art', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'reservedId' },
+    { id: 'personal-plugin', namespace: 'org', namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'approved', reason: 'privatePlugin' },
+    { id: 'personal-plugin', namespace: null, namespaceState: 'pending', approval: 'approved', reason: 'identityPending' },
+    { id: 'personal-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, approval: 'invalid', reason: 'approvalRequired' },
+  ])('keeps publishing restrictions out of use details for $id ($reason)', async ({ id, namespace, namespaceState, approval, reason }) => {
+    const installed = {
+      manifest: { ...detail.manifest, id, name: 'Installed Plugin' },
+      dir: '/tmp/brain/' + id, namespace, namespaceState, publishingSource: { kind: 'local', source: 'manual' },
+      enabled: true, approval: { state: approval, revision: 'revision' },
+    } as InstalledGhost;
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    window.electronAPI.pluginMarket.snapshot = async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    render(page('/plugins'));
+    fireEvent.click(await screen.findByText('Installed Plugin'));
+    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
+    expect(screen.queryByText('settings.ghosts.contribution.unavailable.' + reason)).toBeNull();
+  });
+
+  it('offers only locally publishable exact installations and opens a read-only package summary without uploading or publishing', async () => {
+    auth.mode = 'cloud';
+    const installed = {
+      manifest: { ...detail.manifest, id: 'local-author-plugin', name: 'Local Author Plugin' },
+      dir: '/tmp/brain/local-author-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' },
+      enabled: true, approval: { state: 'approved', revision: 'revision' },
+    } as InstalledGhost;
+    const unavailable = [
+      { ...installed, manifest: { ...installed.manifest, id: 'cindy-art', name: 'Reserved Plugin' } },
+      { ...installed, manifest: { ...installed.manifest, id: 'organization-plugin', name: 'Organization Plugin' }, namespace: 'org' },
+      { ...installed, manifest: { ...installed.manifest, id: 'unapproved-plugin', name: 'Unapproved Plugin' }, approval: { state: 'legacy-unapproved' } },
+      { ...installed, manifest: { ...installed.manifest, id: 'pending-plugin', name: 'Pending Identity Plugin' }, namespaceState: 'pending' },
+    ] as InstalledGhost[];
+    const ghosts = [...unavailable.map((ghost) => ({ ...ghost, dir: path.join(path.dirname(installed.dir), ghost.manifest.id) })), installed];
+    window.electronAPI.ghosts.listSync = () => ({ ghosts });
+    const api = { list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: '2026-10-15T00:00:00Z' }), transfers: vi.fn().mockResolvedValue([]), prepare: vi.fn().mockResolvedValue({ preparedId: 'preview', instanceId: 'local-author-plugin', version: '1.0.0', releaseNotes: 'Initial release', preflight: { blockers: [], actions: { canSubmit: true } } }), discard: vi.fn().mockResolvedValue(undefined), submit: vi.fn() };
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page('/plugins?myPlugins=1'));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }));
+    const picker = screen.getByRole('dialog');
+    expect(within(picker).getAllByRole('button')).toHaveLength(2); // One installation and Close; select before submitting.
+    for (const ghost of unavailable) expect(within(picker).queryByText(ghost.manifest.name)).toBeNull();
+    const option = within(picker).getByRole('button', { name: 'Local Author Plugin · 1.0.0 · local-author-plugin' });
+    await waitFor(() => expect(option).toHaveProperty('disabled', false));
+    fireEvent.click(option);
+    expect(await within(picker).findByRole('button', { name: 'settings.ghosts.contribution.submitVersion' })).toHaveProperty('disabled', false);
+    // Radix correctly removes the page behind an open modal from the accessibility tree.
+    expect(screen.getByText('settings.ghosts.contribution.myPlugins', { selector: 'h1' })).toBeTruthy();
+    expect(api.prepare).toHaveBeenCalledWith('local-author-plugin', expect.objectContaining({ directory: installed.dir }));
+    expect(api.submit).not.toHaveBeenCalled();
+    fireEvent.click(within(picker).getByRole('button', { name: 'settings.ghosts.detail.closeDialog' }));
+    expect(screen.getByRole('heading', { level: 1, name: 'settings.ghosts.contribution.myPlugins' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.title' }));
+    expect(await screen.findByRole('button', { name: 'settings.ghosts.contribution.myPlugins' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Local Author Plugin' })).toBeNull();
+  });
+
+  it.each(['VERSION_ALREADY_SUBMITTED', 'PLUGIN_PENDING_RELEASE_EXISTS', 'RELEASE_NOTES_REQUIRED', 'PLUGIN_GHOST_ID_CONFLICT'])(
+    'hides the unavailable submit action after reading the real preflight projection (%s)', async code => {
+      auth.mode = 'cloud';
+      const installed: InstalledGhost = {
+        manifest: { ...detail.manifest, id: 'local-author-plugin', name: 'Local Author Plugin' },
+        dir: path.resolve('brain', 'local-author-plugin'), namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' },
+        enabled: true, approval: { state: 'approved', revision: 'revision' },
+      };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      const api = {
+        list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: '2026-10-15T00:00:00Z' }),
+        prepare: vi.fn().mockResolvedValue({ preparedId: 'preview', instanceId: 'local-author-plugin', version: '1.0.0', releaseNotes: 'Initial release', preflight: { blockers: [{ code, message: 'Publication blocked' }], actions: { canSubmit: false } } }),
+        discard: vi.fn().mockResolvedValue(undefined), submit: vi.fn(),
+      };
+      Object.assign(window.electronAPI, { pluginContributions: api });
+      render(page('/plugins'));
+      fireEvent.click(await screen.findByText('Local Author Plugin'));
+      expect(api.prepare).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }));
+      const picker = screen.getByRole('dialog');
+      await within(picker).findAllByText(`settings.ghosts.contribution.errors.${code}`);
+      expect(within(picker).queryByText('Publication blocked')).toBeNull();
+      expect(within(picker).queryByRole('button', { name: 'settings.ghosts.contribution.submitVersion' })).toBeNull();
+      expect(within(picker).getByRole('button', { name: 'settings.ghosts.detail.closeDialog' })).toHaveProperty('disabled', false);
+      expect(api.submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('shows no publishable installations instead of no installations when only a reserved plugin is installed', async () => {
+    auth.mode = 'cloud';
+    const installed: InstalledGhost = {
+      manifest: { ...detail.manifest, id: 'cindy-art', name: 'Art' },
+      dir: path.resolve('brain', 'cindy-art'),
+      namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, enabled: true,
+      approval: { state: 'approved', revision: 'revision' },
+    };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = { list: vi.fn().mockResolvedValue({ plugins: [], nextCursor: null, queriedAt: '2026-10-15T00:00:00Z' }), transfers: vi.fn().mockResolvedValue([]), prepare: vi.fn().mockResolvedValue({ preparedId: 'preview', instanceId: 'local-author-plugin', version: '1.0.0', releaseNotes: 'Initial release', preflight: { blockers: [], actions: { canSubmit: true } } }), discard: vi.fn().mockResolvedValue(undefined), submit: vi.fn() };
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page('/plugins?myPlugins=1'));
+    await screen.findByText('settings.ghosts.contribution.empty');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }));
+    const picker = screen.getByRole('dialog');
+    expect(within(picker).getByText('settings.ghosts.contribution.noPublishablePlugins')).toBeTruthy();
+    expect(within(picker).queryByText('settings.ghosts.contribution.noLocalPlugins')).toBeNull();
+    expect(within(picker).queryByText('Art')).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
+    expect(api.submit).not.toHaveBeenCalled();
+  });
 
   it.each(['xd-ordinary', 'filo-ordinary'])(
     'updates an ordinary root %s from a local file and offers export in packaged builds',
@@ -706,5 +901,330 @@ describe('organization catalog access notice', () => {
     expect(await screen.findByText('Navigation Plugin')).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.market.errors.namespaceClientRequired')).toBeNull();
     expect(screen.queryByText('settings.ghosts.market.errors.organizationUnavailable')).toBeNull();
+  });
+});
+
+
+describe('plugin use details and independent author management', () => {
+  const prefix = 'settings.ghosts.contribution';
+  async function openLocalPublishing() {
+    fireEvent.click(await screen.findByRole('button', { name: `${prefix}.publishPlugin` }));
+    return screen.getByRole('dialog');
+  }
+  function authorApi(localInstanceId: string | null = '_root__navigation-plugin') {
+    const own: MyPluginDetailView = {
+      plugin: { pluginId: detail.pluginId, name: 'Published snapshot name', iconUrl: null,
+        updatedAt: '2026-10-19T00:00:00Z', market: { state: 'available', version: '1.0.0', releaseId: detail.releaseId, reason: null },
+        localInstanceId, localVersion: localInstanceId ? '1.2.0' : null,
+        localInstallation: localInstanceId ? { state: 'installed', instanceId: localInstanceId, version: '1.2.0', origin: 'local', enabled: true } : { state: 'missing' },
+        actions: { submitUpdate: true, viewMarket: true }, authorSettings: { anonymous: true, canEdit: false },
+        latestSubmission: { releaseId: 'pending-release', version: '1.2.0', sha256: 'a'.repeat(64), revision: 'revision',
+          revisionState: 'current', submissionId: 'pending-submission', reviewStatus: 'pending',
+          submittedAt: '2026-10-19T00:00:00Z', reviewedAt: null, reason: null, source: 'manual', canCancelReview: true,
+          content: { name: 'Submitted snapshot name', description: 'Submitted snapshot description', iconUrl: null,
+            permissions: [], manifestView: { releaseNotes: 'Changes since the published 1.0.0' } } } },
+      history: [], nextCursor: null, queriedAt: '2026-10-19T00:00:00Z',
+    };
+    return { list: vi.fn().mockResolvedValue({ plugins: [own.plugin], nextCursor: null, queriedAt: own.queriedAt }),
+      detail: vi.fn().mockResolvedValue(own), releases: vi.fn<() => Promise<MyPluginReleasePageView>>().mockResolvedValue({ releases: [], nextCursor: null, queriedAt: own.queriedAt }),
+      prepare: vi.fn(), submit: vi.fn(), setAnonymity: vi.fn() };
+  }
+
+  function localAuthorInstallation(version: string): InstalledGhost {
+    return {
+      manifest: { ...detail.manifest, name: 'Local Author Plugin', version, releaseNotes: 'Complete changes' },
+      dir: path.resolve('brain', '_ns', '_root', detail.ghostId), instanceKey: '_root__navigation-plugin',
+      namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' },
+      enabled: true, approval: { state: 'approved', revision: 'revision' },
+    };
+  }
+
+  it.each([
+    ['failed', 'Missing entry file: main.js\nPackage validation stopped.'],
+    ['failed', 'Expected SHA256 aabb, received ccdd.'],
+    ['failed', 'Package is 120 MB; maximum size is 100 MB.'],
+    ['failed', 'Release storage could not retain the validated package.'],
+    ['unconfirmed', null],
+    ['processing', null],
+    ['succeeded', null],
+  ] as const)('keeps a %s submission in the original detail without an upload-management page', async (stage, message) => {
+    auth.mode = 'cloud';
+    const installed = localAuthorInstallation('1.3.0');
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi();
+    const own = await api.detail();
+    own.plugin.latestSubmission = null;
+    const prepared: ContributionTransferView['prepared'] = { preparedId: 'submit-package', instanceId: installed.instanceKey!, pluginId: detail.pluginId,
+      ghostId: detail.ghostId, name: 'Local Author Plugin', description: '', version: '1.3.0', releaseNotes: 'Complete changes',
+      sha256: 'a'.repeat(64), sizeBytes: 100, expiresAt: '2099-01-01T00:00:00Z',
+      preflight: { subject: { authority: 'https://issuer.test', membershipId: 'member-A' }, queriedAt: '2026-10-21T00:00:00Z', policyVersion: 2,
+        target: { pluginId: detail.pluginId, ghostId: detail.ghostId, version: '1.3.0', expectedRelease: null }, pendingRelease: null, blockers: [], actions: { canSubmit: true } } };
+    api.prepare.mockResolvedValue(prepared);
+    const transfer: ContributionTransferView = {
+      localId: prepared.preparedId, prepared, stage: stage === 'processing' ? 'processing' : 'complete',
+      errorCode: stage === 'unconfirmed' ? 'INTERNAL' : null,
+      operation: { subject: { authority: 'https://issuer.test', membershipId: 'member-A' }, operationId: 'operation',
+        status: stage === 'failed' ? 'failed' : stage === 'succeeded' ? 'succeeded' : 'validating', createdAt: '2026-10-21T00:00:00Z', updatedAt: '2026-10-21T00:00:00Z',
+        expiresAt: '2099-01-01T00:00:00Z', receipt: stage === 'succeeded' ? { operationId: 'operation', submissionId: 'new-submission', pluginId: detail.pluginId, releaseId: 'new-release', ghostId: detail.ghostId, version: '1.3.0', source: 'manual', submittedAt: '2026-10-21T00:00:00Z', uploadedPackage: { sha256: prepared.sha256, sizeBytes: prepared.sizeBytes }, releaseRevision: { releaseId: 'new-release', sha256: prepared.sha256, displayUpdatedAt: '2026-10-21T00:00:00Z' }, outcome: 'submitted_for_review' } : null, submission: null,
+        failure: message ? { code: 'PLUGIN_PACKAGE_INVALID', message } : null },
+    };
+    api.submit.mockResolvedValue(transfer);
+    let finish!: (value: ContributionTransferView) => void;
+    const status = vi.fn(() => new Promise<ContributionTransferView>(resolve => { finish = resolve; }));
+    const error = vi.spyOn(toast, 'error').mockReturnValue('submit-error');
+    Object.assign(window.electronAPI, { pluginContributions: { ...api, status, discard: vi.fn().mockResolvedValue(undefined) } });
+    render(page(`/plugins?ghost=${installed.instanceKey}`));
+    await screen.findByRole('heading', { name: 'Local Author Plugin' });
+    expect(api.prepare).not.toHaveBeenCalled();
+    const picker = await openLocalPublishing();
+    const submit = await within(picker).findByRole('button', { name: `${prefix}.submitVersion` });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.submit).toHaveBeenCalledExactlyOnceWith(prepared.preparedId));
+    if (stage === 'processing') {
+      expect(submit).toHaveProperty('disabled', true);
+      await waitFor(() => expect(status).toHaveBeenCalledWith(transfer.localId), { timeout: 2500 });
+      await act(async () => { finish({ ...transfer, stage: 'complete', errorCode: 'INTERNAL' }); });
+    }
+    if (stage === 'succeeded') {
+      await screen.findByRole('heading', { name: 'Published snapshot name' });
+      expect(error).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: `${prefix}.myPlugins` }));
+      await screen.findByRole('heading', { level: 1, name: `${prefix}.myPlugins` });
+      fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.title' }));
+      await screen.findByRole('heading', { level: 1, name: 'settings.ghosts.title' });
+    } else {
+      await waitFor(() => expect(error).toHaveBeenCalledWith(`${prefix}.errors.${message ? 'PLUGIN_PACKAGE_INVALID' : 'INTERNAL'}`));
+      if (message) expect(error).not.toHaveBeenCalledWith(message);
+      expect(screen.getByText('Local Author Plugin', { selector: 'h1' })).toBeTruthy();
+    }
+    expect(screen.queryByText(`${prefix}.resume`)).toBeNull();
+    expect(screen.queryByText(`${prefix}.retryPublish`)).toBeNull();
+    expect(screen.queryByRole('region', { name: `${prefix}.publicationProgress` })).toBeNull();
+  });
+
+  // Unit: a cancelled 1.0.0 still offered submission and only failed after clicking.
+  // Exercise the real installed-detail entry; preflight-only coverage missed updates.
+  it.each(['cancelled', 'rejected', 'approved', 'pending'] as const)(
+    'hides the installed-version submit action after a %s submission', async reviewStatus => {
+      auth.mode = 'cloud';
+      const installed = localAuthorInstallation('1.2.0');
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      const api = authorApi();
+      const own = await api.detail();
+      own.plugin.latestSubmission!.reviewStatus = reviewStatus;
+      Object.assign(window.electronAPI, { pluginContributions: api });
+      render(page(`/plugins?ghost=${installed.instanceKey}`));
+      await screen.findByRole('heading', { name: 'Local Author Plugin' });
+      const picker = await openLocalPublishing();
+      await within(picker).findAllByText(`${prefix}.errors.${reviewStatus === 'pending' ? 'PLUGIN_PENDING_RELEASE_EXISTS' : 'VERSION_ALREADY_SUBMITTED'}`);
+      expect(within(picker).queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+      expect(api.prepare).not.toHaveBeenCalled();
+      expect(api.submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('checks older release pages before enabling submission of an installed version', async () => {
+    auth.mode = 'cloud';
+    const installed = localAuthorInstallation('0.9.0');
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi();
+    const own = await api.detail();
+    const latest = own.plugin.latestSubmission!;
+    latest.reviewStatus = 'approved';
+    api.releases.mockResolvedValueOnce({ releases: [latest], nextCursor: 'older', queriedAt: own.queriedAt })
+      .mockResolvedValueOnce({ releases: [{ ...latest, version: '0.9.0', reviewStatus: 'cancelled' }], nextCursor: null, queriedAt: own.queriedAt });
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(`/plugins?ghost=${installed.instanceKey}`));
+    await screen.findByRole('heading', { name: 'Local Author Plugin' });
+    const picker = await openLocalPublishing();
+    await within(picker).findAllByText(`${prefix}.errors.VERSION_ALREADY_SUBMITTED`);
+    expect(api.releases).toHaveBeenCalledWith(detail.pluginId, 'older');
+    expect(within(picker).queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
+    expect(api.submit).not.toHaveBeenCalled();
+  });
+
+  it('keeps the entry usable and offers no submission while dialog eligibility is loading or failed', async () => {
+    auth.mode = 'cloud';
+    const installed = localAuthorInstallation('2.0.0');
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi();
+    (await api.detail()).plugin.latestSubmission!.reviewStatus = 'approved';
+    let fail!: (error: Error) => void;
+    api.releases.mockImplementation(() => new Promise((_, reject) => { fail = reject; }));
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(`/plugins?ghost=${installed.instanceKey}`));
+    const action = await screen.findByRole('button', { name: `${prefix}.publishPlugin` });
+    expect(action).toHaveProperty('disabled', false);
+    expect(api.releases).not.toHaveBeenCalled();
+    const picker = await openLocalPublishing();
+    await waitFor(() => expect(api.releases).toHaveBeenCalled());
+    expect(within(picker).queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+    await act(async () => { fail(new Error('Offline')); });
+    expect(await within(picker).findByRole('alert')).toHaveProperty('textContent', `${prefix}.loadFailed`);
+    expect(within(picker).queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
+    expect(api.submit).not.toHaveBeenCalled();
+  });
+
+  // An unused version can still fail preflight (for example, missing update notes).
+  // Exercise the installed-detail action: it must use the same preview as first publication.
+  it.each([{ allowed: true, membershipKind: 'personal' }, { allowed: false, membershipKind: 'personal' }, { allowed: true, membershipKind: 'org' }])('preflights an unused installed update for $membershipKind before submission (allowed=$allowed)', async ({ allowed, membershipKind }) => {
+    auth.mode = 'cloud';
+    auth.user.membershipKind = membershipKind;
+    const installed = localAuthorInstallation('2.0.0');
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi();
+    const own = await api.detail();
+    own.plugin.latestSubmission!.reviewStatus = 'approved';
+    api.releases.mockResolvedValueOnce({ releases: [own.plugin.latestSubmission!], nextCursor: 'older', queriedAt: own.queriedAt })
+      .mockResolvedValueOnce({ releases: [], nextCursor: null, queriedAt: own.queriedAt });
+    const prepared: ContributionTransferView['prepared'] = { preparedId: 'checked-update', instanceId: installed.instanceKey!, pluginId: detail.pluginId,
+      ghostId: detail.ghostId, name: 'Local Author Plugin', description: '', version: '2.0.0', releaseNotes: 'Checked update notes',
+      sha256: 'a'.repeat(64), sizeBytes: 100, expiresAt: '2099-01-01T00:00:00Z',
+      preflight: { subject: { authority: 'https://issuer.test', membershipId: 'member-A' }, queriedAt: own.queriedAt, policyVersion: 2,
+        target: { pluginId: detail.pluginId, ghostId: detail.ghostId, version: '2.0.0', expectedRelease: null }, pendingRelease: null,
+        blockers: allowed ? [] : [{ code: 'RELEASE_NOTES_REQUIRED', message: 'Missing release notes' }], actions: { canSubmit: allowed } } };
+    let finishPreview!: (value: ContributionTransferView['prepared']) => void;
+    api.prepare.mockImplementation(() => new Promise<ContributionTransferView['prepared']>(resolve => { finishPreview = resolve; }));
+    Object.assign(window.electronAPI, { pluginContributions: { ...api, discard: vi.fn().mockResolvedValue(undefined) } });
+    render(page(`/plugins?ghost=${installed.instanceKey}`));
+    expect(api.prepare).not.toHaveBeenCalled();
+    const picker = await openLocalPublishing();
+    await waitFor(() => expect(api.prepare).toHaveBeenCalledTimes(1));
+    expect(within(picker).queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+    expect(api.submit).not.toHaveBeenCalled();
+    await act(async () => { finishPreview(prepared); });
+    if (allowed) {
+      expect(await screen.findByRole('button', { name: `${prefix}.submitVersion` })).toHaveProperty('disabled', false);
+      expect(within(picker).getByText('Checked update notes')).toBeTruthy();
+    } else {
+      expect(await within(picker).findByText(`${prefix}.errors.RELEASE_NOTES_REQUIRED`)).toBeTruthy();
+      expect(within(picker).queryByText('Missing release notes')).toBeNull();
+      expect(screen.queryByRole('button', { name: `${prefix}.submitUpdate` })).toBeNull();
+      expect(screen.queryByRole('button', { name: `${prefix}.submitVersion` })).toBeNull();
+    }
+    expect(api.releases).toHaveBeenCalledWith(detail.pluginId, 'older');
+    expect(api.submit).not.toHaveBeenCalled();
+  });
+  it.each([undefined, { kind: 'unavailable' }, { kind: 'public-market', pluginId: detail.pluginId }] satisfies InstalledGhost['publishingSource'][])(
+    'does not expose publishing or prepare ordinary/unknown downloads (%j)', async publishingSource => {
+      auth.mode = 'cloud';
+      const installed: InstalledGhost = { manifest: { ...detail.manifest, name: 'Downloaded Plugin' },
+        dir: path.resolve('brain', '_ns', '_root', detail.ghostId), instanceKey: '_root__navigation-plugin',
+        namespace: null, namespaceState: 'confirmed', publishingSource, enabled: true,
+        approval: { state: 'approved', revision: 'revision' } };
+      window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+      const api = authorApi();
+      const readonly = { ...(await api.detail()).plugin, actions: { submitUpdate: false, viewMarket: true } };
+      api.list.mockResolvedValue({ plugins: [readonly], nextCursor: null, queriedAt: detail.publishedAt });
+      api.detail.mockResolvedValue({ ...(await api.detail()), plugin: readonly });
+      Object.assign(window.electronAPI, { pluginContributions: api });
+      render(page(`/plugins?ghost=${installed.instanceKey}`));
+      await screen.findByRole('heading', { name: 'Downloaded Plugin' });
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.queryByRole('heading', { name: `${prefix}.publishing` })).toBeNull();
+      expect(screen.queryByRole('button', { name: `${prefix}.publishPlugin` })).toBeNull();
+      expect(api.prepare).not.toHaveBeenCalled();
+      expect(api.submit).not.toHaveBeenCalled();
+      // 普通下载详情无需扫描本人投稿权限，公开安装也不能开启 UI 提审。
+      expect(api.list).not.toHaveBeenCalled();
+    });
+  it.each(['author-list', 'installed', 'installed-market', 'market'] as const)('keeps use and version management separate when entering from %s', async entry => {
+    auth.mode = 'cloud';
+    const installed: InstalledGhost = { manifest: { ...detail.manifest, name: 'Actual installed name', version: '1.2.0' },
+      dir: path.resolve('brain', '_ns', '_root', detail.ghostId), instanceKey: '_root__navigation-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, enabled: true,
+      approval: { state: 'approved', revision: 'revision' } };
+    if (entry === 'installed-market') installed.publishingSource = { kind: 'public-market', pluginId: detail.pluginId };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi(); Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(entry === 'author-list' ? '/plugins?myPlugins=1' : entry === 'market' ? `/plugins?market=${detail.pluginId}` : '/plugins'));
+    if (entry === 'author-list') fireEvent.click(await screen.findByText('Published snapshot name'));
+    if (entry === 'installed' || entry === 'installed-market') fireEvent.click(await screen.findByText('Actual installed name'));
+    if (entry === 'author-list') {
+      await screen.findByRole('heading', { level: 1, name: 'Published snapshot name' });
+      const facts = screen.getByLabelText(`${prefix}.versionFacts`);
+      expect(facts.closest('details')).toBeNull();
+      expect(within(facts).getAllByText('1.2.0')).toHaveLength(2);
+      expect(within(facts).getByText('1.0.0')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /settings\.ghosts\.contribution\.submitVersion/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: `${prefix}.openPlugin` })).toBeNull();
+      expect(screen.getByRole('button', { name: `${prefix}.cancelReview` })).toBeTruthy();
+      expect(screen.queryByRole('switch', { name: 'settings.ghosts.enableAria' })).toBeNull();
+      expect(screen.queryByRole('switch', { name: `${prefix}.anonymous` })).toBeNull();
+    } else {
+      await screen.findByRole('heading', { level: 1, name: entry === 'market' ? detail.name : 'Actual installed name' });
+      expect(screen.queryByLabelText(`${prefix}.versionFacts`)).toBeNull();
+      expect(screen.queryByRole('button', { name: `${prefix}.cancelReview` })).toBeNull();
+      expect(screen.queryByRole('switch', { name: `${prefix}.anonymous` })).toBeNull();
+      if (entry !== 'market') expect(screen.getByRole('switch', { name: 'settings.ghosts.enableAria' }).getAttribute('aria-checked')).toBe('true');
+      if (entry === 'installed-market' || entry === 'market') expect(screen.queryByRole('button', { name: `${prefix}.submitUpdate` })).toBeNull();
+    }
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(api.prepare).not.toHaveBeenCalled(); expect(api.submit).not.toHaveBeenCalled();
+    expect(api.setAnonymity).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: entry === 'author-list' ? `${prefix}.myPlugins` : 'settings.ghosts.detail.backToList' }));
+    if (entry === 'author-list') await screen.findByRole('heading', { name: `${prefix}.myPlugins` });
+    else await screen.findByRole('heading', { level: 1, name: 'settings.ghosts.title' });
+  });
+  it('honors an explicit installed deep link while leaving the author detail', async () => {
+    auth.mode = 'cloud';
+    const installed: InstalledGhost = { manifest: { ...detail.manifest, name: 'Actual installed name', version: '1.2.0' },
+      dir: path.resolve('brain', '_ns', '_root', detail.ghostId), instanceKey: '_root__navigation-plugin', namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, enabled: true,
+      approval: { state: 'approved', revision: 'revision' } };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    const api = authorApi(); Object.assign(window.electronAPI, { pluginContributions: api });
+    function NavigateInstalled() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate(`/plugins?ghost=${installed.instanceKey}`)}>Installed deep link</button>;
+    }
+    render(<MemoryRouter initialEntries={[`/plugins?myPlugins=1&contribution=${detail.pluginId}`]}>
+      <NavigateInstalled /><GhostPluginPage />
+    </MemoryRouter>);
+    await screen.findByLabelText(`${prefix}.versionFacts`);
+    fireEvent.click(screen.getByRole('button', { name: 'Installed deep link' }));
+    await screen.findByRole('heading', { level: 1, name: 'Actual installed name' });
+    expect(screen.queryByLabelText(`${prefix}.versionFacts`)).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
+  });
+  it('does not guess first publication or prepare a package when author association cannot be read', async () => {
+    auth.mode = 'cloud';
+    const installed: InstalledGhost = { manifest: { ...detail.manifest, name: 'Unknown author association' },
+      dir: path.resolve('brain', '_ns', '_root', detail.ghostId), instanceKey: '_root__navigation-plugin',
+      namespace: null, namespaceState: 'confirmed', publishingSource: { kind: 'local', source: 'manual' }, enabled: true, approval: { state: 'approved', revision: 'revision' } };
+    window.electronAPI.ghosts.listSync = () => ({ ghosts: [installed] });
+    window.electronAPI.pluginMarket.snapshot = async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const api = authorApi(null); api.list.mockRejectedValue(new Error('Offline'));
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(`/plugins?ghost=${installed.instanceKey}`));
+    expect(api.list).not.toHaveBeenCalled();
+    const picker = await openLocalPublishing();
+    await within(picker).findAllByText(`${prefix}.loadFailed`);
+    expect(api.prepare).not.toHaveBeenCalled();
+    expect(api.submit).not.toHaveBeenCalled();
+  });
+  it('keeps a remote author detail usable without selecting a same-name local plugin', async () => {
+    auth.mode = 'cloud';
+    const api = authorApi(null); Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(`/plugins?myPlugins=1&contribution=${detail.pluginId}`));
+    const facts = await screen.findByLabelText(`${prefix}.versionFacts`);
+    expect(within(facts).getByText(`${prefix}.localState.missing`)).toBeTruthy();
+    expect(screen.getByRole('button', { name: `${prefix}.installPublished` })).toBeTruthy();
+    expect(screen.queryByRole('switch', { name: 'settings.ghosts.enableAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: `${prefix}.submitUpdate` })).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
+  });
+  it('keeps an ordinary market viewer outside author management', async () => {
+    auth.mode = 'cloud';
+    const api = authorApi(null); api.detail.mockRejectedValue(new Error('PERMISSION_DENIED'));
+    Object.assign(window.electronAPI, { pluginContributions: api });
+    render(page(`/plugins?market=${detail.pluginId}`));
+    await screen.findByRole('heading', { name: detail.name });
+    expect(api.detail).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText(`${prefix}.versionFacts`)).toBeNull();
+    expect(screen.queryByRole('heading', { name: `${prefix}.publishing` })).toBeNull();
+    expect(screen.queryByText(`${prefix}.anonymous`)).toBeNull();
+    expect(api.prepare).not.toHaveBeenCalled();
   });
 });

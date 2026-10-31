@@ -284,3 +284,30 @@ describe('group.message(阶段 14)', () => {
     );
   });
 });
+
+describe('group image locators', () => {
+  it('round-trips bounded optional locators and rejects executable/non-image payloads', () => {
+    const imageRefs = [
+      {
+        fileId: 'photo',
+        name: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        downloadToken: 'opaque-proof',
+      },
+    ];
+    roundTrip(makeGroupMessage({ ...FULL, imageRefs }));
+    for (const patch of [
+      { mimeType: 'text/html' },
+      { fileId: '' },
+      { downloadToken: 'x'.repeat(8193) },
+    ]) {
+      expectReject(
+        {
+          ...makeGroupMessage(FULL),
+          payload: { ...FULL, imageRefs: [{ ...imageRefs[0], ...patch }] },
+        },
+        'imageRefs',
+      );
+    }
+  });
+});

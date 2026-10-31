@@ -13,6 +13,7 @@ const CANONICAL_DOCS = [
 ];
 const CONTRIBUTING_DOCS = ["CONTRIBUTING.md", "CONTRIBUTING.en.md"];
 const CHECKED_DOCS = [...CONTRIBUTING_DOCS, ...CANONICAL_DOCS];
+const COMMAND_CHECKED_DOCS = [...CHECKED_DOCS, "apps/desktop/README.md"];
 const WORKSPACES = new Map([
 	["desktop", "apps/desktop/package.json"],
 	["mobile", "apps/mobile/package.json"],
@@ -140,7 +141,7 @@ function listLinkCheckedDocs() {
 
 test("developer docs only document pnpm commands that exist", () => {
 	const rootPackage = readJson("package.json");
-	for (const relativePath of CHECKED_DOCS) {
+	for (const relativePath of COMMAND_CHECKED_DOCS) {
 		for (const line of shellLines(relativePath)) {
 			assertPnpmCommandExists(line, rootPackage);
 		}

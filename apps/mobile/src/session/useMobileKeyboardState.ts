@@ -27,7 +27,7 @@ export interface MobileKeyboardState {
  * iOS 的输入卡片、消息区域和避让容器共用这份坐标与动画，不再让 KAV
  * 另行监听 show/hide 并覆盖动画。Android 保留 KAV 的 did 事件避让。
  */
-export function useMobileKeyboardState(enabled = true, layoutAnimationEnabled?: RefObject<boolean>): MobileKeyboardState {
+export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
   const viewport = useWindowDimensions();
   const [state, setState] = useState(() => readKeyboardSnapshot(enabled));
   const snapshot = useRef(state);
@@ -55,7 +55,7 @@ export function useMobileKeyboardState(enabled = true, layoutAnimationEnabled?: 
       const next = { shown, frame };
       snapshot.current = next;
       transition.current = { event, startedAt: Date.now() };
-      if (Platform.OS === 'ios' && layoutAnimationEnabled?.current !== false) {
+      if (Platform.OS === 'ios') {
         if (getCachedReduceMotionEnabled() === false && event.duration > 0) {
           Keyboard.scheduleLayoutAnimation(event);
         } else {
@@ -115,7 +115,7 @@ export function useMobileKeyboardState(enabled = true, layoutAnimationEnabled?: 
       disposed = true;
       for (const subscription of subscriptions) subscription.remove();
     };
-  }, [enabled, layoutAnimationEnabled]);
+  }, [enabled]);
 
   const frame = enabled && state.shown ? state.frame : null;
   const height = !frame ? 0 : Platform.OS === 'ios'

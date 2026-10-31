@@ -27,6 +27,13 @@ export interface DurableOutboxRecord {
     input: import('../chat/chatServerClient').ChatSendInput;
     body?: import('../chat/chatServerClient').ChatSendBody;
     messageId?: string;
+    /** Optional second stage; absent on all pre-topic records. */
+    shareToMain?: {
+      state: 'pending' | 'failed' | 'sent' | 'unavailable';
+      body?: import('../chat/chatServerClient').ChatSendBody;
+      messageId?: string | null;
+      error?: 'THREAD_SHARE_FAILED' | 'SHARE_UNAVAILABLE';
+    };
     quote?: import('@cindy/maker-shared/botGroupChat').BotGroupQuoteView;
     after: number;
     /** Server cursor; `after` above is only the local displayed row position. */
@@ -312,6 +319,14 @@ function isLoadableOutboxRecord(
 
 function validChatDestination(row: DurableOutboxRecord): boolean {
   const chat = row.chat;
+  const share = chat?.shareToMain;
+  if (share && ((chat?.messageId !== undefined && (typeof chat.messageId !== 'string' || !chat.messageId))
+    || !chat?.input?.threadRootId || !['pending', 'failed', 'sent', 'unavailable'].includes(share.state)
+    || (share.state === 'sent' && !chat.messageId)
+    || (share.error !== undefined && !['THREAD_SHARE_FAILED', 'SHARE_UNAVAILABLE'].includes(share.error))
+    || (share.messageId !== undefined && share.messageId !== null && typeof share.messageId !== 'string')
+    || (share.body && (!chat.messageId || share.body.threadRootId || share.body.operationId !== `thread-share:${chat.messageId}`
+      || !Array.isArray(share.body.content) || !Array.isArray(share.body.mentions))))) return false;
   if (chat?.afterServerSequence !== undefined && !/^[1-9][0-9]{0,18}$/.test(chat.afterServerSequence)) return false;
   return !!chat && row.deviceId === '' && typeof chat.roomId === 'string' && !!chat.roomId
     && row.item?.sessionId === chat.roomId && chat.input?.clientId === row.item.clientId

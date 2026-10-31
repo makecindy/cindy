@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
-import { applyMailInlineEdits, mailInlineDocument, mailInlineBindingScript, mailInlineRefreshScript, type MailInlineImage } from '@cindy/maker-shared/mail-text-edit';
+import { applyMailInlineEdits, mailInlineDocument, mailReadingDocument, mailReadingThemeScript, mailInlineBindingScript, mailInlineRefreshScript, type MailInlineImage } from '@cindy/maker-shared/mail-text-edit';
 import { WebView } from 'react-native-webview';
 import { interceptHtmlNavigation } from '@/session/htmlNavigationPolicy';
 import { useBotGroupRemoteMedia } from '@/session/useBotGroupRemoteMedia';
-import { useThemedStyles, spacing, typeScale, lineHeight, fontWeight, type ThemeColors } from '@/theme';
+import { useTheme, useThemedStyles, spacing, typeScale, lineHeight, fontWeight, type ThemeColors } from '@/theme';
 
 /** CID substitution is preview-only. Never pass fetched URLs back into the draft. */
 export function MobileMailHtmlPreview({ html, images = [], deviceId, disabled, onChange }: {
@@ -72,16 +72,19 @@ function MobileMailFrame({ html, images, disabled, onChange }: {
   html: string; images: MailInlineImage[]; disabled?: boolean; onChange?: (html: string, text: string) => void;
 }) {
   const web = useRef<WebView>(null);
+  const { mode, colors } = useTheme();
   const model = useRef({ source: html, emitted: html, received: html, edits: {} as Record<string, string>, revision: 0 });
   if (model.current.received !== html) {
     if (html !== model.current.emitted) model.current = { source: html, emitted: html, received: html, edits: {}, revision: model.current.revision + 1 };
     else model.current.received = html;
   }
   const revision = model.current.revision;
-  const source = useMemo(() => ({ baseUrl: 'about:blank', html: mailInlineDocument(model.current.source, images) }), [revision]);
+  const editable = Boolean(onChange);
+  const source = useMemo(() => ({ baseUrl: 'about:blank', html: (editable ? mailInlineDocument : mailReadingDocument)(model.current.source, images) }), [revision, editable]);
   const settled = useRef(false), lastSource = useRef(source);
   if (lastSource.current !== source) { lastSource.current = source; settled.current = false; }
-  const refresh = mailInlineRefreshScript(Boolean(onChange) && !disabled, images);
+  const appearance = editable ? '' : mailReadingThemeScript(mode === 'dark', { surface: colors.surface, text: colors.textPrimary });
+  const refresh = mailInlineRefreshScript(Boolean(onChange) && !disabled, images) + appearance;
   useEffect(() => { web.current?.injectJavaScript(refresh); }, [refresh]);
   return <WebView key={revision} ref={web} source={source} javaScriptEnabled
     originWhitelist={['*']} onShouldStartLoadWithRequest={request => interceptHtmlNavigation(request, settled.current)}

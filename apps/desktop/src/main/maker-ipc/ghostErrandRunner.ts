@@ -12,8 +12,8 @@
  *     → 取最终回复文字(观察器累积为主,DB 最新 assistant 消息兜底)
  *
  * 安全不变量(与 errandSlot 头注释同一契约):任务文本只进普通 user 消息;
- * 权限档只认 ask/plan/acceptEdits/auto(存储层与本层双重钳制,bypassPermissions
- * 在协议上不存在);errand 会话侧边栏可见,用户可旁观可随时停;工作目录
+ * 权限由用户插件设置提供(ask/auto/bypassPermissions，历史 plan/acceptEdits 保留)，
+ * 插件请求不能自报授权;errand 会话侧边栏可见,用户可旁观可随时停;工作目录
  * 用户配置优先,插件转述的目录只认 pick 亲选台账(isUserPickedDir),
  * 台账没有即明拒——插件不能凭空指路。
  *

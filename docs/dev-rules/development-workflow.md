@@ -10,6 +10,11 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
 
 ## 1. Dogfooding：在本仓 worktree 会话里工作
 
+Cindy 创建或重建托管 worktree 时，会尽力向 Git 本地 `info/exclude` 追加所用托管目录的
+根级排除规则，避免基础仓库的未跟踪扫描进入这些目录。保留已有规则，不修改项目
+`.gitignore`，不影响已跟踪文件；写入失败不阻止创建或恢复。不扫描、排除任意第三方目录。
+实现见 `apps/desktop/src/main/worktree/managedWorktreeExclude.ts`。
+
 如果你是 Cindy 内嵌的 agent，且 cwd 位于 `<baseRepo>/.cindy-worktrees/<name>`（或迁移前的
 `.xdt-worktrees/<name>`）下（会话级 git worktree），遵守以下契约：
 

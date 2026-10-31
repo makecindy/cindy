@@ -63,7 +63,35 @@
       "zh-TW": "繁体中文",
       "en": "English",
       "ja": "日本語",
-      "ko": "한국어"
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "简繁与文风",
+      "hint": "AI 按所选文风作答；选“照常作答”时界面仍为文言，回答随你的语言",
+      "scriptAriaLabel": "文言简繁",
+      "styleAriaLabel": "AI 作答文风",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "文言（默认）",
+        "tang-poetry": "唐诗",
+        "song-ci": "宋词",
+        "yuan-qu": "元曲",
+        "chu-ci": "楚辞",
+        "parallel-prose": "骈文",
+        "pre-qin": "先秦诸子",
+        "historian": "史传",
+        "ming-qing-essay": "明清小品",
+        "plain": "照常作答"
+      }
     }
   },
   "version": {
@@ -96,9 +124,7 @@
   "betaChannel": {
     "title": "Beta 测试渠道",
     "badge": "Beta",
-    "description": "提前接收即将发布的客户端更新。",
-    "restartHint": "Beta 测试渠道需要重启客户端后才能生效，请重启应用。",
-    "ok": "我知道了",
+    "description": "提前接收即将发布的客户端更新。内容更新在下次检查时获取，下载后重启应用生效。",
     "saveFailed": "保存 Beta 测试渠道设置失败",
     "unavailable": "Beta 测试渠道暂不可用，无法连接到 Beta 更新服务器。"
   },

@@ -1,5 +1,12 @@
 import type { ModelDisplayPricing, SummaryQuote } from '@cindy/model-providers';
 
+/** Unknown categories are ordinary uncategorized quotes, not inferred from their units. */
+export function displayPricingComponent(component: string | undefined) {
+  return component === 'text' || component === 'image' || component === 'audio' || component === 'video'
+    ? component
+    : undefined;
+}
+
 /** Keep the quoted basis; do not convert mixed units or infer a model-wide starting price. */
 export function displayPricingAmount(
   item: Pick<SummaryQuote, 'price' | 'maxPrice'>,

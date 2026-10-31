@@ -27,7 +27,8 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { openMainWindowSession } from '../deepLink.js';
+import { openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
   AGENT_ISLAND_MAX_RESIZABLE_WIDTH,
@@ -81,6 +82,7 @@ import {
   type AgentIslandScreenLayoutMetrics,
 } from '../../shared/agentIsland.js';
 import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
+import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
 import { remoteInvoke } from '../device-link/index.js';
@@ -101,10 +103,13 @@ import {
   agentIslandCompletionToken,
   readAgentIslandUnreadTerminalStamp,
   applyAgentIslandEvent,
+  syncAgentIslandGroupChat,
+  revealAgentIslandGroupChat,
   applyAgentIslandInteractionDismissed,
   applyAgentIslandInteractionRequest,
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
+  buildAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
@@ -128,6 +133,7 @@ import {
   setAgentIslandLayoutDragActive,
   setAgentIslandMeasuredContentHeight,
   setAgentIslandPointerZones,
+  setAgentIslandSessionDisplaySuppressed,
   setAgentIslandStrings,
   setAgentIslandToolWording,
   setAgentIslandVisibleSession,
@@ -191,12 +197,14 @@ interface AgentIslandSessionMeta {
   sessionId: string;
   agentKind?: string;
   workingDir?: string | null;
+  projectDir?: string | null;
   workspaceKind?: string | null;
 }
 
 interface AgentIslandCachedMetadata {
   title: string | null;
   workingDir: string | null;
+  projectDir?: string | null;
   workspaceKind: string | null;
   /** undefined until the Session row has been read; null for non-companion Sessions. */
   companion?: AgentIslandCompanionIdentity | null;
@@ -229,6 +237,7 @@ export interface AgentIslandServiceDeps {
 
 interface AgentIslandNativeRenderer {
   readonly failed: boolean;
+  readonly available?: boolean;
   readonly headless?: boolean;
   prepare?(): void;
   publish(
@@ -328,7 +337,7 @@ function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string 
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
-  const { compactDetail: _compactDetail, ...snapshot } = activity;
+  const { compactDetail: _compactDetail, summaryFormat: _summaryFormat, ...snapshot } = activity;
   return {
     ...snapshot,
     workflow: snapshot.workflow ? { ...snapshot.workflow } : null,
@@ -343,6 +352,7 @@ function canonicalSessionActivity(
 export class AgentIslandService {
   private attentionCount = 0;
   private readonly attentionCountListeners = new Set<(count: number) => void>();
+  private readonly taskOverviewListeners = new Set<() => void>();
   private readonly sessionActivityListeners = new Set<
     (transition: SessionActivityTransition) => void
   >();
@@ -832,6 +842,47 @@ export class AgentIslandService {
     this.publish();
   }
 
+  setGroupChat(groupId: string, input: AgentIslandGroupChatInput | null): void {
+    const sessionId = groupChatIslandId(groupId);
+    const previous = this.state.sessions.get(sessionId)?.groupChat;
+    if (!input && !previous) return;
+    if (input && previous && JSON.stringify(previous.input) === JSON.stringify(input)) return;
+    const avatars = input?.members.map((member, index) => {
+      const old = previous?.input.members[index];
+      return old && JSON.stringify(old) === JSON.stringify(member) ? previous!.avatars[index]!
+        : companionSnapshotWithoutArtwork(member);
+    }) ?? [];
+    syncAgentIslandGroupChat(this.state, groupId, input, avatars, t('bots.groupChat.server.thread.mentionedYou'), Date.now());
+    const chat = this.state.sessions.get(sessionId)?.groupChat;
+    this.publish();
+    if (!input || !chat) return;
+    for (const [index, member] of input.members.entries()) {
+      if (avatars[index]?.imageJpeg || !companionAvatarHasArtwork(member.avatar)) continue;
+      void companionAvatarThumbnail(member.avatar).then(imageJpeg => {
+        if (!imageJpeg || this.state.sessions.get(sessionId)?.groupChat !== chat) return;
+        chat.avatars[index] = { ...chat.avatars[index]!, imageJpeg };
+        this.publish();
+      }).catch(() => undefined);
+    }
+  }
+
+  /** True means this surface owns the alert; otherwise the caller uses the OS notification. */
+  notifyGroupChat(groupId: string): boolean {
+    if (!this.isEnabled() || this.headless || this.nativeHost.failed || this.nativeHost.available === false) return false;
+    const chat = this.state.sessions.get(groupChatIslandId(groupId))?.groupChat;
+    if (!chat) return false;
+    const window = this.deps.getMainWindow();
+    // Thread reads are authoritative; merely being on the group's URL does not read a thread.
+    if (!chat.input.threadRootId && window?.isFocused() && window.isVisible()) {
+      try {
+        if (new URL(window.webContents.getURL()).hash.split('?')[0] === `#/bots/groups/${groupId}`) return true;
+      } catch { /* A loading window is not a visible chat. */ }
+    }
+    revealAgentIslandGroupChat(this.state, groupId, Date.now());
+    this.publish();
+    return !this.nativeHost.failed && !this.nativeFailureLogged;
+  }
+
   private companionChatProjections() {
     return [...this.companionChats.values()].map(({ input, companion, token }) => ({ ...input, companion, token }));
   }
@@ -1059,7 +1110,7 @@ export class AgentIslandService {
       suppressCompletionAttention,
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
       // live state/ledger, so use that state (including any intervening read ack).
-      preserveCompletionAttention: suppressCompletionAttention && (
+      preserveCompletionAttention: suppressCompletionAttention && !this.isGroupLaneEvent(hydrated.sessionId, event) && (
         event.turnOrigin?.surface === 'im'
           ? hasAgentIslandSessionAttention(this.state, hydrated.sessionId)
           : this.hadAttentionBeforeSilencedCompletion(hydrated.sessionId)
@@ -1363,6 +1414,28 @@ export class AgentIslandService {
   }
 
   /**
+   * 「消息免打扰」发生变化:只影响展示面(岛面 / 菜单栏 / 提示音)。重发一次即可 ——
+   * 抑制集合在 publish() 里从同步索引重新对齐。静音任务的 Agent 事件仍照常进状态机,
+   * 侧栏卡片的实时活动、等待交互态与远端活动镜像不受影响。
+   */
+  handleNotificationMuteChanged(): void {
+    // 取消静音会让任务重新进入展示面。若它在此期间还在跑 / 已完成 / 报错 / 等确认,
+    // 逐帧比较会把「重新出现」当成一次新转移,补播一次 start / complete / error /
+    // attention 提示音。把刚解除抑制的任务记进本帧的声音基线,只为旧状态重发一次画面。
+    if (this.enabledSynced && this.enabled) {
+      for (const sessionId of this.state.sessions.keys()) {
+        if (
+          this.state.displaySuppressedSessionIds.has(sessionId) &&
+          !isSessionNotificationsMutedSync(sessionId)
+        ) {
+          this.baselineSoundSessionIds.add(sessionId);
+        }
+      }
+    }
+    this.publish();
+  }
+
+  /**
    * @param options.reason
    *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
    *   清除),条目硬删。
@@ -1503,7 +1576,7 @@ export class AgentIslandService {
 
   handleSessionMetadataPatch(
     sessionId: string,
-    patch: { title?: string | null; workingDir?: string | null; workspaceKind?: string | null },
+    patch: { title?: string | null; workingDir?: string | null; projectDir?: string | null; workspaceKind?: string | null },
   ): void {
     const current: AgentIslandCachedMetadata = this.metadataCache.get(sessionId) ?? {
       title: null,
@@ -1514,6 +1587,7 @@ export class AgentIslandService {
       ...current,
       title: patch.title !== undefined ? patch.title : current.title,
       workingDir: patch.workingDir !== undefined ? patch.workingDir : current.workingDir,
+      projectDir: patch.projectDir !== undefined ? patch.projectDir : current.projectDir,
       workspaceKind: patch.workspaceKind !== undefined ? patch.workspaceKind : current.workspaceKind,
     };
     this.commitMetadata(sessionId, next);
@@ -1600,6 +1674,11 @@ export class AgentIslandService {
       ...rest,
       ...(companion !== undefined ? { companion: companion?.companion ?? null } : {}),
     })) return;
+    // Fast group replies can finish before identity resolves. The reply's chat read position
+    // owns completion attention; running, failure and approval cards remain runtime-owned.
+    if (companion?.groupId && this.state.sessions.get(sessionId)?.phase === 'completed') {
+      completeAgentIslandSessionWithoutAttention(this.state, sessionId, Date.now(), { preserveAttention: false });
+    }
     this.publish();
   }
 
@@ -1612,6 +1691,8 @@ export class AgentIslandService {
       // 原始标题:投影只在 publish 构建 payload 时做(见 commitMetadata 的说明)。
       title: cached?.title ?? null,
       workingDir: cached?.workingDir ?? meta.workingDir,
+      // A persisted clear must win over stale event metadata as well.
+      projectDir: cached?.projectDir !== undefined ? cached.projectDir : meta.projectDir,
       workspaceKind: cached?.workspaceKind ?? meta.workspaceKind,
       ...(cached?.companion !== undefined ? { companion: cached.companion?.companion ?? null } : {}),
     };
@@ -1693,6 +1774,7 @@ export class AgentIslandService {
         this.commitMetadata(sessionId, {
           title: row?.title ?? null,
           workingDir: row?.workingDir ?? null,
+          projectDir: row?.projectDir ?? null,
           workspaceKind: row?.workspaceKind ?? null,
           companion,
         });
@@ -1752,7 +1834,13 @@ export class AgentIslandService {
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
     return event.agentMeta?.botTaskCoordination === true
+      || this.isGroupLaneEvent(sessionId, event)
       || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
+  }
+
+  private isGroupLaneEvent(sessionId: string, event: AgentEvent): boolean {
+    // Accepted-input provenance reaches this event independently of avatar loading.
+    return event.agentMeta?.botGroupLane === true || !!this.metadataCache.get(sessionId)?.companion?.groupId;
   }
 
   private hadAttentionBeforeSilencedRun(sessionId: string): boolean {
@@ -1853,6 +1941,7 @@ export class AgentIslandService {
       interactionKind: s.interactionKind,
       // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
       compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
+      summaryFormat: 'plain-text',
       workingPhase: s.workingPhase,
     }));
   }
@@ -1897,12 +1986,32 @@ export class AgentIslandService {
     return this.attentionCount;
   }
 
+  getTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
+  }
+
+  subscribeTaskOverview(listener: () => void): () => void {
+    this.taskOverviewListeners.add(listener);
+    return () => this.taskOverviewListeners.delete(listener);
+  }
+
+  /** Menu-bar entry uses the same device/companion navigation and read acknowledgement. */
+  openTaskOverviewSession(sessionId: string): void {
+    this.focusSession(sessionId);
+  }
+
   subscribeAttentionCount(listener: (count: number) => void): () => void {
     this.attentionCountListeners.add(listener);
     return () => this.attentionCountListeners.delete(listener);
   }
 
   private publishAttentionCount(count: number): void {
+    // Content can change without changing the count (including restored companion chats).
+    for (const listener of this.taskOverviewListeners) {
+      try { listener(); } catch (error) {
+        log.warn('task overview listener failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     if (count === this.attentionCount) return;
     this.attentionCount = count;
     for (const listener of this.attentionCountListeners) {
@@ -1973,7 +2082,24 @@ export class AgentIslandService {
     }
   }
 
+  /**
+   * 把「消息免打扰」从同步索引对齐到展示面抑制集合。放在每次 publish 的开头：账号
+   * 切换、索引重载、直接改库都能自愈，不靠某一条写库路径记得来登记。
+   */
+  private syncDisplaySuppression(): void {
+    for (const [sessionId, session] of this.state.sessions) {
+      // 静音标记属于本机那行任务：其它设备投影进来的条目（sourceDeviceId 非空）可能与它
+      // 同 id（还原/复制过的库），不能拿本机标记去压远端的卡片与提示音。
+      setAgentIslandSessionDisplaySuppressed(
+        this.state,
+        sessionId,
+        session.sourceDeviceId === null && isSessionNotificationsMutedSync(sessionId),
+      );
+    }
+  }
+
   private publish(): void {
+    this.syncDisplaySuppression();
     const now = Date.now();
     if (!this.enabledSynced) {
       this.mutedCompletionSoundSessionIds.clear();
@@ -2055,14 +2181,13 @@ export class AgentIslandService {
    * 只投影哨兵;真实标题与 null 原样透传(null 由 native 走它自己的空标题分支)。
    */
   private localizeDisplayState(state: AgentIslandDisplayState): AgentIslandDisplayState {
-    if (!state.sessions.some((s) => isDefaultDraftSessionTitle(s.title))) return state;
+    if (!state.sessions.some((s) => isDefaultDraftSessionTitle(s.title) || s.groupChat?.mentionLabel)) return state;
     return {
       ...state,
-      sessions: state.sessions.map((session) =>
-        isDefaultDraftSessionTitle(session.title)
-          ? { ...session, title: t('ccAgent.common.unnamedSession') }
-          : session,
-      ),
+      sessions: state.sessions.map(session => ({ ...session,
+        ...(isDefaultDraftSessionTitle(session.title) ? { title: t('ccAgent.common.unnamedSession') } : {}),
+        ...(session.groupChat?.mentionLabel ? { groupChat: { ...session.groupChat, mentionLabel: t('bots.groupChat.server.thread.mentionedYou') } } : {}),
+      })),
     };
   }
 
@@ -2739,6 +2864,14 @@ export class AgentIslandService {
   private focusSession(sessionId: string): void {
     const nextSessionId = typeof sessionId === 'string' && sessionId.trim() ? sessionId.trim() : null;
     if (!nextSessionId) return;
+    const group = this.state.sessions.get(nextSessionId)?.groupChat;
+    if (group) {
+      // Navigation never acknowledges a group: reading the destination updates the server read position.
+      requestAgentIslandManualCollapse(this.state, Date.now());
+      this.publish();
+      openMainWindowChatMessage(group.input.groupId, group.input.messageId, group.input.threadRootId);
+      return;
+    }
     const now = Date.now();
     const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now);
     const deviceId = this.state.sessions.get(nextSessionId)?.sourceDeviceId
@@ -3147,6 +3280,7 @@ function getAgentIslandSoundEventForTransition(
   // Visual smart suppression controls unread/reveal state, not configured completion sounds.
   for (const session of next.sessions) {
     if (session.phase !== 'completed') continue;
+    if (session.groupChat) continue;
     if (mutedCompletionSessionIds.has(session.sessionId)) continue;
     const prev = previousById.get(session.sessionId);
     if (prev?.phase !== 'completed') return 'complete';

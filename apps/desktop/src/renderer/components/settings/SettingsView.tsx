@@ -45,7 +45,6 @@ import { WorktreeRecycleCard } from './WorktreeRecycleCard';
 import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
-import { CompactionSection } from './CompactionSection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
 import { StreamFadeSection } from './StreamFadeSection';
@@ -55,6 +54,7 @@ import { GitSafetySection } from './GitSafetySection';
 import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
+import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
 import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
@@ -414,6 +414,11 @@ export function SettingsView() {
                       <CollaborationSection />
                     </section>
 
+                    <section id="settings-new-chat-default-permission" className="py-[18px]"
+                      aria-label={t('settings.newChatDefaults.title')}>
+                      <NewChatDefaultPermissionSection />
+                    </section>
+
                     {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。 */}
                     <section
                       id="settings-agent-resource"
@@ -538,9 +543,6 @@ export function SettingsView() {
                   aria-label={t('settings.contacts.title')}
                 >
                   <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
-                </section>
-                <section id="settings-search-target-personalization-compaction" className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
-                  <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
                 {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
                 <section id="settings-search-target-personalization-terminal-shell" className="pb-[18px]" aria-label={t('settings.sections.terminalShell')}>

@@ -676,6 +676,14 @@
       "light": "semantic.defaults.login-overlay-secondary-pressed.light",
       "dark": "semantic.defaults.login-overlay-secondary-pressed.dark"
     },
+    "login-overlay-apple-hover": {
+      "light": "semantic.defaults.login-overlay-apple-hover.light",
+      "dark": "semantic.defaults.login-overlay-apple-hover.dark"
+    },
+    "login-overlay-apple-pressed": {
+      "light": "semantic.defaults.login-overlay-apple-pressed.light",
+      "dark": "semantic.defaults.login-overlay-apple-pressed.dark"
+    },
     "login-apple-circle-bg": {
       "light": "semantic.defaults.login-apple-circle-bg.light",
       "dark": "semantic.defaults.login-apple-circle-bg.dark"
@@ -3728,7 +3736,7 @@
       {
         "id": "text-tertiary",
         "category": "",
-        "use": "Placeholder / tertiary"
+        "use": "Tertiary text / metadata (never placeholders — use --text-placeholder)"
       },
       {
         "id": "text-tertiary-stone",
@@ -3797,49 +3805,49 @@
         "ids": [
           "login-panel-bg"
         ],
-        "use": "callback-card dark（as-built）"
+        "use": "同 CINDY 主界面卡片 `surface-elevated`（2026-10-27 并入墨水口径；暗色取卡片档 = 方案 A）"
       },
       {
         "label": "`--login-panel-border`",
         "ids": [
           "login-panel-border"
         ],
-        "use": "callback-card dark"
+        "use": "墨水线 黑 8% / 白 10%（同主界面 `border-default`）"
       },
       {
         "label": "`--login-control-bg`（输入框底）",
         "ids": [
           "login-control-bg"
         ],
-        "use": "figma `Dark_normal` 输入 symbol"
+        "use": "墨水填充 黑 5% / 白 6%（同主界面 `surface-chip`，叠在面板上）"
       },
       {
         "label": "`--login-action-control-bg`（方式行 / 返回钮底）",
         "ids": [
           "login-action-control-bg"
         ],
-        "use": "figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23）"
+        "use": "与输入框同档（2026-10-27 起不再分化）"
       },
       {
         "label": "`--login-back-border`（返回钮描边）",
         "ids": [
           "login-back-border"
         ],
-        "use": "figma 549:897"
+        "use": "墨水线 黑 8% / 白 10%"
       },
       {
         "label": "`--login-control-border`",
         "ids": [
           "login-control-border"
         ],
-        "use": "figma `Dark_normal`"
+        "use": "墨水线 黑 8% / 白 10%（同主界面 `border-default`）"
       },
       {
         "label": "`--login-control-border-active`（focus / filled）",
         "ids": [
           "login-control-border-active"
         ],
-        "use": "figma `Dark_highlight`"
+        "use": "墨水正文档 黑 88% / 白 82%"
       },
       {
         "label": "`--login-control-text`（输入填充字，Bold）",
@@ -3874,49 +3882,49 @@
         "ids": [
           "login-primary-button-bg"
         ],
-        "use": "figma `white_button` / callback-cta dark"
+        "use": "同主界面反相 CTA `accent-cta-bg-pure`"
       },
       {
         "label": "`--login-primary-button-border`",
         "ids": [
           "login-primary-button-border"
         ],
-        "use": "同上"
+        "use": "与底同色（不另描边）"
       },
       {
         "label": "`--login-primary-button-text`（Bold）",
         "ids": [
           "login-primary-button-text"
         ],
-        "use": "同上"
+        "use": "同主界面 `accent-pure-cta-fg`"
       },
       {
         "label": "`--login-link-text`（重发链接）",
         "ids": [
           "login-link-text"
         ],
-        "use": "figma `dark_重新发送` symbol"
+        "use": "墨水正文档 黑 88% / 白 82%"
       },
       {
         "label": "`--login-link-hover`",
         "ids": [
           "login-link-hover"
         ],
-        "use": "推导值（无独立 dark hover symbol）"
+        "use": "墨水说明档 黑 70% / 白 66%"
       },
       {
         "label": "`--login-link-pressed`",
         "ids": [
           "login-link-pressed"
         ],
-        "use": "推导值"
+        "use": "墨水强调档 黑 95% / 白 100%"
       },
       {
-        "label": "`--login-disabled-button-overlay`",
+        "label": "`--login-disabled-button-overlay`（已退役）",
         "ids": [
           "login-disabled-button-overlay"
         ],
-        "use": "figma `white_button` Disable：disabled 两模式同构（见 §16.5）"
+        "use": "已退役（2026-10-27）：禁用主按钮改为控件底 + 占位字，不再叠层；ID 与透明默认值保留，仅为兼容旧版导出的本地主题，组件不再消费"
       },
       {
         "label": "`--login-splash-progress-track` / `--login-splash-progress-fill`",
@@ -3924,14 +3932,14 @@
           "login-splash-progress-track",
           "login-splash-progress-fill"
         ],
-        "use": "figma Dark symbol 核验"
+        "use": "轨 = 墨水弱档 黑 10% / 白 13%；填充 = 墨水正文档"
       },
       {
         "label": "`--login-loading-ring-track`（loading 环轨道）",
         "ids": [
           "login-loading-ring-track"
         ],
-        "use": "18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token）"
+        "use": "墨水弱档 黑 10% / 白 13%；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token）"
       },
       {
         "label": "`--login-error-fg`",

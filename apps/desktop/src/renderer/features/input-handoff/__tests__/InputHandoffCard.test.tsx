@@ -379,5 +379,25 @@ describe('InputHandoffCard', () => {
         expect(mocks.resolve).toHaveBeenCalledWith('req1', { kind: 'input_handoff', action: 'done', expectedRevision: 6 }),
       );
     });
+
+    // ask_owner kind=scan with the agent's screenshot (2026-10-30): Cindy cannot see that
+    // screen, so it says where the picture came from, never claims to continue by itself,
+    // has nothing to tap, and the owner hands back after scanning.
+    it('labels a code from the agent\'s screenshot and lets the owner hand back after scanning', async () => {
+      answerWith('https://login.example.com/qr?t=1', 'https://login.example.com/qr?t=1');
+      render(<InputHandoffCard sessionId="s1" snapshot={qrStep({ agentPicture: true, agentControlled: true, source: { app: 'Cindy', origin: 'https://login.example.com' } })} />);
+      fill('inputHandoff.action.scan');
+      const code = await screen.findByTestId('input-handoff-qr-code');
+      expect(screen.getByText('inputHandoff.agentPicture')).toBeTruthy();
+      expect(screen.queryByText('inputHandoff.agentControlled')).toBeNull();
+      expect(screen.queryByText('inputHandoff.qr.hintLink')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.picture' })).toBeNull();
+      fireEvent.click(code, { clientX: 120, clientY: 60 });
+      expect(mocks.answer).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.done' }));
+      await waitFor(() =>
+        expect(mocks.resolve).toHaveBeenCalledWith('req1', { kind: 'input_handoff', action: 'done', expectedRevision: 4 }),
+      );
+    });
   });
 });

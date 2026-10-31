@@ -59,7 +59,7 @@
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，
   必须先读 `docs/product-rules/im-permission-confirmation.md`；Desktop、Mobile 与共享
   packages 共用同一最终决定，渠道收到回答不代表执行已恢复。
-- 新增或修改代输入（`request_input_handoff`、宿主步骤读取与执行、代输入卡、终端 askpass、
+- 新增或修改代输入（`ask_owner` 的 fill／scan、宿主步骤读取与执行、代输入卡、截图扫码、终端 askpass、
   单窗口实时画面、设备码识别，或任何经手主人填写值的路径）前，必须先读
   `docs/product-rules/input-handoff.md`：主人填写的值只交给宿主执行，不进模型、记录、日志、IM 与推送。
 - 修改账号用量上限的判定、重置时刻来源，或普通任务／目标模式撞上限额后的等待与自动继续前，
@@ -167,6 +167,9 @@
 - 修改本地协议 package、插件分发来源边界或 device-link 协议／relay／隧道
   payload／IPC allowlist，或任何改动跨端 wire protocol 前，必须先读
   `docs/dev-rules/protocol-compatibility.md`。
+- 修改 Device Link 客户端、协议、relay、设备／媒体接口、能力协商或连接恢复行为前，必须先读
+  `docs/dev-rules/protocol-compatibility.md` 的「自建中转同步维护」：凡影响自建中转的改动，
+  必须在同一次改动中完成必要的同步适配与互通验证，不得留到后续。
 - 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
   `docs/dev-rules/architecture-invariants.md`。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider

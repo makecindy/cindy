@@ -4,9 +4,9 @@ export default {
   name: 'companion-composer',
   entry: './companion-composer-fixture.tsx',
   viewport: { width: 760, height: 360 },
-  real: 'ChatInput, Tiptap editor, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
+  real: 'ChatInput, Tiptap editor, useAttachments, SendButton, VoiceInputButton, tooltips, send dispatch, themes and translations',
   notCovered:
-    'Microphone/ASR, live companion tasks and speech synthesis; host services, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
+    'Microphone/ASR, live companion tasks, real media IO and speech synthesis; host services, delayed image cache, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
   stubs: {
     'src/renderer/hooks/useProviders': `const providers = [{ id: 'openai', name: 'OpenAI', source: 'builtin', connected: true, agents: ['codex'], auth: { method: 'oauth' }, routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } }, models: { codex: [{ id: 'fixture-chat', name: 'Fixture', contextWindow: 200000, efforts: [], defaultEffort: null }] } }]; export const useProviders = () => ({ providers, loading: false });`,
     'src/renderer/hooks/useDeviceProviders': {
@@ -27,6 +27,18 @@ export default {
     'src/renderer/voice-input/useVoiceInput': `import { useState, useRef } from 'react'; export function useVoiceInput(editor) { const [state, setState] = useState('idle'); const current = useRef(state); const update = value => { current.current = value; setState(value); }; return { state, getState: () => current.current, isListening: state === 'listening', isBusy: state !== 'idle', draftText: '', start: () => { update('listening'); return true; }, stop: async () => { update('idle'); editor?.commands.setContent('<p>Dictated message</p>'); }, cancel: async () => update('idle') }; }`,
   },
   cases: {
+    'late-attachment': {
+      about: 'A cache result from the unmounted composer restores its image without replacing fresh text inside the 120ms save window',
+    },
+    recommendation: {
+      about: 'Recommendation and call coexist; starting a call preserves the suggestion, accepting it restores Send',
+      data: { recommendation: '帮我整理下一步计划' },
+    },
+    'recommendation-narrow': {
+      about: 'Recommendation and call remain usable at narrow width',
+      data: { recommendation: '帮我整理下一步计划' },
+      viewport: { width: 360, height: 400 },
+    },
     'voice-hold': {
       about: 'Empty composer hints, native mouse selection during hold, and button hold/click release semantics',
       viewport: { width: 360, height: 400 },
@@ -44,6 +56,59 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'late-attachment') {
+      await page.locator('input[type="file"]').setInputFiles({
+        name: 'late.png', mimeType: 'image/png', buffer: Buffer.from('fixture-image-bytes'),
+      });
+      await page.waitForFunction(() => typeof window.__composerImageCache.finish === 'function');
+      const toggle = page.getByTestId('toggle-composer');
+      await toggle.click();
+      await page.locator('.ProseMirror').waitFor({ state: 'detached' });
+      await toggle.click();
+      const editor = page.locator('.ProseMirror');
+      await editor.waitFor();
+      // One renderer turn pins the cache completion inside the real debounce window.
+      const savedBefore = await page.evaluate(() => {
+        document.querySelector('.ProseMirror').editor.commands.insertContent('Keep unsaved text');
+        const saved = window.__composerImageCache.getDraft()?.text;
+        window.__composerImageCache.finish();
+        return saved;
+      });
+      assert.ok(!JSON.stringify(savedBefore).includes('Keep unsaved text'));
+      await page.locator('img[alt="late.png"]').waitFor();
+      assert.equal(await editor.textContent(), 'Keep unsaved text');
+      await ui.capture('late-image-preserves-text');
+      await page.waitForFunction(() => JSON.stringify(window.__composerImageCache.getDraft()?.text).includes('Keep unsaved text'));
+      return;
+    }
+    if (ui.data.recommendation) {
+      const editor = page.locator('[contenteditable]');
+      const call = page.getByRole('button', { name: await ui.t('bots.voiceMode.startConversation'), exact: true });
+      const send = page.getByRole('button', { name: await ui.t('newChat.sendButton.send'), exact: true });
+      const suggestion = page.getByRole('button', {
+        name: `${await ui.t('newChat.chatInput.recommendationShortcut')}: ${ui.data.recommendation}`,
+        exact: true,
+      });
+      await suggestion.waitFor();
+      await ui.capture('recommendation');
+      assert.equal(await call.count(), 1);
+      assert.equal(await send.count(), 0);
+      await call.click();
+      assert.equal(await suggestion.count(), 0);
+      assert.equal(await editor.textContent(), '');
+      assert.equal(await page.getByTestId('sent').textContent(), '');
+      await page.getByTestId('end-call').click();
+      await suggestion.waitFor();
+      assert.equal(await call.evaluate((node) => node === document.activeElement), true);
+      await suggestion.click();
+      assert.equal(await editor.textContent(), ui.data.recommendation);
+      assert.equal(await call.count(), 0);
+      await ui.capture('accepted');
+      await send.click();
+      await call.waitFor();
+      assert.equal(await page.getByTestId('sent').textContent(), ui.data.recommendation);
+      return;
+    }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
       const hint = page.getByTestId('composer-voice-hint');

@@ -1,7 +1,8 @@
 /**
  * cross-agent-convert / detector
  *
- * 4 项独立判断（双向）。每一项"对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 配置项独立判断："对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 指令文件仅保留 CLAUDE.md → AGENTS.md；不再提示为 Claude Code 创建 CLAUDE.md。
  *
  * 关键：用 codex 同款 `is_missing_or_empty_text_file` 语义 ——
  *   目标"不存在 OR trim 后为空" 才视为缺失。
@@ -98,7 +99,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
   const items: MigrationItem[] = [];
   const direction: MigrationDirection = input.agentKind === 'claude-code' ? 'to-claude' : 'to-codex';
 
-  // ── 第 1 项：CLAUDE.md ↔ AGENTS.md ────────────────────────────────────
+  // ── 第 1 项：CLAUDE.md → AGENTS.md ────────────────────────────────────
   await detectAgentsMd(wd, direction, items);
 
   // ── 第 2 项：agents/ ─────────────────────────────────────────────────
@@ -116,18 +117,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
 async function detectAgentsMd(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
   const claudeMd = path.join(wd, 'CLAUDE.md');
   const agentsMd = path.join(wd, 'AGENTS.md');
-  if (direction === 'to-claude') {
-    if ((await isNonEmptyTextFile(agentsMd)) && (await isMissingOrEmptyTextFile(claudeMd))) {
-      items.push({
-        id: 'agents-md:0',
-        kind: 'agents-md',
-        direction,
-        label: 'AGENTS.md → CLAUDE.md',
-        source: agentsMd,
-        target: claudeMd,
-      });
-    }
-  } else {
+  if (direction === 'to-codex') {
     if ((await isNonEmptyTextFile(claudeMd)) && (await isMissingOrEmptyTextFile(agentsMd))) {
       items.push({
         id: 'agents-md:0',
@@ -213,9 +203,11 @@ async function detectHooks(wd: string, direction: MigrationDirection, items: Mig
     const hasSourceJson = await isNonEmptyTextFile(codexHooksJson);
     if (!hasSourceDir && !hasSourceJson) return;
     // 目标缺失判断：claude settings.json 不存在 / 不含 hooks 段，或 .claude/hooks/ 不存在
-    const claudeSettingsHasHooks = await fileHasJsonKey(claudeSettings, 'hooks');
+    // 存量错误嵌套 settings.hooks.hooks 不算完备，需放行让 converter 拍平修复
+    const claudeSettingsHasHooks = await claudeSettingsHooksWellFormed(claudeSettings);
     const claudeHooksDirExists = await isDir(claudeHooksDir);
-    if (claudeSettingsHasHooks && claudeHooksDirExists) return;
+    // 按源端资产对齐：源端只有 hooks.json、没有 hooks/ 目录时，目标有 hooks 配置即视为完备
+    if ((!hasSourceJson || claudeSettingsHasHooks) && (!hasSourceDir || claudeHooksDirExists)) return;
     items.push({
       id: 'hooks:0',
       kind: 'hooks',
@@ -228,9 +220,10 @@ async function detectHooks(wd: string, direction: MigrationDirection, items: Mig
     const hasSourceDir = await isDir(claudeHooksDir);
     const hasSourceJson = await fileHasJsonKey(claudeSettings, 'hooks');
     if (!hasSourceDir && !hasSourceJson) return;
-    const codexHooksJsonExists = await isNonEmptyTextFile(codexHooksJson);
+    // 旧平铺 hooks.json 缺少顶层 hooks 包装，不算完备，需放行让 converter 就地升级
+    const codexHooksJsonExists = await codexHooksJsonWellFormed(codexHooksJson);
     const codexHooksDirExists = await isDir(codexHooksDir);
-    if (codexHooksJsonExists && codexHooksDirExists) return;
+    if ((!hasSourceJson || codexHooksJsonExists) && (!hasSourceDir || codexHooksDirExists)) return;
     items.push({
       id: 'hooks:0',
       kind: 'hooks',
@@ -269,6 +262,33 @@ async function detectMcp(wd: string, direction: MigrationDirection, items: Migra
       source: mcpJson,
       target: codexConfigToml,
     });
+  }
+}
+
+/** .claude/settings.json 含 hooks 段，且不是旧版错误产物 hooks.hooks。 */
+async function claudeSettingsHooksWellFormed(p: string): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(p, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const hooks = (parsed as Record<string, unknown>).hooks;
+    if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return false;
+    const nested = (hooks as Record<string, unknown>).hooks;
+    return !(nested && typeof nested === 'object' && !Array.isArray(nested));
+  } catch {
+    return false;
+  }
+}
+
+/** .codex/hooks.json 非空且不是旧平铺写法（有事件却没有顶层 hooks 包装）。 */
+async function codexHooksJsonWellFormed(p: string): Promise<boolean> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(p, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const rec = parsed as Record<string, unknown>;
+    if (rec.hooks && typeof rec.hooks === 'object' && !Array.isArray(rec.hooks)) return true;
+    return Object.keys(rec).filter((k) => k !== 'hooks').length === 0;
+  } catch {
+    return false;
   }
 }
 

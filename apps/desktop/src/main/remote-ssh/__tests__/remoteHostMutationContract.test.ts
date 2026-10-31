@@ -13,6 +13,15 @@ function handlerBody(channel: string, nextChannel: string): string {
   return source.slice(start, end);
 }
 
+/** Settings ADD and the Agent's ssh_add_host share this implementation. */
+function addHostBody(): string {
+  const start = source.indexOf('export async function addRemoteSshHost(');
+  const end = source.indexOf('export async function reloadRemoteSshConfig(', start + 1);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe('remote SSH managed-host mutation contract', () => {
   it('validates the app renderer before remote Codex discovery can start a daemon', () => {
     const body = handlerBody('LIST_CODEX_MODELS', 'CHECK_CODEX_AUTH');
@@ -30,14 +39,21 @@ describe('remote SSH managed-host mutation contract', () => {
       ...[
         body.indexOf('ensureHydrated()'),
         body.indexOf('hydrateRemoteHosts()'),
+        body.indexOf('reloadRemoteSshConfig()'),
       ].filter((index) => index >= 0),
     );
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(read);
   });
 
+  it('ADD validates the app renderer before delegating to the shared add flow', () => {
+    const body = handlerBody('ADD', 'UPDATE');
+    const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf('return addRemoteSshHost(rawHost);'));
+  });
+
   it.each([
-    ['ADD', 'UPDATE'],
     ['UPDATE', 'REMOVE'],
     ['REMOVE', 'CONNECT'],
   ])('%s validates the app renderer before parsing input', (channel, nextChannel) => {
@@ -54,8 +70,8 @@ describe('remote SSH managed-host mutation contract', () => {
   });
 
   it('serializes add, update, and remove with config reloads', () => {
+    expect(addHostBody()).toContain('return remoteHostHydrationQueue.run(async () => {');
     for (const [channel, nextChannel] of [
-      ['ADD', 'UPDATE'],
       ['UPDATE', 'REMOVE'],
       ['REMOVE', 'CONNECT'],
     ]) {
@@ -65,7 +81,7 @@ describe('remote SSH managed-host mutation contract', () => {
   });
 
   it('does not disconnect existing aliases when an add write or refresh fails', () => {
-    const body = handlerBody('ADD', 'UPDATE');
+    const body = addHostBody();
     const hostWrite = body.indexOf('await addManagedHostWithInclude(');
     const hydrate = body.indexOf('await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));');
     const reloadError = body.indexOf("throwReloadRequired('新主机'");
@@ -88,7 +104,7 @@ describe('remote SSH managed-host mutation contract', () => {
     expect(ownershipCheck).toBeGreaterThan(-1);
     expect(ownershipCheck).toBeLessThan(poolPublish);
 
-    const body = handlerBody('ADD', 'UPDATE');
+    const body = addHostBody();
     const hydrate = body.indexOf('await hydrateRemoteHostsUnqueued(new Set(), true, new Set([cfg.id]));');
     const rollback = body.indexOf('await addReceipt.rollback();');
     const prefs = body.indexOf('patchSshHostPrefOrThrow(cfg.id');

@@ -240,3 +240,14 @@ describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §
       .not.toContain('<a href="mailto:');
   });
 });
+
+describe('buildSelectableMarkdownHtml remote images', () => {
+  it('does not expose remote image URLs when an explicit empty image allowlist is supplied', () => {
+    const html = buildSelectableMarkdownHtml(
+      '![tracking pixel](https://tracker.example.test/pixel.png)',
+      { imageSources: new Map() },
+    );
+    expect(html).not.toContain('https://tracker.example.test/pixel.png');
+    expect(html).toContain('<span class="xdt-image-chip">tracking pixel</span>');
+  });
+});

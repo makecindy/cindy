@@ -37,6 +37,10 @@ const knobs = vi.hoisted(() => ({
   transportCloseRejects: false,
   transportCloseCount: 0,
   getStateRejects: false,
+  getStateSessionFile: null as string | null,
+  switchSessionGate: null as Promise<void> | null,
+  switchSessionRejects: false,
+  switchSessionSuccess: null as boolean | null,
   abortRejects: false,
   getStateGate: null as Promise<void> | null,
   closeRejects: false,
@@ -50,6 +54,7 @@ const knobs = vi.hoisted(() => ({
   spawnedEnvs: [] as Array<Record<string, string | undefined>>,
   spawnedArgs: [] as string[][],
   requests: [] as string[],
+  requestOptions: [] as Array<{ commandType: string; timeoutMs?: number }>,
 }));
 
 vi.mock('../transport.js', () => ({
@@ -95,13 +100,23 @@ vi.mock('../rpc-client.js', () => ({
       knobs.onExit = o?.onExit ?? null;
       knobs.onEvent = o?.onEvent ?? null;
     }
-    async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown; error?: string }> {
+    async request(
+      cmd: { type: string },
+      options?: { timeoutMs?: number },
+    ): Promise<{ success: boolean; data?: unknown; error?: string }> {
       knobs.requests.push(cmd.type);
+      knobs.requestOptions.push({ commandType: cmd.type, timeoutMs: options?.timeoutMs });
+      if (cmd.type === 'switch_session') {
+        const gate = knobs.switchSessionGate;
+        if (gate) await gate;
+        if (knobs.switchSessionRejects) throw new Error('switch_session timed out (mock)');
+        if (knobs.switchSessionSuccess === false) return { success: false, error: 'session load failed (mock)' };
+      }
       if (cmd.type === 'get_state') {
         const gate = knobs.getStateGate;
         if (gate) await gate;
         if (knobs.getStateRejects) throw new Error('get_state rejected (mock)');
-        return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
+        return { success: true, data: { sessionFile: knobs.getStateSessionFile ?? '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
       if (cmd.type === 'abort' && knobs.abortRejects) {
         return { success: false, error: 'abort rejected (mock)' };
@@ -167,6 +182,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.transportCloseRejects = false;
     knobs.transportCloseCount = 0;
     knobs.getStateRejects = false;
+    knobs.getStateSessionFile = null;
+    knobs.switchSessionGate = null;
+    knobs.switchSessionRejects = false;
+    knobs.switchSessionSuccess = null;
     knobs.abortRejects = false;
     knobs.getStateGate = null;
     knobs.closeRejects = false;
@@ -179,6 +198,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     knobs.spawnedEnvs = [];
     knobs.spawnedArgs = [];
     knobs.requests = [];
+    knobs.requestOptions = [];
     disposed = 0;
     proxyDisposed = 0;
     proxyGeneration++;
@@ -258,6 +278,24 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       ...overrides,
     };
   }
+
+  it('writes model-scoped compaction without replacing the inherited policy of other models or providers', async () => {
+    const agent = new PiAgent(buildDeps({
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9', piAutoCompactThresholdPct: 85 },
+      capabilityAdditions: { availableModels: [
+        { id: 'm', displayName: 'M', contextWindow: 200_000, efforts: [], defaultEffort: null },
+        { id: 'other', displayName: 'Other', contextWindow: 200_000, efforts: [], defaultEffort: null },
+      ] },
+      resolveModelCompactionPct: (source, model) => source === 'xd' && model === 'm' ? 75 : null,
+    }));
+    const handle = await agent.startSession({ sessionId: 'compaction-policy', workingDir: cwd, model: 'm', providerId: 'xd' });
+    try {
+      const home = knobs.spawnedEnvs.at(-1)!.PI_CODING_AGENT_DIR!;
+      const settings = JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8'));
+      expect(settings.compaction.modelOverrides['cindy/m'].reserveTokens).toBe(50_000);
+      expect(settings.compaction.modelOverrides['cindy/other'].reserveTokens).toBe(30_000);
+    } finally { await handle.close(); }
+  });
 
   function approvedInput(
     workingDir: string,
@@ -1514,6 +1552,158 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  // #7494: a child's internal `cindy:harness-hook` shares the extension_ui
+  // channel with permissions. It must be answered through the harness hook
+  // bridge, never surfaced as a `Subagent: tool` approval with `{}` input.
+  type PendingFixture = NonNullable<PiSubagentRunStatus['tasks'][number]['pendingApproval']>;
+  const harnessHook = (placeholder: string, id = 'hook-1'): PendingFixture => ({
+    id, method: 'input', title: 'cindy:harness-hook', placeholder,
+  });
+  const toolBeforeHook = harnessHook(JSON.stringify({
+    name: 'tool.before',
+    toolName: 'bash',
+    toolUseId: 'bash-1',
+    input: { command: 'git status' },
+  }));
+  function mockHarnessHookRun(
+    runId: string,
+    taskId: string,
+    ready: () => boolean,
+    approvals: PendingFixture[] = [toolBeforeHook],
+  ): void {
+    // Surface the child's requests only once the test is ready (handler wired),
+    // as in a live session where the handler is attached before tools run, and
+    // only to this test's own run root: a detached supervisor left draining by
+    // an earlier test must not answer them.
+    const root = piSubagentRuns.piSubagentRunRoot(agentHome, opts().sessionId);
+    mockRunDiscovery().mockImplementation(async (candidate) => candidate !== root || !ready() ? [] : [{
+      version: 1,
+      runId,
+      taskId,
+      parentSessionId: 's1',
+      runtimeOwnerId: ownerId(),
+      runnerInstanceId: `runner-${taskId}`,
+      state: 'running',
+      startedAt: 1,
+      updatedAt: 2,
+      tasks: approvals.map((pendingApproval, index) => ({
+        childId: `${runId}-${index + 1}`,
+        sessionId: `${runId}-${index + 1}`,
+        agent: 'worker',
+        title: 'hook-fixture',
+        status: 'running',
+        pendingApproval,
+      })),
+    }]);
+  }
+
+  // The harness hook bridge was reverted, so the host no longer runs these
+  // hooks, but a child started by an older bridge can still raise one. Every
+  // `cindy:harness-hook` is answered `continue` and never becomes an approval.
+  it.each([
+    ['tool.before', toolBeforeHook],
+    ['compaction.before', harnessHook(JSON.stringify({ name: 'compaction.before' }))],
+    ['non-JSON payload', harnessHook('not json')],
+    ['unknown hook name', harnessHook(JSON.stringify({ name: 'tool.after', toolName: 'bash' }))],
+    ['tool.before without a tool name', harnessHook(JSON.stringify({ name: 'tool.before', input: {} }))],
+    ['array payload', harnessHook('[]')],
+  ] as const)('answers continue for a durable Subagent harness hook without an approval prompt (%s)', async (_case, pending) => {
+    const runId = '123e4567-e89b-42d3-a456-426614174098';
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    let ready = false;
+    mockHarnessHookRun(runId, 'tool-harness-hook', () => ready, [pending]);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+    ready = true;
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      'tool-harness-hook',
+      'approval',
+      expect.objectContaining({
+        childId: `${runId}-1`,
+        approvalId: 'hook-1',
+        value: JSON.stringify({ action: 'continue' }),
+        runtimeOwnerId: ownerId(),
+      }),
+    ), { timeout: 3_000 });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('keeps durable Subagent hooks out of Auto-review', async () => {
+    // #7494's symptom: the hook reached Auto-review as `tool` with `{}` input
+    // and was escalated as an unreviewable action.
+    const runId = '123e4567-e89b-42d3-a456-42661417409c';
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    let ready = false;
+    mockHarnessHookRun(runId, 'tool-harness-auto', () => ready);
+    const review = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps({ reviewAutoPermissionAction: review as never }))
+      .startSession({ ...opts(), permissionMode: 'auto' });
+    handle.setInteractionResolver(resolver);
+    ready = true;
+
+    await vi.waitFor(() => expect(control).toHaveBeenCalledWith(
+      expect.any(String),
+      'tool-harness-auto',
+      'approval',
+      expect.objectContaining({ approvalId: 'hook-1', value: JSON.stringify({ action: 'continue' }) }),
+    ), { timeout: 3_000 });
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).not.toHaveBeenCalled();
+
+    await handle.close();
+  });
+
+  it('still forwards a real cindy:permission with its tool and input next to a hook', async () => {
+    // The hook branch must only take `cindy:harness-hook`; a permission raised
+    // in the same run keeps its tool name and arguments and its approval card.
+    const runId = '123e4567-e89b-42d3-a456-42661417409d';
+    const control = vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockResolvedValue(1);
+    let ready = false;
+    mockHarnessHookRun(runId, 'tool-harness-mixed', () => ready, [
+      toolBeforeHook,
+      {
+        id: 'approval-2',
+        method: 'confirm',
+        title: 'cindy:permission',
+        message: JSON.stringify({ toolName: 'bash', input: { command: 'printf fixture' } }),
+      },
+    ]);
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'allow' }) as const);
+    const handle = await new PiAgent(buildDeps()).startSession(opts());
+    handle.setInteractionResolver(resolver);
+    ready = true;
+
+    await vi.waitFor(() => {
+      expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        'tool-harness-mixed',
+        'approval',
+        expect.objectContaining({ childId: `${runId}-1`, approvalId: 'hook-1', value: JSON.stringify({ action: 'continue' }) }),
+      );
+      expect(control).toHaveBeenCalledWith(
+        expect.any(String),
+        'tool-harness-mixed',
+        'approval',
+        expect.objectContaining({ childId: `${runId}-2`, approvalId: 'approval-2', confirmed: true }),
+      );
+    }, { timeout: 3_000 });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'permission',
+      toolName: 'bash',
+      input: { command: 'printf fixture' },
+      title: 'Subagent: bash',
+    }));
+
+    await handle.close();
+  });
+
   /**
    * The caller-side fence check is not the write. Between them
    * `controlPiSubagentRuns` discovers runs and guards the run directory —
@@ -2623,6 +2813,115 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await handle.close();
   });
 
+  // 测试价值
+  // - 生产入口与结果：PiAgent.startSession；验证恢复等待、session_id 发布、CAS fallback 和进程清理。
+  // - Bug／缺口：#7740；已有用例未覆盖慢恢复、超时不清除身份及恢复专属 RPC 预算。
+  // - 最小失败输入：存在的恢复文件，switch_session 延迟、超时或明确返回 success:false。
+  // - tier／实测耗时：unit（注入的进程与文件 fixture）；所选回归 3.05s，完整文件 77.13s。
+  it('waits for slow resume and publishes only the session identity confirmed by get_state', async () => {
+    const resumeFile = path.join(cwd, 'slow-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    // get_state 必须返回一个**不同**的有效身份：如果它与入参 resumeSessionId 同值，
+    // 「跳过身份确认、直接把 resume 参数当最终 id」的实现也能把这条用例跑绿。
+    const confirmedFile = path.join(cwd, 'confirmed-resume.jsonl');
+    writeFileSync(confirmedFile, '{}');
+    knobs.getStateSessionFile = confirmedFile;
+    let releaseSwitch!: () => void;
+    knobs.switchSessionGate = new Promise<void>((resolve) => { releaseSwitch = resolve; });
+    const onInvalidResumeSession = vi.fn(async () => true);
+    let startupSettled = false;
+    const startup = new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    }).then((handle) => {
+      startupSettled = true;
+      return handle;
+    });
+
+    // 慢恢复期间必须仍在等：恢复专属预算给了 switch_session，且启动还没resolve。
+    await vi.waitFor(() => expect(knobs.requestOptions).toContainEqual({
+      commandType: 'switch_session',
+      timeoutMs: 60_000,
+    }));
+    expect(startupSettled).toBe(false);
+
+    releaseSwitch();
+    const handle = await startup;
+    // 发布的是 get_state 确认回来的身份，不是调用方传进来的恢复参数。
+    expect(knobs.requests).toContain('get_state');
+    expect(handle.id).toBe(confirmedFile);
+    // 恢复专属预算只给 switch_session；get_state 仍走默认预算，不为它顺手放宽。
+    // 这两条断言放在释放之后才有意义 —— 释放前 get_state 还没发出。
+    expect(knobs.requestOptions).not.toContainEqual(expect.objectContaining({ timeoutMs: 60_000, commandType: 'get_state' }));
+    expect(onInvalidResumeSession).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('preserves the resume identity and skips invalid-resume fallback when switch_session times out', async () => {
+    const resumeFile = path.join(cwd, 'timeout-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionRejects = true;
+    knobs.closeRejects = true;
+    const onInvalidResumeSession = vi.fn(async () => true);
+
+    const agent = new PiAgent(buildDeps());
+    const failure = await agent.startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgentStartupCleanupPendingError);
+    expect(failure).toMatchObject({ cause: new Error('switch_session timed out (mock)') });
+    expect(onInvalidResumeSession).not.toHaveBeenCalled();
+    expect(knobs.requests).toEqual(['switch_session']);
+    expect(knobs.closeCount).toBe(1);
+
+    await expect(agent.startSession(opts())).rejects.toThrow(/close unconfirmed/);
+    expect(knobs.spawnedEnvs).toHaveLength(1);
+    knobs.closeRejects = false;
+    knobs.switchSessionRejects = false;
+    const fresh = await agent.startSession(opts());
+    expect(knobs.spawnedEnvs).toHaveLength(2);
+    await fresh.close();
+  });
+
+  it('allows fresh fallback after Pi explicitly rejects resume and the CAS clears its identity', async () => {
+    const resumeFile = path.join(cwd, 'rejected-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionSuccess = false;
+    const onInvalidResumeSession = vi.fn(async () => true);
+
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    });
+
+    expect(onInvalidResumeSession).toHaveBeenCalledOnce();
+    expect(knobs.requests).toContain('get_state');
+    expect(handle.id).toBe('/mock/session.jsonl');
+    await handle.close();
+  });
+
+  it('does not start a fresh session when Pi rejects resume and the CAS finds a concurrent identity', async () => {
+    const resumeFile = path.join(cwd, 'concurrent-resume.jsonl');
+    writeFileSync(resumeFile, '{}');
+    knobs.switchSessionSuccess = false;
+    const onInvalidResumeSession = vi.fn(async () => false);
+
+    await expect(new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      resumeSessionId: resumeFile,
+      onInvalidResumeSession,
+    })).rejects.toThrow(/CAS did not clear it \(concurrent owner replaced it\)/);
+
+    expect(onInvalidResumeSession).toHaveBeenCalledOnce();
+    expect(knobs.requests).toEqual(['switch_session']);
+    expect(knobs.closeCount).toBeGreaterThanOrEqual(1);
+  });
+
   it('freezes approval per new session and fails closed after revocation', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
     mkdirSync(skillPath, { recursive: true });
@@ -3143,11 +3442,13 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }
   });
 
-  it('correlates redacted MCP, spawn, RPC-ready, and first-model-request timings', async () => {
+  it('correlates redacted MCP, spawn, RPC-ready, and first-prompt-rpc timings', async () => {
     const info = vi.fn();
+    const debug = vi.fn();
     const timingLogger: Logger = {
       ...noopLogger,
       info,
+      debug,
       child: () => timingLogger,
     };
     const resolvePiManagedPackageResources = vi.fn<NonNullable<AgentDeps['resolvePiManagedPackageResources']>>(async () => ({
@@ -3175,7 +3476,7 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         'mcp-ready',
         'pi-spawn',
         'rpc-ready',
-        'first-model-request',
+        'first-prompt-rpc',
       ]);
       for (const event of events) {
         expect(event).toMatchObject({
@@ -3189,6 +3490,64 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       expect(serialized).not.toContain('timing-session-secret');
       expect(serialized).not.toContain('timing-prompt-secret');
       expect(serialized).not.toContain(cwd);
+      // The RPC receipt is not a model request. Only a native preparation hook
+      // may start request timings; test unknown metadata cannot leak into logs.
+      expect(debug.mock.calls.filter(([message]) => message === 'pi request stage')).toEqual([]);
+      const token = knobs.spawnedEnvs.at(-1)?.CINDY_PI_TURN_TOOL_POLICY;
+      const notify = (suffix: string) => knobs.onEvent?.({
+        type: 'extension_ui_request', method: 'notify',
+        message: `cindy:provider-request:${suffix}`,
+      });
+      notify('wrong-instance:{"wireEffort":"low"}');
+      notify(`${token}:invalid-json`);
+      expect(debug.mock.calls.filter(([message]) => message === 'pi request stage')).toEqual([]);
+      notify(`${token}:${JSON.stringify({ toolCount: 2, messageCount: 3, preparationMs: 5012.4, wireEffort: 'medium', secret: 'private-content' })}`);
+      const delta = { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'private-output' } };
+      knobs.onEvent?.(delta);
+      knobs.onEvent?.(delta);
+      knobs.onEvent?.({ type: 'agent_end' });
+      let stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
+      expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output']);
+      knobs.onEvent?.({ type: 'agent_settled' });
+      stages = debug.mock.calls.filter(([message]) => message === 'pi request stage').map(([, fields]) => fields);
+      expect(stages.map(row => row.stage)).toEqual(['provider-request-prepared', 'first-output', 'agent-settled']);
+      expect(stages[0]).toMatchObject({ toolCount: 2, messageCount: 3, preparationMs: 5012, wireEffort: 'medium', requestSequence: 1 });
+      expect(stages[2]).toMatchObject({ requestSequence: 1, elapsedMs: expect.any(Number), turnElapsedMs: expect.any(Number) });
+      notify(`${token}:${JSON.stringify({ toolCount: -1, messageCount: 'secret', preparationMs: 60001, wireEffort: 'private-effort' })}`);
+      const last = debug.mock.calls.filter(([message]) => message === 'pi request stage').at(-1)?.[1];
+      expect(last).toEqual({ startupTraceId: resolverOptions?.startupTraceId, requestSequence: 2,
+        stage: 'provider-request-prepared', wireEffort: null });
+      expect(JSON.stringify(debug.mock.calls.filter(([message]) => message === 'pi request stage'))).not.toContain('private');
+
+      // An aborted/retry-exhausted turn can omit agent_settled. A new native
+      // turn must discard its clock, while repeated requests in that turn retain it.
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(5_000);
+      try {
+        knobs.onEvent?.({ type: 'agent_start' });
+        const beforeRequest = debug.mock.calls.filter(([message]) => message === 'pi request stage').length;
+        knobs.onEvent?.(delta);
+        expect(debug.mock.calls.filter(([message]) => message === 'pi request stage')).toHaveLength(beforeRequest);
+        notify(`${token}:{"wireEffort":"low"}`);
+        knobs.onEvent?.(delta);
+        clock.mockReturnValue(5_010);
+        knobs.onEvent?.({ type: 'auto_retry_start', attempt: 1 });
+        notify(`${token}:{"wireEffort":"low"}`);
+        // A zero-argument tool may never emit toolcall_delta. Its start is
+        // already observable output, and duplicate starts must log only once.
+        const toolStart = { type: 'message_update', assistantMessageEvent: { type: 'toolcall_start', contentIndex: 0 } };
+        knobs.onEvent?.(toolStart);
+        knobs.onEvent?.(toolStart);
+        clock.mockReturnValue(5_025);
+        knobs.onEvent?.({ type: 'agent_settled' });
+        const retryStages = debug.mock.calls.filter(([message]) => message === 'pi request stage').slice(beforeRequest).map(([, fields]) => fields);
+        expect(retryStages.map(row => row.stage)).toEqual([
+          'provider-request-prepared', 'first-output', 'provider-request-prepared', 'first-output', 'agent-settled',
+        ]);
+        expect(retryStages.at(-1)).toMatchObject({ requestSequence: 4, elapsedMs: 15, turnElapsedMs: 25 });
+        expect(retryStages[3]).toMatchObject({ requestSequence: 4, elapsedMs: 0 });
+      } finally {
+        clock.mockRestore();
+      }
     } finally {
       await handle.close();
     }

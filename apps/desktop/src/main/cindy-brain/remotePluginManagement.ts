@@ -1,6 +1,7 @@
 import { extractIpcError } from '../../shared/ipcError.js';
 import { createHash, randomUUID } from 'node:crypto';
-import type { RemoteActionInvokeRequest, RemoteActionInvokeResponse } from '@cindy/device-link';
+import { isSharedTaskPeer, isProviderSharePeer, type RemoteActionInvokeRequest, type RemoteActionInvokeResponse } from '@cindy/device-link';
+import { parseLocalPluginShareSnapshot, type LocalPluginShareSnapshot } from '@cindy/plugin-protocol';
 import {
   isGhostInstallApprovalToken,
   ghostInstallApprovalToken,
@@ -36,6 +37,11 @@ export interface RemotePluginManagementDeps {
   list(): InstalledGhost[];
   preferences?: RemotePluginPreferences;
   settingsPage?: true;
+  ui?: {
+    suppressed(ghost: InstalledGhost): boolean;
+    approve(id: string, prompt: GhostInstallConsentPrompt, assertCurrent: () => void): Promise<boolean>;
+    defer(id: string, assertCurrent: () => void): void;
+  };
   projects?: {
     list(): Promise<Array<PluginManagementProject & { workdir: string }>>;
     resolve?(workdir: string): Promise<RemotePluginProject>;
@@ -67,6 +73,11 @@ export interface RemotePluginManagementDeps {
     assertCurrent: () => void,
   ): Promise<void>;
   uninstall(id: string, approval: string, assertCurrent: () => void): Promise<void>;
+  installShare?(
+    snapshot: LocalPluginShareSnapshot,
+    prompt: GhostInstallConsentPrompt,
+    assertScope: () => void,
+  ): Promise<void>;
   installFile?(
     peer: string,
     attachment: string,
@@ -105,8 +116,10 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     iconDataUrl: g.iconDataUrl,
     builtin: g.builtin,
     retirement: g.retirement,
+    ...(g.uiCapabilityApproved === true ? { uiCapabilityApproved: true as const } : {}),
     taskCapabilityApproved: g.taskCapabilityApproved,
     targetCapabilityApproved: g.targetCapabilityApproved,
+    delegationCapabilityApproved: g.delegationCapabilityApproved,
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };
@@ -174,6 +187,7 @@ export class RemotePluginManagement {
     peer: string,
     request: RemoteActionInvokeRequest,
   ): Promise<RemoteActionInvokeResponse> {
+    if (isSharedTaskPeer(peer) || isProviderSharePeer(peer)) return unavailable();
     this.prune();
     const input = request.input ?? {};
     const result = (value: unknown): RemoteActionInvokeResponse => ({ effects: [], result: value });
@@ -192,10 +206,14 @@ export class RemotePluginManagement {
         : projects;
       return result({
         version: 1,
-        ghosts: this.deps.list().map(projectManagedGhost),
+        ghosts: this.deps.list().map(ghost => ({ ...projectManagedGhost(ghost),
+          ...(this.deps.ui?.suppressed(ghost) ? { uiPromptSuppressed: true } : {}),
+        })),
+        ...(this.deps.ui ? { uiCapabilityApproval: true } : {}),
         market,
         ...(this.deps.preferences ? { hostPreferences: true } : {}),
         ...(this.deps.settingsPage ? { settingsPage: true } : {}),
+        ...(this.deps.installShare ? { localShares: true } : {}),
         ...(scopeProjects ? { projects: scopeProjects.map(({ id, name, path }) => ({ id, name, ...(path ? { path } : {}) })) } : {}),
         ...(this.deps.projects?.resolve ? { projectBrowse: true } : {}),
       });
@@ -299,11 +317,13 @@ export class RemotePluginManagement {
         (k) =>
           ![
             'operationId',
+            'uiConsentVersion',
             'kind',
             'pluginId',
             'expectedReleaseId',
             'expectedInstalledApproval',
             'expectedManifest',
+            'expectedSnapshot',
             'attachment',
             'projectId',
             'expectedProjectRevision',
@@ -313,8 +333,10 @@ export class RemotePluginManagement {
       return invalid();
     const id = str(input.operationId, 128);
     const kind = str(input.kind, 32);
-    if (!['install', 'enable', 'disable', 'uninstall', 'install-file'].includes(kind))
+    if (!['install', 'enable', 'disable', 'uninstall', 'install-file', 'install-share', 'approve-ui', 'defer-ui'].includes(kind))
       return invalid();
+    if (input.uiConsentVersion !== undefined && input.uiConsentVersion !== 1) return invalid();
+    if (['approve-ui', 'defer-ui'].includes(kind) && (!this.deps.ui || input.uiConsentVersion !== 1)) return invalid();
     const projectId = input.projectId === undefined ? undefined : str(input.projectId);
     const projectRevision =
       input.expectedProjectRevision === undefined ? undefined : str(input.expectedProjectRevision);
@@ -325,6 +347,13 @@ export class RemotePluginManagement {
     )
       return invalid();
     const target = request.resourceRef?.id;
+    let sharedSnapshot: LocalPluginShareSnapshot | undefined;
+    if (kind === 'install-share') {
+      if (!this.deps.installShare || target || Object.keys(input).some(key =>
+        !['operationId', 'kind', 'expectedSnapshot'].includes(key))) return invalid();
+      try { sharedSnapshot = parseLocalPluginShareSnapshot(input.expectedSnapshot); }
+      catch { return invalid(); }
+    } else if (input.expectedSnapshot !== undefined) return invalid();
     const fingerprint = JSON.stringify([target ?? null, input]);
     const previous = this.operations.get(id);
     if (previous) {
@@ -340,7 +369,7 @@ export class RemotePluginManagement {
     if (target) {
       ghost = this.find(target);
       if (installedApproval !== ghostInstallApprovalToken(ghost.approval)) return unavailable();
-    } else if (!['install', 'install-file'].includes(kind)) return invalid();
+    } else if (!['install', 'install-file', 'install-share'].includes(kind)) return invalid();
     const pluginId = kind === 'install' ? str(input.pluginId, 1024) : undefined;
     const releaseId = kind === 'install' ? str(input.expectedReleaseId, 1024) : undefined;
     if (kind === 'install-file' && (!this.deps.installFile || typeof input.attachment !== 'string'))
@@ -392,10 +421,24 @@ export class RemotePluginManagement {
         };
       });
     };
+    prompt.uiCapabilityApproval = input.uiConsentVersion === 1;
     void (async () => {
       try {
         assertCurrent();
         switch (kind) {
+          case 'install-share':
+            await this.deps.installShare!(sharedSnapshot!, prompt, () => this.assertScope(op));
+            break;
+          case 'approve-ui':
+            if (!await this.deps.ui!.approve(target!, prompt, assertCurrent)) {
+              // A stale install is not a user cancellation. Retain its failed receipt.
+              assertCurrent();
+              throw Object.assign(new Error('Page approval cancelled'), { code: 'MUTATION_CANCELLED' });
+            }
+            break;
+          case 'defer-ui':
+            this.deps.ui!.defer(target!, assertCurrent);
+            break;
           case 'install':
             await this.deps.market.install(
               pluginId!,

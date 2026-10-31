@@ -93,6 +93,23 @@ describe('manifestService cache channel identity', () => {
     clearCachedManifest();
   });
 
+  // Optional binary preparation observes metadata; it cannot change the result
+  // of the application's update lookup, even if the observer fails. Tier: unit.
+  it('isolates optional metadata observers and honors unsubscribe', async () => {
+    const service = await import('../manifestService');
+    const observer = vi.fn(() => { throw new Error('optional prefetch failed'); });
+    const unsubscribe = service.onManifestFetched(observer);
+    try {
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+      unsubscribe();
+      mockManifestResponse(RELEASE_MANIFEST);
+      await expect(service.fetchManifest()).resolves.toMatchObject({ app: { version: '0.0.65' } });
+      expect(observer).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); }
+  });
+
   it('discards a cached release manifest after the shared channel switches to beta', async () => {
     mockManifestResponse(RELEASE_MANIFEST);
     const service = await import('../manifestService');
@@ -176,13 +193,24 @@ describe('probeBetaManifest', () => {
     await expect(service.probeBetaManifest()).resolves.toBe(false);
   });
 
-  it('accepts a Linux x64 beta manifest with a complete .deb installer', async () => {
-    setRuntime('linux', 'x64');
-    mockManifestResponse(JSON.stringify(LINUX_BETA_MANIFEST));
+  // Regression: ARM64 beta builds must reach the same real manifest probe and
+  // .deb validation as x64, rather than failing before the request. Tier: unit.
+  it.each(['x64', 'arm64'])('accepts a Linux %s beta manifest with a complete .deb installer', async (arch) => {
+    setRuntime('linux', arch);
+    mockManifestResponse(JSON.stringify({
+      ...LINUX_BETA_MANIFEST,
+      app: {
+        ...LINUX_BETA_MANIFEST.app,
+        installer: {
+          ...LINUX_BETA_MANIFEST.app.installer,
+          file: `app/linux-${arch}/cindy-0.0.66-${arch === 'x64' ? 'amd64' : 'arm64'}.deb`,
+        },
+      },
+    }));
     const service = await import('../manifestService');
 
     await expect(service.probeBetaManifest()).resolves.toBe(true);
-    expect(String(netRequest.mock.calls[0]?.[0])).toContain('manifest-linux-x64-beta.json');
+    expect(String(netRequest.mock.calls[0]?.[0])).toContain(`manifest-linux-${arch}-beta.json`);
   });
 
   it.each([
@@ -223,16 +251,20 @@ describe('probeBetaManifest', () => {
         },
       },
     ],
-  ])('rejects a Linux x64 beta manifest with %s', async (_case, manifest) => {
-    setRuntime('linux', 'x64');
-    mockManifestResponse(JSON.stringify(manifest));
-    const service = await import('../manifestService');
+  ].flatMap(([reason, manifest]) => ['x64', 'arm64'].map((arch) => ({ arch, reason, manifest }))))(
+    'rejects a Linux $arch beta manifest with $reason',
+    async ({ arch, manifest }) => {
+      setRuntime('linux', arch);
+      mockManifestResponse(JSON.stringify(manifest));
+      const service = await import('../manifestService');
 
-    await expect(service.probeBetaManifest()).resolves.toBe(false);
-  });
+      await expect(service.probeBetaManifest()).resolves.toBe(false);
+      expect(netRequest).toHaveBeenCalledOnce();
+    },
+  );
 
-  it('does not probe the beta channel on Linux arm64', async () => {
-    setRuntime('linux', 'arm64');
+  it('does not probe the beta channel on unsupported Linux architectures', async () => {
+    setRuntime('linux', 'ia32');
     const service = await import('../manifestService');
 
     await expect(service.probeBetaManifest()).resolves.toBe(false);

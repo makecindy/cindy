@@ -33,6 +33,8 @@ export type RemoteMessageRole =
   | 'agent_switch';
 
 export interface RemoteSession {
+  /** Explicit host project membership; older hosts fall back to workingDir. */
+  projectDir?: string | null;
   tags?: import('@cindy/maker-shared').TaskTag[];
   id: string;
   userId: string;
@@ -83,6 +85,8 @@ export interface RemoteSession {
   /** main 进程内的下一条消息跨 Agent 切换意图；null = 已确认没有。 */
   agentSwitchIntent?: RemoteSessionAgentSwitchIntent | null;
   source?: string;
+  companion?: import("./teammateTaskSource").TaskCompanion;
+  taskTeammate?: import("./teammateTaskSource").TaskTeammate | null;
   orcaRole?: 'lead' | 'worker' | string | null;
   /** 运行设备上的远端 Worker 身份；团队在 Lead 电脑上，不作为本机 orcaRole 使用。旧端缺省。 */
   orcaRemoteLead?: {
@@ -240,6 +244,8 @@ export interface QueuedRemoteMessage {
   userName?: string;
   /** Interface language of this phone. The desktop stamps it only for a remote turn. */
   uiLanguage?: string;
+  /** Classical output style chosen next to the language; used only with a classical uiLanguage. */
+  classicalStyle?: string;
   createOpts: {
     agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;

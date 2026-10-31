@@ -42,19 +42,3 @@ cindy.onHostMessage(async function (msg) {
 - **处理期间那条消息挂"插件处理中"轻指示**(主机画),完成/超时清掉;
 - **权限档**:声明 `will-assistant-message` 在插件详情里单列一条(「可读取并重写
   AI 的回复」),比入口钩子更敏感(能看到 AI 完整输出),只在真需要时申请。
-
-## 4.6.2 Harness 原生能力桥（独立 harness 声明）
-
-将 Cindy 插件接到获准关联的用户主任务，复用 Claude Code、Codex、Pi 的执行。与旧 subscribe、agent-request、插件工具和面板协议并存；原生扩展继续沿原生路径使用。
-清单片段：`"harness":{"read":["runtime","usage","messages","tool-content"],"events":["tool","message","usage","compaction","task","status"],"hooks":["permission.request","tool.before","compaction.before"],"actions":["context.compact","turn.interrupt"]},"launch":"resident"`。
-每个名称独立批准。hooks 必须 resident；未知声明保留但不授权。接口有定义不代表当前 adapter 已接通，先查 runtime。
-本桥只开放三种 Harness 已有且语义共有的能力；可以新增插件转发与权限校验，不新增原生能力、不改写原生行为，也不另建压缩调度流程。预留名称不代表已开放。
-
-- `await cindy.harness({kind:'read',name:'runtime',sessionId})` 返回 `{ok:true,sessionId,runtimeId,turnGeneration,agent,value}`。value.capabilityStates 分别报告声明、批准与接通；hookSubscriptions 另报 disabled / not-ready / fused / not-running / ready。版本无运行证据时为 null。
-- read 的 usage 为数值用量、上下文占用及已观察缓存统计，status 为 running。详细模型请求、压缩配置/阈值和未来缓存保证不在本接口中。
-- read 的 messages / tool-content 分别读取普通消息文本、工具参数和结果；必须分别声明和批准。可传 limit（1–50，默认 25）、cursor 和 runtimeId；返回 value={items,nextCursor,source:'saved-history'}。正文单项上限 16384 字符，非文本或大内容省略时标 truncated；不包含 agentMeta、固定指令、隐藏推理或签名。历史发生任意数据库写入时旧 cursor 可能失效（STALE_RUNTIME），重新读取，不把不同修订的页直接拼接。已保存历史不是完整原生日志。
-- `onHostMessage` 收 `type:'harness-event'`（topic/name/seq/ts/dropped/data）。新增 message.updated 是助手文本增量/快照，isFullText/isFinal 保留原始标记；用户消息从历史读取或已有消息 hook 获取。tool=started/completed，usage=updated，compaction=boundary，task/status=updated。正文仅在 messages 或 tool-content 另行获准后出现；仅订阅不会取得正文。seq 与旧 did-* 共享，队列有界且可丢，不是原始日志 ID。任务、执行起止与等待输入/审批仍复用 subscribe 的 session/turn/activity。
-- `type:'harness-hook'` 带 name/hookId/deadline/data。用 `cindy.send({type:'harness-verdict',hookId:msg.hookId,action:'continue'})` 或 block 回执。continue 继续既有守门，不增加授权；多插件共用 1.5 秒预算，超时回到正常策略。正文需额外工具内容权限，block 不将插件自定义文字写入模型。
-- `cindy.harness({kind:'hook',name,sessionId,runtimeId,enabled:false})` 取消当前实例的处理，enabled:true 恢复。声明和批准不变；实例替换后覆盖项失效。permission.request 接宿主审批；tool.before / compaction.before 转发三种引擎的原生前置 Hook，仅本机普通主任务接入。Codex 0.159.2 使用原生 mcp_tool handler 复用现有连接，必须先有已启用且获原生信任的配置；Cindy 不自动改配置或授予信任。原生关闭、未配置/信任或回调不可达时返回 UNAVAILABLE，先查 runtime 的实际连接状态。内部 harness_hook 不是供模型或插件直接调用的工具。
-- `cindy.harness({kind:'action',name:'turn.interrupt',sessionId,runtimeId,turnGeneration,requestId})` 请求中断；name:'context.compact' 转发原生手动压缩：Claude /compact、Codex 0.159.2 thread/compact/start、Pi compact RPC，不新增摘要算法或后台调度。两个标识来自最新 runtime，requestId 必须为本次操作生成。同实例同 ID 不重复执行。压缩忙时返回 BUSY，并沿用原生手动压缩的等待语义，不保证后台并行。中断返回 requested 不代表已经停止，应观察终态。最多等待 10 秒；TIMEOUT/outcome:'unknown' 时不能自动重发或换 ID 重试。
-- 控制请求在宿主同时校验身份、批准、任务/实例/执行代次，卸载或换账号后旧读取、投递和回执失效。后台压缩 prepare/adopt 尚未接通，nativeEnabled/nativeRunning=unknown 不能当作原生关闭。当前范围不扩至 IM、自动化、Worker 或另一台电脑的 Agent。

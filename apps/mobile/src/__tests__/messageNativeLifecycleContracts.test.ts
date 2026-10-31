@@ -14,7 +14,7 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     const source = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const perfHarness = readFileSync(resolve(process.cwd(), 'app/listperf.tsx'), 'utf8');
 
-    const listStart = source.search(/<AnimatedLegendList\s/);
+    const listStart = source.search(/<LegendList\s/);
     expect(listStart).toBeGreaterThan(-1);
     const listEnd = source.indexOf('      />', listStart);
     expect(listEnd).toBeGreaterThan(listStart);
@@ -32,13 +32,13 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     expect(source).not.toContain('MOBILE_TAIL_REVEAL_ITEM_COUNT');
     expect(listSource).not.toMatch(/\binitialScrollIndex\s*=/);
     // Manual data prepend 不能与 Android native MVCP 并行:它会在 cell 位置提交后异步补
-    // offset，中间坐标窗无 cell 而白屏。读历史时 data/size 变化交给 LegendList 锚定；
-    // 贴底时交给唯一跟随控制器，避免 native MVCP 与连续高度/滚动补偿同时写 offset。
+    // offset，中间坐标窗无 cell 而白屏。size 变化始终由 LegendList 锚定；data 变化只在读历史
+    // 时锚定——贴底跟随时锚定会把被整批替换的旧可见行钉住，重连补同步时先跳上去再拉回底部。
     expect(listSource).toContain('alignItemsAtEnd');
     expect(listSource).toContain('maintainScrollAtEnd');
     expect(listSource).toContain('maintainVisibleContentPosition={historyPrependNativeMvcpDisabled');
     expect(listSource).toContain('? false');
-    expect(listSource).toContain(': { data: anchorVisibleRowsOnDataChange, size: anchorVisibleRowsOnDataChange }}');
+    expect(listSource).toContain(': { data: anchorVisibleRowsOnDataChange, size: true }}');
     expect(source).toContain(
       'const anchorVisibleRowsOnDataChange = isAwayFromBottom || readingOlderRef.current;',
     );
@@ -64,6 +64,10 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
     expect(perfHarness).toContain("const recycle = params.recycle === '1';");
     expect(listSource).toContain('recycleItems={recycleItems}');
     expect(listSource).toContain('getItemType={mobileMessageListItemType}');
+    // Confirmation must stay in the same LegendList pool as the optimistic row;
+    // changing its type would discard the measured cell just as the persisted
+    // message replaces the pending bubble.
+    expect(source).toContain("return item.type === 'pending_send' ? 'message' : item.type;");
     expect(source).toContain('useRecyclingState');
     // 可见性必须由 cell 自己订阅。把可见 key 集合放进 React Context 会在每个
     // onViewableItemsChanged 回调里广播给所有已挂载长消息，快滑时造成整窗重渲染、GC 和白屏。
@@ -308,11 +312,12 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     // iOS 部分选择:RN Text 底层是 UILabel 只能整块拷贝(facebook/react-native#13938),
     // 可选中块在 iOS 换用 react-native-uitextview(真 UITextView,系统选择手柄);
     // Android 维持 AppText selectable(本身有手柄)。嵌套 span 必须同为 UITextView 家族。
-    expect(source).toContain("from 'react-native-uitextview'");
-    expect(source).toContain('function MarkdownSelectableText({');
-    expect(source).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
-    expect(source).toContain('uiTextView');
-    expect(source).toContain('function MarkdownSelectableSpan(');
+    const selectableTextSource = readFileSync(resolve(process.cwd(), 'src/session/MarkdownSelectableText.tsx'), 'utf8');
+    expect(selectableTextSource).toContain("from 'react-native-uitextview'");
+    expect(selectableTextSource).toContain('function MarkdownSelectableText({');
+    expect(selectableTextSource).toContain("if (selectable && allowIosUITextView && Platform.OS === 'ios') {");
+    expect(selectableTextSource).toContain('uiTextView');
+    expect(selectableTextSource).toContain('function MarkdownSelectableSpan(');
     expect(source).toContain('const SpanText = ctx.SpanText ?? MessageBodyText;');
     expect(markdownBodySource).toContain('blockSelectable && allowIosUITextView && Platform.OS === \'ios\'');
 

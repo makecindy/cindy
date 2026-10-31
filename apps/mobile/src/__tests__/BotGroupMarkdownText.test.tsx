@@ -8,28 +8,39 @@ vi.mock('react-native', async () => {
   const React = await import('react');
   const flat = (style: unknown): Record<string, unknown> =>
     Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
-  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID }: any) => {
+  const host = (tag: string) => ({ children, style, horizontal, onLayout, testID, selectable }: any) => {
     React.useEffect(() => { onLayout?.({ nativeEvent: { layout: { width: 280 } } }); }, [onLayout]);
     return React.createElement(tag, { 'data-style': JSON.stringify(flat(style)),
-      'data-horizontal': horizontal, 'data-testid': testID }, children);
+      'data-horizontal': horizontal, 'data-testid': testID, 'data-selectable': selectable }, children);
   };
   return {
     View: host('div'),
     ScrollView: host('section'),
     Text: host('span'),
     useWindowDimensions: () => ({ width: 360, height: 800, fontScale: 1, scale: 3 }),
-    StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
+    StyleSheet: { create: (s: any) => s, flatten: flat, hairlineWidth: 1 },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
 });
-vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
+vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5 }));
+vi.mock('react-native-uitextview', async () => {
+  const React = await import('react');
+  const { StyleSheet } = await import('react-native');
+  return { UITextView: ({ children, uiTextView, selectable, style }: any) => React.createElement('span', {
+    'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
+    'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}),
+  }, children) };
+});
+vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
+vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
+vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/theme', () => ({
   fontWeight: { regular: '400', medium: '500', semibold: '600', bold: '700' },
   monoFont: 'Menlo',
   useThemedStyles: (make: (colors: any) => any) => make(new Proxy({}, { get: () => '#000' })),
 }));
 
-import { BotGroupMarkdownText } from '@/session/BotGroupMessageText';
+import { BotGroupMarkdownText, BotGroupUserText } from '@/session/BotGroupMessageText';
 
 let root: Root;
 let node: HTMLDivElement;
@@ -107,6 +118,19 @@ it('keeps component literal punctuation and Markdown formatting distinct', async
   expect(node.textContent).not.toContain('"op":"create"');
 });
 
+// #7492: media src filtering removed the only visible access path for public URLs.
+it('keeps public component media URLs readable without exposing internal sources', async () => {
+  const sources = ['https://example.test/image.png', 'https://example.test/video.mp4', 'https://example.test/audio.mp3'];
+  const content = '```cindy-ui\n' + [
+    ...sources.map((src, i) => ({ seq: i + 1, version: 1, op: 'create', id: `public${i}`, kind: ['image', 'video', 'audio'][i], props: { src } })),
+    { seq: 4, op: 'create', id: 'local', kind: 'image', props: { src: 'cindy-media://blobs/private.png', alt: 'Local description' } },
+  ].map(item => JSON.stringify(item)).join('\n') + '\n```';
+  await act(async () => root.render(createElement(BotGroupMarkdownText, { content, authorKind: 'bot' })));
+  for (const src of sources) expect(node.textContent).toContain(src);
+  expect(node.textContent).toContain('Local description');
+  expect(node.textContent).not.toContain('cindy-media://');
+});
+
 // #6716 review: group images render as alt text, not 150px native previews.
 it.each([['x', ''], ['a long image description that wraps inside its column', 'y']])(
   'measures image cells like their visible fallback text (%s / %s)', async (alt, otherAlt) => {
@@ -124,3 +148,34 @@ it.each([['x', ''], ['a long image description that wraps inside its column', 'y
     if (!otherAlt) expect(imageWidths.reduce((a, b) => a + b, 0)).toBe(280);
   },
 );
+
+// Regression: iOS RN Text selectable offers only whole-block Copy. Exercise the
+// production body with native-carrier fakes; real selection handles need Simulator.
+// Existing layout tests did not cover the UITextView root/child native contract.
+it.each(['ios', 'android'])('uses system partial-selection text for formatted group bodies and own mentions on %s', async (platform) => {
+  const { Platform } = await import('react-native');
+  Platform.OS = platform as typeof Platform.OS;
+  try {
+    await act(async () => root.render(createElement('div', null,
+      createElement(BotGroupMarkdownText, { content: 'Select **part** of this paragraph.\n\n> quote\n\n- item\n\n~~~text\ncode\n~~~\n\n| Cell | Other |\n| --- | --- |\n| value | next |' }),
+      createElement(BotGroupUserText, { content: '@Cindy keep my words', mentionLabels: ['Cindy'] }),
+    )));
+    const roots = [...node.querySelectorAll('[data-selectable="true"]')];
+    expect(roots.map(el => el.textContent)).toEqual([
+      'Select part of this paragraph.', 'quote', 'item', 'code', 'Cell', 'Other', 'value', 'next', '@Cindy keep my words',
+    ]);
+    for (const text of roots) {
+      if (platform === 'ios') {
+        expect(text.getAttribute('data-uitextview')).toBe('root');
+        // Mixing RN Text descendants into a UITextView breaks styled selection.
+        expect(text.querySelector('span:not([data-uitextview="span"])')).toBeNull();
+      } else {
+        expect(text.hasAttribute('data-uitextview')).toBe(false);
+        expect(text.querySelector('[data-uitextview]')).toBeNull();
+      }
+    }
+    expect(styleOf('part').fontWeight).toBe('600');
+  } finally {
+    Platform.OS = 'ios';
+  }
+});

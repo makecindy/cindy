@@ -17,7 +17,7 @@ import type { BotModelRoute } from '../../../shared/botModelChain.js';
 import type { BotLifecycleActionRequest } from '../../../shared/botLifecycle.js';
 import type { BotMemoryDeleteInput, BotMemoryUpdateInput } from '../../../shared/botMemory.js';
 import type { BotSkillSummary } from '../../../shared/botSkill.js';
-import { parseRoutineInput, type Routine, type RoutineRun, type RoutineSource } from '@cindy/maker-scheduler';
+import { parseRoutineInput, type Routine, type RoutineRun, type RoutineSource, type RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import { throwIpcError } from '../../utils/ipcValidate.js';
 import type { BotSettingsCall, BotSettingsOpHandler } from './botRemoteSettingsHost.js';
 
@@ -92,6 +92,7 @@ export interface BotSettingsOpsDeps {
   routines: {
     list(botId: string): Promise<Routine[]>;
     sources(): Promise<RoutineSource[]>;
+    deliveryTargets?(botId: string): Promise<RoutineDeliveryTarget[]>;
     history(botId: string, id: string): Promise<RoutineRun[]>;
     save(botId: string, input: ReturnType<typeof parseRoutineInput>, id?: string): Promise<Routine>;
     runNow(botId: string, id: string): Promise<unknown>;
@@ -231,6 +232,20 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
     'routines.sources': () => routineCall(() => deps.routines.sources()),
     'routines.history': call => routineCall(() => deps.routines.history(botOf(call), text(call.args.id, 'id', 128))),
     'routines.save': call => routineCall(() => {
+      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
+      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
+    }),
+    'routines.saveWithModel': call => routineCall(() => {
+      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
+      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
+    }),
+    // Advertised separately: older hosts accept `saveWithModel` but drop `sessionMode`.
+    'routines.saveWithSessionMode': call => routineCall(() => {
+      const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
+      return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
+    }),
+    'routines.deliveryTargets': call => routineCall(() => deps.routines.deliveryTargets?.(botOf(call)) ?? Promise.resolve([])),
+    'routines.saveWithDelivery': call => routineCall(() => {
       const id = call.args.id === undefined ? undefined : text(call.args.id, 'id', 128);
       return deps.routines.save(botOf(call), parseRoutineInput(call.args.input), id);
     }),

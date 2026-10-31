@@ -96,7 +96,14 @@ export interface DeferredHistoryWork {
   owner?: object;
   key?: string;
   revision?: string;
-  setVisible?(expanded: boolean, preview: boolean): void;
+  /**
+   * Holds detail interest for a mounted surface; call the returned release on unmount.
+   * `preview` says the surface can show a folded running tail; the Host's own range
+   * state decides whether one is read, never the regrouped render it would change.
+   */
+  setVisible?(expanded: boolean, preview: boolean): () => void;
+  /** The Host range is running without projected lines, so a folded tail is read. */
+  livePreview?: boolean;
   previewComplete?: boolean;
   /** Host-projected running lines; when present a folded preview needs no detail read. */
   lines?: readonly HistoryWorkLine[];

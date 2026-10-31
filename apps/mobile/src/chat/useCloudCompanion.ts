@@ -4,12 +4,13 @@ import { useFocusEffect } from 'expo-router';
 import type { ChatActor, ChatSetHomeResult } from './chatServerClient';
 import { useChatClient } from './useChatServer';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
-import { cacheCloudHome, peekCachedCloudHome, readCachedCloudHome,
+import { cacheCloudHome, patchCachedCloudHome, peekCachedCloudHome, readCachedCloudHome,
   remoteResourceCacheRevision, subscribeRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { forgetCloudConversation } from './cloudConversationCache';
 
 const NO_ACTORS: ChatActor[] = [];
+const NO_CINDY_IDS: string[] = [];
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 /**
@@ -43,13 +44,18 @@ export function useCloudCompanionHome(enabled: boolean) {
         await Promise.all((previous?.actors ?? []).filter(actor => !ids.has(actor.id)).map(actor => forgetCloudConversation(actor.id)));
         if (!current()) return;
       }
-      await cacheCloudHome(api.userId, api.realm, { supported: companionHome, actors, deviceNames: previousNames }, current);
+      const cindyIds = (previous?.cindyIds ?? []).filter(id => actors.some(actor => actor.externalId === id));
+      await cacheCloudHome(api.userId, api.realm, { supported: companionHome, actors, cindyIds, deviceNames: previousNames }, current);
       if (!current()) return;
       setFailure(null);
-      // Optional computer labels never delay the companion roster itself.
+      // Neither optional metadata read delays the roster or the other's publication.
       if (companionHome && actors.length) {
-        const names = await readDeviceList().then(({ devices }) => devices.map(device => [device.deviceId, device.name] as [string, string]), () => null);
-        if (names && current()) await cacheCloudHome(api.userId, api.realm, { supported: companionHome, actors, deviceNames: names }, current);
+        const enrich = (patch: { deviceNames?: Array<[string, string]>; cindyIds?: string[] }) =>
+          patchCachedCloudHome(api.userId, api.realm, patch, current);
+        await Promise.all([
+          readDeviceList().then(({ devices }) => enrich({ deviceNames: devices.map(device => [device.deviceId, device.name]) }), () => undefined),
+          api.client.cindyCompanionIds(actors, cindyIds, current).then(ids => enrich({ cindyIds: ids })),
+        ]);
       }
     } catch (error) {
       if (!current()) return;
@@ -72,5 +78,5 @@ export function useCloudCompanionHome(enabled: boolean) {
     return api.client.setHome(actorId, homeDeviceId, expected);
   }, [api]);
   return { supported: cached?.supported === true, actors: cached?.actors ?? NO_ACTORS,
-    deviceNames, error: failure?.owner === api.owner ? failure.error : null, refresh, setHome };
+    cindyIds: cached?.cindyIds ?? NO_CINDY_IDS, deviceNames, error: failure?.owner === api.owner ? failure.error : null, refresh, setHome };
 }

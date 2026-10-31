@@ -9,7 +9,10 @@ import { resetBrowserProxyDnsVerdictCache } from '@cindy/browser-control-runtime
 import {
   BrowserProxyAuthCoordinator,
   closeAdoptedManagedBrowser,
+  commandLineHasArgumentValue,
   commandLineHasExactArgument,
+  terminateManagedChromePortOwner,
+  waitForCdpPortFree,
 } from '../proxy-auth.js';
 
 interface CdpCommand {
@@ -183,6 +186,118 @@ describe('commandLineHasExactArgument', () => {
     ]) {
       expect(commandLineHasExactArgument(line, `--user-data-dir=${dir}`), line).toBe(true);
     }
+  });
+});
+
+describe('commandLineHasArgumentValue', () => {
+  const dir = 'C:\\Users\\me\\AppData\\Roaming\\Cindy\\browser-runtime\\browser\\Cindy\\user-data';
+
+  it('matches a Windows value that the shell quoted', () => {
+    // Windows quotes an argument whose value contains spaces, so the very same
+    // option appears as --user-data-dir="..." there. Token matching answered
+    // "not ours" for every Windows profile path, which disabled the identity
+    // proof behind each process kill.
+    expect(commandLineHasArgumentValue(
+      `"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe" --remote-debugging-port=18800 --user-data-dir="${dir}" --no-startup-window`,
+      '--user-data-dir',
+      dir,
+    )).toBe(true);
+    expect(commandLineHasArgumentValue(
+      `--remote-debugging-port=18800 --user-data-dir="${dir}"`,
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(true);
+  });
+
+  it('matches an unquoted POSIX value', () => {
+    expect(commandLineHasArgumentValue(
+      'chrome --user-data-dir=/Users/me/Cindy/user-data --remote-debugging-port=18800',
+      '--user-data-dir',
+      '/Users/me/Cindy/user-data',
+    )).toBe(true);
+  });
+
+  it('rejects a value that is merely a prefix of the expected one', () => {
+    // The result feeds a process kill, so a different profile must not match.
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${dir}-backup"`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      'chrome --remote-debugging-port=188000',
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(false);
+  });
+
+  it('rejects a quoted value that carries a suffix after the closing quote', () => {
+    // `"<dir>"-backup` is a different profile that happens to start with the
+    // expected one. Matching it would let a foreign browser be killed.
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir="${dir}"-backup`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      `chrome --user-data-dir='${dir}'-backup`,
+      '--user-data-dir',
+      dir,
+    )).toBe(false);
+    expect(commandLineHasArgumentValue(
+      `chrome --remote-debugging-port="18800"0`,
+      '--remote-debugging-port',
+      '18800',
+    )).toBe(false);
+  });
+
+  it('rejects a missing option', () => {
+    expect(commandLineHasArgumentValue('chrome --headless', '--user-data-dir', dir)).toBe(false);
+  });
+});
+
+describe('waitForCdpPortFree', () => {
+  it('keeps probing until the port is released instead of trusting the first answer', async () => {
+    // The signal is delivered before the browser releases the port, so a
+    // single probe right after it reports a survivor and fails the launch
+    // reclaim even though the browser is on its way out.
+    let probes = 0;
+    const probe = vi.fn(async () => {
+      probes += 1;
+      return probes < 3;
+    });
+    const sleep = vi.fn(async () => {});
+
+    await expect(waitForCdpPortFree('http://127.0.0.1:45999', {
+      probe,
+      sleep,
+      deadlineMs: 1_000,
+    })).resolves.toBe(true);
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up when the port stays taken for the whole window', async () => {
+    const probe = vi.fn(async () => true);
+    const sleep = vi.fn(async () => {});
+
+    await expect(waitForCdpPortFree('http://127.0.0.1:45998', {
+      probe,
+      sleep,
+      deadlineMs: 0,
+    })).resolves.toBe(false);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('terminateManagedChromePortOwner', () => {
+  it('reports the port free when nothing holds it', async () => {
+    // Nothing listens on that port, so the reclaim must succeed — otherwise a
+    // launch is refused because of a browser that is already gone.
+    await expect(terminateManagedChromePortOwner({
+      cdpHttpUrl: 'http://127.0.0.1:45997',
+      cdpPort: 45997,
+      userDataDir: '/managed/browser/Cindy/user-data',
+    })).resolves.toBe(true);
   });
 });
 

@@ -6,10 +6,11 @@ import { pipeline } from 'node:stream/promises';
 
 import type { migrationNativeContext } from './migrationNativeContext.js';
 
-export interface TranscriptRewrite {
+export type TranscriptRewrite = {
   context: ReturnType<typeof migrationNativeContext>;
   agent: 'cc' | 'codex';
-}
+} | { agent: 'pi'; sessionId: string; cwd: string }
+  | { agent: 'codex-provider'; modelProvider: string };
 
 const NEWLINE = Buffer.from('\n');
 
@@ -21,6 +22,7 @@ const NEWLINE = Buffer.from('\n');
  */
 class TranscriptLines extends Transform {
   private carry: Buffer[] = [];
+  private firstLine = true;
 
   constructor(private readonly rewrite: TranscriptRewrite) {
     super();
@@ -48,6 +50,34 @@ class TranscriptLines extends Transform {
   private takeLine(): Buffer {
     const bytes = this.carry.length === 1 ? this.carry[0] : Buffer.concat(this.carry);
     this.carry = [];
+    const firstLine = this.firstLine;
+    this.firstLine = false;
+    if (this.rewrite.agent === 'pi') {
+      // Pi resumes in the header's cwd and refuses a missing source-machine directory.
+      // Relocate only the copied session header; preserve the entry tree and message bytes.
+      if (!firstLine) return bytes;
+      try {
+        const header = JSON.parse(bytes.toString('utf8'));
+        if (header?.type === 'session') {
+          return Buffer.from(JSON.stringify({ ...header, id: this.rewrite.sessionId, cwd: this.rewrite.cwd }));
+        }
+      } catch { /* Preserve malformed native history for the native reader to diagnose. */ }
+      return bytes;
+    }
+    if (this.rewrite.agent === 'codex-provider') {
+      // Codex resumes a thread only under the provider identity recorded in its header.
+      if (!firstLine) return bytes;
+      try {
+        const meta = JSON.parse(bytes.toString('utf8'));
+        if (meta?.type === 'session_meta' && meta.payload && typeof meta.payload === 'object') {
+          return Buffer.from(JSON.stringify({
+            ...meta,
+            payload: { ...meta.payload, model_provider: this.rewrite.modelProvider },
+          }));
+        }
+      } catch { /* Preserve malformed native history for the native reader to diagnose. */ }
+      return bytes;
+    }
     const { context, agent } = this.rewrite;
     if (!context.mayRewrite(bytes)) return bytes;
     return Buffer.from(context.line(bytes.toString('utf8'), agent));

@@ -103,7 +103,7 @@ function parseImDefaultAgentSettings(
         : null;
   }
   if ('model' in input) {
-    if (typeof input.model !== 'string' || !input.model.trim()) {
+    if (typeof input.model !== 'string' || (input.model.length > 0 && !input.model.trim())) {
       throwIpcError('INVALID_PARAMS', 'im default model required (string)');
     }
     model = input.model.trim();
@@ -115,5 +115,6 @@ function parseImDefaultAgentSettings(
     effort = input.effort;
   }
   if (agentDeviceId && !providerId) throwIpcError('INVALID_PARAMS', 'remote providerId required');
+  if (agentDeviceId && !model) throwIpcError('INVALID_PARAMS', 'remote model required');
   return { providerId, model, effort, ...(agentDeviceId ? { agentDeviceId } : {}) };
 }

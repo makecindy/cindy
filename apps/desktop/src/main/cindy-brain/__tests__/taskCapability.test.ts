@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, PluginTaskApprovalGate } from '../taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, PluginTaskApprovalGate } from '../taskCapability.js';
 import { handlePluginTaskRequest } from '../taskSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 
@@ -152,5 +152,29 @@ it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'write-
       await ensurePluginTaskApproval('p', { getGhost: () => ghost, isCurrent: () => current, confirm, approve }, 'targets');
       expect(confirm).toHaveBeenCalledOnce();
     }
+  },
+);
+
+// unit: old target approval must remain valid without becoming delegated execution consent.
+it.each(['missing-declaration', 'old-receipt', 'deny', 'account-change', 'approve'] as const)(
+  'keeps delegation independently approved: %s', async scenario => {
+    const ghost = legacy(); ghost.taskCapabilityApproved = true; ghost.targetCapabilityApproved = true;
+    ghost.manifest.agent!.targets = true;
+    if (scenario !== 'missing-declaration') ghost.manifest.agent!.delegation = true;
+    let current = true;
+    const confirm = vi.fn(async facts => {
+      expect(facts.added.map((item: { key: string }) => item.key)).toEqual(['agent:delegation']);
+      if (scenario === 'account-change') current = false;
+      return scenario !== 'deny';
+    });
+    const approve = vi.fn(async () => { ghost.delegationCapabilityApproved = true; return true; });
+    expect(hasPluginDelegationApproval(ghost)).toBe(false);
+    if (scenario !== 'old-receipt') expect(await ensurePluginTaskApproval('p', {
+      getGhost: () => ghost, isCurrent: () => current, confirm, approve,
+    }, 'delegation')).toBe(scenario === 'approve');
+    expect(hasPluginDelegationApproval(ghost)).toBe(scenario === 'approve');
+    expect(hasPluginTargetApproval(ghost)).toBe(true);
+    expect(ghost.enabled).toBe(true);
+    if (scenario !== 'approve') expect(approve).not.toHaveBeenCalled();
   },
 );

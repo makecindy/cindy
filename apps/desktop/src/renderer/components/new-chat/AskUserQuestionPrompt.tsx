@@ -25,7 +25,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowRight, Mic } from 'lucide-react';
+import { ArrowRight, Mic, Square } from 'lucide-react';
 import { visibleAskOptions } from '@cindy/maker-shared';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
@@ -41,6 +41,7 @@ import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
+import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
 import { useAskUserDictation } from './useAskUserDictation';
 import { parseVoiceQuestionSelection, type VoiceQuestionBridge, type VoiceQuestionTarget } from './voiceQuestionSelection';
@@ -53,6 +54,7 @@ interface AutoGrowingAnswerTextareaProps extends Omit<
 > {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
+  voice?: ReturnType<typeof useAskUserDictation>;
 }
 
 /**
@@ -64,9 +66,63 @@ function AutoGrowingAnswerTextarea({
   textareaRef,
   value,
   className,
+  voice,
   ...props
 }: AutoGrowingAnswerTextareaProps) {
   useAutoResize(textareaRef, value, ASK_USER_ANSWER_MAX_HEIGHT_PX);
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  useEffect(() => {
+    const field = textareaRef.current;
+    if (!field) return;
+    let pointerId: number | null = null;
+    const gesture = createComposerLongPressVoiceGesture({
+      getState: () => voiceRef.current?.state ?? 'idle',
+      start: () => voiceRef.current?.start() ?? false,
+      stop: async () => { await voiceRef.current?.stop(); },
+      onHoldStart: () => {
+        if (pointerId !== null) {
+          try { field.setPointerCapture(pointerId); } catch { /* The pointer may have left the window. */ }
+        }
+      },
+      onHoldEnd: () => {
+        if (pointerId !== null && field.hasPointerCapture?.(pointerId)) field.releasePointerCapture(pointerId);
+        pointerId = null;
+      },
+    });
+    const press = (event: PointerEvent) => {
+      if (!voiceRef.current || field.readOnly || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (event.pointerType && event.pointerType !== 'mouse') return;
+      if (getVoiceInputSettings().composerLongPressEnabled === false || !isComposerLongPressVoiceReady()) return;
+      pointerId = event.pointerId;
+      gesture.press({ x: event.clientX, y: event.clientY });
+    };
+    const move = (event: PointerEvent) => {
+      if (event.pointerId === pointerId) gesture.move({ x: event.clientX, y: event.clientY });
+    };
+    const release = () => { gesture.release(); pointerId = null; };
+    const dragStart = (event: DragEvent) => {
+      // Native text dragging can swallow pointermove/up. Keep ordinary drags,
+      // but cancel their pending hold; an active hold must retain its release.
+      if (gesture.isHolding()) event.preventDefault();
+      else release();
+    };
+    field.addEventListener('pointerdown', press);
+    field.addEventListener('dragstart', dragStart);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('blur', release);
+    return () => {
+      field.removeEventListener('pointerdown', press);
+      field.removeEventListener('dragstart', dragStart);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      window.removeEventListener('blur', release);
+      gesture.dispose();
+    };
+  }, [textareaRef]);
 
   return (
     <textarea
@@ -277,7 +333,8 @@ function AskUserQuestionForm({
   const [voiceShortcutOrder] = useState(nextAskUserVoiceShortcutOrder);
   const answerValue = dictation.liveText ?? customInput;
   const voiceShortcutLabel = formatVoiceInputShortcut(getVoiceInputSettings().shortcut);
-  const voiceButtonLabel = dictation.isBusy
+  const voiceProcessing = dictation.state === 'submitting' || dictation.state === 'refining';
+  const voiceButtonLabel = voiceProcessing ? voiceSubmitLabel : dictation.isBusy
     ? t('newChat.chatInput.voiceInput.stop')
     : voiceShortcutLabel
       ? `${t('newChat.chatInput.voiceInput.start')} · ${voiceShortcutLabel}`
@@ -596,6 +653,13 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
+      if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        pendingVoiceStartRef.current = false;
+        void dictationRef.current.cancel();
+        return;
+      }
       const shortcut = getVoiceInputSettings().shortcut;
       if (!isVoiceInputShortcutMatch(event, shortcut)) return;
       // No defaultPrevented check: an unfocused sibling composer swallows every
@@ -900,6 +964,7 @@ function AskUserQuestionForm({
             )}
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
+              voice={voiceBridge ? undefined : dictation}
               value={answerValue}
               readOnly={voiceLocked}
               onCompositionStart={markStarted}
@@ -934,7 +999,8 @@ function AskUserQuestionForm({
                 size="md"
                 label={voiceButtonLabel}
                 busy={dictation.isBusy}
-                disabled={voiceSubmitting}
+                processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)}
+                disabled={voiceSubmitting || voiceProcessing}
                 onClick={beginVoiceInput}
               />)}
               {!isMultiSelect && (
@@ -997,7 +1063,7 @@ function AskUserQuestionForm({
                   button for screen readers, as the option rows do. */}
               <span className="sr-only">{options.length + 1}</span>
             </button>
-            {!voiceBridge && (<AskUserVoiceButton label={voiceButtonLabel} busy={dictation.isBusy} disabled={voiceSubmitting} onClick={beginVoiceInput} />)}
+            {!voiceBridge && (<AskUserVoiceButton label={voiceButtonLabel} busy={dictation.isBusy} processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)} disabled={voiceSubmitting || voiceProcessing} onClick={beginVoiceInput} />)}
             {/* Pointer shortcut only: the row button above already carries the
                 action and its number for keyboard and screen-reader users. */}
             <div
@@ -1134,6 +1200,7 @@ function AskUserQuestionForm({
           <div className="flex items-end gap-2">
             <AutoGrowingAnswerTextarea
               textareaRef={inputRef}
+              voice={voiceBridge ? undefined : dictation}
               value={answerValue}
               readOnly={voiceLocked}
               onCompositionStart={markStarted}
@@ -1162,7 +1229,8 @@ function AskUserQuestionForm({
                 size="md"
                 label={voiceButtonLabel}
                 busy={dictation.isBusy}
-                disabled={voiceSubmitting}
+                processing={voiceProcessing || (dictation.isBusy && !dictation.captureReady)}
+                disabled={voiceSubmitting || voiceProcessing}
                 onClick={beginVoiceInput}
               />)}
               <Tip text={voiceSubmitting ? voiceSubmitLabel : isLastQuestion ? null : t('chat.askUserQuestion.next')}>
@@ -1206,12 +1274,14 @@ function AskUserQuestionForm({
 function AskUserVoiceButton({
   label,
   busy,
+  processing = false,
   onClick,
   size = 'sm',
   disabled = false,
 }: {
   label: string;
   busy: boolean;
+  processing?: boolean;
   disabled?: boolean;
   onClick: () => void;
   /**
@@ -1226,6 +1296,7 @@ function AskUserVoiceButton({
       data-testid="ask-user-voice"
       aria-label={label}
       aria-pressed={busy}
+      aria-busy={processing}
       disabled={disabled}
       onMouseDown={(event) => {
         // Keep the caret in the answer field so dictation replaces the selection
@@ -1245,7 +1316,7 @@ function AskUserVoiceButton({
           : 'bg-[var(--ask-badge-bg)] text-[var(--ask-badge-text)]',
       )}
     >
-      <Mic size={15} strokeWidth={2} aria-hidden="true" />
+      {processing ? <Spinner size={15} /> : busy ? <Square size={13} fill="currentColor" aria-hidden="true" /> : <Mic size={15} strokeWidth={2} aria-hidden="true" />}
     </button>
   );
 }

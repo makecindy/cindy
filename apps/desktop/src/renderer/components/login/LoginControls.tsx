@@ -35,9 +35,8 @@ import {
  *
  * 态系(design.md §2):
  * - hover 仅桌面(本文件即桌面端);pressed 双端;态只叠遮罩不改布局(§2.3-1)。
- * - 叠层一律挂伪元素(::after),不侵入图标/文本子节点(§2.3-4);
- *   hover/pressed 叠层为 §2.1 实测参数(rgba 字面值随行注 nodeId,非主题色;
- *   disabled 叠层走 token —— token-decision-table §3 仅 disabled 建 token)。
+ * - 叠层一律挂伪元素(::after),文字与图标 z-[1] 在叠层之上(§2.3-4);
+ *   hover/pressed 叠层全部走 --login-overlay-* token(取值见 DESIGN §16.5)。
  * - 全部叠层/旋转 = opacity/transform,compositor-only(§2.3-3,规则 7);
  *   spinner 动画挂 HTML wrapper,SVG 静止;prefers-reduced-motion 直落终态。
  */
@@ -190,8 +189,8 @@ const PHONE_PREFIX = {
 } as const;
 
 /**
- * 输入框(§4.1/§4.2:540×80 r40 #EEEEEE;default 边 #D4D4D4/focus·filled 边 #2A2828
- * 字转 Bold #252222/error 边 #D91F37;hover 黑 5% 叠层 = §2.2 延展照抄白按钮 347:2529)。
+ * 输入框(§4.1/§4.2:540×80 r40 墨水填充;default 边 = 墨水线 / focus·filled 边 = 墨水正文档,
+ * 字转 Bold 正文档 / error 边 #D91F37;hover 叠同色墨水加深一档,DESIGN §16.5)。
  * focus/filled 视觉由 CSS(:focus)与 value 是否非空驱动,error 由调用方传入。
  * prefix:固定前缀覆盖层(不可点、恒 Bold 墨色,如 cn 手机号 "+86"),文本区右移让位。
  */
@@ -293,7 +292,7 @@ export function LoginInput({
           // placeholder 接 token(figma §4.1 定稿值);漏接时被 Tailwind preflight
           // 默认 placeholder 灰顶替(2026-07-23 用户实测发现)。
           'placeholder:text-[var(--login-control-placeholder)]',
-          // hover 黑 5% 叠层(§2.2 照抄 347:2529;input 无法用伪元素,叠 background-image)
+          // hover 叠同色墨水加深一档(DESIGN §16.5;input 无法用伪元素,叠 background-image)
           'hover:enabled:[background-image:linear-gradient(var(--login-overlay-input-hover),var(--login-overlay-input-hover))]',
           'disabled:cursor-not-allowed',
           center ? 'text-center' : 'text-left',
@@ -321,7 +320,7 @@ export function LoginInput({
             fontSize: CONTROL.fontSize,
             fontWeight: filled || error ? 700 : 400,
             color: filled || error ? LOGIN_COLORS.controlText : LOGIN_COLORS.controlPlaceholder,
-            // focus 态(#2A2828 边)由全局无法内联表达的 :focus 承载 → CSS var 交给
+            // focus 态(正文档墨水边)由全局无法内联表达的 :focus 承载 → CSS var 交给
             // style 层:用 outline:none + onFocus/blur 会引入布局态;此处用
             // CSS 自定义属性 + 下方 <style> 惯例过重,直接以 box-shadow 承载 focus 边。
             ['--login-input-active-border' as string]: LOGIN_COLORS.controlBorderActive,
@@ -434,8 +433,9 @@ export function LoginSsoOrgHistoryList({
 }
 
 /**
- * 主按钮(§4.3 五态:normal/hover 白 8%/pressed 黑 50%/loading spinner 24@(487,27)/
- * disabled 白 70% 叠层+边 #B4B4B4+文字 80%)。文字保持居中,spinner 绝对定位。
+ * 主按钮(§4.3 五态,2026-10-27 墨水口径:normal = 主界面反相 CTA / hover、pressed 叠黑
+ * 加深 / loading spinner 24@(487,27) / disabled = 控件底 + 占位字)。文字保持居中,
+ * spinner 绝对定位;叠层挂 ::after,文字 z-[1] 在叠层之上。
  */
 export function LoginPrimaryButton({
   children,
@@ -468,8 +468,7 @@ export function LoginPrimaryButton({
         !inert &&
           'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-button-hover)] active:after:bg-[var(--login-overlay-button-pressed)] active:after:opacity-100',
         loading && 'cursor-default',
-        disabled &&
-          'cursor-not-allowed after:opacity-100 after:[background:var(--login-disabled-button-overlay)]',
+        disabled && 'cursor-not-allowed',
       )}
       style={{
         left: CONTROL.x,
@@ -477,8 +476,7 @@ export function LoginPrimaryButton({
         width: CONTROL.width,
         height: CONTROL.height,
         borderRadius: CONTROL.radius,
-        // disabled 底/字两模式同构(深底浅字,暗色不随 primaryButtonBg 反相为白;
-        // figma white_button Disable:深底 + 白 70% 叠层 + disabled 边 + 字 80%)
+        // disabled = 控件底(墨水填充)+ 占位档文字,描边透明(DESIGN §16.5)
         background: disabled ? LOGIN_COLORS.disabledButtonBg : LOGIN_COLORS.primaryButtonBg,
         border: `1px solid ${disabled ? LOGIN_COLORS.controlBorderDisabled : LOGIN_COLORS.primaryButtonBorder}`,
         color: disabled ? LOGIN_COLORS.disabledButtonText : LOGIN_COLORS.primaryButtonText,
@@ -486,7 +484,7 @@ export function LoginPrimaryButton({
         opacity: 1,
       }}
     >
-      <span className={cn('relative z-[1]', disabled && 'opacity-80')}>{children}</span>
+      <span className="relative z-[1]">{children}</span>
       {loading && (
         <span
           role="status"
@@ -523,7 +521,7 @@ function LoginSpinnerGlyph({ size }: { size: number }) {
 }
 
 /**
- * 第三方圆钮行(§4.5:80×80 r50 #2A2828/#434343,icon 48,gap 70,y=540 = 面板底 +40;
+ * 第三方圆钮行(§4.5:80×80 r50 主按钮底色,icon 48,gap 70,y=540 = 面板底 +40;
  * 行内水平居中 = demo socialRow left 公式)。SSO = 行内最后一颗(游客圆钮已随
  * 「跳过登录」文字入口移入面板内而删除)。
  */
@@ -544,10 +542,10 @@ export function LoginSocialRow({ children, count }: { children: ReactNode; count
 }
 
 /**
- * 第三方圆钮(§4.5:80×80 r50 #2A2828/#434343,icon 48 居中)。
+ * 第三方圆钮(§4.5:80×80 r50 主按钮底色,icon 48 居中)。
  *
  * 态系(§10 拍板 2026-07-21):仅 normal + hover(仅桌面)+ pressed(双端)三态,
- * hover/pressed 叠层照抄主按钮(白 8% / 黑 50% rgba,§2.2);**无 disabled / loading 态**
+ * hover/pressed 叠层同主按钮;Apple 圆钮(亮黑 / 暗白)走 login-overlay-apple-*;**无 disabled / loading 态**
  * (用户 2026-07-21 拍板移除,覆盖 §2.2 表 2026-07-19 loading/disabled 两行;圆钮从不曾
  * 实现 loading,disabled 渲染路径本轮删除)。normal 底色/描边走主题 token
  * (primaryButtonBg / primaryButtonBorder);hover/pressed 叠层为 figma §2.1 实测 rgba
@@ -593,8 +591,12 @@ export function LoginSocialButton({
       className={cn(
         'relative grid place-items-center overflow-hidden',
         overlayBase,
-        // hover(仅桌面)/pressed(双端)照抄主按钮(§2.2;白 8% / 黑 50% rgba 叠层)。
-        'hover:after:opacity-100 hover:after:bg-[var(--login-overlay-button-hover)] active:after:bg-[var(--login-overlay-button-pressed)] active:after:opacity-100',
+        // hover(仅桌面)/pressed(双端)同主按钮叠黑;Apple 圆钮底色由 Apple 规范定,
+        // 亮色黑圆叠黑没有反馈,单独走 login-overlay-apple-*(DESIGN §16.5)。
+        'hover:after:opacity-100 active:after:opacity-100',
+        isApple
+          ? 'hover:after:bg-[var(--login-overlay-apple-hover)] active:after:bg-[var(--login-overlay-apple-pressed)]'
+          : 'hover:after:bg-[var(--login-overlay-button-hover)] active:after:bg-[var(--login-overlay-button-pressed)]',
       )}
       style={{
         width: SOCIAL.size,
@@ -615,7 +617,7 @@ export function LoginSocialButton({
 }
 
 /**
- * 返回按钮(§4.6:60×60 r40 #EEEEEE/边 #FFFFFF;hover 白 70%/pressed 黑 8%;
+ * 返回按钮(§4.6:60×60 r40 墨水填充 + 墨水线;hover / pressed 叠同色墨水加深一档;
  * icon 24 box,chevron 视觉按设计稿方向)。
  */
 export function LoginBackButton({
@@ -652,7 +654,7 @@ export function LoginBackButton({
       }}
     >
       {/* 24 box 内左向 chevron(247:1635 icon 语义;矢量重绘,静态)。z-[1]:hover/pressed
-          叠层(::after,亮色白 70%)只染底色,不盖住箭头——否则悬停时箭头仅 1.76:1。 */}
+          叠层(::after)只染底色,不盖住箭头。 */}
       <svg className="relative z-[1]" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path
           d="M14.5 5.5 8 12l6.5 6.5"
@@ -668,8 +670,8 @@ export function LoginBackButton({
 
 /**
  * Text_link(§4.7 状态表 + U-9 裁决):(70,238) 540×50 Regular 20 居中。
- * - link:default #2A2828 underline(247:1612)/hover #4A4848(358:792,仅桌面)/
- *   pressed #1A1818(U-9,--login-link-pressed;underline·字号·字重不变);
+ * - link:default 墨水正文档 underline(247:1612)/hover 说明档(仅桌面)/
+ *   pressed 强调档(--login-link-pressed;underline·字号·字重不变;2026-10-27 墨水口径);
  * - countdown/info 变体:次要档(--login-secondary-text,2026-10-23 起;原 figma 247:1614
  *   为 #D4D4D4,与占位同档只有 1.3~2.2:1,倒计时与「验证码已发送至 X」是要读的信息)
  *   无 underline 不可交互;
@@ -1202,9 +1204,9 @@ export function LoginErrorText({ children }: { children: ReactNode }) {
 }
 
 /**
- * 方式行(§4.9:540×100 r60 #EEEEEE/#D4D4D4;标题 24 Bold/副行 20 次要档左对齐
+ * 方式行(§4.9:540×100 r60 墨水填充 + 墨水线;标题 24 Bold/副行 20 次要档左对齐
  * x=67,文字块垂直居中行距 5;左 icon 24 box @(27,37)/person 18×20 @(30,39);
- * 右 share 18×18 @(490,40);hover 白 8%/pressed 黑 8%)。
+ * 右 share 18×18 @(490,40);hover / pressed 叠同色墨水加深一档)。
  */
 export function LoginMethodRow({
   top,

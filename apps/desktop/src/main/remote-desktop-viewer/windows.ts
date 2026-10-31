@@ -2,6 +2,7 @@ import {
   BrowserWindow,
   clipboard,
   ipcMain,
+  powerMonitor,
   screen,
   type IpcMainInvokeEvent,
   type WebContents,
@@ -312,7 +313,23 @@ export class RemoteDesktopViewerWindows {
       throwIpcError('PERMISSION_DENIED', 'Invalid viewer');
     return entry;
   }
+  private readonly endForLocalLock = () => {
+    for (const entry of this.entries) {
+      if (!entry.connection.active) continue;
+      try {
+        entry.connection.close(entry.connection.generation, true);
+      } catch {
+        // An account change can retire the owner between the power event and
+        // its handler. Revoke locally without acting as the previous owner.
+        entry.connection.deactivate();
+      }
+      const win = entry.window;
+      if (win && !win.isDestroyed()) entry.controller.close(win.webContents);
+    }
+  };
   register(): void {
+    powerMonitor.on('lock-screen', this.endForLocalLock);
+    powerMonitor.on('suspend', this.endForLocalLock);
     ipcMain.handle(REMOTE_VIEWER.OPEN, (event, target) => {
       assertTrustedAppRendererEvent(event);
       this.open(event.sender, target);

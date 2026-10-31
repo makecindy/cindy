@@ -151,7 +151,7 @@ describe('MarkdownRenderer — math 接线 source contract', () => {
     expect(source).toContain('normalizeMarkdownRendererContent(repairedContent, emitSourceLines)');
     expect(source).toContain('normalizeMathDelimiters(content, { preserveLineCount })');
     expect(source).toContain(
-      'streamFade && isStreaming ? repairStreamingMarkdown(throttledContent) : throttledContent',
+      'streamFade ? repairStreamingMarkdown(throttledContent) : throttledContent',
     );
   });
 

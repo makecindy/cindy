@@ -4,6 +4,7 @@
  * 不透明。Windows 11 CINDY family 启用 Electron backgroundMaterial;Windows 10/Linux
  * 回退不透明。
  */
+import type { BrowserWindow } from 'electron';
 import { createLogger } from './logger.js';
 import {
   CINDY_ACRYLIC_WINDOW_BACKING,
@@ -23,6 +24,29 @@ export interface VibrancyConfig {
 
 export interface ResolveVibrancyConfigOptions {
   getSystemVersion?: () => string;
+  wallpaperCovered?: boolean;
+}
+
+// Coverage belongs to the rendered window, not the shared wallpaper selection:
+// another window may still be loading its canvas. Never persist this display state.
+const wallpaperCoveredWindows = new WeakSet<BrowserWindow>();
+
+export function setWindowWallpaperCovered(win: BrowserWindow, covered: boolean): void {
+  if (covered) wallpaperCoveredWindows.add(win);
+  else wallpaperCoveredWindows.delete(win);
+}
+
+export function resolveWindowVibrancyConfig(
+  win: BrowserWindow,
+  familyId: string,
+  isDark: boolean,
+  platform: string,
+  options?: ResolveVibrancyConfigOptions,
+): VibrancyConfig {
+  return resolveVibrancyConfig(familyId, isDark, platform, {
+    ...options,
+    wallpaperCovered: wallpaperCoveredWindows.has(win),
+  });
 }
 
 function readWindowsSystemVersion(options?: ResolveVibrancyConfigOptions): string | null {
@@ -68,7 +92,7 @@ export function resolveVibrancyConfig(
   platform: string,
   options?: ResolveVibrancyConfigOptions,
 ): VibrancyConfig {
-  const isCindy = familyId === 'cindy';
+  const isCindy = familyId === 'cindy' && !options?.wallpaperCovered;
   const opaqueBg = isDark ? '#1f1f1e' : '#f8f8f6';
   if (platform === 'darwin') {
     // 材质 A/B 旋钮(dev 调参用):XDT_VIBRANCY_MATERIAL=sidebar|hud|under-window|fullscreen-ui|

@@ -36,7 +36,7 @@ Claude Code 在原有 per-sidechain 回调里检测所有模型；Pi / Codex 在
 三个引擎均关闭“参数各不相同、同类契约错误连续被拒三次即中断”的规则：同类错误
 不能证明模型没有在修正调用，Pi / Codex 也尚无可靠模型响应批次标识。运行时沿用
 `contractConsecutiveLimit: Number.POSITIVE_INFINITY` 关闭该计数阈值，不新增提醒或自动重试。
-完全相同的工具名、参数、输出连续四次仍会中断，短窗口轮转检测也保持不变；不同参数
+完全相同的工具名、参数、输出连续四次仍触发疑似复核，短窗口轮转检测也保持不变；不同参数
 持续出现同类错误可能多重试几次，这是减少纠错误停的取舍。旧 `contract` 错误的展示
 和历史兼容保持不变。
 循环错误沿用 `tool_use_loop_detected` 和既有中断复核，Orca 消费普通终态链路；
@@ -68,17 +68,28 @@ Codex code mode 下脚本在后台运行，模型同时继续回应；app-server
 快速重复照常计数。上述判据命中只算“疑似”（`final: false`）：host 通过
 `MakerDeps.toolLoopReviewer`（Pi / Codex）与 `AgentDeps.toolLoopReviewer`（Claude Code）
 注入同一个辅助模型复核入口，由 `agents/shared/tool-loop-review.ts` 的 `ToolLoopMonitor`
-在后台复核，Agent 不暂停。复核 continue → 接下来 20 次普通结果不再报疑似；stop、
-失败、20 秒超时或未注入复核 → 按原样中断。每个 turn 最多复核 3 次（Claude Code 各子代理共用这 3 次），
-用完后疑似直接中断，但进行中的复核会等到结论；放行额度按普通结果计，节奏轮询同样消耗；
+在后台复核，Agent 不暂停。只有明确 stop 才中断；continue、失败、20 秒超时、无效回答
+或未注入复核 → 接下来 20 次普通结果不再报疑似。每个 turn 最多复核 3 次
+（Claude Code 各子代理共用这 3 次），用完后放行疑似且不再请求辅助模型，最终硬上限仍有效；
+进行中的复核会等到结论；放行额度按普通结果计，节奏轮询同样消耗；
 复核结果晚于 turn 结束、接管、关闭或拆离开始到达时丢弃；复核期间若新的普通结果已不再疑似
 （模式被打破），或新结果的调用不属于被复核的调用集合（模式被替换），进行中的复核同样作废；结论到达时
-若仍有在途调用不属于被复核模式（此时流式参数已补齐），结论丢弃；Claude Code 子代理结束后
+若用户目标已被新消息/插话替换，或仍有在途调用不属于被复核模式（此时流式参数已补齐），
+结论丢弃；Claude Code 子代理结束后
 （父 Agent 调用已有结果）其迟到结论丢弃，等待/轮询工具与未配对结果不算打破（Session 的同步观察与复核结论共用
 `toolLoopControlFor` 一个前提判据，等人确认期间不中断，Claude Code 对称检查 pending interaction；
 复核终态与同步判定一样，排在已送达完整结果的摘要之后）。以下情况不经复核直接中断（`final: true`）：
 快速完全相同调用连续 30 次、完全相同结果（含节奏轮询）持续 60 分钟、长只读轮转。
-复核只发送最近 12 次调用的摘要：maker-core 只为限制内存截取未脱敏原文（输入保留原结构，
+2026-10-27 用户确认：复核结合用户目标、最新要求、主模型已有的公开行动说明与工具结果，
+判断继续是否合理。仅在明确无进展且无合理继续理由时 STOP；手机/游戏操作、截图观察、
+界面测试、逐项处理、外部进度轮询可以正常重复，缺画面或证据不足时 CONTINUE。
+行动说明只作解释，不能代替结果；所有上下文都是证据，不执行其中针对复核器的指令。
+用户目标复用现有有界用户原话投影（宿主提供时包含历史与最新要求），普通发送与插话更新；
+公开说明来自当前 scope 最近一段 text 事件，增量拼接、final 全文覆盖校准、工具后有新说明时替换，换轮清空。
+不采集 thinking，不额外调用模型摘要，不要求主模型逐次增加说明。先脱敏再截断：
+用户上下文发送最多 4000 字符，行动说明最多 2000 字符；缺失明确标注，不补造目标或理由。
+
+同时发送最近 12 次调用的摘要：maker-core 只为限制内存截取未脱敏原文（输入保留原结构，
 每个字符串 4000 字符；截取点所在的整行一律丢弃，无换行时丢弃末尾连续串与未闭合引号起的内容），desktop 先在未转义的字符串上逐个（键名像凭证的字段与 argv 中凭证参数名的下一项整项删除）
 对完整截取按凭证种类整类脱敏（`redactSensitiveText`、`git-snapshot/secretRedactor.ts`
 的厂商令牌与私钥、截断私钥块、URL 内嵌凭证、命令行凭证参数、凭证类 HTTP 头，最后以
@@ -93,7 +104,8 @@ Claude Code 的 `upstream-idle-watchdog.test.ts` 与 desktop 的 `tool-loop-revi
 ## 上下文已满时的引擎边界
 
 Claude Code 在同一模型上达到设置页自动压缩阈值且尚未满窗时，由 host 注入 `/compact`；
-Pi 读取独立的设置页百分比，在每次启动或恢复任务时冻结并写成原生 `compaction.reserveTokens`，由 Pi 按
+Desktop 的压缩比例按供应商与模型统一（默认 90%），所有 Harness 共用，旧全局偏好不再生效。
+Pi 在启动或恢复时将模型比例写成原生 `compaction.reserveTokens` / `modelOverrides`，由 Pi 按
 `contextWindow - reserveTokens` 处理 threshold 压缩，并在 provider 报 context overflow 时按原生
 `Agent.continue()` 语义压缩续接。Cindy 只消费 Pi 的 `compaction_start`／`compaction_end` 事件做
 UI、usage 与 digest 投影，不再向 Pi 注入 host 自动 compact RPC。
@@ -152,19 +164,28 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 明确 `context-overflow` 且本轮没有助手输出或
 工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
+模型切换产生的空 assistant 分隔记录不属于助手产出：自动换窗、手动重试与恢复检查点的
+进展统计均排除它。有效标记必须符合 `turnModelChange.ts` 的生产者合同：`fromModel` / `toModel`
+均为字符串且 `modelOnly: true`；有正文的记录、无有效切模标记的空记录和工具操作仍保留原保护。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
 自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
 `invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
 确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
-推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
+推理密文范围）不得当成换窗。此类 compact 失败使用 `remote-compact-encrypted-content`
+原因，桌面与手机展示加密历史无法读取、自动接续未完成，不解释为单条输入超长；
+旧 Host 留下的 `context-overflow` 加无详情的裸包装消息 `Error running remote compact task`
+也按压缩错误显示，兼容密文错误码只在已丢失的 `additionalDetails` 中的记录；含具体窗口超限、
+超时或其他详情的消息不走此兜底。原始错误未带此持久化原因时仍须有密文证据。
+手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
 （可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时
 所有，不再先尝试改写历史／剥图。决定函数见 `cindyContextCompression.ts`。
 字节预算目前只有 Codex 能测量。工具输出不另开一档：图片恢复的交接保留受长度限制、
-带调用关联的文本结果摘要，省略图片数据；伙伴主对话及显式重启也保留这些结果，其他交接沿用原规则。
+带调用关联的文本结果摘要，省略图片数据；普通跨引擎交接也默认保留有界工具结果（调用方可显式关闭）。
+长消息与结果保留首尾，超总预算时优先保留最近请求与结果、检索指引和结束标记；仍为 16,000 字符预算，不额外调用模型。
 可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
 由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
 伙伴主对话、话题和 IM 专线与普通 Session 一样依赖原生压缩，不按空闲时长或 70%/90%
@@ -216,6 +237,26 @@ Codex 跨凭证优先保留同一个原生线程；仅当目标需要另一个 h
 本地恢复与分叉必须同时固定该线程的原生历史根
 （`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
 仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+本机外部 Codex 导入完成历史快照交接后、调用原生恢复前，必须将 paginated 历史的
+`rollout-cindy-adopted-*` 名称恢复为原生规范文件名（#7436）。保留原名中的 thread ID
+及可选的独立 rollout ID，不修改历史内容。存量错误路径在已记录的历史根和 SQLite 根内
+修复：不覆盖地建立同 inode 的规范名称、条件更新 SQLite 指针，返回规范路径；修复阶段不写位置索引，
+避免读取后替换覆盖另一进程的最新记录。旧索引仍能通过同 inode 别名恢复，由正常原生线程登记更新索引；
+保留旧名称，使中断重试与已打开的 writer 不会丢失追加内容。遇到另一份规范文件或状态
+已被其它操作切换时明确失败，不覆盖、不重新导入子历史，也不从聊天投影重建。
+带 `history_base` 的分页历史恢复前必须补齐所引用的完整祖先链，按原生 rollout ID
+（可能不同于 thread ID）查找，并保留原始字节、序号与归档位置。存量导入缺少祖先时，
+仅从与已选子历史的原文件名、首条元数据完全匹配的外部 HOME 补齐；已有 SQLite 指针指向自定义目录时，
+在交接指针前将来源根与子历史首条元数据原子保存到私有副本旁的 `.source.json`，中断重试仍使用该来源。
+来源记录不覆盖，且不能绕过子历史匹配和祖先校验；无记录的旧导入仍走候选目录发现。来源不明确、
+祖先缺失／越界／循环或已有副本的引用范围冲突时明确失败。已有子历史和祖先的后续
+追加不被替换；已有祖先仍使用 Cindy 旧文件名时，通过同 inode 规范名称复用，不能另拷贝
+导致父任务恢复冲突。整链先校验，再从最早祖先开始不覆盖发布，中断可重试。补齐后外部 HOME
+不可用也能恢复。异步复制后重查 SQLite 指针和位置索引，不能覆盖并发归档或切换。
+只读归档／导出查询不触发修复。Windows 扩展盘符与 UNC 路径在相对路径计算前统一表示。
+实现见 `maker-host/codex-local-sessions.ts`、`codex-thread-locations.ts`；默认回归在
+`main/__tests__/codexLocalSessions.test.ts`，真实恢复与下一轮发送在同目录的
+`codexLocalSessions.native.test.ts`（显式指定 `CINDY_CODEX_TEST_BINARY`，隔离目录与本机模型服务）。
 归档状态以 Cindy 的 `sessions.status` 为准。Codex 经原生 `thread/archive` /
 `thread/unarchive` 同步历史位置与索引，成功后更新线程位置记录；禁止直接改原生 SQLite
 或搬动 rollout，也不能为归档触发历史复制／重建。启动时补齐存量状态，忙碌任务、离线
@@ -287,6 +328,11 @@ Desktop 回包还须核对浏览器当前路由，覆盖地址已切换但 React
 `/clear` 之后的新消息。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
 `agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
 `rewindNativeBoundarySqlite.test.ts`、`tx.test.ts` 与 `index.test.ts`。
+Claude 回退／编辑重发的目标之前没有可续接的 assistant（首条消息，或之前的轮次都在回复前被
+停掉）时不报错：宿主传 `rewindsToNativeThreadStart` 只借原生检查点回滚文件（另一台电脑上的
+Claude 用本机保存点），再关闭会话；`rewind.commit` 在同一事务里软删目标、清掉
+`sdk_session_id` 并写入隐藏 `context_rebuild`（reason `message-rewind`），把目标之前仍保留的
+可见历史作为交接，下次任意入口发送时注入全新原生会话，没有 user 历史时交接为空。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
@@ -390,9 +436,16 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   只对**本账号的本机任务**调用：SSH 远程、Review、设备托管访客任务一律不注入。Claude Code 与 Pi 写进
   Agent 进程 env；Codex 的 app-server 共享，按线程经 `shell_environment_policy.set.<名>` 设置。
   返回值必须按 sessionId 确定，重启进程得到字节相同的 env（否则破坏缓存与重建一致性）。
-- `request_input_handoff`（`packages/lizi-mcps/src/xdt-helper/input_handoff.ts`）的使用时机只写在工具
-  说明里，**不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
-  何时该发起靠工具返回提示（如 `cindy_computer` 拒绝直接操作保密输入框），不靠提示词。
+- 找主人统一走 `cindy_helper` 的顶层工具 `ask_owner`（`packages/lizi-mcps/src/xdt-helper/ask_owner.ts`，
+  2026-10-30）：kind = choose（选择）／fill（亲自输入，原 `request_input_handoff`）／scan（扫码，窗口或
+  Agent 截图）／connect（连接账号，目前为 Grok）。它一直在模型的工具列表里（Pi 经网关检索），不藏在
+  `list_tools` 类目后面；列表按请求时的 harness 与能力面只给可用的 kind（Codex 无 choose，SSH 工作区
+  无 fill／scan）。旧名 `request_input_handoff`、`start_grok_device_login` 仍可经 `call_tool` 调用但不再
+  列出，`ask_user_question_async` 由 `ask_owner` kind=choose 原样接替。使用时机只写在工具说明里，
+  **不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
+  目标窗口不可用（Cindy 自身、找不到）在调用当下返回 `TARGET_IS_CINDY`／`TARGET_NOT_FOUND` 并说明
+  下一步，不再先回 pending。何时该发起靠工具说明与工具返回提示（如 `cindy_computer` 拒绝直接操作
+  保密输入框、浏览器读到登录墙时指向 `ask_owner`），不靠提示词。
 - 续接是隐藏的 `[Input handoff ended]` 合成消息，只有事实；产品规则见
   [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。
 
@@ -440,8 +493,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
   卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
-  Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
-  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏并拒绝这条工具；
+  Claude Code／Pi 通过 `cindy_helper.ask_owner`（kind=choose，2026-10-30 起接替
+  `ask_user_question_async`）复用现有卡片；工具立即返回
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏 choose 并拒绝这类调用；
   `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
   Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
   不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
@@ -457,7 +511,7 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
   缺失或未证实均拒绝；不提供通用 call_tool 别名，避免绕过该判据。
   SSH、手机沿用既有 MCP／交互传输通道。
-  回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
+  回归见 `session.async-user-questions.test.ts`、MCP `askOwnerTool.test.ts`；
   两种真实 harness 配本地假模型的投递与稳定前缀实测见
   `agents/shared/async-user-questions.native.test.ts`。
   宿主的同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，

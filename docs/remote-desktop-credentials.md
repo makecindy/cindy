@@ -250,6 +250,15 @@ the phone; Desktop closes locally without awaiting the remote result. Background
 lock failures are logged on the host. macOS and supported Linux hosts advertise
 this optional capability.
 
+### Idle protection
+
+The separate default-five-minute idle setting is host-enforced when `idleLock` is
+advertised. It does not change saved credentials, biometric checks or privacy defaults.
+Timeout and loss of the protected lease block automatic resume so saved auto-unlock
+cannot immediately undo locking. Local Desktop lock/suspend requests an immediate
+remote lock; Mobile backgrounding without PiP does the same when idle protection is
+on. See [Remote desktop](remote-desktop.md#idle-protection) for options and counting.
+
 ### Stable mobile controls
 
 Control, Display and Security share one viewport-sized panel with persistent

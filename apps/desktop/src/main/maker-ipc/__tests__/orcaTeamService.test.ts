@@ -1,9 +1,7 @@
 import { admitTaskAction, captureTaskActionGuard } from '../taskActionAuthorization.js';
-import { hasAcceptedUserTaskInput } from '../pluginTaskInput.js';
 import { describe, expect, it, vi } from 'vitest';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {PluginTaskError} from '../pluginTaskService.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../acceptedCallbackRunner';
 
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
@@ -136,7 +134,7 @@ describe('model Orca cleanup authority', () => {
         },
       };
       const api = compile({
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         orcaTeamService: service, listWorkersByLead: deps.listWorkersByLead, findFocusTargetWorker,
         setWorkerFocus: focus, resumeOrcaWorkerSessionIfMissing: resume,
         orcaWorkerResumeScheduler, log: { warn: vi.fn() },
@@ -156,7 +154,7 @@ describe('model Orca cleanup authority', () => {
       const assertCurrent = async () => { if (!allowed) throw Error('Revoked'); };
       const close = vi.fn(async () => undefined), archive = vi.fn(async () => []);
       const bindings = {
-        captureOrcaPluginAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
+        captureOrcaTaskAuthority: async () => { await assertCurrent(); return { assertCurrent }; },
         getActiveTeamByLead: async () => team ? { id: 'team-1' } : null,
         getSessionOrcaRole: async () => { if (phase === 'lookup') allowed = false; return 'lead'; },
         listWorkersByLead: async () => { if (phase === 'lookup') allowed = false; return [createWorker()]; },
@@ -323,30 +321,7 @@ describe('OrcaTeamService updateWorker', () => {
     expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'backend-2' });
   });
 
-  it('rejects a label rename locked by the active plugin team plan but still allows role changes', async () => {
-    const isWorkerLabelLockedByPlan = vi.fn(async () => true);
-    const { deps, service, getWorker } = createDeps({ isWorkerLabelLockedByPlan });
 
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      label: 'backend-2',
-    })).resolves.toMatchObject({ ok: false, errorCode: 'WORKER_STATE_CHANGED' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledWith({
-      leadSessionId: 'lead-1',
-      labels: ['research', 'backend-2'],
-    });
-    expect(deps.updateWorkerIdentity).not.toHaveBeenCalled();
-
-    // 计划只按 label 寻址，role 改名不受影响，也不触发计划查询。
-    await expect(service.updateWorker({
-      callerLeadSessionId: 'lead-1',
-      workerId: 'worker-1',
-      role: 'Reviewer',
-    })).resolves.toMatchObject({ ok: true, role: 'Reviewer', label: 'research' });
-    expect(isWorkerLabelLockedByPlan).toHaveBeenCalledTimes(1);
-    expect(getWorker()).toMatchObject({ role: 'Reviewer', label: 'research' });
-  });
 });
 
 function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
@@ -593,59 +568,34 @@ describe('OrcaTeamService', () => {
     })).resolves.toMatchObject({ dispatched: true, agentKind: 'pi' });
   });
 
-  // #6399: plugin-only coverage missed an ordinary owner input revoked after
-  // admission. Real host capture + public service; delayed acceptance escapes ALS.
-  it.each(['send', 'interrupt'].flatMap(action => [
-    ...['initial', 'lookup', 'restore', 'accept', 'queued', 'healthy'].map(phase => ({action,phase,source:'plugin'})),
-    ...['lookup', 'queued', 'healthy'].map(phase => ({action,phase,source:'action'})),
-  ]))(
-    'preserves $source authority for public $action across $phase', async ({action,phase,source:authoritySource}) => {
-      let revoked = phase === 'initial', nativeCalls = 0;
-      let delayed: (() => Promise<void>) | undefined;
-      const source = readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-      const helper = source.slice(source.indexOf('  const assertPluginWorkerAutoAuthorized ='),source.indexOf('  const orcaWorkerCreationService ='));
-      const epoch = {client:{}};
-      const bindings = {PluginTaskError,getCurrentDbClientSnapshot:()=>epoch,
-        maker:{getSession:()=>null},inputCoordinator:{getAcceptedInputProvenance:()=>authoritySource==='plugin'?{clientId:'plugin-task:run'}:null},
-        createPluginTaskStore:()=>({get:async (id:string)=>authoritySource==='action'?undefined:id==='run'
-          ? {operation:'send',targetId:'lead-1',pluginId:'plugin',payload:'{"inputMessageId":"plugin-task:run"}'}
-          : {operation:'create',pluginId:'plugin',payload:JSON.stringify({ownershipRevoked:revoked})}}),
-        pluginTaskServiceForCurrentOwner:()=>({get:async()=>({status:'active',permissionMode:'auto'})}),
-        isPluginTaskAuthorized:()=>!revoked,readPluginTaskConfig:()=>({permissionMode:'auto'})};
-      const capture = new Function('captureTaskActionGuard', 'hasAcceptedUserTaskInput', ...Object.keys(bindings),ts.transpileModule(`${helper}\nreturn captureOrcaPluginAuthority;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText)(captureTaskActionGuard, hasAcceptedUserTaskInput, ...Object.values(bindings));
-      const {deps,service,getWorker}=createDeps({captureControlAuthority:async id=>(await capture(id)).assertCurrent});
-      const list=deps.listWorkersByLead;
-      deps.listWorkersByLead=vi.fn(async id=>{const r=await list(id);if(phase==='lookup')revoked=true;return r;});
-      deps.resumeWorkerSession=vi.fn(async()=>{if(phase==='restore')revoked=true;});
-      const dispatch=async (params: Parameters<OrcaTeamServiceDeps['reserveWorkerMessage']>[0]):Promise<DispatchWorkerMessageResult>=>{
-        if(action==='interrupt'){
-          if(phase==='restore')revoked=true;
-          await params.beforeReserve?.(); params.onReserved?.();
-        }
-        const accept=async()=>{if(phase==='accept')revoked=true;await runAcceptedCallback(params.onAccepted,'worker-session-1','input',deps.log);nativeCalls++;};
-        if(phase==='queued')delayed=accept;else await accept();
-        return {ok:true,mode:phase==='queued'?'queued':'dispatched',clientId:'input',dispatchOutcome:{kind:'session-dispatch',source:'test',dispatched:true},targetTitle:'Worker',targetLastUserSendAt:null};
-      };
-      deps.dispatchWorkerMessage=vi.fn(dispatch);deps.reserveWorkerMessage=vi.fn(dispatch);
-      const invoke=async()=>service[action==='send'?'sendToWorker':'interruptWorker']({callerLeadSessionId:'lead-1',targetSessionId:'worker-session-1',message:'Evaluate'});
-      const run=async()=>{
-        if(authoritySource==='plugin')return invoke();
-        const admitted=await admitTaskAction({sessionId:'lead-1',server:'cindy_orca',tool:action==='send'?'send_to_worker':'interrupt_worker',args:{}},
-          {key:'owner',ownerInput:true,delegated:false,assertCurrent:async()=>{if(revoked)throw new Error('Revoked');}});
-        if(!admitted.ok||!admitted.run)throw new Error('missing admission');
-        return admitted.run(invoke);
-      };
-      if(phase==='initial')await expect(run()).rejects.toThrow();
-      else {
-        const result=await run();
-        if(phase==='queued'){expect(result.ok).toBe(true);revoked=true;await expect(delayed!()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);}
-        else expect(result.ok).toBe(phase==='healthy');
-      }
-      expect(nativeCalls).toBe(phase==='healthy'?1:0);
-      expect(getWorker().status).toBe(phase==='healthy'?'running':'idle');
-      if(action==='interrupt'&&['initial','lookup','restore'].includes(phase))expect(deps.requestWorkerInterrupt).not.toHaveBeenCalled();
-      expect(deps.archiveWorkerSession).not.toHaveBeenCalled();
+  it.each(['send', 'interrupt'] as const)('rechecks task action authorization during public %s', async action => {
+    let allowed = true;
+    const { deps, service, getWorker } = createDeps({
+      captureControlAuthority: async () => {
+        const guard = captureTaskActionGuard();
+        await guard?.();
+        return async () => { await guard?.(); };
+      },
     });
+    const list = deps.listWorkersByLead;
+    deps.listWorkersByLead = vi.fn(async id => { const workers = await list(id); allowed = false; return workers; });
+    const admitted = await admitTaskAction({
+      sessionId: 'lead-1', server: 'cindy_orca', tool: action === 'send' ? 'send_to_worker' : 'interrupt_worker', args: {},
+    }, { key: 'owner', ownerInput: true, delegated: false,
+      assertCurrent: async () => { if (!allowed) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'); } });
+    if (!admitted.ok || !admitted.run) throw new Error('missing admission');
+    const params = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'Evaluate' };
+    if (action === 'send') {
+      await expect(admitted.run(() => service.sendToWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    } else {
+      await expect(admitted.run(() => service.interruptWorker(params)))
+        .resolves.toMatchObject({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'TASK_ACTION_AUTHORIZATION_EXPIRED' });
+    }
+    expect(getWorker().status).toBe('idle');
+    expect(deps.dispatchWorkerMessage).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerMessage).not.toHaveBeenCalled();
+  });
   it.each(['lookup', 'resume', 'send', 'accepted-list', 'status-update', 'queued', 'healthy'])(
     'rechecks Host creation provenance at acceptance after %s', async phase => {
       let allowed = true, nativeCalls = 0;
@@ -1860,6 +1810,257 @@ describe('OrcaTeamService', () => {
     expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
     expect(onLeadWorkerReportsSettled).toHaveBeenCalledTimes(1);
     expect(onLeadWorkerReportsSettled).toHaveBeenCalledWith('lead-1');
+  });
+
+  // A real mid-turn send_to_lead used to write done while the runtime kept working.
+  // Report ownership must survive until product terminal without generating a second report.
+  it.each(['done', 'error', 'input_stop', 'abort_session', 'lead_interrupt'] as const)(
+    'keeps a reported local turn running until %s', async outcome => {
+      const onLeadWorkerReportsSettled = vi.fn();
+      const h = createDeps({ onLeadWorkerReportsSettled });
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' });
+      const capture = h.service.captureWorkerTerminalTurn('worker-session-1');
+      const finish = h.service.captureLocalWorkerReport('worker-session-1');
+      await finish(true);
+      await finish(true);
+      await h.service.captureLocalWorkerReport('worker-session-1')(true);
+      expect(h.getWorker().status).toBe('running');
+      expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+      expect(h.service.captureWorkerTerminalTurn('worker-session-1').autoBridgeIdentity).toBe(capture.autoBridgeIdentity);
+      expect(onLeadWorkerReportsSettled).toHaveBeenCalledExactlyOnceWith('lead-1');
+      const stopped = outcome !== 'done' && outcome !== 'error';
+      if (stopped) h.setManualInterrupt(outcome);
+      await h.service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: outcome === 'error' ? 'error' : 'done', finalText: 'finished' });
+      expect(h.getWorker().status).toBe(stopped ? 'idle' : outcome);
+      expect(h.deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+      expect(h.service.captureWorkerTerminalTurn('worker-session-1').autoBridgeIdentity).toBeNull();
+      expect(onLeadWorkerReportsSettled).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('settles a report captured before dispatch ready without resurrecting deferred auto-bridge', async () => {
+    const h = createDeps();
+    const update = h.deps.updateWorkerStatus;
+    let finished: Promise<void> | undefined;
+    h.deps.updateWorkerStatus = async (id, status) => {
+      await update(id, status);
+      if (status === 'running') finished = h.service.captureLocalWorkerReport('worker-session-1')(true);
+    };
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'fast A' });
+    await finished;
+    expect(h.getWorker().status).toBe('running');
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+    await h.service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'A' });
+    expect(h.deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+  });
+
+  it('notifies Lead completion only when its last manual report settles, even before Worker terminal', async () => {
+    const onLeadWorkerReportsSettled = vi.fn();
+    const h = createDeps({ onLeadWorkerReportsSettled });
+    h.setWorkers([createWorker(), createWorker({ id: 'worker-2', sessionId: 'worker-session-2' })]);
+    for (const sessionId of ['worker-session-1', 'worker-session-2']) {
+      await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sessionId, message: 'A' });
+    }
+    await h.service.captureLocalWorkerReport('worker-session-1')(true);
+    expect(onLeadWorkerReportsSettled).not.toHaveBeenCalled();
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+    await h.service.captureLocalWorkerReport('worker-session-2')(true);
+    expect(h.getWorker().status).toBe('running');
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+    expect(onLeadWorkerReportsSettled).toHaveBeenCalledExactlyOnceWith('lead-1');
+  });
+
+  it.each([true, false])('waits outside the transition lock for an in-flight manual report: accepted=%s', async accepted => {
+    let generation = 1;
+    const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
+    const h = createDeps({ getLiveSession: () => runtime });
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' });
+    // A vendor failure is captured but suppressed; auto-resume is still A's product turn.
+    h.service.captureWorkerTerminalTurn('worker-session-1');
+    generation++;
+    await h.service.handleWorkerTurnStarted('worker-session-1');
+    const finish = h.service.captureLocalWorkerReport('worker-session-1');
+    const terminal = h.service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'finished' });
+    // Observe the durable product terminal, not a timing delay or an implementation promise.
+    await vi.waitFor(() => expect(h.getWorker().status).toBe('done'));
+    expect(h.deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+    await finish(accepted);
+    await terminal;
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(accepted ? 0 : 1);
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+  });
+
+  it.each(['commit', 'late-commit', 'rollback', 'rollback-stop'] as const)(
+    'settles A while B is provisional without reviving A or clearing B: %s', async outcome => {
+      const onLeadWorkerReportsSettled = vi.fn();
+      const h = createDeps({ onLeadWorkerReportsSettled });
+      const input = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' };
+      await h.service.sendToWorker(input);
+      const captureA = h.service.captureWorkerTerminalTurn(input.targetSessionId);
+      const finishA = h.service.captureLocalWorkerReport(input.targetSessionId);
+      const dispatch = h.deps.dispatchWorkerMessage;
+      h.deps.dispatchWorkerMessage = async params => {
+        await params.onAccepted?.();
+        if (outcome !== 'late-commit') await finishA(true);
+        expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+        if (outcome === 'commit' || outcome === 'late-commit') {
+          await params.onAcceptedCommit?.();
+          return { ok: true, mode: 'dispatched', clientId: 'B', targetTitle: 'Worker', targetLastUserSendAt: null,
+            dispatchOutcome: { kind: 'session-dispatch', source: params.dispatchMeta.source, dispatched: true } };
+        }
+        if (outcome === 'rollback-stop') h.setManualInterrupt('input_stop');
+        await params.onAcceptedRollback?.();
+        return { ok: false, dispatchOutcome: { kind: 'host-send', accepted: false, code: 'SEND_FAILED', message: 'B rejected', source: params.dispatchMeta.source, context: params.dispatchMeta.context } };
+      };
+      await h.service.sendToWorker({ ...input, message: 'B' });
+      h.deps.dispatchWorkerMessage = dispatch;
+      if (outcome === 'late-commit') await finishA(true);
+      const committed = outcome === 'commit' || outcome === 'late-commit';
+      expect(h.service.hasPendingWorkerReports('lead-1')).toBe(committed);
+      await h.service.handleWorkerTerminalTurn({ sessionId: input.targetSessionId, status: 'done', finalText: 'A',
+        capture: outcome === 'rollback-stop' ? h.service.captureWorkerTerminalTurn(input.targetSessionId) : captureA });
+      expect(h.getWorker().status).toBe(committed ? 'running' : outcome === 'rollback-stop' ? 'idle' : 'done');
+      expect(h.deps.sendAutoBridgeToLead).not.toHaveBeenCalled();
+      expect(onLeadWorkerReportsSettled).toHaveBeenCalledTimes(committed ? 0 : 1);
+    },
+  );
+
+  it('does not let an unassigned direct-user report settle a later Lead assignment', async () => {
+    let generation = 1;
+    const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
+    const h = createDeps({ getLiveSession: () => runtime });
+    h.setWorker(createWorker({ status: 'running' }));
+    const finish = h.service.captureLocalWorkerReport('worker-session-1');
+    const capture = h.service.captureWorkerTerminalTurn('worker-session-1');
+    await finish(true);
+    expect(h.getWorker().status).toBe('running');
+    generation++;
+    await h.service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'old direct turn', capture });
+    expect(h.getWorker().status).toBe('running');
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'B' });
+    await finish(true);
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+  });
+
+  // PR #7309: a direct-user B does not replace A's auto-bridge identity. Its generation
+  // must protect the visible status and Stop mark without losing A's outstanding report.
+  it.each([
+    { reported: true, stopB: false, stopA: false },
+    { reported: false, stopB: false, stopA: false },
+    { reported: true, stopB: true, stopA: false },
+    { reported: false, stopB: true, stopA: false },
+    { reported: false, stopB: true, stopA: true },
+  ])('settles old A without ending direct-user B: %j', async ({ reported, stopB, stopA }) => {
+    let generation = 1;
+    const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
+    const h = createDeps({ getLiveSession: () => runtime });
+    const sessionId = 'worker-session-1';
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sessionId, message: 'A' });
+    if (reported) await h.service.captureLocalWorkerReport(sessionId)(true);
+    if (stopA) h.setManualInterrupt('input_stop');
+    const capture = h.service.captureWorkerTerminalTurn(sessionId);
+    generation++;
+    await h.service.handleWorkerTurnStarted(sessionId);
+    if (stopB) h.setManualInterrupt('input_stop');
+    const stopMark = h.deps.getManualInterrupt(sessionId);
+    vi.mocked(h.deps.updateWorkerStatus).mockClear();
+    vi.mocked(h.deps.broadcastOrcaWorkerChanged).mockClear();
+    vi.mocked(h.deps.clearManualInterrupt).mockClear();
+    const oldTerminal = { sessionId, status: 'done' as const, finalText: 'A result', capture };
+    await h.service.handleWorkerTerminalTurn(oldTerminal);
+    await h.service.handleWorkerTerminalTurn(oldTerminal);
+    expect(h.getWorker().status).toBe('running');
+    expect(h.deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(h.deps.broadcastOrcaWorkerChanged).not.toHaveBeenCalled();
+    expect(h.deps.clearManualInterrupt).not.toHaveBeenCalled();
+    expect(h.deps.getManualInterrupt(sessionId)).toBe(stopMark);
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(reported || stopA ? 0 : 1);
+    if (!reported && !stopA) expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledWith('lead-1', expect.stringContaining('A result'), 'worker-1');
+    expect(h.service.captureWorkerTerminalTurn(sessionId).autoBridgeIdentity).toBeNull();
+    await h.service.handleWorkerTerminalTurn({ sessionId, status: 'done', finalText: 'B result' });
+    expect(h.getWorker().status).toBe(stopB ? 'idle' : 'done');
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(reported || stopA ? 0 : 1);
+  });
+
+  // PR #7309 second review: an unchanged report object must not let direct-user B
+  // pay A's debt. The old generation tests never sent a manual report from B.
+  // Unit: pause the real terminal handler at its first async read, then report from B.
+  it('keeps A outstanding when direct-user B reports before A terminal handling resumes', async () => {
+    let generation = 1;
+    const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };
+    const h = createDeps({ getLiveSession: () => runtime });
+    const sessionId = 'worker-session-1';
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sessionId, message: 'A' });
+    const capture = h.service.captureWorkerTerminalTurn(sessionId);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const getLink = h.deps.getWorkerLinkBySessionId;
+    vi.mocked(getLink).mockImplementationOnce(async () => {
+      await gate;
+      return { workerId: 'worker-1', leadSessionId: 'lead-1', teamId: 'team-1', workerSessionId: sessionId };
+    });
+    const terminal = { sessionId, status: 'done' as const, finalText: 'A real result', capture };
+    const handling = h.service.handleWorkerTerminalTurn(terminal);
+    generation++;
+    await h.service.handleWorkerTurnStarted(sessionId);
+    await h.service.captureLocalWorkerReport(sessionId)(true);
+    const stillPendingAfterBReport = h.service.hasPendingWorkerReports('lead-1');
+    release();
+    await handling;
+    await h.service.handleWorkerTerminalTurn(terminal);
+    expect(stillPendingAfterBReport).toBe(true);
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledExactlyOnceWith(
+      'lead-1', expect.stringContaining('A real result'), 'worker-1',
+    );
+    expect(h.getWorker().status).toBe('running');
+  });
+
+  it('keeps an in-flight auto-report pending across duplicate terminal delivery', async () => {
+    let release!: (result: { accepted: boolean }) => void;
+    let started!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const h = createDeps({ sendAutoBridgeToLead: vi.fn(() => {
+      started();
+      return new Promise<{ accepted: boolean }>(resolve => { release = resolve; });
+    }) });
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' });
+    const payload = { sessionId: 'worker-session-1', status: 'done' as const, finalText: 'A' };
+    const first = h.service.handleWorkerTerminalTurn(payload);
+    await began;
+    await h.service.handleWorkerTerminalTurn(payload);
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+    release({ accepted: false });
+    await first;
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+    await h.service.captureLocalWorkerReport(payload.sessionId)(true);
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the transition lock while auto-bridge acceptance immediately dispatches B', async () => {
+    const h = createDeps();
+    const input = { callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' };
+    await h.service.sendToWorker(input);
+    h.deps.sendAutoBridgeToLead = vi.fn(async () => {
+      await h.service.sendToWorker({ ...input, message: 'B' });
+      return { accepted: true };
+    });
+    await h.service.handleWorkerTerminalTurn({ sessionId: input.targetSessionId, status: 'done', finalText: 'A' });
+    expect(h.getWorker().status).toBe('running');
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(true);
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a rejected auto-report after a successful manual report', async () => {
+    const h = createDeps({ sendAutoBridgeToLead: vi.fn(async () => ({ accepted: false })) });
+    await h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: 'A' });
+    const terminal = { sessionId: 'worker-session-1', status: 'error' as const, finalText: 'failed' };
+    await h.service.handleWorkerTerminalTurn(terminal);
+    await h.service.captureLocalWorkerReport(terminal.sessionId)(true);
+    await h.service.handleWorkerTerminalTurn(terminal);
+    expect(h.deps.sendAutoBridgeToLead).toHaveBeenCalledTimes(1);
+    expect(h.getWorker().status).toBe('error');
+    expect(h.service.hasPendingWorkerReports('lead-1')).toBe(false);
   });
 
   // Cross-device manual reporting settles the same TeamService identity as auto-bridge.

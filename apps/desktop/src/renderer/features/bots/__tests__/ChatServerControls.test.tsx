@@ -1,22 +1,31 @@
 // @vitest-environment jsdom
-import { StrictMode, type ReactNode } from 'react';
+import { StrictMode, useState, type ReactNode } from 'react';
 import { act, cleanup, createEvent, fireEvent, render as renderUI, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { ChatInviteButton, ChatMessageActions } from '../ChatServerControls';
+import { ChatMessageActions } from '../ChatServerControls';
 import { ChatInviteDialog } from '../ChatInviteDialog';
 import { ChatThreadPanel } from '../ChatThreadPanel';
+import { BotGroupThreadHint } from '../BotGroupThreadHint';
+import { GroupMaskProvider } from '../GroupMaskProvider';
+import { GroupMaskContext, useGroupMask, useReadLocatedMention, type GroupMaskPresentation } from '../groupMaskPresentation';
 import { botGroupThreadDraftKey } from '../botGroupAttachments';
-import { clearDraft } from '@/lib/composerDraftStore';
+import { discardDraft, getAllDraftAttachmentUrls, getDraft, saveDraft } from '@/lib/composerDraftStore';
+import type { AttachedFile } from '@/lib/fileTypes';
 import { flashThreadTarget } from '../BotGroupThreadViews';
 import { chatErrorKey } from '../chatError';
-import type { BotGroupDetail, BotGroupMessageView } from '../../../../shared/botGroupChat';
+import type { BotGroupDetail, BotGroupMessageView, BotGroupThreadSummary, ChatMaskState } from '../../../../shared/botGroupChat';
 import { shareSelectionStore } from '@/components/chat/shareSelectionStore';
 import { queryShareableMessageIds, stripInteractiveElements } from '@/lib/shareConversationImage';
 
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), react: vi.fn(), reactors: vi.fn(), thread: vi.fn(), followThread: vi.fn(), reply: vi.fn(), createInvite: vi.fn(), previewInvite: vi.fn(), acceptInvite: vi.fn(),
-  refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
+  mask: vi.fn(), mentions: vi.fn(), refresh: vi.fn(), shareToMain: vi.fn(), ownerCurrent: true,
+  materialize: vi.fn(async (files: readonly AttachedFile[]) => [...files]),
+}));
+vi.mock('@/lib/annotationBurnIn', async (original) => ({
+  ...(await original<typeof import('@/lib/annotationBurnIn')>()),
+  materializeAnnotatedAttachmentsForSend: (files: readonly AttachedFile[]) => mocks.materialize(files),
 }));
 // Partial: the 话题 reply box shares the group composer, whose attachment pieces pull in the app i18n instance.
 vi.mock('react-i18next', async (original) => ({
@@ -24,7 +33,7 @@ vi.mock('react-i18next', async (original) => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div> }));
-vi.mock('../BotAvatar', () => ({ BotAvatar: () => null }));
+vi.mock('../BotAvatar', () => ({ BotAvatar: ({ bot }: { bot: { avatar?: string } }) => <span>{bot.avatar}</span> }));
 vi.mock('../botGroupStore', () => ({ refreshBotGroups: mocks.refresh }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
@@ -36,11 +45,15 @@ const group = { id: 'room', members: [], messages: [message] } as unknown as Bot
 const render = (ui: ReactNode) => renderUI(<Tooltip.Provider>{ui}</Tooltip.Provider>);
 beforeEach(() => {
   vi.clearAllMocks(); mocks.ownerCurrent = true;
+  mocks.reply.mockReset();
   shareSelectionStore.reset();
   // The thread reply keeps a draft per thread; one test's unsent text must not start the next.
-  clearDraft(botGroupThreadDraftKey(group.id, 'root'));
+  discardDraft(botGroupThreadDraftKey(group.id, 'root'));
+  mocks.materialize.mockReset().mockImplementation(async files => [...files]);
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   mocks.status.mockResolvedValue({ enabled: true, connected: true });
+  mocks.mask.mockResolvedValue({ ok: false, errorCode: 'UNSUPPORTED_OPERATION' });
+  mocks.mentions.mockResolvedValue({ ok: true, mentions: [{ messageId: 'question', sequence: '1' }], hasMore: false });
   mocks.react.mockResolvedValue({ ok: true });
   mocks.reactors.mockResolvedValue({ ok: true, reactors: [] });
   mocks.thread.mockResolvedValue({ ok: true, root: message, replies: [], hasMore: false });
@@ -51,9 +64,165 @@ beforeEach(() => {
     chatServer: mocks, onBotGroupChanged: () => () => {},
   } } });
 });
-afterEach(() => { cleanup(); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); discardDraft(botGroupThreadDraftKey(group.id, 'root')); shareSelectionStore.reset(); vi.unstubAllGlobals(); });
 
 describe('chat interaction controls', () => {
+  // Review regressions: a delayed personal config must preserve chat-local state;
+  // an independent successful operation must preserve an unsaved setting and its retry.
+  // Unit tier at the real Provider boundary; existing thread tests supplied a fixed context.
+  const maskState = (): ChatMaskState => ({ revision: 1, status: 'enabled', manualRunning: false,
+    self: { id: 'human', name: 'Alex', avatarUrl: null }, companions: [],
+    settings: { companionId: 'bot', enabled: true, trigger: 'always', start: '09:00', end: '18:00',
+      timeZone: 'UTC', resumeMinutes: 15, collectTodos: true, digest: 'manual' } });
+  function MaskProbe() {
+    const mask = useGroupMask('room'), [draft, setDraft] = useState('');
+    return <><input aria-label="Chat draft" value={draft} onChange={e => setDraft(e.target.value)} />
+      <span>{mask ? 'Config ready' : 'No config'}</span>
+      {mask && <><button onClick={() => mask.update({ enabled: false })}>Disable reply</button>
+        <button onClick={mask.participate}>Participate</button><button onClick={() => mask.markMentionsRead(['question'])}>Read original</button>
+        <button onClick={mask.retry}>Retry mask</button>{mask.error && <span role="alert">Save failed</span>}</>}
+    </>;
+  }
+  it('preserves chat-local state when personal config arrives or authority disappears', async () => {
+    let finish!: (value: unknown) => void, changed = () => {};
+    mocks.mask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    window.electronAPI.maker.onBotGroupChanged = callback => { changed = () => callback({ groupId: 'room', change: 'messages' }, undefined); return () => {}; };
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    fireEvent.change(screen.getByLabelText('Chat draft'), { target: { value: 'My unfinished message' } });
+    await act(async () => finish({ ok: true, state: maskState() }));
+    await screen.findByText('Config ready');
+    expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
+    await act(async () => changed());
+    await screen.findByText('No config');
+    expect((screen.getByLabelText('Chat draft') as HTMLInputElement).value).toBe('My unfinished message');
+  });
+  it.each(['Participate', 'Read original'])('retains a failed save after successful %s and retries that save', async operation => {
+    let state = maskState(), fail = true;
+    mocks.mask.mockImplementation(async ({ action }) => {
+      if (action?.type === 'save') {
+        if (fail) return { ok: false, errorCode: 'NETWORK_ERROR' };
+        state = { ...state, revision: 2, settings: action.settings };
+      }
+      return { ok: true, state };
+    });
+    render(<GroupMaskProvider groupId="room"><MaskProbe /></GroupMaskProvider>);
+    fireEvent.click(await screen.findByText('Disable reply'));
+    await screen.findByRole('alert');
+    await act(async () => fireEvent.click(screen.getByText(operation)));
+    expect(screen.getByRole('alert').textContent).toBe('Save failed');
+    fail = false;
+    await act(async () => fireEvent.click(screen.getByText('Retry mask')));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    const saves = mocks.mask.mock.calls.filter(([input]) => input.action?.type === 'save');
+    expect(saves).toHaveLength(2);
+    expect(saves[1]![0]).toMatchObject({ action: { settings: { enabled: false } }, operationId: saves[0]![0].operationId });
+  });
+  it.each([true, false])('offers post-join setup only with confirmed personal capability (%s)', async supported => {
+    mocks.status.mockResolvedValue({ enabled: true, connected: true, ...(supported ? { personalMask: true } : {}) });
+    const joined = vi.fn();
+    render(<ChatInviteDialog initialLink="cindy://chat-invite/test" onClose={vi.fn()} onJoined={joined} />);
+    await screen.findByText('Invited group');
+    const toggle = screen.queryByRole('switch', { name: 'bots.groupChat.mask.joinSetup' });
+    expect(!!toggle).toBe(supported);
+    if (toggle) fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: k('accept') }));
+    await waitFor(() => expect(joined).toHaveBeenCalledWith(...(supported ? ['room', true] : ['room'])));
+  });
+
+  // Unit regression for the human-read contract: prior inbox tests covered opening/dismissal,
+  // but not a located original becoming visible while the window is in the background.
+  // The production hook must acknowledge exactly that message, once, after foreground viewing.
+  it('reads only the located visible mention when the human returns to the foreground', () => {
+    const read = vi.fn();
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    onTestFinished(() => { focus.mockRestore(); visibility.mockRestore(); });
+    let intersect: (entries: { isIntersecting: boolean; intersectionRect: { height: number } }[]) => void = () => {};
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: typeof intersect) { intersect = callback; }
+      observe() {} disconnect() {}
+    });
+    function LocatedOriginal() {
+      const located = useReadLocatedMention('room');
+      return <button onClick={event => located('question', event.currentTarget)}>Original request</button>;
+    }
+    const mask = { groupId: 'room', unreadMentions: [{ messageId: 'question' }, { messageId: 'other' }], markMentionsRead: read } as unknown as GroupMaskPresentation;
+    render(<GroupMaskContext.Provider value={mask}><LocatedOriginal /></GroupMaskContext.Provider>);
+    fireEvent.click(screen.getByText('Original request'));
+    act(() => intersect([{ isIntersecting: false, intersectionRect: { height: 0 } }]));
+    expect(read).not.toHaveBeenCalled();
+    act(() => intersect([{ isIntersecting: true, intersectionRect: { height: 40 } }]));
+    expect(read).not.toHaveBeenCalled();
+    focus.mockReturnValue(true);
+    fireEvent.focus(window);
+    expect(read).toHaveBeenCalledExactlyOnceWith(['question']);
+    fireEvent.focus(window);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  // Integration at the existing attention entry: mentions must extend this surface,
+  // preserve the old one-thread shortcut, and never acknowledge through navigation/dismissal.
+  it('keeps the original single followed-thread shortcut', () => {
+    const onOpen = vi.fn();
+    const thread = {rootId:'root',rootText:'Followed topic',replyCount:2,following:true,unread:{count:1,mentioned:false,latest:3}} as BotGroupThreadSummary;
+    render(<BotGroupThreadHint threads={[thread]} members={[]} openRootId={null} onOpen={onOpen} />);
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    expect(onOpen).toHaveBeenCalledWith('root');
+  });
+
+  it('lists main and thread mentions in the existing hint without reading on locate or dismiss', async () => {
+    const locate = vi.fn(), read = vi.fn();
+    const mentions = [{messageId:'main',authorName:'Peer',text:'Please confirm'},
+      {messageId:'reply',threadRootId:'root',authorName:'Peer',text:'Topic question',reply:{companion:{id:'cindy',name:'Cindy'},text:'Waiting for the owner'}}];
+    const props = {threads:[],members:[],openRootId:null,onOpen:vi.fn(),mentions,onLocateMention:locate,onReadMentions:read};
+    const view=render(<BotGroupThreadHint {...props} />);
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    fireEvent.click(await screen.findByText('Topic question'));
+    expect(locate).toHaveBeenCalledWith(mentions[1]);
+    expect(read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button',{name:k('thread.hintDismiss')}));
+    expect(screen.queryByTestId('group-attention-hint')).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    view.rerender(<Tooltip.Provider><BotGroupThreadHint {...props} mentions={[...mentions,{messageId:'new',authorName:'Peer',text:'New request'}]} /></Tooltip.Provider>);
+    fireEvent.click(screen.getByTestId('group-attention-hint'));
+    const reply = await screen.findByText('Waiting for the owner');
+    const toggle = screen.getByRole('button', { name: 'bots.groupChat.mask.catchup.answered' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(reply.parentElement?.hidden).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(reply.parentElement?.hidden).toBe(false);
+    expect(locate).toHaveBeenCalledTimes(1);
+    expect(read).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button',{name:'bots.groupChat.mask.catchup.markAll'}));
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  // Unit regression: a group update must not clear human unread while the window
+  // is in the background. Existing thread cases do not exercise window visibility.
+  // Minimal input: an open thread with its scroll at the bottom, then a background refresh.
+  it('preserves thread unread in the background and acknowledges on returning to the window', async () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    onTestFinished(() => { focus.mockRestore(); visibility.mockRestore(); });
+    let changed = () => {};
+    window.electronAPI.maker.onBotGroupChanged = callback => {
+      changed = () => callback({ groupId: group.id, change: 'messages' }, undefined);
+      return () => {};
+    };
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    await screen.findByText('Root message');
+    expect(mocks.thread).toHaveBeenLastCalledWith(expect.objectContaining({ markRead: false }));
+    focus.mockReturnValue(true);
+    visibility.mockReturnValue('hidden');
+    act(changed);
+    await waitFor(() => expect(mocks.thread).toHaveBeenCalledTimes(2));
+    expect(mocks.thread).toHaveBeenLastCalledWith(expect.objectContaining({ markRead: false }));
+    visibility.mockReturnValue('visible');
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(mocks.thread).toHaveBeenLastCalledWith(expect.objectContaining({ markRead: true })));
+  });
+
   it.each([{ archived: true }, { archived: false, dissolvedAt: '2026-10-15T00:00:00.000Z' }])('keeps terminal thread replies read-only and focuses close (%j)', async state => {
     render(<ChatThreadPanel group={{ ...group, ...state }} rootId="root" onClose={vi.fn()} />);
     await screen.findByText('Root message');
@@ -476,14 +645,17 @@ describe('chat interaction controls', () => {
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'root', emoji: '👍', present: false });
   });
 
-  it('re-reads the opened older Thread page after reacting to a reply on it', async () => {
+  // Unit, PR #7396: a latest refresh must not invalidate the reaction recheck for
+  // an opened older reply. The projection path must avoid that extra page read.
+  it.each([false, true])('refreshes an opened older Thread reaction (projection: %s)', async projection => {
     const latest = { ...message, id: 'latest', sequence: 100, content: 'Latest reply', reactions: [] };
     const older = { ...message, id: 'older', sequence: 4, content: 'Earlier reply', reactions: [{ emoji: '👍', count: 1, me: false }] };
+    const updated = { ...older, reactions: [{ emoji: '👍', count: 2, me: true }] };
     let reacted = false;
     mocks.thread.mockImplementation(async (input: { before?: number }) => input.before
       // The re-read page's hasMore is not about the oldest loaded page, so it must be ignored.
-      ? { ok: true, root: message, replies: [reacted ? { ...older, reactions: [{ emoji: '👍', count: 2, me: true }] } : older], hasMore: input.before === 5 }
-      : { ok: true, root: message, replies: [latest], hasMore: true });
+      ? { ok: true, root: message, replies: [reacted ? updated : older], hasMore: input.before === 5 }
+      : { ok: true, root: message, replies: [latest], hasMore: true, ...(projection && reacted ? { messageUpdates: [updated] } : {}) });
     mocks.react.mockImplementation(async () => { reacted = true; return { ok: true }; });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
@@ -498,9 +670,37 @@ describe('chat interaction controls', () => {
     // from avatar placeholders back to the authoritative count.
     await waitFor(() => expect(earlierChip().textContent).toContain('2'));
     expect(mocks.react).toHaveBeenCalledWith({ groupId: 'room', messageId: 'older', emoji: '👍', present: true });
-    expect(mocks.thread.mock.calls.map(([input]) => input.before)).toEqual([undefined, 100, undefined, 5]);
+    expect(mocks.thread.mock.calls.map(([input]) => input.before)).toEqual(projection
+      ? [undefined, 100, undefined] : [undefined, 100, undefined, 5]);
     expect(screen.queryByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' })).toBeNull();
     expect(screen.getByText('Latest reply')).toBeTruthy();
+  });
+
+  // Unit, PR #7396: two warm topics share a room, but losing one root must not
+  // erase the other. Room revocation must still remove both cached previews.
+  it.each(['MESSAGE_NOT_FOUND', 'CONVERSATION_NOT_FOUND'])('scopes warm topic eviction to the error (%s)', async errorCode => {
+    const room = { ...group, id: `scope-${errorCode}`, historyRevision: `scope-${errorCode}` };
+    mocks.thread.mockImplementation(async ({ rootId }: { rootId: string }) => ({ ok: true,
+      historyRevision: room.historyRevision, root: { ...message, id: rootId, reactions: [] },
+      replies: [{ ...message, id: `${rootId}-reply`, sequence: 2, content: `${rootId} cached reply`, reactions: [] }], hasMore: false }));
+    const open = (rootId: string) => render(<ChatThreadPanel group={room} rootId={rootId} onClose={vi.fn()} />);
+    for (const rootId of ['other', 'root']) {
+      const view = open(rootId);
+      await screen.findByText(`${rootId} cached reply`);
+      view.unmount();
+    }
+    let finish!: (value: unknown) => void;
+    mocks.thread.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const missing = open('root');
+    expect(screen.getByText('root cached reply')).toBeTruthy();
+    await act(async () => finish({ ok: false, errorCode }));
+    expect(screen.queryByText('root cached reply')).toBeNull();
+    missing.unmount();
+    const retry = open('root');
+    expect(screen.queryByText('root cached reply')).toBeNull();
+    retry.unmount();
+    open('other');
+    expect(Boolean(screen.queryByText('other cached reply'))).toBe(errorCode === 'MESSAGE_NOT_FOUND');
   });
 
   it('re-reads Thread reactors only when this message or the whole room changed, even if the page is not reloaded', async () => {
@@ -549,10 +749,15 @@ describe('chat interaction controls', () => {
   });
 
   it('creates and displays a copyable link in Strict Mode', async () => {
-    render(<StrictMode><ChatInviteButton groupId="room" /></StrictMode>);
-    fireEvent.click(screen.getByRole('button', { name: k('invite') }));
-    fireEvent.click(screen.getByRole('button', { name: k('createLink') }));
+    render(<StrictMode><ChatInviteDialog groupId="room" onClose={vi.fn()} members={[
+      { botId: 'self', name: 'Alex', avatar: '👤', avatarColor: 'graphite', status: 'active', isSelf: true },
+      { botId: 'bot', name: 'Cindy', avatar: '🤖', avatarColor: 'violet', status: 'active' },
+    ]} /></StrictMode>);
     expect((await screen.findByRole('textbox', { name: k('inviteLink') }) as HTMLInputElement).value).toBe('cindy://chat-invite/test');
+    expect(mocks.createInvite).toHaveBeenCalledExactlyOnceWith({ groupId: 'room', clientId: expect.any(String) });
+    expect(screen.queryByRole('button', { name: k('createLink') })).toBeNull();
+    expect(screen.getByText('👤')).toBeTruthy();
+    expect(screen.queryByText('🤖')).toBeNull();
   });
 
   it.each([{ members: [] }, { members: [{ botId: 'namesake', name: 'Ann', status: 'active' as const }] }])('keeps a refused directed thread reply after the roster changes to %j', async ({ members }) => {
@@ -579,6 +784,165 @@ describe('chat interaction controls', () => {
     expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(original.clientId);
   });
 
+  // Regression: thread mode hid the attachment menu and silently sent text only.
+  // Real panel + useAttachments; unit tier, picking a single image is the minimal input.
+  // #8084 / r4429774858: also-send must carry its image before the main share receipt arrives.
+  it('sends an image-only thread draft, keeps it on failure and clears it after retry', async () => {
+    const image = { id: 'thread-photo', name: 'photo.png', ext: '.png', category: 'image' as const,
+      mimeType: 'image/png', size: 12, path: '', url: 'cindy-media://blobs/photo.png' };
+    Object.assign(window.electronAPI, {
+      getFilePath: () => '/fixture/photo.png',
+      cacheImageFromPath: vi.fn(async () => ({ url: image.url })),
+    });
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' })
+      .mockResolvedValueOnce({ ok: true, messageId: 'image-reply' });
+    let finishShare!: (result: { ok: true; messageId: string }) => void;
+    mocks.shareToMain.mockImplementationOnce(() => new Promise(resolve => { finishShare = resolve; }));
+    const settleShare = vi.fn();
+    const onPostPending = vi.fn(() => settleShare);
+    const view = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} onPostPending={onPostPending} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: k('thread.alsoSend') }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'bots.groupChat.composer.more' }), { key: 'Enter' });
+    expect(await screen.findByRole('menuitem', { name: 'extraDirs.addFiles' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: /bots.groupChat.composer.division/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'extraDirs.addFiles' }));
+    fireEvent.change(view.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['image-bytes'], image.name, { type: image.mimeType })] },
+    });
+    const send = screen.getByRole('button', { name: k('sendReply') });
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    expect((await screen.findByRole('alert')).textContent).toBe(k('requestFailed'));
+    expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({
+      rootId: 'root', text: '', attachments: [expect.objectContaining({ name: image.name, url: image.url })],
+    }));
+    const original = mocks.reply.mock.calls[0]![0];
+    fireEvent.click(send);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(original);
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(true));
+    expect(onPostPending).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'image-reply', threadRootId: 'root', content: '',
+      attachments: [expect.objectContaining({ name: image.name, url: image.url, category: 'image' })],
+    }));
+    expect(settleShare).not.toHaveBeenCalled();
+    await act(async () => finishShare({ ok: true, messageId: 'main-share' }));
+    expect(settleShare).toHaveBeenCalledWith('main-share');
+  });
+
+  // #8084 / r4428010998: existing remount cases start after caching, missing this late result.
+  // Unit: real panel/hook, one deferred image cache, close then reopen on either side of completion.
+  it.each(['before', 'after'] as const)('keeps a pending image when the thread reopens %s cache completion', async reopen => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const url = 'cindy-media://blobs/late-thread-photo.png';
+    let finishCache!: (value: { url: string }) => void;
+    const cached = new Promise<{ url: string }>(resolve => { finishCache = resolve; });
+    const cacheImageFromPath = vi.fn(() => cached);
+    Object.assign(window.electronAPI, { getFilePath: () => '/fixture/late.png', cacheImageFromPath });
+    const open = () => render(<StrictMode><ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} /></StrictMode>);
+    const first = open();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Original draft' } });
+    fireEvent.change(first.container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(['image-bytes'], 'late.png', { type: 'image/png' })] },
+    });
+    await waitFor(() => expect(cacheImageFromPath).toHaveBeenCalledTimes(1));
+    first.unmount();
+    const second = reopen === 'before' ? open() : null;
+    if (second) fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Newer draft' } });
+    await act(async () => {
+      finishCache({ url });
+      await cached;
+    });
+    expect(getDraft(scope)?.attachments).toEqual([expect.objectContaining({ name: 'late.png', url })]);
+    const reopened = second ?? open();
+    expect(screen.getByAltText('late.png').getAttribute('src')).toBe(url);
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(second ? 'Newer draft' : 'Original draft');
+    reopened.unmount();
+    expect(getDraft(scope)?.attachments).toEqual([expect.objectContaining({ name: 'late.png', url })]);
+  });
+
+  // Review regression: id-only settlement erased newer annotations after reopening during upload.
+  // Unit tier: real panel/hook, one image, one delayed reply; selection/retry is covered above.
+  it('preserves a newer attachment draft when an earlier thread upload settles after reopening', async () => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file = { id: 'thread-photo', name: 'photo.png', ext: '.png', category: 'image' as const,
+      mimeType: 'image/png', size: 12, path: '', url: 'cindy-media://blobs/photo.png' };
+    saveDraft(scope, { text: null, attachments: [file] });
+    let finish!: (value: { ok: true; messageId: string }) => void;
+    mocks.reply.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    const send = screen.getByRole('button', { name: k('sendReply') });
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    first.unmount();
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    await screen.findByRole('img', { name: file.name });
+    const edited = { ...file, annotationStrokes: [{ points: [{ x: 0.1, y: 0.1 }, { x: 0.5, y: 0.5 }] }] };
+    // The shared draft write is the same live hook update used by annotation edits.
+    act(() => saveDraft(scope, { ...getDraft(scope)!, attachments: [edited] }));
+    await act(async () => finish({ ok: true, messageId: 'earlier-reply' }));
+    expect(getDraft(scope)?.attachments).toEqual([edited]);
+    expect(screen.getByRole('img', { name: file.name })).toBeTruthy();
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // #8084 review: local refs lost both the send id and the burned image on remount.
+  // Unit: real panel/hook, one annotation result, delayed burn + reply, then an explicit retry.
+  it('keeps an in-flight thread attempt and its prepared media across panel remounts', async () => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file: AttachedFile = { id: 'remount-photo', name: 'photo.png', ext: '.png', category: 'image',
+      size: 12, mimeType: 'image/png', path: '', url: 'cindy-media://blobs/remount-original.png' };
+    const prepared = { ...file, url: 'cindy-media://blobs/remount-burned.png', annotated: true };
+    saveDraft(scope, { text: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'with image' }] }] }, attachments: [file] });
+    let finishBurn!: (files: AttachedFile[]) => void;
+    let finishReply!: (result: { ok: false; errorCode: 'REQUEST_TIMEOUT' }) => void;
+    mocks.materialize.mockImplementationOnce(() => new Promise(resolve => { finishBurn = resolve; }));
+    mocks.reply.mockImplementationOnce(() => new Promise(resolve => { finishReply = resolve; }))
+      .mockResolvedValueOnce({ ok: true, messageId: 'remount-reply' });
+    const panel = () => <ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />;
+    const first = render(panel());
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    first.unmount();
+    const second = render(panel());
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finishBurn([prepared]));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    second.unmount();
+    const third = render(panel());
+    expect((screen.getByRole('button', { name: k('sendReply') }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => finishReply({ ok: false, errorCode: 'REQUEST_TIMEOUT' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(k('requestFailed'));
+    expect((screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement).value).toBe('with image');
+    third.unmount();
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    render(panel());
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(2));
+    expect(mocks.reply.mock.calls[1]![0]).toEqual(mocks.reply.mock.calls[0]![0]);
+    expect(mocks.materialize).toHaveBeenCalledOnce();
+    await waitFor(() => expect(getAllDraftAttachmentUrls()).not.toContain(prepared.url));
+  });
+
+  // #8084 review: failed annotation copies must remain live only while retry is available.
+  it.each(['edit', 'discard'] as const)('releases failed thread prepared media after %s', async boundary => {
+    const scope = botGroupThreadDraftKey(group.id, 'root');
+    const file: AttachedFile = { id: 'held-photo', name: 'photo.png', ext: '.png', category: 'image',
+      size: 12, mimeType: 'image/png', path: '', url: 'cindy-media://blobs/held-original.png' };
+    const prepared = { ...file, url: 'cindy-media://blobs/held-burned.png', annotated: true };
+    saveDraft(scope, { text: null, attachments: [file] });
+    mocks.materialize.mockResolvedValueOnce([prepared]);
+    mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'INVALID_ATTACHMENT' });
+    render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+    await screen.findByRole('alert');
+    expect(getAllDraftAttachmentUrls()).toContain(prepared.url);
+    if (boundary === 'edit') fireEvent.change(screen.getByRole('textbox', { name: k('replyPlaceholder') }), { target: { value: 'changed' } });
+    else act(() => discardDraft(scope));
+    await waitFor(() => expect(getAllDraftAttachmentUrls()).not.toContain(prepared.url));
+  });
+
   it('keeps a failed reply draft and reuses its operation id; IME confirmation does not send', async () => {
     mocks.reply.mockResolvedValueOnce({ ok: false, errorCode: 'REQUEST_TIMEOUT' }).mockResolvedValueOnce({ ok: true, messageId: 'reply' });
     render(<ChatThreadPanel group={group} rootId="root" onClose={vi.fn()} />);
@@ -597,10 +961,10 @@ describe('chat interaction controls', () => {
 
   describe('thread @ picker', () => {
     const namesakes = [
-      { botId: 'ann-chris', name: 'Ann', status: 'active' },
-      { botId: 'ann-dana', name: 'Ann', status: 'active' },
-      { botId: 'bo', name: 'Bo', status: 'active' },
-      { botId: 'gone', name: 'Annie', status: 'left' },
+      { botId: 'ann-chris', name: 'Ann', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'ann-dana', name: 'Ann', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' },
+      { botId: 'gone', name: 'Annie', status: 'missing' as const, avatar: '', avatarColor: '' },
     ];
     const renderThread = () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
@@ -612,6 +976,21 @@ describe('chat interaction controls', () => {
     const type = (input: HTMLTextAreaElement, value: string, caret = value.length) =>
       fireEvent.change(input, { target: { value, selectionStart: caret, selectionEnd: caret } });
     const labels = () => screen.queryAllByRole('option').map(option => option.textContent);
+
+    // Unit UI regression: the independent bulk entry exists only when the owner enables it.
+    it('offers and sends the separate teammate broadcast only when enabled', async () => {
+      mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
+      const view = render(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: true }} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      type(input, '@');
+      fireEvent.click(screen.getByRole('option', { name: /bots.groupChat.mention.allBots.*allBotsHint/ }));
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, allBots: true, botIds: [] });
+      view.rerender(<ChatThreadPanel group={{ ...group, members: namesakes, supportsMentionAudiences: true, allowMentionAllBots: false }} rootId="root" onClose={vi.fn()} />);
+      type(input, '@');
+      expect(labels().some(label => label?.includes('allBots'))).toBe(false);
+    });
 
     it('opens on @ with the main composer candidates, filters, and picks a namesake by keyboard', async () => {
       const input = renderThread();
@@ -739,7 +1118,7 @@ describe('chat interaction controls', () => {
 
     it('names only the picked companion whose name is a Thread 「所有人」 alias', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
-      const members = [{ botId: 'all-bot', name: 'all', status: 'active' }, { botId: 'bo', name: 'Bo', status: 'active' }];
+      const members = [{ botId: 'all-bot', name: 'all', status: 'active' }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];
       render(<ChatThreadPanel group={{ ...group, members } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@al');
@@ -754,7 +1133,7 @@ describe('chat interaction controls', () => {
 
     it('never offers or resolves the current user, as on mobile', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
-      const members = [{ botId: 'me', name: 'Dash', status: 'active', isSelf: true }, { botId: 'bo', name: 'Bo', status: 'active' }];
+      const members = [{ botId: 'me', name: 'Dash', status: 'active', isSelf: true }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];
       render(<ChatThreadPanel group={{ ...group, members } as unknown as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
       const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
       type(input, '@');

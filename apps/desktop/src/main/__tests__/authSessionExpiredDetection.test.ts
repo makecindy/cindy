@@ -141,7 +141,7 @@ describe('desktop auth session-expiry detection', () => {
     );
 
     // 自救函数:节流(token-rotating 端点不能每次重连都打)+ refresh 成功后立即重连。
-    const recoverStart = deviceLinkSource.indexOf('function recoverFromRelayAuthFailure(): void {');
+    const recoverStart = deviceLinkSource.indexOf('function recoverFromRelayAuthFailure(crossAccount = false): void {');
     const recoverEnd = deviceLinkSource.indexOf('\n}\n', recoverStart);
     const recoverBody = deviceLinkSource.slice(recoverStart, recoverEnd);
     expect(recoverBody).toContain('elapsed < RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS');
@@ -149,10 +149,10 @@ describe('desktop auth session-expiry detection', () => {
     // 会让自救在首次尝试后永久停摆,退回无限 401。延迟触发前复查 issue 仍在,
     // 避免已自愈后多余轮换 token。
     expect(recoverBody).toContain('relayAuthRecoveryRetryTimer = setTimeout(');
-    expect(recoverBody).toContain("client?.getConnectionIssue()?.kind !== 'auth-failed'");
+    expect(recoverBody).toContain("connection()?.getConnectionIssue()?.kind !== 'auth-failed'");
     expect(recoverBody).toContain('authManager');
     expect(recoverBody).toContain('.refresh({ networkRecovered: true })');
-    expect(recoverBody).toContain("client?.connectNow('relay-auth-recovered');");
+    expect(recoverBody).toContain("connection()?.connectNow('relay-auth-recovered');");
     // refresh 在途期间持有权可能已被别的实例夺走(teardown 已停 client):connectNow
     // 会把已停的 client 拉活绕过仲裁,重连前必须重新确认 isOwner。
     expect(recoverBody).toContain('arbiter?.isOwner()');

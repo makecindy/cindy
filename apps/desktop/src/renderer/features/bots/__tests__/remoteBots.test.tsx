@@ -5,8 +5,14 @@ const h = vi.hoisted(() => ({
   owner: 'owner-a',
   devices: [] as any[],
   invoke: vi.fn(),
+  cloudEnabled: false,
+  copies: vi.fn(),
   status: null as any,
   push: null as any,
+}));
+vi.mock('../companionCloudStore', () => ({
+  useCompanionCloud: () => ({ enabled: h.cloudEnabled, actors: [] }),
+  companionCloudApi: () => ({ listCindyCopies: h.copies }),
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: h.owner, isAuthenticated: true }),
@@ -15,8 +21,8 @@ vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => h.devices,
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
-import { useRemoteBotSync, useRemoteBots, markRemoteBotRead } from '../useRemoteBots';
-import { parseRemoteCollectionListRequest } from '@cindy/device-link';
+import { useRemoteBotSync, useRemoteBots, useRemoteCindyIds, markRemoteBotRead } from '../useRemoteBots';
+import { parseRemoteCollectionListRequest, REMOTE_RESOURCE_LIST_CHANNEL, REMOTE_RESOURCE_CHANGED_CHANNEL } from '@cindy/device-link';
 import { parseRemoteBots, remoteBotKey, isRemoteBotUnread } from '../remoteBotRoster';
 const host = (deviceId: string, online = true) => ({
   deviceId,
@@ -41,6 +47,8 @@ function useRoster() {
   return useRemoteBots();
 }
 beforeEach(() => {
+  h.cloudEnabled = false;
+  h.copies.mockReset();
   h.owner = `owner-${Math.random()}`;
   h.devices = [host('a'), host('b')];
   h.invoke.mockReset().mockResolvedValue(collection());
@@ -69,7 +77,7 @@ describe('remote teammate roster', () => {
     const { result, rerender } = renderHook(useRoster);
     await waitFor(() => expect(result.current).toHaveLength(2));
     expect(new Set(result.current.map(remoteBotKey)).size).toBe(2);
-    for (const call of h.invoke.mock.calls)
+    for (const call of h.invoke.mock.calls.filter(call => call[1] === REMOTE_RESOURCE_LIST_CHANNEL))
       expect(parseRemoteCollectionListRequest(call[2][0])).not.toBeNull();
     h.devices = [host('a', false), host('b')];
     rerender();
@@ -158,9 +166,122 @@ it('does not reinterpret a resource read error as device disconnection', async (
   expect(result.current[0].online).toBe(true);
   h.invoke.mockRejectedValue(new Error('model/resource failure'));
   act(() => h.status({ status: 'online' }));
-  await waitFor(() => expect(h.invoke).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(h.invoke.mock.calls.filter(call => call[1] === REMOTE_RESOURCE_LIST_CHANNEL)).toHaveLength(2));
   expect(result.current[0].online).toBe(true);
   act(() => h.status({ status: 'stopped' }));
   expect(result.current[0].online).toBe(false);
   expect(result.current[0].connectionKnown).toBe(true);
+});
+
+it('parses exact following links without confusing them with the canonical conversation', () => {
+  const response = collection();
+  response.items[0].links.push(
+    { rel: 'following', target: { kind: 'session', sessionId: 'taken-over' } },
+    { rel: 'following', target: { kind: 'session', sessionId: 'taken-over' } },
+    { rel: 'following', target: { kind: 'resource', sessionId: 'not-a-task' } },
+  );
+  expect(parseRemoteBots(response, 'a', 'Laptop')[0]).toMatchObject({
+    sessionId: 'canonical', followingSessionIds: ['taken-over'],
+  });
+  expect(parseRemoteBots(collection(), 'a', 'Laptop')[0]).toMatchObject({
+    followingSessionIds: [],
+  });
+});
+
+// Regression: released hosts advertise teammates without any created-task links.
+it('hydrates exact creation attribution through the existing task-card API on each computer', async () => {
+  h.invoke.mockImplementation(async (device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? collection() : { ok: true, delegations: [
+      { requestingBotId: 'same-bot', childSessionId: `${device}-child` },
+      { requestingBotId: 'same-bot', childSessionId: `${device}-child` },
+      { requestingBotId: 'someone-else', childSessionId: 'not-owned' },
+      { requestingBotId: 'same-bot', childSessionId: null },
+    ] });
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current.map(bot => bot.delegatedSessionIds)).toEqual([['a-child'], ['b-child']]));
+  expect(h.invoke).toHaveBeenCalledWith('a', 'maker:bot-delegations:list', ['canonical']);
+  expect(h.invoke).toHaveBeenCalledWith('b', 'maker:bot-delegations:list', ['canonical']);
+});
+
+it('refreshes creation attribution on a delegation push, keeps it on failure and clears it on a successful empty read', async () => {
+  h.devices = [host('a')];
+  let response: unknown = { ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'child' }] };
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL ? collection() : response);
+  const { result } = renderHook(useRoster);
+  await waitFor(() => expect(result.current[0]?.delegatedSessionIds).toEqual(['child']));
+  const taskReads = () => h.invoke.mock.calls.filter(call => call[1] === 'maker:bot-delegations:list').length;
+  const beforeStatusPush = taskReads();
+  vi.useFakeTimers();
+  try {
+    act(() => h.push({ deviceId: 'a', channel: REMOTE_RESOURCE_CHANGED_CHANNEL }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(taskReads()).toBe(beforeStatusPush);
+  } finally { vi.useRealTimers(); }
+  response = { ok: false, errorCode: 'HOST_NOT_READY' };
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(result.current[0].delegatedSessionIds).toEqual(['child']);
+  response = { ok: true, delegations: [] };
+  vi.useFakeTimers();
+  try {
+    act(() => h.push({ deviceId: 'a', channel: 'maker:bot-delegation:changed' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(result.current[0].delegatedSessionIds).toEqual([]);
+  } finally { vi.useRealTimers(); }
+});
+
+it('cannot restore old attribution when a pending task-card read completes after switching accounts', async () => {
+  h.devices = [host('a')];
+  let finish!: (value: unknown) => void;
+  h.invoke.mockImplementation(async (_device, channel) => channel === REMOTE_RESOURCE_LIST_CHANNEL
+    ? collection() : new Promise(resolve => { finish = resolve; }));
+  const { result, rerender } = renderHook(useRoster);
+  await waitFor(() => expect(finish).toBeDefined());
+  h.owner = 'new-owner';
+  h.devices = [];
+  rerender();
+  await act(async () => finish({ ok: true, delegations: [{ requestingBotId: 'same-bot', childSessionId: 'old-child' }] }));
+  expect(result.current).toEqual([]);
+});
+
+// The compact legacy roster has no templateId; the cloud knows the built-in identity.
+it('applies cloud Cindy identity regardless of roster arrival order and rejects a late old-owner reply', async () => {
+  h.cloudEnabled = true;
+  let finish!: (value: unknown) => void;
+  h.copies.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const { result, rerender } = renderHook(useRoster);
+  await waitFor(() => expect(result.current).toHaveLength(2));
+  await act(async () => finish([{ botId: 'same-bot' }]));
+  expect(result.current.every(bot => bot.templateId === 'cindy')).toBe(true);
+  act(() => h.status({ status: 'online' }));
+  await act(async () => {});
+  expect(result.current.every(bot => bot.templateId === 'cindy')).toBe(true);
+  h.owner = 'another-owner';
+  rerender();
+  await act(async () => {});
+  expect(result.current.every(bot => bot.templateId === undefined)).toBe(true);
+  const oldFinish = finish;
+  h.owner = 'third-owner';
+  h.cloudEnabled = false;
+  rerender();
+  await act(async () => oldFinish([{ botId: 'same-bot' }]));
+  expect(result.current.every(bot => bot.templateId === undefined)).toBe(true);
+});
+
+// Unit / review4390134785: identity must be available without any roster rows;
+// previous arrival-order coverage only read templateId on already listed rows.
+it('exposes known Cindy IDs before an offline home provides its roster and clears on owner switch', async () => {
+  h.devices = [];
+  h.cloudEnabled = true;
+  h.copies.mockResolvedValue([{ botId: 'same-bot' }]);
+  const { result, rerender } = renderHook(() => {
+    useRemoteBotSync();
+    return { rows: useRemoteBots(), ids: useRemoteCindyIds() };
+  });
+  await waitFor(() => expect(result.current.ids.has('same-bot')).toBe(true));
+  expect(result.current.rows).toEqual([]);
+  h.owner = 'new-empty-owner';
+  h.cloudEnabled = false;
+  rerender();
+  expect(result.current.ids.size).toBe(0);
 });

@@ -139,7 +139,7 @@ describe('caller cancellation', () => {
     h.dispatcher.getPendingCallSignal('art', 'stopped');
     const keptSignal = h.dispatcher.getPendingCallSignal('art', 'kept')!;
     h.dispatcher.cancelSessionCalls('session-a');
-    expect(await stopped).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await stopped).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(keptSignal.aborted).toBe(false);
     expect(h.dispatcher.pendingCount()).toBe(2);
     h.dispatcher.handleToolResult('art', { callId: 'legacy', ok: true, result: 'legacy-kept' });
@@ -160,7 +160,7 @@ describe('caller cancellation', () => {
     expect(h.dispatcher.getPendingCallSessionId('other-plugin', 'call-1')).toBeNull();
     expect(h.dispatcher.getPendingCallSessionId('art', 'missing')).toBeNull();
     a.abort();
-    expect(await first).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await first).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(firstLifetime.aborted).toBe(true);
     expect(secondLifetime.aborted).toBe(false);
     expect(h.dispatcher.pendingCount()).toBe(1);
@@ -196,7 +196,7 @@ describe('caller cancellation', () => {
     started();
     await vi.waitFor(() => expect(h.sent).toHaveLength(1));
     expect(h.dispatcher.getPendingCallSignal('art', 'stopped-before-binding')).toBeNull();
-    await expect(pending).resolves.toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
 
     // Stop belongs to that invocation, not future turns reusing the session.
     h.deps.runtimeStateOf.mockReturnValue('running');
@@ -211,7 +211,7 @@ describe('caller cancellation', () => {
     const pending = h.dispatcher.callGhostTool({ ...CALL, callId: 'late-bind', signal: abort.signal });
     abort.abort();
     expect(h.dispatcher.getPendingCallSignal('art', 'late-bind')).toBeNull();
-    expect(await pending).toMatchObject({ ok: false, message: 'Plugin tool call cancelled' });
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED', message: 'Plugin tool call cancelled' });
     expect(h.dispatcher.pendingCount()).toBe(0);
   });
 });
@@ -904,4 +904,30 @@ describe('dispatch usage observation', () => {
     h.dispatcher.handleToolResult('art',{callId:'no-block',ok:true,result:'done'});
     expect(await pending).toMatchObject({ok:true,result:'done'});
   });
+});
+
+// A1: production dispatch observation must accept numeric progress only for the
+// live owning call. Existing heartbeat cases do not cover forwarding. Unit tier.
+it('forwards validated progress only within the owning call, retaining heartbeat compatibility', async () => {
+  const h = makeHarness(), onProgress = vi.fn();
+  const pending = h.dispatcher.callGhostTool({ ...CALL, onProgress });
+  const callId = h.sent[0].callId;
+  expect(h.dispatcher.handleToolProgress('art', { callId }).accepted).toBe(true);
+  expect(onProgress).not.toHaveBeenCalled();
+  for (const invalid of [{ progress: NaN }, { progress: -1 }, { progress: 2, total: 1 }, { progress: 1, message: 4 }])
+    expect(h.dispatcher.handleToolProgress('art', { callId, ...invalid }).accepted).toBe(false);
+  expect(h.dispatcher.handleToolProgress('other', { callId, progress: 1 }).accepted).toBe(false);
+  expect(h.dispatcher.handleToolProgress('art', { callId, progress: 1, total: 3, message: 'Importing' }).accepted).toBe(true);
+  expect(onProgress).toHaveBeenCalledExactlyOnceWith({ progress: 1, total: 3, message: 'Importing' });
+  // B6: a Host read phase followed by network sending cannot repeat or decrease MCP progress.
+  const transfer = h.dispatcher.createHostProgress('art', callId);
+  transfer(3, 3, 'Reading');
+  expect(onProgress).toHaveBeenLastCalledWith({ progress: 4, total: 4, message: 'Reading (3 / 3 bytes)' });
+  transfer(undefined, undefined, 'Uploading');
+  expect(onProgress).toHaveBeenLastCalledWith({ progress: 5, message: 'Uploading' });
+  h.dispatcher.handleToolResult('art', { callId, ok: true, result: null });
+  await pending;
+  transfer(100, 100, 'Reading');
+  expect(onProgress).toHaveBeenCalledTimes(3);
+  expect(h.dispatcher.handleToolProgress('art', { callId, progress: 3 }).accepted).toBe(false);
 });

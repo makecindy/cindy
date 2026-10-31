@@ -53,13 +53,12 @@ it('keeps text-only policy local and ordinary tools independent of host UI failu
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const helperStart = source.indexOf('let textOnlyTurnActive = false');
   const helperEnd = source.indexOf('function currentPermissionState', helperStart);
-  const harnessHookStart = source.indexOf('  const runHarnessHook =');
   const handlerStart = source.indexOf("  pi.on('tool_call', async");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
   const handlers = new Map<string, (event: any, ctx: any) => any>();
   let permissionReads = 0;
   const compiled = ts.transpileModule(
-    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(harnessHookStart, handlerEnd),
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   runInNewContext(compiled, {
@@ -2416,16 +2415,18 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
+  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'send_to_agent', 'check_agent_message', 'list_agents', 'create_teammate', 'routine_list', 'routine_save', 'routine_sources', 'routine_history', 'routine_delete', 'routine_run_now', 'routine_delivery_targets', 'schedule_list_models', 'schedule_notify_current_run', 'schedule_set_pre_run_hook', 'get_task_digest', 'get_workbench', 'read_workbench_task', 'continue_workbench_task']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
     const args = name === 'routine_save' ? {
       name: 'Rest', prompt: 'Remind me to rest', enabled: true, silentWhenIdle: false, preRunHook: { command: 'node check.mjs' },
+      modelOverride: { agentKind: 'codex', model: 'economy', providerId: 'connected', agentDeviceId: null, effort: 'low', fastMode: 'ultrafast' },
+      sessionMode: 'fresh', delivery: { kind: 'companion', mode: 'direct' },
       triggers: [
         { id: 'minute', kind: 'interval', intervalMs: 60000, anchorMs: 30000 },
         { id: 'one-shot', kind: 'once', at: 90000 },
       ],
-    } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' ? {}
+    } : name === 'schedule_list_models' ? { agent: 'codex', agentDeviceId: 'local' } : name === 'schedule_notify_current_run' || name === 'get_workbench' ? {} : name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'continue_workbench_task' ? { task_id: 'laptop::session-1', message: 'Report progress and continue' } : name === 'schedule_set_pre_run_hook' ? { script: 'process.exit(2)' } : name === 'check_agent_message' ? { message_id: 'message-1' } : name === 'list_agents' || name === 'routine_list' || name === 'routine_sources' || name === 'routine_delivery_targets' ? {}
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
@@ -2435,6 +2436,12 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     if (name === 'routine_save') {
       expect(tool.parameters.required).toEqual(['name', 'prompt', 'enabled', 'triggers']);
       expect(tool.parameters.properties.botId).toBeUndefined();
+      // Regression: the host accepted these fields, but Pi's direct schema hid them.
+      expect(tool.parameters.properties.sessionMode.enum).toEqual(['persistent', 'fresh']);
+      expect(tool.parameters.properties.modelOverride.anyOf).toContainEqual({ type: 'null' });
+      const model = tool.parameters.properties.modelOverride.anyOf.find((schema: any) => schema.type === 'object');
+      expect(model.required).toEqual(['agentKind', 'model']);
+      expect(model.properties.fastMode.anyOf).toContainEqual({ type: 'string', enum: ['ultrafast'] });
       const variants = tool.parameters.properties.triggers.items.anyOf;
       const interval = variants.find((item: any) => item.properties.kind.enum.includes('interval'));
       expect(interval.properties.intervalMs.minimum).toBe(60000);
@@ -2498,7 +2505,7 @@ describe('Pi same-turn library native mapping', () => {
 });
 
 
-it('applies native Fast only to the exact declared connection and fails closed on invalid host replies', async () => {
+it.each(['openai-responses', 'openai-codex-responses'])('applies native Fast only to the exact declared %s connection and fails closed on invalid host replies', async api => {
   const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('async function nativeFastPayload(');
   const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
   const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
@@ -2510,7 +2517,7 @@ it('applies native Fast only to the exact declared connection and fails closed o
   } });
   const ctx = { ui: { input: async () => { if (reply instanceof Error) throw reply; return reply; } } };
   const original = { model: 'gpt-6-sol', reasoning: { effort: 'high' }, input: 'hello' };
-  const model = { provider: 'relay-a', id: 'gpt-6-sol', api: 'openai-responses' };
+  const model = { provider: 'relay-a', id: 'gpt-6-sol', api };
   expect(await adapt(original, model, ctx)).toEqual({ ...original, service_tier: 'priority' });
   expect(await adapt(original, { ...model, provider: 'relay-b' }, ctx)).toBeUndefined();
   expect(await adapt(original, { ...model, id: 'other-model' }, ctx)).toBeUndefined();
@@ -2737,22 +2744,4 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
     .rejects.toThrow(/write_file failed/);
   expect(requests).toHaveLength(1);
   expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
-});
-
-it('removes cache fields only for an exact learned Chat Completions route and preserves Fast', () => {
-  const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('  function learnedCachePayload(');
-  const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf("  pi.on('before_provider_request'", start);
-  const model = { provider: 'connection-a', id: 'wire', baseUrl: 'http://localhost/api.openai.com/v1', api: 'openai-completions' };
-  let rules = JSON.stringify([model]);
-  const adapt = new Function('path', 'process', 'statSync', 'readFileSync', CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end) + '; return learnedCachePayload;')(
-    { join: (...v: string[]) => v.join('/') }, { env: { PI_CODING_AGENT_DIR: '/isolated' } }, () => ({ size: rules.length }), () => rules,
-  );
-  const original = { messages: [], prompt_cache_key: 'key', prompt_cache_retention: '24h', service_tier: 'priority' };
-  expect(adapt(original, model)).toEqual({ messages: [], service_tier: 'priority' });
-  expect(original.prompt_cache_key).toBe('key');
-  expect(adapt(original, { ...model, provider: 'connection-b' })).toBe(original);
-  expect(adapt(original, { ...model, baseUrl: 'http://other/v1' })).toBe(original);
-  expect(adapt(original, { ...model, api: 'openai-responses' })).toBe(original);
-  rules = '{bad-json';
-  expect(adapt(original, model)).toBe(original);
 });

@@ -22,7 +22,7 @@ export function chatGroupFailure(error: unknown): BotGroupFailure {
   const { code: raw, status } = chatErrorDiagnostic(error);
   const code = missingGroupCode(raw);
   let errorCode: BotGroupErrorCode;
-  if (['PLAN_OPEN', 'PLAN_CLOSED', 'MENTION_UNAVAILABLE', 'MEMBER_LIMIT', 'MEMBER_UNAVAILABLE', 'HOST_NOT_READY',
+  if (['PLAN_OPEN', 'PLAN_CLOSED', 'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'MEMBER_LIMIT', 'MEMBER_UNAVAILABLE', 'HOST_NOT_READY',
     'INVALID_ATTACHMENT', 'ATTACHMENT_UNAVAILABLE', 'ATTACHMENT_TOO_LARGE', 'MEDIA_UPLOAD_FAILED',
     'LIFECYCLE_UNAVAILABLE', 'LAST_OWNER', 'AUTH_REQUIRED', 'IMPORT_PENDING', 'REQUEST_TIMEOUT', 'REVISION_CONFLICT', 'QUOTE_UNAVAILABLE'].includes(code)) errorCode = code as BotGroupErrorCode;
   else if (code === 'CONVERSATION_NOT_FOUND' || code === 'OWNER_CHANGED') errorCode = 'NOT_FOUND';

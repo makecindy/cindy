@@ -19,13 +19,19 @@ export const HOST_SESSIONS_SOURCE_ID = 'host:sessions';
 /** 内置跟进例行任务的 id 前缀；完整 id 由主进程 builtinRoutine.ts 的 builtinFollowUpRoutineId 生成，幂等。 */
 export const BUILTIN_FOLLOW_UP_ROUTINE_PREFIX = 'builtin-follow-up-';
 
-/** 内置「每天查待办」例行任务的 id 前缀；主人在近况里打开时才建，完整 id 见 todoCheckRoutine.ts。 */
-export const BUILTIN_TODO_CHECK_ROUTINE_PREFIX = 'builtin-todo-check-';
+/**
+ * 「每天查待办」例行任务的 id 前缀；主人在近况里打开时才建，完整 id 见 todoCheckRoutine.ts。
+ * 它已是可编辑的普通例行任务，`builtin-` 前缀是早期内置时期留下的已存 id，保留以便旧数据与近况开关对上。
+ */
+export const TODO_CHECK_ROUTINE_PREFIX = 'builtin-todo-check-';
 
 /** 内置「夜间学习」例行任务的 id 前缀；每个伙伴默认一条，完整 id 见 nightlyLearningRoutine.ts。 */
 export const BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX = 'builtin-nightly-learning-';
 
-/** 内置例行任务（跟进 / 查待办）派发时的 schedule id 前缀（`routine-${routine.id}`）。宿主模板不是主人的常驻指令。 */
+/**
+ * 内置例行任务（跟进 / 夜间学习）及沿用旧 id 的「每天查待办」派发时的 schedule id 前缀（`routine-${routine.id}`）。
+ * 这些运行由宿主发起，按 autonomous 判定身份，不是主人的常驻指令。
+ */
 export const BUILTIN_ROUTINE_SCHEDULE_PREFIX = 'routine-builtin-';
 
 /**
@@ -102,6 +108,8 @@ export interface WatchedSession {
   online: boolean;
   title: string;
   workingDir: string | null;
+  /** Executing model explicitly reported final delivery for this execution. */
+  finalDelivery?: boolean;
   phase: WatchedPhase;
   /** 进入当前 phase 的时刻（ms）。同一 (phase, phaseSince) 只发布一次事件。 */
   phaseSince: number;

@@ -108,6 +108,8 @@ describe('media spend transaction', () => {
         origin,
         model: 'keep-model',
         mediaCosts: [{ amount: 1.5, currency: 'USD', approximate: false, kind: 'actual-cost' }],
+        mediaCostDetails: [{ model: 'image', category: 'additional', providerId: 'xd', billingSource: 'cindy-ai',
+          money: { amount: 1.5, currency: 'USD', approximate: false, kind: 'actual-cost' } }],
       });
       expect(db.prepare('SELECT cost_amount, cost_attribution FROM schedule_runs').get()).toEqual({
         cost_amount: attribution === 'direct' ? 1 : 2.5,

@@ -37,6 +37,10 @@ const families: ReadonlyArray<readonly [RegExp, string]> = [
   [/^muse-wonder-/, 'complexWork'],
   [/^grok-(?:build|code)-/, 'coding'],
   [/^grok-/, 'reasoning'],
+  // Agnes Video is the supplier's generation series, not video-understanding chat.
+  [/^agnes-video-\d/, 'video'],
+  [/^agnes-.*-flash(?:-|$)/, 'everydayWork'],
+  [/^agnes-/, 'reasoning'],
 ];
 
 const categoryKeys: Readonly<Record<string, string>> = {

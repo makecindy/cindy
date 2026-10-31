@@ -178,7 +178,7 @@ export function TaskMoveSubmenu({
             <SessionProjectMoveSubmenu
               heading={t('taskMove.sourceProjects')}
               projectOptions={projects}
-              currentWorkingDir={session.workspaceKind === 'project' ? session.workingDir : null}
+              currentSession={session}
               isDialogue={session.workspaceKind === 'dialogue'}
               onSelectProject={move}
               onBrowseProject={onBrowseRemote}

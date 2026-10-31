@@ -1,3 +1,4 @@
+import { MemoryRouter } from 'react-router-dom';
 import { mountPage, subscription, forbid } from '../../ui-page/harness';
 import { BotRoutines } from '../../../src/renderer/features/bots/BotRoutines';
 import { BotAutonomySettings } from '../../../src/renderer/features/bots/BotAutonomySettings';
@@ -37,7 +38,7 @@ mountPage({
       maker: { onBotAutonomyChanged: subscription('autonomy') },
     };
   },
-  render: () => <div className="mx-auto w-full max-w-xl p-4"><BotRoutines botId="fixture" embedded
+  render: () => <MemoryRouter><div className="mx-auto w-full max-w-xl p-4"><BotRoutines botId="fixture" embedded
     header={<BotAutonomySettings botId="fixture" botName="Cindy" allowSchedulerFollow={false} onAllowSchedulerFollowChange={() => {}} />}
-  /></div>,
+  /></div></MemoryRouter>,
 });

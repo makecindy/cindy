@@ -32,7 +32,7 @@ handle.stop();
 
 ## Server contract
 
-配套 server: `apps/heartbeat-server`。endpoint 仅一个:
+配套 server 位于独立服务端仓库，不在本客户端仓。endpoint 仅一个:
 
 - `POST {endpoint}/heartbeat` body `{ uid, platform?, version? }` → `{ ok: true }`
 

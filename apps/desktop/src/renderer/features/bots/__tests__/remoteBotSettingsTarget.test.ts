@@ -127,6 +127,19 @@ it('does not re-read a deleted teammate after the lifecycle action', async () =>
   expect(host.invoke).toHaveBeenCalledTimes(1);
 });
 
+it('offers routine session modes only to hosts that keep them', async () => {
+  // A host that predates session modes accepts saveWithModel but drops sessionMode.
+  const older = create([...ALL_OPS, 'routines.saveWithModel']);
+  expect(older.target.routineSessionModes).toBe(false);
+  host.invoke.mockResolvedValue(ok([]));
+  await older.target.routines.save('bot-1', { name: 'Digest' } as never, 'r1');
+  expect(sent()).toMatchObject({ input: { op: 'routines.saveWithModel' } });
+  const current = create([...ALL_OPS, 'routines.saveWithModel', 'routines.saveWithSessionMode']);
+  expect(current.target.routineSessionModes).toBe(true);
+  await current.target.routines.save('bot-1', { name: 'Digest', sessionMode: 'fresh' } as never, 'r1');
+  expect(sent(1)).toMatchObject({ input: { op: 'routines.saveWithSessionMode', args: { input: { sessionMode: 'fresh' } } } });
+});
+
 it('runs routines on the teammate computer and tells the page when they change there', async () => {
   const { target, changed } = create();
   host.invoke.mockResolvedValue(ok([]));
@@ -179,4 +192,17 @@ it('starts again from the host profile, not from the old one, when a later part 
     .rejects.toSatisfy((error) => extractIpcError(error)?.code === 'INTERNAL');
   expect(sent(4)).toMatchObject({ input: { op: 'profile.get' } });
   expect(profiles.get()).toMatchObject({ avatarColor: 'blue', identitySource: long, userContextSource: '' });
+});
+
+it('negotiates final delivery and discovers recipients on the teammate computer', async () => {
+  const older = create();
+  expect(older.target.routineDelivery).toBe(false);
+  expect(await older.target.routines.deliveryTargets?.('bot-1')).toEqual([]);
+  const current = create([...ALL_OPS, 'routines.saveWithDelivery', 'routines.deliveryTargets']);
+  host.invoke.mockResolvedValue(ok([]));
+  const delivery = { kind: 'im', targetId: 'host-destination' };
+  await current.target.routines.save('bot-1', { name: 'Digest', delivery } as never, 'r1');
+  expect(sent()).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.saveWithDelivery', args: { input: { delivery } } } });
+  await current.target.routines.deliveryTargets?.('bot-1');
+  expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.deliveryTargets' } });
 });

@@ -41,6 +41,33 @@ describe('host-owned forwarded request', () => {
     expect(result.autoReviewUserText).toEqual({ kind: 'agent-request', request: { userText: original, sessionId: 'caller', clientId: 'accepted' } });
   });
 
+  // Unit, protocol compatibility: old receivers only recognize the original five
+  // envelope dialects. Freeze the English wire text from 050886c543; comparing
+  // against today's English formatter would miss catalog drift on both sides.
+  // Minimal failure: change an English prefix, then send from a French host to an old host.
+  // Windows run: 4.93s wall time (Vitest reports 3.61s), 2026-10-31.
+  it.each(['fr', 'es', 'de', 'pt-PT', 'pt-BR'] as const)('sends %s receipts in the legacy English dialect', locale => {
+    const source = { userText: 'Review only; do not publish.' };
+    const supplement = 'Inspect the changes.';
+    expect(formatForwardedRequest(source, supplement, locale)).toBe([
+      '[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.',
+      'User’s original words:"Review only; do not publish."',
+      'Agent supplement:"Inspect the changes."',
+    ].join('\n'));
+    expect(formatForwardedRequest({ userText: null }, supplement, locale)).toBe([
+      '[Source] No verifiable original user text was found.',
+      'User’s original words:""',
+      'Agent supplement:"Inspect the changes."',
+    ].join('\n'));
+  });
+
+  it('still verifies a persisted French receipt without accepting edited owner text', () => {
+    // Frozen wire fixture emitted before the compatibility fix, not a model-authored label.
+    const body = `[Source] L'hôte a conservé les mots d'origine de l'utilisateur, sans modification, comme contexte de la demande. La demande actuelle figure dans le complément de l'Agent.\nMots d'origine de l'utilisateur :"Review only; do not publish."\nComplément de l'Agent :"Inspect the changes."`;
+    expect(matchesForwardedRequest({ userText: 'Review only; do not publish.' }, body)).toBe(true);
+    expect(matchesForwardedRequest({ userText: 'Publish now.' }, body)).toBe(false);
+  });
+
   // #6514 applied owner-quotation formatting to scheduled notifications and
   // ordinary task messages. Unit: the production capture must leave both raw.
   it.each([undefined, 'scheduler'])('keeps non-companion messages plain (%s)', async originKind => {
@@ -72,8 +99,8 @@ describe('host-owned forwarded request', () => {
   });
 
   // Incident 2026-10-23: a relayed "可以提交 pr" reached the task with no verifiable owner
-  // authority. Only a relay admitted in a verified owner turn becomes the receiver's intent,
-  // and the mark never travels with the receipt into a later, unverified relay.
+  // authority. The same verified request must survive another accepted relay,
+  // while merely reading an old receipt cannot revive it.
   it('marks only a host-verified owner relay, without changing the wire body', async () => {
     const verified = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, true);
     const plain = await captureAgentRequest('owner-chat', 'background', { clientId: 'u1', authoredText: '可以提交 pr' }, async () => [], true, false);
@@ -85,7 +112,13 @@ describe('host-owned forwarded request', () => {
     expect(readForwardedRequestSource({ ...plain.autoReviewUserText.request, ownerVerified: 'yes' })?.ownerVerified).toBeUndefined();
     const carried = await captureAgentRequest('child', 'more', { clientId: 'c1', delegatedRequest: verified.autoReviewUserText.request }, async () => [], true, false);
     expect(carried.autoReviewUserText.request?.userText).toBe('可以提交 pr');
-    expect(verifiedOwnerRequestText(carried.autoReviewUserText)).toBeUndefined();
+    expect(verifiedOwnerRequestText(carried.autoReviewUserText)).toBe('可以提交 pr');
+    expect(carried.autoReviewUserText.request).toEqual(verified.autoReviewUserText.request);
+    const historical = await captureAgentRequest('child', 'more', null, async () => [{
+      clientId: 'c1', role: 'user', content: verified.message,
+      agentMeta: { autoReviewUserText: verified.autoReviewUserText },
+    }], true, false);
+    expect(verifiedOwnerRequestText(historical.autoReviewUserText)).toBeUndefined();
     const missing = await captureAgentRequest('caller', 'analysis', null, async () => [], true, true);
     expect(missing.autoReviewUserText.request).toEqual({ userText: null });
   });
@@ -126,7 +159,7 @@ describe('host-owned forwarded request', () => {
 describe('forwarded request display', () => {
   const original = '  只检查\n"不要发布"  ';
   const supplement = '第一段\n\n1. 保留代码 `\\n`\n2. 路径 C:\\new\\test\n用户原话：这是补充中的文本';
-  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'] as const)('decodes %s once without changing receipts or authored escapes', locale => {
+  it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"] as const)('decodes %s once without changing receipts or authored escapes', locale => {
     const source = { userText: original, sessionId: 'owner', clientId: 'input' };
     const body = formatForwardedRequest(source, supplement, locale);
     const display = forwardedRequestDisplayText(body);

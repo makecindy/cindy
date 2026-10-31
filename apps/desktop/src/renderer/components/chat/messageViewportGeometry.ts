@@ -74,21 +74,9 @@ export class MessageViewportGeometry {
       (this.itemsHeight !== itemsHeight && this.dirty.size === 0);
     if (!this.full && !this.dirty.size) return;
     const boxes = new Map<number, DOMRect>();
-    // Visual follow/entrance offsets are compositor projections, not row layout.
-    // Caching them as list geometry makes the virtualizer compensate them again.
-    const translationY = (element: HTMLElement) => {
-      const transform = getComputedStyle(element).transform;
-      return !transform || transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42;
-    };
-    const flowOffset = translationY(items);
     const box = (index: number) => {
       let result = boxes.get(index);
-      if (!result) {
-        const row = this.rows[index];
-        const rect = row.getBoundingClientRect();
-        result = new DOMRect(rect.x, rect.y - flowOffset - translationY(row), rect.width, rect.height);
-        boxes.set(index, result);
-      }
+      if (!result) { result = this.rows[index].getBoundingClientRect(); boxes.set(index, result); }
       return result;
     };
     const changed: number[] = [];

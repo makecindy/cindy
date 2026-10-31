@@ -356,6 +356,7 @@ export async function prepareCodexCustomContextCatalog(params: {
   modelIds?: readonly string[];
   /** Same-provider budgets for native previous-model compaction after cold resume. */
   resolveContextWindow?: (modelId: string) => number | null;
+  resolveCompactionPct?: (modelId: string) => number | null;
   /** In-memory smart Subagent catalog to preserve in the one-session custom-context Host. */
   baseCatalog?: unknown;
 }): Promise<{ catalogPath: string; extraArgs: string[] }> {
@@ -378,7 +379,7 @@ export async function prepareCodexCustomContextCatalog(params: {
     if (typeof window !== 'number' || !Number.isSafeInteger(window) || window <= 0) return model;
     return { ...model, context_window: window,
       max_context_window: Math.max(Number(model.max_context_window) || 0, window),
-      auto_compact_token_limit: Math.max(1, Math.floor(window * 0.9)) };
+      auto_compact_token_limit: Math.max(1, Math.floor(window * ((params.resolveCompactionPct?.(model.slug) ?? 90) / 100))) };
   });
   const content = `${JSON.stringify(patched)}\n`;
   const catalogPath = await persistCatalog(params.codexHome, content);

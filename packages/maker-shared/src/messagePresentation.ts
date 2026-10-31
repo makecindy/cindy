@@ -19,21 +19,6 @@ import {
   type PresentationLocalizer,
 } from './presentationLocalization';
 
-/** New tail rows only: initial history, prepends and window replacement stay still.
- * Use visible message identities, not creation times: a final reply may become visible
- * minutes after its first token. Streaming and delivery acknowledgements retain the key.
- */
-export function appendedMessageKeys(previous: readonly string[] | undefined, next: readonly string[]): Set<string> {
-  if (!previous) return new Set();
-  const known = new Set(previous);
-  let boundary = -1;
-  for (let index = next.length - 1; index >= 0; index--) {
-    if (known.has(next[index])) { boundary = index; break; }
-  }
-  if (previous.length > 0 && boundary < 0) return new Set();
-  return new Set(next.slice(boundary + 1).filter(key => !known.has(key)));
-}
-
 export type MessageFoldHeaderChevronPosition = 'leading' | 'trailing';
 
 export type MessageFoldHeaderVariant = 'card' | 'plain';
@@ -334,13 +319,16 @@ export interface ToolRowWording {
   intentVerb(action: CommandIntentAction): string;
   /** fileChange 多文件复合短语("更新 3 个文件");量词与语序语言相关,整短语粒度,count 恒 >= 2。 */
   updateFilesLabel(count: number): string;
+  /** Compact activity fallback when no reliable action description is available. */
+  toolCallLabel?(): string;
 }
 
-export const DEFAULT_TOOL_ROW_WORDING: ToolRowWording = {
+export const DEFAULT_TOOL_ROW_WORDING = {
   verb: (key) => TOOL_ROW_VERB_ZH[key],
   intentVerb: (action) => INTENT_VERB_ZH[action],
   updateFilesLabel: (count) => `${TOOL_ROW_VERB_ZH.update} ${count} 个文件`,
-};
+  toolCallLabel: () => '正在调用工具…',
+} satisfies ToolRowWording;
 
 const TOOL_ROW_TEXT_MAX_CHARS = 60;
 
@@ -863,7 +851,9 @@ function isErrorRecord(value: string): boolean {
     if (status === 'error' || status === 'failed' || status === 'failure') return true;
     return ['error', 'errors', 'exception', 'stderr'].some((key) => {
       const raw = record[key];
-      return typeof raw === 'string' ? raw.trim().length > 0 : raw !== undefined && raw !== null;
+      if (typeof raw === 'string') return raw.trim().length > 0;
+      if (Array.isArray(raw)) return raw.length > 0;
+      return raw !== undefined && raw !== null;
     });
   } catch {
     return false;

@@ -54,7 +54,7 @@ export async function isBotAuthorizationSession(sessionId: string): Promise<bool
       and(
         eq(botSessionLinks.sessionId, sessionId),
         // The owner's Bot Chat: the permanent Chat and its private-chat topics.
-        inArray(botSessionLinks.role, ['canonical', 'thread']),
+        inArray(botSessionLinks.role, ['canonical', 'thread', 'routine']),
         isNull(botSessionLinks.archivedAt),
         ne(sessions.status, 'deleted'),
         ne(sessions.status, 'archived'),

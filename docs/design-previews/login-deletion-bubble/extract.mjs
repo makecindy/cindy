@@ -87,6 +87,11 @@ function numField(objSrc, key) {
 function extractRegisterColor(src, name) {
   const re = new RegExp(`registerColor\\('${name}',\\s*\\{\\s*light:\\s*'([^']+)',\\s*dark:\\s*'([^']+)'`, 's');
   const m = re.exec(src);
+  if (!m && src.includes(`registerColor('${name}', GENERATED_DEFAULTS["${name}"]`)) {
+    const generated = src.match(/const GENERATED_DEFAULTS = (\{[\s\S]*?\n\}) as const;/)?.[1];
+    const pair = generated ? JSON.parse(generated)[name] : undefined;
+    if (typeof pair?.light === 'string' && typeof pair?.dark === 'string') return pair;
+  }
   if (!m) throw new Error(`registerColor('${name}') 未命中`);
   return { light: m[1], dark: m[2] };
 }
@@ -125,7 +130,7 @@ const deskBubbleObj = extractConstObject(deskTokensSrc, 'LOGIN_DELETION_BUBBLE')
 const panelFixedScale = Number(/PANEL_FIXED_SCALE\s*=\s*([\d.]+)/.exec(deskScaleSrc)[1]);
 if (!(panelFixedScale > 0 && panelFixedScale <= 1)) throw new Error('PANEL_FIXED_SCALE 提取异常');
 // 渲染位置结构事实:气泡在 </LoginStage> 之后(根层,不在 stage 文档流)
-const renderPosM = /<\/LoginStage>\s*\{\/\* 注销状态提示气泡[\s\S]{0,400}?<AccountDeletionStatusPanel/.exec(loginPageSrc);
+const renderPosM = /<\/LoginStage>\s*<CredentialStoreHelpDialog\b[^]*?\/>(\s*\{\/\* 注销状态提示气泡[^]*?<AccountDeletionStatusPanel)/.exec(loginPageSrc);
 if (!renderPosM) throw new Error('desktop 气泡根层渲染位置(</LoginStage> 之后)未命中');
 // completed 才传 onDismiss(结构事实,沿用旧逻辑未改动)
 const dismissGateM = /accountDeletionStatus\.status === 'completed'\s*\?\s*\(\) =>/.exec(loginPageSrc);
@@ -233,8 +238,8 @@ if (!/accessibilityElementsHidden=\{deletionBubbleA11yHidden\}/.test(mGateTag[0]
   throw new Error('mobile 气泡 iOS 读屏隐藏(accessibilityElementsHidden)未命中');
 if (!/importantForAccessibility=\{\s*deletionBubbleA11yHidden \? 'no-hide-descendants' : 'auto'\s*\}/.test(mGateTag[0]))
   throw new Error('mobile 气泡 Android 读屏隐藏(importantForAccessibility)未命中');
-if (!/const deletionBubbleA11yHidden =\s*consentDialogOpen \|\| realmConsentOpen \|\| handoffPhase !== 'done';/.test(mLoginSrc))
-  throw new Error('mobile 气泡读屏隐藏条件(协议弹窗 || 区域确认 || 入场未完成)未命中');
+if (!/const deletionBubbleA11yHidden =\s*consentDialogOpen \|\| realmConsentOpen \|\| captchaChallengeOpen \|\| handoffPhase !== 'done';/.test(mLoginSrc))
+  throw new Error('mobile 气泡读屏隐藏条件(协议弹窗 || 区域确认 || 验证码 || 入场未完成)未命中');
 
 // loginPalettes 双色板
 const mPalettesObj = extractConstObject(mTokensSrc, 'loginPalettes');
@@ -255,9 +260,11 @@ let messagesMod;
 try {
   const code = esbuild.transformSync(mSkinSrc, { loader: 'ts', format: 'esm' }).code;
   writeFileSync(join(tmp, 'loginSkinLayout.mjs'), code);
+  writeFileSync(join(tmp, 'locale.mjs'), esbuild.transformSync(readFileSync(R('apps/mobile/src/i18n/locale.ts'), 'utf8'), { loader: 'ts', format: 'esm' }).code);
   const messagesCode = esbuild
     .transformSync(mMsgsSrc, { loader: 'ts', format: 'esm' })
-    .code.replace(
+    .code.replace(/from ["']@\/i18n\/locale["']/g, 'from "./locale.mjs"')
+    .replace(
       /import\s*\{\s*getLocales\s*\}\s*from\s*['"]expo-localization['"];?/,
       'const getLocales = () => [{ languageTag: "zh-CN" }];',
     )

@@ -1,14 +1,13 @@
+import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
-import { useMessageEntrance } from './useMessageEntrance';
-import { useSmoothMessageFollow } from './useSmoothMessageFollow';
+import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
-export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+export { botProcessItems, simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
@@ -75,6 +74,7 @@ import {
 export { groupWorkRuns } from './messageWorkGroups';
 export type { RenderItem, WorkChildItem } from './messageWorkGroups';
 import { useTranslation } from 'react-i18next';
+import { richAnswerMediaSources } from '@cindy/maker-shared/rich-answer';
 import {
   findMessageTodoInsertions,
   getLatestMessageTodoState,
@@ -334,6 +334,7 @@ import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
@@ -443,6 +444,8 @@ import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../sh
 interface MessageStreamProps {
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
+  /** Host forms share the measured scroll area, outside message virtualization. */
+  footer?: ReactNode;
   historyVisibleAfter?: number;
   onAskInSideChat?: (quote: string) => Promise<boolean>;
   /** Active session id — used to reset scroll state on session switch. */
@@ -458,6 +461,7 @@ interface MessageStreamProps {
   remoteHostId?: string | null;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
    *  can resolve relative paths in markdown links and inline @-chips
    *  (text-lightbox-trigger-extension F1 / F2). Stable within a session
@@ -480,6 +484,8 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
+  /** Persisted row already owned by the live error banner; keep its recovery state there. */
+  activeErrorClientId?: string | null;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
@@ -1614,10 +1620,10 @@ export function buildRenderItems(
     return allMessages.slice(start, end);
   };
 
-  // Agent 最终正文中的 Markdown 图片是首选排版；tool_result 媒体仍保留为
+  // Agent 最终正文中的 Markdown 图片和组件媒体是首选排版；tool_result 媒体仍保留为
   // 确定性兜底。只有同一真实 user turn 内确实嵌入了同一 URL，才压掉兜底卡。
-  const inlineImageUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
-  const recordTurnInlineImages = (lo: number, hi: number): void => {
+  const inlineMediaUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
+  const recordTurnInlineMedia = (lo: number, hi: number): void => {
     if (hi <= lo) return;
     const urls = new Set<string>();
     for (const message of messages.slice(lo, hi)) {
@@ -1630,18 +1636,19 @@ export function buildRenderItems(
           )
         : extractRenderedMarkdownImageTargets(message.content);
       for (const url of imageTargets) urls.add(url);
+      for (const url of richAnswerMediaSources(message.content)) urls.add(url);
     }
-    inlineImageUrlsByTurnStart.set(lo, urls);
+    inlineMediaUrlsByTurnStart.set(lo, urls);
   };
   let inlineTurnStart = 0;
   for (let index = 0; index <= messages.length; index += 1) {
     const message = messages[index];
     const isBoundary = message ? isRenderTurnBoundary(message) : false;
     if (isBoundary && index > inlineTurnStart) {
-      recordTurnInlineImages(inlineTurnStart, index);
+      recordTurnInlineMedia(inlineTurnStart, index);
       inlineTurnStart = index;
     }
-    if (index === messages.length) recordTurnInlineImages(inlineTurnStart, index);
+    if (index === messages.length) recordTurnInlineMedia(inlineTurnStart, index);
   }
 
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
@@ -1920,7 +1927,7 @@ export function buildRenderItems(
       for (const message of originalTurnSlice(lo, hi)) {
         if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
         for (const item of extractToolResultMedia(message.content)) {
-          if (item.kind === 'image' && inlineImageUrlsByTurnStart.get(lo)?.has(item.url)) {
+          if (inlineMediaUrlsByTurnStart.get(lo)?.has(item.url)) {
             continue;
           }
           if (seenMediaUrls.has(item.url)) continue;
@@ -2206,9 +2213,9 @@ export function buildRenderItems(
       // 提交消息被 rewind/异 ghost 伪锚)回退今日行为——本调用位置渲染。
       const collectResultMedia = (result: string): void => {
         let media = extractToolResultMedia(result);
-        const inlineImageUrls = inlineImageUrlsByTurnStart.get(turnStartIdx);
-        if (inlineImageUrls?.size) {
-          media = media.filter((item) => item.kind !== 'image' || !inlineImageUrls.has(item.url));
+        const inlineMediaUrls = inlineMediaUrlsByTurnStart.get(turnStartIdx);
+        if (inlineMediaUrls?.size) {
+          media = media.filter((item) => !inlineMediaUrls.has(item.url));
         }
         if (media.length === 0) return;
         if (isGhostCallToolName(toolName)) {
@@ -2836,6 +2843,7 @@ function renderWorkGroupChild(
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
     sessionSource?: string | null;
+    onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
@@ -2885,6 +2893,7 @@ function renderWorkGroupChild(
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
         sessionSource={props.sessionSource}
+        onDiagnoseError={props.onDiagnoseError}
         sessionRunning={props.isSessionStreaming}
         assistantForkBlocked={shouldBlockAssistantFork(
           props.isSessionStreaming,
@@ -2955,6 +2964,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
     }
     return {
       kind: 'rendered',
+      prose: child.type === 'message' && child.message.role === 'assistant' && !child.message.systemCardType,
       key: child.key,
       renderNode: () => renderWorkGroupChild(child, context),
     };
@@ -2972,6 +2982,8 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       compact={compact}
       deferred={item.deferred}
       fitHeader={Boolean(replyColumnSpacer)}
+      journal={item.teammateJournal}
+      journalTitle={item.isStreaming ? elapsed => <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus> : undefined}
     />
   );
   return (
@@ -2992,6 +3004,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 
 export function MessageStream({
   header,
+  footer,
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
@@ -2999,12 +3012,14 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   sessionSource,
+  onDiagnoseError,
   workingDir,
   assistantAvatar,
   simplifiedBotConversation = false,
   botUnreadBoundaryAt = null,
   onBotReadThrough,
   messages,
+  activeErrorClientId = null,
   activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -3095,7 +3110,6 @@ export function MessageStream({
   const contentRef = useRef<HTMLDivElement>(null);
   /** 渲染 item 的内层 flex 容器；按 data-render-item-key 定位，异步卡片可不占 DOM。 */
   const itemsRef = useRef<HTMLDivElement>(null);
-  const followMessageBottom = useSmoothMessageFollow(scrollRef, itemsRef);
 
   // ── 切会话恢复浏览位置(默认常开) ──
   // 父组件用 key={sessionId} 重挂载本组件,所以这里在 mount 时一次性读取快照即可:
@@ -3387,7 +3401,7 @@ export function MessageStream({
       forkOrigin,
     );
     return simplifiedBotConversation
-      ? simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)
+      ? botProcessItems(grouped, isSessionStreaming)
       : grouped;
   }, [
     ungroupedRenderItems,
@@ -3399,12 +3413,6 @@ export function MessageStream({
     workGroupProjection,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
-  const entranceSignature = allRenderItems.flatMap(item => item.type === 'message'
-    && (item.message.role === 'user' || item.message.role === 'assistant') && !item.message.systemCardType
-    && (item.message.content.trim().length > 0 || item.message.images?.length || item.message.files?.length)
-    ? [item.key] : []).join('\0');
-  const entranceKeys = useMemo(() => entranceSignature ? entranceSignature.split('\0') : [], [entranceSignature]);
-  const enterMessage = useMessageEntrance(entranceKeys, !isLoadingMore && (!historySnapshot || historySnapshot.ready));
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -5084,7 +5092,7 @@ export function MessageStream({
     if (scrollbarDragStartTopRef.current != null) return;
     const generation = beginProgrammaticScroll();
     suppressScrollbarActivation(el);
-    followMessageBottom();
+    el.scrollTop = el.scrollHeight;
     // Layout effects already flush their state updates before paint. Observer
     // and input callbacks need an explicit commit before the next scroll event.
     if (fromLayout) reconcileMessageViewport();
@@ -5097,7 +5105,7 @@ export function MessageStream({
         refreshViewportAnchor();
       }
     });
-  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport, followMessageBottom]);
+  }, [beginProgrammaticScroll, finishProgrammaticScroll, refreshViewportAnchor, reconcileMessageViewport, syncMessageViewport]);
   pinToBottomRef.current = pinToBottom;
 
   // Composer send is an explicit "show me the result" intent. Don't wait for
@@ -6248,8 +6256,7 @@ export function MessageStream({
     root.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
   }, [railJumpRequest, allRenderItems, visibleRenderItems, beginChipJump]);
 
-  // 第一条 user 消息没有"上一条 assistant"作为 resumeSessionAt 锚点，
-  // rewind 必然抛 NO_PRIOR_ASSISTANT。直接在 UI 层把按钮藏掉，避免无效点击。
+  // 第一条 user 消息没有可 fork 的前文(fork 出来等价于复制整条任务),UI 层藏掉 fork 入口。
   // 注意:这里要用全量 messages 而不是 visibleRenderItems —— "首条 user" 的语义
   // 是整段对话的首条,不是当前窗口的首条;且 messages 本身也只是已加载的尾部
   // 切片,还有老页未加载(hasMoreMessages)时不能把切片首条误判为对话首条
@@ -6316,6 +6323,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
       lastUserMessageClientId,
@@ -6336,6 +6344,7 @@ export function MessageStream({
       agentKind,
       remoteHostId,
       sessionSource,
+      onDiagnoseError,
       isSessionStreaming,
       firstUserMessageClientId,
       lastUserMessageClientId,
@@ -6475,8 +6484,6 @@ export function MessageStream({
                 className="relative mx-auto w-full pt-7"
                 style={{
                   paddingBottom: resolvedBottomPadding,
-                  // The visual follow transform must not enlarge the native scroll range.
-                  overflow: 'clip',
                   // Match the input overlay's width so chat content + input box
                   // share the same horizontal bounds. Falls back to 880 only if
                   // the parent forgot to pass contentWidth.
@@ -6742,11 +6749,13 @@ export function MessageStream({
                           continuationInFlightProjectionCapability
                         }
                         isLastMessage={msg.clientId === lastMessageClientId}
+                        isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
+                        onDiagnoseError={onDiagnoseError}
                       />
                     );
                     const highlightClass =
@@ -6771,7 +6780,6 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          ref={node => enterMessage(node, item.key)}
                           className={cn('scroll-mt-20 transition-colors', highlightClass)}
                         >
                           {startsUnread ? (
@@ -6813,7 +6821,6 @@ export function MessageStream({
                         key={item.key}
                         data-render-item-key={item.key}
                         data-message-client-id={msg.clientId}
-                        ref={node => enterMessage(node, item.key)}
                         {...shareAttributes}
                         className={cn(
                           'scroll-mt-20 transition-colors',
@@ -6829,6 +6836,7 @@ export function MessageStream({
                     );
                   })}
                 </div>}</MessageViewport>
+                {footer ? <div className="mt-3.5" data-message-stream-footer>{footer}</div> : null}
               </div>
             </div>
 
@@ -6935,11 +6943,13 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
   isLastMessage,
+  isActiveError,
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
   starterOptionsLocked,
   sessionSource,
+  onDiagnoseError,
 }: {
   message: ChatMessage;
   toolResult?: string;
@@ -6986,6 +6996,7 @@ const MessageItem = memo(function MessageItem({
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
+  isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
   assistantAvatar?: ReactNode;
@@ -6994,6 +7005,7 @@ const MessageItem = memo(function MessageItem({
   /** True once the user has written anything in this task, which retires the opening's starter buttons. */
   starterOptionsLocked?: boolean;
   sessionSource?: string | null;
+  onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
   // 「已自动继续」分隔线,必须在 synthetic early-return 之前检查,否则分隔线被吞。
@@ -7070,6 +7082,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
+            plugin={message.systemCardData?.plugin}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }
@@ -7173,10 +7186,10 @@ const MessageItem = memo(function MessageItem({
       // error-tail-banner:普通失败行是尾部消息且未被忽略时,由输入框上方的可操作
       // 红条(重试/关闭)独家承载,流内不重复渲染,避免双红条;被忽略或后续有新
       // 消息后回落为流内静态历史卡。
-      if (isLastMessage && !message.errorDismissed) return null;
-      // 历史里的 turn 失败记录(role='error' 持久化行)——静态时间线卡,
-      // live 报错仍走输入框上方的 ErrorBanner,两者不会同时出现
-      // (error 行落库时不广播,只在历史加载路径进入消息流)。
+      if (isActiveError || (isLastMessage && !message.errorDismissed)) return null;
+      // A live error may be followed by hidden or system rows when history is
+      // reloaded. Its exact persisted identity still belongs to the live banner;
+      // unrelated failures remain available as compact history cards.
       return (
         <ErrorMessageCard
           message={message.content}
@@ -7184,6 +7197,7 @@ const MessageItem = memo(function MessageItem({
           providerId={message.errorProviderId}
           toolLoop={message.toolLoop}
           sessionSource={sessionSource}
+          onDiagnose={onDiagnoseError}
         />
       );
     case 'thinking':

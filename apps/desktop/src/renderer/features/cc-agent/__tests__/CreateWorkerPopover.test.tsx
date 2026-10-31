@@ -1,8 +1,10 @@
+import { readLocalWorkerCreationSelection } from '../../../state/workerCreationPrefs';
 // @vitest-environment jsdom
 import { WorkerProjectField, useWorkerProjectSelection } from '../WorkerProjectField';
 import type { WorkerProjectContext } from '../../../../shared/orca-worker-project';
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
@@ -1951,6 +1953,29 @@ describe('CreateWorkerPopover remote providers', () => {
 
   afterEach(() => cleanup());
 
+  // #8010 / unit: create through the real Worker form, then return to the task host.
+  // Existing cases lacked catalogHostDeviceId, so a cache key could accidentally
+  // become agentDeviceId or move the Worker's work computer without being caught.
+  it.each(['agent-pc', 'share:s1'])('keeps %s as the execution identity while reading its catalog through B', async source => {
+    mocks.capabilitiesByAgent['claude-code'] = {
+      availableModels: [], supportsOrcaWorkerAgentDevice: true,
+    } as typeof mocks.capabilitiesByAgent['claude-code'];
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open deviceId="host-b" catalogHostDeviceId="host-b"
+      leadAgentDeviceId={source} remoteAgentDevices={devices} onClose={vi.fn()} onCreate={onCreate} />);
+    expect(mocks.deviceProvidersFor).toBe(modelCatalogKey(source, 'host-b'));
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: source, model: 'codex/gpt-5.5' });
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty('executionDeviceId');
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    expect(mocks.deviceProvidersFor).toBe('host-b');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    expect(onCreate.mock.calls[1][0]).toMatchObject({ agentDeviceId: null, model: 'codex/gpt-5.5' });
+    expect(onCreate.mock.calls[1][0]).not.toHaveProperty('executionDeviceId');
+  });
+
   // 模型面板底部「配置模型」：Worker 的 Agent 已选在分享上时也要能跳设置(由面板决定显示)；
   // 只有任务在远程控制的电脑上时不接线。
   it('keeps provider navigation wired while the Worker agent already uses a share', async () => {
@@ -2385,9 +2410,12 @@ describe('local Worker project selection', () => {
   });
   // Review P1: explicit same-repository choices were silently replaced by inheritance.
   // Unit/jsdom: exercise the actual native-picker callback and submitted form fields.
+  // PR #7933 P2: a saved release branch must not replace HEAD within the same repo.
   it.each(['/repo/apps/api', '/repo/.cindy-worktrees/other', '/repo'])(
     'submits the explicitly browsed same-repository directory %s', async (directory) => {
-      const inherited = {...project, directory: '/repo/apps/web'};
+      const inherited = {...project, directory: '/repo/apps/web', baseRepo: '/repo/'};
+      window.electronAPI.getNewMakerWorktreeBranchPreference = vi.fn().mockResolvedValue({baseRepo: '/repo', sourceBranch: 'release', revision: 1});
+      window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({branches: ['selected-branch', 'release']});
       const opening = {...context, recordedDirectory: inherited.directory, inherited, selected: inherited};
       projectContext.mockImplementation(async (_id, dir) => dir
         ? {...project, directory: dir, branch: 'selected-branch'} : opening);
@@ -2400,8 +2428,33 @@ describe('local Worker project selection', () => {
       await waitFor(() => expect((screen.getByRole('button', {name: 'Create'}) as HTMLButtonElement).disabled).toBe(false));
       fireEvent.click(screen.getByRole('button', {name: 'Create'}));
       expect(onCreate).toHaveBeenCalledWith({workingDir: directory, projectPath: '/repo'});
+      expect(window.electronAPI.getNewMakerWorktreeBranchPreference).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByText('orca.workerProject.newWorktree'));
+      fireEvent.click(screen.getByRole('button', {name: 'Create'}));
+      expect(onCreate).toHaveBeenLastCalledWith({workingDir: directory, projectPath: '/repo', worktree: {sourceBranch: 'selected-branch'}});
     },
   );
+  // Unit/jsdom: production form selection now reads a repository's main-task branch memory.
+  // Previous cases only covered checkout HEAD. Missing refs/read failures must display and submit HEAD.
+  it.each(['remembered', 'remote-default', 'missing', 'read-failed'])('uses actual default branch for another project: %s', async scenario => {
+    window.electronAPI.getNewMakerWorktreeBranchPreference = vi.fn().mockImplementation(async () => {
+      if (scenario === 'read-failed') throw new Error('old host');
+      return { baseRepo: '/other', sourceBranch: scenario === 'remote-default' ? 'refs/remotes/origin/main' : 'release', revision: 1 };
+    });
+    window.electronAPI.worktreeListBranches = vi.fn().mockResolvedValue({ branches: scenario === 'missing' ? ['main'] : ['main', 'release'], remoteDefaultBranch: 'refs/remotes/origin/main' });
+    projectContext.mockImplementation(async (_id, dir) => dir ? { ...project, directory: '/other', baseRepo: '/other' } : context);
+    const { result } = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(window.electronAPI.getNewMakerWorktreeBranchPreference).not.toHaveBeenCalled();
+    act(() => result.current.select('/other'));
+    await waitFor(() => expect(result.current.context?.selected.directory).toBe('/other'));
+    const expected = scenario === 'remote-default' ? 'refs/remotes/origin/main' : scenario === 'remembered' ? 'release' : project.branch;
+    expect(result.current.branch).toBe(expected);
+    act(() => result.current.setChecked(true));
+    expect(result.current.fields.worktree?.sourceBranch).toBe(expected);
+    act(() => result.current.setSourceBranch('manual'));
+    expect(result.current.fields.worktree?.sourceBranch).toBe('manual');
+  });
   it('allows a Git project selected from a dialogue Lead and never probes a disabled remote form', async () => {
     projectContext.mockResolvedValue({...context, dialogue: true, selected: {...project, directory: '/other', baseRepo: '/other'}});
     const {result} = renderHook(() => useWorkerProjectSelection(true, 'lead', true));
@@ -2410,4 +2463,18 @@ describe('local Worker project selection', () => {
     renderHook(() => useWorkerProjectSelection(true, 'remote', false));
     expect(projectContext).not.toHaveBeenCalled();
   });
+});
+
+// Unit: only submitted local host routes count, never synthetic or legacy per-agent defaults.
+it('exports only the current owner local route for tool defaults', () => {
+  const route = { agent: 'pi', model: 'test-model', providerId: 'provider', agentDeviceId: null, effort: '', fast: false };
+  localStorage.setItem('workerCreationPrefs', JSON.stringify({ lastAgent: 'pi', pi: route }));
+  expect(readLocalWorkerCreationSelection('owner')).toBeNull();
+  localStorage.setItem('workerCreationPrefs', JSON.stringify({ modelSelectionByHost: {
+    [JSON.stringify(['owner', 'device'])]: route,
+    [JSON.stringify(['other', 'local'])]: route,
+  } }));
+  expect(readLocalWorkerCreationSelection('owner')).toBeNull();
+  localStorage.setItem('workerCreationPrefs', JSON.stringify({ modelSelectionByHost: { [JSON.stringify(['owner', 'local'])]: route } }));
+  expect(readLocalWorkerCreationSelection('owner')).toEqual(route);
 });

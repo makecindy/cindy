@@ -1,8 +1,8 @@
 /**
  * Value: production tool admission + queued dispatch guards, no real account or network.
  * Regression: task actions added owner consent checks after the normal runtime permission flow;
- * later (#6699) any live mode admitted a teammate's own wake-ups as if the owner had asked.
- * Rule: teammate-authority.md — the Host decides the turn's principal before the permission mode.
+ * 2026-10-29: missing owner provenance silently rejected routine_save and start_session_task.
+ * Rule: teammate-authority.md — separate source identity, account access and explicit operation risks.
  * Gap: workbench tests cover visibility; SDK approval tests cannot prove Host consent.
  * Minimum input: non-owner provenance + runtime change; live execution modes do not review twice.
  * Tier: unit. This file isolates the process-local authorization lifetime from SQLite/IPC.
@@ -19,11 +19,16 @@ import {
   bindTaskActionInput,
   createTaskActionAuthorizer,
   taskActionInputGuard,
+  taskActionPrincipal,
+  taskActionRoutineRevision,
+  type TaskActionScheduleDefinition,
   hasTaskActionAuthorization,
   TASK_ACTION_TOOLS,
   ORCA_TASK_ACTION_TOOLS,
   captureTaskActionSyncGuard,
   captureTaskActionGuard,
+  captureTaskActionDeliveryGuard,
+  isTaskActionRevoked,
 } from '../taskActionAuthorization.js';
 
 function fixture(ownerInput = false, delegated = false) {
@@ -259,7 +264,8 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
                 ? rows.team
                   ? [rows.team]
                   : []
-                : [caller],
+                // SQL reads return value snapshots, not a shared mutable row.
+                : [{ ...caller }],
         };
         return query;
       },
@@ -279,6 +285,7 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     ownerContinuation: false,
     automatic: kind !== 'private',
     boundary: 'runtime-1',
+    clearBoundaryMs: null as number | null,
   };
   const confirm = vi.fn(async () => true);
   const runtime = {
@@ -289,11 +296,42 @@ function desktopFixture(kind: 'private' | 'group' | 'automatic' = 'group') {
     reviewHostPermissionAction: vi.fn(async (): Promise<AutoReviewDecision> => ({ verdict: 'allow' })),
   };
   const getSession = vi.fn((): typeof runtime | undefined => runtime);
-  const entrusted = vi.fn(async () => false);
-  const authorize = createDesktopTaskActionAuthorizer({
-    input: () => ({ ...activeInput }), confirm, getSession, isEntrustedTask: entrusted,
+  const permissionRequest = { requestId: 'permission-1', kind: 'permission',
+    toolName: 'bash', input: { command: 'echo reviewed' } };
+  const capturePermissionRequest = vi.fn(async () => {
+    const request = structuredClone(permissionRequest);
+    return {
+      details: { task: { id: 'own', title: 'Child task' }, request },
+      assertCurrent() {
+        if (JSON.stringify(permissionRequest) !== JSON.stringify(request))
+          throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      },
+    };
   });
-  return { authorize, confirm, activeInput, caller, rows, runtime, getSession, entrusted };
+  const routines = new Map<string, { enabled: boolean; revision: number; prompt?: string; preRunCommand?: string }>();
+  const schedules = new Map<string, TaskActionScheduleDefinition>();
+  const workDirs = new Map([['companion', '/companion']]);
+  const getScheduleDefinition = vi.fn(async (id: string) => structuredClone(schedules.get(id) ?? null));
+  const authorize = createDesktopTaskActionAuthorizer({
+    input: () => ({ ...activeInput }), confirm, getSession,
+    capturePermissionRequest,
+    getScheduleDefinition,
+    getSessionWorkDir: async id => workDirs.get(id),
+    captureRoutine: async (_botId, id, forExecution) => {
+      const row = routines.get(id);
+      if (!row) return undefined;
+      const captured = { ...row };
+      return { ...captured, prompt: captured.prompt ?? '', details: { routine: { id, ...captured },
+        ...(forExecution && captured.preRunCommand ? { execution: {
+          targetSessionId: `routine-${id}`, workingDir: workDirs.get(`routine-${id}`),
+        } } : {}) }, assertCurrent() {
+        if (routines.get(id)?.revision !== captured.revision)
+          throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+      } };
+    },
+  });
+  return { authorize, confirm, activeInput, caller, rows, runtime, getSession,
+    permissionRequest, capturePermissionRequest, routines, schedules, workDirs, getScheduleDefinition };
 }
 const ownerWrites = [
   ['cindy_helper', 'start_session_task'],
@@ -399,7 +437,19 @@ describe('Owner-delegated scheduled task actions', () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
-  it.each(['permission', 'plan', 'instance', 'account', 'input'] as const)('invalidates admission and delayed delivery after %s changes', async changed => {
+  // teammate-authority.md「延迟投递只认真实撤权」(2026-10-30): live turn facts still
+  // expire the admission, but only real revocation stops a queued message. Before,
+  // any of these rollovers between turns dropped every supplement still queued.
+  // A held app-session boundary alone proves nothing (a same-owner Ghost projection repair holds
+  // it too): the captured database client is the owner identity (review on #7969).
+  it.each([
+    ['permission', 'delivered'],
+    ['plan', 'delivered'],
+    ['instance', 'delivered'],
+    ['input', 'delivered'],
+    ['boundary', 'retryable'],
+    ['owner', 'revoked'],
+  ] as const)('invalidates admission after %s changes; delayed delivery is %s', async (changed, outcome) => {
     const h = scheduledFixture();
     const queued = input();
     const guard = await withToolCallAuthority(h.authorize, scheduledSend(), async () => {
@@ -412,10 +462,42 @@ describe('Owner-delegated scheduled task actions', () => {
     if (changed === 'permission') h.runtime.stablePermissionModeState.generation++;
     if (changed === 'plan') h.runtime.stablePlanModeState.generation++;
     if (changed === 'instance') h.getSession.mockReturnValue({ ...h.runtime });
-    if (changed === 'account') hostFacts.boundaryPending.mockReturnValue(true);
+    if (changed === 'boundary') hostFacts.boundaryPending.mockReturnValue(true);
+    if (changed === 'owner') hostFacts.getDb.mockReturnValue({});
     if (changed === 'input') h.activeInput.boundary = 'replacement-runtime';
     expect(() => guard()).toThrow('AUTHORIZATION_EXPIRED');
-    await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    const rejection = await taskActionInputGuard('target', queued)!().then(() => null, (error: unknown) => ({ error }));
+    if (outcome === 'delivered') expect(rejection).toBeNull();
+    else expect(rejection && isTaskActionRevoked(rejection.error)).toBe(outcome === 'revoked');
+  });
+
+  // Review on #7969: /clear moves the coordinator's boundary before cleared_at is persisted,
+  // and persisting may fail, so delivery reads that boundary too. A persisted boundary the
+  // coordinator merely loads late (restart) is older than the admission, not a new clear.
+  it.each([
+    { name: 'cleared in memory after admission', dbClearedAt: null, memoryAfter: 2_000, expired: true },
+    { name: 'older persisted boundary loaded late', dbClearedAt: 1_000, memoryAfter: 1_000, expired: false },
+  ])('queued delivery when $name (expired=$expired)', async ({ dbClearedAt, memoryAfter, expired }) => {
+    const h = scheduledFixture();
+    Object.assign(h.caller, { clearedAt: dbClearedAt });
+    const queued = input();
+    await withToolCallAuthority(h.authorize, scheduledSend(), async () => bindTaskActionInput('target', queued));
+    h.activeInput.clearBoundaryMs = memoryAfter;
+    const delivery = expect(taskActionInputGuard('target', queued)!());
+    if (expired) await delivery.rejects.toThrow('AUTHORIZATION_EXPIRED');
+    else await delivery.resolves.toBeUndefined();
+  });
+
+  // Only a proven revocation may destroy a queued message; a failed check keeps it for retry.
+  it.each([
+    [new Error('TASK_ACTION_AUTHORIZATION_EXPIRED'), true],
+    [new Error('TASK_ACTION_AUTHORIZATION_REQUIRED'), true],
+    [new Error('OWNER_SCOPE_CHANGED'), true],
+    [Object.assign(new Error('revoked'), { code: 'GROUP_AUTHORIZATION_REQUIRED' }), true],
+    [Object.assign(new Error('transport'), { code: 'GROUP_AUTHORIZATION_UNAVAILABLE' }), false],
+    [new Error('DbClient not ready'), false],
+  ])('classifies %s as revoked=%s', (error, revoked) => {
+    expect(isTaskActionRevoked(error)).toBe(revoked);
   });
 
   it.each(['permission', 'account', 'turn'] as const)('does not act or prompt if %s changes during review', async changed => {
@@ -478,7 +560,7 @@ describe('Desktop owner input task actions', () => {
   );
 
   it.each(['bypassPermissions', 'auto', 'ask'])(
-    'revokes the %s admission before execution and delayed delivery when live permissions change', async permissionMode => {
+    'revokes the %s admission before execution but keeps its queued message when live permissions change', async permissionMode => {
       const h = desktopFixture('private');
       let current = true;
       h.activeInput.permission = {
@@ -494,7 +576,7 @@ describe('Desktop owner input task actions', () => {
       current = false;
       const effect = vi.fn(async () => 'changed');
       await expect(decision.run(effect)).rejects.toThrow('AUTHORIZATION_EXPIRED');
-      await expect(taskActionInputGuard('target', queued)!()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+      await expect(taskActionInputGuard('target', queued)!()).resolves.toBeUndefined();
       expect(() => syncGuard()).toThrow('AUTHORIZATION_EXPIRED');
       expect(effect).not.toHaveBeenCalled();
     },
@@ -674,6 +756,28 @@ describe('Desktop owner input task actions', () => {
 // Review regressions: caller identity must not erase scoped delegation or mint it.
 // Existing owner-input cases did not exercise automatic continuations. Unit tier.
 describe('Existing execution authority', () => {
+  // Regression: delegation onAccepted must use the Host delivery scope after
+  // source-input rollover. Prior queue-binding tests did not capture this guard.
+  // Minimum: one owner-admitted call + new input key; unit, no real account/IO.
+  it.each(['source-only', 'cleared', 'deleted', 'bot-paused', 'archived'] as const)
+  ('retains delivery scope across source-input rollover while rejecting %s revocation', async changed => {
+    const h = desktopFixture('private');
+    const decision = await h.authorize(call('message_session_task'));
+    if (!decision.ok || !decision.run) throw new Error('missing admission');
+    const guards = await decision.run(async () => ({
+      mutation: captureTaskActionGuard()!, delivery: captureTaskActionDeliveryGuard()!,
+    }));
+    h.activeInput.key = 'next-owner-input';
+    await expect(guards.mutation()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    if (changed === 'cleared') Object.assign(h.caller, { clearedAt: 1 });
+    if (changed === 'deleted') h.caller.status = 'deleted';
+    if (changed === 'bot-paused') h.caller.botStatus = 'paused';
+    if (changed === 'archived') Object.assign(h.caller, { archivedAt: 1 });
+    if (changed === 'source-only') await expect(guards.delivery()).resolves.toBeUndefined();
+    else await expect(guards.delivery()).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
   it('keeps delegated work independent of follow-up enablement, but respects pause/revocation', async () => {
     const h = desktopFixture('automatic');
     const grant = {
@@ -763,17 +867,17 @@ describe('teammate turn principal', () => {
     helper('set_workbench_task_responsibility', { task_id: 'owner-task', responsible: true }),
   ];
 
-  // The 2026-10-22 behavior: Full Access admitted a follow-up wake-up as the owner.
-  it.each(['bypassPermissions', 'auto', 'ask'])('rejects an autonomous turn acting on the owner\'s tasks under %s', async mode => {
+  // Ordinary actions retain the autonomous principal and use the existing permission mode.
+  it.each(['bypassPermissions', 'auto', 'ask'])('uses ordinary permissions without an extra provenance gate under %s', async mode => {
     const h = desktopFixture('automatic');
     live(h, mode);
     for (const request of [...ownerTaskWrites, { ...call('create_worker'), server: 'cindy_orca' as const }]) {
       const effect = vi.fn(async () => 'changed');
       const result = await withToolCallAuthority(h.authorize, request, effect);
-      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
-      expect(effect).not.toHaveBeenCalled();
+      expect(result).toBe('changed');
+      expect(effect).toHaveBeenCalledTimes(1);
     }
-    expect(h.confirm).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled(); // reversible task controls are ordinary work
   });
 
   it('keeps the teammate\'s own scope on its own initiative', async () => {
@@ -785,9 +889,7 @@ describe('teammate turn principal', () => {
     expect(await admitted(helper('continue_workbench_task', { task_id: 'handed', message: 'Carry on' }))).toBe('changed');
     expect(await admitted(helper('set_workbench_task_responsibility', { task_id: 'handed', responsible: false }))).toBe('changed');
     expect(await admitted(helper('set_session_runtime', { model: 'self' }))).toBe('changed');
-    h.entrusted.mockResolvedValue(true);
     expect(await admitted(helper('set_session_runtime', { session_id: 'handed', model: 'next' }))).toBe('changed');
-    expect(h.entrusted).toHaveBeenCalledWith('companion', 'handed');
     h.rows.delegation = { status: 'completed', runSequence: 1, permissionSnapshotJson: '{}' };
     expect(await admitted(helper('message_session_task', { task_id: 'own', message: 'Fill the gap' }))).toBe('changed');
     expect(await admitted(helper('message_session_task', { task_id: 'own', answers: { q: 'a' } }))).toBe('changed');
@@ -795,18 +897,19 @@ describe('teammate turn principal', () => {
     expect(await admitted(helper('send_to_session', { target_session_id: 'own-child', message: 'Fix it' }))).toBe('changed');
     // Permission decisions and resuming a pause stay with the owner, even on its own task.
     for (const args of [{ task_id: 'own', decision: 'approve' }, { task_id: 'own', mode: 'resume' }])
-      expect(JSON.stringify(await admitted(helper('message_session_task', args)))).toContain('NEEDS_OWNER_REQUEST');
+      expect(await admitted(helper('message_session_task', args))).toBe('changed');
+    expect(h.confirm).toHaveBeenCalledTimes(2);
   });
 
-  it('continues its own Orca team from a Worker report, but cannot start a team', async () => {
+  it('uses normal permissions for Orca writes without a second team allowlist', async () => {
     const h = desktopFixture('automatic');
     live(h);
     h.activeInput.orcaSenderSessionId = 'worker-session';
     h.rows.team = { id: 'team' };
     const orca = (tool: string) => ({ ...call(tool), server: 'cindy_orca' as const });
     expect(await withToolCallAuthority(h.authorize, orca('send_to_worker'), async () => 'changed')).toBe('changed');
-    expect(JSON.stringify(await withToolCallAuthority(h.authorize, orca('start_team'), async () => 'changed')))
-      .toContain('NEEDS_OWNER_REQUEST');
+    expect(await withToolCallAuthority(h.authorize, orca('start_team'), async () => 'changed')).toBe('changed');
+    expect(h.confirm).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -817,9 +920,9 @@ describe('teammate turn principal', () => {
     const h = desktopFixture('automatic');
     live(h);
     h.runtime.getCurrentTurnOrigin = () => ({ kind: 'scheduler', scheduleId, runId: 'run' });
-    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
-    if (entrusted) expect(result).toBe('changed');
-    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+    const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => taskActionPrincipal('companion'));
+    expect(result).toBe(entrusted ? 'entrusted' : 'autonomous');
+    expect(h.confirm).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('lets the IM lane requester decide (owner=%s)', async requesterIsOwner => {
@@ -833,35 +936,33 @@ describe('teammate turn principal', () => {
     }));
     const result = await withToolCallAuthority(h.authorize, ownerTaskWrites[0], async () => 'changed');
     if (requesterIsOwner) expect(result).toBe('changed');
-    else expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+    else expect(JSON.stringify(result)).toContain('TASK_ACTION_SOURCE_UNAUTHORIZED');
   });
 
-  // A teammate must not create or fire an owner routine on its own: the next run would be
-  // entrusted, turning its own initiative into a standing grant.
+  // Drafts/non-executing inputs remain ordinary; deletion needs an exact decision.
   it.each(['routine_save', 'routine_run_now', 'routine_delete', 'schedule_set_pre_run_hook'])(
-    'reserves %s for owner or entrusted turns', async tool => {
+    'keeps draft or non-executing %s payloads ordinary except deletion', async tool => {
       const h = desktopFixture('automatic');
       live(h);
-      const request = helper(tool, { name: 'r', prompt: 'Message the owner\'s task', enabled: true });
-      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'saved')))
-        .toContain('NEEDS_OWNER_REQUEST');
+      const request = helper(tool, { name: 'r', prompt: 'Message the owner\'s task', enabled: false });
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
+      expect(h.confirm).toHaveBeenCalledTimes(tool === 'routine_delete' ? 1 : 0);
       h.activeInput.ownerInput = true;
       expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
       expect(await withToolCallAuthority(h.authorize, helper('routine_list', {}), async () => 'listed')).toBe('listed');
     },
   );
 
-  // PR #6936 review: the scheduler surface addresses the same routine rows (and any schedule)
-  // by id. On its own initiative a teammate cannot change, fire, hook or create automations there.
+  // Both tool surfaces must apply the same narrow risk list to the same routine rows.
   it.each(['schedule_update', 'schedule_delete', 'schedule_run_now', 'schedule_set_pre_run_hook',
     'schedule_pause', 'schedule_resume', 'schedule_create', 'routine_save', 'routine_run_now', 'routine_delete'])(
-    'reserves cindy_scheduler %s for owner or entrusted turns', async tool => {
+    'uses the same risk policy for cindy_scheduler %s', async tool => {
       const h = desktopFixture('automatic');
       live(h);
       const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool,
-        args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything' } };
-      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, async () => 'changed')))
-        .toContain('NEEDS_OWNER_REQUEST');
+        args: { id: 'routine-owner-weekly', scheduleId: 'routine-owner-weekly', prompt: 'Merge everything', bindToCurrentSession: true } };
+      expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
+      expect(h.confirm).toHaveBeenCalledTimes(['schedule_delete', 'routine_delete', 'schedule_resume'].includes(tool) ? 1 : 0);
       h.activeInput.ownerInput = true;
       expect(await withToolCallAuthority(h.authorize, request, async () => 'changed')).toBe('changed');
     },
@@ -875,6 +976,510 @@ describe('teammate turn principal', () => {
       expect(await withToolCallAuthority(h.authorize, request, async () => 'read')).toBe('read');
     },
   );
+
+  // 2026-10-29: a missing owner marker must not silently deny ordinary work.
+  // Risk decisions are visible, single-use, and invalidated by a new input.
+  // Production admission + effect; unit tier; minimum input is an autonomous deletion.
+  it('waits for the exact decision, executes once, and rejects a second consumption', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    let decide!: (value: boolean) => void;
+    h.confirm.mockImplementation(() => new Promise(resolve => { decide = resolve; }));
+    const pending = h.authorize(helper('routine_delete', { id: 'test-routine' }));
+    await vi.waitFor(() => expect(h.confirm).toHaveBeenCalledTimes(1));
+    expect(h.confirm).toHaveBeenCalledWith('companion', 'routine_delete',
+      { id: 'test-routine' }, { server: 'cindy_helper', risk: 'remove' });
+    decide(true);
+    const admission = await pending;
+    if (!admission.ok || !admission.run) throw new Error('missing admission');
+    const effect = vi.fn(async () => 'deleted');
+    expect(await admission.run(effect)).toBe('deleted');
+    await expect(admission.run(effect)).rejects.toThrow('AUTHORIZATION_EXPIRED');
+    expect(effect).toHaveBeenCalledTimes(1);
+  });
+
+  // Security review r4409127909: trusted local scheduler commands bypass the
+  // harness approval policy. Production admission must wait before persistence/fire.
+  // Unit tier; a script schedule is the minimum failing input.
+  it.each(['schedule_create', 'schedule_update', 'schedule_run_now'])(
+    'waits for an exact decision before autonomous %s can execute shell commands', async tool => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const definition = { id: 'script', name: 'Command check', prompt: '', useWorktree: false, executionMode: 'script' as const,
+        workingDir: '/tmp/check', scriptConfig: { command: 'printf reviewed', capabilities: [] } };
+      h.schedules.set('script', definition);
+      const args = tool === 'schedule_run_now' ? { id: 'script' } : definition;
+      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool, args };
+      h.confirm.mockResolvedValue(false);
+      const effect = vi.fn(async () => 'executed');
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('USER_CANCELLED');
+      expect(effect).not.toHaveBeenCalled();
+      expect(h.confirm).toHaveBeenCalledWith('companion', tool, args,
+        expect.objectContaining({ server: 'cindy_scheduler', risk: 'command' }));
+      h.confirm.mockResolvedValue(true);
+      expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('executed');
+      expect(effect).toHaveBeenCalledTimes(1);
+      if (tool !== 'schedule_create') expect(h.confirm).toHaveBeenLastCalledWith('companion', tool, args,
+        expect.objectContaining({ details: { schedule: definition } }));
+      h.activeInput.ownerInput = true;
+      h.confirm.mockClear();
+      expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('executed');
+      expect(h.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  // r4409452538: standalone Agent schedules default to Full Access in the runner.
+  // Existing shell-command cases miss an agent prompt creating a more privileged session.
+  // Unit: production admission + effects, default agent mode is the minimum failing input.
+  it.each(['create', 'detach', 'run-now', 'persistent'] as const)(
+    'requires the exact command-capable decision for autonomous Agent schedule %s', async variant => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const definition = { id: 'agent', name: 'Agent work', useWorktree: false, prompt: 'Run the saved work',
+        workingDir: '/work', executionMode: 'agent' as const,
+        ...(variant === 'detach' ? { targetSessionId: 'companion' } : {}) };
+      h.schedules.set('agent', definition);
+      const tool = variant === 'run-now' ? 'schedule_run_now' : variant === 'detach' ? 'schedule_update' : 'schedule_create';
+      const args = variant === 'run-now' ? { id: 'agent', bindToCurrentSession: true } : variant === 'detach'
+        ? { id: 'agent', targetSessionId: null } : { prompt: definition.prompt, workingDir: '/work',
+          ...(variant === 'persistent' ? { bindToCurrentSession: true, persistentSession: true } : {}) };
+      const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool, args };
+      const effect = vi.fn(async () => 'started');
+      h.confirm.mockResolvedValue(false);
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('USER_CANCELLED');
+      expect(effect).not.toHaveBeenCalled();
+      expect(h.confirm).toHaveBeenCalledWith('companion', tool, args,
+        expect.objectContaining({ risk: 'command', details: expect.objectContaining({
+          execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' },
+        }) }));
+      h.confirm.mockResolvedValue(true);
+      expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('started');
+      expect(effect).toHaveBeenCalledTimes(1);
+      h.confirm.mockClear();
+      h.activeInput.ownerInput = true;
+      expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('started');
+      expect(h.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  // #7912: the ordinary cross-device route remains available, but a remote
+  // schedule that starts an independent Full Access Agent is the same command
+  // risk as the local route and must show the same visible decision.
+  it('applies the command decision to remote independent Agent schedules without blacklisting ordinary edits', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const definition = { id: 'remote-agent', name: 'Remote agent', useWorktree: false,
+      prompt: 'Run the saved work', executionMode: 'agent' as const, workingDir: '/remote/work' };
+    h.schedules.set(definition.id, definition);
+    const effect = vi.fn(async () => 'started');
+    const runRequest = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_run_now', args: { id: definition.id, device: 'remote-mac' } };
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, runRequest, effect))).toContain('USER_CANCELLED');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', runRequest.tool, runRequest.args,
+      expect.objectContaining({ risk: 'command', details: expect.objectContaining({
+        schedule: expect.objectContaining({ id: definition.id, workingDir: '/remote/work' }),
+        execution: { mode: 'agent', newTaskPermissionMode: 'bypassPermissions' },
+      }) }));
+
+    h.confirm.mockClear();
+    const metadataEdit = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_update', args: { id: definition.id, device: 'remote-mac', name: 'Renamed' } };
+    expect(await withToolCallAuthority(h.authorize, metadataEdit, effect)).toBe('started');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the remote schedule definition cannot be read', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.getScheduleDefinition.mockRejectedValueOnce(new Error('SCHEDULE_DEFINITION_UNAVAILABLE'));
+    const effect = vi.fn(async () => 'started');
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const,
+      tool: 'schedule_run_now', args: { id: 'remote-agent', device: 'remote-mac' } };
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('CAPABILITY_NOT_AVAILABLE');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  // r4409663577: helper create starts Full Access without a directory override.
+  // Unit, real admission/effect: ordinary task sends must not mint silent authority.
+  it('confirms a new Full Access handoff without changing existing sends or inherited-permission creates', async () => {
+    const h = desktopFixture('automatic');
+    live(h, 'auto');
+    const request = helper('send_to_session', { message: 'Only reply to the test' });
+    const create = vi.fn(async () => 'created');
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, create))).toContain('USER_CANCELLED');
+    expect(create).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      { server: 'cindy_helper', risk: 'command', details: { execution: {
+        mode: 'agent', newTaskPermissionMode: 'bypassPermissions', workingDir: '/companion',
+      } } });
+    h.confirm.mockResolvedValue(true);
+    expect(await withToolCallAuthority(h.authorize, request, create)).toBe('created');
+    expect(create).toHaveBeenCalledTimes(1);
+    h.confirm.mockClear();
+    for (const args of [{ target_session_id: 'existing', message: 'Reply' },
+      { working_dir: '/other', message: 'Reply' }])
+      expect(await withToolCallAuthority(h.authorize, helper('send_to_session', args), create)).toBe('created');
+    expect(h.confirm).not.toHaveBeenCalled();
+    h.activeInput.ownerInput = true;
+    expect(await withToolCallAuthority(h.authorize, request, create)).toBe('created');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  // r4409987073: turning off isolation changes where a Full Access Agent writes.
+  // Unit, production admission: deny that change and expire a previously reviewed run.
+  it('confirms changed worktree isolation and expires a run when isolation changes', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const definition = { id: 'agent', name: 'Isolated', prompt: 'Owner work',
+      executionMode: 'agent' as const, workingDir: '/work', useWorktree: true };
+    h.schedules.set('agent', definition);
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_update',
+      args: { id: 'agent', useWorktree: false } };
+    const effect = vi.fn(async () => 'changed');
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('USER_CANCELLED');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      expect.objectContaining({ risk: 'command', details: expect.objectContaining({
+        schedule: expect.objectContaining({ useWorktree: true }),
+      }) }));
+    h.confirm.mockImplementation(async () => { definition.useWorktree = false; return true; });
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize,
+      { ...request, tool: 'schedule_run_now', args: { id: 'agent' } }, effect))).toContain('AUTHORIZATION_EXPIRED');
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  // r4409828449: resume previously displayed only an ID, not the saved command.
+  // Unit, production admission/effect: show the definition and reject replacement.
+  it('shows and binds the saved script before resuming a paused schedule', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const definition = { id: 'paused', name: 'Paused command', useWorktree: false, prompt: '', executionMode: 'script' as const,
+      workingDir: '/work', scriptConfig: { command: 'printf reviewed', capabilities: [] } };
+    h.schedules.set('paused', definition);
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_resume', args: { id: 'paused' } };
+    const resume = vi.fn(async () => 'resumed');
+    h.confirm.mockImplementation(async () => { definition.scriptConfig.command = 'printf replacement'; return true; });
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, resume))).toContain('AUTHORIZATION_EXPIRED');
+    expect(resume).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      { server: 'cindy_scheduler', risk: 'command', details: { schedule: expect.objectContaining({
+        workingDir: '/work', scriptConfig: { command: 'printf reviewed', capabilities: [] },
+      }) } });
+    h.confirm.mockResolvedValue(true);
+    expect(await withToolCallAuthority(h.authorize, request, resume)).toBe('resumed');
+    expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  // r4409808139: the runner inherits the bound session's current hook directory.
+  // Unit, production admission: changing that effective directory invalidates approval.
+  it('binds manual hook execution to its resolved directory', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const definition = { id: 'bound', name: 'Bound hook', useWorktree: false, prompt: 'Owner work', executionMode: 'agent' as const,
+      targetSessionId: 'existing', workingDir: '/stale', preRunWorkingDir: '/actual',
+      preRunHook: { command: 'node relative.mjs' } };
+    h.schedules.set('bound', definition);
+    h.confirm.mockImplementation(async () => { definition.preRunWorkingDir = '/replacement'; return true; });
+    const execute = vi.fn(async () => 'executed');
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_run_now', args: { id: 'bound' } };
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, execute))).toContain('AUTHORIZATION_EXPIRED');
+    expect(execute).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      expect.objectContaining({ details: { schedule: expect.objectContaining({ preRunWorkingDir: '/actual' }) } }));
+  });
+
+  it('keeps an approved independent Agent schedule metadata edit ordinary', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.schedules.set('agent', { id: 'agent', name: 'Agent work', useWorktree: false, prompt: 'Saved owner instruction',
+      executionMode: 'agent', workingDir: '/work' });
+    const request = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_update',
+      args: { id: 'agent', name: 'Renamed', cronExpr: '0 9 * * *' } };
+    expect(await withToolCallAuthority(h.authorize, request, async () => 'saved')).toBe('saved');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(['script', 'agent'] as const)('expires a %s command decision when the saved schedule changes', async mode => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.schedules.set('script', { id: 'script', name: 'Command check', prompt: '', useWorktree: false, executionMode: mode,
+      ...(mode === 'script' ? { scriptConfig: { command: 'printf reviewed', capabilities: [] } } : { prompt: 'Reviewed prompt' }) });
+    h.confirm.mockImplementation(async () => {
+      if (mode === 'script') h.schedules.get('script')!.scriptConfig!.command = 'printf replacement';
+      else h.schedules.get('script')!.prompt = 'Replacement prompt';
+      return true;
+    });
+    const effect = vi.fn(async () => 'executed');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize,
+      { sessionId: 'companion', server: 'cindy_scheduler', tool: 'schedule_run_now', args: { id: 'script' } },
+      effect))).toContain('AUTHORIZATION_EXPIRED');
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  it('recognizes raw pre-run hooks without prompting for ordinary prompt schedules', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const call = (tool: string, args: Record<string, unknown>) => withToolCallAuthority(h.authorize,
+      { sessionId: 'companion', server: 'cindy_scheduler', tool, args }, async () => 'done');
+    await call('schedule_create', { prompt: 'Check progress', preRunHook: { command: 'node check.mjs' } });
+    await call('schedule_set_pre_run_hook', { script: 'process.exit(2)' });
+    expect(h.confirm).toHaveBeenCalledTimes(2);
+    h.confirm.mockClear();
+    await call('schedule_create', { prompt: 'Remind me tomorrow', bindToCurrentSession: true });
+    h.schedules.set('prompt', { id: 'prompt', name: 'Reminder', useWorktree: false, prompt: 'Remind me tomorrow', executionMode: 'agent', targetSessionId: 'companion' });
+    await call('schedule_update', { id: 'prompt', name: 'Updated reminder' });
+    await call('schedule_run_now', { id: 'prompt' });
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  // r4409346213: the helper forwards to the same installing/self-testing handler.
+  // Unit tier: a valid helper script must wait before any installer effect.
+  it('requires the same command decision for the helper hook installer', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const request = helper('schedule_set_pre_run_hook', { script: 'process.exit(2)' });
+    const install = vi.fn(async () => 'installed');
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, install))).toContain('USER_CANCELLED');
+    expect(install).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      { server: 'cindy_helper', risk: 'command', details: { installation: { workingDir: '/companion' } } });
+    h.confirm.mockResolvedValue(true);
+    expect(await withToolCallAuthority(h.authorize, request, install)).toBe('installed');
+    expect(install).toHaveBeenCalledTimes(1);
+    h.confirm.mockClear();
+    h.activeInput.ownerInput = true;
+    expect(await withToolCallAuthority(h.authorize, request, install)).toBe('installed');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  // r4409429594: installer inherits mutable target state after its card.
+  // Unit: production admission must show the target and reject a changed directory/path.
+  it('binds the scheduler hook installer decision to its actual schedule target', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const target = { id: 'bound', name: 'Bound check', useWorktree: false, prompt: 'Bound owner instruction', executionMode: 'agent' as const,
+      targetSessionId: 'child', workingDir: '/schedule', preRunHook: { command: 'node old.mjs' },
+      hookInstallation: { workingDir: '/session', fallbackDir: '/fallback' } };
+    h.schedules.set('bound', target);
+    const request = { ...helper('schedule_set_pre_run_hook', { scheduleId: 'bound', script: 'process.exit(2)' }), server: 'cindy_scheduler' as const };
+    const install = vi.fn(async () => 'installed');
+    h.confirm.mockImplementation(async () => {
+      target.hookInstallation.workingDir = '/replacement';
+      target.preRunHook.command = 'node replacement.mjs';
+      return true;
+    });
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, install)))
+      .toContain('AUTHORIZATION_EXPIRED');
+    expect(install).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      expect.objectContaining({ details: { schedule: expect.objectContaining({
+        targetSessionId: 'child', preRunHook: { command: 'node old.mjs' },
+        hookInstallation: { workingDir: '/session', fallbackDir: '/fallback' },
+      }) } }));
+    h.confirm.mockResolvedValue(true);
+    expect(await withToolCallAuthority(h.authorize, request, install)).toBe('installed');
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
+  // Helper deliberately accepts no scheduleId/workingDir: its actual target is the caller workspace.
+  it('binds the helper installation directory without granting a schedule target', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const request = helper('schedule_set_pre_run_hook', { script: 'process.exit(2)' });
+    const install = vi.fn(async () => 'installed');
+    h.confirm.mockImplementation(async () => {
+      h.workDirs.set('companion', '/replacement');
+      return true;
+    });
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, install)))
+      .toContain('AUTHORIZATION_EXPIRED');
+    expect(install).not.toHaveBeenCalled();
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+      { server: 'cindy_helper', risk: 'command', details: { installation: { workingDir: '/companion' } } });
+    h.confirm.mockResolvedValue(true);
+    expect(await withToolCallAuthority(h.authorize, request, install)).toBe('installed');
+    expect(install).toHaveBeenCalledTimes(1);
+  });
+
+  // r4409429587: ID-only manual execution runs the saved shell hook, not just a prompt.
+  // Existing save tests did not cover an enabled rule's command. Unit, real admission/effect.
+  it.each(['cindy_helper', 'cindy_scheduler'] as const)(
+    'shows and confirms the saved routine command before %s manual execution', async server => {
+      const h = desktopFixture('automatic');
+      live(h);
+      h.routines.set('command', { enabled: true, revision: 3, prompt: 'Reviewed instructions', preRunCommand: 'node check.mjs' });
+      h.workDirs.set('routine-command', '/reviewed');
+      const request = { ...helper('routine_run_now', { botId: 'bot', id: 'command' }), server };
+      const execute = vi.fn(async () => taskActionRoutineRevision('bot', 'command'));
+      h.confirm.mockResolvedValue(false);
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, execute))).toContain('USER_CANCELLED');
+      expect(execute).not.toHaveBeenCalled();
+      expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args,
+        expect.objectContaining({ risk: 'command', details: { routine: expect.objectContaining({
+          id: 'command', preRunCommand: 'node check.mjs', revision: 3,
+        }), execution: { targetSessionId: 'routine-command', workingDir: '/reviewed' } } }));
+      // r4412911528: rule revision is unchanged but the reused lane moves.
+      h.confirm.mockImplementation(async () => { h.workDirs.set('routine-command', '/replacement'); return true; });
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, execute))).toContain('AUTHORIZATION_EXPIRED');
+      expect(execute).not.toHaveBeenCalled();
+      h.confirm.mockResolvedValue(true);
+      expect(await withToolCallAuthority(h.authorize, request, execute)).toBe(3);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(h.confirm).toHaveBeenLastCalledWith('companion', request.tool, request.args,
+        expect.objectContaining({ details: expect.objectContaining({ execution: {
+          targetSessionId: 'routine-command', workingDir: '/replacement',
+        } }) }));
+    },
+  );
+
+  // Security r4409367066: saving instructions must not manufacture a standing
+  // owner grant for the next routine turn. Unit, production admission + effect.
+  it.each(['cindy_helper', 'cindy_scheduler'] as const)(
+    'requires an owner decision to mint or rewrite active routine instructions through %s', async server => {
+      const h = desktopFixture('automatic');
+      live(h);
+      const call = (args: Record<string, unknown>, effect = vi.fn(async () => 'saved')) =>
+        withToolCallAuthority(h.authorize, { ...helper('routine_save', args), server }, effect);
+      h.confirm.mockResolvedValue(false);
+      const create = vi.fn(async () => 'saved');
+      expect(JSON.stringify(await call({ botId: 'bot', prompt: 'Run my new instructions', enabled: true }, create)))
+        .toContain('USER_CANCELLED');
+      expect(create).not.toHaveBeenCalled();
+      expect(h.confirm).toHaveBeenCalledWith('companion', 'routine_save', expect.anything(),
+        { server, risk: 'authority' });
+      h.confirm.mockClear();
+      h.routines.set('standing', { enabled: true, revision: 1, prompt: 'Owner standing instructions' });
+      expect(await call({ botId: 'bot', id: 'standing', enabled: true, prompt: 'Owner standing instructions', name: 'Renamed' }))
+        .toBe('saved');
+      expect(await call({ botId: 'bot', enabled: false, prompt: 'Unapproved draft' })).toBe('saved');
+      expect(h.confirm).not.toHaveBeenCalled();
+      const rewrite = vi.fn(async () => 'saved');
+      expect(JSON.stringify(await call({ botId: 'bot', id: 'standing', enabled: true, prompt: 'Replacement instructions' }, rewrite)))
+        .toContain('USER_CANCELLED');
+      expect(rewrite).not.toHaveBeenCalled();
+      h.confirm.mockResolvedValue(true);
+      expect(await call({ botId: 'bot', prompt: 'Reviewed standing instructions', enabled: true })).toBe('saved');
+      h.confirm.mockClear();
+      h.activeInput.ownerInput = true;
+      expect(await call({ botId: 'bot', prompt: 'Owner explicit instructions', enabled: true })).toBe('saved');
+      expect(h.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['cindy_helper', 'cindy_scheduler'] as const)(
+    'does not turn a disabled draft into an entrusted run through %s without approval', async server => {
+      const h = desktopFixture('automatic');
+      live(h);
+      h.routines.set('draft', { enabled: false, revision: 2, prompt: 'Unapproved instructions' });
+      const request = { ...helper('routine_run_now', { botId: 'bot', id: 'draft' }), server };
+      const enqueue = vi.fn(async () => taskActionRoutineRevision('bot', 'draft'));
+      h.confirm.mockResolvedValue(false);
+      expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, enqueue))).toContain('USER_CANCELLED');
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(h.confirm).toHaveBeenCalledWith('companion', 'routine_run_now', request.args,
+        expect.objectContaining({ server, risk: 'resume' }));
+      h.confirm.mockResolvedValue(true);
+      expect(await withToolCallAuthority(h.authorize, request, enqueue)).toBe(2);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['cindy_helper', 'cindy_scheduler'] as const)('requires a command decision only for a changed routine hook through %s', async server => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.routines.set('standing', { enabled: true, revision: 1, prompt: 'Owner instructions', preRunCommand: 'node owner.mjs' });
+    const hook = { command: 'node owner.mjs' };
+    const request = { ...helper('routine_save', { botId: 'bot', id: 'standing', enabled: true,
+      prompt: 'Owner instructions', preRunHook: hook }), server };
+    const effect = vi.fn(async () => 'saved');
+    expect(await withToolCallAuthority(h.authorize, request, effect)).toBe('saved');
+    expect(h.confirm).not.toHaveBeenCalled();
+    hook.command = 'node replacement.mjs';
+    h.confirm.mockResolvedValue(false);
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, request, effect))).toContain('USER_CANCELLED');
+    expect(effect).toHaveBeenCalledTimes(1);
+    expect(h.confirm).toHaveBeenCalledWith('companion', request.tool, request.args, { server, risk: 'command' });
+  });
+
+  // Review #7782: approval must describe and bind the child's exact request, not
+  // whichever request is current after the parent card is answered. Unit tier.
+  it.each(['request-id', 'arguments'] as const)('expires a permission answer when child %s changes', async change => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.confirm.mockImplementation(async () => {
+      if (change === 'request-id') h.permissionRequest.requestId = 'permission-2';
+      else h.permissionRequest.input.command = 'echo replacement';
+      return true;
+    });
+    const effect = vi.fn(async () => 'approved');
+    const result = await withToolCallAuthority(h.authorize,
+      helper('message_session_task', { task_id: 'own', decision: 'approve' }), effect);
+    expect(h.confirm).toHaveBeenCalledWith('companion', 'message_session_task',
+      { task_id: 'own', decision: 'approve' }, expect.objectContaining({ risk: 'permission', details: {
+        task: { id: 'own', title: 'Child task' },
+        request: { requestId: 'permission-1', kind: 'permission', toolName: 'bash', input: { command: 'echo reviewed' } },
+      } }));
+    expect(JSON.stringify(result)).toContain('AUTHORIZATION_EXPIRED');
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  // Same save API on helper and scheduler: only an existing disabled->enabled
+  // transition is a resume; ordinary creation/editing remains unchanged.
+  // r4410276099: omitted hook parameters retain the saved command, which must be shown.
+  it.each(['cindy_helper', 'cindy_scheduler'] as const)('asks for routine restoration through %s', async server => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.routines.set('saved', { enabled: false, revision: 3, preRunCommand: 'node saved-check.mjs' });
+    const request = { ...helper('routine_save', { botId: 'bot', id: 'saved', enabled: true }), server };
+    expect(await withToolCallAuthority(h.authorize, request,
+      async () => taskActionRoutineRevision('bot', 'saved'))).toBe(3);
+    expect(h.confirm).toHaveBeenCalledWith('companion', 'routine_save', request.args,
+      { server, risk: 'resume', details: { routine: { id: 'saved', enabled: false, revision: 3,
+        preRunCommand: 'node saved-check.mjs' } } });
+    h.confirm.mockClear();
+    h.routines.set('saved', { enabled: true, revision: 4 });
+    expect(await withToolCallAuthority(h.authorize, request, async () => 'edited')).toBe('edited');
+    expect(await withToolCallAuthority(h.authorize,
+      { ...request, args: { botId: 'bot', enabled: true } }, async () => 'created')).toBe('created');
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(['routine_save', 'routine_run_now'])('does not execute %s after its routine changes during confirmation', async tool => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.routines.set('saved', { enabled: false, revision: 1 });
+    h.confirm.mockImplementation(async () => {
+      h.routines.set('saved', { enabled: false, revision: 2 });
+      return true;
+    });
+    const effect = vi.fn(async () => 'enabled');
+    const result = await withToolCallAuthority(h.authorize,
+      helper(tool, { id: 'saved', enabled: true }), effect);
+    expect(JSON.stringify(result)).toContain('AUTHORIZATION_EXPIRED');
+    expect(effect).not.toHaveBeenCalled();
+  });
+
+  it.each(['deny', 'input-changed', 'permission-changed'] as const)(
+    'does not execute after confirmation %s', async change => {
+      const h = desktopFixture('automatic');
+      live(h);
+      h.confirm.mockImplementation(async () => {
+        if (change === 'input-changed') h.activeInput.key = 'new-input';
+        if (change === 'permission-changed') h.activeInput.permission!.isCurrent = () => false;
+        return change !== 'deny';
+      });
+      const effect = vi.fn(async () => 'deleted');
+      const result = await withToolCallAuthority(h.authorize,
+        helper('routine_delete', { id: 'test-routine' }), effect);
+      expect(JSON.stringify(result)).toContain(change === 'deny' ? 'USER_CANCELLED' : 'AUTHORIZATION_EXPIRED');
+      expect(effect).not.toHaveBeenCalled();
+    });
 
   it('keeps the owner principal through an automatic resume of the owner\'s input', async () => {
     const h = desktopFixture('automatic');
@@ -934,7 +1539,7 @@ describe('independent Desktop tool invocation', () => {
     const effect = vi.fn(async () => 'sent');
     await withToolCallAuthority(outer.authorize, call('start_session_task'), async () => {
       const result = await withToolCallAuthority(h.authorize, call('send_to_session'), effect);
-      expect(JSON.stringify(result)).toContain('NEEDS_OWNER_REQUEST');
+      expect(JSON.stringify(result)).toContain('TASK_ACTION_AUTHORIZATION_REQUIRED');
       expect(effect).not.toHaveBeenCalled();
       expect(approvedTaskDelegation('companion')).toBeDefined();
     });

@@ -154,13 +154,16 @@ describe('MacAgentIslandNativeHost', () => {
     const host = new MacAgentIslandNativeHost(createOptions());
 
     expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    expect(host.available).toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.spawn).toHaveBeenCalledTimes(1);
 
     (children[0].stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
     await vi.advanceTimersByTimeAsync(0);
+    expect(host.available).toBe(true);
 
     children[0].stdin.emit('error', new Error('write EPIPE'));
+    expect(host.available).toBe(false);
     expect(children[0].kill).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(999);
     expect(h.spawn).toHaveBeenCalledTimes(1);

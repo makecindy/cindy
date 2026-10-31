@@ -16,6 +16,9 @@ import zhCN from '../../../i18n/locales/zh-CN/common.json';
 import zhTW from '../../../i18n/locales/zh-TW/common.json';
 
 const invoiceLocales = { en, ja, ko, 'zh-CN': zhCN, 'zh-TW': zhTW };
+// The page formats period ends in the machine's local time zone. Build the instants that
+// tests read back as a calendar date from local noon, so the date holds in every zone.
+const localNoon = (year: number, month: number, day: number) => new Date(year, month - 1, day, 12).toISOString();
 
 const i18n = createInstance();
 void i18n.init({
@@ -492,7 +495,7 @@ describe('BillingPage remote catalog rendering', () => {
         subscriptionId: 'subscription_fixture',
         status: 'ACTIVE' as const,
         currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
-        currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+        currentPeriodEndAt: localNoon(2026, 8, 1),
         entitlementValidUntil: '2026-08-02T00:00:00.000Z',
         cancelAtPeriodEnd: false,
         effectivePlan: {
@@ -2247,7 +2250,7 @@ describe('BillingPage plan change', () => {
     const billing = install(billingMocks());
     billing.cancelCurrentSubscription.mockResolvedValue({
       ...activeSubscription(),
-      currentPeriodEndAt: '2026-09-01T00:00:00.000Z',
+      currentPeriodEndAt: localNoon(2026, 9, 1),
       cancelAtPeriodEnd: true,
     });
     uiMocks.confirm.mockResolvedValueOnce(true);

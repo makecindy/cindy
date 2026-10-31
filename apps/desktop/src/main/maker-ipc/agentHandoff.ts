@@ -66,11 +66,12 @@ export interface BuildHandoffOptions {
    * 会话过期等不可检测场景),增量交接也保有全局工作现场,不至于失明。
    */
   workStateMessages?: HandoffSourceMessage[];
-  /** 图片历史恢复要保留工具结果摘要，不能把调用记录误当作已经成功执行。 */
+  /** 默认保留有界、带调用关联的文本结果；显式 false 可省略。调用记录不代表成功。 */
   includeToolResults?: boolean;
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
-   * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
+   * 上下文；message-rewind 表示回退/编辑的目标之前没有可续接的 Claude 回复，
+   * 只能换全新原生会话并带上保留下来的历史；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
    * model-window-switch 表示切到更小模型前主动换窗；pi-prompt-timeout 表示原生会话
    * 对 prompt 无响应后用户重试换窗;idle-gap 表示伙伴对话空闲足够久之后的下一条消息
    * 主动换干净原生会话,免得老话题带偏新话题。
@@ -78,6 +79,7 @@ export interface BuildHandoffOptions {
   reason?:
     | 'agent-switch'
     | 'message-deletion'
+    | 'message-rewind'
     | 'context-overflow'
     | 'model-window-switch'
     | 'pi-prompt-timeout'
@@ -155,6 +157,15 @@ const COMMAND_TOOL_NAMES = new Set(['Bash', 'shell', 'exec_command', 'local_shel
 function truncate(text: string, cap: number): string {
   if (text.length <= cap) return text;
   return `${text.slice(0, cap)}…(truncated)`;
+}
+
+/** Preserve both the request/setup and the final correction/outcome within the same budget. */
+function excerpt(text: string, cap: number): string {
+  if (text.length <= cap) return text;
+  const marker = '\n…(middle omitted)…\n';
+  if (cap <= marker.length) return text.slice(0, cap);
+  const head = Math.ceil((cap - marker.length) / 2);
+  return text.slice(0, head) + marker + text.slice(-(cap - marker.length - head));
 }
 
 /** 折叠换行成单行(提要区用)。 */
@@ -489,7 +500,7 @@ function imContextForHandoff(message: HandoffSourceMessage): string[] {
 }
 
 /** 把消息流按 user 行切成轮次。首个 user 行之前的孤儿行并入首轮 detail。 */
-function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false): Turn[] {
+function splitTurns(messages: HandoffSourceMessage[], includeToolResults = true): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
   for (const msg of messages) {
@@ -516,7 +527,7 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
           const groupSource = readMessageSourceGroup(parseJsonObjectString(msg.agentMeta))
             ? describeHandoffUserSource(msg) : null;
           const label = groupSource ? `[Assistant · ${groupSource}]` : '[Assistant]';
-          current.detailLines.push(`${label}\n${truncate(text, RECENT_TEXT_CAP)}`);
+          current.detailLines.push(`${label}\n${excerpt(text, RECENT_TEXT_CAP)}`);
           current.lastAssistantText = groupSource ? `${label} ${text}` : text;
         }
         break;
@@ -531,7 +542,7 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
           inputDigest = '';
         }
         const id = includeToolResults ? toolUseIdOf(msg, c) : '';
-        current.detailLines.push(`[Tool] ${name}${id ? ` (id=${id})` : ''}${inputDigest ? `: ${truncate(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
+        current.detailLines.push(`[Tool] ${name}${id ? ` (id=${id})` : ''}${inputDigest ? `: ${excerpt(inputDigest, TOOL_INPUT_CAP)}` : ''}`);
         break;
       }
       case 'tool_result': {
@@ -543,7 +554,7 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
         const text = toolResultText(c?.fullText ?? c?.output ?? c?.content ?? msg.content)
           .replace(/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g, '[image omitted]');
         const status = c?.isError === true ? 'failed' : 'recorded; verify outcome from result';
-        current.detailLines.push(`[Tool result${id ? ` id=${id}` : ''}; ${status}]\n${truncate(text || '(no text result retained)', 1000)}`);
+        current.detailLines.push(`[Tool result${id ? ` id=${id}` : ''}; ${status}]\n${excerpt(text || '(no text result retained)', 1000)}`);
         break;
       }
       case 'error': {
@@ -570,7 +581,7 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
 function collapseDetailLines(lines: string[]): string[] {
   const totalChars = lines.reduce((sum, line) => sum + line.length + 1, 0);
   const normalized = totalChars > DETAIL_LINES_CHAR_BUDGET
-    ? lines.map((line) => truncate(line, DETAIL_LINE_COMPACT_CAP))
+    ? lines.map((line) => excerpt(line, DETAIL_LINE_COMPACT_CAP))
     : lines;
   const kept = DETAIL_LINES_EDGE_CAP * 2;
   if (normalized.length <= kept) return normalized;
@@ -612,6 +623,7 @@ const FORK_TERMINATOR = "== End of fork note; the user's new message follows =="
 function isRebuildReason(reason: BuildHandoffOptions['reason']): boolean {
   return (
     reason === 'message-deletion' ||
+    reason === 'message-rewind' ||
     reason === 'context-overflow' ||
     reason === 'model-window-switch' ||
     reason === 'pi-prompt-timeout' ||
@@ -718,7 +730,15 @@ function capPreservingTerminator(text: string, opts: BuildHandoffOptions): strin
   const separator = '\n\n';
   const room = HANDOFF_HARD_CAP - tail.length - separator.length;
   if (room <= 0) return tail.slice(0, HANDOFF_HARD_CAP);
-  return `${body.slice(0, room)}${separator}${tail}`;
+  // The latest request and outcome outrank the old ledger/index. Previously slicing the
+  // prefix could discard the entire recent conversation when the working-memory tail grew.
+  const recentAt = Math.max(body.lastIndexOf('== Recent conversation =='), body.lastIndexOf('== Conversation while you were away =='));
+  if (recentAt >= 0 && room > 1000) {
+    const prefix = excerpt(body.slice(0, recentAt).trimEnd(), Math.min(3000, Math.floor(room / 3)));
+    const recent = excerpt(body.slice(recentAt), room - prefix.length - separator.length);
+    return `${prefix}${separator}${recent}${separator}${tail}`;
+  }
+  return `${excerpt(body, room)}${separator}${tail}`;
 }
 
 function assembleHandoffText(
@@ -748,6 +768,10 @@ function assembleHandoffText(
         : opts.reason === 'native-session-recovery'
           ? `The previous native session history could not be safely transferred, so Cindy started a fresh native session in the same task. ` +
             `The original conversation remains available through the history retrieval tools. Use the handoff below to continue; do not repeat completed actions. `
+        : opts.reason === 'message-rewind'
+          ? `The user rewound or edited a message in this conversation, so Cindy started a fresh native session in the same task. ` +
+            `Below is the conversation before that point; user messages without a reply there were stopped by the user before any answer. ` +
+            `Treat only these records as the prior conversation. `
         : opts.reason === 'pi-prompt-timeout'
           ? `The previous native agent session stopped responding to prompts, so Cindy started a fresh native session in the same task. ` +
             `Below is the valid conversation history before the unresponsive turn; treat only these records as the prior conversation, ` +
@@ -817,10 +841,10 @@ function assembleHandoffText(
     const lines: string[] = [];
     for (const t of earlier) {
       if (t.userText) {
-        lines.push(`- User${t.userSource ? ` · ${t.userSource}` : ''}: ${truncate(oneLine(t.userText), DIGEST_LINE_CAP)}`);
+        lines.push(`- User${t.userSource ? ` · ${t.userSource}` : ''}: ${oneLine(excerpt(oneLine(t.userText), DIGEST_LINE_CAP))}`);
       }
       if (t.lastAssistantText) {
-        lines.push(`  Reply: ${truncate(oneLine(t.lastAssistantText), DIGEST_LINE_CAP)}`);
+        lines.push(`  Reply: ${oneLine(excerpt(oneLine(t.lastAssistantText), DIGEST_LINE_CAP))}`);
       }
     }
     // 预算内保留最新的提要行,最旧的先丢
@@ -848,7 +872,7 @@ function assembleHandoffText(
     for (const t of recent) {
       const parts: string[] = [];
       if (t.userText) {
-        parts.push(`[User${t.userSource ? ` · ${t.userSource}` : ''}]\n${truncate(t.userText, RECENT_TEXT_CAP)}`);
+        parts.push(`[User${t.userSource ? ` · ${t.userSource}` : ''}]\n${excerpt(t.userText, RECENT_TEXT_CAP)}`);
       }
       parts.push(...collapseDetailLines(t.detailLines));
       if (parts.length > 0) blocks.push(parts.join('\n'));

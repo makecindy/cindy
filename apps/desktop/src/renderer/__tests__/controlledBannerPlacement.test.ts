@@ -37,9 +37,9 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain('rightLeadingSlot={');
     expect(sessionViewSource).toContain('hasControlledBanner && controlledBannerCollapsed ? (');
     // 伙伴与普通任务共用 RunningStatusBar；折叠呼吸灯随 token 元数据一起显示。
-    // Suppression/independent collapsed indicator behavior is rendered through
-    // RunningStatusBar in runningStatusBarSuppression.test.tsx. Its retained
-    // exit no longer uses an outer conditional mount.
+    expect(sessionViewSource).toContain(
+      '{!pendingPlanReview || (hasControlledBanner && controlledBannerCollapsed) ? (',
+    );
     expect(sessionViewSource).not.toContain('<BotWorkingStatus');
     expect(sessionViewSource).toContain('suppressContent={Boolean(pendingPlanReview)}');
     expect(sessionViewSource).toContain(
@@ -57,8 +57,9 @@ describe('controlled banner placement', () => {
     expect(sessionViewSource).toContain(
       'const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;',
     );
-    // The same production render test verifies no row remains after suppression
-    // without an indicator, while allowing the occupied space to close first.
+    expect(sessionViewSource).toContain(
+      'if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;',
+    );
     expect(controlledBannerSource).toContain("placement?: 'floating' | 'inline' | 'composer';");
     expect(controlledBannerSource).toContain(
       'className="pointer-events-auto flex min-w-0 max-w-full shrink justify-end"',

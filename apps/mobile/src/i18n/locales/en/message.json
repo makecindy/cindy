@@ -9,6 +9,8 @@
     }
   },
   "renderer": {
+    "sourceLocalApp": "Sent by local app “{{name}}”",
+    "sourceLocalAppId": "App ID: {{id}}",
     "failedSamplingAttempt": "This reply did not complete. Its content is for reference only.",
     "moreActions": "More message actions",
     "reply": "Reply",
@@ -104,6 +106,7 @@
     "subagentSummary": "Subagent summary",
     "agentSwitchLabel": "Switched from {{from}} to {{to}}",
     "agentSwitchViewHandoff": "{{label}}, view handoff",
+    "sessionFallbackPill": "Continued from summary",
     "sessionResumedPill": "Resumed original session",
     "handoffContentDesc": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
     "handoffContentDescEnglishSource": "Handoff — context summary sent to the new engine when switching (not part of the chat transcript; shown only here)",
@@ -417,8 +420,26 @@
     "sent": "Submitted",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
+    "downloadVideo": "Download video",
     "openVideoSource": "Open original video",
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."
+  },
+  "usageCost": {
+    "title": "Cost details",
+    "conversation": "Conversation",
+    "additional": "Additional fees",
+    "unknownModel": "Model not recorded",
+    "estimate": "Estimated value",
+    "charged": "Usage charge",
+    "loading": "Loading details…",
+    "unavailable": "Details are unavailable for this record.",
+    "explanation": "Grouped by model and channel. Subscription value is an estimate, not an extra charge. Only recorded costs are included; older records may have incomplete details.",
+    "source": {
+      "subscription": "Subscription",
+      "cindy-ai": "Cindy AI",
+      "provider": "API provider",
+      "unknown": "Channel not recorded"
+    }
   }
 }

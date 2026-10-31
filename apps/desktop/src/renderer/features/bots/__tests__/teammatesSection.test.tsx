@@ -322,7 +322,7 @@ describe('teammate host labels', () => {
 
     mocks.remoteBots = mocks.remoteBots.map((bot) => ({ ...bot, online: false, deviceName: ' ' }));
     view.rerender(<TeammatesSection />);
-    expect(screen.getByText('bots.remote.offline · remote-device')).toBeTruthy();
+    expect(screen.getByText('bots.remote.offline · another computer')).toBeTruthy();
     expect(screen.queryByText('bots.remote.offline · bots.remote.thisDevice')).toBeNull();
   });
 
@@ -348,8 +348,8 @@ describe('teammate host labels', () => {
       activityAt: 1, sessionId: 'remote-session', online: true,
     }));
     const view = await renderSidebar();
-    expect(screen.getByText('Shared Mac (host-a)')).toBeTruthy();
-    expect(screen.getByText('Shared Mac (host-b)')).toBeTruthy();
+    expect(screen.getByText('Shared Mac (1)')).toBeTruthy();
+    expect(screen.getByText('Shared Mac (2)')).toBeTruthy();
     expect(view.container.innerHTML).not.toContain('local-device');
     mocks.remoteBots = mocks.remoteBots.map((entry) => ({ ...entry, deviceName: entry.deviceId === 'host-a' ? 'Studio' : 'Mini' }));
     view.rerender(<TeammatesSection />);
@@ -433,7 +433,7 @@ describe('TeammatesSection header', () => {
     // Collapsed: one avatar per chat; an unread teammate says so in its label.
     fireEvent.click(screen.getByRole('button', { name: 'PR steward' }));
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/bot-1');
-    expect(screen.getByRole('button', { name: 'Writer · bots.list.unread:{"count":1}' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Writer · bots.avatarStatus.unread' })).toBeTruthy();
     // The full rows leave once the collapse animation has finished.
     await waitFor(() => expect(screen.queryByText('Two checks are still red')).toBeNull());
 
@@ -454,10 +454,10 @@ describe('TeammatesSection header', () => {
 
   it('keeps the collapsed row on one line and folds the rest into +N', async () => {
     const original = globalThis.ResizeObserver;
-    // 4 slots: 3 avatars + the +N chip (36px per slot, 8px gap).
+    // 4 slots: 3 avatars + the +N chip (56px per slot, 8px gap).
     globalThis.ResizeObserver = class {
       constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() { this.callback([{ contentRect: { width: 136 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      observe() { this.callback([{ contentRect: { width: 216 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
       disconnect() {}
       unobserve() {}
     } as unknown as typeof ResizeObserver;
@@ -485,9 +485,24 @@ describe('TeammatesSection header', () => {
     mocks.params = { botId: 'bot-1' };
     await renderSidebar();
     fireEvent.click(header());
-    // The chat being read is current and does not also advertise its unread replies.
-    expect(screen.getByRole('button', { name: 'PR steward' }).getAttribute('aria-current')).toBe('page');
+    // Routing alone does not acknowledge a reply; the existing read receipt owns clearing.
+    expect(screen.getByRole('button', { name: 'PR steward · bots.avatarStatus.unread' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('button', { name: 'Writer' }).hasAttribute('aria-current')).toBe(false);
+  });
+
+  it('keeps a completed unread reply green after the live snapshot is removed, then clears on read', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'Writer' }), lastMessageRole: 'assistant' }];
+    mocks.unread = { 'bot-1': 1 };
+    mocks.islandActivity = new Map([['bot-1-chat', { sessionId: 'bot-1-chat', phase: 'completed' }]]);
+    const view = await renderSidebar();
+    expect(view.container.querySelector('[data-teammate-status="done"]')).not.toBeNull();
+    // Idle is represented by no activity entry, not an AgentIslandSessionPhase.
+    mocks.islandActivity = new Map();
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status="done"]')).not.toBeNull();
+    mocks.unread = {};
+    view.rerender(<TeammatesSection />);
+    expect(view.container.querySelector('[data-teammate-status]')).toBeNull();
   });
 
   it('leaves session notifications to the task sidebar', async () => {
@@ -568,7 +583,7 @@ describe('TeammatesSection rows', () => {
 
     await renderSidebar();
 
-    expect(screen.getByLabelText('bots.list.needsAttention')).toBeTruthy();
+    expect(screen.getByLabelText('bots.avatarStatus.error')).toBeTruthy();
   });
   it('does not duplicate recent Bots in a separate Active now area', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'Active steward', lastMessageAt: Date.now() })];

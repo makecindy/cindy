@@ -18,6 +18,8 @@
 
 import type { IMMessageEvent, InteractiveCardSpec, TextChannelIM } from '@cindy/im';
 import { buildInboundMessageFacts } from '@cindy/im';
+import { decodeDingTalkLaneUserId, decodeWecomLane } from '@cindy/im';
+import { receivedHistoryScope, recordReceivedImageMessage } from './receivedImageHistory';
 
 import { createLogger } from '../../logger';
 import {
@@ -381,6 +383,33 @@ export function createMessageHandler(
     // 群上下文拼装慢的时候就是 15~60s 的空白, 看着像消息丢了。忙 / 新会话 /
     // 受保护内容时返回 null, 完全退回原行为(见 persistInboundUserMessageEarly)。
     let prePersisted: { sessionId: string; clientId: string } | null = null;
+    const groupHistoryAccess =
+      adapter.groupHistoryAccessFor?.(event) ??
+      (() => {
+        if (!['wecom', 'dingtalk', 'discord'].includes(channel)) return undefined;
+        const chatId =
+          channel === 'wecom'
+            ? decodeWecomLane(event.senderId).targetId
+            : channel === 'dingtalk'
+              ? (decodeDingTalkLaneUserId(event.senderId)?.conversationId ?? event.chatId)
+              : event.chatId;
+        return chatId ? receivedHistoryScope(channel, event.contextId, chatId) : undefined;
+      })();
+    if (groupHistoryAccess && channel !== 'telegram' && !event.protectedContent) {
+      // Before channel context assembly: its idempotent window insert must not hide image refs.
+      const messageId =
+        channel === 'discord' && event.messageId.startsWith(`${event.chatId}|`)
+          ? event.messageId.slice(event.chatId.length + 1)
+          : event.messageId;
+      await recordReceivedImageMessage({
+        scope: groupHistoryAccess,
+        messageId,
+        text: event.text,
+        attachments: event.attachments,
+        author: event.speaker?.name,
+        chatName: event.interactionSource?.chatName,
+      }).catch(() => log.warn('received image history indexing failed'));
+    }
     if (adapter.prepareAgentTurnText) {
       handedOverAck = event.messageId ? ackProcessingEarly(im, event.messageId) : null;
       try {
@@ -415,7 +444,6 @@ export function createMessageHandler(
     const messageOrigin = imMessageOriginFor(event, channelNoteSource);
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
-    const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
     // A channel policy's own identity verdict wins (personal WeChat is always
     // `unknown`); otherwise the control-command owner check applies.
     const requesterIsOwner = turnPermissionPolicy?.autoReviewContext

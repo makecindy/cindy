@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/device-link/deviceName';
 import { FileTypeIcon, pickFileIcon } from '@/components/FileTypeIcon';
 import { FileTypeTile } from '@/components/FileTypeTile';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
@@ -59,7 +60,7 @@ import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { goBackGuarded } from '@/utils/backGuard';
 import { useAuth } from '@/auth/AuthContext';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { onFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
 import { formatRemoteError } from '@/device-link/remoteStatus';
@@ -147,7 +148,7 @@ function RemoteFileBrowserContent() {
   const sessionId = String(params.sessionId ?? '');
   const routeDeviceId = readRouteString(params.deviceId);
   const deviceId = routeDeviceId ?? remoteSessionStore.getSessionDeviceId(sessionId) ?? '';
-  const deviceName = readRouteString(params.deviceName) ?? deviceId;
+  const deviceName = deviceDisplayName(deviceId, readRouteString(params.deviceName));
   const relPath = readRouteString(params.relPath) ?? '';
   const router = useRouter();
   const guardedPush = useGuardedPush();
@@ -158,7 +159,7 @@ function RemoteFileBrowserContent() {
   const fileWindow = useAdaptiveWindow();
   const screenWidth = fileWindow.width - fileWindow.insets.left - fileWindow.insets.right;
   const auth = useAuth();
-  const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink();
+  const { connectionIssue, openLink, status, subscribe, unsubscribe } = useDeviceLink(deviceId);
   const maker = useMobileMakerTransport(deviceId);
   const sessions = useRemoteSessions();
   const knownSession = useMemo(
@@ -370,7 +371,7 @@ function RemoteFileBrowserContent() {
   // —— 图片统一走聊天同款 ImageLightbox(目录内全部图片为一个图集)——
   const presignGet = useCallback(async (ossKey: string) => {
     return auth.apiFetch<MobileRemoteMediaPresignResult>('/api/device-link/media/presign-get', {
-      baseUrl: DEVICE_LINK_API_BASE_URL,
+      baseUrl: deviceLinkMediaApiBaseUrl(ossKey),
       method: 'POST',
       body: { key: ossKey },
     });
@@ -558,7 +559,7 @@ function RemoteFileBrowserContent() {
               presignGet,
               deleteOssObject: (key) => {
                 void auth.apiFetch('/api/device-link/media', {
-                  baseUrl: DEVICE_LINK_API_BASE_URL, method: 'DELETE', body: { key },
+                  baseUrl: deviceLinkMediaApiBaseUrl(key), method: 'DELETE', body: { key },
                 }).catch(() => undefined);
               },
               isCancelled: () => unmountedRef.current || run.cancelled,

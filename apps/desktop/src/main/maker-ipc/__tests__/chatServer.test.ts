@@ -85,7 +85,7 @@ import { ChatResponseError, REACTION_REVISION_MESSAGE_LIMIT, splitChatMessageTex
 import { t } from '../../i18n.js';
 import { signalBotAutonomyBotsChanged } from '../../bot-autonomy/botsChangedSignal.js';
 import { projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
-import { botGroupRuntimeFailureCode, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
+import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatchedBotGroupTurn } from '../botGroupRuntimeFailure.js';
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
@@ -107,6 +107,17 @@ describe('Chat Server production connection', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
   const local = { dispose: vi.fn() } as unknown as BotGroupChatService;
   const deps = {} as BotGroupChatServiceDeps;
+  it('forwards interaction timing to local turns without connecting to the server', () => {
+    fixture.packaged = true;
+    fixture.urls = [];
+    const refreshPendingInteraction = vi.fn();
+    const service = withChatServer({ ...local, refreshPendingInteraction }, deps);
+    try {
+      service.refreshPendingInteraction('local-lane');
+      expect(refreshPendingInteraction).toHaveBeenCalledExactlyOnceWith('local-lane');
+      expect(fixture.urls).toEqual([]);
+    } finally { service.dispose(); }
+  });
   it('enables the installed application without reading a fixture', async () => {
     fixture.packaged = true;
     const service = withChatServer(local, deps);
@@ -163,7 +174,7 @@ describe('Chat Server result delivery and refresh', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
     vi.setSystemTime(new Date('2026-10-03T00:00:00Z'));
-    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; claimed = false;
+    fixture.packaged = false; fixture.exists.mockReturnValue(true); fixture.profiles = []; fixture.sockets = []; fixture.urls = []; claimed = false;
     fixture.config = '{"baseUrl":"http://127.0.0.1:3018","auth":"cindy"}';
     vi.stubEnv('XDT_ISOLATED', '1');
     fixture.handle.mockImplementation(response);
@@ -181,6 +192,146 @@ describe('Chat Server result delivery and refresh', () => {
     service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.unstubAllEnvs(); fixture.config = ''; vi.clearAllMocks(); });
+
+  it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
+    let downgraded = false;
+    const peer = '30000000-0000-4000-8000-000000000002';
+    fixture.handle.mockImplementation((route) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, personalMaskTools: 1 } } };
+      if (route === '/mask/executions/claim') {
+        const next = claimed ? null : { ...execution, access_mode: 'tools', mask_owner_id: selfId, mask_kind: 'reply', requester_id: peer,
+          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
+        claimed = true; return { body: { execution: next } };
+      }
+      if (route.endsWith('/mask')) return { body: { self: { id: selfId }, revision: downgraded ? 2 : 1,
+        settings: { access: downgraded ? 'chat' : 'tools', companionId: botId } } };
+      return response(route);
+    });
+    await start();
+    expect((await service.chatServer!.status()).personalMask).toBe(true);
+    expect(deps.dispatch).toHaveBeenCalledWith(expect.objectContaining({ toolsDisabled: false }));
+    // Owner decision: the actual model input must identify AI reply mode and its represented member.
+    // The existing tool-boundary assertions below ensure this identity does not elevate the peer.
+    const prompt = vi.mocked(deps.dispatch).mock.calls[0][0].message;
+    expect(prompt).toContain('You are in AI reply mode');
+    const identity = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
+      .map(match => JSON.parse(match[1])).find(block => block.representedMember);
+    expect(identity).toMatchObject({ representedMember: { id: selfId, name: 'Represented member' } });
+    expect(deps.ensureLane).toHaveBeenCalledWith(expect.objectContaining({ chatAccess: { mode: 'tools', revision: 1, maskOwnerId: selfId } }));
+    await expect(authorizeGroupTool('lane', 'local-bot', 'read-self')).resolves.toBeDefined();
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    downgraded = true;
+    await expect(authorizeGroupTool('lane', 'local-bot', 'read-self')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
+  });
+
+  // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty
+  // answer must not stop the idle claim that is the only way AI reply work is discovered.
+  it('keeps claiming AI reply work when the server also offers read-only work discovery', async () => {
+    fixture.handle.mockImplementation((route, _method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, workAvailabilityVersion: 1 } } };
+      if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: true, pending: false })) } };
+      if (route === '/mask/executions/claim') {
+        const next = claimed ? null : { ...execution, mask_owner_id: selfId, mask_kind: 'reply',
+          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
+        claimed = true; return { body: { execution: next } };
+      }
+      return response(route);
+    });
+    await start();
+    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/availability')).toBe(false);
+  });
+
+  // Regression: the paired reply is a content projection, not a full Message with author.kind.
+  it('does not call mask endpoints on a server without the capability',async()=>{
+    expect((await service.chatServer!.status()).personalMask).not.toBe(true);
+    expect(await service.chatServer!.mask!({groupId:roomId})).toMatchObject({ok:false,errorCode:'UNSUPPORTED_OPERATION'});
+    expect(await service.chatServer!.mentions!({groupId:roomId})).toMatchObject({ok:false,errorCode:'UNSUPPORTED_OPERATION'});
+    expect(fixture.urls.some(url=>url.includes('/mask') || url.includes('/mentions'))).toBe(false);
+  });
+
+  it('reads mask mentions with paired replies without consuming human read state',async()=>{
+    fixture.handle.mockImplementation(route=>route === '/me' ? {body:{actor:{id:selfId},capabilities:{personalMask:1}}}
+      : route.includes('/mentions?') ? {body:{messages:[{id:execution.source_message_id,seq:'4',author:{kind:'human',name:'Peer'},
+        content:[{type:'text',text:'@owner confirm?'}],reply:{content:[{type:'text',text:'Awaiting owner'}],maskAttribution:{companion:{id:botId,name:'Cindy',avatarUrl:null}}}}],hasMore:false}}
+      : response(route));
+    const result=await service.chatServer!.mentions!({groupId:roomId});
+    expect(result).toMatchObject({ok:true,mentions:[{text:'@owner confirm?',reply:{text:'Awaiting owner',companion:{id:botId}}}]});
+    expect(fixture.urls.some(url=>url.includes('/read'))).toBe(false);
+  });
+
+  // Unit: exercise the real transport and read.changed path. The former notification-only
+  // tests had no persistent group attention consumer, so read/mute/reconnect could not be observed.
+  it('projects one group reminder, follows server reads and mute, and restores reconnect history without alerting it', async () => {
+    service.dispose();
+    const attention = vi.fn();
+    const notify = vi.fn();
+    deps.onChatGroupAttention = attention;
+    deps.onChatMessageNotification = notify;
+    const peer = { id: botId, kind: 'human', name: 'Chris', state: 'joined', role: 'member', ownerActorId: botId, avatar: '👋' };
+    const message = (seq: string, threadRootId: string | null = null) => ({
+      id: `50000000-0000-4000-8000-${seq.padStart(12, '0')}`, seq, authorId: botId, author: { kind: 'human', name: 'Chris' },
+      content: [{ type: 'text', text: `Message ${seq}` }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId,
+      mentions: threadRootId ? [selfId] : [],
+    });
+    const topic = '70000000-0000-4000-8000-000000000001';
+    const snapshot = { room: room(roomId), members: [peer], messages: [message('3'), message('2', topic)], cursor: '3',
+      reads: [{ thread_key: 'main', read_seq: '0', muted: false }, { thread_key: topic, read_seq: '0', muted: false }] };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/conversations?limit=100') return { body: [snapshot.room] };
+      if (route === '/executions/claim') return { body: { execution: null } };
+      if (route.endsWith('/snapshot')) return { body: snapshot };
+      if (route.includes('/messages?')) return { body: snapshot.messages };
+      return response(route);
+    });
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    expect((await service.listGroups()).ok).toBe(true);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ groupId: roomId, messageId: message('2').id,
+      threadRootId: topic, mentioned: true, members: [{ name: 'Chris', avatar: '👋' }] });
+    expect(notify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    const socket = fixture.sockets.at(-1)!;
+    Object.defineProperty(socket, 'readyState', { value: 1 });
+    socket.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(150);
+    const readChanged = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '5',
+      changes: [{ type: 'read.changed', entityId: roomId }] }));
+    snapshot.reads[1].read_seq = '2'; readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('3').id, mentioned: false });
+    snapshot.reads[0].muted = true; readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
+    snapshot.reads[0].muted = false;
+    readChanged();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('3').id, mentioned: false });
+    const received = (seq: string) => socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: seq,
+      changes: [{ type: 'message.created', entityId: message(seq).id }] }));
+    received('3');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).not.toHaveBeenCalled();
+    snapshot.messages.unshift(message('6')); received('6');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('6').id, mentioned: false });
+    // Server/device timestamps deliberately stay equal: only server sequences decide replay.
+    socket.emit('close');
+    snapshot.messages.unshift(message('7'));
+    await vi.advanceTimersByTimeAsync(500);
+    const reconnected = fixture.sockets.at(-1)!;
+    Object.defineProperty(reconnected, 'readyState', { value: 1 });
+    reconnected.emit('message', JSON.stringify({ type: 'ready' }));
+    await vi.advanceTimersByTimeAsync(150);
+    reconnected.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '7',
+      changes: [{ type: 'message.created', entityId: message('7').id }] }));
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(attention.mock.calls.at(-1)?.[1]).toMatchObject({ messageId: message('7').id });
+    reconnected.emit('message', JSON.stringify({ type: 'scope_error', scope: `conversation:${roomId}`, error: { code: 'FORBIDDEN' } }));
+    await vi.advanceTimersByTimeAsync(150);
+    expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
+  });
   // #6907: getGroup feeds Desktop and remote phones. Existing fixtures never pair group name A
   // with the bot's account ownerName B; exercise the production projection (unit tier).
   it.each(['Nickname A', 'Account B', '   ', null] as const)('uses the current room owner name %s with safe account fallback', async name => {
@@ -306,6 +457,31 @@ describe('Chat Server result delivery and refresh', () => {
   it('uses the mobile edited revision instead of a newer server snapshot when saving settings', async () => {
     await service.updateGroup({ groupId: roomId, name: 'Draft', expectedRevision: 7 });
     expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}`, 'PATCH', expect.objectContaining({ name: 'Draft', expectedRevision: 7 }));
+  });
+  // Unit: renderer filtering alone left older servers callable with bot targets.
+  // Exercise production manage with a nonhuman/left target and the legacy bot-owner
+  // recovery path; assertions cover rejected writes and the delegated HTTP identity.
+  it.each(['bot', 'integration', 'left', 'human', 'legacy'] as const)('validates the ownership transfer recipient (%s) before sending', async mode => {
+    const targetId = mode === 'legacy' ? selfId : botId;
+    fixture.handle.mockImplementation(route => {
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: mode === 'legacy' ? 'admin' : 'owner' },
+        { id: botId, kind: mode === 'bot' || mode === 'legacy' ? 'bot' : mode === 'integration' ? 'integration' : 'human',
+          ownerActorId: mode === 'legacy' ? selfId : botId, state: mode === 'left' ? 'left' : 'joined', role: mode === 'legacy' ? 'owner' : 'member' },
+      ], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const requestsStart = fixture.requests.length;
+    const result = await service.chatServer!.manage({ groupId: roomId, action: { type: 'transfer', actorId: targetId } });
+    const writes = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/transfer` && method === 'POST');
+    if (mode === 'human' || mode === 'legacy') {
+      expect(result).toEqual({ ok: true });
+      expect(writes).toEqual([[`/conversations/${roomId}/transfer`, 'POST', { actorId: targetId, operationId: expect.any(String) }]]);
+      expect(fixture.requests.slice(requestsStart).find(r => r.url.endsWith('/transfer'))?.actor).toBe(mode === 'legacy' ? botId : selfId);
+    } else {
+      expect(result).toEqual({ ok: false, errorCode: mode === 'left' ? 'MEMBER_NOT_FOUND' : 'HUMAN_OWNER_REQUIRED' });
+      expect(writes).toEqual([]);
+    }
   });
   // Group avatar regression: exercise the production manage entry, real image
   // validation and HTTP payload, with only the network/image decoder faked.
@@ -463,6 +639,110 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.prepareAttachments).toHaveBeenCalledTimes(1);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST')).toHaveLength(1);
+  });
+
+  // Thread attachment regression: real reply entry, injected byte preparation/transport.
+  // Existing send tests covered only main-chat media. Unit tier: image-only reply + failed POST.
+  it('uploads image-only thread replies and settles media references on failure and retry', async () => {
+    const commit = vi.fn(), discard = vi.fn();
+    const attachment = { id: 'image', name: 'photo.png', category: 'image' as const,
+      mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/photo.png', path: '/fixture/photo.png', ext: '.png' };
+    const media = { type: 'media' as const, mediaId: '80000000-0000-4000-8000-000000000001', caption: 'photo.png' };
+    deps.prepareAttachments = vi.fn(async () => ({ ok: true as const, attachments: [attachment], commit, discard }));
+    fixture.upload.mockResolvedValue([media]);
+    let fail = true;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return fail
+        ? { status: 500, body: { error: { code: 'UPSTREAM_FAILED' } } }
+        : { body: { id: 'saved-image-reply' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, rootId: '70000000-0000-4000-8000-000000000001',
+      text: '', clientId: 'thread-image-1', mentions: { all: false, botIds: [] }, attachments: [attachment] };
+    expect(await service.chatServer!.reply(input)).toMatchObject({ ok: false });
+    // A 5xx does not prove the POST was refused; retain the original upload for retry.
+    expect(discard).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    fail = false;
+    expect(await service.chatServer!.reply(input)).toEqual({ ok: true, messageId: 'saved-image-reply' });
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(discard).not.toHaveBeenCalled();
+    expect(deps.prepareAttachments).toHaveBeenCalledOnce();
+    expect(fixture.upload).toHaveBeenCalledOnce();
+    expect(fixture.upload).toHaveBeenLastCalledWith(roomId, input.clientId, [attachment], selfId);
+    const posts = fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
+    expect(posts.map(([, , body]) => body)).toEqual([0, 1].map(() => ({
+      operationId: input.clientId, threadRootId: input.rootId, content: [media], mentions: [],
+    })));
+  });
+
+  // Review regression: a lost ACK followed by a changed/deleted local file must replay the
+  // uploaded body. Unit tier at reply's production entry; ordinary retry/ref settlement is above.
+  it.each(['changed', 'deleted'] as const)('replays an uncertain thread attachment POST after its source is %s', async source => {
+    const attachment = { id: 'file', name: 'notes.md', category: 'text' as const,
+      mimeType: 'text/markdown', size: 12, url: null, path: '/fixture/notes.md', ext: '.md' };
+    deps.prepareAttachments = vi.fn(async () => ({ ok: true as const, attachments: [attachment], commit: vi.fn(), discard: vi.fn() }));
+    let sourceVersion = 'original';
+    // The real uploader hashes source bytes into its media operation id and rejects missing files.
+    fixture.upload.mockImplementation(async () => {
+      if (sourceVersion === 'deleted') throw new Error('ATTACHMENT_UNAVAILABLE');
+      return [{ type: 'media', mediaId: sourceVersion, caption: attachment.name }];
+    });
+    let committed: unknown;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') {
+        if (!committed) {
+          committed = structuredClone(body);
+          throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        }
+        return JSON.stringify(body) === JSON.stringify(committed)
+          ? { body: { id: 'saved-file-reply' } }
+          : { status: 409, body: { error: { code: 'OPERATION_CONFLICT' } } };
+      }
+      return response(route);
+    });
+    const input = { groupId: roomId, rootId: '70000000-0000-4000-8000-000000000001', text: '',
+      clientId: 'thread-file-uncertain', mentions: { all: false, botIds: [] }, attachments: [{ ...attachment, url: undefined }] };
+    expect(await service.chatServer!.reply(input)).toMatchObject({ ok: false });
+    sourceVersion = source;
+    expect(await service.chatServer!.reply(input)).toEqual({ ok: true, messageId: 'saved-file-reply' });
+    // A successful host response can also be lost before the composer receives it.
+    expect(await service.chatServer!.reply(input)).toEqual({ ok: true, messageId: 'saved-file-reply' });
+    expect(fixture.upload).toHaveBeenCalledOnce();
+  });
+
+  // Complement the uncertain-POST case: a failed upload or explicit 400 stored no message,
+  // so it must release its media and permit fresh preparation on the next attempt.
+  it.each(['upload', 'post'] as const)('releases thread media after a definite failure at %s', async stage => {
+    const attachment = { id: 'file', name: 'notes.md', category: 'text' as const,
+      mimeType: 'text/markdown', size: 12, url: null, path: '/fixture/notes.md', ext: '.md' };
+    const commit = vi.fn(), discard = vi.fn();
+    deps.prepareAttachments = vi.fn(async () => ({ ok: true as const, attachments: [attachment], commit, discard }));
+    let fail = true;
+    fixture.upload.mockImplementation(async () => {
+      if (fail && stage === 'upload') throw new Error('ATTACHMENT_UNAVAILABLE');
+      return [{ type: 'media', mediaId: fail ? 'first-upload' : 'fresh-upload', caption: attachment.name }];
+    });
+    fixture.handle.mockImplementation((route, method) => {
+      if (route.endsWith('/members')) return { body: [] };
+      if (route.endsWith('/messages') && method === 'POST') return fail
+        ? { status: 400, body: { error: { code: 'INVALID_INPUT' } } }
+        : { body: { id: 'fresh-file-reply' } };
+      return response(route);
+    });
+    const input = { groupId: roomId, rootId: '70000000-0000-4000-8000-000000000001', text: '',
+      clientId: 'thread-file-refused', mentions: { all: false, botIds: [] }, attachments: [{ ...attachment, url: undefined }] };
+    expect(await service.chatServer!.reply(input)).toMatchObject({ ok: false });
+    expect(discard).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
+    fail = false;
+    expect(await service.chatServer!.reply(input)).toEqual({ ok: true, messageId: 'fresh-file-reply' });
+    expect(deps.prepareAttachments).toHaveBeenCalledTimes(2);
+    expect(fixture.upload).toHaveBeenCalledTimes(2);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledOnce();
   });
 
   it('reports an HTTP send failure with safe route, code and status', async () => {
@@ -700,6 +980,18 @@ describe('Chat Server result delivery and refresh', () => {
     });
   });
 
+  it('projects a completed process locator only on a bot reply without changing visible text', async () => {
+    const ref = { groupId: roomId, executionId: execution.id, sessionId: 'lane', clientId: 'source' };
+    const reply = { id: '90000000-0000-4000-8000-000000000001', seq: '8', authorId: botId,
+      author: { kind: 'bot', name: 'Bot' }, origin: 'bot', deleted: false, threadRootId: null,
+      createdAt: '2026-10-03T00:00:00Z', content: [{ type: 'text', text: 'Result' },
+        { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '', data: ref }] };
+    fixture.handle.mockImplementation(route => route.includes('/messages?') ? { body: [reply] } : response(route));
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error('Expected group');
+    expect(result.group.messages[0]).toMatchObject({ content: 'Result', process: ref });
+  });
+
   async function start() {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     await vi.advanceTimersByTimeAsync(2000);
@@ -707,6 +999,41 @@ describe('Chat Server result delivery and refresh', () => {
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+  const processRecord = { type: 'card', namespace: 'cindy.work-record', schemaRevision: 1, fallback: '',
+    data: { groupId: roomId, executionId: execution.id, sessionId: 'lane', durationMs: expect.any(Number),
+      clientId: `bot-group:${roomId}:${execution.id}:local-bot` } };
+
+  // Unit: the historical locator must keep the executing host even if the
+  // companion moves later; the production completion payload is the evidence.
+  it('records the execution computer in the completed process locator', async () => {
+    service.dispose();
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, deviceId: 'execution-mac' } } : response(route));
+    service = withChatServer({ dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+    await start();
+    await service.settleLaneTurn(terminal);
+    expect(deliveries()[0][2].content).toContainEqual({ ...processRecord,
+      data: { ...processRecord.data, deviceId: 'execution-mac' } });
+  });
+
+  // #7583, unit: runtime close without an SDK terminal left the leased execution
+  // alive. Existing cases start from done/error; exercise the close adapter with
+  // the real Chat Server service and assert the terminal wire result and lease retirement.
+  it('retires a closed group turn without terminating recovery or a different input', async () => {
+    await start();
+    const inputId = vi.mocked(deps.dispatch).mock.calls[0][0].clientId;
+    const failures = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'fail');
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, true)).toBe(false);
+    expect(await settleClosedBotGroupTurn(service, 'lane', 'bot-group:old-input', false)).toBe(false);
+    expect(failures()).toHaveLength(0);
+    expect(await settleClosedBotGroupTurn(service, 'lane', inputId, false)).toBe(true);
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0][2]).toMatchObject({ action: 'fail', detail: 'cindy-runtime-error:RUNTIME_ERROR', epoch: execution.epoch });
+    const heartbeats = fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat').length;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'heartbeat')).toHaveLength(heartbeats);
+    expect(deliveries()).toHaveLength(0);
+  });
 
   // #6418: media visibility changes, but the original reply still determines
   // continuation. The helper mock isolates import/ledger tests from settlement.
@@ -718,12 +1045,12 @@ describe('Chat Server result delivery and refresh', () => {
     replyImages.mockResolvedValue({ text: display, attachments: [replyImage] }); fixture.upload.mockResolvedValue([imageBlock]);
     await start(); await service.settleLaneTurn({ ...terminal, resultText });
     expect(deliveries()[0][2]).toMatchObject({ continueDiscussion: true,
-      content: [{ type: 'text', text: display || '已完成' }, imageBlock] });
+      content: [{ type: 'text', text: display || '已完成' }, imageBlock, processRecord] });
   });
   it.each(['Hello', '', 'NO_REPLY'])('keeps the baseline no-image result for %j', async resultText => {
     await start(); await service.settleLaneTurn({ ...terminal, resultText });
     expect(deliveries()[0][2].continueDiscussion).toBe(resultText === 'Hello');
-    if (resultText === 'Hello') expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Hello' }]);
+    if (resultText === 'Hello') expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Hello' }, processRecord]);
     else expect(deliveries()[0][2]).not.toHaveProperty('content');
   });
   it.each([408, 429, 503])('reuses imported images after HTTP %s and completion ACK loss', async status => {
@@ -736,7 +1063,7 @@ describe('Chat Server result delivery and refresh', () => {
     await start(); await service.settleLaneTurn({ ...terminal, resultText: '![](xdt-image:///task/generated.png)' });
     expect(deliveries()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(status === 429 ? 61000 : 16000);
-    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Original image' }, imageBlock]);
+    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Original image' }, imageBlock, processRecord]);
     await vi.advanceTimersByTimeAsync(16000);
     expect(deliveries()).toHaveLength(2); expect(deliveries()[1][2]).toEqual(deliveries()[0][2]);
     expect(replyImages).toHaveBeenCalledOnce(); expect(fixture.upload).toHaveBeenCalledTimes(2);
@@ -769,7 +1096,7 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.upload).toHaveBeenCalledOnce(); expect(deliveries()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(2000);
     expect(fixture.upload).toHaveBeenCalledTimes(2);
-    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'image' }, imageBlock]);
+    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'image' }, imageBlock, processRecord]);
     expect(replyImages).toHaveBeenCalledOnce(); expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
@@ -872,7 +1199,7 @@ describe('Chat Server result delivery and refresh', () => {
     await startFileReply();
     const uploads = fixture.upload.mock.calls.length;
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
-    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }]);
+    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }, processRecord]);
     await vi.advanceTimersByTimeAsync(16000);
     expect(deliveries()).toHaveLength(2);
     expect(deliveries()[1][2]).toEqual(deliveries()[0][2]);
@@ -932,7 +1259,7 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(16000);
     expect(fixture.upload).toHaveBeenLastCalledWith(roomId, expect.any(String), [...images, pdf], expect.any(String), expect.any(Function));
     expect(deliveries()).toHaveLength(1);
-    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Delivered' }, ...blocks]);
+    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Delivered' }, ...blocks, processRecord]);
     expect(replyFiles.prepare).toHaveBeenCalledOnce(); expect(replyImages).toHaveBeenCalledOnce();
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
@@ -973,7 +1300,7 @@ describe('Chat Server result delivery and refresh', () => {
     await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
     expect(deliveries()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(16000);
-    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }]);
+    expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }, processRecord]);
     expect(replyFiles.prepare).toHaveBeenCalledOnce();
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
@@ -1014,11 +1341,15 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   it.each([
-    ['NO_MODEL', 'MODEL_UNAVAILABLE'],
-    ['MEMBER_UNAVAILABLE', 'RUNTIME_ERROR'],
-  ])('settles the lane preparation failure %s without dispatching or exposing details', async (errorCode, failureCode) => {
+    // #6835: unit service entry must retain wrapped lane limits; the old matrix only covered codes.
+    ['NO_MODEL', 'MODEL_UNAVAILABLE', 'private preparation details'],
+    ['MEMBER_UNAVAILABLE', 'RUNTIME_ERROR', 'private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_DEVICE_LIMIT', '[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'REMOTE_TOTAL_LIMIT', '[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private preparation details'],
+    ['LAZY_CREATE_FAILED', 'RUNTIME_ERROR', '[REMOTE_AGENT_BUSY] private preparation details'],
+  ])('settles the lane preparation failure %s without dispatching or exposing details', async (errorCode, failureCode, message) => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
-    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode, message: 'private preparation details' }));
+    deps.ensureLane = vi.fn(async () => ({ ok: false as const, errorCode, message }));
     await vi.advanceTimersByTimeAsync(2000);
     expect(deps.dispatch).not.toHaveBeenCalled();
     expect(deps.abortLane).not.toHaveBeenCalled();
@@ -1067,6 +1398,8 @@ describe('Chat Server result delivery and refresh', () => {
 
   it.each([
     ['authentication_failed private credential', 'AUTH_REQUIRED'],
+    ['[REMOTE_AGENT_BUSY] [DEVICE_LIMIT] private credential', 'REMOTE_DEVICE_LIMIT'],
+    ['[REMOTE_AGENT_BUSY] [TOTAL_LIMIT] private credential', 'REMOTE_TOTAL_LIMIT'],
     ['ECONNRESET private endpoint', 'NETWORK_ERROR'],
     ['pi rpc timeout after 30000ms: prompt /private/path', 'RUNTIME_TIMEOUT'],
   ])('classifies an unqueued dispatch rejection from its local message: %s', async (message, code) => {
@@ -1233,6 +1566,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(posts.every(([, , body]) => (body as { threadRootId?: string }).threadRootId === rootId)).toBe(true);
     });
 
+    // Unit: the generic creation entry has no delegation card; its outbox still freezes
+    // every wire part and receives the authenticated destination used for the actual POST.
+    it('posts a generic task result into its original Thread through its own durable outbox', async () => {
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      const rootId = '90000000-0000-4000-8000-0000000000aa';
+      fixture.handle.mockImplementation((route, method) => {
+        if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [joined(botId, 'bot'), joined(selfId, 'human')], messages: [], cursor: '1' } };
+        if (route.endsWith('/messages') && method === 'POST') return { body: { id: '70000000-0000-4000-8000-000000000002' } };
+        return response(route);
+      });
+      const preparePost = vi.fn(async (prepare: () => Promise<import('../botGroupTaskPostSnapshot').BotGroupTaskPostSnapshot>) => prepare());
+      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'generic-result',
+        text: 'Finished', threadRootId: rootId, preparePost })).toMatchObject({ ok: true });
+      expect(preparePost).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ roomId, selfId, clientId: 'generic-result' }));
+      const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
+      expect(posts).toHaveLength(1);
+      expect(posts[0]?.[2]).toMatchObject({ threadRootId: rootId, content: [{ type: 'text', text: 'Finished' }] });
+    });
+
     it('leaves out one file this computer cannot send and still posts the result with the others', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       const files = await deliveryFiles(3);
@@ -1363,7 +1715,7 @@ describe('Chat Server result delivery and refresh', () => {
       } finally { legacy.dispose(); }
     });
 
-    it.each(['channel', 'started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
+    it.each(['started', 'completed'] as const)('restores an upgraded local task route before the first migration poll (%s)', async state => {
       const target = '10000000-0000-4000-8000-000000000099';
       migration.read.mockReturnValue({ roomId: target, sequence: 12, version: 2 });
       const localPost = vi.fn(async () => ({ ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false }));
@@ -1376,8 +1728,7 @@ describe('Chat Server result delivery and refresh', () => {
       });
       try {
         // A fresh service has an empty in-memory map; no timer/list read has started its migration.
-        if (state === 'channel') expect(await legacy.hasCompanionTaskChannel(roomId)).toBe(true);
-        else {
+        {
           expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: `task-restart:${state}`,
             text: '', card: { ...taskCard, data: { ...taskCard.data, state } } })).toEqual({ ok: true, messageId: 'posted-task' });
           expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${target}/messages`))?.actor).toBe(botId);
@@ -1499,16 +1850,20 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deps.dispatch).toHaveBeenCalledOnce();
   });
 
-  // bot-group-chat.md §3: a companion may answer in several Threads at once.
-  it('shows a companion running in two Threads as one speaker', async () => {
+  // bot-group-chat.md §3: a companion may answer in several Threads at once;
+  // each execution keeps its identity so the UI can stop/open the exact task.
+  it('shows a companion running in two Threads as two execution speakers', async () => {
     fixture.handle.mockImplementation(route => {
       if (route.endsWith('/executions')) return { body: [{ ...execution, status: 'running' },
         { ...execution, id: '50000000-0000-4000-8000-000000000099', status: 'running' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
-    expect(result).toMatchObject({ ok: true, group: { round: { status: 'running', speakers: [{ activity: 'reply' }] } } });
-    expect(result.ok && result.group.round.speakers).toHaveLength(1);
+    expect(result).toMatchObject({ ok: true, group: { round: { status: 'running', speakers: [
+      { activity: 'reply', executionId: execution.id, executionStatus: 'running' },
+      { activity: 'reply', executionId: '50000000-0000-4000-8000-000000000099', executionStatus: 'running' },
+    ] } } });
+    expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });
 
   it.each(['IMAGE_INPUT_UNSUPPORTED', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
@@ -1624,21 +1979,27 @@ describe('Chat Server result delivery and refresh', () => {
     expect(retry).toMatchObject({ ok: true, executionFailures: [], hasMore: true });
   });
 
-  it('keeps the specific local failure on an older server and clears the notice after retry', async () => {
+  // #6835: unit readback must retain local limit reasons when an older server normalizes unknown codes.
+  it.each([
+    [undefined, 'IMAGE_INPUT_UNSUPPORTED', 'IMAGE_INPUT_UNSUPPORTED'],
+    ['RUNTIME_ERROR', 'REMOTE_DEVICE_LIMIT', 'REMOTE_DEVICE_LIMIT'],
+    ['RUNTIME_ERROR', 'REMOTE_TOTAL_LIMIT', 'REMOTE_TOTAL_LIMIT'],
+    ['AUTH_REQUIRED', 'REMOTE_DEVICE_LIMIT', 'AUTH_REQUIRED'],
+  ] as const)('keeps specific local failures with server code %s and clears them on retry', async (serverCode, localCode, expectedCode) => {
     await start();
-    await service.settleLaneTurn({ ...terminal, outcome: 'error', failureCode: 'IMAGE_INPUT_UNSUPPORTED' });
+    await service.settleLaneTurn({ ...terminal, outcome: 'error', failureCode: localCode });
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     let status = 'failed';
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.includes('/messages?')) return { body: [source] };
       if (route.includes('/execution-failures?')) return { status: 404, body: { code: 'NOT_FOUND' } };
-      if (route.endsWith('/executions')) return { body: [{ ...execution, status }] };
+      if (route.endsWith('/executions')) return { body: [{ ...execution, status, failure_code: serverCode }] };
       return response(route);
     });
     const failed = await service.getGroup(roomId);
     if (!failed.ok) throw new Error('group missing');
-    expect(projectBotGroupExecutionFailures(failed.group.messages, failed.group.executionFailures)[1]).toMatchObject({ runtimeFailureCode: 'IMAGE_INPUT_UNSUPPORTED' });
+    expect(projectBotGroupExecutionFailures(failed.group.messages, failed.group.executionFailures)[1]).toMatchObject({ runtimeFailureCode: expectedCode });
     status = 'queued';
     const retrying = await service.getGroup(roomId);
     if (!retrying.ok) throw new Error('group missing');
@@ -1770,7 +2131,7 @@ describe('Chat Server result delivery and refresh', () => {
     fixture.handle.mockImplementation(welcomeResponse);
     await start();
     await service.settleLaneTurn(terminal);
-    expect(deliveries()[0][2]).toMatchObject({ content: [{ type: 'text', text: terminal.resultText }], continueDiscussion: false });
+    expect(deliveries()[0][2]).toMatchObject({ content: [{ type: 'text', text: terminal.resultText }, processRecord], continueDiscussion: false });
     const socket = fixture.sockets[0];
     socket.emit('message', JSON.stringify({ type: 'changes', scope: `conversation:${roomId}`, cursor: '2',
       changes: [{ type: 'message.system.created', data: { executionTrigger: 'member.joined', message: joinedSource() } }] }));
@@ -1909,7 +2270,7 @@ describe('Chat Server result delivery and refresh', () => {
       await start();
       await service.settleLaneTurn({ ...terminal, resultText: 'My view.' });
       const [delivery] = deliveries();
-      expect(delivery[2].content).toEqual([{ type: 'text', text: 'My view.' }]);
+      expect(delivery[2].content).toEqual([{ type: 'text', text: 'My view.' }, processRecord]);
       expect(delivery[2]).not.toHaveProperty('continueDiscussion');
     });
 
@@ -1958,7 +2319,7 @@ describe('Chat Server result delivery and refresh', () => {
       await service.settleLaneTurn({ ...terminal, resultText: '![](cindy-media://image)' });
       if (kind === 'talk') {
         expect(replyImages).toHaveBeenCalledOnce();
-        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'image' }, imageBlock]);
+        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'image' }, imageBlock, processRecord]);
         expect(fixture.upload).toHaveBeenCalledWith(roomId, expect.any(String), [replyImage], botId, expect.any(Function));
       } else expect(replyImages).not.toHaveBeenCalled();
       expect(deliveries()[0][2]).not.toHaveProperty('continueDiscussion');
@@ -1980,10 +2341,10 @@ describe('Chat Server result delivery and refresh', () => {
       await service.settleLaneTurn({ ...terminal, resultText: '[Report](./report.pdf)' });
       expect(deliveries()[0][2]).not.toHaveProperty('continueDiscussion');
       if (kind === 'talk') {
-        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }]);
+        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Report' }, { type: 'media', mediaId: 'pdf', caption: 'report.pdf' }, processRecord]);
       } else {
         expect(replyFiles.prepare).not.toHaveBeenCalled();
-        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: '[Report](./report.pdf)' }]);
+        expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: '[Report](./report.pdf)' }, processRecord]);
       }
     });
 
@@ -3208,6 +3569,7 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       claimed = true;
       const socket = await live();
+      await vi.advanceTimersByTimeAsync(100); // finish the immediate reconnect claim
       const claims = () => fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim').length;
       // The next poll is at 4s; the notice arrives just after the first one.
       vi.setSystemTime(Date.now());
@@ -3300,6 +3662,243 @@ describe('Chat Server result delivery and refresh', () => {
         changes: [{ type: 'execution.changed', entityId: execution.id, data: { status: 'queued', botId } }] }));
       await vi.advanceTimersByTimeAsync(110_000);
       expect(claims()).toBe(limited);
+    });
+
+    // Unit transport integration: discovery is read-only, while a durable owner
+    // hint for an unopened room may bypass an outstanding discovery response.
+    it('probes idle companions together and claims only the owner-notified companion while discovery is slow', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finish!: (value: unknown) => void;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1, workNotificationsVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return new Promise(resolve => { finish = resolve; });
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fixture.handle).toHaveBeenCalledWith('/executions/availability', 'POST', { botIds: [botId, otherBot] });
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim')).toHaveLength(0);
+      const socket = fixture.sockets[0]!;
+      Object.defineProperty(socket, 'readyState', { value: 1 });
+      socket.emit('message', JSON.stringify({ type: 'ready' }));
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '17', changes: [
+        { type: 'work.available', data: { work: [{ botId, conversationId: roomId }] } },
+      ] }));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fixture.requests.filter(request => request.url.endsWith('/executions/claim')).slice(-1)[0]?.actor).toBe(botId);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim')).toHaveLength(1);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      finish({ body: { items: [botId, otherBot].map(botId => ({ botId, enabled: true, pending: false })) } });
+      await vi.advanceTimersByTimeAsync(2);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+    });
+
+    // A disabled answer marks the registry stale. While re-registration keeps failing, that
+    // companion must not be probed every 2s from the obsolete list; its sibling keeps polling.
+    it('stops probing a companion reported disabled until the registry re-reads it', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      const base = fixture.handle.getMockImplementation()!;
+      let reads = 0, recovered = false;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return ++reads === 1 || recovered ? { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] } : { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: recovered || id !== botId, pending: false })) } };
+        return base(route, method, body);
+      });
+      const probes = () => fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability').map(([, , body]) => body.botIds as string[]);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reads).toBeGreaterThan(1);
+      expect(probes().filter(ids => ids.includes(botId))).toHaveLength(1);
+      expect(probes().slice(1).some(ids => ids.includes(otherBot))).toBe(true);
+      // Re-enabled and re-read: the companion is polled again.
+      recovered = true;
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(probes().filter(ids => ids.includes(botId)).length).toBeGreaterThan(1);
+    });
+
+    it('dispatches an independently claimed companion while its discovered sibling claim is still unanswered', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      const base = fixture.handle.getMockImplementation()!;
+      let claims = 0;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: true })) } };
+        if (route === '/executions/claim' && ++claims === 1) return new Promise(() => {});
+        if (route === '/executions/claim') return { body: { execution: { ...execution, bot_id: otherBot } } };
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(claims).toBe(2);
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/claim-batch' || route === '/executions/recover')).toBe(false);
+    });
+
+    it('checks the shared work gate again before an authenticated replay and later probes', async () => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finishRefresh!: (ok: boolean) => void, claims = 0;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finishRefresh = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: true })) } };
+        if (route === '/executions/claim') return ++claims === 1
+          ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } }
+          : { status: 429, headers: { 'retry-after': '120' }, body: { error: { code: 'RATE_LIMITED' } } };
+        return base(route, method, body);
+      });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(claims).toBe(2);
+      // Admission restricts network work, not a still-current local registry.
+      expect(await service.chatServer!.ownedBots()).toMatchObject({ ok: true, bots: [{ actorId: botId }, { actorId: otherBot }] });
+      fixture.token = 'renewed-test-token'; finishRefresh(true);
+      await vi.advanceTimersByTimeAsync(110_000);
+      expect(claims).toBe(2);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability')).toHaveLength(1);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/me')).toHaveLength(1);
+      expect(deps.dispatch).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])('pauses sibling work during token renewal, then applies its outcome (%s)', async refreshed => {
+      const otherBot = '20000000-0000-4000-8000-000000000002';
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' },
+        { id: 'other-bot', displayName: 'Other', avatar: null, status: 'active' }];
+      let finishRefresh!: (ok: boolean) => void, claims = 0;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finishRefresh = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { workAvailabilityVersion: 1 } } };
+        if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+          { id: otherBot, kind: 'bot', externalId: 'other-bot', name: 'Other' }] };
+        if (route === '/executions/availability') return { body: { items: body.botIds.map((botId: string) => ({ botId, enabled: true, pending: false })) } };
+        if (route === '/executions/claim') return ++claims === 1
+          ? { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } } : { body: { execution: null } };
+        return base(route, method, body);
+      });
+      const socket = await live();
+      const wake = (botId: string) => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '9',
+        changes: [{ type: 'work.available', data: { work: [{ botId, conversationId: roomId }] } }] }));
+      wake(botId); await vi.advanceTimersByTimeAsync(250);
+      expect(claims).toBe(1);
+      const reads = fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability').length;
+      wake(otherBot); await vi.advanceTimersByTimeAsync(6000);
+      expect(claims).toBe(1);
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/executions/availability')).toHaveLength(reads);
+      if (refreshed) fixture.token = 'renewed-test-token';
+      finishRefresh(refreshed); await vi.advanceTimersByTimeAsync(2000);
+      if (refreshed) {
+        expect(claims).toBeGreaterThan(1);
+        const payloads = fixture.handle.mock.calls.filter(([route]) => route === '/executions/claim').map(([, , body]) => body);
+        expect(payloads[1]).toEqual(payloads[0]); // existing authenticated replay, same single claim
+      } else expect(claims).toBe(1);
+    });
+
+    it.each([true, false])('keeps a newer unopened-room hint across an older busy scan (new hint map: %s)', async newMap => {
+      const otherRoom = '10000000-0000-4000-8000-000000000002';
+      const otherExecution = { ...execution, id: '40000000-0000-4000-8000-000000000002', conversation_id: otherRoom,
+        source_message_id: '50000000-0000-4000-8000-000000000002' };
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      const socket = await live();
+      expect(deps.dispatch).toHaveBeenCalledOnce();
+      let finish!: (value: unknown) => void, held = false;
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (!held && route === `/conversations/${newMap ? roomId : otherRoom}/executions`) {
+          held = true; return new Promise(resolve => { finish = resolve; });
+        }
+        if (route === `/conversations/${otherRoom}/executions`) return { body: [{ ...otherExecution, status: 'queued' }] };
+        if (route === '/executions/claim' && body.executionId === otherExecution.id) return { body: { execution: otherExecution } };
+        if (route === `/conversations/${otherRoom}/messages/${otherExecution.source_message_id}`) return { body: {
+          id: otherExecution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' },
+          deleted: false, threadRootId: null, content: [{ type: 'text', text: 'Work in another room' }],
+        } };
+        if (route === `/conversations/${otherRoom}/snapshot`) return { body: { ...snapshotOf().body, room: room(otherRoom) } };
+        return base(route, method, body);
+      });
+      const wake = () => socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '11',
+        changes: [{ type: 'work.available', data: { work: [{ botId, conversationId: otherRoom }] } }] }));
+      if (!newMap) wake();
+      await vi.advanceTimersByTimeAsync(newMap ? 12_000 : 250);
+      expect(held).toBe(true);
+      wake(); await vi.advanceTimersByTimeAsync(250);
+      finish({ body: [] }); await vi.advanceTimersByTimeAsync(10);
+      expect(fixture.handle).toHaveBeenCalledWith('/executions/claim', 'POST', expect.objectContaining({ executionId: otherExecution.id }));
+      expect(deps.dispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([false, true])('opens a legacy group through foreground migration while auth renews (prior background deferral: %s)', async backgroundFirst => {
+      const source = '10000000-0000-4000-8000-000000000088';
+      service.dispose();
+      fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
+      service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: source, name: 'Old group', members: [] }] })),
+        dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      // The restartable importer has its own real paging/receipt tests. This
+      // fixture isolates the real adapter's caller context and cached promise.
+      const migrator = await import('../chatServerMigration.js');
+      const imported = vi.spyOn(migrator, 'migrateLocalGroups').mockImplementation(async input => {
+        input.onRoom?.(source, roomId); return new Map([[source, roomId]]);
+      });
+      let expired = false, finish!: (ok: boolean) => void;
+      fixture.refresh.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      const base = fixture.handle.getMockImplementation()!;
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (expired && (route === '/me' || route === '/profile/refresh')) return { status: 401, body: { error: { code: 'TOKEN_EXPIRED' } } };
+        if (route === '/conversations?limit=100') return { body: [] };
+        return base(route, method, body);
+      });
+      await service.chatServer!.ownedBots();
+      expired = true; signalBotAutonomyBotsChanged();
+      const refreshing = service.chatServer!.refreshProfile();
+      await vi.advanceTimersByTimeAsync(0);
+      try {
+        expect(fixture.refresh).toHaveBeenCalledOnce();
+        if (backgroundFirst) { expect((await service.listGroups()).ok).toBe(true); await vi.advanceTimersByTimeAsync(0); }
+        let settled = false;
+        const opened = service.getGroup(source).then(value => { settled = true; return value; });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        expired = false; fixture.token = 'renewed-test-token'; finish(true);
+        expect((await opened).ok).toBe(true);
+        expect(imported).toHaveBeenCalledOnce();
+        expect(fixture.handle).toHaveBeenCalledWith(`/conversations/${roomId}/snapshot`, 'GET', undefined);
+        expect((await service.getGroup(source)).ok).toBe(true);
+        expect(imported).toHaveBeenCalledOnce();
+      } finally {
+        expired = false; finish(true); await refreshing; imported.mockRestore();
+      }
+    });
+
+    it('resumes the owner cursor on reconnect and resets an ahead cursor without replaying registration on every connect', async () => {
+      const socket = await live();
+      socket.emit('message', JSON.stringify({ type: 'changes', scope: `actor:${selfId}`, cursor: '42', changes: [] }));
+      await vi.advanceTimersByTimeAsync(0);
+      socket.emit('close');
+      await vi.advanceTimersByTimeAsync(500);
+      const next = fixture.sockets.at(-1)!;
+      Object.defineProperty(next, 'readyState', { value: 1 });
+      next.emit('message', JSON.stringify({ type: 'ready' }));
+      await vi.advanceTimersByTimeAsync(0);
+      const subscriptions = () => vi.mocked(next.send).mock.calls.map(([raw]) => JSON.parse(String(raw)))
+        .filter(frame => frame.type === 'subscribe' && frame.scope === `actor:${selfId}`);
+      expect(subscriptions()).toEqual([{ type: 'subscribe', scope: `actor:${selfId}`, after: '42' }]);
+      next.emit('message', JSON.stringify({ type: 'scope_error', scope: `actor:${selfId}`, error: { code: 'CURSOR_AHEAD' } }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subscriptions().at(-1)).toEqual({ type: 'subscribe', scope: `actor:${selfId}`, after: '0' });
+      expect(fixture.handle.mock.calls.filter(([route]) => route === '/me')).toHaveLength(1);
     });
 
     it('claims for several owned companions at once', async () => {
@@ -3935,18 +4534,19 @@ describe('Chat Server directed sends', () => {
   let service: BotGroupChatService;
   let responseMode: 'all' | 'mentioned';
   let nextSendId: number;
+  let mentionAudiences = false, allowAllBots = false;
   let members: Array<{ id: string; kind: string; state: string }>;
   beforeEach(() => {
     vi.useFakeTimers();
-    fixture.packaged = true; responseMode = 'all'; nextSendId = 0;
+    fixture.packaged = true; responseMode = 'all'; nextSendId = 0; mentionAudiences = false; allowAllBots = false;
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'active' }];
     members = [{ id: selfId, kind: 'human', state: 'joined' },
       { id: botId, kind: 'bot', state: 'joined' }, { id: humanId, kind: 'human', state: 'joined' }];
     fixture.handle.mockImplementation((route, method) => {
-      if (route === '/me') return { body: { actor: { id: selfId } } };
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: mentionAudiences ? { groupMentionAudiences: 1 } : {} } };
       if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
       if (route.endsWith('/members')) return { body: members };
-      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', response_mode: responseMode }, members, messages: [], cursor: '0' } };
+      if (route.endsWith('/snapshot')) return { body: { room: { id: roomId, kind: 'group', response_mode: responseMode, allow_mention_all_bots: allowAllBots }, members, messages: [], cursor: '0' } };
       if (route.endsWith('/messages') && method === 'POST') return { body: { id: 'posted-message' } };
       return { body: [] };
     });
@@ -3955,15 +4555,72 @@ describe('Chat Server directed sends', () => {
   });
   afterEach(() => { service.dispose(); vi.useRealTimers(); vi.clearAllMocks(); });
   const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
-  const send = (entry: string, mentions = { all: false, botIds: ['local-bot'] }) => {
+  const send = (entry: string, mentions: { all: boolean; allBots?: boolean; botIds: string[] } = { all: false, botIds: ['local-bot'] }) => {
     const input = { groupId: roomId, text: '@Bot hello', clientId: `directed-send-${++nextSendId}`, mentions };
     return entry === 'thread' ? service.chatServer!.reply({ ...input, rootId }) : service.sendMessage(input);
   };
+
+  // User rule: human and teammate broadcasts must remain distinct on both send routes.
+  it.each(['main', 'thread'])('uses the owner-enabled teammate audience independently in %s', async entry => {
+    mentionAudiences = true;
+    expect(await send(entry, { all: false, allBots: true, botIds: [] })).toMatchObject({ ok: false, errorCode: 'ALL_BOTS_MENTION_DISABLED' });
+    expect(posts()).toEqual([]);
+    expect(await send(entry, { all: true, botIds: [] })).toMatchObject({ ok: true });
+    expect(posts().at(-1)![2]).toMatchObject({ mentions: [humanId], mentionAudience: 'humans' });
+    allowAllBots = true;
+    expect(await send(entry, { all: false, allBots: true, botIds: [] })).toMatchObject({ ok: true });
+    expect(posts().at(-1)![2]).toMatchObject({ mentions: [botId], mentionAudience: 'bots' });
+  });
+
+  // Unit: a lost committed receipt must remain recoverable after the owner closes broadcasts.
+  it('retries a posted teammate broadcast unchanged after its setting is disabled', async () => {
+    mentionAudiences = true; allowAllBots = true;
+    const response = fixture.handle.getMockImplementation()!;
+    let loseReply = true;
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route.endsWith('/messages') && method === 'POST' && loseReply) {
+        loseReply = false; throw new Error('lost receipt');
+      }
+      return response(route, method, body);
+    });
+    const input = { groupId: roomId, rootId, text: '@All teammates', clientId: 'retry-broadcast',
+      mentions: { all: false, allBots: true, botIds: [] } };
+    expect(await service.chatServer!.reply(input)).toMatchObject({ ok: false });
+    const first = posts()[0]![2];
+    allowAllBots = false;
+    expect(await service.chatServer!.reply(input)).toMatchObject({ ok: true });
+    expect(posts()).toHaveLength(2);
+    expect(posts()[1]![2]).toEqual(first);
+  });
 
   it('maps each owned Chat Server actor back to its local teammate for entry points outside group settings', async () => {
     const result = await service.chatServer!.ownedBots();
     expect(result).toMatchObject({ ok: true });
     expect(result.ok && result.bots.some(bot => bot.botId === 'local-bot' && typeof bot.actorId === 'string')).toBe(true);
+  });
+
+  it('lists owned companions on other devices without importing them locally, excluding disabled actors', async () => {
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' ? { body: [
+      { id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' },
+      { id: humanId, kind: 'bot', externalId: 'linux-bot', name: 'Linux', homeDeviceId: 'linux', avatar: '🐧' },
+      { id: rootId, kind: 'bot', externalId: 'deleted-bot', name: 'Deleted', disabled: true },
+    ] } : original(route, method, body));
+    expect(await service.chatServer!.ownedBots()).toMatchObject({ ok: true, bots: [
+      { actorId: botId, botId: 'local-bot' },
+      { actorId: humanId, botId: 'linux-bot', name: 'Linux', homeDeviceId: 'linux', avatar: '🐧' },
+    ] });
+    expect(fixture.profiles).toHaveLength(1);
+  });
+
+  it.each([null, 'another-device'])('respects local pause only while this computer owns execution (home=%s)', async homeDeviceId => {
+    fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', status: 'paused' }];
+    const original = fixture.handle.getMockImplementation()!;
+    fixture.handle.mockImplementation((route, method, body) => route === '/actors' ? { body: [
+      { id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot', homeDeviceId },
+    ] } : original(route, method, body));
+    const result = await service.chatServer!.ownedBots();
+    expect(result.ok && result.bots.map(bot => bot.botId)).toEqual(homeDeviceId ? ['local-bot'] : []);
   });
 
   it.each(['main', 'thread'])('rejects a selected bot that left before the %s send instead of posting empty mentions', async entry => {
@@ -3977,8 +4634,7 @@ describe('Chat Server directed sends', () => {
     for (const all of [false, true]) {
       for (const targets of [[botId], ['local-bot'], [humanId], [selfId], [selfId, humanId, 'local-bot', botId]]) {
         expect(await send(entry, { all, botIds: targets })).toMatchObject({ ok: true });
-        const ids = all ? [botId, humanId]
-          : [...new Set(targets.map(target => target === 'local-bot' ? botId : target))].filter(target => target !== selfId);
+        const ids = [...new Set([...targets.map(target => target === 'local-bot' ? botId : target), ...(all ? [humanId] : [])])].filter(target => target !== selfId);
         expect(posts().at(-1)![2]).toMatchObject({ mentions: ids,
           ...(entry === 'thread' ? { threadRootId: rootId } : {}) });
       }
@@ -3992,7 +4648,7 @@ describe('Chat Server directed sends', () => {
         const before = posts().length;
         expect(await send(entry, mentions)).toMatchObject({ ok: true });
         expect(posts()).toHaveLength(before + 1);
-        expect(posts().at(-1)![2].mentions).toEqual(mentions.all ? [botId, humanId] : []);
+        expect(posts().at(-1)![2].mentions).toEqual(mentions.all ? [humanId] : []);
       }
     }
   });

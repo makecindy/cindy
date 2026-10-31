@@ -367,8 +367,6 @@ export type CindyMediaToolRequest =
 
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {
-  /** Internal Codex native Hook ingress; ordinary model calls cannot dispatch it. */
-  nativeHarnessHook?(input: unknown, metadata: unknown): Promise<Record<string, unknown>>;
   /** Cindy's own catalog, separate from installed plugins and provider app marketplaces. */
   searchMarket?(query: string): Promise<Record<string, unknown>>;
   installMarket?(request: { pluginId: string; releaseId: string }, signal?: AbortSignal): Promise<Record<string, unknown>>;
@@ -476,6 +474,8 @@ export interface CindyGhostsMcpDeps {
   forgeScaffold(request: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    /** Add a standard MCP Apps page bridging the existing main.js runtime. */
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;
@@ -507,6 +507,15 @@ export interface CindyGhostsMcpDeps {
   forgePublish(request: { token: string }): Promise<CindyForgePublishResult>;
   /** 查询一次后台发布传输的当前状态。 */
   forgePublishStatus(request: { transferId: string }): Promise<CindyForgePublishStatusResult>;
+  /** Ordinary personal community author capability, separate from organization Forge publishing. */
+  communityContribution?(request:
+    | { action: 'prepare'; ghostId: string; namespace?: string | null }
+    | { action: 'submit' | 'status' | 'cancel'; id: string }
+    | { action: 'list'; query?: string; filter?: 'all' | 'pending' | 'needs_action' | 'published'; cursor?: string }
+    | { action: 'detail'; pluginId: string; cursor?: string }
+    | { action: 'submission'; pluginId: string; submissionId: string }
+    | { action: 'cancel-review'; pluginId: string; release: { releaseId: string; sha256: string; revision: string } }
+  ): Promise<unknown>;
   logger?: {
     info: (msg: string, meta?: Record<string, unknown>) => void;
     warn: (msg: string, meta?: Record<string, unknown>) => void;

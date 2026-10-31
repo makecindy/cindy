@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { cn } from '@/lib/utils';
 import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
 import {
@@ -15,6 +16,7 @@ interface BannerProps {
   dataOwnerId: string | null;
   sessionId: string;
   latestFailedRun: FailedScheduleRunSnapshot;
+  onDiagnose?: (error: ErrorDiagnosisSource) => void;
   className?: string;
   style?: CSSProperties;
 }
@@ -33,6 +35,7 @@ function FailedScheduleNotice({
   dataOwnerId,
   sessionId,
   latestFailedRun,
+  onDiagnose,
   className,
   style,
 }: BannerProps) {
@@ -83,6 +86,11 @@ function FailedScheduleNotice({
       data-testid="unread-failed-schedule-banner"
       data-banner-kind="unread-failed-schedule"
       message={t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
+      details={latestFailedRun.errorMsg}
+      onDiagnose={onDiagnose && latestFailedRun.errorMsg ? () => onDiagnose({
+        message: t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`),
+        details: latestFailedRun.errorMsg!,
+      }) : undefined}
       onDismiss={dismiss}
       dismissLabel={t('chat.unreadFailedScheduleBanner.dismissTitle')}
     />

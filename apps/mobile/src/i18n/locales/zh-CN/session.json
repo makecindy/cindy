@@ -257,6 +257,7 @@
     "voiceSenderNotReady": "消息暂时无法发送，请返回后重新进入任务。",
     "voiceStopAndSend": "结束语音输入并发送",
     "sendMessage": "发送远程消息",
+    "inputSyncFailed": "未能读取完整输入，内容已保留，请重试。",
     "voiceStartInput": "开始语音输入",
     "stopSession": "停止远程任务",
     "sessionNotFoundResync": "未找到当前远程任务，请重新同步后再发送。",
@@ -561,6 +562,7 @@
     "toolUseLoopDetectedPingPongWithCount": "模型在多个工具调用之间来回循环，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用多个工具，Cindy 检测到本轮已有 {{count}} 次调用后停止了本轮。可以发送新消息继续。",
     "codexThreadLost": "Codex 鉴权模式已切换，当前任务无法继续，请新建任务。",
+    "remoteCompactEncryptedContent": "整理上下文失败：模型无法读取历史中的加密内容。自动接续未完成，可重试恢复。",
     "encryptedContentInvalid": "由于更换供应商导致加密不可用，本任务只能在原供应商下使用；请回到电脑端处理（可以用「从这里开启新任务」丢弃协议加密内容，在新任务里继续）。"
   },
   "row": {
@@ -624,6 +626,7 @@
     "REMOTE_AGENT_RESUME_LOST": "之前在那台电脑上的对话没能接上，Agent 会在没有之前上下文的情况下继续。",
     "REMOTE_AGENT_UNSUPPORTED": "那台电脑上这个 Agent 不可用。在那台电脑上安装或登录后再试，或换一个 Agent。",
     "REMOTE_AGENT_INVALID": "和运行 Agent 的电脑通信出错。请重试；如果一直出现，请把两台电脑上的 Cindy 都更新到最新版。",
+    "REMOTE_AGENT_MEMBER_BUDGET_PAUSED": "此模型已达到分享者设置的模型占比上限。请选择其他可用模型继续。",
     "REMOTE_AGENT_PROVIDER_NOT_ALLOWED": "那台电脑没有允许远程调用这个供应商。请在那台电脑的「设置 → 模型供应商」里打开「允许被远程调用」，或换一个模型。",
     "REMOTE_AGENT_FORK_FAILED": "运行 Agent 的电脑没能从这里开启新任务。请重试，或换一条消息再试。",
     "REMOTE_AGENT_SHARE_PAUSED": "对方已暂停对你的分享，恢复前不能使用这些模型。可以换成其他模型继续。",

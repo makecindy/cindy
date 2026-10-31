@@ -84,7 +84,8 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
   const tap = async (event: MouseEvent<HTMLButtonElement>) => {
     const session = opened.current;
     const rect = image.current?.getBoundingClientRect();
-    if (!session || !rect || rect.width <= 0 || rect.height <= 0 || state !== 'shown') return;
+    // An agent's screenshot is not a window: there is nothing on screen to tap.
+    if (snapshot.agentPicture || !session || !rect || rect.width <= 0 || rect.height <= 0 || state !== 'shown') return;
     opened.current = null;
     setState('sending');
     const clamp = (n: number) => Math.min(1, Math.max(0, n));
@@ -176,9 +177,12 @@ export function InputHandoffQrStep({ sessionId, snapshot, busy, inputBlocked, on
           </p>
         )}
       </div>
-      <p className="max-w-[360px] text-center text-12 leading-relaxed text-[var(--text-secondary)]">
-        {t(openable ? 'inputHandoff.qr.hintLink' : 'inputHandoff.qr.hint')}
-      </p>
+      {/* An agent's screenshot does not continue by itself; the dialog header says to hand back. */}
+      {!snapshot.agentPicture && (
+        <p className="max-w-[360px] text-center text-12 leading-relaxed text-[var(--text-secondary)]">
+          {t(openable ? 'inputHandoff.qr.hintLink' : 'inputHandoff.qr.hint')}
+        </p>
+      )}
       {/* Opening the link here comes first: many codes open an app straight from the browser. */}
       {openable && (
         <Button type="button" size="lg" variant="cta" palette="confirmation" className="w-full" disabled={disabled} onClick={open}>

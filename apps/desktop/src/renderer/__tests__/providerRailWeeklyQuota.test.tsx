@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderShareInsights } from '../../shared/providerShareInsights';
@@ -10,7 +10,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 
 // Account generations are driven explicitly below; no full auth host is needed.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => 'self-a' }));
 
 const sharing = vi.hoisted(() => ({ received: [] as ProviderShareReceived[] }));
 vi.mock('@/features/provider-share/providerShareStore', () => ({
@@ -57,6 +57,7 @@ import {
   remoteCodexQuotaView,
   weeklyQuota,
   providerWeeklyQuotaSource,
+  useProviderWeeklyQuota,
 } from '@/components/new-chat/useProviderWeeklyQuota';
 
 const provider = (id: string, extra: Partial<ProviderView> = {}): ProviderView => ({
@@ -87,6 +88,33 @@ afterEach(() => {
 });
 
 describe('provider weekly quota identity and windows', () => {
+  // #8010 merge regression / unit: main added Kimi after self-source normalization.
+  // Run the real quota + account hooks; existing tests only covered other vendors.
+  // Minimum input: A's explicit device ID and a Kimi provider read from B's catalog.
+  it('reads controller-owned Kimi quota locally and keeps other computers remote', async () => {
+    reads.codex.mockReturnValue({ snapshot: null });
+    const value = (usedPercent: number) => ({ status: 'ready', stale: false,
+      snapshot: { kind: 'kimi-coding-quota', fetchedAt: Date.now(),
+        windows: [{ id: 'limit_7d', usedPercent, resetsAt: null }] } });
+    const local = vi.fn().mockResolvedValue(value(30));
+    const remote = vi.fn().mockResolvedValue(value(60));
+    vi.stubGlobal('electronAPI', { maker: { fetchProviderAccountUsage: local }, deviceLink: { invoke: remote } });
+    const kimi = provider('kimi-self', { auth: { method: 'apiKey' },
+      routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } });
+    const hook = renderHook(({ deviceId }) => useProviderWeeklyQuota(kimi, { deviceId }),
+      { initialProps: { deviceId: 'self-a' } });
+    try {
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(30);
+      expect(local).toHaveBeenCalledExactlyOnceWith({ providerId: 'kimi-self', forceRefresh: false });
+      expect(remote).not.toHaveBeenCalled();
+      hook.rerender({ deviceId: 'other-b' });
+      await act(async () => {});
+      expect(hook.result.current?.usedPercent).toBe(60);
+      expect(remote).toHaveBeenCalledExactlyOnceWith('other-b', 'maker:usage:kimi-coding', [{ providerId: 'kimi-self', forceRefresh: false }]);
+      expect(local).toHaveBeenCalledTimes(1);
+    } finally { hook.unmount(); vi.unstubAllGlobals(); }
+  });
   it('selects only the weekly generic bucket, not the latest promotion or short window', () => {
     const data = snapshot(79);
     expect(codexWeeklyQuota(localCodexQuotaView(data), Date.now())?.usedPercent).toBe(79);
@@ -335,7 +363,7 @@ describe('provider rail weekly remaining bars', () => {
         el.getAttribute('data-weekly-remaining'),
       ),
     ).toEqual(['75', '30']);
-    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai');
+    expect(reads.remoteCodex).toHaveBeenCalledWith('device-1', 'openai', { live: true, web: false });
     expect(reads.remoteClaude).toHaveBeenCalledWith('device-1', 'anthropic');
     expect(reads.remoteXai).toHaveBeenCalledWith('device-1', 'xai');
     for (const read of [reads.codex, reads.claude, reads.xai])

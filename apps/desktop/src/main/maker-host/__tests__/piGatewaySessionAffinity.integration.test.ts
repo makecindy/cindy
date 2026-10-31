@@ -1,5 +1,5 @@
 /** Real Pi RPC → production loopback proxy → fake upstream affinity regression. */
-import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,8 @@ import { PiAgent } from '../../../../../../packages/maker-core/src/agents/pi/ind
 import type { AgentDeps, AgentSessionHandle } from '../../../../../../packages/maker-core/src/agents/base-agent.js';
 import type { Logger } from '../../../../../../packages/maker-core/src/interfaces/logger.js';
 
+// Skill discovery is unrelated to this isolated Gateway transport fixture.
+vi.mock('../managed-skills.js', () => ({ listCindyManagedSkills: async () => [], cindyManagedSkillRoots: async () => [] }));
 vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
 vi.mock('../grok-oauth-login.js', () => ({ hasGrokOAuthLogin: () => false }));
 vi.mock('../anthropic-compat-proxy-host.js', () => ({ getClaudeEndpoint: () => undefined }));
@@ -127,6 +129,126 @@ async function sendTurn(handle: AgentSessionHandle, content: string) {
   expect(seen.some(event => event.type === 'text')).toBe(true);
   expect(seen.at(-1)).toMatchObject({ type: 'done', data: { status: 'completed' } });
 }
+
+/**
+ * #7296 integration: production Gateway spec → models.json → real Pi → proxy → fake upstream.
+ * The existing affinity fixture never produced tools. A current-turn tool call without thinking
+ * and a normal ID is the minimal failure; follow it with signed reasoning to guard preservation.
+ * Real processes/sockets stay in the integration tier; only synthetic data and invalid keys.
+ */
+describe.skipIf(!existsSync(binary))('Gateway DeepSeek reasoning replay (real Pi RPC and proxy)', () => {
+  it.each([
+    ['deepseek/deepseek-v4.1-flash', false],
+    ['deepseek/deepseek-flash', false],
+    ['deepseek/deepseek-v4-pro', false],
+    ['deepseek/deepseek-v4-flash-vision-exp', false],
+    ['deepseek/deepseek-v4-flash', false],
+    ['deepseek/deepseek-v4.1-flash', true],
+  ] as const)('%s / fallback disabled: %s', async (model, disableFallback) => {
+    const writeEvidence = createEvidenceWriter();
+    const temp = mkdtempSync(path.join(tmpdir(), 'cindy-pi-reasoning-'));
+    const workingDir = path.join(temp, 'workspace');
+    mkdirSync(workingDir);
+    const inputFile = path.join(workingDir, 'number.txt');
+    writeFileSync(inputFile, '7');
+    const reasoning = 'Read the fixture again to verify its number.';
+    type WireMessage = { role: string; reasoning_content?: string; tool_calls?: Array<{ id: string }> };
+    const requests: Array<{ model: string; messages: WireMessage[] }> = [];
+    const statuses: number[] = [];
+    const upstream = createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        const request = JSON.parse(body) as typeof requests[number];
+        requests.push(request);
+        const toolTurns = request.messages.filter(message => message.role === 'assistant' && message.tool_calls?.length);
+        const status = toolTurns.some(message => typeof message.reasoning_content !== 'string') ? 400 : 200;
+        statuses.push(status);
+        writeEvidence({ case: 'deepseek-reasoning-replay', model, disableFallback, request: requests.length, status,
+          reasoningLengths: toolTurns.map(message => message.reasoning_content?.length ?? null) });
+        if (status === 400) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { type: 'invalid_request_error', code: 'provider_invalid_request',
+            message: 'The reasoning_content in the thinking mode must be passed back to the API.' } }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        if (requests.length > 2) {
+          res.end(chatCompletionsStreamBody('7', model));
+          return;
+        }
+        const secondTool = requests.length === 2;
+        const deltas = [
+          { role: 'assistant' },
+          ...(secondTool ? [{ reasoning_content: reasoning }] : []),
+          { tool_calls: [{ index: 0, id: secondTool ? 'call_probe_7296_signed' : 'call_probe_7296_missing',
+            type: 'function', function: { name: 'read', arguments: JSON.stringify({ path: inputFile }) } }] },
+        ];
+        res.end([
+          ...deltas.map(delta => `data: ${JSON.stringify({ id: `chatcmpl_${requests.length}`, object: 'chat.completion.chunk',
+            created: 1, model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`),
+          `data: ${JSON.stringify({ id: `chatcmpl_${requests.length}`, object: 'chat.completion.chunk', created: 1, model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } })}\n\n`,
+          'data: [DONE]\n\n',
+        ].join(''));
+      });
+    });
+    let proxy: Awaited<ReturnType<typeof createAnthropicCompatProxy>> | undefined;
+    let handle: AgentSessionHandle | undefined;
+    try {
+      await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+      const endpoint = `http://127.0.0.1:${(upstream.address() as import('node:net').AddressInfo).port}`;
+      proxy = await createAnthropicCompatProxy({ upstream: endpoint });
+      setActiveCatalog(BUNDLED_CATALOG);
+      setXdGatewayModels([{ id: model, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-completions' } } }]);
+      const agent = new PiAgent({
+        binaryPath: binary, logger,
+        auth: {
+          getState: async () => ({ authenticated: true, identity: 'fixture', authSource: 'api-key' as const }),
+          triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+          getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'fixture-not-a-real-key', HOME: temp, USERPROFILE: temp }),
+        },
+        runtimeConfig: { endpoint: proxy.url },
+        resolvePiAgentHome: () => path.join(temp, 'agent'),
+        resolvePiGlobalContextHome: () => temp,
+        resolvePiGatewayModelSpec: (provider, id, context) => {
+          const spec = resolvePiCindyGatewayModelSpec(provider, id, context);
+          return disableFallback && spec
+            ? { ...spec, compat: { ...spec.compat, requiresReasoningContentOnAssistantMessages: false } }
+            : spec;
+        },
+        capabilityAdditions: { availableModels: [{ id: model, displayName: model, contextWindow: 128000,
+          efforts: ['high', 'max'], defaultEffort: 'high' }] },
+      });
+      handle = await agent.startSession({ sessionId: 'reasoning-fixture', providerId: 'xd', model,
+        workingDir, effort: 'max', permissionMode: 'bypassPermissions' });
+      const events = await collectTurn(handle, 'Read number.txt twice and reply with the number.');
+      expect(requests.every(request => request.model === model)).toBe(true);
+      if (disableFallback) {
+        expect(statuses).toEqual([200, 400]);
+        expect(requests[1]!.messages.find(message => message.tool_calls?.length))
+          .not.toHaveProperty('reasoning_content');
+        expect(events.some(event => event.type === 'error')).toBe(true);
+        expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'failed' } });
+      } else {
+        expect(statuses).toEqual([200, 200, 200]);
+        const toolTurns = requests[2]!.messages.filter(message => message.tool_calls?.length);
+        expect(toolTurns.map(message => ({ id: message.tool_calls![0]!.id, reasoning: message.reasoning_content })))
+          .toEqual([{ id: 'call_probe_7296_missing', reasoning: '' }, { id: 'call_probe_7296_signed', reasoning }]);
+        expect(requests[2]!.messages.filter(message => message.role === 'user')).toHaveLength(1);
+        expect(events.filter(event => event.type === 'error')).toEqual([]);
+        expect(events.at(-1)).toMatchObject({ type: 'done', data: { status: 'completed', result: '7' } });
+      }
+    } finally {
+      await handle?.close();
+      await proxy?.dispose();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(temp, { recursive: true, force: true });
+    }
+  }, 30000);
+});
 
 describe.skipIf(!existsSync(binary))('Gateway session affinity (real Pi RPC and proxy)', () => {
   it.each([

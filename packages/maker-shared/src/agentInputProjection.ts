@@ -136,6 +136,33 @@ export function boundAgentReferenceText(
   return { text: text.slice(0, cap), truncated: true };
 }
 
+/** Stable identity of one quoted message across the composer and the session-reference resolver. */
+export function agentInputMessageReferenceKey(sessionId: string, messageClientId: string): string {
+  return `${sessionId}\u0000${messageClientId}`;
+}
+
+/**
+ * Messages whose body already reaches the model verbatim inside the user
+ * message. The quoted-history payload must not deliver those bodies a second
+ * time: a duplicate copy spends the shared quote budget and can arrive
+ * trimmed, so the model would see the same message twice — once complete,
+ * once mutilated.
+ */
+export function collectInlineMessageReferenceKeys(
+  references: readonly AgentInputReference[] | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const reference of references ?? []) {
+    if (reference.kind !== 'message') continue;
+    // No inline body, or a body that was cut at the reference cap: the quote
+    // still has to carry the message.
+    if (!reference.text?.trim()) continue;
+    if (reference.truncated === true) continue;
+    keys.add(agentInputMessageReferenceKey(reference.sessionId, reference.messageClientId));
+  }
+  return keys;
+}
+
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
@@ -561,8 +588,8 @@ function formatReference(reference: AgentInputReference): string {
     const truncated = reference.truncated === true || bounded.truncated;
     return [
       '[Referenced message]',
-      `Session ID: ${reference.sessionId}`,
-      `Message ID: ${reference.messageClientId}`,
+      `Session ID: ${quotedMetadata(reference.sessionId)}`,
+      `Message ID: ${quotedMetadata(reference.messageClientId)}`,
       'Content:',
       bounded.text || '(message content unavailable)',
       ...(truncated ? ['[Content truncated]'] : []),
@@ -572,8 +599,8 @@ function formatReference(reference: AgentInputReference): string {
   if (reference.kind === 'session') {
     return [
       '[Referenced conversation]',
-      `Title: ${oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`}`,
-      `Session ID: ${reference.sessionId}`,
+      `Title: ${quotedMetadata(oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`)}`,
+      `Session ID: ${quotedMetadata(reference.sessionId)}`,
       '[/Referenced conversation]',
     ].join('\n');
   }
@@ -643,8 +670,8 @@ function formatReference(reference: AgentInputReference): string {
   }
   return [
     '[Referenced project]',
-    `Name: ${oneLine(reference.name)}`,
-    `Working directory: ${reference.workingDir}`,
+    `Name: ${quotedMetadata(oneLine(reference.name))}`,
+    `Working directory: ${quotedMetadata(reference.workingDir)}`,
     '[/Referenced project]',
   ].join('\n');
 }

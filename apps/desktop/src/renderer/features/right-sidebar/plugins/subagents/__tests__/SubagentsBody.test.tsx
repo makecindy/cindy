@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   SubagentRunDetail,
@@ -54,6 +55,16 @@ vi.mock('@/components/chat/AssistantMessage', () => ({
 }));
 
 import { SubagentsBody } from '../SubagentsBody';
+import { prefillErrorDiagnosisDraft } from '@/lib/errorDiagnosisPrompt';
+
+vi.mock('@/lib/errorDiagnosisPrompt', () => ({
+  buildErrorDiagnosisPrompt: (_t: unknown, url: string, source: { details: string }) => `${url}\n${source.details}`,
+  prefillErrorDiagnosisDraft: vi.fn(),
+}));
+
+function CurrentRoute() {
+  return <span data-testid="current-route">{useLocation().pathname}</span>;
+}
 
 const OWNER_STAMP = { dataOwnerId: 'owner-1', ownerGeneration: 1 };
 
@@ -170,6 +181,31 @@ describe('SubagentsBody', () => {
     cleanup();
     dataOwnerTesting.reset();
     Reflect.deleteProperty(window, 'electronAPI');
+  });
+
+  it('opens a diagnosis draft for a failed child without retrying or controlling it', async () => {
+    currentDetail = {
+      ...detail(''), status: 'failed',
+      capabilities: { ...detail('').capabilities, viewFullTranscript: true },
+      children: [{ id: 'child-1', role: 'worker', status: 'failed', error: 'provider mismatch' }],
+    };
+    render(<MemoryRouter initialEntries={['/cc-agent/session-1']}>
+      <CurrentRoute />
+      <SubagentsBody
+        state={{ selectedRunId: 'run-1', selectedProvider: 'pi' }}
+        ctx={{
+          tabId: 'tab-1', sessionId: 'session-1', workdir: '/workspace',
+          remoteHostId: null, deviceLinkDeviceId: null, patchState: vi.fn(),
+          onVisibilityChange: vi.fn(), setCloseInterceptor: vi.fn(() => () => undefined),
+        }}
+      />
+    </MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'chat.errorBanner.networkShowRaw' }));
+    fireEvent.click(screen.getByRole('button', { name: 'chat.errorBanner.diagnose' }));
+    expect(prefillErrorDiagnosisDraft).toHaveBeenLastCalledWith(expect.stringMatching(/session-1[\s\S]*subagentRunId: run-1\nchildId: child-1\nprovider mismatch/));
+    expect(screen.getByTestId('current-route').textContent).toBe('/cc-agent/new');
+    expect(controlPiSubagent).not.toHaveBeenCalled();
+    expect(stopAgentTask).not.toHaveBeenCalled();
   });
 
   it('polls a local run to completion when no change push ever arrives', async () => {

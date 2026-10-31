@@ -17,8 +17,8 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  * F-MSG-1: assistant message styling (left-aligned, no bubble)
  * F-MSG-2: Markdown rendering
  * message-actions V1.2: hover-revealed bar below the markdown body, left-aligned,
- *   order [copy][fork][more][time][cost]. Streaming messages reserve the bar's height,
- *   without mounting its actions; 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
+ *   order [copy][fork][more][time][cost]. Streaming messages do NOT mount the bar (per spec
+ *   "流式期间不挂载"); 且仅当父层标记本消息为 turn 收尾正文(showActionBar)
  *   时才挂载 —— 任务执行过程中的中间句没有操作行。The bar
  *   owns its own fade lifecycle (see MessageActionBar) so this component
  *   only tracks raw hover state.
@@ -47,8 +47,7 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  *   直到 finally — 那个体验更差, 没有借鉴。
  */
 
-import { CHAT_BODY_CLASS } from './chatChrome';
-import { Collapse } from '@/components/ui/collapse';
+import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, TriangleAlert } from 'lucide-react';
@@ -68,7 +67,7 @@ import { buildSessionMessageDeepLink } from '@/lib/deepLink';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { BubbleHoverToolbar, MessageActionBar } from './MessageActionBar';
+import { MessageActionBar } from './MessageActionBar';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -353,6 +352,8 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   const actionBar = !isStreaming && showActionBar ? (
     <MessageActionBar
+      sessionId={currentSessionId}
+      clientId={messageClientId}
       createdAt={createdAt}
       copyText={richAnswerText(content)}
       copyLinkText={messageDeepLink}
@@ -362,7 +363,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       readAloudMessage={simplifiedBotConversation && !ghostReplyPending && currentSessionId && messageClientId
         ? { sessionId: currentSessionId, messageId: messageClientId }
         : undefined}
-      compact={botBubble}
+      companionFooter={botBubble}
       replyAction={dmThread && botBubble ? {
         onClick: dmThread.open,
         label: dmThread.thread
@@ -389,23 +390,10 @@ export const AssistantMessage = memo(function AssistantMessage({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div
+      <ChatBubble
+        bare={!botBubble}
         {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
-        className={cn(
-          // min-w-0: flex item 默认 min-width: auto 会被 <pre> 的固有宽度撑爆，
-          // 导致代码块溢出消息流右边界。加上 min-w-0 让 w-full 真正生效，
-          // <pre> 的 overflow-x-auto 才能正常接管横向滚动。
-          // 伙伴私聊：回复放进与群聊同一种气泡（卡片底 + 细边框，无阴影），宽度随内容、
-          // 上限 720；组件式回答按可用宽度排版，气泡取满上限。右侧为回复、朗读和更多留出位置。
-          botBubble
-            ? cn(
-                'relative min-w-0 max-w-[min(720px,calc(100%-96px))] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5',
-                hasRichAnswer(content) ? 'w-full' : 'w-fit',
-              )
-            : 'w-full min-w-0',
-          CHAT_BODY_CLASS,
-          'text-[var(--msg-assistant-text)]',
-        )}
+        className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
       >
         {botBubble && botQuote && messageClientId ? (
           <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
@@ -489,8 +477,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             })}
           </div>
         )}
-        {botBubble && actionBar && <BubbleHoverToolbar side="right">{actionBar}</BubbleHoverToolbar>}
-      </div>
+      </ChatBubble>
+      {botBubble && actionBar}
       {dmThread?.thread && !isStreaming ? (
         <BotDmThreadPreview thread={dmThread.thread} bot={dmThread.bot} unread={dmThread.unread} onOpen={dmThread.open} />
       ) : null}
@@ -503,13 +491,10 @@ export const AssistantMessage = memo(function AssistantMessage({
             data={{ ...card }} sessionId={currentSessionId} attached />)}
         </div>
       ) : null}
-      {/* Reserve the completed toolbar's space while streaming, without showing premature actions.
-          Companion hover tools are outside flow and need no footer reservation. */}
-      {!botBubble ? <div className="-mt-1.5">
-        <Collapse open={isStreaming || showActionBar}>
-          <div className="pt-1.5"><div className="min-h-6">{actionBar}</div></div>
-        </Collapse>
-      </div> : null}
+      {/* Streaming → bar not mounted at all (V1.2 验收 "流式期间不挂载");
+          非 turn 收尾正文(showActionBar=false)同样不挂,消息流保持紧凑。
+          伙伴私聊的操作栏已紧跟气泡显示；普通任务保持原位置。 */}
+      {!botBubble && actionBar}
     </div>
   );
 });

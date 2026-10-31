@@ -170,7 +170,7 @@ function assertSharedTaskInteractionResolve(
   if (args.length !== 2 || typeof args[0] !== 'string' || !args[0]) deny();
   const interaction = phase === 'invoke' ? readInteractionSession?.(args[0]) : undefined;
   if (phase === 'invoke' && (!interaction || interaction.sessionId !== sessionId)) deny();
-  if (interaction?.toolName && OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES.has(interaction.toolName)) deny();
+  if (interaction?.toolName && (OWNER_ONLY_HOST_CONFIRMATION_TOOL_NAMES.has(interaction.toolName) || ['ghost_contribution_submit', 'ghost_cancel_plugin_review'].includes(interaction.toolName))) deny();
   const decision = record(args[1]);
   if (!decision || typeof decision.kind !== 'string' || !interactionDecisionKinds.has(decision.kind)) deny();
   // Guests approve the host-displayed input, never substitute executable input.

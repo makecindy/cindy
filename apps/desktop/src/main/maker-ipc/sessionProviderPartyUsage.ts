@@ -97,7 +97,7 @@ export function recordSessionProviderPartyUsage(
   session: Session,
   event: AgentEvent,
 ): void {
-  if (event.type !== 'done') return;
+  if (event.type !== 'done' && event.type !== 'status') return;
   let meter = meters.get(session);
   if (!meter) {
     meter = createGuestUsageMeter(session.agentKind);

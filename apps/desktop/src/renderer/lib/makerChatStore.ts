@@ -136,7 +136,7 @@ import type {
   GhostSetupStepPhase,
 } from '../../shared/ghost';
 import * as messageService from '@/lib/messageService';
-import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
+import { parseMcpAppHistory, parseMcpAppRecord } from '@cindy/maker-shared/mcp-apps';
 import * as sessionService from '@/lib/sessionService';
 // device-link 透明传输:远程(被控设备)会话的操作/读取走隧道,本地会话零变化。
 import {
@@ -162,7 +162,7 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { isInputHandoffAwaitingOwner, parsePendingInputHandoff } from '@/features/input-handoff/inputHandoffModel';
+import { inputHandoffDialogHasContent, isInputHandoffAwaitingOwner, parsePendingInputHandoff } from '@/features/input-handoff/inputHandoffModel';
 import { clearCachedMessages, readCachedMessages, persistListMessage, sessionCacheInvalidationToken } from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
@@ -625,6 +625,8 @@ export interface ChatMessage {
     /** 代输入结束留痕:由隐藏续接行派生,只有步数、设备与域名,没有任何输入值。 */
     | 'input-handoff'
     | 'context-rebuild'
+    /** 任务导入的时间线标记：开头的来源说明与结尾的分隔。 */
+    | 'session-import'
     | 'mcp-app';
   mcpAppClientId?: string;
   systemCardData?: Record<string, unknown>;
@@ -819,6 +821,10 @@ export interface PendingPermission {
   /** Renderer-only delivery state; never part of the permission decision. */
   submitting?: boolean;
   submissionFailed?: boolean;
+}
+
+export interface PendingAppPermission extends PendingPermission {
+  mcpApp: { clientId: string; serverId: string; title: string; scope: string };
 }
 
 /** F7.2: Pending ask-user-question data — holds ALL questions for the wizard. */
@@ -2723,6 +2729,7 @@ export interface SessionChatState {
   sdkSessionId: string | null;
   /** F-PERM-2: Currently pending permission request; null when none. */
   pendingPermission: PendingPermission | null;
+  pendingAppPermissions?: PendingAppPermission[];
   /** F7.2: Currently pending ask-user-question; null when none. */
   pendingAskUser: PendingAskUser | null;
   /** Host-owned plugin setup snapshot; updates replace by monotonic revision. */
@@ -6738,6 +6745,9 @@ export function handleStreamEvent(
         data.reason === 'resolved' && data.decision && typeof data.decision === 'object'
           ? (data.decision as Record<string, unknown>)
           : null;
+      if (state.pendingAppPermissions?.some(p => p.requestId === data.requestId)) {
+        return { ...state, pendingAppPermissions: state.pendingAppPermissions.filter(p => p.requestId !== data.requestId) };
+      }
       if (state.pendingPermission?.requestId === data.requestId) {
         return { ...state, pendingPermission: null };
       }
@@ -6805,7 +6815,7 @@ export function handleStreamEvent(
         state.messages.some((m) => m.role === 'ask_user' && m.askUserRequestId === data.requestId)
       ) {
         // resolved + answers → 翻成 answered 并填答案(与答题端 answerUserQuestion 同款 reply / answers,
-        // 卡片据此渲染 ✓ 选项);否则(真·放弃)标 expired。
+        // 卡片据此渲染 ✓ 选项);无答案关闭只将 pending 标 expired，保留已回答记录。
         // 多窗口输家可能已经乐观写成 answered；仍要用赢家决策覆盖，不能只认 pending。
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
@@ -6829,7 +6839,9 @@ export function handleStreamEvent(
                     askUserReply,
                     askUserAnswers: answers,
                   }
-                : { ...m, askUserStatus: 'expired' as const }
+                : m.askUserStatus === 'pending'
+                  ? { ...m, askUserStatus: 'expired' as const }
+                  : m
               : m,
           ),
         };
@@ -7110,6 +7122,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
   const stoppedTasks = stopRunningAgentTasks(state.taskUpdates, 'all');
   // 已经不在跑 + 没有 pending 也没有 streaming → no-op, 不要无谓地新建对象触发订阅
   if (
+    !state.pendingAppPermissions?.length &&
     !state.agentStatus.isRunning &&
     !state.agentStatus.startedAt &&
     !state.streamingClientId &&
@@ -7176,6 +7189,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     // boundary; user queued input remains available for the next owner.
     pendingQueue: finalized.pendingQueue.filter((item) => item.autoResume !== true),
     pendingPermission: null,
+    pendingAppPermissions: [],
     pendingAskUser: null,
     pendingPluginSetup: null,
     pendingPluginSetupQueue: [],
@@ -8641,18 +8655,32 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     }
 
     if (request.kind === 'input_handoff') {
-      const parsed = parsePendingInputHandoff(request);
-      if (!parsed) return;
-      setState(sessionId, (s) => {
-        const current = s.pendingInputHandoff;
-        if (current?.requestId === parsed.requestId && parsed.revision < current.revision) return s;
-        return { ...s, pendingInputHandoff: parsed };
-      });
+      applyInputHandoffInteractionRequest(sessionId, request);
       return;
     }
 
     if (request.kind === 'permission') {
       const metadata = request.metadata as Record<string, unknown> | undefined;
+      const app = metadata?.mcpApp as Record<string, unknown> | undefined;
+      if (app && typeof app.clientId === 'string' && typeof app.serverId === 'string' && typeof app.title === 'string') {
+        const permission: PendingAppPermission = {
+          requestId: request.requestId as string, toolName: request.toolName as string,
+          input: (request.input as Record<string, unknown>) ?? {},
+          title: typeof request.title === 'string' ? request.title : undefined,
+          description: typeof request.description === 'string' ? request.description : undefined,
+          autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+          autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
+          suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
+          mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
+        };
+        setState(sessionId, s => {
+          const previous = s.pendingAppPermissions ?? [];
+          // Snapshot reconciliation must not re-enable a submitted decision.
+          if (previous.some(p => p.requestId === permission.requestId)) return s;
+          return { ...s, pendingAppPermissions: [...previous, permission] };
+        });
+        return;
+      }
       const data: CCAgentPermissionRequestPayload = {
         sessionId,
         requestId: request.requestId,
@@ -10147,8 +10175,12 @@ export interface SessionStatusInfo {
   hasPendingPermission: boolean;
   hasPendingPlanReview: boolean;
   hasPendingPluginSetup: boolean;
-  /** 代输入: owner input requested for an on-screen step (survives the turn). */
+  /** A nonterminal input-handoff card exists, including reading/working/finishing phases. */
   hasPendingInputHandoff?: boolean;
+  /** The current handoff step actually needs an owner action and may trigger a reminder. */
+  hasActionableInputHandoff?: boolean;
+  /** Stable identities for pending interactions; changes even when pending booleans stay true. */
+  pendingRequestKeys?: readonly string[];
 }
 
 /**
@@ -10201,6 +10233,40 @@ function scheduleStopTransitionClear(): void {
   }, 0);
 }
 
+function pendingRequestKeys(state: SessionChatState): string[] {
+  const keys: string[] = [];
+  if (state.pendingAskUser) keys.push(`ask:${state.pendingAskUser.requestId}`);
+  if (state.pendingPermission) keys.push(`permission:${state.pendingPermission.requestId}`);
+  if (state.pendingPlanReview) keys.push(`plan:${state.pendingPlanReview.requestId}`);
+  const visibleSetup = state.pendingPluginSetup && !state.pendingPluginSetup.terminal
+    ? state.pendingPluginSetup
+    : state.pendingPluginSetupQueue.find((setup) => !setup.terminal);
+  if (visibleSetup) keys.push(`plugin:${visibleSetup.requestId}`);
+  if (isInputHandoffAwaitingOwner(state.pendingInputHandoff)) {
+    const handoff = state.pendingInputHandoff!;
+    keys.push(`handoff:${handoff.requestId}:${handoff.stepNumber}`);
+  }
+  return keys.sort();
+}
+
+function applyInputHandoffInteractionRequest(sessionId: string, raw: unknown): void {
+  const parsed = parsePendingInputHandoff(raw);
+  if (!parsed) return;
+  setState(sessionId, (state) => {
+    const current = state.pendingInputHandoff;
+    if (current?.requestId === parsed.requestId && parsed.revision < current.revision) return state;
+    return { ...state, pendingInputHandoff: parsed };
+  });
+}
+
+function samePendingRequestKeys(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if ((left?.length ?? 0) !== (right?.length ?? 0)) return false;
+  return !right?.some((key, index) => left?.[index] !== key);
+}
+
 function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
   const next = new Map<string, SessionStatusInfo>();
   for (const [id, state] of sessions) {
@@ -10212,6 +10278,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       state.pendingPluginSetupQueue,
     );
     const hasPendingInputHandoff = isInputHandoffAwaitingOwner(state.pendingInputHandoff);
+    const hasActionableInputHandoff = !!state.pendingInputHandoff &&
+      inputHandoffDialogHasContent(state.pendingInputHandoff, false);
+    const requestKeys = pendingRequestKeys(state);
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10234,6 +10303,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingPlanReview,
         hasPendingPluginSetup,
         hasPendingInputHandoff,
+        hasActionableInputHandoff,
+        pendingRequestKeys: requestKeys,
       });
     } else if (
       hasPendingAskUser ||
@@ -10252,6 +10323,8 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingPlanReview,
         hasPendingPluginSetup,
         hasPendingInputHandoff,
+        hasActionableInputHandoff,
+        pendingRequestKeys: requestKeys,
       });
     }
   }
@@ -10276,6 +10349,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         state.pendingPluginSetupQueue,
       ),
       hasPendingInputHandoff: isInputHandoffAwaitingOwner(state.pendingInputHandoff),
+      hasActionableInputHandoff: !!state.pendingInputHandoff &&
+        inputHandoffDialogHasContent(state.pendingInputHandoff, false),
+      pendingRequestKeys: pendingRequestKeys(state),
     });
   }
 
@@ -10314,7 +10390,9 @@ function getRunningSnapshot(): ReadonlyMap<string, SessionStatusInfo> {
         prev.hasPendingPermission !== info.hasPendingPermission ||
         prev.hasPendingPlanReview !== info.hasPendingPlanReview ||
         prev.hasPendingPluginSetup !== info.hasPendingPluginSetup ||
-        !!prev.hasPendingInputHandoff !== !!info.hasPendingInputHandoff
+        !!prev.hasPendingInputHandoff !== !!info.hasPendingInputHandoff ||
+        !!prev.hasActionableInputHandoff !== !!info.hasActionableInputHandoff ||
+        !samePendingRequestKeys(prev.pendingRequestKeys, info.pendingRequestKeys)
       ) {
         same = false;
         break;
@@ -10680,6 +10758,8 @@ function reconcilePendingInteractions(
           }
           return message;
         });
+        const appPermissions = state.pendingAppPermissions?.filter(p => authoritativePermissionIds.has(p.requestId));
+        const appPermissionsChanged = appPermissions?.length !== state.pendingAppPermissions?.length;
         const nextPermission = state.pendingPermission &&
           authoritativePermissionIds.has(state.pendingPermission.requestId)
           ? state.pendingPermission : null;
@@ -10738,6 +10818,7 @@ function reconcilePendingInteractions(
 
         if (
           !currentChanged &&
+          !appPermissionsChanged &&
           !queueChanged &&
           !messagesChanged &&
           nextAskUser === state.pendingAskUser &&
@@ -10760,6 +10841,7 @@ function reconcilePendingInteractions(
           planViewerState: nextPlanReview ? state.planViewerState : 'expanded',
           lastExpandedPlanViewerState: nextPlanReview ? state.lastExpandedPlanViewerState : 'expanded',
           pendingPermission: nextPermission,
+          pendingAppPermissions: appPermissions,
           pendingInputHandoff: nextInputHandoff,
           pendingPluginSetup: nextCurrent,
           pendingPluginSetupQueue: survivingQueue,
@@ -16797,6 +16879,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      pendingAppPermissions: [],
       pendingAskUser: null,
       pendingPluginSetup: null,
       pendingPluginSetupQueue: [],
@@ -17339,12 +17422,19 @@ function respondToPluginSetup(
 /**
  * Keep the card until the host acknowledges the decision (or dismisses it).
  */
-function respondToPermission(sessionId: string, result: CCAgentPermissionResult): void {
+function respondToPermission(sessionId: string, result: CCAgentPermissionResult, appRequestId?: string): void {
   if (!sessionId) return;
   const state = getOrCreateState(sessionId);
-  if (!state.pendingPermission || state.pendingPermission.submitting) return;
-
-  const { requestId } = state.pendingPermission;
+  const selected = (s: SessionChatState) => appRequestId
+    ? s.pendingAppPermissions?.find(p => p.requestId === appRequestId) : s.pendingPermission;
+  const permission = selected(state);
+  if (!permission || permission.submitting) return;
+  const { requestId } = permission;
+  const update = (patch: Partial<PendingPermission> | null) => setState(sessionId, s => {
+    if (appRequestId) return { ...s, pendingAppPermissions: s.pendingAppPermissions?.flatMap(p =>
+      p.requestId === requestId ? patch ? [{ ...p, ...patch }] : [] : [p]) };
+    return { ...s, pendingPermission: patch && s.pendingPermission ? { ...s.pendingPermission, ...patch } : null };
+  });
   const owner = getDataOwnerGeneration();
   const messagesEpoch = _messagesEpoch.get(sessionId) ?? 0;
   const authorityEpoch = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
@@ -17357,13 +17447,10 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
     remoteProjectsStore.getSessionDeviceId(sessionId) === origin &&
     (!stickyDevice || !isRemoteTerminalSessionTombstoned(sessionId, stickyDevice));
   const hasCurrentCard = () => isCurrent() &&
-    sessions.get(sessionId)?.pendingPermission?.requestId === requestId;
+    !!sessions.get(sessionId) && selected(sessions.get(sessionId)!)?.requestId === requestId;
   bumpInteractionReconcileEpoch(sessionId);
 
-  setState(sessionId, (s) => ({
-    ...s,
-    pendingPermission: { ...s.pendingPermission!, submitting: true, submissionFailed: false },
-  }));
+  update({ submitting: true, submissionFailed: false });
 
   // Bound both local IPC and remote delivery; a lost reply must not disable the
   // card forever. Never resend an allow automatically after an uncertain reply.
@@ -17394,12 +17481,12 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
       if (!hasCurrentCard()) return;
       if (receipt?.accepted === true) {
         bumpInteractionReconcileEpoch(sessionId);
-        setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+        update(null);
         return;
       }
       if (receipt?.accepted === false) {
         bumpInteractionReconcileEpoch(sessionId);
-        setState(sessionId, (s) => ({ ...s, pendingPermission: null }));
+        update(null);
         toast.warning(i18n.t('newChat.permissionPrompt.requestEnded'));
         return;
       }
@@ -17414,10 +17501,7 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
         // Leave the card retryable when the host cannot be reached at all.
       }
       if (!hasCurrentCard()) return;
-      setState(sessionId, (s) => ({
-        ...s,
-        pendingPermission: { ...s.pendingPermission!, submitting: false, submissionFailed: true },
-      }));
+      update({ submitting: false, submissionFailed: true });
     }
   })();
 }
@@ -18681,6 +18765,8 @@ export const makerChatStore = {
     setState(sessionId, (s) => handleStreamEvent(s, event));
     scheduleWakeBridgeReconciliation(sessionId);
   },
+  /** Exposed for tests only: use the same request path as the live interaction handler. */
+  __applyInputHandoffRequestForTest: applyInputHandoffInteractionRequest,
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
     if (!isTurnContinuationBoundaryEvent(update) && !update.skipTurnReset && !update.isRunning) {
@@ -18936,9 +19022,12 @@ function oldestServerMessageIdForWindow(
 /**
  * 把一条窗口内消息换算回"落库那条时间线"上的可比对象(与原始 DB 行同口径)。
  *
- * 只有 thinking 需要换算:mapServerMessages 会把它的 createdAt 改写成 `finishedAt - durationMs`
- * (渲染层拿它当块的开始时刻算时长)。拿改写后的值去跟原始 DB 行比大小,就是在混两条时间线。
- * 换算不出来(没有 thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ * thinking 的锚点是块的开始时刻(`finishedAt - durationMs`):mapServerMessages 按它改写
+ * createdAt,main 落库也按它写 createdAt,两条时间线已经重合。换算不出来(没有
+ * thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ *
+ * 存量行(锚点仍是 finishedAt)用开始时刻比会偏早:只会多判一次脱离、多做一次补齐,
+ * 不会把有损通道造成的缺口当成连续。
  */
 function thinkingSafeTimelineRow(
   message: ChatMessage,
@@ -18946,10 +19035,7 @@ function thinkingSafeTimelineRow(
   if (message.role !== 'thinking') return message;
   if (typeof message.thinkingFinishedAtMs !== 'number') return null;
   if (!Number.isFinite(message.thinkingFinishedAtMs)) return null;
-  return {
-    createdAt: new Date(message.thinkingFinishedAtMs).toISOString(),
-    rowid: message.rowid,
-  };
+  return { createdAt: message.createdAt, rowid: message.rowid };
 }
 
 /**
@@ -19213,7 +19299,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     if (mcpApp) return {
       clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
       systemCardType: 'mcp-app' as const,
-      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text },
+      systemCardData: { title: mcpApp.title, fallbackText: mcpApp.text, plugin: (parseMcpAppRecord(m.content)?.tool._meta as Record<string, unknown> | undefined)?.['cindy/plugin'] },
       mcpAppClientId: m.clientId,
     };
     const persistedCindyCard =
@@ -19429,6 +19515,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         systemCardType: 'agent-switch' as const, systemCardData: { ...m.agentMeta.modelChange },
       };
     }
+    const sessionImport =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { sessionImport?: unknown }).sessionImport
+        : undefined;
+    if (sessionImport && typeof sessionImport === 'object') {
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'session-import' as const,
+        systemCardData: { ...(sessionImport as Record<string, unknown>) },
+      };
+    }
     // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。
     const contextRebuild =
       m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
@@ -19470,6 +19570,13 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           toModel: typeof c.toModel === 'string' ? c.toModel : null,
           handoff: typeof c.handoff === 'string' ? c.handoff : '',
           resumed: c.resumed === true,
+          ...(c.nativeHistory === 'restored' || c.nativeHistory === 'fallback'
+            ? { nativeHistory: c.nativeHistory } : {}),
+          ...(c.toAgentDeviceId === null || typeof c.toAgentDeviceId === 'string'
+            ? { toAgentDeviceId: c.toAgentDeviceId } : {}),
+          ...(typeof c.toAgentDeviceName === 'string'
+            ? { toAgentDeviceName: c.toAgentDeviceName } : {}),
+          ...(c.switchReason === 'quota-rebalance' ? { switchReason: c.switchReason } : {}),
         },
       };
     }

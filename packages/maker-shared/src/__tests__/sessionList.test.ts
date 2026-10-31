@@ -873,6 +873,16 @@ describe('sessionList', () => {
     expect(sections[0].data[0].messagePreview).not.toContain('{');
   });
 
+  it('shows only the basename for Windows attachment paths in session previews', () => {
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(['windows-file'], () => [
+      message('windows-file', 'm1', 'user', {
+        files: [{ path: 'C:\\work\\report.pdf' }],
+      }, '2026-01-01T00:01:00.000Z'),
+    ]);
+
+    expect(messagePreviewIndex.get('windows-file')).toBe('附件 report.pdf');
+  });
+
   it('never leaks hidden synthetic trigger prompts into session previews', () => {
     // 桌面「失败后继续」的隐藏续跑 prompt(带 [UI_ACTION_TRIGGER] 前缀)常是会话
     // 最后一条 user 行:预览必须回落到上一条可见消息,而不是把裸英文指令亮出来。

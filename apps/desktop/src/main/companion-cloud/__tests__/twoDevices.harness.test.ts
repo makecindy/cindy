@@ -248,7 +248,7 @@ describe.skipIf(!BASE)('cloud companions against a real chat-server (two devices
       { operationId: `e2e-post-${randomUUID()}`, content: [{ type: 'text', text: 'from laptop' }], mentions: [] });
     const queued = await waitFor(async () => (await laptop.api<Array<{ id: string; source_message_id: string; status: string }>>(
       `/conversations/${roomId}/executions`)).find(e => e.source_message_id === posted.id && e.status === 'queued'), 'queued execution');
-    const claim = { executorId: 'desktop:e2e', accessPolicyVersion: 1, planVersion: 1 };
+    const claim = { executorId: 'desktop:e2e', accessPolicyVersion: 1, planVersion: 1, directRoomVersion: 1 };
     const laptopClaim = await laptop.api<{ execution: unknown }>('/executions/claim', 'POST', { operationId: randomUUID(), ...claim }, actorId);
     expect(laptopClaim.execution).toBeNull();
     const execution = await waitFor(async () => (await macmini.api<{ execution: { id: string; epoch: number; source_message_id: string } | null }>(

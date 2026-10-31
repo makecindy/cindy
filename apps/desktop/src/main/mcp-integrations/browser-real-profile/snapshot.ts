@@ -73,43 +73,32 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Copies last_used cookies into dest `Default`. Chrome still honors
- * Local State `profile.last_used`, so a verbatim copy would open the original
- * folder (often an empty `Profile 2`) and look signed-out. Point every
- * selection field at Default and keep only that info_cache entry, taking
- * metadata from the source last_used profile when present. Stamp the chip
- * name to `Cindy` so a copied "Dash" / "Person 1" label never leaks; launch
- * decoration uses the same display name.
+ * Only the encryption metadata is needed to reuse website cookies. Never
+ * clone Chrome's device/sign-in identity or profile account cache: this copy
+ * has no matching browser OAuth identity and must not reconcile Google cookies.
+ * Select dest Default explicitly so Chrome cannot reopen an empty sibling.
  */
 export function rewriteLocalStateForManagedDefault(
   localStateRaw: string,
-  sourceProfile: string,
 ): string {
-  let parsed =
-    asObject(
-      (() => {
-        try {
-          return JSON.parse(localStateRaw) as unknown;
-        } catch {
-          return {};
-        }
-      })(),
-    ) ?? {};
-  const profile = { ...(asObject(parsed.profile) ?? {}) };
-  const infoCache = asObject(profile.info_cache) ?? {};
-  const sourceInfo = {
-    ...(asObject(infoCache[sourceProfile]) ?? asObject(infoCache.Default) ?? {}),
+  const source = parseJsonObject(localStateRaw);
+  const parsed = {
+    ...(source?.os_crypt ? { os_crypt: source.os_crypt } : {}),
+    profile: {
+      last_used: 'Default',
+      last_active_profiles: ['Default'],
+      profiles_order: ['Default'],
+      profiles_created: 1,
+      show_picker_on_startup: false,
+      info_cache: {
+        Default: {
+          name: MANAGED_PROFILE,
+          shortcut_name: MANAGED_PROFILE,
+          user_name: MANAGED_PROFILE,
+        },
+      },
+    },
   };
-  sourceInfo.name = MANAGED_PROFILE;
-  sourceInfo.shortcut_name = MANAGED_PROFILE;
-  sourceInfo.user_name = MANAGED_PROFILE;
-  profile.last_used = 'Default';
-  profile.last_active_profiles = ['Default'];
-  profile.profiles_order = ['Default'];
-  profile.profiles_created = 1;
-  profile.show_picker_on_startup = false;
-  profile.info_cache = { Default: sourceInfo };
-  parsed = { ...parsed, profile };
   return `${JSON.stringify(parsed)}\n`;
 }
 
@@ -199,25 +188,36 @@ function parseJsonObject(raw: string | null): Record<string, unknown> | null {
 /**
  * Source `Preferences` refreshed onto dest, except the `extensions` subtree,
  * which belongs to the agent browser (install signature, commands, pins).
- * When the source is missing or not a JSON object (e.g. caught mid-write),
- * keep a valid dest unchanged rather than drop its extension state; return
- * null only when neither side is usable, so the caller falls back to the source
- * file as-is (or to no file).
+ * Missing/malformed sources may fall back to the old dest, but every path
+ * removes browser identity before Chrome starts. Otherwise DICE can issue a
+ * Google logout when copied cookies have no matching browser refresh tokens.
  */
 export function mergeManagedPreferences(
   sourceRaw: string | null,
   destRaw: string | null,
-): string | null {
+): string {
   const dest = parseJsonObject(destRaw);
   const source = parseJsonObject(sourceRaw);
-  if (!source) return dest ? destRaw : null;
-  const merged = { ...source };
+  const merged = { ...(source ?? dest ?? {}) };
   const destExtensions = dest?.extensions;
   if (destExtensions === undefined) {
     delete merged.extensions;
   } else {
     merged.extensions = destExtensions;
   }
+  for (const key of [
+    'account_info',
+    'account_values',
+    'account_tracker_service_last_update',
+    'google',
+    'gaia_cookie',
+    'sync',
+  ]) {
+    delete merged[key];
+  }
+  // Chromium recomputes allowed at startup from allowed_on_next_startup.
+  // Do not let copied primary-account/device fields survive in this subtree.
+  merged.signin = { allowed: false, allowed_on_next_startup: false };
   return JSON.stringify(merged);
 }
 
@@ -466,6 +466,22 @@ async function copySqliteDatabase(src: string, dest: string, optional: boolean):
   }
 }
 
+/**
+ * Web Data also stores Chrome OAuth refresh tokens, not just autofill. Remove
+ * them offline in staging: letting Chrome revoke a copied token on startup
+ * would revoke the everyday browser's token on Google's server as well.
+ */
+function removeCopiedBrowserTokens(webDataPath: string): void {
+  const db = new DatabaseSync(webDataPath);
+  try {
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'token_service'").get()) {
+      db.exec('DELETE FROM token_service');
+    }
+  } finally {
+    db.close();
+  }
+}
+
 export async function snapshotRealProfile(options: {
   source: InstalledChromium;
   destDir: string;
@@ -551,7 +567,7 @@ export async function snapshotRealProfile(options: {
 
     await fs.promises.writeFile(
       path.join(stagingDir, 'Local State'),
-      rewriteLocalStateForManagedDefault(localStateRaw, sourceProfile),
+      rewriteLocalStateForManagedDefault(localStateRaw),
       'utf8',
     );
     filesCopied.push('Local State');
@@ -563,6 +579,7 @@ export async function snapshotRealProfile(options: {
       const optionalDatabase = OPTIONAL_BROWSER_PROFILE_DATABASES.find((name) => name === relative);
       try {
         await copySqliteDatabase(src, dest, optionalDatabase !== undefined);
+        if (relative === 'Web Data') removeCopiedBrowserTokens(dest);
         filesCopied.push(path.join('Default', relative));
         copiedRelative.add(relative);
         authDbCopied += 1;
@@ -607,12 +624,7 @@ export async function snapshotRealProfile(options: {
         sourceRaw,
         readFileIfExists(path.join(destDir, 'Default', relative)),
       );
-      if (merged === null) {
-        if (sourceRaw === null) continue;
-        await fs.promises.copyFile(src, dest);
-      } else {
-        await fs.promises.writeFile(dest, merged, 'utf8');
-      }
+      await fs.promises.writeFile(dest, merged, 'utf8');
       filesCopied.push(path.join('Default', relative));
       copiedRelative.add(relative);
     }

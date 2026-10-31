@@ -11,6 +11,7 @@
     "deleteMessage": "계정에서 이 기기를 제거하고 원격 연결을 끊습니다. 기기의 세션과 파일은 유지됩니다. 해당 기기에서 다시 로그인하면 추가할 수 있습니다.",
     "deleteFailed": "기기를 삭제하지 못했습니다.",
     "deleteOnline": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
+    "deleteRejectedWhileOffline": "기기를 삭제하지 못했습니다. 목록에서는 오프라인이지만 서버에는 아직 온라인으로 기록되어 있습니다.",
     "currentlyOnline": "현재 온라인",
     "availableSection": "온라인 기기",
     "offlineSection": "오프라인 기기",
@@ -62,7 +63,7 @@
       "filterMeta": "{{available}}대 접속 가능",
       "filterMetaWithUnavailable": "{{available}}대 접속 가능 · {{unavailable}}대 확인 필요",
       "showUnavailableReason": "기기를 펼치면 사용할 수 없는 이유가 표시됩니다",
-      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 설정의 원격 제어에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
+      "emptyCopy": "컴퓨터에서 같은 계정으로 로그인한 뒤 '설정 → 원격 연결'에서 ‘같은 계정의 기기가 이 컴퓨터를 제어하도록 허용’을 켜세요.",
       "emptyTitle": "표시할 컴퓨터가 아직 없습니다",
       "hideUnavailableA11y": "사용할 수 없는 컴퓨터 숨기기",
       "showUnavailableA11y": "사용할 수 없는 컴퓨터 표시",
@@ -338,7 +339,9 @@
       "doneUnread": "완료·읽지 않음",
       "running": "실행 중",
       "close": "닫기",
-      "cancelRename": "이름 변경 취소"
+      "cancelRename": "이름 변경 취소",
+      "createdBy": "{{name}}이(가) 생성",
+      "ownedBy": "{{name}} 소속"
     },
     "accounts": {
       "title": "계정 전환",
@@ -401,6 +404,7 @@
         "30d": "30일",
         "all": "전체"
       },
+      "showCollapsedTeammateAvatars": "접었을 때 아바타 표시",
       "displayHeading": "표시",
       "view": {
         "text": "텍스트",
@@ -415,7 +419,11 @@
       },
       "summaryNone": "없음",
       "summarySeparator": ", ",
-      "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다."
+      "filterEmptyCopy": "표시 설정의 필터에서 조정하거나 재설정할 수 있습니다.",
+      "filterTeammatesHeading": "파트너",
+      "filterAnySource": "전체",
+      "filterHideAllTeammates": "모두 숨기기",
+      "filterSelectedTeammates": "{{count}}명 선택"
     },
     "search": {
       "placeholder": "제목 또는 내용 검색…",
@@ -688,7 +696,14 @@
     "createMenu": "새로 만들기",
     "awaiting": "확인 필요",
     "taskResult": "작업 결과",
-    "collapseResult": "결과 접기"
+    "collapseResult": "결과 접기",
+    "avatarStatus": {
+      "awaiting": "확인 대기",
+      "error": "확인 필요",
+      "running": "작업 중",
+      "done": "완료",
+      "unread": "읽지 않음"
+    }
   },
   "companionProfile": {
     "avatar": "아바타",
@@ -867,6 +882,10 @@
     "checkPrompt": "연결된 메일, 메시지 등에서 내가 처리해야 할 새 일이 있는지 확인하고, 있으면 할 일에 추가해 줘.",
     "dailyCheck": "매일 확인",
     "dailyCheckMeta": "평일 9:00, 새 할 일이 없으면 알리지 않습니다",
+    "recentTasks": "최근 세션",
+    "unread": "읽지 않은 결과",
+    "stopDailyCheck": "매일 확인 중지",
+    "openFailed": "링크를 열 수 없습니다",
     "dailyCheckFailed": "저장하지 못했습니다. 다시 시도하세요",
     "loadFailed": "할 일을 불러오지 못했습니다",
     "outputs": "결과물",
@@ -912,5 +931,62 @@
     "homeOutdated": "주 컴퓨터 “{{device}}”의 Cindy가 이전 버전입니다. 업데이트하거나 그 컴퓨터에서 변경하세요",
     "homeUnreachable": "“{{device}}”에 연결할 수 없습니다. 온라인 상태이고 “같은 계정의 기기에서 이 컴퓨터 제어 허용”이 켜져 있어야 합니다",
     "sendUnreachable": "메시지가 주 컴퓨터 “{{device}}”에 전달되지 않았습니다. 오프라인일 수 있습니다. 다른 컴퓨터에서 계속할 수 있습니다."
+  },
+  "sessionImport": {
+    "entry": "다른 도구에서 가져오기",
+    "title": "다른 도구에서 가져오기",
+    "found_one": "{{device}}에서 세션 {{count}}개를 찾았습니다",
+    "found_other": "{{device}}에서 세션 {{count}}개를 찾았습니다",
+    "search": "세션 또는 폴더 검색",
+    "scanning": "컴퓨터에서 세션을 찾는 중…",
+    "loadFailed": "컴퓨터의 세션을 읽지 못했습니다. 다시 시도하세요.",
+    "retry": "다시 시도",
+    "rescan": "다시 검색",
+    "emptyTitle": "컴퓨터에 가져올 세션이 없습니다",
+    "emptyDescription": "Cindy는 아래 도구의 세션을 가져올 수 있습니다. 도구를 사용한 뒤 다시 검색하세요.",
+    "noMatch": "조건에 맞는 세션이 없습니다",
+    "dialogue": "대화",
+    "folderMissing": "원래 폴더 없음",
+    "groupTasks_one": "세션 {{count}}개",
+    "groupTasks_other": "세션 {{count}}개",
+    "archived": "보관됨",
+    "unsupported": "지원하지 않는 형식",
+    "selected_one": "{{count}}개 선택됨 · {{size}}",
+    "selected_other": "{{count}}개 선택됨 · {{size}}",
+    "confirmBody_one": "세션 {{count}}개를 가져오며 디스크 공간을 최대 {{size}} 사용합니다. 컴퓨터의 백그라운드에서 진행되며 언제든 중지할 수 있습니다. 한 번 더 누르면 시작합니다.",
+    "confirmBody_other": "세션 {{count}}개를 가져오며 디스크 공간을 최대 {{size}} 사용합니다. 컴퓨터의 백그라운드에서 진행되며 언제든 중지할 수 있습니다. 한 번 더 누르면 시작합니다.",
+    "importCount_one": "세션 {{count}}개 가져오기",
+    "importCount_other": "세션 {{count}}개 가져오기",
+    "import": "가져오기",
+    "progressTitle_one": "세션 {{count}}개 가져오는 중",
+    "progressTitle_other": "세션 {{count}}개 가져오는 중",
+    "background": "이 패널을 닫아도 가져오기는 컴퓨터에서 계속됩니다.",
+    "stop": "중지",
+    "done": "완료",
+    "queued": "대기 중",
+    "copy": "원본 기록 복사 중",
+    "messages_one": "메시지 {{count}}개 저장 중",
+    "messages_other": "메시지 {{count}}개 저장 중",
+    "verify": "이어서 작업할 수 있는지 확인 중",
+    "resultTitle_one": "세션 {{count}}개를 가져왔습니다",
+    "resultTitle_other": "세션 {{count}}개를 가져왔습니다",
+    "sumReady_one": "{{count}}개 바로 이어서 작업 가능",
+    "sumReady_other": "{{count}}개 바로 이어서 작업 가능",
+    "sumAction_one": "{{count}}개 확인 필요",
+    "sumAction_other": "{{count}}개 확인 필요",
+    "sumFailed_one": "{{count}}개 실패",
+    "sumFailed_other": "{{count}}개 실패",
+    "readyNative": "이어서 작업 가능 · {{harness}}에서 그대로 계속",
+    "readyHandoff": "이어서 작업 가능 · {{harness}}(으)로 이어받음, 언제든 변경 가능",
+    "missingDir": "원래 폴더가 없습니다. 컴퓨터에서 폴더를 선택하면 이어서 작업할 수 있습니다.",
+    "cancelled": "가져오기 전에 중지됨",
+    "failure": {
+      "read-failed": "가져오지 못함: 원본 기록을 읽을 수 없습니다",
+      "unsupported-version": "가져오지 못함: 이 버전의 기록 형식은 아직 지원하지 않습니다",
+      "empty": "가져오지 못함: 원본 기록에 메시지가 없습니다",
+      "not-found": "가져오지 못함: 원본 기록이 없습니다",
+      "disk-full": "가져오지 못함: 디스크 공간이 부족합니다",
+      "native-unloadable": "가져오지 못함: 원본 기록을 불러올 수 없습니다"
+    }
   }
 }

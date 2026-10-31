@@ -37,13 +37,14 @@ import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
  * 全部纯函数；输入为空 / 异常 → 静默返回合理默认。
  */
 
-import { extractDisplayName, splitPathSegments, tailJoin } from '../../../../shared/projectDisplayName';
+import { splitPathSegments, tailJoin } from '../../../../shared/projectDisplayName';
 export { extractDisplayName } from '../../../../shared/projectDisplayName';
 
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import { resolveProjectAliasForSessions, type ProjectAliasesByDevice } from '@cindy/maker-shared/project-alias-sync';
 import { isOrcaLeadSession, isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { normalizeWorkingDirForGrouping } from '../../../../shared/workingDir';
+import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 import {
   deviceLinkProjectKey,
   normalizeProjectKey,
@@ -116,6 +117,17 @@ export interface BotGroupNode {
   /** 该伙伴名下所有任务,已按 status 然后 sortTime desc 排序。 */
   sessions: Session[];
   latestActivityAt: string;
+}
+
+/** Filtering/sorting must not discard grouping's structural reuse when the
+ * actual rows and their order are unchanged. Compare objects, never just IDs:
+ * fresh titles/status and same-ID tasks on other devices must still propagate.
+ */
+export function withProjectSessions(project: ProjectNode, sessions: Session[]): ProjectNode {
+  return sessions.length === project.sessions.length &&
+    sessions.every((session, index) => session === project.sessions[index])
+    ? project
+    : { ...project, sessions };
 }
 
 /** 分组时用来认伙伴的最小信息。渲染层从 botStore 的会话投影现拼。 */
@@ -255,9 +267,9 @@ export function persistentProjectMatchesVendor(
 }
 
 export function projectIdentityKeyForSession(
-  session: Pick<Session, 'workingDir' | 'remoteHostId' | 'deviceLinkDeviceId'>,
+  session: Pick<Session, 'workingDir' | 'projectDir' | 'remoteHostId' | 'deviceLinkDeviceId'>,
 ): string | null {
-  const workingDir = normalizeWorkingDir(session.workingDir);
+  const workingDir = normalizeWorkingDir(sessionProjectDirectory(session));
   if (workingDir == null) return null;
   if (session.deviceLinkDeviceId)
     return deviceLinkProjectKey(session.deviceLinkDeviceId, workingDir);
@@ -269,7 +281,7 @@ export function projectIdentityKeyForSession(
 }
 
 export function getProjectIdentity(session: Session): ProjectIdentity | null {
-  const workingDir = normalizeWorkingDir(session.workingDir);
+  const workingDir = normalizeWorkingDir(sessionProjectDirectory(session));
   if (workingDir == null) return null;
   if (session.deviceLinkDeviceId) {
     return {
@@ -347,7 +359,7 @@ function extractDisplayNameFromIndex(
   return { name: fallback, segments: maxSegments };
 }
 
-function normalizeProjectAliases(
+export function normalizeProjectAliases(
   raw: GroupSessionsOptions['projectAliases'],
   localPlatform: string,
 ): Map<string, string> {
@@ -493,7 +505,7 @@ export function groupSessions(
   for (const member of options.projectAliasMembers ?? sessions) {
     if (member.status === 'deleted' || member.workspaceKind === 'dialogue' || member.orcaRole === 'worker'
       || !member.deviceLinkDeviceId || options.botOwnerBySessionId?.has(member.id)) continue;
-    const dir = normalizeWorkingDir(member.workingDir);
+    const dir = normalizeWorkingDir(sessionProjectDirectory(member));
     if (!dir) continue;
     const key = deviceLinkProjectKey(member.deviceLinkDeviceId, dir);
     const members = aliasMembersByProject.get(key);
@@ -557,7 +569,7 @@ export function groupSessions(
       if (!botOwners.has(owner.botId)) botOwners.set(owner.botId, owner);
       continue;
     }
-    const dir = normalizeWorkingDir(s.workingDir);
+    const dir = normalizeWorkingDir(sessionProjectDirectory(s));
     const noPhysicalMessages = (s._count?.messages ?? 0) === 0;
     const isOrcaLead = isOrcaLeadSession(s);
     // 新建页里正在输入、还没发送的任务：已经选好项目，就放在那个项目下。

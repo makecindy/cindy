@@ -23,6 +23,7 @@ import {
 } from './dirty';
 import { readAttachedWorktreeBranch } from './attachedBranch';
 import { gitExec, GitExecError } from './gitExec';
+import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
 import { applyWorktreeIncludeFile } from './includePatternsEngine';
 import { pathKey } from './liveSessionRefs';
 import {
@@ -254,6 +255,7 @@ async function addRestoredWorktree(
   worktreePath: string,
   branch: string,
 ): Promise<void> {
+  await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
   const addArgs = ['-c', 'core.longpaths=true', 'worktree', 'add', worktreePath, branch];
   try {
     await gitExec(addArgs, baseRepo);
