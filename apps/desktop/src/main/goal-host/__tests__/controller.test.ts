@@ -166,6 +166,23 @@ describe('decideNextGoalState', () => {
     expect(d.shouldFire).toBe(false);
   });
 
+  it('holds (active, no fire) on a waiting verdict instead of looping idle turns', () => {
+    const d = decideNextGoalState(BASE, outcome({ verdict: { status: 'waiting', reason: '等交单' } }));
+    expect(d.status).toBe('active');
+    expect(d.shouldFire).toBe(false);
+    expect(d.lastReason).toBe('waiting: 等交单');
+    expect(d.turnsUsed).toBe(1);
+  });
+
+  it('budget guard wins over a waiting verdict', () => {
+    const d = decideNextGoalState(
+      { ...BASE, budgetTokens: 100 },
+      outcome({ verdict: { status: 'waiting', reason: 'x' }, tokensThisTurn: 100 }),
+    );
+    expect(d.status).toBe('budgetLimited');
+    expect(d.shouldFire).toBe(false);
+  });
+
   it('continues + fires on a continue verdict', () => {
     const d = decideNextGoalState(BASE, outcome({ verdict: { status: 'continue', reason: 'wip' } }));
     expect(d.status).toBe('active');
@@ -1634,6 +1651,10 @@ describe('GoalController', () => {
     expect(text).toContain('20 turns'); // tells the model the current budget so it can judge it
     expect(text).toContain('"goal_status":"blocked"');
     expect(text).toContain('goal_status'); // verdict contract still present
+    // waiting 是对模型协议的一部分:无活可干时退出而非空转 continue;丢了它,
+    // 监督型目标会回到 2026-10 「无变化。待命。」每 8s 一轮的 token 空转。
+    expect(text).toContain('complete|continue|blocked|waiting');
+    expect(text).toContain('NEVER use waiting to dodge work');
     expect(text).not.toContain('goal_assessment'); // no custom block anymore
   });
 
@@ -2443,6 +2464,70 @@ describe('GoalController', () => {
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
     expect(h.stopped).toHaveBeenCalledExactlyOnceWith('s1', 1000);
+  });
+
+  it('waiting verdict: holds active without continuation, exposes waitingSince in payload', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"B3 交单前无事可做"}\n```', tokens: 30 });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('active');
+    expect(st?.lastReason).toBe('waiting: B3 交单前无事可做');
+    // 不立即续跑("无变化。待命。"不再 8s 一轮地烧 token),listener 保留以便唤醒。
+    expect(h.session.sends).toHaveLength(1);
+    expect(h.session.hasListener()).toBe(true);
+    const payload = h.updates.at(-1)?.goal;
+    expect(payload?.status).toBe('active');
+    expect(payload?.waitingSince).toBe(1000);
+  });
+
+  it('waiting goal wakes on session intervention (worker 回报 / 用户消息进队)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等交单"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect(h.session.sends[1].originKind).toBe('goal');
+    // 唤醒即清等待态:payload 立即回到「进行中」,不等唤醒轮的 finalize。
+    expect(h.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
+  });
+
+  it('waiting goal re-checks itself after the safety interval even without events', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"无变化"}\n```' });
+    await tick(); // 10ms < 25ms:仍在等待,无续跑
+    expect(local.session.sends).toHaveLength(1);
+    await tick();
+    await tick(); // 累计 30ms > 25ms:安全网重检轮发出
+    expect(local.session.sends.length).toBeGreaterThan(1);
+  });
+
+  it('resumeGoal wakes a waiting goal (manual wake)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    await h.controller.resumeGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('active');
+    expect(st?.lastReason).toBeNull();
+  });
+
+  it('pauseGoal cancels the waiting wake: a later intervention does not fire', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    await h.controller.pauseGoal('s1');
+    expect((await h.storage.get('s1'))?.status).toBe('paused');
+    const sendsAfterPause = h.session.sends.length;
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect(h.session.sends.length).toBe(sendsAfterPause);
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {

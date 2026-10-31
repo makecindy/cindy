@@ -113,6 +113,11 @@ export interface GoalStatusPayload {
   /** 目标创建时刻(unix ms),供 chip 显示实时运行时长。 */
   startedAt: number;
   lastReason: string | null;
+  /**
+   * 模型吐 waiting 裁决(等会话外事件)进入等待的时刻(unix ms);非等待态为 null。
+   * 等待是 active 的子态(不落库,重启后丢失 → 打开会话时由 resume-on-open 唤醒补检)。
+   */
+  waitingSince: number | null;
 }
 
 /**
@@ -216,6 +221,11 @@ export interface GoalControllerDeps {
   now?: () => number;
   /** 续跑前的防抖毫秒(默认 150;测试传 0 取消异步等待)。 */
   continuationDebounceMs?: number;
+  /**
+   * waiting(等会话外事件)状态下的安全网重检间隔毫秒(默认 30 分钟)。事件唤醒
+   * (intervention / resume / 打开会话)会提前取代它;间隔只兜"事件丢失永不醒"。
+   */
+  waitingRecheckMs?: number;
   /**
    * 持久化一条 goal 发起的 user 消息(注入 createMessage)。仅**首轮**用它落一条
    * 干净的目标文案,让对话有连贯起点;续轮不落(助手自然接着写,贴近 Codex 体验)。

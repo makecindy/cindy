@@ -23,8 +23,8 @@ import type { GoalVerdictStatus } from './verdict.js';
  */
 function buildVerdictContract(includeRefinedObjective: boolean): string {
   const blockLine = includeRefinedObjective
-    ? '{"goal_status":"complete|continue|blocked","reason":"<one short sentence>","refined_objective":"<OPTIONAL — see rule below; omit unless you clarified a vague goal this turn>"}'
-    : '{"goal_status":"complete|continue|blocked","reason":"<one short sentence>"}';
+    ? '{"goal_status":"complete|continue|blocked|waiting","reason":"<one short sentence>","refined_objective":"<OPTIONAL — see rule below; omit unless you clarified a vague goal this turn>"}'
+    : '{"goal_status":"complete|continue|blocked|waiting","reason":"<one short sentence>"}';
   const lines = [
     'When you finish working this turn, end your reply with EXACTLY this fenced block (and nothing after it):',
     '',
@@ -36,13 +36,14 @@ function buildVerdictContract(includeRefinedObjective: boolean): string {
     '- "complete": the goal is verifiably done. Before claiming this, actually run the check (tests/build/etc.) and show its output this turn.',
     '- "continue": real work remains; you made progress and want another turn.',
     '- "blocked": you cannot proceed without human input (a decision, a credential, or an action you are not permitted to take). Put what you need in "reason".',
+    '- "waiting": nothing actionable THIS turn because progress depends on events outside this session (another agent must deliver work, a long-running external process, or the user). Auto-continuation pauses and the system wakes you when new input arrives. NEVER use waiting to dodge work: if you could do anything useful this turn, do it and use "continue". Do not re-check unchanged state turn after turn — emit waiting instead.',
   ];
   if (includeRefinedObjective) {
     lines.push(
       '- "refined_objective": OPTIONAL. Include this field ONLY if you used AskUserQuestion this turn to clarify a vague goal and now have a concrete one. Set it to the sharpened goal in the user\'s own language (one clear sentence based on their answer) — the system will replace the stored goal with it. If you did not clarify the goal, or the user chose to keep it as-is, OMIT this field entirely.',
     );
   }
-  lines.push('Do real work with tools each turn — do not just chat. Emit the verdict block every turn.');
+  lines.push('Do real work with tools each turn — do not just chat. When you truly have nothing to do, end the turn with "waiting" instead of a no-progress "continue". Emit the verdict block every turn.');
   return lines.join('\n');
 }
 

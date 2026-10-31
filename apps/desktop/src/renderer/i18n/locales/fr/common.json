@@ -17026,13 +17026,15 @@
       "complete": "Terminé",
       "budgetLimited": "Limite atteinte",
       "usageLimited": "Consommation limitée",
-      "capacityLimited": "Service du modèle saturé"
+      "capacityLimited": "Service du modèle saturé",
+      "waiting": "En attente"
     },
     "turns": "{{used}} tours",
     "turnsWithMax": "{{used}} / {{max}} tours",
     "clear": "Effacer l'objectif",
     "pause": "Mettre l'objectif en pause",
     "resume": "Reprendre l'objectif",
+    "wake": "Réveiller l'objectif",
     "tokensTooltip": "{{used}} / {{budget}} jetons utilisés",
     "tokensUsedLabel": "{{used}} jetons utilisés",
     "elapsedTooltip": "Temps écoulé",

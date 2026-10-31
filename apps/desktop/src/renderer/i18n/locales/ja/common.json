@@ -16785,13 +16785,15 @@
       "complete": "完了",
       "budgetLimited": "上限到達",
       "usageLimited": "利用上限",
-      "capacityLimited": "モデルサービスが混雑"
+      "capacityLimited": "モデルサービスが混雑",
+      "waiting": "待機中"
     },
     "turns": "{{used}} ターン",
     "turnsWithMax": "{{used}} / {{max}} ターン",
     "clear": "目標をクリア",
     "pause": "目標を一時停止",
     "resume": "目標を再開",
+    "wake": "目標を起こす",
     "tokensTooltip": "{{used}} / {{budget}} トークン使用",
     "tokensUsedLabel": "{{used}} トークン使用",
     "elapsedTooltip": "経過時間",

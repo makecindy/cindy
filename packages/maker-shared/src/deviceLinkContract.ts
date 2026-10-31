@@ -164,6 +164,11 @@ export interface MobileGoalStatusPayload {
   usageResetAt: number | null;
   startedAt: number;
   lastReason: string | null;
+  /**
+   * waiting(active 子态,等会话外事件)进入等待的时刻(unix ms);非等待/旧 Host 无此字段。
+   * additive:旧手机端忽略未知字段,照常按 active 显示。
+   */
+  waitingSince?: number | null;
 }
 
 /** goal 状态变化 push 的 payload(goal=null 表示已清除)。 */
