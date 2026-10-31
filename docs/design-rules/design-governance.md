@@ -215,6 +215,19 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 3. 没有标准替代道路时不上阻断级门禁——先报告模式运行并用历史 PR 回放验证误报率，
    再升级阻断；门禁错误信息必须包含文件、行号与推荐改法。
 
+### 门禁加固（2026-10-30）
+
+审计发现「规则写了但没人守」，本批只调门禁，不改任何界面；存量违规不在本批修，按页面另作有意可见 PR。回放与反例见 [证据](../design-evidence/2026-10-30/design-gates-hardening.md)。
+
+| 改动 | 方式 | 存量处理 |
+| --- | --- | --- |
+| 颜色豁免表 | 43 条早已不生效的整文件记录移入 `scripts/hardcoded-color-exemptions.archive.json`（审计不读，只作回归样例）；窄豁免 `reviewDate` 过期即不再放行新增行，CI 输出列出过期条目 | 用户 2026-10-30 决定：Toast 四色、hljs 提亮、灵动岛素材色、实体键盘复刻色续期到 2027-04-30；composer 兜底色一条按原定「集成收口删」不续期 |
+| Desktop 规范外圆角 | 新增行在确认的样式语境（class 属性、`cn()` 等调用、纯类名字符串、样式对象、CSS 文件）里解析为 0 / 2 / 4 / 8 / 12px / pill 以外的值即 block；普通文案里的字样只 report（`rounded-md` 6px、`rounded-2xl` / `3xl`、`rounded-[6px]` 等任意值、字面 `border-radius` / `borderRadius`）；`var()` / `calc()` / % 仍 report；内容自身形状用 `design: intrinsic-geometry — <理由>` 注释声明后降为 report | 约 200 处存量是债，改到哪行修哪行，或按页面分批迁移 |
+| Mobile 五档字色与占位字 | `textColorDiscipline.test.ts`（登记在 mobile guard 层）两条全仓扫描：文字色只能是五档中性色或已登记语义色；`placeholderTextColor` 只能是 `textPlaceholder`（登录画布除外） | 存量名单按次数登记、只许减少：徽标 `cta`、插件详情与远程桌面设置里的光标蓝文字、共享任务危险文字借用确认钮红、ContextSheet 占位字三级色，待设计裁决或有意可见 PR |
+| PR 设计依据检查 | `apps/mobile/src/**/*.tsx` 计入 UI 路径；设计依据按现行规范确切文件名（含 `mobile-design-guide`）且区分大小写，任意 `*-design.md` 不再误过；补 workflow ↔ 检查名 ↔ 脚本一致性测试 | 无存量 |
+
+UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
+
 ### DS-10 报告准确性与维护（提交候选已验证）
 
 沿用 DS-7 的颜色增量阻断、inventory 新鲜度和 Token unit tier 生成保护，不新增 CI 步骤、required 或豁免。`design-layer-report.mjs` 从 Token `desktop-bindings.json` 的 foundations.spacing/css 读取真实变量：例如 `--space-4` 已登记，`--spacing-4` 未登记，不能凭命名猜测合法性。审计结果的 scriptHashes 同时绑定这份输入。
@@ -239,7 +252,7 @@ DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，最终 he
 | Desktop renderer 消费者新增 HEX 字面颜色、样式语境中的 RGB/HSL/OKLCH 等字面颜色函数与字面 fallback | block；准确新增行、列、原因、建议；已验证范围见证据 | 语义角色入口为 `themes/colors.ts`；不能机械替换为随意 Token。数值颜色函数要求位于样式属性、CSS 声明/函数或任意值语境——普通文案字符串里的颜色函数文本不算设计变化。不清洗已有存量 |
 | 颜色来源、测试 fixture、已正式批准的具体角色/值 | allowed，输出仍保留 | 来源由现有冻结测试保护；消费者只读窄 `matches`，旧 glob 记录不再整文件放行；窄规则可经 `object` 绑定获批对象路径（如 `VARIANT_MAP.info`、`MASCOT_PREVIEW_CONFIGS.cindy`），同文件其它对象/变体复用批准色即违规；原批准值/上下文和新违规均有反例 |
 | Mobile 及非上述生产消费者、素材/文档中的字面颜色 | report（是否违规仍需判断） | Mobile 既有 designTokenDiscipline / typographyTokenDiscipline 继续阻断；新增 diff 规则不冒充覆盖所有平台 |
-| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
+| 已注册可见层圆角、命中层/指示层、未知几何与任意间距 | report（规范外圆角值自 2026-10-30 起 block，见上「门禁加固」） | 识别范围与未知分类分开；keycap 4px、已登记图元 2px，不能从 button 标签推出 pill；未决命中方案不自动批准 |
 | 广泛表单采用、焦点/secret/保存行为 | 采用建议 report，现有 DS-6 行为测试保留 | G2 独立试用未完成；不以类名检查取代行为测试，不将全部确认改 CTA |
 | Desktop/Mobile 入口台账新鲜度 | block | 入口发现不等于迁移；人工 owner/pilot/legacy/下一动作不由生成器重写 |
 

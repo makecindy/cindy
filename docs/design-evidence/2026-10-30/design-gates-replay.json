@@ -1,0 +1,92 @@
+{
+ "generated": "2026-10-30",
+ "today": "2026-10-30",
+ "range": "last 100 first-parent merges of main 97b785ae43..d8ccef49fa",
+ "scriptHashes": {
+  "scripts/hardcoded-color-audit.mjs": "fb815d595ea5659eb4069b991262fab6bae7711f188fbb54a78bf52c22ac5410",
+  "scripts/shared/hardcoded-color-match.mjs": "ed31fec9c67f130fd58103b0fb6687fc1dc6dc7ea4e6a33991129281f3b9ae07",
+  "scripts/shared/design-layer-report.mjs": "a3ae75de311f1e3f7b6b9f5dea750416239c50356cbfe478eaf26ae8b1e1a5bf",
+  "scripts/hardcoded-color-exemptions.json": "111c4d7b1b53fadcb9faef956f48dc0e2377183290e40f304642c7e1bfa518f0",
+  "packages/design-tokens/src/desktop-bindings.json": "cf16cb3cfba3f38a1806dab2458c0523ad43a991416e5e2547b1f151c9b22b85",
+  "packages/design-tokens/src/semantic/foundations.json": "61651580afaff343003683fee9e827e416504e3656b04fa263fef35608f70a70"
+ },
+ "recent": {
+  "merges": 100,
+  "withOffScaleRadius": 1,
+  "colorBlocks": 0,
+  "rows": [
+   {
+    "sha": "cfd02a20b4",
+    "offScaleRadius": [
+     {
+      "file": "apps/desktop/src/renderer/features/cc-agent/sidebar/AutomationSessionGroupItem.tsx",
+      "line": 779,
+      "value": "rounded-md",
+      "disposition": "block"
+     }
+    ],
+    "colorBlocks": 0
+   }
+  ]
+ },
+ "positiveControl": [
+  {
+   "sha": "9245acbbe4",
+   "offScaleRadius": [
+    {
+     "file": "apps/desktop/src/renderer/features/right-sidebar/plugins/plugin-task/index.tsx",
+     "line": 47,
+     "value": "rounded-[3px]",
+     "disposition": "block"
+    }
+   ],
+   "colorBlocks": 0
+  },
+  {
+   "sha": "256940f00b",
+   "offScaleRadius": [
+    {
+     "file": "apps/desktop/src/renderer/components/chat/GhostToolCard.tsx",
+     "line": 719,
+     "value": "rounded-[10px]",
+     "disposition": "block"
+    }
+   ],
+   "colorBlocks": 0
+  },
+  {
+   "sha": "7b8e3e4a71",
+   "offScaleRadius": [
+    {
+     "file": "apps/desktop/src/renderer/components/settings/AppearanceSection.tsx",
+     "line": 151,
+     "value": "rounded-[3px]",
+     "disposition": "block"
+    }
+   ],
+   "colorBlocks": 0
+  },
+  {
+   "sha": "c488f28e36",
+   "offScaleRadius": [],
+   "colorBlocks": 0
+  },
+  {
+   "sha": "3f4ec18ec5",
+   "offScaleRadius": [
+    {
+     "file": "apps/desktop/src/renderer/features/input-handoff/InputHandoffDeviceCode.tsx",
+     "line": 21,
+     "value": "rounded-[10px]",
+     "disposition": "block"
+    }
+   ],
+   "colorBlocks": 0
+  },
+  {
+   "sha": "4cd3a4c8b9",
+   "offScaleRadius": [],
+   "colorBlocks": 0
+  }
+ ]
+}
