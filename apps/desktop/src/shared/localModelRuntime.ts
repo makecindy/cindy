@@ -212,8 +212,10 @@ export function classifyOllamaPullError(value: unknown, pullName?: string): Olla
   if (typeof value === 'string' && OLLAMA_PULL_ERROR_KINDS.has(value as OllamaPullErrorKind)) {
     return value as OllamaPullErrorKind;
   }
-  if (pullName && isHfMlxPullName(pullName)) return 'not-gguf';
   const text = pullErrorText(value).toLowerCase();
+  // DNS failures do not establish that a model is missing or access is denied.
+  if (text.includes('no such host') || /\benotfound\b/.test(text)) return 'generic';
+  if (pullName && isHfMlxPullName(pullName)) return 'not-gguf';
   if (text.includes('not gguf') || text.includes('not compatible with llama.cpp')) {
     return 'not-gguf';
   }
@@ -225,12 +227,7 @@ export function classifyOllamaPullError(value: unknown, pullName?: string): Olla
   ) {
     return 'unauthorized';
   }
-  if (
-    text.includes('404') ||
-    text.includes('not found') ||
-    text.includes('file does not exist') ||
-    text.includes('no such host')
-  ) {
+  if (text.includes('404') || text.includes('not found') || text.includes('file does not exist')) {
     return 'not-found';
   }
   if (
