@@ -3586,9 +3586,9 @@ export function ProvidersSection() {
           entry={wizard.entry}
           detected={wizard.detected}
           onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
-          onEntryUnavailable={dialog?.mode === 'create' ? () => {
+          onEntryUnavailable={dialog?.mode === 'create' ? (reason) => {
             setWizard(null);
-            toast.error(t('settings.providers.custom.nameSearchUnavailable'));
+            if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
           } : undefined}
           onOpenCustomForm={() => {
             setWizard(null);

@@ -124,7 +124,7 @@ vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
   ProviderConnectionDialog: (props: { initial?: { name?: string } }) => {
     customDialogSpy(props);
     return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' },
-      props.initial && React.createElement('input', { 'aria-label': 'edit connection draft', defaultValue: props.initial.name }));
+      React.createElement('input', { 'aria-label': props.initial ? 'edit connection draft' : 'custom connection draft', defaultValue: props.initial?.name }));
   },
 }));
 
@@ -1250,3 +1250,27 @@ it('keeps a newly opened edit draft when the completed search wizard refresh set
   expect((input as HTMLInputElement).value).toBe('Unsaved edit');
   expect(customDialogSpy.mock.lastCall![0].initial.id).toBe('existing-endpoint');
 });
+
+// #8065 r4430831420: real parent state with child boundary stubs (unit/jsdom).
+// Prior cancel coverage did not distinguish connection failures from stale targets.
+// The smallest caller reason must restore the same draft, with a catalog toast
+// only when the target is unavailable; connector errors are already shown upstream.
+it.each(['connection-failed', 'target-unavailable'] as const)(
+  'resumes the search draft with the correct toast policy for %s', async reason => {
+    renderAt('?tab=providers&wizard=1');
+    await screen.findByTestId('wizard-stub');
+    act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+    const input = screen.getByRole('textbox', { name: 'custom connection draft' });
+    fireEvent.change(input, { target: { value: 'My unsaved endpoint' } });
+    act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'ollama' }));
+    expect(customDialogSpy.mock.lastCall![0].suspended).toBe(true);
+    toastError.mockClear();
+    act(() => wizardPropsSpy.mock.lastCall![0].onEntryUnavailable(reason));
+    expect(screen.queryByTestId('wizard-stub')).toBeNull();
+    expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+    expect(screen.getByRole('textbox', { name: 'custom connection draft' })).toBe(input);
+    expect((input as HTMLInputElement).value).toBe('My unsaved endpoint');
+    if (reason === 'connection-failed') expect(toastError).not.toHaveBeenCalled();
+    else expect(toastError).toHaveBeenCalledExactlyOnceWith('settings.providers.custom.nameSearchUnavailable');
+  },
+);

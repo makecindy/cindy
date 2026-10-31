@@ -55,6 +55,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
+import { toast } from '@/lib/toast';
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
@@ -2058,13 +2059,31 @@ it('focuses a search target and reports a missing or empty-directory target to i
   await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
 });
 
-it('uses the existing Ollama connector once and returns to the search draft on failure', async () => {
+// #8065 r4430831420: unit/jsdom, real connector entry and mocked IPC.
+// Existing coverage checked only callback count, not its failure reason or toast.
+// A non-ready result or rejected ensure must keep its specific error, not claim
+// that the still-valid provider disappeared from the catalog.
+it.each([
+  ['port-conflict', 'settings.providers.local.conflict'],
+  ['stopped', 'settings.providers.local.status.stopped'],
+  ['ollama-error', 'settings.providers.local.connectFailed'],
+  ['llamacpp-error', 'settings.providers.llamacpp.failed'],
+] as const)('returns a connection-failed reason for %s', async (failure, message) => {
   const onUnavailable = vi.fn();
-  const status = vi.fn(async () => { throw new Error('unavailable'); });
-  Object.assign(window.electronAPI.maker, { localModelStatus: status });
-  render(<AddProviderWizard providers={[]} entry={{ kind: 'ollama' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
-  await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
-  expect(status).toHaveBeenCalledTimes(1);
+  const onDone = vi.fn();
+  const connector = vi.fn(async () => {
+    if (failure.endsWith('-error')) throw new Error('connector failed');
+    return { runtime: 'ollama' as const, kind: failure, appInstalled: false };
+  });
+  Object.assign(window.electronAPI.maker, failure === 'llamacpp-error'
+    ? { llamaCppEnsure: connector } : { localModelStatus: connector });
+  render(<AddProviderWizard providers={[]} entry={{ kind: failure === 'llamacpp-error' ? 'llamacpp' : 'ollama' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledWith('connection-failed'));
+  expect(onUnavailable).toHaveBeenCalledOnce();
+  expect(connector).toHaveBeenCalledOnce();
+  expect(toast.error).toHaveBeenCalledExactlyOnceWith(message);
+  expect(onDone).not.toHaveBeenCalled();
 });
 
 

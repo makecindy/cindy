@@ -85,7 +85,8 @@ interface AddProviderWizardProps {
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
-  onEntryUnavailable?: () => void;
+  /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
+  onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
   onOpenCustomForm: () => void;
   onClose: () => void;
@@ -610,7 +611,7 @@ export function AddProviderWizard({
       await onDone(MANAGED_LLAMACPP_PROVIDER_ID);
     } catch {
       toast.error(t('settings.providers.llamacpp.failed'));
-      if (entry?.kind === 'llamacpp') onEntryUnavailable?.();
+      if (entry?.kind === 'llamacpp') onEntryUnavailable?.('connection-failed');
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -671,12 +672,12 @@ export function AddProviderWizard({
       }
       if (status.kind === 'port-conflict') {
         toast.error(t('settings.providers.local.conflict'));
-        if (entry?.kind === 'ollama') onEntryUnavailable?.();
+        if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
         return;
       }
       if (status.kind !== 'ready') {
         toast.error(t(`settings.providers.local.status.${status.kind}`));
-        if (entry?.kind === 'ollama') onEntryUnavailable?.();
+        if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
         return;
       }
       await window.electronAPI.maker.localModelEnsure();
@@ -688,7 +689,7 @@ export function AddProviderWizard({
           ? t('settings.providers.local.notReady')
           : t('settings.providers.local.connectFailed'),
       );
-      if (entry?.kind === 'ollama') onEntryUnavailable?.();
+      if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
     } finally {
       savingRef.current = false;
       setSaving(false);
