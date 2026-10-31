@@ -62,7 +62,7 @@ export const HANDOFF_NOTE = STRING(500);
 export const HANDOFF_TARGET = z.object({
   app: STRING(200).optional().describe('Application name or bundle id showing the step, e.g. "Google Chrome".'),
   pid: z.number().int().positive().optional(),
-  window_title: STRING(300).optional().describe('Window title, when the app has several windows.'),
+  window_title: STRING(300).optional().describe('Window title, when the app has several windows. A minimized window named here is brought back for the owner.'),
 }).strict();
 export const HANDOFF_COMPLETE_WHEN = z.object({
   window_closed: z.boolean().optional(),

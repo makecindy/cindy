@@ -155,9 +155,14 @@ const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastInd
  * The window a handoff works on: by pid, else by app name or bundle id, else
  * the frontmost app; never Cindy itself. Shared with the request-time check so
  * a bad target is reported to the agent at once instead of minutes later.
+ *
+ * Minimized windows stay reachable (Cindy's browser window opens minimized), but
+ * only when named or when the app has nothing else: a shown window answers first.
  */
 export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | null {
-  const candidates = list.apps.filter((app) => app.pid !== hostPid && app.windows.some((w) => !w.minimized));
+  const others = list.apps.filter((app) => app.pid !== hostPid && app.windows.length > 0);
+  const showing = (app: NativeWindowList['apps'][number]) => app.windows.some((w) => !w.minimized);
+  const candidates = [...others.filter(showing), ...others.filter((app) => !showing(app))];
   let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
   if (!app && spec.app) {
     const wanted = spec.app.trim().toLowerCase();
@@ -172,12 +177,23 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
   if (!app) return null;
   const visibleWindows = app.windows.filter((window) => !window.minimized);
   const title = spec.windowTitle?.toLowerCase();
-  const window = (title ? visibleWindows.find((w) => w.title.toLowerCase().includes(title)) : undefined)
+  const named = (w: { title: string }) => !!title && w.title.toLowerCase().includes(title);
+  const window = visibleWindows.find(named)
+    ?? app.windows.find(named)
     ?? visibleWindows.find((w) => w.focused)
-    ?? visibleWindows[0];
+    ?? visibleWindows[0]
+    ?? app.windows[0];
   if (!window) return null;
-  return { pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title } };
+  return {
+    pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title },
+    ...(window.minimized ? { minimized: true } : {}),
+  };
 }
+
+/** How long a window just brought back may take to draw its form (a sign-in page loads frames). */
+const RESTORED_PAGE_WAIT_MS = 6000;
+/** How long a browser may take to expose its page to accessibility on the first read. */
+const BROWSER_PAGE_WAIT_MS = 3000;
 
 /**
  * One 代输入 request: a loop of read step → owner answers → act → wait for
@@ -360,7 +376,7 @@ export class InputHandoffSession {
       }
       await this.useTarget(target);
       this.initial = target;
-      const step = await this.read().catch(() => null);
+      const step = await this.readFirstStep(await this.restoreTarget(target));
       if (step && actionable(step)) {
         this.present(step);
         return;
@@ -936,6 +952,36 @@ export class InputHandoffSession {
     this.target = target;
   }
 
+  /** A minimized window draws nothing and the owner cannot see it: bring it back before asking anything. */
+  private async restoreTarget(target: HandoffTarget): Promise<boolean> {
+    const driver = this.options.driver;
+    if (!target.minimized || !driver.raise) return false;
+    await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    return true;
+  }
+
+  /**
+   * The first read, given a page time to appear: a browser builds its page for
+   * accessibility on demand, and a window just restored is still loading. Other
+   * windows answer on the first read.
+   */
+  private async readFirstStep(restored: boolean): Promise<ExtractedStep | null> {
+    const deadline = this.now() + (restored ? RESTORED_PAGE_WAIT_MS : BROWSER_PAGE_WAIT_MS);
+    for (;;) {
+      const step = await this.read().catch(() => null);
+      const waiting = restored ? !step || !actionable(step) : !!step?.pageMissing;
+      if (!waiting || this.ended || this.now() >= deadline) return step;
+      await this.sleep(350);
+      // The page's title is the window's: it may have changed while loading, so find the raised window again.
+      if (restored && !step && this.target) {
+        const pid = this.target.pid;
+        const list = await this.options.driver.windows().catch(() => null);
+        const window = list?.apps.find((app) => app.pid === pid)?.windows.find((w) => w.focused && !w.minimized);
+        if (window) this.target = { ...this.target, window: { index: window.index, title: window.title } };
+      }
+    }
+  }
+
   private async read(): Promise<ExtractedStep | null> {
     if (!this.target) return null;
     const raw = await this.options.driver.snapshot(this.target.pid, this.target.window);
@@ -1040,7 +1086,7 @@ export class InputHandoffSession {
         else stableReads = 0;
         last = step;
         const changed = step.signature !== previous;
-        if (stableReads >= 1 && (changed || this.now() - start >= 4000)) return step;
+        if (stableReads >= 1 && !step.pageMissing && (changed || this.now() - start >= 4000)) return step;
       }
       if (this.now() >= deadline) {
         if (last) return last;

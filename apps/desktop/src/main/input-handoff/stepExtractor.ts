@@ -39,6 +39,8 @@ export interface ExtractedStep {
   texts: string[];
   /** A sign-in code plus a link to open elsewhere, when that is all the step asks for. */
   deviceCode?: InputHandoffDeviceCode;
+  /** A browser window whose page is not readable yet; only its own toolbar could be seen. */
+  pageMissing?: boolean;
 }
 
 const SKIPPED_SUBROLES = new Set([
@@ -160,7 +162,9 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   const topWeb = webAreas
     .filter((area) => !webAreas.some((other) => other !== area && isWithin(area.ref, other.ref)))
     .sort((a, b) => area(b) - area(a))[0];
-  const scoped = topWeb ? nodes.filter((node) => isWithin(node.ref, topWeb.ref)) : nodes;
+  // Without a page, a browser window shows only its toolbar: its address bar is never the owner's to fill.
+  const pageMissing = browser && !topWeb;
+  const scoped = topWeb ? nodes.filter((node) => isWithin(node.ref, topWeb.ref)) : pageMissing ? [] : nodes;
 
   // Modal sheets take over the window.
   const sheet = scoped.find((node) => node.role === 'AXSheet');
@@ -364,6 +368,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     ...(topWeb?.url ? { url: topWeb.url } : {}),
     texts,
     ...(deviceCode ? { deviceCode } : {}),
+    ...(pageMissing ? { pageMissing } : {}),
   };
 }
 

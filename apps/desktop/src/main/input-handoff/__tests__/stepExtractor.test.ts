@@ -24,6 +24,19 @@ const snapshot = (nodes: NativeAxNode[], extra: Partial<NativeAxSnapshot> = {}):
 });
 
 describe('extractStep', () => {
+  it('never asks for a browser\'s address bar when its page cannot be read', () => {
+    for (const [desc, placeholder] of [['地址和搜索栏', '问问 Google 或输入网址'], ['Address and search bar', 'Search Google or type a URL']]) {
+      const step = extractStep(snapshot([node('0', 'AXTextField', { desc, placeholder, hasValue: true, frame: [40, 10, 600, 20] })]));
+      expect(step).toMatchObject({ shown: [], controls: [], pageMissing: true });
+    }
+  });
+
+  it('keeps every control of a native window, which has no page to wait for', () => {
+    const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Email' })], { app: 'Notes', bundleId: 'com.example.notes' }));
+    expect(step.shown).toHaveLength(1);
+    expect(step.pageMissing).toBeUndefined();
+  });
+
   it('scopes a browser window to the page and maps a login form to standard fields', () => {
     const step = extractStep(snapshot([
       node('0', 'AXButton', { desc: 'Reload', frame: [10, 10, 20, 20] }),

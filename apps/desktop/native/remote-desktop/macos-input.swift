@@ -551,6 +551,11 @@ func handoffWindowList() -> [String: Any] {
       if let pid = info[kCGWindowOwnerPID as String] as? Int32 { pids.insert(pid) }
     }
   }
+  // An app with only minimized windows has nothing on screen (macOS may even report it hidden), yet the step may wait in one of them.
+  let onScreen = pids
+  for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
+    pids.insert(running.processIdentifier)
+  }
   var apps: [[String: Any]] = []
   for pid in pids {
     guard let running = NSRunningApplication(processIdentifier: pid), running.activationPolicy == .regular else { continue }
@@ -562,6 +567,7 @@ func handoffWindowList() -> [String: Any] {
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
+    if !onScreen.contains(pid) && !windows.contains(where: { $0["minimized"] as? Bool == true }) { continue }
     apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
                  "windows": windows])
   }
@@ -628,9 +634,18 @@ func handoffWaitFront(_ pid: Int32, _ seconds: Double) -> Bool {
   }
   return true
 }
+/// A minimized window draws nothing and takes no input: bring it back and let the Dock animation finish.
+func handoffRestore(_ window: AXUIElement) {
+  guard handoffBool(window, kAXMinimizedAttribute) == true else { return }
+  AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+  let deadline = Date().addingTimeInterval(1.0)
+  while handoffBool(window, kAXMinimizedAttribute) == true && Date() < deadline { usleep(40000) }
+  usleep(300000)
+}
 /// Bring the window forward. Reports whether its app now takes keys: typing must never go anywhere else.
 @discardableResult
 func handoffActivate(_ pid: Int32, _ window: AXUIElement) -> Bool {
+  handoffRestore(window)
   let front = handoffFrontPid() == pid
   if !front {
     _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
