@@ -13886,6 +13886,7 @@
       "continueHint": "Keep going. No adjustment needed yet.",
       "unknownHint": "Current usage appears when the model reports it.",
       "tokens": "{{used}} / {{total}} tokens",
+      "snapshotHint": "Usage is based on the latest report or estimate and may change with the next request.",
       "compact": "Compact context",
       "compactHelp": "Summarize earlier content to free space. Some details may be omitted.",
       "adjust": "Adjust window",

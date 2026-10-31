@@ -13851,6 +13851,7 @@
       "continueHint": "但续言谈无妨，暂不必调。",
       "unknownHint": "得模型之耗用数据后，此处将示今之所占。",
       "tokens": "{{used}} / {{total}} tokens",
+      "snapshotHint": "耗用据近次回报或估算而示，下次请求或有异。",
       "compact": "缩上下文",
       "compactHelp": "概括较早之内容，以腾余地。或略去若干细节。",
       "adjust": "调窗口",

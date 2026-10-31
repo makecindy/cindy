@@ -14048,6 +14048,7 @@
       "continueHint": "Continue. Ainda não é necessário ajustar.",
       "unknownHint": "A utilização atual é apresentada quando o modelo a comunica.",
       "tokens": "{{used}} / {{total}} tokens",
+      "snapshotHint": "A utilização baseia-se no último valor comunicado ou numa estimativa e pode mudar com o próximo pedido.",
       "compact": "Compactar contexto",
       "compactHelp": "Resumir o conteúdo anterior para libertar espaço. Alguns detalhes podem ser omitidos.",
       "adjust": "Ajustar janela",
