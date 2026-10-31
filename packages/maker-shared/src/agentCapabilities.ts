@@ -24,6 +24,8 @@ export interface MobileAgentCapabilities {
   effortLevels: MobileChoiceOption[];
   permissionModes: MobileChoiceOption[];
   hasFastMode: boolean;
+  /** Host advertises the native compact-session route; absent on older hosts. */
+  manualCompactSupported?: boolean;
   /** 计划模式一级开关能力(maker-core Capabilities.planMode.supported,#494 起替代 permissionMode='plan')。 */
   planModeSupported: boolean;
   /** desktop host 是否支持同一会话 Claude Code / Codex pending-intent 切换；旧 host 缺省 false。 */
@@ -166,6 +168,7 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     effortLevels,
     permissionModes,
     hasFastMode: value.hasFastMode === true,
+    manualCompactSupported: isRecord(value.manualCompact) && value.manualCompact.supported === true,
     planModeSupported: isRecord(value.planMode) && value.planMode.supported === true,
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
     supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,

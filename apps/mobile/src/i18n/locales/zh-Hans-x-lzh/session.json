@@ -1,4 +1,18 @@
 {
+  "contextControl": {
+    "compacting": "方压缩…",
+    "meaning": "AI 此轮可参之内容，含言谈、指令与工具所得。",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "得模型之耗用数据后，此处将示今之所占。",
+    "snapshotHint": "耗用据近次回报或估算而示，下次请求或有异。",
+    "compact": "缩上下文",
+    "compactHelp": "概括较早之内容，以腾余地。或略去若干细节。",
+    "autoHelp": "Codex 将于近压缩门槛时自理上下文。",
+    "requested": "已请缩上下文，事毕当更新耗用。",
+    "notExecuted": "此会未备，未行压缩。",
+    "success": "上下文已压缩",
+    "nothing": "无可压缩者"
+  },
   "paneResize": {
     "label": "分栏之宽",
     "hint": "左右拖之，可调两栏之宽"

@@ -1,4 +1,18 @@
 {
+  "contextControl": {
+    "compacting": "Compacting…",
+    "meaning": "What AI can refer to this turn: conversation, instructions and tool results.",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "Current usage appears when the model reports it.",
+    "snapshotHint": "Usage is based on the latest report or estimate and may change with the next request.",
+    "compact": "Compact context",
+    "compactHelp": "Summarize earlier content to free space. Some details may be omitted.",
+    "autoHelp": "Codex automatically compacts context near its compaction threshold.",
+    "requested": "Compaction requested. Usage will update when it finishes.",
+    "notExecuted": "Compaction was not performed. This session is not ready.",
+    "success": "Context compacted",
+    "nothing": "Nothing to compact yet"
+  },
   "paneResize": {
     "label": "Column width",
     "hint": "Drag left or right to adjust the column widths"
