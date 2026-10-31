@@ -2520,6 +2520,28 @@ describe('GoalController', () => {
     expect(st?.lastReason).toBeNull();
   });
 
+  it('editing a waiting goal objective wakes it (the new objective runs instead of waiting)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"waiting","reason":"等交单"}\n```',
+    });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+
+    await h.controller.updateGoal('s1', { objective: '新目标:先把 B3 交单' });
+    await tick();
+
+    // 编辑目标 = 新指令:等待判定是针对旧目标给的,必须立刻结束等待;旧等待标记与
+    // 30 分钟安全网不得把新目标一起按住(否则目标永远不跑)。
+    expect(h.session.sends.length).toBeGreaterThan(1);
+    expect(h.session.sends.at(-1)?.content).toContain('新目标:先把 B3 交单');
+    const st = await h.storage.get('s1');
+    expect(st?.objective).toBe('新目标:先把 B3 交单');
+    expect((await h.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+  });
+
   it('pauseGoal cancels the waiting wake: a later intervention does not fire', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });

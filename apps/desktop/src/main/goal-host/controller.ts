@@ -1034,6 +1034,13 @@ export class GoalController {
         await this.resumeGoal(sessionId);
         return reconcileLifecycleChange();
       }
+      if (objectiveChanged && changed.status === 'active' && this.waitingSessions.has(sessionId)) {
+        // 编辑等待中目标的目标文本 = 新指令:等待判定是针对旧目标给的,必须立刻结束等待。
+        // 否则旧等待标记 + 30 分钟安全网会把新目标一起按住,idle 兜底又因等待标记早退,
+        // 目标永远不跑。用与 intervention / resume-on-open 同一个唤醒原语:清等待态 +
+        // 排防抖续跑(发轮时从存储读新目标)。
+        this.wakeWaitingGoal(sessionId);
+      }
       this.emit(next, state.status);
       if (
         next.status === 'active' &&
