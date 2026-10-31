@@ -2211,13 +2211,21 @@ export class GoalController {
         },
       );
     } catch (error) {
-      // waiting 落库失败:标记已在但 idle 兕底被它挡住 —— 补排安全网,让 DB 恢复后
-      // 目标能自愈补检(否则只有 intervention / 手动唤醒能救)。唤醒窗口内标记被删
-      // 的情况不补:短 timer 已由唤醒方排好。
+      // finalize 由 onEvent 以 void 调用,rejection 无人接会变成 unhandled error
+      // 打红整个分片。就地收口:日志 + 补排安全网 + 提前返回(边界保留,安全网
+      // 到点时 fireTurn 照常发轮)。等待标记仍在 —— idle 兜底被它挡住,安全网是
+      // 唯一的自动自愈通道(intervention / 打开会话 / 手动唤醒也仍可用);唤醒
+      // 窗口内标记已被删的情况不补:短 timer 已由唤醒方排好。
       if (waitingEntry && this.waitingSessions.has(sessionId)) {
         this.scheduleContinuation(sessionId, this.waitingRecheckMs);
       }
-      throw error;
+      this.deps.logger.error('[goal] failed to persist goal turn state', {
+        sessionId,
+        waiting: waitingEntry,
+        error: String(error),
+      });
+      return;
+
     }
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated, state.status);
