@@ -1337,6 +1337,9 @@ export class GoalController {
       try {
         ensured = await this.deps.ensureSession(sessionId);
       } catch (error) {
+        // 唤醒在 ensureSession 期间失败:目标仍是 active,恢复等待标记,让安全网/
+        // 后续事件继续接管(否则 chip 显示进行中却无任何后续调度)。
+        if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
         if (!opts?.auto) {
           this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         }
@@ -1361,6 +1364,9 @@ export class GoalController {
       }
       if (!opts?.auto && this.isBusy(sessionId)) {
         this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
+        // ensureSession await 期间来了新输入:这里已过第一处 busy 检查、等待标记已删,
+        // 同样要恢复,否则 deferred 重试认不出唤醒意图,目标卡死。
+        if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
         return;
       }
     }
@@ -1377,6 +1383,8 @@ export class GoalController {
         }),
       );
     } catch (error) {
+      // 与 ensureSession 失败同理:唤醒未兑现前保住等待语义。
+      if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
       if (!opts?.auto) {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
       }

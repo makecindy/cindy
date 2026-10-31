@@ -2559,6 +2559,35 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.lastReason).toBeNull();
   });
 
+  it('wake that turns busy during ensureSession defers and restores the waiting marker', async () => {
+    // Greptile 4/5 复核发现:第一处 busy 检查过了、标记已删,ensureSession await 期间
+    // 新输入开跑 → 第二处 busy 走 defer,重试认不出唤醒意图,目标卡死。
+    const busyDuringRestore = { on: false };
+    const local = makeController({
+      ensureSession: async (id) => {
+        const s = local?.session;
+        if (id === 's1' && busyDuringRestore.on && s) {
+          s.running = true;
+          busyDuringRestore.on = false;
+        }
+        return id === 's1' ? s : undefined;
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(local.session.sends).toHaveLength(1);
+    busyDuringRestore.on = true;
+    await local.controller.resumeGoal('s1');
+    // 恢复等待标记:chip 不假显示进行中,deferred 重试也认得出唤醒意图。
+    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    local.session.running = false;
+    await local.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(local.session.sends).toHaveLength(2);
+    expect((await local.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
   it('resumeOnOpen wakes a waiting goal (opening the session re-checks)', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
