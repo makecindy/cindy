@@ -7,6 +7,7 @@ import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-im
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
+import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, refreshMenubarControlState, refreshMenubarLocalization, stopMenubarService } from './menubar/service.js';
@@ -7217,6 +7218,17 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
+  });
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
+  // 经本机原有安装器与设置存储重建；同时应答另一台电脑的只读快照请求。
+  registerSetupMigration({
+    getMaker: getMakerCore,
+    getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
+    getMainWindow: () => mainWindowRef,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;

@@ -18589,6 +18589,297 @@
     "calculationUnavailable": "이 값을 계산할 수 없습니다.",
     "incomplete": "일부 내용을 표시하지 못했습니다."
   },
+  "setupMigration": {
+    "title": "마이그레이션 지원",
+    "back": "← 이전",
+    "cancel": "취소",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "옮기기 단계",
+      "source": "컴퓨터 선택",
+      "review": "내용 선택",
+      "apply": "옮기기"
+    },
+    "source": {
+      "description": "같은 계정으로 로그인한 컴퓨터를 선택하세요. 그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터에 그대로 설정합니다. 키는 그 컴퓨터에서 허용한 후에만 복사되며, 로그인 상태는 그 컴퓨터를 벗어나지 않습니다.",
+      "loading": "다른 컴퓨터를 찾는 중…",
+      "empty": "이 계정의 다른 컴퓨터를 찾지 못했습니다. 다른 컴퓨터에서 Cindy에 로그인한 뒤 다시 열어 주세요",
+      "loadFailed": "컴퓨터 목록을 불러오지 못했습니다",
+      "reload": "다시 불러오기",
+      "ready": "온라인, 옮길 수 있음",
+      "next": "설정 읽기",
+      "readAgain": "다시 읽기",
+      "unavailable": {
+        "offline": "오프라인입니다. 그 컴퓨터에서 Cindy를 열면 옮길 수 있습니다",
+        "remote-control-off": "먼저 그 컴퓨터에서 ‘동일 계정 기기의 이 컴퓨터 제어 허용’을 켜 주세요",
+        "control-disabled": "이 컴퓨터에서 그 컴퓨터 제어가 꺼져 있습니다. ‘원격 연결’에서 다시 켤 수 있습니다"
+      }
+    },
+    "reading": "‘{{name}}’의 설정을 읽는 중…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "‘{{name}}’의 Cindy가 오래되어 옮기기를 지원하지 않습니다. 그 컴퓨터의 Cindy를 업데이트한 뒤 다시 시도하세요",
+      "SETUP_SOURCE_UNAVAILABLE": "‘{{name}}’의 설정을 읽지 못했습니다. 옮기려면 그 컴퓨터가 온라인이고 ‘동일 계정 기기의 이 컴퓨터 제어 허용’이 켜져 있어야 합니다",
+      "SETUP_SNAPSHOT_INVALID": "‘{{name}}’에서 받은 설정을 인식하지 못했습니다. 두 컴퓨터의 Cindy 버전이 다를 때 생깁니다. 같은 버전으로 업데이트한 뒤 다시 시도하세요",
+      "SETUP_PLAN_EXPIRED": "옮기기 목록이 만료되었습니다. ‘{{name}}’의 설정을 다시 읽어 주세요",
+      "GENERIC": "‘{{name}}’의 설정을 읽지 못했습니다"
+    },
+    "review": {
+      "description": "‘{{name}}’에서 이 컴퓨터로 옮길 내용을 선택하세요. 이 컴퓨터에서 이미 바꾼 설정은 그대로 유지되며 덮어쓰지 않습니다.",
+      "partial": "그 컴퓨터의 일부 내용은 이번에 읽지 못했습니다. 읽은 내용만 아래에 표시합니다.",
+      "groupCount": "{{total}}개 중 {{selected}}개 선택",
+      "present_one": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
+      "present_other": "그 밖의 {{count}}개 항목은 이 컴퓨터와 같아 옮기지 않아도 됩니다",
+      "start_one": "{{count}}개 항목 옮기기",
+      "start_other": "{{count}}개 항목 옮기기",
+      "continue": "계속",
+      "version": "버전 {{version}}",
+      "pluginDisabled": "그 컴퓨터에서 꺼져 있으며, 옮긴 뒤에도 꺼진 상태로 유지됩니다",
+      "pluginConsentLater": "플러그인 마켓 ‘{{market}}’에서 가져옵니다. 설치할 때 권한을 따로 확인합니다",
+      "skillTeam": "팀 스킬",
+      "settingsChanges_one": "설정 {{count}}개",
+      "settingsChanges_other": "설정 {{count}}개",
+      "settingsKept_one": "이 컴퓨터의 설정 {{count}}개 유지",
+      "settingsKept_other": "이 컴퓨터의 설정 {{count}}개 유지",
+      "settingsChangesKept_one": "설정 {{count}}개, 이 컴퓨터의 {{kept}}개는 유지",
+      "settingsChangesKept_other": "설정 {{count}}개, 이 컴퓨터의 {{kept}}개는 유지",
+      "kept": "이 컴퓨터의 설정 유지",
+      "rendererPrefs": "화면 환경설정",
+      "rendererPrefsHint": "테마, 언어, 알림, 채팅 표시",
+      "toolOn": "기본 제공 도구 ‘{{name}}’ 켜기",
+      "toolOff": "기본 제공 도구 ‘{{name}}’ 끄기",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 인증 정보는 이 컴퓨터에서 다시 입력해야 합니다",
+      "checklistTitle": "옮긴 뒤 이 컴퓨터에서 할 일",
+      "checklistDescription": "로그인 상태, 키, 시스템 권한은 원래 컴퓨터를 벗어나지 않습니다. 옮긴 뒤 이 목록에 따라 하나씩 완료하세요.",
+      "groups": {
+        "plugins": "플러그인",
+        "skills": "스킬",
+        "settings": "설정",
+        "connections": "제공자 및 MCP",
+        "access": "이 컴퓨터 접근",
+        "secrets": "키",
+        "ssh": "SSH 서버"
+      },
+      "reason": {
+        "not-in-catalog": "이 컴퓨터의 플러그인 마켓에 없습니다",
+        "source-not-added": "이 컴퓨터가 읽을 수 없는 플러그인 마켓에서 왔습니다",
+        "local-only": "그 컴퓨터에만 있어 직접 옮겨야 합니다",
+        "needs-sign-in": "먼저 로그인해야 합니다",
+        "platform": "다른 운영체제 전용입니다",
+        "invalid": "이 컴퓨터에서 인식할 수 없습니다"
+      },
+      "providerAuth": {
+        "apiKey": "API 키를 이 컴퓨터에서 다시 입력해야 합니다",
+        "oauth": "이 컴퓨터에서 다시 로그인해야 합니다",
+        "native": "이 컴퓨터에서 구독 계정에 로그인해야 합니다",
+        "none": "키가 필요 없습니다",
+        "apiKeyCopy": "API 키는 \"키\"와 함께 복사할 수 있습니다"
+      },
+      "access": {
+        "remote-control": "동일 계정 기기의 이 컴퓨터 제어 허용",
+        "remote-controlHint": "‘{{name}}’과 같은 설정입니다. ‘원격 연결’에서 언제든지 끌 수 있습니다",
+        "keep-awake": "컴퓨터를 절전 모드로 전환하지 않기",
+        "keep-awakeHint": "‘{{name}}’과 같은 설정입니다. 이 컴퓨터는 절전 모드로 전환되지 않습니다"
+      },
+      "secrets": {
+        "title_one": "{{count}}개 항목의 키 복사",
+        "title_other": "{{count}}개 항목의 키 복사",
+        "description": "\"{{name}}\"에서 허용을 선택한 후에만 이 요청 전용으로 암호화해 복사합니다. 계정 로그인은 복사하지 않으며, 마이그레이션 후 체크리스트에서 차례로 로그인할 수 있습니다."
+      },
+      "sshDescription": "이 컴퓨터에서 새 SSH 키를 만들고 \"{{name}}\"이(가) 이 서버들에 추가합니다(그 컴퓨터에서도 허용 필요). 이후 서버마다 연결을 확인합니다. 개인 키는 각 컴퓨터를 벗어나지 않습니다.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 인증 정보는 \"키\"와 함께 복사할 수 있습니다",
+      "checklistDescriptionWithKeys": "로그인 상태와 시스템 권한은 원래 컴퓨터에 남습니다. 키는 \"{{name}}\"에서 허용한 후에만 복사됩니다. 마이그레이션 후 이 체크리스트로 나머지를 완료하세요."
+    },
+    "permissions": {
+      "title": "플러그인 권한 확인",
+      "description_one": "아래 플러그인 {{count}}개는 설치 후 이 권한을 갖게 됩니다. 확인하면 함께 설치합니다.",
+      "description_other": "아래 플러그인 {{count}}개는 설치 후 이 권한을 갖게 됩니다. 확인하면 함께 설치합니다.",
+      "pluginTitle": "{{name}} · 버전 {{version}}",
+      "confirm_one": "허용하고 플러그인 {{count}}개 설치",
+      "confirm_other": "허용하고 플러그인 {{count}}개 설치"
+    },
+    "running": {
+      "progress": "옮기는 중: {{total}}개 중 {{completed}}개 완료",
+      "label": "옮기는 중…",
+      "confirm": "\"{{name}}\"에서 허용을 선택하세요.",
+      "confirmCode": "두 컴퓨터에 같은 코드가 표시되어야 합니다:"
+    },
+    "done": {
+      "summary_one": "‘{{name}}’에서 {{count}}개 항목을 옮겼습니다",
+      "summary_other": "‘{{name}}’에서 {{count}}개 항목을 옮겼습니다",
+      "applyFailed": "플러그인, 스킬, 설정 옮기기가 완료되지 않았습니다",
+      "failedTitle_one": "{{count}}개 항목을 옮기지 못했습니다",
+      "failedTitle_other": "{{count}}개 항목을 옮기지 못했습니다",
+      "checklistTitle": "이 컴퓨터에서 아직 할 일",
+      "checklistEmpty": "이 컴퓨터에서 더 할 일이 없습니다",
+      "checklistDescription": "이 목록은 나중에 ‘설정 → 일반’에서도 볼 수 있습니다.",
+      "restartHint": "일부 설정은 Cindy를 다시 열면 적용됩니다.",
+      "finish": "완료",
+      "finishReload": "완료하고 화면 새로 고침"
+    },
+    "failure": {
+      "generic": "옮기지 못했습니다({{code}})",
+      "SOURCE_NOT_ADDED": "플러그인 마켓을 추가하지 못했습니다",
+      "MUTATION_CANCELLED": "설치를 취소했습니다",
+      "PRECONDITION_FAILED": "옮기는 동안 플러그인이나 이 컴퓨터의 상태가 바뀌었습니다",
+      "PERMISSION_DENIED": "이 계정으로는 설치할 수 없습니다",
+      "NOT_FOUND": "이 컴퓨터의 플러그인 마켓에서 찾을 수 없습니다",
+      "ALREADY_EXISTS": "이 컴퓨터에 같은 이름의 항목이 이미 있습니다",
+      "SETUP_PLAN_EXPIRED": "옮기기 목록이 만료되었습니다",
+      "SETUP_TRANSFER_DECLINED": "다른 컴퓨터에서 허용하지 않았거나 2분 안에 응답이 없었습니다",
+      "SETUP_TRANSFER_BUSY": "다른 컴퓨터가 다른 마이그레이션 요청을 처리 중입니다. 잠시 후 다시 시도하세요",
+      "SETUP_TRANSFER_INVALID": "다른 컴퓨터의 응답을 읽을 수 없습니다",
+      "SETUP_SOURCE_OUTDATED": "복사하려면 다른 컴퓨터의 Cindy를 업데이트하세요",
+      "SETUP_SOURCE_UNAVAILABLE": "다른 컴퓨터가 응답하지 않습니다",
+      "SSH_AUTHORIZE_FAILED": "다른 컴퓨터가 새 키를 이 서버에 추가하지 못했습니다",
+      "SSH_KEYGEN_FAILED": "이 컴퓨터에서 SSH 키를 만들지 못했습니다(ssh-keygen 필요)",
+      "SSH_HOST_NOT_FOUND": "다른 컴퓨터에 이 서버가 더 이상 없습니다",
+      "SSH_AUTH_FAILED": "키는 추가되었지만 서버가 이 컴퓨터의 연결을 거부했습니다",
+      "SSH_CONNECT_FAILED": "이 컴퓨터에서 서버에 연결할 수 없습니다. 다른 컴퓨터의 네트워크에서만 접근 가능할 수 있습니다",
+      "SSH_KEY_FILE_NOT_FOUND": "이 컴퓨터에서 새 키 파일을 찾을 수 없습니다"
+    },
+    "checklist": {
+      "done": "완료됨",
+      "markDone": "완료로 표시",
+      "needs": "필요: {{items}}",
+      "voiceAsrName": "음성 인식",
+      "plugin-setup": {
+        "title": "‘{{name}}’ 계정 연결",
+        "action": "연결하기"
+      },
+      "plugin-manual": {
+        "title": "플러그인 ‘{{name}}’ 직접 설치",
+        "detail": "그 컴퓨터에서 직접 가져온 플러그인입니다. 그 컴퓨터의 플러그인 세부 정보에서 패키지를 내보낸 뒤 이 컴퓨터에서 가져오세요",
+        "action": "플러그인 열기"
+      },
+      "market-source": {
+        "title": "플러그인 마켓 ‘{{name}}’ 추가",
+        "detail": "이 마켓의 주소는 그 컴퓨터에만 저장되어 있습니다. 추가하면 마켓의 플러그인을 설치할 수 있습니다",
+        "action": "플러그인 열기"
+      },
+      "skill-manual": {
+        "title": "스킬 ‘{{name}}’ 복사",
+        "detail": "SkillHub에서 설치한 스킬이 아니며 그 컴퓨터에만 있습니다",
+        "action": "스킬 열기"
+      },
+      "provider-key": {
+        "title": "‘{{name}}’의 API 키 입력",
+        "action": "입력하기"
+      },
+      "provider-connection": {
+        "title": "‘{{name}}’의 연결 주소 다시 입력",
+        "detail": "원래 주소의 사용자 정보나 쿼리 매개변수에 인증 정보가 있을 수 있어 옮기지 않았습니다",
+        "action": "입력하기"
+      },
+      "provider-sign-in": {
+        "title": "‘{{name}}’에 로그인",
+        "action": "로그인"
+      },
+      "local-model": {
+        "title": "이 컴퓨터에 로컬 모델 ‘{{name}}’ 준비",
+        "detail": "로컬 모델은 원래 컴퓨터에서 실행됩니다. 이 컴퓨터에는 따로 설치해야 합니다",
+        "action": "제공자 열기"
+      },
+      "mcp-token": {
+        "title": "MCP ‘{{name}}’의 인증 정보 입력",
+        "action": "입력하기"
+      },
+      "builtin-key": {
+        "title": "‘{{name}}’의 API 키 입력",
+        "action": "입력하기"
+      },
+      "im-channel": {
+        "title": "‘{{name}}’ 연결",
+        "detail": "봇 하나는 한 번에 한 컴퓨터에서만 메시지를 받습니다. 어느 컴퓨터에서 받을지 정한 뒤 연결하세요",
+        "action": "연결하기"
+      },
+      "computer-use": {
+        "title": "자동 조작 켜기",
+        "detail": "이 컴퓨터에서 손쉬운 사용과 화면 기록 권한을 허용해야 합니다",
+        "action": "켜기"
+      },
+      "remote-desktop": {
+        "title": "원격 데스크톱 켜기",
+        "detail": "이 컴퓨터에서 따로 켜고 화면 기록 권한을 허용해야 합니다",
+        "action": "켜기"
+      },
+      "ssh": {
+        "title_one": "원격 호스트 {{count}}대의 SSH 키와 설정 복사",
+        "title_other": "원격 호스트 {{count}}대의 SSH 키와 설정 복사",
+        "detail": "~/.ssh의 키와 설정은 자동으로 옮겨지지 않으므로 이 컴퓨터로 복사해야 합니다",
+        "action": "원격 연결 열기"
+      },
+      "ssh-host": {
+        "title": "SSH 서버 \"{{name}}\" 설정",
+        "detail": "자동으로 설정하지 못했습니다. SSH 설정에서 키를 선택하고 연결을 확인하세요",
+        "action": "원격 열기"
+      },
+      "startAll_one": "차례로 완료({{count}}개)",
+      "startAll_other": "차례로 완료({{count}}개)"
+    },
+    "settingsGroups": {
+      "appearance": "외관",
+      "windowBehavior": "앱 동작",
+      "menubar": "메뉴 막대 남은 양 표시",
+      "collaboration": "협업",
+      "agentResource": "Agent 리소스 사용량",
+      "gitSafety": "Git 안전",
+      "goal": "목표 모드",
+      "memory": "메모리",
+      "compaction": "컨텍스트 압축",
+      "silentEncryptedRetry": "프로토콜 암호화 콘텐츠를 버리고 재시도",
+      "silentStopAutoResume": "예기치 않게 멈춘 뒤 자동으로 계속",
+      "sessionRuntimeFallback": "작업 모델 자동 대체",
+      "subagentModels": "하위 에이전트",
+      "auxiliaryModels": "보조 모델",
+      "visionBridge": "비전 브리지",
+      "modelVisibility": "모델 표시 및 숨기기",
+      "providerOrder": "제공자 순서",
+      "modelCatalogOverrides": "모델 매개변수 조정",
+      "modelPriceOverrides": "모델 단가",
+      "autoUpdate": "유휴 상태일 때 업데이트 설치",
+      "updateChannel": "베타 채널"
+    },
+    "settings": {
+      "title": "마이그레이션 지원",
+      "description": "새 컴퓨터에서 다른 기존 컴퓨터의 Cindy에 연결된 모든 기능, 플러그인, 설정을 복사해 바로 사용할 수 있게 합니다.",
+      "start": "마이그레이션 지원 열기",
+      "pending_one": "이 컴퓨터에서 아직 할 일이 {{count}}개 있습니다",
+      "pending_other": "이 컴퓨터에서 아직 할 일이 {{count}}개 있습니다",
+      "allDone": "이 컴퓨터에서 할 일을 모두 완료했습니다",
+      "from": "‘{{name}}’에서 옮김",
+      "closeChecklist": "목록 닫기"
+    },
+    "suggestion": {
+      "title": "마이그레이션 지원으로 ‘{{name}}’에서 옮길까요?",
+      "description": "그 컴퓨터의 플러그인, 스킬, 설정, 연결을 이 컴퓨터로 옮길 수 있습니다. 이 컴퓨터에서 다시 로그인하거나 권한을 허용해야 하는 항목은 목록으로 정리해 드립니다. 나중에 ‘설정 → 일반 → 마이그레이션 지원’에서 열 수도 있습니다.",
+      "confirm": "마이그레이션 지원 열기",
+      "later": "나중에"
+    },
+    "walkthrough": {
+      "progress": "마이그레이션 체크리스트 {{current}} / {{total}}",
+      "open": "열기",
+      "skip": "건너뛰기",
+      "next": "완료, 다음",
+      "stop": "종료",
+      "allDone": "체크리스트를 모두 마쳤습니다"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "마이그레이션 지원",
+        "message": "\"{{name}}\"이(가) 이 컴퓨터에서 다음 항목을 복사하려고 합니다",
+        "secrets": "키(그 컴퓨터에만 복사되며 이 컴퓨터의 키는 그대로 유지됩니다):",
+        "ssh": "그 컴퓨터의 새 SSH 공개 키를 다음 서버에 추가:",
+        "sshKey": "공개 키 지문: {{fingerprint}}",
+        "code": "코드: {{code}}. 그 컴퓨터에 표시된 코드와 같을 때만 허용하세요.",
+        "notice": "직접 새 컴퓨터를 설정하는 중이 아니라면 거부하세요.",
+        "more": "외 {{count}}개",
+        "allow": "허용",
+        "deny": "거부"
+      }
+    }
+  },
   "forwardedRequest": {
     "sourcePresent": "[출처] 호스트가 사용자 원문을 요청의 배경으로 그대로 보존했습니다. 현재 요청은 Agent 보충에 있습니다.",
     "sourceMissing": "[출처] 확인 가능한 사용자 원문을 찾지 못했습니다.",

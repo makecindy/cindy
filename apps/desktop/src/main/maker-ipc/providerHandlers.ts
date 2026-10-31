@@ -653,6 +653,25 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
   };
 }
 
+/** Marks a create that Main itself started; never reachable from an IPC event. */
+const MAIN_PROCESS_SENDER = Symbol('main-process-provider-mutation');
+let mainProcessProviderCreate:
+  | ((input: unknown, keys: unknown) => Promise<CustomProviderUpdateResult>)
+  | null = null;
+
+/**
+ * New-computer setup (docs/product-rules/new-device-setup-migration.md) creates a connection
+ * together with the keys copied from the other computer. Same validation, owner checks, locks
+ * and key/header storage as the settings page; the keys never pass through a renderer.
+ */
+export function createCustomProviderFromMain(
+  input: unknown,
+  keys: Record<string, string>,
+): Promise<CustomProviderUpdateResult> {
+  if (!mainProcessProviderCreate) throw new Error('provider handlers are not registered');
+  return mainProcessProviderCreate(input, keys);
+}
+
 export function registerProviderHandlers(
   registry: IpcHandlerRegistry,
   deps: ProviderHandlerDeps,
@@ -1451,6 +1470,7 @@ export function registerProviderHandlers(
   );
 
   function assertTrustedProviderMutationSender(event: unknown): void {
+    if (event === MAIN_PROCESS_SENDER) return;
     if (!deps.assertTrustedSender) {
       throwIpcError('PERMISSION_DENIED', 'sender trust guard unavailable');
     }
@@ -2164,6 +2184,7 @@ export function registerProviderHandlers(
     });
   }
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, createProviderFromInput);
+  mainProcessProviderCreate = (input, keys) => createProviderFromInput(MAIN_PROCESS_SENDER, input, keys);
 
   async function updateProviderFromInput(
     event: unknown,

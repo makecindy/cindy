@@ -18589,6 +18589,297 @@
     "calculationUnavailable": "この値を計算できません。",
     "incomplete": "一部の内容を表示できませんでした。"
   },
+  "setupMigration": {
+    "title": "移行アシスタント",
+    "back": "← 戻る",
+    "cancel": "キャンセル",
+    "listSeparator": "、",
+    "steps": {
+      "label": "移行の手順",
+      "source": "パソコンを選択",
+      "review": "内容を選択",
+      "apply": "移行"
+    },
+    "source": {
+      "description": "同じアカウントでログインしているパソコンを選んでください。そのパソコンのプラグイン、スキル、設定、接続をこのパソコンに同じように設定します。キーはそのパソコンで許可した後にだけコピーされ、ログイン状態はそのパソコンから出ません。",
+      "loading": "ほかのパソコンを探しています…",
+      "empty": "このアカウントのほかのパソコンが見つかりません。別のパソコンで Cindy にログインしてから、もう一度開いてください",
+      "loadFailed": "パソコンの一覧を読み込めませんでした",
+      "reload": "再読み込み",
+      "ready": "オンライン・移行できます",
+      "next": "設定を読み込む",
+      "readAgain": "もう一度読み込む",
+      "unavailable": {
+        "offline": "オフラインです。そのパソコンで Cindy を開くと移行できます",
+        "remote-control-off": "先にそのパソコンで「同一アカウントのデバイスによる操作を許可」をオンにしてください",
+        "control-disabled": "このパソコンからの操作がオフになっています。「リモート接続」でオンに戻せます"
+      }
+    },
+    "reading": "「{{name}}」の設定を読み込んでいます…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」の Cindy は古いため移行に対応していません。そのパソコンの Cindy を更新してから、もう一度お試しください",
+      "SETUP_SOURCE_UNAVAILABLE": "「{{name}}」の設定を読み込めませんでした。移行にはそのパソコンがオンラインで、「同一アカウントのデバイスによる操作を許可」がオンである必要があります",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」から届いた設定を認識できませんでした。2 台の Cindy のバージョンが異なると起こります。同じバージョンに更新してから、もう一度お試しください",
+      "SETUP_PLAN_EXPIRED": "移行リストの有効期限が切れました。「{{name}}」の設定をもう一度読み込んでください",
+      "GENERIC": "「{{name}}」の設定を読み込めませんでした"
+    },
+    "review": {
+      "description": "「{{name}}」からこのパソコンに移行する内容を選んでください。このパソコンで変更済みの設定はそのまま残り、上書きされません。",
+      "partial": "そのパソコンの一部の内容は今回読み込めませんでした。読み込めた内容だけを表示しています。",
+      "groupCount": "{{selected}} / {{total}} 件を選択",
+      "present_one": "ほかに {{count}} 件はこのパソコンと同じため、移行は不要です",
+      "present_other": "ほかに {{count}} 件はこのパソコンと同じため、移行は不要です",
+      "start_one": "{{count}} 件を移行",
+      "start_other": "{{count}} 件を移行",
+      "continue": "続行",
+      "version": "バージョン {{version}}",
+      "pluginDisabled": "そのパソコンでオフになっています。移行後もオフのままです",
+      "pluginConsentLater": "プラグインマーケット「{{market}}」から。インストール時に権限を個別に確認します",
+      "skillTeam": "チームのスキル",
+      "settingsChanges_one": "{{count}} 件の設定",
+      "settingsChanges_other": "{{count}} 件の設定",
+      "settingsKept_one": "このパソコンの設定 {{count}} 件を残します",
+      "settingsKept_other": "このパソコンの設定 {{count}} 件を残します",
+      "settingsChangesKept_one": "{{count}} 件の設定（このパソコンの {{kept}} 件は残します）",
+      "settingsChangesKept_other": "{{count}} 件の設定（このパソコンの {{kept}} 件は残します）",
+      "kept": "このパソコンの設定を残します",
+      "rendererPrefs": "画面の表示設定",
+      "rendererPrefsHint": "テーマ、言語、通知、チャットの表示",
+      "toolOn": "組み込みツール「{{name}}」をオン",
+      "toolOff": "組み込みツール「{{name}}」をオフ",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 認証情報はこのパソコンで入力し直します",
+      "checklistTitle": "移行後にこのパソコンで行うこと",
+      "checklistDescription": "ログイン状態、キー、システムの権限は元のパソコンから出ません。移行後、このリストに沿って一つずつ設定してください。",
+      "groups": {
+        "plugins": "プラグイン",
+        "skills": "スキル",
+        "settings": "設定",
+        "connections": "プロバイダーと MCP",
+        "access": "このパソコンへのアクセス",
+        "secrets": "キー",
+        "ssh": "SSH サーバー"
+      },
+      "reason": {
+        "not-in-catalog": "このパソコンのプラグインマーケットにありません",
+        "source-not-added": "このパソコンから読めないプラグインマーケットのものです",
+        "local-only": "そのパソコンにしかないため、手動で移す必要があります",
+        "needs-sign-in": "先にログインが必要です",
+        "platform": "別の OS 専用です",
+        "invalid": "このパソコンでは認識できません"
+      },
+      "providerAuth": {
+        "apiKey": "API キーをこのパソコンで入力し直します",
+        "oauth": "このパソコンでログインし直します",
+        "native": "このパソコンでサブスクリプションにログインします",
+        "none": "キーは不要です",
+        "apiKeyCopy": "API キーは「キー」と一緒にコピーできます"
+      },
+      "access": {
+        "remote-control": "同一アカウントのデバイスによる操作を許可",
+        "remote-controlHint": "「{{name}}」と同じ設定です。「リモート接続」でいつでもオフにできます",
+        "keep-awake": "パソコンをスリープさせない",
+        "keep-awakeHint": "「{{name}}」と同じ設定です。このパソコンはスリープしません"
+      },
+      "secrets": {
+        "title_one": "{{count}} 件のキーをコピー",
+        "title_other": "{{count}} 件のキーをコピー",
+        "description": "「{{name}}」で「許可」を選んだ後にだけ、このリクエスト専用に暗号化してコピーします。アカウントのログインはコピーしません。移行後にチェックリストから順にログインできます。"
+      },
+      "sshDescription": "このコンピューターで新しい SSH キーを作成し、「{{name}}」がそれを各サーバーに追加します（そのコンピューターでの許可も必要です）。その後、サーバーごとに接続を確認します。秘密鍵はそれぞれのコンピューターから出ません。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 認証情報は「キー」と一緒にコピーできます",
+      "checklistDescriptionWithKeys": "ログイン状態とシステムの許可は元のコンピューターに残ります。キーは「{{name}}」で許可された後にだけコピーされます。移行後、このチェックリストで残りを完了できます。"
+    },
+    "permissions": {
+      "title": "プラグインの権限を確認",
+      "description_one": "下の {{count}} 個のプラグインはインストール後にこれらの権限を持ちます。確認するとまとめてインストールします。",
+      "description_other": "下の {{count}} 個のプラグインはインストール後にこれらの権限を持ちます。確認するとまとめてインストールします。",
+      "pluginTitle": "{{name}} · バージョン {{version}}",
+      "confirm_one": "許可して {{count}} 個のプラグインをインストール",
+      "confirm_other": "許可して {{count}} 個のプラグインをインストール"
+    },
+    "running": {
+      "progress": "移行中：{{completed}} / {{total}} 件完了",
+      "label": "移行中…",
+      "confirm": "「{{name}}」で「許可」を選んでください。",
+      "confirmCode": "両方のコンピューターに同じコードが表示されているはずです："
+    },
+    "done": {
+      "summary_one": "「{{name}}」から {{count}} 件を移行しました",
+      "summary_other": "「{{name}}」から {{count}} 件を移行しました",
+      "applyFailed": "プラグイン、スキル、設定の移行が完了しませんでした",
+      "failedTitle_one": "{{count}} 件を移行できませんでした",
+      "failedTitle_other": "{{count}} 件を移行できませんでした",
+      "checklistTitle": "このパソコンでまだ行うこと",
+      "checklistEmpty": "このパソコンで追加で行うことはありません",
+      "checklistDescription": "このリストはあとで「設定 → 一般」でも確認できます。",
+      "restartHint": "一部の設定は Cindy を開き直すと反映されます。",
+      "finish": "完了",
+      "finishReload": "完了して画面を再読み込み"
+    },
+    "failure": {
+      "generic": "移行できませんでした（{{code}}）",
+      "SOURCE_NOT_ADDED": "プラグインマーケットを追加できませんでした",
+      "MUTATION_CANCELLED": "インストールをキャンセルしました",
+      "PRECONDITION_FAILED": "移行中にプラグインまたはこのパソコンの状態が変わりました",
+      "PERMISSION_DENIED": "このアカウントではインストールできません",
+      "NOT_FOUND": "このパソコンのプラグインマーケットに見つかりません",
+      "ALREADY_EXISTS": "同じ名前のものがこのパソコンにすでにあります",
+      "SETUP_PLAN_EXPIRED": "移行リストの有効期限が切れました",
+      "SETUP_TRANSFER_DECLINED": "もう一方のコンピューターで許可されなかったか、2 分以内に応答がありませんでした",
+      "SETUP_TRANSFER_BUSY": "もう一方のコンピューターが別の移行リクエストを処理中です。しばらくしてから再試行してください",
+      "SETUP_TRANSFER_INVALID": "もう一方のコンピューターの応答を読み取れません",
+      "SETUP_SOURCE_OUTDATED": "コピーするには、もう一方のコンピューターの Cindy を更新してください",
+      "SETUP_SOURCE_UNAVAILABLE": "もう一方のコンピューターが応答していません",
+      "SSH_AUTHORIZE_FAILED": "もう一方のコンピューターが新しいキーをこのサーバーに追加できませんでした",
+      "SSH_KEYGEN_FAILED": "このコンピューターで SSH キーを作成できませんでした（ssh-keygen が必要です）",
+      "SSH_HOST_NOT_FOUND": "このサーバーはもう一方のコンピューターにありません",
+      "SSH_AUTH_FAILED": "キーは追加されましたが、サーバーがこのコンピューターの接続を拒否しました",
+      "SSH_CONNECT_FAILED": "このコンピューターからサーバーに接続できません。もう一方のコンピューターのネットワークからのみ到達できる可能性があります",
+      "SSH_KEY_FILE_NOT_FOUND": "このコンピューターで新しいキーファイルが見つかりません"
+    },
+    "checklist": {
+      "done": "完了",
+      "markDone": "完了にする",
+      "needs": "必要：{{items}}",
+      "voiceAsrName": "音声認識",
+      "plugin-setup": {
+        "title": "「{{name}}」のアカウントを接続",
+        "action": "接続する"
+      },
+      "plugin-manual": {
+        "title": "プラグイン「{{name}}」を手動でインストール",
+        "detail": "そのパソコンで直接インポートしたプラグインです。そのパソコンのプラグイン詳細からパッケージを書き出し、このパソコンでインポートしてください",
+        "action": "プラグインを開く"
+      },
+      "market-source": {
+        "title": "プラグインマーケット「{{name}}」を追加",
+        "detail": "このマーケットのアドレスはそのパソコンにだけ保存されています。追加するとプラグインをインストールできます",
+        "action": "プラグインを開く"
+      },
+      "skill-manual": {
+        "title": "スキル「{{name}}」をコピー",
+        "detail": "SkillHub からインストールしたものではなく、そのパソコンにしかありません",
+        "action": "スキルを開く"
+      },
+      "provider-key": {
+        "title": "「{{name}}」の API キーを入力",
+        "action": "入力する"
+      },
+      "provider-connection": {
+        "title": "「{{name}}」の接続先アドレスを入力し直す",
+        "detail": "元のアドレスのユーザー情報やクエリパラメーターには認証情報が含まれる可能性があるため、移行していません",
+        "action": "入力する"
+      },
+      "provider-sign-in": {
+        "title": "「{{name}}」にログイン",
+        "action": "ログイン"
+      },
+      "local-model": {
+        "title": "このパソコンにローカルモデル「{{name}}」を用意",
+        "detail": "ローカルモデルは元のパソコンで動いています。このパソコンには別途インストールが必要です",
+        "action": "プロバイダーを開く"
+      },
+      "mcp-token": {
+        "title": "MCP「{{name}}」の認証情報を入力",
+        "action": "入力する"
+      },
+      "builtin-key": {
+        "title": "「{{name}}」の API キーを入力",
+        "action": "入力する"
+      },
+      "im-channel": {
+        "title": "「{{name}}」を接続",
+        "detail": "1 つのボットがメッセージを受け取れるのは一度に 1 台のパソコンだけです。どのパソコンで受け取るか決めてから接続してください",
+        "action": "接続する"
+      },
+      "computer-use": {
+        "title": "自動操作をオン",
+        "detail": "このパソコンでアクセシビリティと画面収録の権限を許可する必要があります",
+        "action": "オンにする"
+      },
+      "remote-desktop": {
+        "title": "リモートデスクトップをオン",
+        "detail": "このパソコンで個別にオンにし、画面収録の権限を許可する必要があります",
+        "action": "オンにする"
+      },
+      "ssh": {
+        "title_one": "リモートホスト {{count}} 台の SSH キーと設定をコピー",
+        "title_other": "リモートホスト {{count}} 台の SSH キーと設定をコピー",
+        "detail": "~/.ssh のキーと設定は自動では移行されません。このパソコンにコピーしてください",
+        "action": "リモート接続を開く"
+      },
+      "ssh-host": {
+        "title": "SSH サーバー「{{name}}」を設定",
+        "detail": "自動では設定できませんでした。SSH 設定でキーを選んで接続を確認してください",
+        "action": "リモートを開く"
+      },
+      "startAll_one": "順に完了（{{count}} 件）",
+      "startAll_other": "順に完了（{{count}} 件）"
+    },
+    "settingsGroups": {
+      "appearance": "外観",
+      "windowBehavior": "アプリの動作",
+      "menubar": "メニューバーの残り表示",
+      "collaboration": "コラボレーション",
+      "agentResource": "Agent リソース使用量",
+      "gitSafety": "Git セーフティ",
+      "goal": "ゴールモード",
+      "memory": "メモリ",
+      "compaction": "コンテキスト圧縮",
+      "silentEncryptedRetry": "プロトコル暗号化コンテンツを破棄して再試行",
+      "silentStopAutoResume": "予期せず停止したあと自動で続行",
+      "sessionRuntimeFallback": "タスクモデルの自動フォールバック",
+      "subagentModels": "サブエージェント",
+      "auxiliaryModels": "補助モデル",
+      "visionBridge": "ビジョンブリッジ",
+      "modelVisibility": "モデルの表示と非表示",
+      "providerOrder": "プロバイダーの順序",
+      "modelCatalogOverrides": "モデルパラメータの調整",
+      "modelPriceOverrides": "モデルの単価",
+      "autoUpdate": "アイドル時に更新をインストール",
+      "updateChannel": "Beta チャンネル"
+    },
+    "settings": {
+      "title": "移行アシスタント",
+      "description": "新しいパソコンで、ほかの古いパソコンの Cindy に接続しているすべての機能、プラグイン、設定をコピーし、すぐに使える状態にします。",
+      "start": "移行アシスタントを開く",
+      "pending_one": "このパソコンでまだ {{count}} 件行うことがあります",
+      "pending_other": "このパソコンでまだ {{count}} 件行うことがあります",
+      "allDone": "このパソコンで行うことはすべて完了しました",
+      "from": "「{{name}}」からの移行",
+      "closeChecklist": "リストを閉じる"
+    },
+    "suggestion": {
+      "title": "移行アシスタントで「{{name}}」から移行しますか？",
+      "description": "そのパソコンのプラグイン、スキル、設定、接続をこのパソコンに移せます。このパソコンでログインや許可が必要なものはリストにまとめます。あとで「設定 → 一般 → 移行アシスタント」から開くこともできます。",
+      "confirm": "移行アシスタントを開く",
+      "later": "あとで"
+    },
+    "walkthrough": {
+      "progress": "移行チェックリスト {{current}} / {{total}}",
+      "open": "開く",
+      "skip": "スキップ",
+      "next": "完了して次へ",
+      "stop": "終了",
+      "allDone": "チェックリストを完了しました"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "移行アシスタント",
+        "message": "「{{name}}」がこのコンピューターから次の内容のコピーを求めています",
+        "secrets": "キー（そのコンピューターにだけコピーされ、ここのキーは変わりません）：",
+        "ssh": "そのコンピューターの新しい SSH 公開鍵を次のサーバーに追加：",
+        "sshKey": "公開鍵のフィンガープリント：{{fingerprint}}",
+        "code": "コード：{{code}}。そのコンピューターに表示されたコードと一致する場合にだけ許可してください。",
+        "notice": "ご自身で新しいコンピューターを設定していない場合は拒否してください。",
+        "more": "ほか {{count}} 件",
+        "allow": "許可",
+        "deny": "拒否"
+      }
+    }
+  },
   "forwardedRequest": {
     "sourcePresent": "[出典] ホストがユーザーの原文を依頼の背景としてそのまま保持しています。現在の依頼は Agent の補足にあります。",
     "sourceMissing": "[出典] 確認可能なユーザーの原文が見つかりません。",

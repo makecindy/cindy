@@ -22,7 +22,7 @@ import type {
   MoneyCurrency,
 } from '../../shared/regionalMoney.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 
@@ -582,3 +582,6 @@ export const __testing = {
   mergedQuote,
   currencyCanProjectToLedger,
 };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelPriceOverridePortableSettings = portableOverrideSettings(store);

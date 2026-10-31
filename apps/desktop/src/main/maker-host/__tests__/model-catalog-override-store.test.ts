@@ -23,8 +23,13 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
 }));
 
-const { MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES, readModelCatalogOverrides, readModelImageInputOverride, writeModelImageInputOverride } =
-  await import('../model-catalog-override-store.js');
+const {
+  MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+  modelCatalogOverridePortableSettings,
+  readModelCatalogOverrides,
+  readModelImageInputOverride,
+  writeModelImageInputOverride,
+} = await import('../model-catalog-override-store.js');
 
 const patchEntry = { base: { name: 'Renamed' } };
 
@@ -153,5 +158,18 @@ describe('image input edits', () => {
     const file = writeOwnerFile(original);
     await expect(writeModelImageInputOverride([target], true, refresh)).rejects.toThrow();
     expect(fs.readFileSync(file, 'utf8')).toBe(original);
+  });
+});
+
+// Unit, new-computer setup (docs/product-rules/new-device-setup-migration.md): this store's own merge
+// rule used to keep only `patches`, so a migrated section reported success but was never written.
+// Minimal input: one addition from the other computer, one patch already changed here.
+describe('new-computer setup', () => {
+  it('writes a section this computer has not changed and keeps the ones it has', async () => {
+    owner.current = 'setup-migration';
+    const file = writeOwnerFile({ version: 1, patches: { 'openai:gpt-6': patchEntry } });
+    const additions = { 'xai:xai/local-b': { agents: ['codex'], base: { name: 'B', contextWindow: 1_000, efforts: [], defaultEffort: null } } };
+    await expect(modelCatalogOverridePortableSettings.applyPatch(() => ({ additions }))).resolves.toBe(true);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ additions, patches: { 'openai:gpt-6': patchEntry } });
   });
 });

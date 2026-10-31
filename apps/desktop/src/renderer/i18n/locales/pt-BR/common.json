@@ -18865,6 +18865,310 @@
     "calculationUnavailable": "Não foi possível calcular este valor.",
     "incomplete": "Parte do conteúdo não pôde ser exibida."
   },
+  "setupMigration": {
+    "title": "Assistente de migração",
+    "back": "← Voltar",
+    "cancel": "Cancelar",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Etapas de configuração",
+      "source": "Computador",
+      "review": "Conteúdo",
+      "apply": "Transferir"
+    },
+    "source": {
+      "description": "Escolha um computador conectado a esta conta. Os plugins, habilidades, configurações e conexões dele são configurados aqui do mesmo jeito; logins e chaves só saem daquele computador se você permitir nele.",
+      "loading": "Procurando seus outros computadores…",
+      "empty": "Nenhum outro computador encontrado para esta conta. Entre no Cindy em outro computador e abra isto novamente",
+      "loadFailed": "Não foi possível carregar seus computadores",
+      "reload": "Recarregar computadores",
+      "ready": "On-line, pronto para transferir",
+      "next": "Ler configurações",
+      "readAgain": "Ler novamente",
+      "unavailable": {
+        "offline": "Off-line. Abra o Cindy naquele computador para transferir dele",
+        "remote-control-off": "Primeiro ative “Permitir que dispositivos da mesma conta controlem este computador” naquele computador",
+        "control-disabled": "O controle daquele computador está desativado aqui. Ative-o novamente em Conexão remota"
+      }
+    },
+    "reading": "Lendo as configurações de “{{name}}”…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "O Cindy em “{{name}}” é antigo demais para transferir. Atualize o Cindy naquele computador e tente novamente",
+      "SETUP_SOURCE_UNAVAILABLE": "Não foi possível ler as configurações de “{{name}}”. Aquele computador precisa estar on-line com “Permitir que dispositivos da mesma conta controlem este computador” ativado",
+      "SETUP_SNAPSHOT_INVALID": "Não foi possível ler as configurações de “{{name}}”. Isso acontece quando os dois computadores usam versões diferentes do Cindy; atualize os dois para a mesma versão e tente novamente",
+      "SETUP_PLAN_EXPIRED": "Esta lista expirou. Leia as configurações de “{{name}}” novamente",
+      "GENERIC": "Não foi possível ler as configurações de “{{name}}”"
+    },
+    "review": {
+      "description": "Escolha o que transferir de “{{name}}” para este computador. As configurações que você já mudou neste computador são mantidas.",
+      "partial": "Parte do conteúdo daquele computador não pôde ser lida desta vez. Abaixo aparece apenas o que foi lido.",
+      "groupCount": "{{selected}} de {{total}} selecionados",
+      "present_one": "Mais {{count}} item já é igual aqui",
+      "present_other": "Mais {{count}} itens já são iguais aqui",
+      "present_many": "Mais {{count}} itens já são iguais aqui",
+      "start_one": "Transferir {{count}} item",
+      "start_other": "Transferir {{count}} itens",
+      "start_many": "Transferir {{count}} itens",
+      "continue": "Continuar",
+      "version": "Versão {{version}}",
+      "pluginDisabled": "Desativado naquele computador; continua desativado aqui",
+      "pluginConsentLater": "Do marketplace “{{market}}”; você confirmará as permissões ao instalar",
+      "skillTeam": "Habilidade da equipe",
+      "settingsChanges_one": "{{count}} configuração",
+      "settingsChanges_other": "{{count}} configurações",
+      "settingsChanges_many": "{{count}} configurações",
+      "settingsKept_one": "Mantém {{count}} configuração deste computador",
+      "settingsKept_other": "Mantém {{count}} configurações deste computador",
+      "settingsKept_many": "Mantém {{count}} configurações deste computador",
+      "settingsChangesKept_one": "{{count}} configuração; mantém {{kept}} deste computador",
+      "settingsChangesKept_other": "{{count}} configurações; mantém {{kept}} deste computador",
+      "settingsChangesKept_many": "{{count}} configurações; mantém {{kept}} deste computador",
+      "kept": "Mantém a configuração deste computador",
+      "rendererPrefs": "Preferências da interface",
+      "rendererPrefsHint": "Tema, idioma, notificações e exibição do chat",
+      "toolOn": "Ativar a ferramenta integrada “{{name}}”",
+      "toolOff": "Desativar a ferramenta integrada “{{name}}”",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Informe as credenciais de acesso novamente neste computador",
+      "checklistTitle": "Para concluir neste computador",
+      "checklistDescription": "Logins, chaves e permissões do sistema ficam no computador original. Depois de transferir, conclua-os um a um por esta lista.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Habilidades",
+        "settings": "Configurações",
+        "connections": "Provedores e MCP",
+        "access": "Acesso a este computador",
+        "secrets": "Chaves",
+        "ssh": "Servidores SSH"
+      },
+      "reason": {
+        "not-in-catalog": "Não está no marketplace de plugins deste computador",
+        "source-not-added": "De um marketplace que este computador não consegue ler",
+        "local-only": "Só existe naquele computador; transfira manualmente",
+        "needs-sign-in": "Entre primeiro",
+        "platform": "Somente para outro sistema operacional",
+        "invalid": "Este computador não consegue ler"
+      },
+      "providerAuth": {
+        "apiKey": "Informe a chave de API novamente neste computador",
+        "oauth": "Entre novamente neste computador",
+        "native": "Entre na assinatura neste computador",
+        "none": "Nenhuma chave necessária",
+        "apiKeyCopy": "A chave de API pode ser copiada com Chaves"
+      },
+      "access": {
+        "remote-control": "Permitir que dispositivos da mesma conta controlem este computador",
+        "remote-controlHint": "Igual a “{{name}}”. Você pode desativar a qualquer momento em Conexão remota",
+        "keep-awake": "Manter o computador ativo",
+        "keep-awakeHint": "Igual a “{{name}}”. Este computador não entrará em repouso"
+      },
+      "secrets": {
+        "title_one": "Copiar as chaves de {{count}} item",
+        "title_other": "Copiar as chaves de {{count}} itens",
+        "title_many": "Copiar as chaves de {{count}} itens",
+        "description": "Copiadas só depois que você escolher Permitir em “{{name}}”, criptografadas apenas para esta solicitação. Logins de contas não são copiados; entre pela lista depois de transferir."
+      },
+      "sshDescription": "Este computador cria uma nova chave SSH, “{{name}}” a adiciona a estes servidores depois de permitido lá e então cada servidor é testado. Chaves privadas nunca saem do seu computador.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · As credenciais podem ser copiadas com Chaves",
+      "checklistDescriptionWithKeys": "Logins e permissões do sistema ficam no computador original; as chaves só são copiadas depois que “{{name}}” permitir. Depois de transferir, conclua o restante por esta lista."
+    },
+    "permissions": {
+      "title": "Confirmar permissões dos plugins",
+      "description_one": "Depois de instalado, o plugin abaixo recebe estas permissões. Confirmar faz a instalação.",
+      "description_other": "Depois de instalados, os {{count}} plugins abaixo recebem estas permissões. Confirmar instala todos juntos.",
+      "description_many": "Depois de instalados, os {{count}} plugins abaixo recebem estas permissões. Confirmar instala todos juntos.",
+      "pluginTitle": "{{name}} · Versão {{version}}",
+      "confirm_one": "Permitir e instalar {{count}} plugin",
+      "confirm_other": "Permitir e instalar {{count}} plugins",
+      "confirm_many": "Permitir e instalar {{count}} plugins"
+    },
+    "running": {
+      "progress": "Transferindo: {{completed}} de {{total}} concluídos",
+      "label": "Transferindo…",
+      "confirm": "Escolha Permitir em “{{name}}”.",
+      "confirmCode": "Os dois computadores devem mostrar o mesmo código:"
+    },
+    "done": {
+      "summary_one": "{{count}} item transferido de “{{name}}”",
+      "summary_other": "{{count}} itens transferidos de “{{name}}”",
+      "summary_many": "{{count}} itens transferidos de “{{name}}”",
+      "applyFailed": "A transferência de plugins, habilidades e configurações não foi concluída",
+      "failedTitle_one": "{{count}} item não pôde ser transferido",
+      "failedTitle_other": "{{count}} itens não puderam ser transferidos",
+      "failedTitle_many": "{{count}} itens não puderam ser transferidos",
+      "checklistTitle": "Ainda a fazer neste computador",
+      "checklistEmpty": "Nada mais a fazer neste computador",
+      "checklistDescription": "Você também encontra esta lista depois em Configurações → Geral.",
+      "restartHint": "Algumas configurações entram em vigor depois que você reabrir o Cindy.",
+      "finish": "Concluído",
+      "finishReload": "Concluir e recarregar"
+    },
+    "failure": {
+      "generic": "Não foi possível transferir ({{code}})",
+      "SOURCE_NOT_ADDED": "Não foi possível adicionar o marketplace de plugins dele",
+      "MUTATION_CANCELLED": "Instalação cancelada",
+      "PRECONDITION_FAILED": "O plugin ou este computador mudou durante a transferência",
+      "PERMISSION_DENIED": "Esta conta não pode instalá-lo",
+      "NOT_FOUND": "Não encontrado no marketplace de plugins deste computador",
+      "ALREADY_EXISTS": "Já existe algo com o mesmo nome aqui",
+      "SETUP_PLAN_EXPIRED": "Esta lista expirou",
+      "SETUP_TRANSFER_DECLINED": "Não permitido no outro computador ou sem resposta em 2 minutos",
+      "SETUP_TRANSFER_BUSY": "O outro computador está atendendo outra solicitação. Tente novamente em instantes",
+      "SETUP_TRANSFER_INVALID": "Não foi possível ler a resposta do outro computador",
+      "SETUP_SOURCE_OUTDATED": "Atualize o Cindy no outro computador para copiar isto",
+      "SETUP_SOURCE_UNAVAILABLE": "O outro computador não está respondendo",
+      "SSH_AUTHORIZE_FAILED": "O outro computador não conseguiu adicionar a nova chave a este servidor",
+      "SSH_KEYGEN_FAILED": "Este computador não conseguiu criar uma chave SSH (o ssh-keygen é necessário)",
+      "SSH_HOST_NOT_FOUND": "Este servidor não está mais no outro computador",
+      "SSH_AUTH_FAILED": "A chave foi adicionada, mas o servidor recusou este computador",
+      "SSH_CONNECT_FAILED": "Este computador não alcança o servidor; talvez ele só seja acessível pela rede do outro computador",
+      "SSH_KEY_FILE_NOT_FOUND": "O novo arquivo de chave não foi encontrado neste computador"
+    },
+    "checklist": {
+      "done": "Concluído",
+      "markDone": "Marcar como concluído",
+      "needs": "Precisa de: {{items}}",
+      "voiceAsrName": "Reconhecimento de voz",
+      "plugin-setup": {
+        "title": "Conectar as contas de “{{name}}”",
+        "action": "Conectar"
+      },
+      "plugin-manual": {
+        "title": "Instalar manualmente o plugin “{{name}}”",
+        "detail": "Ele foi importado diretamente naquele computador. Exporte o pacote nos detalhes do plugin lá e importe-o aqui",
+        "action": "Abrir plugins"
+      },
+      "market-source": {
+        "title": "Adicionar o marketplace de plugins “{{name}}”",
+        "detail": "O endereço deste marketplace só está salvo naquele computador. Adicione-o para instalar os plugins dele",
+        "action": "Abrir plugins"
+      },
+      "skill-manual": {
+        "title": "Copiar a habilidade “{{name}}”",
+        "detail": "Ela não foi instalada pelo SkillHub e só existe naquele computador",
+        "action": "Abrir habilidades"
+      },
+      "provider-key": {
+        "title": "Informar a chave de API de “{{name}}”",
+        "action": "Informar chave"
+      },
+      "provider-connection": {
+        "title": "Informar novamente o endereço de conexão de “{{name}}”",
+        "detail": "Dados de login ou parâmetros de consulta no endereço original podem conter credenciais, por isso não foram copiados",
+        "action": "Informar endereço"
+      },
+      "provider-sign-in": {
+        "title": "Entrar em “{{name}}”",
+        "action": "Entrar"
+      },
+      "local-model": {
+        "title": "Preparar o modelo local “{{name}}” neste computador",
+        "detail": "Modelos locais rodam no computador original; este computador precisa de uma instalação própria",
+        "action": "Abrir provedores"
+      },
+      "mcp-token": {
+        "title": "Informar as credenciais de acesso do MCP “{{name}}”",
+        "action": "Informar credenciais"
+      },
+      "builtin-key": {
+        "title": "Informar a chave de API de “{{name}}”",
+        "action": "Informar chave"
+      },
+      "im-channel": {
+        "title": "Conectar “{{name}}”",
+        "detail": "Um bot recebe mensagens em um computador por vez. Decida qual computador vai recebê-las antes de conectar",
+        "action": "Conectar"
+      },
+      "computer-use": {
+        "title": "Ativar a automação",
+        "detail": "Conceda as permissões de Acessibilidade e Gravação de Tela neste computador",
+        "action": "Ativar"
+      },
+      "remote-desktop": {
+        "title": "Ativar a área de trabalho remota",
+        "detail": "Ative separadamente neste computador e conceda a permissão de Gravação de Tela",
+        "action": "Ativar"
+      },
+      "ssh": {
+        "title_one": "Copiar chaves e configuração SSH de {{count}} host remoto",
+        "title_other": "Copiar chaves e configuração SSH de {{count}} hosts remotos",
+        "title_many": "Copiar chaves e configuração SSH de {{count}} hosts remotos",
+        "detail": "As chaves e a configuração em ~/.ssh não são transferidas automaticamente; copie-as para este computador",
+        "action": "Abrir Conexão remota"
+      },
+      "ssh-host": {
+        "title": "Configurar o servidor SSH “{{name}}”",
+        "detail": "Não foi possível configurá-lo automaticamente. Escolha uma chave para ele nas configurações SSH e teste a conexão",
+        "action": "Abrir Conexão remota"
+      },
+      "startAll_one": "Concluir {{count}} item em sequência",
+      "startAll_other": "Concluir {{count}} itens em sequência",
+      "startAll_many": "Concluir {{count}} itens em sequência"
+    },
+    "settingsGroups": {
+      "appearance": "Aparência",
+      "windowBehavior": "Comportamento do app",
+      "menubar": "Uso da barra de menus",
+      "collaboration": "Colaboração",
+      "agentResource": "Uso de recursos do agente",
+      "gitSafety": "Segurança do Git",
+      "goal": "Modo objetivo",
+      "memory": "Memória",
+      "compaction": "Compactação de contexto",
+      "silentEncryptedRetry": "Descartar silenciosamente conteúdo criptografado por protocolo e tentar novamente",
+      "silentStopAutoResume": "Continuar após uma parada inesperada",
+      "sessionRuntimeFallback": "Troca automática do modelo das tarefas",
+      "subagentModels": "Subagentes",
+      "auxiliaryModels": "Modelos auxiliares",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Modelos exibidos e ocultos",
+      "providerOrder": "Ordem dos provedores",
+      "modelCatalogOverrides": "Parâmetros de modelo alterados",
+      "modelPriceOverrides": "Preços dos modelos",
+      "autoUpdate": "Instalar atualizações quando ocioso",
+      "updateChannel": "Canal beta"
+    },
+    "settings": {
+      "title": "Assistente de migração",
+      "description": "Em um computador novo, copie todos os recursos, plugins e configurações que o Cindy tem conectados nos seus outros computadores, prontos para usar.",
+      "start": "Abrir o assistente de migração",
+      "pending_one": "Falta {{count}} item neste computador",
+      "pending_other": "Faltam {{count}} itens neste computador",
+      "pending_many": "Faltam {{count}} itens neste computador",
+      "allDone": "Tudo concluído neste computador",
+      "from": "Transferido de “{{name}}”",
+      "closeChecklist": "Fechar lista"
+    },
+    "suggestion": {
+      "title": "Usar o assistente de migração para transferir de “{{name}}”?",
+      "description": "Você pode configurar este computador com os plugins, habilidades, configurações e conexões do outro. Tudo o que precisar de um novo login ou permissão aqui fica listado para você. Você também pode abri-lo depois em Configurações → Geral → Assistente de migração.",
+      "confirm": "Abrir o assistente de migração",
+      "later": "Agora não"
+    },
+    "walkthrough": {
+      "progress": "Lista de configuração {{current}} / {{total}}",
+      "open": "Abrir",
+      "skip": "Pular",
+      "next": "Concluído, próximo",
+      "stop": "Encerrar",
+      "allDone": "Lista concluída"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Assistente de migração",
+        "message": "“{{name}}” pede para copiar o seguinte deste computador",
+        "secrets": "Chaves (copiadas só para aquele computador; as chaves daqui não mudam):",
+        "ssh": "Adicionar a nova chave pública SSH daquele computador a estes servidores:",
+        "sshKey": "Impressão digital da chave: {{fingerprint}}",
+        "code": "Código: {{code}}. Permita apenas se for igual ao código daquele computador.",
+        "notice": "Se não for você configurando um computador novo, recuse.",
+        "more": "e mais {{count}}",
+        "allow": "Permitir",
+        "deny": "Recusar"
+      }
+    }
+  },
   "forwardedRequest": {
     "sourcePresent": "[Origem] O host preservou as palavras originais do usuário como contexto da solicitação, sem alterações. A solicitação atual está no complemento do Agent.",
     "sourceMissing": "[Origem] Nenhum texto original verificável do usuário foi encontrado.",

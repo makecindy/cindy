@@ -296,6 +296,11 @@ function getSharedHostKeyStore(): FileHostKeyStore {
   return sharedHostKeyStore;
 }
 
+/** New-computer setup reads and seeds trusted fingerprints through the same store the pool uses. */
+export function getRemoteSshHostKeyStore(): FileHostKeyStore {
+  return getSharedHostKeyStore();
+}
+
 const poolLogger = {
   debug: (msg: string, ctx?: Record<string, unknown>) => log.debug(msg, ctx),
   info: (msg: string, ctx?: Record<string, unknown>) => log.info(msg, ctx),

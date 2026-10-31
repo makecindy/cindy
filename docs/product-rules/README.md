@@ -34,6 +34,8 @@
   叫「任务」，任务 / 对话 / 消息的分层定义与判定规则，以及「任务」与 `task` 的歧义处理。
 - [`document-workshop-quality.md`](document-workshop-quality.md)：无插件文档基础能力的
   HTML-first 工序、四格式统一视觉语言、Session 作品卡和插件增强层边界。
+- [`new-device-setup-migration.md`](new-device-setup-migration.md)：新电脑登录后从同账号另一台
+  电脑迁移插件、技能、设置与连接；秘密留在原电脑，必须本机完成的事列成一次性清单。
 - [`input-handoff.md`](input-handoff.md)：代输入——Agent 把需要主人的一步（登录、密码、验证码、
   授权、未知选项）交给主人逐步完成，值不留痕；兜底、提醒、结束判定与已知边界。
 - [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、

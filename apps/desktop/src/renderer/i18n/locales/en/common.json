@@ -18661,6 +18661,297 @@
     "calculationUnavailable": "Unable to calculate this value.",
     "incomplete": "Some content could not be displayed."
   },
+  "setupMigration": {
+    "title": "Migration Assistant",
+    "back": "← Back",
+    "cancel": "Cancel",
+    "listSeparator": ", ",
+    "steps": {
+      "label": "Setup steps",
+      "source": "Computer",
+      "review": "Content",
+      "apply": "Move"
+    },
+    "source": {
+      "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
+      "loading": "Looking for your other computers…",
+      "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
+      "loadFailed": "Couldn't load your computers",
+      "reload": "Reload Computers",
+      "ready": "Online, ready to move",
+      "next": "Read Settings",
+      "readAgain": "Read Again",
+      "unavailable": {
+        "offline": "Offline. Open Cindy on that computer to move from it",
+        "remote-control-off": "Enable “Allow same-account devices to control this machine” on that computer first",
+        "control-disabled": "Control of that computer is disabled here. Enable it again in Remote Connection"
+      }
+    },
+    "reading": "Reading settings on “{{name}}”…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "Cindy on “{{name}}” is too old to move from. Update Cindy on that computer, then try again",
+      "SETUP_SOURCE_UNAVAILABLE": "Couldn't read settings on “{{name}}”. That computer needs to be online with “Allow same-account devices to control this machine” turned on",
+      "SETUP_SNAPSHOT_INVALID": "Settings from “{{name}}” couldn't be read. This happens when the two computers run different Cindy versions; update both to the same version, then try again",
+      "SETUP_PLAN_EXPIRED": "This list has expired. Read the settings on “{{name}}” again",
+      "GENERIC": "Couldn't read settings on “{{name}}”"
+    },
+    "review": {
+      "description": "Choose what to move from “{{name}}” to this computer. Settings you already changed on this computer are kept.",
+      "partial": "Some content on that computer couldn't be read this time. Only what was read is listed below.",
+      "groupCount": "{{selected}} of {{total}} selected",
+      "present_one": "{{count}} more item is already the same here",
+      "present_other": "{{count}} more items are already the same here",
+      "start_one": "Move {{count}} Item",
+      "start_other": "Move {{count}} Items",
+      "continue": "Continue",
+      "version": "Version {{version}}",
+      "pluginDisabled": "Turned off on that computer; stays off here",
+      "pluginConsentLater": "From the “{{market}}” marketplace; you'll confirm its permissions when it installs",
+      "skillTeam": "Team skill",
+      "settingsChanges_one": "{{count}} setting",
+      "settingsChanges_other": "{{count}} settings",
+      "settingsKept_one": "Keeps {{count}} setting from this computer",
+      "settingsKept_other": "Keeps {{count}} settings from this computer",
+      "settingsChangesKept_one": "{{count}} setting; keeps {{kept}} from this computer",
+      "settingsChangesKept_other": "{{count}} settings; keeps {{kept}} from this computer",
+      "kept": "Keeps this computer's setting",
+      "rendererPrefs": "Interface Preferences",
+      "rendererPrefsHint": "Theme, language, notifications and chat display",
+      "toolOn": "Enable built-in tool “{{name}}”",
+      "toolOff": "Disable built-in tool “{{name}}”",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · Enter its access credentials again on this computer",
+      "checklistTitle": "To Finish on This Computer",
+      "checklistDescription": "Sign-ins, keys and system permissions stay on the original computer. After moving, finish them one by one from this list.",
+      "groups": {
+        "plugins": "Plugins",
+        "skills": "Skills",
+        "settings": "Settings",
+        "connections": "Providers and MCP",
+        "access": "Access to This Computer",
+        "secrets": "Keys",
+        "ssh": "SSH Servers"
+      },
+      "reason": {
+        "not-in-catalog": "Not in this computer's plugin marketplace",
+        "source-not-added": "From a marketplace this computer can't read",
+        "local-only": "Only exists on that computer; move it by hand",
+        "needs-sign-in": "Sign in first",
+        "platform": "Only for another operating system",
+        "invalid": "This computer can't read it"
+      },
+      "providerAuth": {
+        "apiKey": "Enter the API key again on this computer",
+        "oauth": "Sign in again on this computer",
+        "native": "Sign in to the subscription on this computer",
+        "none": "No key needed",
+        "apiKeyCopy": "API key can be copied with Keys"
+      },
+      "access": {
+        "remote-control": "Allow same-account devices to control this machine",
+        "remote-controlHint": "Same as on “{{name}}”. You can disable it anytime in Remote Connection",
+        "keep-awake": "Keep computer awake",
+        "keep-awakeHint": "Same as on “{{name}}”. This computer won't go to sleep"
+      },
+      "secrets": {
+        "title_one": "Copy Keys for {{count}} Item",
+        "title_other": "Copy Keys for {{count}} Items",
+        "description": "Copied only after you select Allow on “{{name}}”, encrypted for this request only. Account sign-ins aren't copied; sign in from the list after moving."
+      },
+      "sshDescription": "This computer creates a new SSH key, “{{name}}” adds it to these servers once allowed there, and each server is then tested. Private keys never leave their computer.",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · Credentials can be copied with Keys",
+      "checklistDescriptionWithKeys": "Sign-ins and system permissions stay on the original computer; keys are copied only after “{{name}}” allows it. After moving, finish the rest from this list."
+    },
+    "permissions": {
+      "title": "Confirm Plugin Permissions",
+      "description_one": "Once installed, the {{count}} plugin below gets these permissions. Confirming installs it.",
+      "description_other": "Once installed, the {{count}} plugins below get these permissions. Confirming installs them together.",
+      "pluginTitle": "{{name}} · Version {{version}}",
+      "confirm_one": "Allow and Install {{count}} Plugin",
+      "confirm_other": "Allow and Install {{count}} Plugins"
+    },
+    "running": {
+      "progress": "Moving: {{completed}} of {{total}} done",
+      "label": "Moving…",
+      "confirm": "Select Allow on “{{name}}”.",
+      "confirmCode": "Both computers should show the same code:"
+    },
+    "done": {
+      "summary_one": "Moved {{count}} item from “{{name}}”",
+      "summary_other": "Moved {{count}} items from “{{name}}”",
+      "applyFailed": "Moving plugins, skills and settings didn't finish",
+      "failedTitle_one": "{{count}} item couldn't be moved",
+      "failedTitle_other": "{{count}} items couldn't be moved",
+      "checklistTitle": "Still to Do on This Computer",
+      "checklistEmpty": "Nothing else to do on this computer",
+      "checklistDescription": "You can also find this list later in Settings → General.",
+      "restartHint": "Some settings take effect after you reopen Cindy.",
+      "finish": "Done",
+      "finishReload": "Done and Reload"
+    },
+    "failure": {
+      "generic": "Couldn't move it ({{code}})",
+      "SOURCE_NOT_ADDED": "Couldn't add its plugin marketplace",
+      "MUTATION_CANCELLED": "Installation canceled",
+      "PRECONDITION_FAILED": "The plugin or this computer changed while moving",
+      "PERMISSION_DENIED": "This account can't install it",
+      "NOT_FOUND": "Not found in this computer's plugin marketplace",
+      "ALREADY_EXISTS": "Something with the same name already exists here",
+      "SETUP_PLAN_EXPIRED": "This list has expired",
+      "SETUP_TRANSFER_DECLINED": "Not allowed on the other computer, or no answer within 2 minutes",
+      "SETUP_TRANSFER_BUSY": "The other computer is handling another setup request. Try again shortly",
+      "SETUP_TRANSFER_INVALID": "The other computer sent an unreadable reply",
+      "SETUP_SOURCE_OUTDATED": "Update Cindy on the other computer to copy this",
+      "SETUP_SOURCE_UNAVAILABLE": "The other computer is not answering",
+      "SSH_AUTHORIZE_FAILED": "The other computer could not add the new key to this server",
+      "SSH_KEYGEN_FAILED": "This computer could not create an SSH key (ssh-keygen is required)",
+      "SSH_HOST_NOT_FOUND": "This server is no longer on the other computer",
+      "SSH_AUTH_FAILED": "The key was added, but the server refused this computer",
+      "SSH_CONNECT_FAILED": "This computer can't reach the server; it may only be reachable from the other computer's network",
+      "SSH_KEY_FILE_NOT_FOUND": "The new key file wasn't found on this computer"
+    },
+    "checklist": {
+      "done": "Done",
+      "markDone": "Mark as Done",
+      "needs": "Needs: {{items}}",
+      "voiceAsrName": "Speech recognition",
+      "plugin-setup": {
+        "title": "Connect accounts for “{{name}}”",
+        "action": "Connect"
+      },
+      "plugin-manual": {
+        "title": "Install the “{{name}}” plugin by hand",
+        "detail": "It was imported directly on that computer. Export its package from the plugin details there, then import it here",
+        "action": "Open Plugins"
+      },
+      "market-source": {
+        "title": "Add the “{{name}}” plugin marketplace",
+        "detail": "This marketplace's address is only saved on that computer. Add it to install its plugins",
+        "action": "Open Plugins"
+      },
+      "skill-manual": {
+        "title": "Copy the “{{name}}” skill",
+        "detail": "It wasn't installed from SkillHub and only exists on that computer",
+        "action": "Open Skills"
+      },
+      "provider-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "provider-connection": {
+        "title": "Re-enter the connection address for “{{name}}”",
+        "detail": "Sign-in details or query parameters in the original address may contain credentials, so they were not copied",
+        "action": "Enter Address"
+      },
+      "provider-sign-in": {
+        "title": "Sign in to “{{name}}”",
+        "action": "Sign In"
+      },
+      "local-model": {
+        "title": "Set up the local model “{{name}}” on this computer",
+        "detail": "Local models run on the original computer; this computer needs its own install",
+        "action": "Open Providers"
+      },
+      "mcp-token": {
+        "title": "Enter the access credentials for MCP “{{name}}”",
+        "action": "Enter Credentials"
+      },
+      "builtin-key": {
+        "title": "Enter the API key for “{{name}}”",
+        "action": "Enter Key"
+      },
+      "im-channel": {
+        "title": "Connect “{{name}}”",
+        "detail": "A bot receives messages on one computer at a time. Decide which computer should receive them before connecting",
+        "action": "Connect"
+      },
+      "computer-use": {
+        "title": "Enable Automation",
+        "detail": "Grant Accessibility and Screen Recording permissions on this computer",
+        "action": "Enable"
+      },
+      "remote-desktop": {
+        "title": "Enable Remote Desktop",
+        "detail": "Enable it separately on this computer and grant Screen Recording permission",
+        "action": "Enable"
+      },
+      "ssh": {
+        "title_one": "Copy SSH keys and config for {{count}} remote host",
+        "title_other": "Copy SSH keys and config for {{count}} remote hosts",
+        "detail": "Keys and config in ~/.ssh aren't moved automatically; copy them to this computer",
+        "action": "Open Remote Connection"
+      },
+      "ssh-host": {
+        "title": "Set up SSH server “{{name}}”",
+        "detail": "It couldn't be set up automatically. Choose a key for it in SSH settings and test the connection",
+        "action": "Open Remote Connection"
+      },
+      "startAll_one": "Go Through {{count}} Item",
+      "startAll_other": "Go Through {{count}} Items"
+    },
+    "settingsGroups": {
+      "appearance": "Appearance",
+      "windowBehavior": "App Behavior",
+      "menubar": "Menu Bar Usage",
+      "collaboration": "Collaboration",
+      "agentResource": "Agent Resource Usage",
+      "gitSafety": "Git Safety",
+      "goal": "Goal Mode",
+      "memory": "Memory",
+      "compaction": "Context Compaction",
+      "silentEncryptedRetry": "Silently drop protocol-encrypted content and retry",
+      "silentStopAutoResume": "Continue after an unexpected stop",
+      "sessionRuntimeFallback": "Automatic task model fallback",
+      "subagentModels": "Subagents",
+      "auxiliaryModels": "Auxiliary Models",
+      "visionBridge": "Vision Bridge",
+      "modelVisibility": "Shown and Hidden Models",
+      "providerOrder": "Provider Order",
+      "modelCatalogOverrides": "Model Parameter Changes",
+      "modelPriceOverrides": "Model Prices",
+      "autoUpdate": "Install updates while idle",
+      "updateChannel": "Beta channel"
+    },
+    "settings": {
+      "title": "Migration Assistant",
+      "description": "On a new computer, copy over all the features, plugins and settings Cindy is connected to on your other computers, ready to use.",
+      "start": "Open Migration Assistant",
+      "pending_one": "{{count}} item still to do on this computer",
+      "pending_other": "{{count}} items still to do on this computer",
+      "allDone": "Everything to do on this computer is done",
+      "from": "Moved from “{{name}}”",
+      "closeChecklist": "Close List"
+    },
+    "suggestion": {
+      "title": "Use Migration Assistant to move from “{{name}}”?",
+      "description": "You can set up this computer with the plugins, skills, settings and connections from that one. Anything that needs a new sign-in or permission here is listed for you. You can also open it later in Settings → General → Migration Assistant.",
+      "confirm": "Open Migration Assistant",
+      "later": "Not Now"
+    },
+    "walkthrough": {
+      "progress": "Setup checklist {{current}} / {{total}}",
+      "open": "Open",
+      "skip": "Skip",
+      "next": "Done, Next",
+      "stop": "End",
+      "allDone": "Checklist finished"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "Migration Assistant",
+        "message": "“{{name}}” asks to copy the following from this computer",
+        "secrets": "Keys (copied to that computer only; keys here stay as they are):",
+        "ssh": "Add that computer's new SSH public key to these servers:",
+        "sshKey": "Key fingerprint: {{fingerprint}}",
+        "code": "Code: {{code}}. Allow only if it matches the code on that computer.",
+        "notice": "If you aren't setting up a new computer yourself, deny.",
+        "more": "and {{count}} more",
+        "allow": "Allow",
+        "deny": "Deny"
+      }
+    }
+  },
   "forwardedRequest": {
     "sourcePresent": "[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.",
     "sourceMissing": "[Source] No verifiable original user text was found.",

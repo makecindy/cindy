@@ -58,6 +58,7 @@ import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSecti
 import { AgentResourceSection } from './AgentResourceSection';
 import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
+import { SetupMigrationSection } from './SetupMigrationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
@@ -358,6 +359,11 @@ export function SettingsView() {
                     {/* Section — User Info (pb 18) */}
                     <section id="settings-search-target-general-user" className="pb-[18px]" aria-label={t('settings.sections.user')}>
                       <UserProfileCard />
+                    </section>
+
+                    {/* Section — 新电脑设置：从同账号另一台电脑迁移，并保留一次性配置清单。 */}
+                    <section id="settings-setup-migration" className="py-[18px]" aria-label={t('setupMigration.settings.title')}>
+                      <SetupMigrationSection />
                     </section>
 
                     {/* Section — Language (py 18) */}

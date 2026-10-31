@@ -1302,6 +1302,7 @@ import {
   readCustomProviderKeyForMutation,
   removeCustomProviderHeaders,
   removeCustomProviderKey,
+  storeCustomMcpToken,
   storeCustomProviderHeaders,
   storeCustomProviderKey,
 } from '../secrets/providerSecretStore.js';
@@ -8186,6 +8187,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Persisted MCP changes must eventually replace the frozen spawn config;
     // busy hosts keep their bridge until the existing idle retry can refresh it.
     invalidateCodex: refreshMcpHarnesses,
+    storeMcpToken: storeCustomMcpToken,
   });
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。

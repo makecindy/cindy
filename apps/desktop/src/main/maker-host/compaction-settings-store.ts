@@ -18,6 +18,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -212,3 +213,6 @@ export const __testing = {
     piStores.clear();
   },
 };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const compactionPortableSettings = portableOverrideSettings(() => currentStore());

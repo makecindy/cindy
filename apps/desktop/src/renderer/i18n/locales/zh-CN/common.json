@@ -18589,6 +18589,297 @@
     "calculationUnavailable": "此项暂时无法计算。",
     "incomplete": "部分内容未能显示。"
   },
+  "setupMigration": {
+    "title": "迁移助理",
+    "back": "← 上一步",
+    "cancel": "取消",
+    "listSeparator": "、",
+    "steps": {
+      "label": "迁移步骤",
+      "source": "选择电脑",
+      "review": "选择内容",
+      "apply": "迁移"
+    },
+    "source": {
+      "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
+      "loading": "正在查找你的其他电脑…",
+      "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
+      "loadFailed": "未能读取电脑列表",
+      "reload": "重新读取",
+      "ready": "在线，可以迁移",
+      "next": "读取设置",
+      "readAgain": "重新读取",
+      "unavailable": {
+        "offline": "离线。打开那台电脑上的 Cindy 后可以迁移",
+        "remote-control-off": "需要先在那台电脑开启「允许同账号设备控制本机」",
+        "control-disabled": "这台电脑已关闭对它的控制，可在「远程连接」中重新打开"
+      }
+    },
+    "reading": "正在读取「{{name}}」上的设置…",
+    "errors": {
+      "SETUP_SOURCE_OUTDATED": "「{{name}}」上的 Cindy 版本较旧，不支持迁移。更新那台电脑上的 Cindy 后再试",
+      "SETUP_SOURCE_UNAVAILABLE": "未能读取「{{name}}」上的设置。迁移需要那台电脑在线，并开启「允许同账号设备控制本机」",
+      "SETUP_SNAPSHOT_INVALID": "「{{name}}」返回的设置无法识别。两台电脑的 Cindy 版本不同时会出现这种情况，更新到同一版本后再试",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期，需要重新读取「{{name}}」上的设置",
+      "GENERIC": "未能读取「{{name}}」上的设置"
+    },
+    "review": {
+      "description": "勾选要从「{{name}}」迁移到这台电脑的内容。这台电脑上已经改过的设置会保留，不会被覆盖。",
+      "partial": "那台电脑上有部分内容这次没能读取，下面只列出读到的内容。",
+      "groupCount": "已选 {{selected}} / {{total}}",
+      "present_one": "另有 {{count}} 项与这台电脑相同，无需迁移",
+      "present_other": "另有 {{count}} 项与这台电脑相同，无需迁移",
+      "start_one": "迁移 {{count}} 项",
+      "start_other": "迁移 {{count}} 项",
+      "continue": "继续",
+      "version": "版本 {{version}}",
+      "pluginDisabled": "在那台电脑上已停用，迁移后保持停用",
+      "pluginConsentLater": "来自插件市场「{{market}}」，安装时单独确认权限",
+      "skillTeam": "团队技能",
+      "settingsChanges_one": "{{count}} 项设置",
+      "settingsChanges_other": "{{count}} 项设置",
+      "settingsKept_one": "保留这台电脑的 {{count}} 项设置",
+      "settingsKept_other": "保留这台电脑的 {{count}} 项设置",
+      "settingsChangesKept_one": "{{count}} 项设置，保留这台电脑的 {{kept}} 项",
+      "settingsChangesKept_other": "{{count}} 项设置，保留这台电脑的 {{kept}} 项",
+      "kept": "保留这台电脑的设置",
+      "rendererPrefs": "界面偏好",
+      "rendererPrefsHint": "主题、语言、通知与对话显示偏好",
+      "toolOn": "开启内置工具「{{name}}」",
+      "toolOff": "关闭内置工具「{{name}}」",
+      "mcp": "MCP · {{url}}",
+      "mcpToken": "MCP · {{url}} · 访问凭证需要在这台电脑上重新填写",
+      "checklistTitle": "迁移后需要在这台电脑上完成",
+      "checklistDescription": "登录状态、密钥和系统权限不会离开原来的电脑。迁移完成后，可以按这份清单逐项补上。",
+      "groups": {
+        "plugins": "插件",
+        "skills": "技能",
+        "settings": "设置",
+        "connections": "模型供应商与 MCP",
+        "access": "这台电脑的访问",
+        "secrets": "密钥",
+        "ssh": "SSH 服务器"
+      },
+      "reason": {
+        "not-in-catalog": "这台电脑的插件市场里没有它",
+        "source-not-added": "来自这台电脑读不到的插件市场",
+        "local-only": "只存在于那台电脑，需要手动处理",
+        "needs-sign-in": "需要先登录",
+        "platform": "只适用于另一种系统",
+        "invalid": "这台电脑无法识别"
+      },
+      "providerAuth": {
+        "apiKey": "API Key 需要在这台电脑上重新填写",
+        "oauth": "需要在这台电脑上重新登录",
+        "native": "需要在这台电脑上登录订阅账号",
+        "none": "无需密钥",
+        "apiKeyCopy": "API Key 可随「密钥」一起复制"
+      },
+      "access": {
+        "remote-control": "允许同账号设备控制本机",
+        "remote-controlHint": "与「{{name}}」上的设置相同，可随时在「远程连接」中关闭",
+        "keep-awake": "保持电脑唤醒",
+        "keep-awakeHint": "与「{{name}}」上的设置相同，这台电脑不会进入休眠"
+      },
+      "secrets": {
+        "title_one": "复制 {{count}} 项的密钥",
+        "title_other": "复制 {{count}} 项的密钥",
+        "description": "需要在「{{name}}」上点「允许」后才会复制，只用这一次请求加密传给这台电脑。账号登录不会复制，迁移后可在清单里依次登录。"
+      },
+      "sshDescription": "这台电脑会生成一把新的 SSH 密钥，由「{{name}}」加到这些服务器上（同样需要在那台电脑上允许），再逐台测试连接。私钥不会离开各自的电脑。",
+      "sshHost": "{{user}}@{{host}}:{{port}}",
+      "mcpTokenCopy": "MCP · {{url}} · 访问凭证可随「密钥」一起复制",
+      "checklistDescriptionWithKeys": "登录状态和系统权限不会离开原来的电脑；密钥在「{{name}}」允许后才会复制。迁移完成后，可以按这份清单逐项补上。"
+    },
+    "permissions": {
+      "title": "确认插件权限",
+      "description_one": "下面 {{count}} 个插件安装后会获得这些权限。确认后会一起安装。",
+      "description_other": "下面 {{count}} 个插件安装后会获得这些权限。确认后会一起安装。",
+      "pluginTitle": "{{name}} · 版本 {{version}}",
+      "confirm_one": "允许并安装 {{count}} 个插件",
+      "confirm_other": "允许并安装 {{count}} 个插件"
+    },
+    "running": {
+      "progress": "正在迁移：已完成 {{completed}} / {{total}}",
+      "label": "正在迁移…",
+      "confirm": "请在「{{name}}」上点「允许」。",
+      "confirmCode": "两台电脑显示的校验码应一致："
+    },
+    "done": {
+      "summary_one": "已从「{{name}}」迁移 {{count}} 项",
+      "summary_other": "已从「{{name}}」迁移 {{count}} 项",
+      "applyFailed": "插件、技能和设置的迁移没有完成",
+      "failedTitle_one": "{{count}} 项未能迁移",
+      "failedTitle_other": "{{count}} 项未能迁移",
+      "checklistTitle": "还需要在这台电脑上完成",
+      "checklistEmpty": "没有需要在这台电脑上补做的事",
+      "checklistDescription": "这份清单之后也可以在「设置 → 通用」中查看。",
+      "restartHint": "部分设置在重新打开 Cindy 后生效。",
+      "finish": "完成",
+      "finishReload": "完成并刷新界面"
+    },
+    "failure": {
+      "generic": "未能迁移（{{code}}）",
+      "SOURCE_NOT_ADDED": "未能添加它所在的插件市场",
+      "MUTATION_CANCELLED": "已取消安装",
+      "PRECONDITION_FAILED": "迁移时插件或这台电脑的状态发生了变化",
+      "PERMISSION_DENIED": "当前账号无权安装",
+      "NOT_FOUND": "在这台电脑的插件市场里找不到它",
+      "ALREADY_EXISTS": "这台电脑上已有同名项目",
+      "SETUP_PLAN_EXPIRED": "迁移清单已过期",
+      "SETUP_TRANSFER_DECLINED": "那台电脑上没有点「允许」，或 2 分钟内没有回应",
+      "SETUP_TRANSFER_BUSY": "那台电脑正在处理另一个迁移请求，请稍后重试",
+      "SETUP_TRANSFER_INVALID": "那台电脑的回复无法识别",
+      "SETUP_SOURCE_OUTDATED": "那台电脑的 Cindy 版本过旧，更新后才能复制",
+      "SETUP_SOURCE_UNAVAILABLE": "那台电脑现在没有回应",
+      "SSH_AUTHORIZE_FAILED": "那台电脑没能把新密钥加到这台服务器上",
+      "SSH_KEYGEN_FAILED": "这台电脑没能生成 SSH 密钥（需要系统自带的 ssh-keygen）",
+      "SSH_HOST_NOT_FOUND": "那台电脑上已经没有这台服务器",
+      "SSH_AUTH_FAILED": "新密钥已加好，但服务器拒绝了这台电脑的连接",
+      "SSH_CONNECT_FAILED": "这台电脑连不上这台服务器，它可能只在那台电脑的网络里可达",
+      "SSH_KEY_FILE_NOT_FOUND": "找不到这台电脑上的新密钥文件"
+    },
+    "checklist": {
+      "done": "已完成",
+      "markDone": "标记为完成",
+      "needs": "需要：{{items}}",
+      "voiceAsrName": "语音识别",
+      "plugin-setup": {
+        "title": "连接「{{name}}」的账号",
+        "action": "去连接"
+      },
+      "plugin-manual": {
+        "title": "手动安装插件「{{name}}」",
+        "detail": "它是在那台电脑上直接导入的插件。在那台电脑的插件详情中导出安装包，再在这台电脑导入",
+        "action": "打开插件"
+      },
+      "market-source": {
+        "title": "添加插件市场「{{name}}」",
+        "detail": "这个市场的地址只保存在那台电脑上，添加后可以安装其中的插件",
+        "action": "打开插件"
+      },
+      "skill-manual": {
+        "title": "复制技能「{{name}}」",
+        "detail": "它不是从 SkillHub 安装的，只存在于那台电脑",
+        "action": "打开技能"
+      },
+      "provider-key": {
+        "title": "为「{{name}}」填写 API Key",
+        "action": "去填写"
+      },
+      "provider-connection": {
+        "title": "为「{{name}}」重新填写连接地址",
+        "detail": "原地址里的账号信息或查询参数可能含有凭证，没有一起迁移",
+        "action": "去填写"
+      },
+      "provider-sign-in": {
+        "title": "登录「{{name}}」",
+        "action": "去登录"
+      },
+      "local-model": {
+        "title": "在这台电脑上准备本地模型「{{name}}」",
+        "detail": "本地模型运行在原来的电脑上，这台电脑需要单独安装",
+        "action": "打开供应商"
+      },
+      "mcp-token": {
+        "title": "为 MCP「{{name}}」填写访问凭证",
+        "action": "去填写"
+      },
+      "builtin-key": {
+        "title": "填写「{{name}}」的 API Key",
+        "action": "去填写"
+      },
+      "im-channel": {
+        "title": "连接「{{name}}」",
+        "detail": "同一个机器人同时只在一台电脑上接收消息，连接前先确认由哪台电脑接收",
+        "action": "去连接"
+      },
+      "computer-use": {
+        "title": "开启自动操作",
+        "detail": "需要在这台电脑上授予辅助功能与屏幕录制权限",
+        "action": "去开启"
+      },
+      "remote-desktop": {
+        "title": "开启远程桌面",
+        "detail": "需要在这台电脑上单独开启，并授予屏幕录制权限",
+        "action": "去开启"
+      },
+      "ssh": {
+        "title_one": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "title_other": "复制 {{count}} 台远程主机的 SSH 密钥与配置",
+        "detail": "~/.ssh 中的密钥与配置不会自动迁移，需要复制到这台电脑",
+        "action": "打开远程连接"
+      },
+      "ssh-host": {
+        "title": "配置 SSH 服务器「{{name}}」",
+        "detail": "没能自动配好。可以在 SSH 设置里为它选择密钥并测试连接",
+        "action": "打开远程连接"
+      },
+      "startAll_one": "依次完成（{{count}} 项）",
+      "startAll_other": "依次完成（{{count}} 项）"
+    },
+    "settingsGroups": {
+      "appearance": "外观",
+      "windowBehavior": "应用行为",
+      "menubar": "菜单栏余量",
+      "collaboration": "协同",
+      "agentResource": "Agent 资源占用",
+      "gitSafety": "Git 安全",
+      "goal": "目标模式",
+      "memory": "记忆",
+      "compaction": "上下文压缩",
+      "silentEncryptedRetry": "静默丢弃协议加密内容并重试",
+      "silentStopAutoResume": "意外停止后自动继续",
+      "sessionRuntimeFallback": "任务模型自动降级",
+      "subagentModels": "Subagent",
+      "auxiliaryModels": "辅助模型",
+      "visionBridge": "视觉桥",
+      "modelVisibility": "模型显示与隐藏",
+      "providerOrder": "供应商顺序",
+      "modelCatalogOverrides": "模型参数调整",
+      "modelPriceOverrides": "模型单价",
+      "autoUpdate": "空闲时自动安装更新",
+      "updateChannel": "Beta 测试渠道"
+    },
+    "settings": {
+      "title": "迁移助理",
+      "description": "在一台新电脑上，把其他旧机器上 Cindy 所有接入的功能、插件和设置复制过来，成为成品能用。",
+      "start": "打开迁移助理",
+      "pending_one": "还有 {{count}} 项需要在这台电脑上完成",
+      "pending_other": "还有 {{count}} 项需要在这台电脑上完成",
+      "allDone": "这台电脑上需要补做的事已全部完成",
+      "from": "来自「{{name}}」的迁移",
+      "closeChecklist": "关闭清单"
+    },
+    "suggestion": {
+      "title": "用迁移助理从「{{name}}」迁移？",
+      "description": "可以把那台电脑上的插件、技能、设置和连接搬到这台电脑。需要在这台电脑上重新登录或授权的内容会列成清单。之后也可以在「设置 → 通用 → 迁移助理」中打开。",
+      "confirm": "打开迁移助理",
+      "later": "以后再说"
+    },
+    "walkthrough": {
+      "progress": "迁移清单 {{current}} / {{total}}",
+      "open": "打开",
+      "skip": "跳过",
+      "next": "完成，下一项",
+      "stop": "结束",
+      "allDone": "清单已经走完"
+    },
+    "transfer": {
+      "prompt": {
+        "title": "迁移助理",
+        "message": "「{{name}}」请求从这台电脑复制以下内容",
+        "secrets": "密钥（只复制到这一台电脑，这台电脑上的密钥保持不变）：",
+        "ssh": "把那台电脑的新 SSH 公钥加到这些服务器：",
+        "sshKey": "公钥指纹：{{fingerprint}}",
+        "code": "校验码：{{code}}。只有和那台电脑上显示的一致时才允许。",
+        "notice": "如果不是你自己在设置新电脑，请拒绝。",
+        "more": "以及另外 {{count}} 项",
+        "allow": "允许",
+        "deny": "拒绝"
+      }
+    }
+  },
   "forwardedRequest": {
     "sourcePresent": "[来源] 用户原话由宿主原样保留，作为请求背景；当前请求在 Agent补充。",
     "sourceMissing": "[来源] 未找到可核验的用户原话。",

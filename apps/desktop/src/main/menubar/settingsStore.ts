@@ -17,7 +17,7 @@ import {
   type MenubarSettingsPatch,
 } from '../../shared/menubarQuota.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
-import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from '../maker-host/override-settings-file.js';
 
 const log = desktopMakerLogger.child('menubar-settings');
 const MAX_IDS = 200;
@@ -89,3 +89,6 @@ export function writeMenubarSettings(patch: MenubarSettingsPatch): MenubarSettin
   if (Object.keys(clean).length > 0) store.writePatch(clean);
   return store.read();
 }
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const menubarPortableSettings = portableOverrideSettings(store);

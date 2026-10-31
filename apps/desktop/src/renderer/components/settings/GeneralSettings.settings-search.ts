@@ -7,6 +7,7 @@ export default {
   entries: [
     { id: 'general', tab: 'general', targetId: 'settings-panel-general', titleKey: 'settings.tabs.general', sectionKey: 'settings.tabs.general' },
     { id: 'general.user', tab: 'general', targetId: 'settings-search-target-general-user', titleKey: 'settings.sections.user', sectionKey: 'settings.sections.user' },
+    { id: 'general.setupMigration', tab: 'general', targetId: 'settings-setup-migration', titleKey: 'setupMigration.settings.title', sectionKey: 'setupMigration.settings.title', aliases: ['migrate', 'migration assistant', 'new computer', '迁移', '迁移助理', '新电脑'] },
     { id: 'general.language', tab: 'general', targetId: 'settings-search-target-general-language', titleKey: 'settings.sections.language', sectionKey: 'settings.sections.language' },
     { id: 'general.notifications', tab: 'general', targetId: 'settings-notifications', titleKey: 'settings.sections.notifications', sectionKey: 'settings.sections.notifications' },
     { id: 'general.bots', tab: 'general', targetId: 'settings-bots', titleKey: 'settings.sections.bots', sectionKey: 'settings.sections.bots' },

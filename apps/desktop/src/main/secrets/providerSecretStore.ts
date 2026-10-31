@@ -737,6 +737,19 @@ export function readCustomMcpToken(mcpId: string): string | null {
   }
 }
 
+/** Writes a custom MCP access token under the same key the settings page uses (main-only callers). */
+export function storeCustomMcpToken(mcpId: string, value: string): boolean {
+  try {
+    return electronSecretIo.write(customMcpSecretStorageKey(mcpId), value);
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp token failed',
+    );
+    return false;
+  }
+}
+
 /**
  * 通用 OAuth 供应商凭证 blob 的 main 侧存储 IO（`provider_oauth_<id>`，机制同上）。
  * generic-oauth Runner 经 setter 注入消费（保持 Runner 可脱 Electron 单测）。

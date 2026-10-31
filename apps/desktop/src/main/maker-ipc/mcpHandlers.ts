@@ -54,6 +54,8 @@ export interface McpHandlerDeps {
    * 省略时不做保留名校验（测试便利）。
    */
   getReservedMcpIds?(): string[];
+  /** Main-only token write for new-computer setup (production = safeStorage, same key as Settings). */
+  storeMcpToken?(mcpId: string, token: string): boolean;
 }
 
 const listContextSchema = z.object({
@@ -68,6 +70,18 @@ const listContextSchema = z.object({
     fastMode: z.union([z.boolean(), z.literal('ultrafast')]),
   })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
+
+let mainProcessMcpCreate: ((input: unknown, token: string | null) => Promise<void>) | null = null;
+
+/**
+ * New-computer setup (docs/product-rules/new-device-setup-migration.md) creates a server together
+ * with the access token copied from the other computer: same validation and refresh as the
+ * settings page, and the token goes straight to this computer's secure storage.
+ */
+export function createCustomMcpServerFromMain(input: unknown, token: string | null): Promise<void> {
+  if (!mainProcessMcpCreate) throw new Error('MCP handlers are not registered');
+  return mainProcessMcpCreate(input, token);
+}
 
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
@@ -101,7 +115,7 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
     }
   }
 
-  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+  async function createServer(input: unknown, token: string | null): Promise<void> {
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);
     if (!v.ok) throwIpcError(v.code, v.message);
     const config = input as CustomMcpConfig;
@@ -109,9 +123,17 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       throwIpcError('ALREADY_EXISTS', `custom mcp '${config.id}' already exists`);
     }
     await createCustomMcpServer(config);
+    // Like the settings page: a token that cannot be stored leaves the server to be completed there
+    // (the one-time checklist keeps it until a token is saved).
+    if (token) deps.storeMcpToken?.(config.id, token);
     await afterChange();
+  }
+
+  registry.handle(MAKER_INVOKE.MCP_CUSTOM_CREATE, async (_event, input: unknown) => {
+    await createServer(input, null);
     return { ok: true };
   });
+  mainProcessMcpCreate = createServer;
 
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_UPDATE, async (_event, input: unknown) => {
     const v = validateCustomMcpConfig(input, deps.getReservedMcpIds?.() ?? []);

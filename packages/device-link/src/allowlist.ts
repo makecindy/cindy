@@ -37,6 +37,8 @@ import {
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
 } from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
+import { SETUP_SNAPSHOT_CHANNEL, SETUP_SNAPSHOT_TIMEOUT_MS } from './setupSnapshot.js';
+import { SETUP_TRANSFER_CHANNEL, SETUP_TRANSFER_TIMEOUT_MS } from './setupTransfer.js';
 import {
   COMPANION_CLOUD_CAPS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
@@ -381,6 +383,15 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
   TASK_MIGRATION_CHANNEL,
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md):同账号新电脑读取这台电脑的
+  // 非秘密配置快照(只读，被控端 dispatch 拦截执行)。不含密钥、OAuth、IM 凭证、登录与系统授权，
+  // 不写被控端任何状态；共享任务访客与供应商分享受邀者在 dispatch 再拒一次。老版本无 handler →
+  // CHANNEL_NOT_ALLOWED，新电脑提示更新那台电脑。
+  SETUP_SNAPSHOT_CHANNEL,
+  // 新电脑设置的密钥与 SSH 一步(同一规则页):新电脑请求复制指定连接的密钥、为它的新 SSH 公钥
+  // 在这台电脑能连上的服务器上授权。被控端必须由人在本机确认(显示请求电脑、逐项名称与校验码)
+  // 后才执行;密钥只以本次请求的临时公钥加密返回。OAuth 登录与私钥不经此通道。同样只给同账号电脑。
+  SETUP_TRANSFER_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -913,6 +924,10 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   [COMPANION_CLOUD_HAND_OVER_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
   [COMPANION_CLOUD_MERGE_CHANNEL]: COMPANION_CLOUD_MERGE_TIMEOUT_MS,
   [COMPANION_CLOUD_FLUSH_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
+  // 设置快照要读插件、技能并等那台电脑的窗口回答界面偏好，可能超过默认 30s。
+  [SETUP_SNAPSHOT_CHANNEL]: SETUP_SNAPSHOT_TIMEOUT_MS,
+  // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
+  [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

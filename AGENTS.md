@@ -54,6 +54,10 @@
   `cindy_scheduler` 等），或调整工具索引、工具的作用范围说明前，必须先读
   `docs/product-rules/agent-user-parity.md`：用户本人能做的（含跨电脑）Agent 也要能做并能在
   索引第一步发现；改完把现状台账写回去。
+- 修改「迁移助理」（新电脑从其他电脑迁移）的入口、迁移范围、`maker:setup-snapshot` /
+  `maker:setup-transfer` 协议、计划与应用规则或一次性配置清单，或新增一类可迁移的设置前，必须先读
+  `docs/product-rules/new-device-setup-migration.md`：密钥只在原电脑的人允许后一次性加密复制，
+  OAuth 登录与私钥不复制，写入只走本机原有安装器与设置存储，不覆盖本机已改过的设置。
 - 修改共享任务、跨账号访客邀请、共享上下文或共享成员权限前，必须先读
   `docs/product-rules/shared-task-mode.md`；复用 device-link，同账号远控行为不变。
 - 修改 IM 工具授权、来源消息、多端确认或暂停期间的确认回执，或新增 IM 渠道前，

@@ -5952,6 +5952,55 @@ function getGhostSetupProbes(storeId: string, runtimeManifest: GhostManifest): G
   };
 }
 
+/**
+ * Keys a person types for this plugin (API Key / PAT): user network secrets and node bindings that
+ * are not OAuth. OAuth sign-ins, login-derived and host-managed credentials are never listed.
+ */
+function ghostUserSecretKeys(manifest: GhostManifest): string[] {
+  const network = (manifest.network?.secrets ?? [])
+    .filter((secret) => (!secret.source || secret.source === 'user') && !secret.oauth)
+    .map((secret) => secret.key);
+  const node = (manifest.node?.secretBindings ?? [])
+    .filter((binding) => !binding.oauthSecret)
+    .map((binding) => binding.key);
+  return [...new Set([...network, ...node])];
+}
+
+/**
+ * New-computer setup, other computer (docs/product-rules/new-device-setup-migration.md): the saved
+ * user keys of one installed plugin, after a person allowed the copy there.
+ */
+export function readGhostUserSecretsForSetup(instanceKey: string): Record<string, string> {
+  const ghost = findGhostForInstanceId(instanceKey);
+  if (!ghost) return {};
+  const storeId = installedGhostStoragePart(ghost);
+  const out: Record<string, string> = {};
+  for (const key of ghostUserSecretKeys(ghost.manifest)) {
+    const value = readGhostSecretStrict(storeId, key);
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * New-computer setup, this computer: writes copied keys the installed plugin declares and this
+ * computer has not saved yet; a key already saved here is kept. Returns how many were written.
+ */
+export function storeGhostUserSecretsForSetup(instanceKey: string, values: Record<string, string>): number {
+  const ghost = findGhostForInstanceId(instanceKey);
+  if (!ghost) return 0;
+  const storeId = installedGhostStoragePart(ghost);
+  const declared = new Set(ghostUserSecretKeys(ghost.manifest));
+  let written = 0;
+  for (const [key, value] of Object.entries(values)) {
+    if (!declared.has(key) || ghostSecretSaved(storeId, key)) continue;
+    if (!storeGhostSecret(storeId, key, value)) continue;
+    getGhostSetupChangeBus().emit(storeId, { source: 'secret', ref: key });
+    written += 1;
+  }
+  return written;
+}
+
 export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
   const ghost = findGhostForInstanceId(ghostId);
   if (!ghost || !ghostSetupKvStore) {
@@ -8222,7 +8271,8 @@ function readLegacyEncryptedSecret(file: string): LegacyMigrationRead<string> {
 }
 
 
-async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string, assertCurrent?: () => void) {
+/** Same path as the plugin page switch (runtime stop, receipt write, owner lease). */
+export async function setGhostEnabledForUser(id: string, enabled: boolean, expectedInstalledApproval?: string, assertCurrent?: () => void) {
   assertCurrent?.();
   const target = findGhostForPhysicalStoragePart(id);
   if (!target) throwIpcError('NOT_FOUND', '目标插件实例已不存在');

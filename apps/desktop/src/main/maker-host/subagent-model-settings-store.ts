@@ -13,6 +13,7 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
@@ -112,3 +113,6 @@ export function resetSubagentModelSettings(): SubagentModelSettings {
 }
 
 export const __testing = { normalize };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const subagentModelPortableSettings = portableOverrideSettings(store);

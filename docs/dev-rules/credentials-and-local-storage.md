@@ -37,6 +37,12 @@
   只写已声明的单个 user Secret，不读回、不批量同步、不开放账号 vault。值只短暂存在于
   输入组件/Main 调用中，不进入 Renderer store、Agent、普通远控、日志或历史。CLI PKCE
   的私有回调也只交给发起的可信 Node RPC，不能返回沙箱 main.js 或业务 stdout。
+- 新电脑设置的「密钥」一步（[产品规则](../product-rules/new-device-setup-migration.md)）是
+  上一条「不批量同步」之外唯一的例外：只在新电脑勾选、原电脑的人在本机弹窗允许后，一次性复制
+  所选连接与插件里由用户填写的 API Key / PAT。原电脑按自己的数据列名、只读不改；值以本次请求的临时
+  X25519 公钥加密，新电脑只在 Main 内存中解开并写入各自原有的存储，不经 Renderer，也不覆盖新电脑上
+  已有的值。OAuth 账号与刷新令牌、登录派生与主机托管凭证、IM 凭证和 SSH 私钥不在此列。实现见
+  [transfer.ts](../../apps/desktop/src/main/setup-migration/transfer.ts)。
 - 代输入（[产品规则](../product-rules/input-handoff.md)）复用同一签名输入桥：每一步按
   (requestId, revision) 绑定，主人填写的**所有**值（不只密码）只在 Main 执行输入那一下存在，
   提交对象用后逐键删除；不进 Renderer store、续接消息、任务记录、数据库、日志、IM 或推送。
@@ -261,6 +267,7 @@ promise，恢复信号不能在旧请求结束后追加立即续期。只有用�
 | 语音输入声纹识别模型 | `userData/voice-models/<哈希前缀>-<文件名>.onnx`，按内容哈希从区域 CDN 下载并在可见前校验 SHA-256；不含个人数据，本机所有账号共用。新版本模型下载完成后删除旧版本文件 |
 | Mobile 语音输入声纹（生物特征） | SecureStore（iOS 钥匙串 / Android Keystore）键 `xdt.voiceSpeakerProfile.v1.<账号 key 的 SHA-256 前 32 位>`，内容同 Desktop：声纹向量、录入时间与模型哈希；开关与灵敏度 override 在 AsyncStorage `cindy.mobile.voice-speaker-filter.v1.<账号 key>`。只在本机，不同步、不上传、不进日志；退出登录时随该账号的其他本机数据一起删除（模型文件保留）。删除前写 AsyncStorage `cindy.mobile.voice-speaker-filter.cleanup.v1.<账号 key>` 重试标记，不含声纹；失败时保留标记，启动、回到前台及该账号下次读写前重试，全部删除成功后才移除。标记落盘也失败时保留进程内重试，无法保证进程终止后的恢复；不因声纹删除失败阻止退出凭证清除。朗读音频只在内存中处理 |
 | Mobile 语音输入声纹识别模型 | `cacheDirectory/voice-models/`，与 Desktop 同一组按内容哈希下载、校验 SHA-256 后才可见的文件；放缓存目录以免进入 iCloud / Android 备份。系统清理缓存后，下次语音输入发现缺失会在后台重新下载，本次不过滤 |
+| 新电脑设置：上次迁移记录 | `userData/owners/<账号>/setup-migration-state.json`，只记上次迁移来源电脑的名称、完成时间、一次性清单（类别、显示名称、插件实例键或供应商 / MCP id、完成标记）与是否已关闭首次建议；不含密钥、令牌、凭证或设置值。复用设置文件跨进程锁与原子替换，账号切换按目录隔离，用户「关闭清单」后清空。快照只带「是否已配置」的布尔提示。用户勾选「密钥」且原电脑的人允许后，API Key / PAT 以一次性加密传来，在 Main 内存中解开后写入各自原有的 safeStorage 存储，不落其他文件（`docs/product-rules/new-device-setup-migration.md`） |
 | Windows 锁屏控制的系统服务程序 | `%ProgramFiles%\Cindy Remote Desktop\<安装目录哈希>\`,由「授权开启」的管理员提权步骤写入:两个原生 helper 与记录所属安装目录的 `install.txt`。目录与文件的所有者是 Administrators,只有 Administrators 与 SYSTEM 可写——SYSTEM 服务不能从用户可写的安装目录启动,否则本机任何普通进程都能换掉它。不含凭证、账号或对话。源码运行的开发版另将构建缓存放在 `userData/remote-desktop/development/<安装身份哈希>/`，只含本机编译产物与源码摘要；它仍复制到上述受保护目录后才注册服务。只有设置页的「移除服务」(同样需要管理员确认)会删除它;按安装目录分子目录,多份安装互不影响。见 `native/remote-desktop/windows-host/src/staging.rs`、`apps/desktop/src/main/remote-desktop/windowsHost.ts` 与 [`../remote-desktop.md`](../remote-desktop.md) |
 | 用户明确导出的文件                  | 用户选择或任务明确指定的目标路径                                                                                                                                                                                                                                                                                                                                                                                |
 
