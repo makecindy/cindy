@@ -191,6 +191,12 @@ proxy 根下的记录**（双闸）。同一文件里还有 `maker` 源的日志
 
 ## 4. 上报目标与区域
 
+上传编号统一采用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，内部 Dev 构建使用
+`DEV-XXXX-XXXX`。前缀来自当前构建区域，随机部分仍保留 8 位；前缀只保证不同区域的
+新编号不重号，同一区域内仍是随机编号，不承诺严格全局唯一。用户看到和复制的编号、
+SLS `__tags__.uploadCode` 与每条记录的 `uploadCode` 使用同一个完整值。历史无前缀
+`XXXX-XXXX` 编号继续被格式校验器接受，既有日志不改写。
+
 目标 = 日志服务的 project + logstore + 服务区域接入域名，**构建期注入、运行期只读**。
 
 链路（与 `config/endpoint.dev.json` / `release-regions.json` 同款约定）：

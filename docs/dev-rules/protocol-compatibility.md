@@ -248,6 +248,18 @@ Desktop 新增本机 `update-harness-prepare` IPC（Claude Code/Codex、用户�
 原 scoped 修复标记，回复保持兼容。应用更新 IPC、手机与设备间 wire protocol 不变；后台归档只放新缓存目录，旧客户端
 忽略它，不改变原安装目录、凭证、数据库或持久偏好。
 
+## 日志上传编号的区域前缀
+
+Desktop 和 Mobile 的新 `uploadCode` 使用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，
+内部 Dev 构建使用 `DEV-XXXX-XXXX`；随机部分仍保留 8 位。SLS 的 tags、逐条记录和
+客户端返回值都传完整编号，字段名、字符串类型、IPC 和 SLS web-tracking 结构不变。
+格式校验继续接受历史无前缀 `XXXX-XXXX` 编号，历史日志不改写；新旧客户端的显示和
+复制均按不透明字符串处理。回滚后恢复生成无前缀编号，不迁移数据。
+外部检索工具若自行限制了编号长度或正则，需要接受带前缀格式；已有编号按原值查询。
+前缀只隔离不同区域的新编号，不承诺同一区域随机编号唯一。不改变服务端、授权范围
+或 Mobile 原生依赖与配置。实现与回归见 Desktop `log-upload/uploadCode.ts` /
+`__tests__/crashTriggersAndCode.test.ts`、Mobile `debug/diagnosticUpload.ts` / 同名测试。
+
 ## 任务链接保留所属电脑
 
 任务查询返回可选 `sessionUrl`，沿用 `cindy://session/<id>?device=<deviceId>`。

@@ -74,7 +74,7 @@ export interface CollectResult {
 
 /** 环境元数据。后台按这些维度检索（需求 §4.8）。 */
 export interface LogUploadMeta {
-  /** 上传编号（已格式化为 `XXXX-XXXX`）。 */
+  /** 上传编号（区域前缀 + `XXXX-XXXX`；历史记录可能不带前缀）。 */
   uploadCode: string;
   /** 未登录为空串。 */
   userId: string;
