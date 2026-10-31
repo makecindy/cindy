@@ -2503,6 +2503,8 @@ describe('GoalController', () => {
     await tick();
     await tick(); // 累计 30ms > 25ms:安全网重检轮发出
     expect(local.session.sends.length).toBeGreaterThan(1);
+    // 重检轮开始即推状态,chip 不再显示等待(waitingSince 已清)。
+    expect(local.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
   });
 
   it('resumeGoal wakes a waiting goal (manual wake)', async () => {
@@ -2528,6 +2530,44 @@ describe('GoalController', () => {
     publishUiSessionIntervention('s1');
     await tick();
     expect(h.session.sends.length).toBe(sendsAfterPause);
+  });
+
+  it('idle observer does not wake a waiting goal (queue projections must not end the wait)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    // 无新输入的收尾(如队列展开/收起的投影)也走 idle 兕底;不能把安全网换成 150ms 续跑。
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+  });
+
+  it('resumeGoal while busy defers the wake and completes it when idle', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    h.session.running = true;
+    await h.controller.resumeGoal('s1');
+    // busy:进入 deferred,等待标记保留(defer 内部 stopSession 会清,需恢复)供重试识别。
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    h.session.running = false;
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect((await h.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
+  it('resumeOnOpen wakes a waiting goal (opening the session re-checks)', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    await h.controller.resumeOnOpen('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect(h.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
   });
 
   it('detaches goal continuation synchronously before pause persistence can block', async () => {

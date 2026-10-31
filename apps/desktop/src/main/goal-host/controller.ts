@@ -1255,9 +1255,16 @@ export class GoalController {
       // Stop 持久化失败时保留 fail-closed 边界；读取失败也不能据此放行恢复。
       state = await this.deps.storage.get(sessionId);
       if (this.turns.get(sessionId) !== existingBoundary) return;
+      // 唤醒等待目标的重试也走这里(deferred boundary 是 cancelled):等待标记仍在
+      // 说明唤醒意图还没兑现,放行,否则目标停在 active 却无任何后续调度。
+      const wakingRetry =
+        state?.status === 'active' && this.waitingSessions.has(state.sessionId);
       if (
         !state ||
-        (state.status !== 'paused' && state.status !== 'blocked' && state.status !== 'usageLimited')
+        (state.status !== 'paused' &&
+          state.status !== 'blocked' &&
+          state.status !== 'usageLimited' &&
+          !wakingRetry)
       ) {
         this.cancelDeferredManualResume(sessionId);
         return;
@@ -1289,16 +1296,17 @@ export class GoalController {
       }
     }
     if (this.turns.get(sessionId) !== lookupBoundary) return;
-    // waiting(active 子态)也允许 resume:手动「唤醒」= 立即补检一轮。清等待态;
-    // 下方更新会把 lastReason 清空,chip 回到进行中。
-    const waking =
-      state?.status === 'active' && this.waitingSessions.delete(state.sessionId);
+    // waiting(active 子态)也允许 resume:手动「唤醒」= 立即补检一轮。先只探测不清态 ——
+    // busy 时会走 deferManualResumeUntilIdle(内部 stopSession 会清等待标记),那之后
+    // deferred 重试会重新走到这里完成真正的唤醒;提前删掉会让重试拒绝、目标卡死。
+    const wakingTargeted =
+      state?.status === 'active' && this.waitingSessions.has(state.sessionId);
     if (
       !state ||
       (state.status !== 'paused' &&
         state.status !== 'blocked' &&
         state.status !== 'usageLimited' &&
-        !waking)
+        !wakingTargeted)
     ) {
       if (!opts?.auto) this.cancelDeferredManualResume(sessionId);
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
@@ -1308,8 +1316,12 @@ export class GoalController {
     }
     if (!opts?.auto && this.isBusy(sessionId)) {
       this.deferManualResumeUntilIdle(sessionId, lookupBoundary, state);
+      // defer 内部 stopSession 清掉了等待标记;恢复它,让 deferred 重试完成唤醒。
+      if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
       return;
     }
+    // 真正唤醒:清等待态(下方更新把 lastReason 清空,chip 回到进行中)。
+    if (wakingTargeted) this.waitingSessions.delete(state.sessionId);
     if (!opts?.auto) this.claimDeferredManualResume(sessionId, lookupBoundary);
     // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
     // 的目标一恢复就立刻又撞上限)。
@@ -1418,6 +1430,10 @@ export class GoalController {
       this.scheduleDeferredManualResume(sessionId);
       return;
     }
+    // waiting 中的目标不归 idle 兜底:队列展开/收起等无新输入的投影收尾也会走到这里,
+    // 不能把 30 分钟安全网换成 150ms 续跑(否则等待形同虚设)。真新输入会先经
+    // intervention 唤醒(届时已不在 waiting),这里保持沉默。
+    if (this.waitingSessions.has(sessionId)) return;
     if (!this.unsubscribers.has(sessionId)) return;
     if (this.firing.has(sessionId)) return;
     const state = await this.deps.storage.get(sessionId);
@@ -1489,7 +1505,12 @@ export class GoalController {
       if (!persisted) throw new GoalSessionRestoreError();
       return;
     }
-    if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) return; // 已在管或正在 Stop
+    if (this.unsubscribers.has(sessionId) || this.turns.has(sessionId)) {
+      // 仍在管的 waiting 目标也归这里:打开会话 = 用户注意力到场,唤醒补检一轮
+      // (waiting 保有 listener,不走下方 dormant 恢复路径)。
+      if (this.waitingSessions.has(sessionId)) this.wakeWaitingGoal(sessionId);
+      return; // 已在管或正在 Stop
+    }
     const lifecycleBoundary = freshTurn();
     this.turns.set(sessionId, lifecycleBoundary);
     let state: GoalState | null;
@@ -2521,7 +2542,9 @@ export class GoalController {
     }
     if (this.firing.has(sessionId)) return;
     // 真正要发轮了:waiting 态就此结束(模型每轮重新裁决;上一次的等待已由本次发轮取代)。
-    this.waitingSessions.delete(sessionId);
+    // 推一次状态把 chip 从「等待中」切回「进行中」(useGoalStatus 之后只靠 push 刷新,
+    // 不推的话重检/唤醒轮全程仍显示等待)。
+    if (this.waitingSessions.delete(sessionId)) this.emit(state);
     // FIFO, approvals, recovery and explicit input holds own dispatch priority.
     // Queue projections/terminal observers wake us when that boundary releases.
     try {
