@@ -415,6 +415,7 @@ describe('personal source integration and packaging', () => {
       '--region',
       'global',
       '--no-sign',
+      ...(process.platform === 'linux' ? ['--linux-deb-only'] : []),
     ]);
     expect(h.baseline()).toBe('f'.repeat(40));
     expect(

@@ -282,3 +282,30 @@ The URLs above are publication targets, not a claim that the script is already
 online. Validate both commands on Arch / Omarchy after upload, including an
 existing installation. Publishing or changing website/OSS content is separate
 from checking this source into the client repository.
+
+## Building native RPM packages
+
+The Linux Forge build produces both DEB and RPM installers from the same
+packaged application. Install `fakeroot`, `dpkg`, `desktop-file-utils`, and
+`rpm`/`rpmbuild` on the Linux builder (`rpm-build` provides `rpmbuild` on Fedora),
+along with the native Electron build toolchain. Run the existing packaging
+command on the matching x64 or arm64 Linux host:
+
+```sh
+pnpm --filter desktop release:package --platform linux --region global
+```
+
+Cindy Make personal builds explicitly pass `--linux-deb-only`: Forge runs only
+MakerDeb and artifact collection requires only the DEB, so these builds do not
+require `rpmbuild`. The same flag is available for manual DEB-only builds.
+Without it, the packaging command continues producing both formats.
+
+For a versioned release, add `--version x.y.z` with the release version.
+The artifact directory contains the DEB and RPM, with checksums and sizes in
+`build-info.json`. RPM filenames use `x86_64` or `aarch64`. The RPM entry uses
+role `installer-rpm`; the existing `installer` entry remains the DEB for the
+current update manifest. Publishing the RPM download is a separate release
+operator step; adding a local artifact does not make a download URL available.
+
+Install and update the RPM with your distribution's package manager. This
+packaging support does not enable Cindy's in-app DEB updater for RPM installs.

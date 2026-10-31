@@ -531,6 +531,9 @@ importers:
       '@electron-forge/maker-deb':
         specifier: ^7.11.1
         version: 7.11.2
+      '@electron-forge/maker-rpm':
+        specifier: ^7.11.2
+        version: 7.11.2
       '@electron-forge/maker-squirrel':
         specifier: ^7.11.1
         version: 7.11.2
@@ -2454,6 +2457,10 @@ packages:
 
   '@electron-forge/maker-deb@7.11.2':
     resolution: {integrity: sha512-MYSdCTsqzKNmsmaq7CIFh2kJdBWUZ4njxnVGrIRClzueVITk5Kots3+eQo+e5QQLvXTVn2XTNDc2nYjvtBh+Mw==}
+    engines: {node: '>= 16.4.0'}
+
+  '@electron-forge/maker-rpm@7.11.2':
+    resolution: {integrity: sha512-BEj/DcW6bSpmOyKUa3UsOgT7Hm3ZuP0Wa6OuQEunjxeCWn7yoDTDtjuYA0xRvzk+T4NCyDO3RBGjy6nYNSPU2Q==}
     engines: {node: '>= 16.4.0'}
 
   '@electron-forge/maker-squirrel@7.11.2':
@@ -6741,6 +6748,12 @@ packages:
 
   electron-installer-debian@3.2.0:
     resolution: {integrity: sha512-58ZrlJ1HQY80VucsEIG9tQ//HrTlG6sfofA3nRGr6TmkX661uJyu4cMPPh6kXW+aHdq/7+q25KyQhDrXvRL7jw==}
+    engines: {node: '>= 10.0.0'}
+    os: [darwin, linux]
+    hasBin: true
+
+  electron-installer-redhat@3.4.0:
+    resolution: {integrity: sha512-gEISr3U32Sgtj+fjxUAlSDo3wyGGq6OBx7rF5UdpIgbnpUvMN4W5uYb0ThpnAZ42VEJh/3aODQXHbFS4f5J3Iw==}
     engines: {node: '>= 10.0.0'}
     os: [darwin, linux]
     hasBin: true
@@ -12688,6 +12701,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@electron-forge/maker-rpm@7.11.2':
+    dependencies:
+      '@electron-forge/maker-base': 7.11.2
+      '@electron-forge/shared-types': 7.11.2
+    optionalDependencies:
+      electron-installer-redhat: 3.4.0
+    transitivePeerDependencies:
+      - supports-color
+
   '@electron-forge/maker-squirrel@7.11.2':
     dependencies:
       '@electron-forge/maker-base': 7.11.2
@@ -17552,6 +17574,19 @@ snapshots:
       electron-installer-common: 0.10.4
       fs-extra: 9.1.0
       get-folder-size: 2.0.1
+      lodash: 4.18.1
+      word-wrap: 1.2.5
+      yargs: 16.2.2
+    transitivePeerDependencies:
+      - supports-color
+    optional: true
+
+  electron-installer-redhat@3.4.0:
+    dependencies:
+      '@malept/cross-spawn-promise': 1.1.1
+      debug: 4.4.3
+      electron-installer-common: 0.10.4
+      fs-extra: 9.1.0
       lodash: 4.18.1
       word-wrap: 1.2.5
       yargs: 16.2.2

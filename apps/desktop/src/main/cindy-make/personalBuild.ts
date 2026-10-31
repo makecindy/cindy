@@ -438,6 +438,8 @@ export async function buildCindyPersonal(
             '--region',
             region,
             '--no-sign',
+            // Personal builds consume only the DEB installer on Linux.
+            ...(process.platform === 'linux' ? ['--linux-deb-only'] : []),
           ],
           source,
           { ...environment, XDT_MIGRATION_BASE_REF: migrationBase },

@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { MakerDeb } from '@electron-forge/maker-deb';
+import { MakerRpm } from '@electron-forge/maker-rpm';
 import { rebuild as electronRebuild } from '@electron/rebuild';
 import { MakerZIP } from '@electron-forge/maker-zip';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
@@ -1728,6 +1729,19 @@ const makers: ForgeConfig['makers'] = [
         mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
         maintainer: 'Lizi <feedback@cindy.app>',
         // deb 包名规范要求小写;跟随区域 exe 名(cn/global cindy / dev cindydev)。
+        name: CINDY_EXE.toLowerCase(),
+        bin: CINDY_EXE,
+        productName: CINDY_EXE,
+      },
+    },
+    ['linux'],
+  ),
+  new MakerRpm(
+    {
+      options: {
+        categories: ['Development'],
+        icon: path.join(__dirname, 'resources', 'icon.png'),
+        mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
         name: CINDY_EXE.toLowerCase(),
         bin: CINDY_EXE,
         productName: CINDY_EXE,

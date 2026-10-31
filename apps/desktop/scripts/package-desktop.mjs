@@ -27,6 +27,7 @@
 //              仅存的 CDN 依赖,显式 x.y.z 则不再碰 CDN manifest。
 //              (agent 侧车二进制走缓存优先的 ensureBinary:已就位且版本
 //              匹配 pin 时跳过下载;首次打包仍需网络拉一次,之后可离线。)
+//   --linux-deb-only                仅产出 DEB（个人版构建不需要 RPM 工具）
 //   --skip-smoke                    跳过 packaged smoke test(调试用)
 //   --allow-unsigned                有版本打包放行无签名(win 缺 CINDY_WIN_SIGN_CMD /
 //                                   mac 缺 APPLE_APP_PASSWORD 时降级 ad-hoc)
@@ -36,12 +37,13 @@
 //
 // 产物: release/artifacts/<region>/<version|unversioned>/<platform-arch>/
 //   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg /
-//              -<amd64|arm64>.deb                        安装包
+//              -<amd64|arm64>.deb / -<x86_64|aarch64>.rpm  安装包
 //   cindy-<version>-hotfix.zip                           热更包(仅有版本时)
 //   build-info.json                                      发布侧唯一输入
 // =============================================================================
 
 import { execFileSync, execSync } from 'node:child_process';
+import { rpmArch } from '@electron-forge/maker-rpm';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -178,7 +180,7 @@ function cleanOutDir() {
   }
 }
 
-function runForgeMake({ platform, arch, region, version, versionless, noSign, webAuthnAppleTeamId }) {
+function runForgeMake({ platform, arch, region, version, versionless, noSign, linuxDebOnly, webAuthnAppleTeamId }) {
   console.log('==> Building remote bundles...');
   execSync('node scripts/build-remote-bundles.mjs', { cwd: DESKTOP_ROOT, stdio: 'inherit' });
 
@@ -218,6 +220,7 @@ function runForgeMake({ platform, arch, region, version, versionless, noSign, we
   if (noSign) delete forgeEnv.CINDY_WIN_SIGN_CMD;
   execFileSync(process.execPath, [
     path.join(__dirname, 'forge-cli.mjs'), 'make', '--platform', platform, '--arch', arch,
+    ...(linuxDebOnly ? ['--targets', '@electron-forge/maker-deb'] : []),
   ], {
     cwd: DESKTOP_ROOT,
     stdio: 'inherit',
@@ -463,7 +466,7 @@ async function finishDarwin({
   return { files, signing: { mode: signingMode } };
 }
 
-async function finishLinux({ artifactDir, baseName, arch }) {
+async function finishLinux({ artifactDir, baseName, arch, linuxDebOnly }) {
   const makeBaseDir = path.join(DESKTOP_ROOT, 'out', 'make');
   const debPath = findInstallerArtifact(makeBaseDir, 'deb');
   if (!debPath) {
@@ -474,9 +477,21 @@ async function finishLinux({ artifactDir, baseName, arch }) {
   // 包一致:归集时写死 amd64 会让 arm64 产物顶着 amd64 的名字发出去。
   const installerPath = path.join(artifactDir, `${baseName}-${debianArch(arch)}.deb`);
   fs.copyFileSync(debPath, installerPath);
-  // One verified payload: Debian uses pkexec; managed user installs on Arch /
-  // Omarchy extract it without elevation and atomically switch releases.
-  return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
+  if (linuxDebOnly) {
+    return { files: [fileEntry('installer', installerPath)], signing: { mode: 'none' } };
+  }
+  const rpmPath = findInstallerArtifact(makeBaseDir, 'rpm');
+  if (!rpmPath) {
+    throw new Error(`No .rpm found under ${makeBaseDir}`);
+  }
+  const rpmInstallerPath = path.join(artifactDir, `${baseName}-${rpmArch(arch)}.rpm`);
+  fs.copyFileSync(rpmPath, rpmInstallerPath);
+  // Keep the existing installer role on the DEB: Linux update manifests consume
+  // it as app.installer. RPM is a separate manual installation artifact.
+  return {
+    files: [fileEntry('installer', installerPath), fileEntry('installer-rpm', rpmInstallerPath)],
+    signing: { mode: 'none' },
+  };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -491,7 +506,7 @@ async function main() {
     console.error(`ERROR: ${err.message}`);
     process.exit(1);
   }
-  const { platform, archs, region, versionSpec, skipSmoke, allowUnsigned, noSign } = args;
+  const { platform, archs, region, versionSpec, skipSmoke, allowUnsigned, noSign, linuxDebOnly } = args;
   // ensureBinary 的 CDN fallback 按此 region 选择清单基址；必须早于二进制准备。
   process.env.CINDY_AUTH_REGION = region;
   // mac 签名身份按区域从 release-regions.json 注入(文件缺失时静默跳过,
@@ -554,7 +569,7 @@ async function main() {
     for (const platformKey of archs.map((a) => `${platform}-${a}`)) {
       await ensureLinuxRuntimeAssets({ platformKey });
     }
-    logLinuxPackagingRequirements();
+    logLinuxPackagingRequirements({ debOnly: linuxDebOnly });
   } else {
     for (const platformKey of archs.map((a) => `${platform}-${a}`)) {
       await ensureBinary('ripgrep', platformKey);
@@ -595,6 +610,7 @@ async function main() {
       version,
       versionless,
       noSign,
+      linuxDebOnly,
       webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
     });
 
@@ -639,6 +655,7 @@ async function main() {
         versionless,
         allowUnsigned,
         noSign,
+        linuxDebOnly,
         macSigningIdentity,
         webAuthnProvisioningProfile,
       }));
