@@ -400,7 +400,9 @@ function liveErrorBannerText(message: string, reason: string | undefined): strin
         ? i18n.t('logic.errors.silentStopExhausted')
         : reason === 'codex-auto-review-unavailable'
           ? i18n.t('logic.errors.codexAutoReviewUnavailable')
-          : remoteErrorMessageForBanner(message);
+          : reason === 'malformed-tool-markup'
+            ? i18n.t('logic.errors.malformedToolMarkup')
+            : remoteErrorMessageForBanner(message);
 }
 // 专门给"出现在用户面前的红色 ErrorBanner"打日志,scope 以 `maker/` 开头
 // 是为了让它落在统一 agent 流(agent-*.ndjson,跟 agent runtime 抛出的底层错误同一份,
