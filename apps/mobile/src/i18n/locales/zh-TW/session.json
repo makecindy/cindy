@@ -1,4 +1,17 @@
 {
+  "contextControl": {
+    "compacting": "正在壓縮…",
+    "meaning": "AI 本輪可參考的內容，包括對話、指令與工具結果。",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "收到模型的用量資料後，這裡會顯示目前占用。",
+    "snapshotHint": "用量取自最近的回報或估算，可能隨下一次請求變動。",
+    "compact": "壓縮上下文",
+    "compactHelp": "概括較早內容，騰出空間。部分細節可能省略。",
+    "autoHelp": "Codex 會在接近壓縮門檻時自動整理上下文。",
+    "requested": "壓縮請求已提交，完成後用量會更新。",
+    "success": "上下文已壓縮",
+    "nothing": "暫無可壓縮內容"
+  },
   "paneResize": {
     "label": "分欄寬度",
     "hint": "左右拖動可調整兩欄寬度"

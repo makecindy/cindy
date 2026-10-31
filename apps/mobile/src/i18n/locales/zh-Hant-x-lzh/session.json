@@ -1,4 +1,17 @@
 {
+  "contextControl": {
+    "compacting": "方壓縮…",
+    "meaning": "AI 此輪可參之內容，含言談、指令與工具所得。",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "得模型之耗用資料後，此處將示今之所占。",
+    "snapshotHint": "耗用據近次回報或估算而示，下次請求或有異。",
+    "compact": "縮上下文",
+    "compactHelp": "概括較早之內容，以騰餘地。或略去若干細節。",
+    "autoHelp": "Codex 將於近壓縮門檻時自理上下文。",
+    "requested": "已請縮上下文，事畢當更新耗用。",
+    "success": "上下文已壓縮",
+    "nothing": "無可壓縮者"
+  },
   "paneResize": {
     "label": "分欄之寬",
     "hint": "左右拖之，可調兩欄之寬"

@@ -307,3 +307,17 @@ it('allows preview deep links only for explicit development visual mock fixtures
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
+
+// #8215: simulator cases traverse the existing mock transport and retain messages.
+it('replays companion context snapshots and compaction without erasing the conversation', async () => {
+  const mock = await import('@/debug/visualMock');
+  const link = await mock.prepareVisualMockDeviceLinkContext();
+  const id = 'visual-teammate-session:visual-bot-lizi';
+  const read = (channel: string, args: unknown[]) => link.invoke<any>(mock.VISUAL_MOCK_DEVICE_ID, channel, args);
+  expect(await read('local-db:sessions:get', [id])).toMatchObject({ agentKind: 'pi', contextTokens: 120_000 });
+  const before = await read('local-db:messages:list', [id]);
+  expect(await read('maker:compact-session', [id])).toMatchObject({ tokensBefore: 120_000, estimatedTokensAfter: 30_000 });
+  expect(await read('local-db:sessions:get', [id])).toMatchObject({ contextTokens: 30_000 });
+  expect(await read('local-db:messages:list', [id])).toEqual(before);
+  expect(await read('maker:compact-session', [id])).toEqual({ noop: true });
+});

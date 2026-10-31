@@ -1,4 +1,17 @@
 {
+  "contextControl": {
+    "compacting": "Wird komprimiert…",
+    "meaning": "Worauf die KI in dieser Runde zugreifen kann: Unterhaltung, Anweisungen und Tool-Ergebnisse.",
+    "tokens": "{{used}} / {{total}} Tokens",
+    "unknownHint": "Die aktuelle Nutzung erscheint, sobald das Modell sie meldet.",
+    "snapshotHint": "Die Nutzung basiert auf der letzten Meldung oder Schätzung und kann sich mit der nächsten Anfrage ändern.",
+    "compact": "Kontext komprimieren",
+    "compactHelp": "Frühere Inhalte zusammenfassen, um Platz zu schaffen. Einige Details können entfallen.",
+    "autoHelp": "Codex komprimiert den Kontext automatisch, wenn die Komprimierungsschwelle fast erreicht ist.",
+    "requested": "Komprimierung angefordert. Die Nutzung wird nach Abschluss aktualisiert.",
+    "success": "Kontext komprimiert",
+    "nothing": "Noch nichts zu komprimieren"
+  },
   "paneResize": {
     "label": "Spaltenbreite",
     "hint": "Ziehe nach links oder rechts, um die Spaltenbreiten anzupassen"

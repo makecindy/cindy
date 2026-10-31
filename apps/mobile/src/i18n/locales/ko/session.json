@@ -1,4 +1,17 @@
 {
+  "contextControl": {
+    "compacting": "압축 중…",
+    "meaning": "이번 턴에 AI가 참고할 수 있는 대화, 지시 및 도구 결과입니다.",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "모델이 사용량을 보고하면 현재 사용량이 표시됩니다.",
+    "snapshotHint": "사용량은 최근 보고값 또는 추정값을 기준으로 하며 다음 요청에서 달라질 수 있습니다.",
+    "compact": "컨텍스트 압축",
+    "compactHelp": "이전 내용을 요약해 공간을 확보합니다. 일부 세부 내용은 생략될 수 있습니다.",
+    "autoHelp": "Codex는 압축 임계값에 가까워지면 컨텍스트를 자동으로 정리합니다.",
+    "requested": "압축을 요청했습니다. 완료되면 사용량이 갱신됩니다.",
+    "success": "컨텍스트를 압축했습니다",
+    "nothing": "아직 압축할 내용이 없습니다"
+  },
   "paneResize": {
     "label": "열 너비",
     "hint": "좌우로 드래그하여 두 열의 너비를 조절합니다"

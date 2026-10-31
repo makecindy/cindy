@@ -1,4 +1,17 @@
 {
+  "contextControl": {
+    "compacting": "Compactando…",
+    "meaning": "O que a IA pode consultar neste turno: conversa, instruções e resultados de ferramentas.",
+    "tokens": "{{used}} / {{total}} tokens",
+    "unknownHint": "O uso atual aparece quando o modelo o informa.",
+    "snapshotHint": "O uso se baseia no último valor informado ou em uma estimativa e pode mudar com a próxima solicitação.",
+    "compact": "Compactar contexto",
+    "compactHelp": "Resuma o conteúdo anterior para liberar espaço. Alguns detalhes podem ser omitidos.",
+    "autoHelp": "O Codex compacta o contexto automaticamente perto do limite de compactação.",
+    "requested": "Compactação solicitada. O uso será atualizado ao terminar.",
+    "success": "Contexto compactado",
+    "nothing": "Nada para compactar ainda"
+  },
   "paneResize": {
     "label": "Largura da coluna",
     "hint": "Arraste para a esquerda ou direita para ajustar a largura das colunas"
