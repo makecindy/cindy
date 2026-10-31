@@ -14,7 +14,7 @@ import type { RemoteAgentReply } from '@cindy/device-link';
 import { CINDY_EXEC_MCP_SERVER, handleExecMcpRequest } from '../executor/ccMcp';
 import { ExecutorRequestError, type RemoteExecutor } from '../executor/executor';
 import { resolveExecutorShell } from '../executor/shell';
-import { pathTextContext } from '../executor/workspace';
+import { pathTextContext, type ExecutorAgentProjection } from '../executor/workspace';
 
 /** 本任务可用的一个本机 MCP 服务：完整地址(已带本任务身份)与要附加的请求头。 */
 export interface LocalMcpTarget {
@@ -92,12 +92,12 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
     if (!value || typeof value !== 'object') return value;
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapArguments(item, name)]));
   };
-  const projectResult = (value: unknown, key = ''): unknown => {
+  const projectResult = (value: unknown, projection: ExecutorAgentProjection, key = ''): unknown => {
     if (typeof value === 'string') {
       if (value.startsWith('file://')) {
         try {
           const uri = new URL(value);
-          const virtual = workspace.toAgentPath(fileURLToPath(uri));
+          const virtual = projection.toAgentPath(fileURLToPath(uri));
           if (virtual !== fileURLToPath(uri)) {
             uri.host = '';
             uri.pathname = virtual.replace(/\\/g, '/');
@@ -105,11 +105,11 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
           }
         } catch { /* 普通字符串或非本机 file URL，交给文本投影。 */ }
       }
-      return workspace.mapTextForAgent(value, pathTextContext(key));
+      return projection.mapTextForAgent(value, pathTextContext(key));
     }
-    if (Array.isArray(value)) return value.map((item) => projectResult(item, key));
+    if (Array.isArray(value)) return value.map((item) => projectResult(item, projection, key));
     if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, projectResult(item, name)]));
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, projectResult(item, projection, name)]));
   };
 
   async function forwardMcp(
@@ -140,13 +140,27 @@ export function createReverseHttpRouter(deps: ReverseHttpRouterDeps) {
       signal,
     });
     let data = Buffer.from(await response.arrayBuffer());
+    // 一份工具回复共用一个异步准备的展示快照，不能在递归遍历每个字符串时同步 realpath。
+    let projection: Promise<ExecutorAgentProjection> | undefined;
+    const projectJson = async (text: string): Promise<string | undefined> => {
+      let value: unknown;
+      try { value = JSON.parse(text); } catch { return undefined; }
+      signal?.throwIfAborted();
+      const prepared = await (projection ??= workspace.prepareAgentProjection());
+      signal?.throwIfAborted();
+      return JSON.stringify(projectResult(value, prepared));
+    };
     if (response.headers.get('content-type')?.includes('application/json')) {
-      try { data = Buffer.from(JSON.stringify(projectResult(JSON.parse(data.toString('utf8'))))); } catch { /* 非 JSON 原样透传。 */ }
+      const projected = await projectJson(data.toString('utf8'));
+      if (projected !== undefined) data = Buffer.from(projected);
     } else if (response.headers.get('content-type')?.includes('text/event-stream')) {
-      data = Buffer.from(data.toString('utf8').split('\n').map((line) => {
-        if (!line.startsWith('data:')) return line;
-        try { return 'data: ' + JSON.stringify(projectResult(JSON.parse(line.slice(5).trim()))); } catch { return line; }
-      }).join('\n'));
+      const lines = data.toString('utf8').split('\n');
+      for (const [index, line] of lines.entries()) {
+        if (!line.startsWith('data:')) continue;
+        const projected = await projectJson(line.slice(5).trim());
+        if (projected !== undefined) lines[index] = 'data: ' + projected;
+      }
+      data = Buffer.from(lines.join('\n'));
     }
     const replyHeaders: Array<[string, string]> = [];
     response.headers.forEach((value, name) => {

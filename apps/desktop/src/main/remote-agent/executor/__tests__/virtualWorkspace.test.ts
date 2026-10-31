@@ -1007,6 +1007,99 @@ describe('path projection cost with many aliases', () => {
 
   const tick = () => new Promise<void>((resolve) => { setImmediate(resolve); });
 
+  it.each([false, true])('projects MCP replies without synchronous realpath (SSE=%s)', async (sse) => {
+    vi.stubEnv('PATH', '');
+    const realpath = fs.realpathSync;
+    let syncRealpaths = 0;
+    try {
+      const { project, workspace } = manyAliasWorkspace(40);
+      const executor = new RemoteExecutor({ workspace, gate: new ExecutorGate(workspace, 'normal'), rgPath: 'unused' });
+      const message = { jsonrpc: '2.0', id: 1, result: {
+        files: Array.from({ length: 50 }, (_, index) => ({ path: path.join(project, 'f-' + index), text: 'plain reply ' + index })),
+        uri: pathToFileURL(path.join(project, 'file.txt')).href,
+      } };
+      const router = createReverseHttpRouter({ executor, mcpTarget: () => ({ url: 'http://local.invalid/mcp', headers: {} }),
+        fetch: async () => new Response(sse ? 'event: message\ndata: ' + JSON.stringify(message) + '\n\ndata: ' + JSON.stringify(message) + '\n\ndata: [DONE]\n' : JSON.stringify(message), {
+          headers: { 'content-type': sse ? 'text/event-stream' : 'application/json' },
+        }),
+      });
+      const prepare = vi.spyOn(workspace, 'prepareAgentProjection');
+      fs.realpathSync = Object.assign(((...args: Parameters<typeof realpath>) => {
+        syncRealpaths += 1;
+        return realpath(...args);
+      }) as typeof realpath, { native: ((...args: Parameters<typeof realpath.native>) => {
+        syncRealpaths += 1;
+        return realpath.native(...args);
+      }) as typeof realpath.native });
+      const reply = await router({ method: 'POST', path: '/mcp/helper', headers: [] });
+      expect(reply.type).toBe('http');
+      if (reply.type !== 'http') throw new Error('Expected an HTTP reply');
+      const body = Buffer.from(reply.body!, 'base64').toString('utf8');
+      const messages = sse
+        ? body.split('\n').filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]').map((line) => JSON.parse(line.slice(6)))
+        : [JSON.parse(body)];
+      expect(messages).toHaveLength(sse ? 2 : 1);
+      for (const projected of messages) {
+        expect(projected.result.files).toEqual(message.result.files.map((file, index) => ({
+          path: VIRTUAL + '/workspace/f-' + index, text: file.text,
+        })));
+        expect(projected.result.uri).toBe(new URL('file://' + VIRTUAL + '/workspace/file.txt').href);
+      }
+      if (sse) expect(body).toContain('\n\ndata: [DONE]\n');
+      expect(syncRealpaths).toBe(0);
+      expect(prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.realpathSync = realpath;
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('does not forward an MCP reply cancelled while its projection is being prepared', async () => {
+    const { workspace } = manyAliasWorkspace(4);
+    const executor = new RemoteExecutor({ workspace, gate: new ExecutorGate(workspace, 'normal'), rgPath: 'unused' });
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    const prepare = workspace.prepareAgentProjection.bind(workspace);
+    vi.spyOn(workspace, 'prepareAgentProjection').mockImplementation(async () => {
+      enter();
+      await paused;
+      return prepare();
+    });
+    const router = createReverseHttpRouter({ executor, mcpTarget: () => ({ url: 'http://local.invalid/mcp', headers: {} }),
+      fetch: async () => new Response('{"result":"plain reply"}', { headers: { 'content-type': 'application/json' } }),
+    });
+    const controller = new AbortController();
+    const reply = router({ method: 'POST', path: '/mcp/helper', headers: [] }, controller.signal);
+    try {
+      await Promise.race([entered, reply.then(() => { throw new Error('Reply completed before projection was prepared'); })]);
+      controller.abort();
+    } finally {
+      release();
+    }
+    await expect(reply).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('resolves existing aliases once while registering a batch of PATH directories', () => {
+    vi.stubEnv('PATH', '');
+    try {
+      const { workspace } = manyAliasWorkspace(40);
+      const aliases = workspace.agentPathPrefixes().length;
+      const dirs = Array.from({ length: 12 }, (_, index) => path.join(root, 'path-' + index));
+      for (const dir of dirs) fs.mkdirSync(dir);
+      const batch = measure(() => workspace.virtualizeDirs(dirs));
+
+      expect(batch.realpaths).toBeLessThanOrEqual((aliases + dirs.length) * 2);
+      for (const [index, virtual] of batch.value.entries()) {
+        expect(workspace.resolve(virtual)).toBe(dirs[index]);
+        expect(workspace.mapTextForAgent(dirs[index])).toBe(virtual);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('sorts aliases and builds prefix patterns once however many short strings are projected', () => {
     const texts = (count: number) => Array.from({ length: count }, (_, index) => '第 ' + index + ' 条输出：ok');
     const single = manyAliasWorkspace().workspace;
@@ -1114,19 +1207,24 @@ describe('path projection cost with many aliases', () => {
     const project = path.join(root, 'work');
     const first = path.join(root, 'first');
     const second = path.join(root, 'second');
+    const registrations = [path.join(root, 'path-first'), path.join(root, 'path-second')];
     const link = path.join(root, 'link');
     const type = process.platform === 'win32' ? 'junction' : 'dir';
-    for (const dir of [project, first, second]) fs.mkdirSync(dir);
+    for (const dir of [project, first, second, ...registrations]) fs.mkdirSync(dir);
     try { fs.symlinkSync(first, link, type); }
     catch { return skip(); }
     const workspace = new ExecutorWorkspace({ workingDir: project, aliases: [{ from: VIRTUAL + '/workspace', to: project }, { from: VIRTUAL + '/link', to: link }] });
     workspace.setVirtualRoot(VIRTUAL);
     // 按链接当前指向的真实路径(Windows 上为长文件名)写入，与 native realpath 的结果一致。
     const real = (dir: string) => path.join(fs.realpathSync.native(dir), 'f.txt');
+    workspace.virtualizeDirs([registrations[0]]);
+    expect(workspace.toAgentPath(real(first))).toBe(VIRTUAL + '/link/f.txt');
     expect(workspace.mapTextForAgent(real(first))).toBe(VIRTUAL + '/link/f.txt');
     fs.unlinkSync(link);
     fs.symlinkSync(second, link, type);
     await tick();
+    workspace.virtualizeDirs([registrations[1]]);
+    expect(workspace.toAgentPath(real(second))).toBe(VIRTUAL + '/link/f.txt');
     expect(workspace.mapTextForAgent(real(second))).toBe(VIRTUAL + '/link/f.txt');
   });
 });
