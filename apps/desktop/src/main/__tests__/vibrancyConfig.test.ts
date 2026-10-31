@@ -114,35 +114,12 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     }
   });
 
-  it('win32 × Win11 × CINDY:默认 acrylic + 浅色侧栏 backing', () => {
+  // Regression: Acrylic samples windows behind Cindy, producing a moving color
+  // boundary in the task list. Mica samples the wallpaper instead (DESIGN §15.12).
+  it('win32 × Win11 × CINDY:默认 mica，浅色侧栏由 CSS 染色', () => {
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
         getSystemVersion: () => '10.0.22631',
-      }),
-    ).toEqual({
-      vibrancy: null,
-      backgroundColor: 'rgba(238, 238, 233, 0.85)',
-      backgroundMaterial: 'acrylic',
-    });
-  });
-
-  it('win32 × Win11 × CINDY:深色 acrylic 使用深色侧栏 backing', () => {
-    expect(
-      resolveVibrancyConfig('cindy', true, 'win32', {
-        getSystemVersion: () => '10.0.22631',
-      }),
-    ).toEqual({
-      vibrancy: null,
-      backgroundColor: 'rgba(5, 5, 5, 0.85)',
-      backgroundMaterial: 'acrylic',
-    });
-  });
-
-  it('win32 × Win11 × CINDY:支持 mica 材质旋钮', () => {
-    process.env.XDT_BACKDROP_MATERIAL = 'mica';
-    expect(
-      resolveVibrancyConfig('cindy', true, 'win32', {
-        getSystemVersion: () => '10.0.22631.2861',
       }),
     ).toEqual({
       vibrancy: null,
@@ -150,6 +127,37 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       backgroundMaterial: 'mica',
     });
   });
+
+  it('win32 × Win11 × CINDY:默认 mica，深色侧栏由 CSS 染色', () => {
+    expect(
+      resolveVibrancyConfig('cindy', true, 'win32', {
+        getSystemVersion: () => '10.0.22631',
+      }),
+    ).toEqual({
+      vibrancy: null,
+      backgroundColor: '#00000000',
+      backgroundMaterial: 'mica',
+    });
+  });
+
+  it.each([
+    [false, 'rgba(238, 238, 233, 0.85)'],
+    [true, 'rgba(5, 5, 5, 0.85)'],
+  ] as const)(
+    'win32 × Win11 × CINDY:显式 acrylic 保留原生 backing (dark=%s)',
+    (isDark, backgroundColor) => {
+      process.env.XDT_BACKDROP_MATERIAL = 'acrylic';
+      expect(
+        resolveVibrancyConfig('cindy', isDark, 'win32', {
+          getSystemVersion: () => '10.0.22631.2861',
+        }),
+      ).toEqual({
+        vibrancy: null,
+        backgroundColor,
+        backgroundMaterial: 'acrylic',
+      });
+    },
+  );
 
   it('win32 × Win11 × CINDY:支持 none 材质旋钮', () => {
     process.env.XDT_BACKDROP_MATERIAL = 'none';
@@ -164,7 +172,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     });
   });
 
-  it('win32 × Win11 × CINDY:非法材质 warn 后回落 acrylic', () => {
+  it('win32 × Win11 × CINDY:非法材质 warn 后回落 mica', () => {
     warnSpy.mockClear();
     process.env.XDT_BACKDROP_MATERIAL = 'glass';
     expect(
@@ -173,12 +181,12 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       }),
     ).toEqual({
       vibrancy: null,
-      backgroundColor: 'rgba(5, 5, 5, 0.85)',
-      backgroundMaterial: 'acrylic',
+      backgroundColor: '#00000000',
+      backgroundMaterial: 'mica',
     });
     // 走统一 logger.warn,不再是裸 console.warn;文案不再带 [main] 前缀(scope 由 logger 注入)
     expect(warnSpy).toHaveBeenCalledWith(
-      "Invalid XDT_BACKDROP_MATERIAL 'glass', falling back to acrylic.",
+      "Invalid XDT_BACKDROP_MATERIAL 'glass', falling back to mica.",
     );
   });
 
