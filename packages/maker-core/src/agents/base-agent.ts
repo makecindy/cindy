@@ -253,6 +253,28 @@ export interface RemoteAgentFileOps {
   sha256File(file: string): Promise<string>;
 }
 
+/** One local image that must become readable by an SSH-hosted Codex app-server. */
+export interface RemoteCodexImageAttachment {
+  /** Local absolute path after image-resizer processing. */
+  path: string;
+  mimeType?: string;
+}
+
+export interface StageRemoteCodexImagesInput {
+  remoteHostId: string;
+  /** Stable per business session; used as the remote cleanup scope. */
+  sessionId: string;
+  /** Catalog model id selected for the turn. */
+  model: string;
+  providerId?: string | null;
+  images: readonly RemoteCodexImageAttachment[];
+}
+
+export interface CleanupRemoteCodexImagesInput {
+  remoteHostId: string;
+  sessionId: string;
+}
+
 export interface PiRemoteFileOps extends RemoteAgentFileOps {
   mkdirp(dir: string): Promise<void>;
   writeFile(file: string, content: string, mode?: number): Promise<void>;
@@ -1214,6 +1236,22 @@ export interface AgentDeps {
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
+
+  /**
+   * Codex-only: stage local images on an SSH host before turn/start.
+   *
+   * The remote app-server cannot read desktop paths. Returning paths in the same
+   * order as `images` lets the core rewrite `localImage.path`; missing support,
+   * unsupported models and upload failures must throw before the turn is sent.
+   */
+  stageRemoteCodexImages?: (
+    input: StageRemoteCodexImagesInput,
+  ) => Promise<readonly string[]>;
+
+  /** Best-effort cleanup for one session's staged remote image directory. */
+  cleanupRemoteCodexImages?: (
+    input: CleanupRemoteCodexImagesInput,
+  ) => Promise<void>;
 
   /**
    * Pi 专用:为远端机器构造一个 pi `--mode rpc` transport。
