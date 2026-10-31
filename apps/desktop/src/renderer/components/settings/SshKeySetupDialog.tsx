@@ -671,12 +671,6 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
               visible={visible}
               onToggleVisible={() => setVisible((v) => !v)}
               autoFocus
-              onSubmit={async () => {
-                if (!pass || submitting) return;
-                setSubmitting(true);
-                await onSubmit(privateKeyPath, pass);
-                setSubmitting(false);
-              }}
             />
             <p className="text-11" style={{ color: 'var(--settings-integration-subtitle)' }}>
               {t('settings.remote.keys.passStorageNote')}
@@ -695,7 +689,7 @@ function UnlockDialog({ privateKeyPath, onClose, onSubmit }: UnlockDialogProps) 
               compact
               loading={submitting}
               type="button"
-              disabled={!pass || submitting}
+              disabled={submitting}
               onClick={async () => {
                 setSubmitting(true);
                 await onSubmit(privateKeyPath, pass);
