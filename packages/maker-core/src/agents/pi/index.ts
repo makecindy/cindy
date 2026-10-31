@@ -203,7 +203,7 @@ import {
   assertReviewMessageContentPaths,
   buildReviewReadGrants } from '../shared/review-read-scope.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
-import { PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
+import { PI_RPC_OVERSIZED_FRAME_ERROR, PiRpcProcess, type PiRpcEvent } from './rpc-client.js';
 import { createPiStdioTransport, type PiTransport } from './transport.js';
 import type { PiRemoteFileOps } from '../base-agent.js';
 import {
@@ -7829,7 +7829,13 @@ export class PiAgent extends BaseAgent {
           if (sendOpts?.retryTranscriptUserEntryId && !ctx.isStreaming) {
             await runExclusivePiRpc(async () => {
               const before = await proc.request({ type: 'get_tree' });
-              if (!before.success) throw new TurnDispatchRejectedError('Pi retry history unavailable');
+              if (!before.success) {
+                throw new TurnDispatchRejectedError(
+                  before.error === PI_RPC_OVERSIZED_FRAME_ERROR
+                    ? `Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`
+                    : 'Pi retry history unavailable',
+                );
+              }
               const branch = piRetryBranch(before.data, sendOpts.retryTranscriptUserEntryId!);
               if (!branch) {
                 if (expectedCompat) throw new TurnDispatchRejectedError('Pi cache recovery branch is not replayable');
@@ -7841,6 +7847,9 @@ export class PiAgent extends BaseAgent {
               const payload = encodeURIComponent(JSON.stringify({ entryId: sendOpts.retryTranscriptUserEntryId }));
               const switched = await proc.request({ type: 'prompt', message: `/cindy-branch-switch ${payload}` });
               const after = await proc.request({ type: 'get_tree' });
+              if (!after.success && after.error === PI_RPC_OVERSIZED_FRAME_ERROR) {
+                throw new TurnDispatchRejectedError(`Pi retry history unavailable: ${PI_RPC_OVERSIZED_FRAME_ERROR}`);
+              }
               if (!switched.success || !after.success || normalizePiSessionTree(after.data).leafId !== branch.parentId) {
                 throw new TurnDispatchRejectedError('Pi retry branch navigation was not confirmed');
               }

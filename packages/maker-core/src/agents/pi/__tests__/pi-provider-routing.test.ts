@@ -98,6 +98,7 @@ vi.mock("../rpc-client.js", () => {
     }
   }
   return {
+    PI_RPC_OVERSIZED_FRAME_ERROR: 'RPC response exceeded 16 MiB and was discarded.',
     PiRpcRequestTimeoutError,
     PiRpcProcess: class {
       isClosed = false;
@@ -7027,7 +7028,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output'])(
+  it.each(['413', 'settings-changed', 'other-error', 'compaction-413', 'compaction-timeout', 'compaction-error', 'compaction-cancelled', 'cancelled-after-compaction', 'nothing-to-compact', 'cancelled-navigation', 'new-window', 'output', 'oversized-after-tree'])(
     'prepares an identity-bound Pi retry without duplicating accepted input: %s', async mode => {
       let navigated = false;
       const controller = new AbortController();
@@ -7035,6 +7036,9 @@ describe("Pi provider-aware model routing", () => {
         if (command.type === 'get_state') return { success: true, data: {
           sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
         } };
+        if (command.type === 'get_tree' && mode === 'oversized-after-tree' && navigated) {
+          return { success: false, error: 'RPC response exceeded 16 MiB and was discarded.' };
+        }
         if (command.type === 'get_tree') return { success: true, data: {
           leafId: navigated || mode === 'new-window' ? 'parent' : mode === 'settings-changed' ? 'effort' : 'failure',
           tree: [{ entry: { id: 'parent', type: 'message', message: { role: 'assistant' } }, children: [
@@ -7083,8 +7087,9 @@ describe("Pi provider-aware model routing", () => {
       });
       const needsRollover = ['compaction-413', 'compaction-timeout', 'compaction-error', 'nothing-to-compact'].includes(mode);
       const cancelled = ['compaction-cancelled', 'cancelled-after-compaction'].includes(mode);
-      const blocked = needsRollover || cancelled || ['cancelled-navigation', 'output'].includes(mode);
-      if (needsRollover) await expect(promise).rejects.toThrow('PI_REQUEST_BODY_RECOVERY_EXHAUSTED');
+      const blocked = needsRollover || cancelled || ['cancelled-navigation', 'output', 'oversized-after-tree'].includes(mode);
+      if (mode === 'oversized-after-tree') await expect(promise).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+      else if (needsRollover) await expect(promise).rejects.toThrow('PI_REQUEST_BODY_RECOVERY_EXHAUSTED');
       else if (cancelled) await expect(promise).rejects.toThrow('cancelled before acceptance');
       else if (blocked) await expect(promise).rejects.toThrow();
       else await promise;
@@ -7102,6 +7107,26 @@ describe("Pi provider-aware model routing", () => {
       await handle.close();
     },
   );
+
+  it('reports the oversized history response before retry accepts another prompt', async () => {
+    captured.requestHandler = async command => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'get_tree') return {
+        success: false, error: 'RPC response exceeded 16 MiB and was discarded.',
+      };
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'retry-oversized-tree', workingDir: cwd, model: 'local-model' });
+    const retryStart = captured.requests.length;
+    await expect(handle.send({ type: 'user', content: 'same input' }, {
+      retryTranscriptUserEntryId: 'accepted',
+    })).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+    expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
+    await handle.close();
+  });
 
   it("reports the stable Pi user entry id after prompt acceptance", async () => {
     let promptAccepted = false;
