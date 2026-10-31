@@ -96,14 +96,13 @@ export function MarkdownCodeCopyButton({ text }: { text: string }) {
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   button: {
     alignItems: 'center',
-    alignSelf: 'flex-end',
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
     backgroundColor: colors.surfaceChip,
     borderRadius: radius.pill,
     height: spacing.xxl,
     justifyContent: 'center',
-    marginBottom: spacing.xs,
-    marginHorizontal: spacing.sm,
-    marginTop: spacing.sm,
     width: spacing.xxl,
   },
   disabled: { opacity: 0.6 },
