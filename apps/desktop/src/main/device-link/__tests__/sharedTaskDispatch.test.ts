@@ -1,4 +1,5 @@
 import { authorizeSharedTaskOperation, sharedTaskGuestPeer } from '@cindy/device-link';
+import { HistoryViewController, historyWorkSummaries, projectHistoryView, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, assertSharedTaskReferences, captureSharedTaskPush, setSharedTaskInteractionReader, setSharedTaskQueueReader, type SharedTaskInteractionCapture, type SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 
@@ -51,6 +52,56 @@ describe('sharedTask dispatch scope', () => {
     for (const channel of ['local-db:messages:list', 'maker:input:stop']) {
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['task'] })).not.toThrow();
       expect(() => assertSharedTaskInvoke(capture(), { channel, args: ['other'] })).toThrow();
+    }
+  });
+  // Regression: expanding a shared work group sent its display-only artifact paths
+  // through the input-reference gate and failed with PERMISSION_DENIED. Existing
+  // scope tests used bare session IDs, never Host-projected work summaries.
+  // Entry/result: real HistoryViewController + assertSharedTaskInvoke must expose
+  // the detail rows and admit expansion intent. Minimal input: one command artifact.
+  // Tier: unit; all history and authorization data remain in memory.
+  // Standalone run: Vitest 3.07s; pnpm command 6.91s on Windows.
+  it.each(['expand', 'locate'] as const)('reads shared work details containing file artifacts through %s', async (mode) => {
+    const rows: HistoryMessageSource[] = [
+      { id: '1', clientId: 'c1', role: 'tool_use', toolUseId: 'command',
+        content: { toolName: 'Bash', input: { command: 'echo done > /work/report.txt' } },
+        createdAt: '2026-10-26T00:00:01Z',
+        historyArtifacts: [{ path: '/work/report.txt', source: 'command', createdAt: '2026-10-26T00:00:01Z' }] },
+      { id: '2', clientId: 'c2', role: 'tool_result', toolUseId: 'command', content: 'done', createdAt: '2026-10-26T00:00:02Z' },
+    ];
+    const items = projectHistoryView(rows, false, true);
+    const summary = historyWorkSummaries(items)[0];
+    const intents: string[][] = [];
+    const queue = { tail: Promise.resolve() };
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: async (ref, after) => {
+        assertSharedTaskInvoke(capture(), { channel: 'local-db:messages:work-details', args: ['task', ref, { after }] });
+        return { version: 1, messages: rows, hasMore: false, nextCursor: null };
+      },
+      expanded: async (refs) => {
+        assertSharedTaskInvoke(capture(), { channel: 'local-db:messages:view-intent', args: ['task', refs] });
+        intents.push(refs.map(ref => ref.key));
+      },
+    }, queue);
+    try {
+      expect(summary.artifacts).toHaveLength(1);
+      await view.refresh();
+      await queue.tail;
+      if (mode === 'expand') {
+        view.setExpanded(summary.key, true);
+        await view.loadDetails(summary);
+        await queue.tail;
+        expect(intents).toContainEqual([summary.key]);
+      } else {
+        expect(await view.locate('c1', rows[0].createdAt)).toEqual(rows[0]);
+        expect(view.getSnapshot().expanded.size).toBe(0);
+      }
+      expect(view.getSnapshot().details.get(summary.key)).toMatchObject({ complete: true, error: null, messages: rows });
+      expect(historyWorkSummaries(view.getSnapshot().items)[0].artifacts).toEqual(summary.artifacts);
+    } finally {
+      view.setActive(false);
+      await queue.tail;
     }
   });
   it.each([

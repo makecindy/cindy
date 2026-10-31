@@ -1076,7 +1076,7 @@ describe('device-link controller mirror — end-to-end scenarios', () => {
       finish();
       await flush();
       await flush();
-      expect(applied.at(-1)).toEqual([work.type === 'work' ? work.summary : undefined]);
+      expect(applied.at(-1)).toEqual([{ key: work.key, firstMessageId: 'work', lastMessageId: 'work' }]);
       expect(getRemoteHistoryView(s)).toBe(current);
     } finally {
       finish();
