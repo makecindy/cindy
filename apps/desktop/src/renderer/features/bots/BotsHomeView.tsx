@@ -20,6 +20,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useBotTranslation } from './botPronounContext';
 
 import { Spinner } from '@/components/ui/spinner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useProviders } from '@/hooks/useProviders';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
@@ -109,6 +110,7 @@ export function BotSettings({
   onOpenSession: (sessionId: string, searchJump?: ConversationSearchJump) => void;
 }) {
   const { t } = useBotTranslation();
+  const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
   // The computer these pages read from and write to: this one, or the teammate's own computer.
   const target = useBotSettingsTarget();
@@ -233,17 +235,39 @@ export function BotSettings({
     commit: commitProfile,
   });
 
-  const canLeave = useCallback(async () => {
+  /** Leaving with `allowDiscard` offers to drop a draft the host keeps rejecting; staying flows never discard. */
+  const canLeave = useCallback(async (allowDiscard = true) => {
     if (avatarInFlight.current) return false;
     await autosave.flush();
-    if (autosave.isDirty()) return false;
+    if (autosave.isDirty()) {
+      // A save the host keeps rejecting must not trap the user in settings.
+      if (!allowDiscard || !autosave.failed()) return false;
+      const discard = await confirm({
+        presentation: 'standard',
+        title: t('bots.autosave.unsavedTitle'),
+        description: t('bots.autosave.unsavedDescription'),
+        confirmText: t('bots.autosave.discard'),
+        cancelText: t('bots.autosave.continueEditing'),
+      });
+      if (!discard) return false;
+      autosave.discard();
+      const saved = savedSettingsRef.current;
+      setName(saved.name);
+      setDescription(saved.description);
+      setIdentitySource(saved.identitySource);
+      setUserContextSource(saved.userContextSource);
+      setAvatar(saved.avatar);
+      setAvatarColor(saved.avatarColor);
+      setSelectedSkills(saved.skills);
+      setCapabilities(saved.capabilities);
+    }
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     return (await routineLeaveRef.current?.()) ?? true;
-  }, [autosave.flush, autosave.isDirty]);
+  }, [autosave, confirm, t]);
   useEffect(() => {
     if (!beforeCloseRef) return;
-    beforeCloseRef.current = canLeave;
+    beforeCloseRef.current = () => canLeave();
     return () => {
       beforeCloseRef.current = null;
     };
@@ -433,7 +457,7 @@ export function BotSettings({
             onConfigureModel={page === 'model' ? undefined : () => go('model')}
             onRetry={async () => {
               // A retry must use the confirmed selection, never race an autosave.
-              if (!await canLeave()) throw new Error('Bot settings have not been saved');
+              if (!await canLeave(false)) throw new Error('Bot settings have not been saved');
               await target.profile.retryInvitation(bot.id);
             }} />
         ) : null}

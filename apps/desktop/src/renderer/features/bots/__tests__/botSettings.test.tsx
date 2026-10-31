@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as renderUnwrapped, screen, waitFor, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BotCapabilities, BotModelRoute, BotProfile } from '../botStore';
 import { MainViewHistoryContext, type MainViewHistory } from '@/contexts/MainViewHistoryContext';
@@ -160,6 +161,9 @@ vi.mock('../voice/CompanionVoiceSettings', () => ({
 
 import { BotsHomeView, BotSettings } from '../BotsHomeView';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+
+// The app root provides the confirm dialog; BotSettings asks it before discarding unsaveable drafts.
+const render = (ui: ReactElement) => renderUnwrapped(ui, { wrapper: ConfirmDialogProvider });
 
 function capabilities(overrides: Partial<BotCapabilities> = {}): BotCapabilities {
   return {
@@ -558,7 +562,7 @@ describe('Bot settings profile consolidation', () => {
     const list = vi.fn(async () => ({ items: [] }));
     (api.localDb.bots as Record<string, unknown>).todos = { list };
     mocks.initialSearch = 'settings=1&tab=growth';
-    render(<ConfirmDialogProvider><BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} /></ConfirmDialogProvider>);
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
     await waitFor(() => expect(api.routines.list).toHaveBeenCalled());
     expect(screen.queryByRole('region', { name: 'teammateTodo.title' })).toBeNull();
@@ -599,18 +603,29 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
-  it('keeps the current inner page and its draft when saving before navigation fails', async () => {
+  it('asks before leaving a draft the host keeps rejecting, keeping it unless discarded', async () => {
+    // Regression: a rejected save (e.g. the primary model provider is down) made every close
+    // path silently refuse, so the drawer could only be dismissed by quitting the app.
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
     render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    // Back offers to discard too; keeping the draft stays on the page with the failure visible.
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.continueEditing' }));
     await screen.findByRole('button', { name: 'bots.autosave.retry' });
     expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
-    let allowed = true;
-    await act(async () => { allowed = await beforeCloseRef.current!(); });
-    expect(allowed).toBe(false);
+
+    let leaving = beforeCloseRef.current!();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.continueEditing' }));
+    expect(await leaving).toBe(false);
+    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
+
+    leaving = beforeCloseRef.current!();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.autosave.discard' }));
+    expect(await leaving).toBe(true);
+    await waitFor(() => expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe(bot().name));
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {
