@@ -591,6 +591,40 @@ describe('MakerScheduleRunner model selection', () => {
       expect(harness.closeSession).toHaveBeenCalledTimes(mode === 'rebuild' ? 1 : 0);
     });
 
+  // 测试价值
+  // - 生产入口与可观察结果：MakerScheduleRunner.fire；持久目标已删除时立即运行应创建替代任务并发送。
+  // - Bug／依据：#8018；runner 在重绑前仍会恢复旧队列并获取旧任务的模型切换锁。
+  // - 现有覆盖缺口：已有重绑用例允许 acquirePendingAgentSwitch 成功，未覆盖旧目标生命周期操作先失败。
+  // - 最小失败输入：deleted 持久目标，且旧任务的 acquirePendingAgentSwitch 会拒绝。
+  // - tier：unit；复用本文件的内存 runner fixture。
+  it('rebinds a deleted persistent target before touching its pending model switch', async () => {
+    const h = createSessionHarness();
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'deleted' });
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      throw new Error('target session is deleted');
+    });
+    const update = vi.fn(async () => undefined);
+    const harness = createRunnerHarness(h, null, {
+      acquirePendingAgentSwitch,
+      resolveModelSelection: async (choice) => choice,
+    });
+    harness.runner.attachScheduler({ update, isRunSilenced: () => false } as unknown as Scheduler);
+
+    await fireToCompletion(harness, h, baseSchedule({
+      targetSessionId: h.session.id,
+      persistentSession: true,
+      agentKind: 'codex',
+      modelAgentKind: 'codex',
+      model: 'gpt-5.5',
+    }));
+
+    expect(harness.createSession).toHaveBeenCalledOnce();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('schedule-1', { targetSessionId: undefined });
+    expect(update).toHaveBeenCalledWith('schedule-1', { targetSessionId: h.session.id });
+  });
+
     it.each(['active', 'deleted', 'missing'] as const)('uses the explicit Pi route for a %s Codex target', async (status) => {
       const h = createSessionHarness();
       Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
@@ -631,7 +665,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionProvider).toHaveBeenCalledWith(h.session.id, 'selected');
       expect(h.setEffort.mock.calls.flat()).not.toContain('low');
       expect(schedule).toEqual(saved);
-      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(status === 'active' ? 1 : 0);
       if (status !== 'active') {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: undefined });
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });

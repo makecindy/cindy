@@ -881,14 +881,18 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // A scheduled message restores its ordinary target just like user input.
     // Do this before hooks/model selection, while keeping deleted-target behavior
     // and service-owned Bot lifecycle separate.
-    if (schedule.source !== 'bot' && schedule.targetSessionId) {
-      const target = await getSessionRowSnapshot(schedule.targetSessionId);
-      if (target && !schedule.persistentSession && (target.status === 'deleted'
+    let persistentTargetUnavailable = false;
+    if (schedule.targetSessionId) {
+      const targetSessionId = schedule.targetSessionId;
+      const target = await getSessionRowSnapshot(targetSessionId);
+      if (schedule.source !== 'bot' && target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
       }
-      if (target && target.status !== 'deleted') {
-        await restoreScheduledTarget(schedule.targetSessionId, target, ctx.signal);
+      persistentTargetUnavailable = schedule.source !== 'bot' && schedule.persistentSession === true
+        && (!target || target.status === 'deleted');
+      if (schedule.source !== 'bot' && target && target.status !== 'deleted') {
+        await restoreScheduledTarget(targetSessionId, target, ctx.signal);
       }
     }
 
@@ -1027,8 +1031,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
       // 直发路径不经过 makerSendTransaction。先落实 pending switch,再读取 meta/row,
       // 才能让本轮 createSession 与 send 都指向切换后的 live engine。
       throwIfFireAborted(ctx.signal, 'credential switch setup');
-      const restorePending = await this.restoreBoundQueue(schedule, ctx, sessionId);
-      if (restorePending) return restorePending;
+      if (!persistentTargetUnavailable) {
+        const restorePending = await this.restoreBoundQueue(schedule, ctx, sessionId);
+        if (restorePending) return restorePending;
+      }
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
           ? {
@@ -1040,29 +1046,31 @@ export class MakerScheduleRunner implements ScheduleRunner {
               fastMode: (schedule.fastMode === 'ultrafast' ? 'ultrafast' : schedule.fastMode === true),
             }
           : undefined;
-      if (selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
+      if (!persistentTargetUnavailable && selection && this.deps.schedulerQueue?.isSessionBusy(sessionId)) {
         return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
       }
-      if (selection && !this.deps.acquirePendingAgentSwitch) {
+      if (!persistentTargetUnavailable && selection && !this.deps.acquirePendingAgentSwitch) {
         throw new Error('Scheduled model selection is not available');
       }
-      try {
-        const lease = await (selection
-          ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection)
-          : schedule.model?.trim()
-          ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, undefined, true)
-          : this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal));
-        holder.releaseAgentSwitchLock = typeof lease === 'function' ? lease : lease?.release;
-        if (selection) {
-          if (!lease || typeof lease === 'function')
-            throw new Error('Scheduled model selection was not resolved');
-          resolvedSelection = lease.selection;
+      if (!persistentTargetUnavailable) {
+        try {
+          const lease = await (selection
+            ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, selection)
+            : schedule.model?.trim()
+            ? this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal, undefined, true)
+            : this.deps.acquirePendingAgentSwitch?.(sessionId, ctx.signal));
+          holder.releaseAgentSwitchLock = typeof lease === 'function' ? lease : lease?.release;
+          if (selection) {
+            if (!lease || typeof lease === 'function')
+              throw new Error('Scheduled model selection was not resolved');
+            resolvedSelection = lease.selection;
+          }
+        } catch (error) {
+          if (error instanceof ScheduledModelSelectionBusyError) {
+            return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
+          }
+          throw error;
         }
-      } catch (error) {
-        if (error instanceof ScheduledModelSelectionBusyError) {
-          return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
-        }
-        throw error;
       }
       throwIfFireAborted(ctx.signal, 'credential switch setup');
       const [meta, row] = await Promise.all([
