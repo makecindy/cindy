@@ -241,7 +241,14 @@ export function botGroupThreadShareOperationId(messageId: string): string {
 
 export function buildBotGroupThreadShareCard(input: { messageId: string; threadRootId: string; authorName: string; text: string }) {
   const text = input.text.replace(/\s+/g, ' ').trim();
-  const clipped = text.length > THREAD_SHARE_FALLBACK_TEXT_MAX ? `${text.slice(0, THREAD_SHARE_FALLBACK_TEXT_MAX)}…` : text;
+  let clipped = text;
+  if (text.length > THREAD_SHARE_FALLBACK_TEXT_MAX) {
+    let end = THREAD_SHARE_FALLBACK_TEXT_MAX;
+    // Never split a surrogate pair (emoji and other astral characters are two UTF-16 units).
+    const high = text.charCodeAt(end - 1);
+    if (high >= 0xd800 && high <= 0xdbff) end -= 1;
+    clipped = `${text.slice(0, end)}…`;
+  }
   const author = input.authorName.trim() || '…';
   return {
     type: 'card' as const, namespace: BOT_GROUP_THREAD_SHARE_NAMESPACE, schemaRevision: THREAD_SHARE_REVISION,
