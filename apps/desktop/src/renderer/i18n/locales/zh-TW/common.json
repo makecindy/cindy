@@ -3575,6 +3575,8 @@
         "simpleSubtitle": "多種模型，統一帳戶結算。"
       },
       "custom": {
+        "nameSearchUnavailable": "此供應商目前無法使用，可繼續設定自訂端點或重新搜尋。",
+        "nameSearchHint": "也可以保留目前名稱，繼續設定自訂端點。",
         "tag": "自定義",
         "editAria": "編輯連線設定",
         "deleteAria": "刪除",

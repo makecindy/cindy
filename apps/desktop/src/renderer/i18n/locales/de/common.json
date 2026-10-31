@@ -3616,6 +3616,8 @@
         "simpleSubtitle": "Mehrere Modelle, Abrechnung über ein Konto."
       },
       "custom": {
+        "nameSearchUnavailable": "Dieser Anbieter ist nicht mehr verfügbar. Fahre mit einem benutzerdefinierten Endpunkt fort oder suche erneut.",
+        "nameSearchHint": "Du kannst diesen Namen beibehalten und mit einem benutzerdefinierten Endpunkt fortfahren.",
         "tag": "Benutzerdefiniert",
         "editAria": "Verbindungseinstellungen bearbeiten",
         "deleteAria": "Löschen",

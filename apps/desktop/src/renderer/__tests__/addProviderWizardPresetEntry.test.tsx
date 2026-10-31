@@ -9,7 +9,7 @@
  *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -55,6 +55,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
+import { toast } from '@/lib/toast';
 import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
 import { AddSpeechModelsDialog } from '@/components/settings/AddSpeechModelsDialog';
 import { UnifiedModelList } from '@/components/settings/UnifiedModelList';
@@ -2044,4 +2045,173 @@ describe('general manual fallback beside speech suggestions', () => {
     await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
     expect(screen.queryByPlaceholderText('settings.providers.wizard.manualModelPlaceholder')).toBeNull();
   });
+});
+
+
+it('focuses a search target and reports a missing or empty-directory target to its caller', async () => {
+  const onUnavailable = vi.fn();
+  const { unmount } = render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect((document.activeElement as HTMLInputElement)?.value).toBe('DeepSeek'));
+  expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  unmount();
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [] });
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'gone' }} onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledTimes(1));
+});
+
+// #8065 r4430831420: unit/jsdom, real connector entry and mocked IPC.
+// Existing coverage checked only callback count, not its failure reason or toast.
+// A non-ready result or rejected ensure must keep its specific error, not claim
+// that the still-valid provider disappeared from the catalog.
+it.each([
+  ['port-conflict', 'settings.providers.local.conflict'],
+  ['stopped', 'settings.providers.local.status.stopped'],
+  ['ollama-error', 'settings.providers.local.connectFailed'],
+  ['llamacpp-error', 'settings.providers.llamacpp.failed'],
+] as const)('returns a connection-failed reason for %s', async (failure, message) => {
+  const onUnavailable = vi.fn();
+  const onDone = vi.fn();
+  const connector = vi.fn(async () => {
+    if (failure.endsWith('-error')) throw new Error('connector failed');
+    return { runtime: 'ollama' as const, kind: failure, appInstalled: false };
+  });
+  Object.assign(window.electronAPI.maker, failure === 'llamacpp-error'
+    ? { llamaCppEnsure: connector } : { localModelStatus: connector });
+  render(<AddProviderWizard providers={[]} entry={{ kind: failure === 'llamacpp-error' ? 'llamacpp' : 'ollama' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledWith('connection-failed'));
+  expect(onUnavailable).toHaveBeenCalledOnce();
+  expect(connector).toHaveBeenCalledOnce();
+  expect(toast.error).toHaveBeenCalledExactlyOnceWith(message);
+  expect(onDone).not.toHaveBeenCalled();
+});
+
+
+it('keeps the Ollama search handoff open while connecting so Escape cannot restore a soon-to-be-discarded draft', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const localModelStatus = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  const localModelEnsure = vi.fn(async () => ({ ok: true }));
+  Object.assign(window.electronAPI.maker, { localModelStatus, localModelEnsure });
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'ollama' }} onOpenCustomForm={vi.fn()} onClose={onClose} onDone={onDone} />);
+  await waitFor(() => expect(localModelStatus).toHaveBeenCalledOnce());
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+  expect(localModelEnsure).toHaveBeenCalledOnce();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it('blocks supplier switches and custom-form navigation until the Ollama search connection settles', async () => {
+  let ready!: (value: { kind: 'ready' }) => void;
+  const status = vi.fn(() => new Promise(resolve => { ready = resolve; }));
+  Object.assign(window.electronAPI.maker, { localModelStatus: status, localModelEnsure: vi.fn(async () => ({ ok: true })) });
+  const onOpenCustomForm = vi.fn();
+  const onDone = vi.fn();
+  render(<AddProviderWizard providers={[anthropicProvider]} entry={{ kind: 'ollama' }} onOpenCustomForm={onOpenCustomForm} onClose={vi.fn()} onDone={onDone} />);
+  await screen.findByRole('button', { name: /DeepSeek/ });
+  fireEvent.click(screen.getByRole('button', { name: /DeepSeek/ }));
+  expect(screen.queryByPlaceholderText('sk-…')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+  expect(screen.getByRole('button', { name: /settings.providers.wizard.customAction/ })).toBeTruthy();
+  expect(screen.queryByText('settings.providers.localAccount.useClaude')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /settings.providers.wizard.customAction/ }));
+  expect(onOpenCustomForm).not.toHaveBeenCalled();
+  ready({ kind: 'ready' });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+});
+
+// #8065 r4430752290: existing entry tests resolve the directory before switching.
+// Renderer unit, deferred IPC: each public choice must keep its own setup/input
+// when the original search entry's directory subsequently resolves or rejects.
+it.each(['oauth', 'oauth-api', 'builtin-key', 'ollama', 'failed-directory'] as const)(
+  'keeps the newer %s choice after the search directory settles', async choice => {
+    let resolve!: (value: { presets: typeof deepseekPreset[] }) => void;
+    let reject!: (error: Error) => void;
+    window.electronAPI.maker.listProviderPresets = vi.fn(() => new Promise<{ presets: typeof deepseekPreset[] }>((ok, fail) => { resolve = ok; reject = fail; }));
+    window.electronAPI.maker.localModelStatus = vi.fn(async () => ({ runtime: 'ollama' as const, kind: 'absent' as const, appInstalled: false, canInstallRuntime: false }));
+    if (choice === 'ollama') Object.assign(window.electronAPI.maker, {
+      onLocalModelInstallProgress: vi.fn(() => () => undefined),
+      onLocalModelStatus: vi.fn(() => () => undefined),
+    });
+    const mediaProvider = { ...anthropicProvider, id: 'gemini', name: 'Media Only', agents: [], models: {},
+      auth: { method: 'apiKey' }, embeddingModels: [{ id: 'embedding', name: 'Embedding' }] } as ProviderView;
+    const onUnavailable = vi.fn();
+    render(<AddProviderWizard providers={[anthropicProvider, mediaProvider]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+      onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByRole('button', { name: /Anthropic/ });
+    if (choice === 'ollama') {
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder'), { target: { value: 'ollama' } });
+      fireEvent.click(await screen.findByRole('button', { name: /settings.providers.local.title/ }));
+      await screen.findByText('settings.providers.local.onboardingTitle');
+    } else if (choice === 'builtin-key') {
+      fireEvent.click(screen.getByRole('button', { name: /Media Only/ }));
+      fireEvent.change(screen.getByRole('dialog').querySelector('input[type="password"]')!, { target: { value: 'unsaved-key' } });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+      if (choice === 'oauth-api') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.useApiKey' }));
+        fireEvent.change(screen.getByDisplayValue('Anthropic API'), { target: { value: 'My latest provider' } });
+      }
+    }
+    await act(async () => {
+      if (choice === 'failed-directory') reject(new Error('directory unavailable'));
+      else resolve({ presets: [deepseekPreset] });
+    });
+    if (choice === 'ollama') expect(screen.getByText('settings.providers.local.onboardingTitle')).toBeTruthy();
+    else if (choice === 'builtin-key') expect(screen.getByDisplayValue('unsaved-key')).toBeTruthy();
+    else if (choice === 'oauth-api') expect(screen.getByDisplayValue('My latest provider')).toBeTruthy();
+    else expect(screen.getByRole('button', { name: 'settings.providers.localAccount.useClaude' })).toBeTruthy();
+    expect(onUnavailable).not.toHaveBeenCalled();
+  },
+);
+
+it('returns the untouched search draft once when its directory fails', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const onUnavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'missing-remote-only' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledOnce());
+});
+
+// #8065 r4431018996: renderer unit; prior failed-directory coverage only used
+// a missing remote preset. A rejected catalog must retain static speech/official
+// setup for search callers and direct deep links rather than strand step 1.
+it.each([
+  { presetId: 'elevenlabs-api', name: 'ElevenLabs', search: true },
+  { presetId: 'elevenlabs-api', name: 'ElevenLabs', search: false },
+  { presetId: 'anthropic-api', name: 'Anthropic API', search: true },
+  { presetId: 'anthropic-api', name: 'Anthropic API', search: false },
+])('opens fallback $presetId after catalog failure (search=$search)', async ({ presetId, name, search }) => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId }}
+    onEntryUnavailable={search ? unavailable : undefined} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(await screen.findByDisplayValue(name)).toBeTruthy();
+  expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  expect(unavailable).not.toHaveBeenCalled();
+});
+
+// #8065 r4431297879: name search retains bundled targets when IPC fails.
+// Cover both search and ordinary deep links, plus an explicit ready-empty result
+// so an actual target removal is not silently resurrected by the offline copy.
+it.each([true, false])('opens bundled DeepSeek when directory IPC fails (search=%s)', async search => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={search ? unavailable : undefined} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(await screen.findByDisplayValue('DeepSeek')).toBeTruthy();
+  expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  expect(unavailable).not.toHaveBeenCalled();
+});
+it('respects an explicitly empty live directory for a bundled search target', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [] });
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
+  expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
 });

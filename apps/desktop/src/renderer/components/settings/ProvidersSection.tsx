@@ -3586,15 +3586,21 @@ export function ProvidersSection() {
           entry={wizard.entry}
           detected={wizard.detected}
           onReturnCustom={(draft) => { setWizard(null); setDialog({ mode: 'create', draft }); }}
+          onEntryUnavailable={dialog?.mode === 'create' ? (reason) => {
+            setWizard(null);
+            if (reason !== 'connection-failed') toast.error(t('settings.providers.custom.nameSearchUnavailable'));
+          } : undefined}
           onOpenCustomForm={() => {
             setWizard(null);
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
-            await refetch();
-            setWizard(null);
+            // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
+            setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             if (providerId) selectProvider(providerId);
+            await refetch();
+            setWizard(current => current === wizard ? null : current);
           }}
         />
       )}
@@ -3603,6 +3609,9 @@ export function ProvidersSection() {
         <ProviderConnectionDialog
           draft={dialog.mode === 'create' ? dialog.draft : undefined}
           onDetected={(detected) => { setDialog(null); setWizard({ detected }); }}
+          providers={providers}
+          suspended={dialog.mode === 'create' && !!wizard}
+          onSelectProvider={dialog.mode === 'create' ? entry => setWizard({ entry }) : undefined}
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
           catalogModels={dialog.mode === 'edit' ? providers.find(p =>
             p.source === 'user' && storedCustomProviderId(p.id) === dialog.config.id)?.models : undefined}

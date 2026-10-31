@@ -1,4 +1,5 @@
-import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
+import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
+import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
@@ -28,7 +29,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
-import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
+import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
@@ -43,10 +44,9 @@ import {
 import { extractIpcError } from '@/utils/ipcError';
 import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
-import { providerMonogram } from '@/lib/providerModels';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
-import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
 import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -57,7 +57,6 @@ import { SpeechModelChoices } from './SpeechModelChoices';
 import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTarget, withSpeechApiPresets } from '../../../shared/speechProviderSetup';
 
 import {
-  PROVIDER_MEDIA_FIELDS,
   providerModelsForRoute,
   isOpenRouterModelsUrl,
   isLoopbackProviderUrl,
@@ -79,14 +78,15 @@ import type {
  *   - builtin(左栏检测建议 / 引导卡 OAuth 行):直接进入该内置渠道的授权步。
  *   - preset(引导卡「其他供应商」行):presets 异步载入后直达该预设的表单步。
  */
-export type WizardEntry =
-  { kind: 'builtin'; providerId: string } | { kind: 'preset'; presetId: string; speechOnly?: boolean };
+export type WizardEntry = ProviderSearchTarget;
 
 interface AddProviderWizardProps {
   detected?: DetectedProviderDraft;
   onReturnCustom?: (draft: DetectedProviderDraft) => void;
   providers: ProviderView[];
   entry?: WizardEntry;
+  /** 连接失败已在向导内提示；父级只恢复草稿，不再提示目录目标失效。 */
+  onEntryUnavailable?: (reason?: 'target-unavailable' | 'connection-failed') => void;
   /** 「自定义端点」卡片 → 关闭向导并打开完整表单。 */
   onOpenCustomForm: () => void;
   onClose: () => void;
@@ -271,72 +271,6 @@ export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
   },
 };
 
-/** 供应商卡片图标。 */
-function cardIcon(sel: { providerId?: string; name: string }): React.ReactNode {
-  if (sel.providerId && hasProviderLogo(sel.providerId)) {
-    return <ProviderLogoMark providerId={sel.providerId} size={15} />;
-  }
-  return <span className="text-12 font-medium leading-none">{providerMonogram(sel.name)}</span>;
-}
-
-/**
- * 目录单行(2026-07 定稿:第 1 步由三列卡片宫格改为单列列表)——名称在左、
- * 鉴权方式靠右;行宽给足后不再需要截断测量 + Tip 组合。
- */
-function ProviderRow({
-  icon,
-  name,
-  meta,
-  beta,
-  busy,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  name: string;
-  meta: string;
-  beta?: boolean;
-  busy?: boolean;
-  onClick: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={name}
-      disabled={busy}
-      aria-busy={busy}
-      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]"
-    >
-      <span
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-        style={{
-          backgroundColor: 'var(--settings-integration-avatar-bg)',
-          border: '1px solid var(--settings-integration-avatar-border)',
-          color: 'var(--settings-integration-avatar-icon)',
-        }}
-      >
-        {busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : icon}
-      </span>
-      <span
-        className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{ color: 'var(--settings-section-title)' }}
-      >
-        {name}
-      </span>
-      {beta && (
-        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
-          {t('settings.providers.local.beta')}
-        </span>
-      )}
-      {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
-      <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>
-        {meta}
-      </span>
-    </button>
-  );
-}
-
 function InfoLine({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-2 text-12" style={{ color: 'var(--text-tertiary)' }}>
@@ -357,15 +291,12 @@ function GroupLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function hasRetainedBuiltinConnection(provider: ProviderView): boolean {
-  return !provider.removed && (provider.connected || provider.removed === false);
-}
-
 export function AddProviderWizard({
   detected,
   onReturnCustom,
   providers,
   entry,
+  onEntryUnavailable,
   onOpenCustomForm: openCustomForm,
   onClose: notifyClosed,
   onDone: notifyDone,
@@ -385,6 +316,12 @@ export function AddProviderWizard({
   );
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const [presetsLoadState, setPresetsLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const presetEntryConsumedRef = useRef<string | null>(null);
+  // 用户改选后，原搜索入口就已消费；目录迟到的成功/失败均不得再接管新选择。
+  const consumePresetEntry = useCallback(() => {
+    if (entry?.kind === 'preset') presetEntryConsumedRef.current = entry.presetId;
+  }, [entry]);
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -480,9 +417,9 @@ export function AddProviderWizard({
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) setPresets(withSpeechApiPresets(r.presets));
+        if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoadState('ready'); }
       })
-      .catch(() => { if (!cancelled) setPresets(withSpeechApiPresets([])); });
+      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets(BUNDLED_CATALOG.presets ?? [])); setPresetsLoadState('failed'); } });
     return () => {
       cancelled = true;
     };
@@ -526,28 +463,14 @@ export function AddProviderWizard({
   // Native subscription brands remain available for adding another independent account.
   const oauthChoices = useMemo(
     () =>
-      providers.filter(
-        (p) =>
-          p.id !== 'xd' &&
-          p.source === 'builtin' &&
-          (!hasRetainedBuiltinConnection(p) || ['anthropic', 'openai', 'xai'].includes(p.id)) &&
-          (['anthropic', 'openai', 'xai'].includes(p.id) ||
-            (p.auth.method === 'oauth' && !!p.auth.oauth)),
-      ),
+      providers.filter(isWizardOAuthChoice),
     [providers],
   );
   // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目):
   // 已添加（包括断开后保留）的连接不再进向导；声明了媒体清单才展示。
   const builtinApiKeyChoices = useMemo(
     () =>
-      providers.filter(
-        (p) =>
-          p.source === 'builtin' &&
-          p.auth.method === 'apiKey' &&
-          isBuiltinApiKeyProviderId(p.id) &&
-          !hasRetainedBuiltinConnection(p) &&
-          PROVIDER_MEDIA_FIELDS.some((field) => (p[field]?.length ?? 0) > 0),
-      ),
+      providers.filter(isWizardApiKeyChoice),
     [providers],
   );
   const sortedPresets = useMemo(
@@ -651,6 +574,8 @@ export function AddProviderWizard({
   }, []);
 
   const pickOauth = useCallback((provider: ProviderView) => {
+    if (savingRef.current) return;
+    consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -659,8 +584,10 @@ export function AddProviderWizard({
     setSel({ kind: 'oauth', provider });
     setApiKey('');
     setStep(2);
-  }, []);
+  }, [consumePresetEntry]);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
+    if (savingRef.current) return;
+    consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -669,9 +596,10 @@ export function AddProviderWizard({
     setSel({ kind: 'builtinApiKey', provider });
     setApiKey('');
     setStep(2);
-  }, []);
+  }, [consumePresetEntry]);
   const connectLlamaCpp = useCallback(async () => {
     if (savingRef.current) return;
+    consumePresetEntry();
     if (providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
       onDone(MANAGED_LLAMACPP_PROVIDER_ID);
       return;
@@ -683,14 +611,17 @@ export function AddProviderWizard({
       await onDone(MANAGED_LLAMACPP_PROVIDER_ID);
     } catch {
       toast.error(t('settings.providers.llamacpp.failed'));
+      if (entry?.kind === 'llamacpp') onEntryUnavailable?.('connection-failed');
     } finally {
       savingRef.current = false;
       setSaving(false);
     }
-  }, [onDone, providers, t]);
+  }, [onDone, providers, t, entry, onEntryUnavailable, consumePresetEntry]);
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
+      if (savingRef.current) return;
+      consumePresetEntry();
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -718,10 +649,13 @@ export function AddProviderWizard({
       setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers, pickOauth],
+    [i18n.language, onDone, providers, pickOauth, consumePresetEntry],
   );
 
   const connectOllama = useCallback(async () => {
+    if (savingRef.current) return;
+    consumePresetEntry();
+    savingRef.current = true;
     setSaving(true);
     try {
       let status = await window.electronAPI.maker.localModelStatus();
@@ -738,14 +672,16 @@ export function AddProviderWizard({
       }
       if (status.kind === 'port-conflict') {
         toast.error(t('settings.providers.local.conflict'));
+        if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
         return;
       }
       if (status.kind !== 'ready') {
         toast.error(t(`settings.providers.local.status.${status.kind}`));
+        if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
         return;
       }
       await window.electronAPI.maker.localModelEnsure();
-      onDone(MANAGED_OLLAMA_PROVIDER_ID);
+      await onDone(MANAGED_OLLAMA_PROVIDER_ID);
     } catch (error) {
       const code = extractIpcError(error)?.code;
       toast.error(
@@ -753,22 +689,42 @@ export function AddProviderWizard({
           ? t('settings.providers.local.notReady')
           : t('settings.providers.local.connectFailed'),
       );
+      if (entry?.kind === 'ollama') onEntryUnavailable?.('connection-failed');
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }, [onDone, t]);
+  }, [onDone, t, entry, onEntryUnavailable, consumePresetEntry]);
+
+  useEffect(() => {
+    if (entry?.kind === 'builtin' && !providers.some(p => p.id === entry.providerId)) onEntryUnavailable?.();
+  }, [entry, providers, onEntryUnavailable]);
+
+  const llamaCppEntryConsumed = useRef(false);
+  useEffect(() => {
+    if (entry?.kind !== 'llamacpp' || llamaCppEntryConsumed.current) return;
+    llamaCppEntryConsumed.current = true;
+    void connectLlamaCpp();
+  }, [entry, connectLlamaCpp]);
+
+  const ollamaEntryConsumed = useRef(false);
+  useEffect(() => {
+    if (entry?.kind !== 'ollama' || ollamaEntryConsumed.current) return;
+    ollamaEntryConsumed.current = true;
+    void connectOllama();
+  }, [entry, connectOllama]);
 
   // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
   // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
   // (如深链二次进入)仍能直达,同一 entry 不重复触发。
-  const presetEntryConsumedRef = useRef<string | null>(null);
   useEffect(() => {
     if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
-    if (presets.length === 0) return;
+    if (presetsLoadState === 'loading') return;
     presetEntryConsumedRef.current = entry.presetId;
     const preset = presets.find((p) => p.id === entry.presetId) ?? [...Object.values(OFFICIAL_API_PRESETS), ...SPEECH_API_PRESETS].find(p => p.id === entry.presetId);
     if (preset) pickPreset(preset, entry.speechOnly === true);
-  }, [entry, presets, pickPreset]);
+    else onEntryUnavailable?.();
+  }, [entry, presets, presetsLoadState, pickPreset, onEntryUnavailable]);
 
   const localLoginRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => () => {
@@ -1532,6 +1488,17 @@ export function AddProviderWizard({
     (!presetNeedsApiKey || apiKey.trim().length > 0 || (detected?.catalog?.ok === true && apiKey === detected.apiKey
       && presetRuntimeBaseUrl(sel.preset, detected.agent, presetBaseUrls) === detected.preset.runtimes[detected.agent]?.baseUrl));
 
+  // The existing Radix dialog owns focus; refocus once the asynchronous search target is ready.
+  const searchTargetFocused = useRef(false);
+  useEffect(() => {
+    if (!onEntryUnavailable || step !== 2 || searchTargetFocused.current) return;
+    const frame = requestAnimationFrame(() => {
+      const target = panelRef.current?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])');
+      if (target) { target.focus(); searchTargetFocused.current = true; }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [onEntryUnavailable, step]);
+
   const wizardTitle = sel
               ? t('settings.providers.wizard.titleWith', {
                   name:
@@ -1576,7 +1543,8 @@ export function AddProviderWizard({
           {step === 1 ? (
             <button
               type="button"
-              onClick={onOpenCustomForm}
+              disabled={saving}
+              onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
               className="min-h-6 shrink-0 rounded-full py-1 text-11 font-medium text-[var(--accent-emphasis)] underline underline-offset-4 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
             >
               {t('settings.providers.wizard.customAction')}
@@ -1728,11 +1696,7 @@ export function AddProviderWizard({
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
                         name={p.name}
-                        meta={t(
-                          OFFICIAL_API_PRESETS[p.id]
-                            ? 'settings.providers.wizard.metaOAuthOrApi'
-                            : 'settings.providers.wizard.metaOAuth',
-                        )}
+                        meta={t(`settings.providers.${builtinChoiceMeta(p, !!OFFICIAL_API_PRESETS[p.id])}`)}
                         onClick={() => pickOauth(p)}
                       />
                     ))}
@@ -1774,56 +1738,47 @@ export function AddProviderWizard({
                           onClick={() => pickBuiltinApiKey(p)}
                         />
                       ))}
-                    {filteredPresets.map((p) => (
-                      <ProviderRow
-                        key={p.id}
-                        icon={cardIcon({
-                          providerId: p.id,
-                          name: presetDisplayName(p, i18n.language),
-                        })}
-                        name={presetDisplayName(p, i18n.language)}
-                        meta={
-                          isMimoTokenPlanPreset(p)
-                            ? t('settings.providers.models.subscriptionProduct', {
-                                product: 'MiMo Token Plan',
-                              })
-                            : t(
-                                providerPresetOAuth(p.id)
-                                  ? 'settings.providers.wizard.metaLoginOrApi'
-                                  : p.authMethod === 'none'
-                                    ? 'settings.providers.wizard.metaNoAuth'
-                                    : 'settings.providers.wizard.metaApiKey',
-                              )
-                        }
-                        beta={isLocalRuntimeBetaProviderId(p.id)}
-                        onClick={() => pickPreset(p)}
-                      />
-                    ))}
+                    {filteredPresets.map((p) => {
+                      const meta = presetChoiceMeta(p);
+                      return (
+                        <ProviderRow
+                          key={p.id}
+                          icon={cardIcon({
+                            providerId: p.id,
+                            name: presetDisplayName(p, i18n.language),
+                          })}
+                          name={presetDisplayName(p, i18n.language)}
+                          meta={t(`settings.providers.${meta.metaKey}`, meta.metaValues)}
+                          beta={isLocalRuntimeBetaProviderId(p.id)}
+                          onClick={() => pickPreset(p)}
+                        />
+                      );
+                    })}
                   </>
                 )}
                 {listedLocalPresets.length > 0 && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.moreLocal')}</GroupLabel>
-                    {listedLocalPresets.map((p) => (
-                      <ProviderRow
-                        key={p.id}
-                        icon={cardIcon({
-                          providerId: p.id,
-                          name: presetDisplayName(p, i18n.language),
-                        })}
-                        name={presetDisplayName(p, i18n.language)}
-                        meta={t(
-                          (LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(p.id)
-                            ? 'settings.providers.wizard.metaLocalConnect'
-                            : 'settings.providers.wizard.metaNoAuth',
-                        )}
-                        beta={isLocalRuntimeBetaProviderId(p.id)}
-                        onClick={() => pickPreset(p)}
-                      />
-                    ))}
+                    {listedLocalPresets.map((p) => {
+                      const meta = presetChoiceMeta(p);
+                      return (
+                        <ProviderRow
+                          key={p.id}
+                          icon={cardIcon({
+                            providerId: p.id,
+                            name: presetDisplayName(p, i18n.language),
+                          })}
+                          name={presetDisplayName(p, i18n.language)}
+                          meta={t(`settings.providers.${meta.metaKey}`, meta.metaValues)}
+                          beta={isLocalRuntimeBetaProviderId(p.id)}
+                          onClick={() => pickPreset(p)}
+                        />
+                      );
+                    })}
                   </>
                 )}
               </div>
+
             </>
           )}
 
