@@ -224,6 +224,7 @@ function normalizeComment(c) {
     id: c.id || null,
     databaseId: c.databaseId || null,
     author: c.author?.login || null,
+    authorIsBot: c.author?.__typename === 'Bot',
     body: c.body || '',
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,
@@ -248,6 +249,7 @@ function normalizeReview(r) {
   return {
     id: r.id || null,
     author: r.author?.login || null,
+    authorIsBot: r.author?.__typename === 'Bot',
     state: r.state || null,
     body: r.body || '',
     submittedAt: r.submittedAt || null,
@@ -264,6 +266,7 @@ function normalizeTopComment(c) {
   return {
     id: c.id || null,
     author: c.author?.login || null,
+    authorIsBot: c.author?.__typename === 'Bot',
     body: c.body || '',
     createdAt: c.createdAt || null,
     updatedAt: c.updatedAt || null,
@@ -318,7 +321,7 @@ query($owner: String!, $name: String!, $number: Int!) {
             nodes {
               id
               databaseId
-              author { login }
+              author { login __typename }
               body
               createdAt
               updatedAt
@@ -347,7 +350,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       reviews(last: 50) {
         nodes {
           id
-          author { login }
+          author { login __typename }
           state
           body
           submittedAt
@@ -358,7 +361,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       comments(last: 50) {
         nodes {
           id
-          author { login }
+          author { login __typename }
           body
           createdAt
           updatedAt

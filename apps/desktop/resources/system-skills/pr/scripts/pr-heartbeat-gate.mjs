@@ -632,12 +632,15 @@ function checkOutcome(check) {
 
 /**
  * PR 上的全部留言:顶层评论、有内容或有结论的 review、review thread 里的评论。只有内容的
- * 「COMMENTED」空 review 不单列 —— 它的内容就是 thread 里的那几条评论。
+ * 「COMMENTED」空 review 不单列 —— 它的内容就是 thread 里的那几条评论。人的编辑算新留言;
+ * 机器人编辑自己的评论不算(部署、覆盖率这类状态评论每次推送都会改写一遍)。
  */
+const remarkTime = (c) => (c?.authorIsBot ? c?.createdAt ?? c?.updatedAt : c?.updatedAt ?? c?.createdAt);
+
 export function remarksOf(snap) {
   const out = [];
   for (const c of snap?.comments ?? []) {
-    out.push({ id: c?.id, author: c?.author, at: c?.updatedAt ?? c?.createdAt, body: c?.body ?? '', path: null, url: c?.url ?? null });
+    out.push({ id: c?.id, author: c?.author, at: remarkTime(c), body: c?.body ?? '', path: null, url: c?.url ?? null });
   }
   for (const r of snap?.reviews ?? []) {
     const body = String(r?.body ?? '').trim();
@@ -646,7 +649,7 @@ export function remarksOf(snap) {
   }
   for (const t of snap?.reviewThreads?.nodes ?? []) {
     for (const c of t?.comments ?? []) {
-      out.push({ id: c?.id, author: c?.author, at: c?.updatedAt ?? c?.createdAt, body: c?.body ?? '', path: t?.path ?? null, url: c?.url ?? null });
+      out.push({ id: c?.id, author: c?.author, at: remarkTime(c), body: c?.body ?? '', path: t?.path ?? null, url: c?.url ?? null });
     }
   }
   return out.filter((r) => r.id && Number.isFinite(Date.parse(r.at ?? '')));
@@ -786,7 +789,9 @@ export function watchFromSnapshot(snap, now, lastKnownConflicting = null) {
 }
 
 function snippet(body) {
-  const text = String(body ?? '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/\s+/g, ' ').trim();
+  // 去掉渲染时看不见的部分:HTML 注释与 Markdown 链接定义行(机器人常用它们藏元数据)
+  const text = String(body ?? '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/^\s*\[[^\]\n]+\]:[^\n]*$/gm, ' ')
+    .replace(/\s+/g, ' ').trim();
   return text.length <= SNIPPET_LENGTH ? text : `${text.slice(0, SNIPPET_LENGTH - 3)}...`;
 }
 

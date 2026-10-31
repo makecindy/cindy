@@ -259,6 +259,22 @@ test('只有别人的新留言唤起:自己的回复、看过的、内容为空�
   assert.deepEqual(evaluateWatch(r.next, sameSecond, T0 + 20 * MIN).events[0].remarks.map((x) => x.id), ['C3']);
 });
 
+test('机器人改写自己的状态评论不唤起,人改评论仍算新留言;摘要去掉看不见的元数据', () => {
+  const posted = '2026-10-20T09:00:00Z';
+  const edited = '2026-10-20T10:05:00Z';
+  const vercel = (updatedAt) => comment('V1', 'vercel', posted, '[vc]: #P3wob:eyJpc01vbm9yZXBvIjp0cnVl\nDeployment ready', { updatedAt, authorIsBot: true });
+  const watch = seenWatch(snap({ comments: [vercel(posted), comment('H1', 'alice', posted)] }));
+  // 一次部署后两条都被改过:只有人的那条算
+  const r = evaluateWatch(watch, snap({ comments: [vercel(edited), comment('H1', 'alice', posted, 'please fix', { updatedAt: edited })] }), T0 + 10 * MIN);
+  assert.deepEqual(r.events[0].remarks.map((x) => x.id), ['H1']);
+  // 机器人的新评论仍然算,摘要里不带它藏的元数据
+  const fresh = vercel(edited);
+  fresh.id = 'V2';
+  fresh.createdAt = edited;
+  const report = eventReport(evaluateWatch(watch, snap({ comments: [fresh] }), T0 + 10 * MIN).events, snap());
+  assert.match(report, /vercel: "Deployment ready"/);
+});
+
 test('连续 10 次只有评论的唤起后要求停止跟进;推送或检查消息清零', () => {
   let watch = seenWatch(snap());
   let r;
