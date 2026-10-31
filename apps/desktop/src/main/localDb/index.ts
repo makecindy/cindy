@@ -250,11 +250,12 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
         const readOnlyStartupMessage =
           '共享数据库当前由其它实例使用，Cindy 不会在其运行期间自动恢复或修改 schema。' +
           '请关闭共享该 userData 的 passive 实例后重试，或改用 --isolated。';
-        showFatalDialog('共享数据库无法恢复', readOnlyStartupMessage, 'DB_CORRUPT_NO_BACKUP');
+        // 本进程是只读/passive，从未检查过备份：不能报「无可用备份」，按「被占用，关闭后重试」处理。
+        showFatalDialog('共享数据库无法恢复', readOnlyStartupMessage, 'DB_SCHEMA_LOCKED');
         releaseSchemaLeasesAfterFailure();
         return {
           ready: false,
-          error: { code: 'DB_CORRUPT_NO_BACKUP', message: readOnlyStartupMessage },
+          error: { code: 'DB_SCHEMA_LOCKED', message: readOnlyStartupMessage },
         };
       }
       const restored = tryRestoreWithFallback(filePath);

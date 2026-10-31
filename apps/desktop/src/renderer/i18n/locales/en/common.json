@@ -1363,6 +1363,16 @@
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. Fetching the new version, please wait…",
       "progress": "{{progress}}% downloaded"
     },
+    "initFailed": {
+      "title": "Local database failed to start",
+      "description": "The local database couldn't start. Try again first. If it keeps failing, share the technical details below with the team.",
+      "retry": "Retry Starting Database"
+    },
+    "corrupt": {
+      "title": "Local database can't be opened",
+      "description": "The local database may be damaged, or it may be in use by another Cindy instance sharing the same data. If another instance is open, close it and retry. If the problem persists, no usable backup could restore it automatically; copy the technical details and share them with the team to get help recovering your data.",
+      "copy": "Copy Technical Details"
+    },
     "noUpdate": {
       "title": "Local data can't be opened right now",
       "description": "Your local data doesn't match this version of the app (it was likely upgraded by a newer version). Try checking for updates again; if this keeps happening, please contact the team.",

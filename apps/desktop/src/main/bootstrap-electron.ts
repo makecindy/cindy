@@ -9554,7 +9554,16 @@ app.on('ready', async () => {
           });
         });
       }
-      await refreshPluginUsageBindings();
+      // 插件使用绑定只是辅助元数据：插件目录不可读（如 Windows EPERM）时不能让
+      // onReady 抛错——否则 ownerEnsureCoordinator 会丢弃已就绪的本地库并报
+      // DB_INIT_FAILED（#6870）。失败只记日志，由后续 post-commit 重试补齐。
+      try {
+        await refreshPluginUsageBindings();
+      } catch (error) {
+        dbClientLog.warn('plugin usage bindings refresh failed (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       checkDatabaseSizeWarningAtStartup();
       // Bot recovery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,

@@ -38,6 +38,11 @@ export function LocalDbFatalScreen({
       onRetry?.();
       return;
     }
+    if (view === 'init-failed' || view === 'corrupt') {
+      // 重新走一遍 ensureReady；与应用更新无关（corrupt 也可能因关闭占用库的其它实例而恢复）。
+      window.location.reload();
+      return;
+    }
     if (view === 'install-update') {
       if (installing) return;
       setInstalling(true);
@@ -54,20 +59,30 @@ export function LocalDbFatalScreen({
   const title =
     view === 'retry-local-db'
       ? t('localDbFatal.schemaLease.title')
-      : view === 'no-update'
-        ? t('localDbFatal.noUpdate.title')
-        : t('localDbFatal.updateReady.title');
+      : view === 'corrupt'
+        ? t('localDbFatal.corrupt.title')
+        : view === 'init-failed'
+          ? t('localDbFatal.initFailed.title')
+          : view === 'no-update'
+            ? t('localDbFatal.noUpdate.title')
+            : t('localDbFatal.updateReady.title');
   const description =
     view === 'retry-local-db'
       ? (message ?? t('localDbFatal.schemaLease.lock-unreadable'))
-      : view === 'install-update'
-        ? t('localDbFatal.updateReady.description')
-        : view === 'preparing-update'
-          ? t('localDbFatal.preparing.description')
-          : t('localDbFatal.noUpdate.description');
+      : view === 'corrupt'
+        ? t('localDbFatal.corrupt.description')
+        : view === 'init-failed'
+          ? t('localDbFatal.initFailed.description')
+          : view === 'install-update'
+            ? t('localDbFatal.updateReady.description')
+            : view === 'preparing-update'
+              ? t('localDbFatal.preparing.description')
+              : t('localDbFatal.noUpdate.description');
   const confirmText =
     view === 'retry-local-db'
       ? t('localDbFatal.schemaLease.retry')
+      : view === 'init-failed' || view === 'corrupt'
+        ? t('localDbFatal.initFailed.retry')
       : view === 'install-update'
         ? t('localDbFatal.updateReady.confirm')
         : t('localDbFatal.noUpdate.checkUpdate');
@@ -95,6 +110,19 @@ export function LocalDbFatalScreen({
               <p className="text-13 text-[var(--confirm-desc)]">
                 {t('localDbFatal.preparing.progress', { progress: Math.round(progress) })}
               </p>
+            )}
+            {(view === 'corrupt' || view === 'init-failed') && (message || code) && (
+              <button
+                type="button"
+                className="text-12 text-[var(--text-tertiary)] underline transition-colors hover:text-[var(--text-secondary)]"
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                onClick={() => {
+                  const text = [code, message].filter(Boolean).join('\n');
+                  void navigator.clipboard?.writeText(text).catch(() => {});
+                }}
+              >
+                {t('localDbFatal.corrupt.copy')}
+              </button>
             )}
             {(message || code) && (
               <details className="mt-1 w-full">
