@@ -1162,6 +1162,30 @@ describe('ProvidersSection — 分享来的供应商深链', () => {
 
   afterEach(() => resetProviderShareStoreForTests());
 
+  // #8065 r4430950535: unit/jsdom, real parent selection and deferred refetch.
+  // The earlier completion test protected an edit draft but not the detail pane.
+  // Minimal race: complete a wizard, select a local/shared row while refreshing,
+  // then settle the old refresh; the newer detail selection must remain visible.
+  it.each(['local', 'shared'] as const)('keeps a newer %s provider selection after wizard refresh', async target => {
+    stubReceived([{ ...share, providerLabel: 'Shared fixture' }]);
+    providersState.providers = [
+      makeProvider('anthropic', { name: 'Anthropic', connected: true }),
+      makeProvider('added-endpoint', { name: 'Created endpoint', connected: true }),
+    ];
+    renderAt('?tab=providers&wizard=1');
+    await screen.findByTestId('wizard-stub');
+    let release!: () => void;
+    providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+    let completion!: Promise<void>;
+    act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone('added-endpoint'); });
+    fireEvent.click(await screen.findByRole('button', { name: target === 'local' ? /^Anthropic/ : /Shared fixture/ }));
+    if (target === 'local') expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
+    else await screen.findByTestId('provider-share-received-detail');
+    await act(async () => { release(); await completion; });
+    if (target === 'local') expect(screen.getByTestId('provider-detail-identity').textContent).toContain('Anthropic');
+    else expect(screen.getByTestId('provider-share-received-detail')).toBeTruthy();
+  });
+
   it('receivedShare=<shareId> → 选中那条分享来的供应商；参数消费后清除', async () => {
     stubReceived([share]);
     renderAt('?tab=providers&receivedShare=share-1');

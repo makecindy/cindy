@@ -3598,9 +3598,9 @@ export function ProvidersSection() {
           onDone={async (providerId) => {
             // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
             setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
+            if (providerId) selectProvider(providerId);
             await refetch();
             setWizard(current => current === wizard ? null : current);
-            if (providerId) selectProvider(providerId);
           }}
         />
       )}
