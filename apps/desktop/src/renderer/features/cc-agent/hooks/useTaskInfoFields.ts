@@ -15,6 +15,7 @@ import {
   loadTaskInfoFields,
   nextTaskInfoAfterToggle,
   persistTaskInfoFields,
+  parseTaskInfoFields,
   type TaskInfoField,
 } from './helpers/sidebarFilterCore';
 
@@ -24,11 +25,23 @@ let memoryValue: readonly TaskInfoField[] | null = null;
 
 /** 同步读——首个读取者从 storage 落定一次。 */
 export function getTaskInfoFields(): readonly TaskInfoField[] {
+  ensureStorageListener();
   if (memoryValue !== null) return memoryValue;
   return (memoryValue = loadTaskInfoFields());
 }
 
 const listeners = new Set<() => void>();
+let storageListenerBound = false;
+
+function ensureStorageListener(): void {
+  if (storageListenerBound || typeof window === 'undefined') return;
+  storageListenerBound = true;
+  window.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key !== TASK_INFO_KEY) return;
+    memoryValue = parseTaskInfoFields(event.newValue);
+    listeners.forEach(fn => fn());
+  });
+}
 
 export function useTaskInfoFields(): {
   fields: readonly TaskInfoField[];
@@ -45,18 +58,11 @@ export function useTaskInfoFields(): {
   }, []);
 
   useEffect(() => {
+    ensureStorageListener();
     const sync = () => setFieldsState(getTaskInfoFields());
     listeners.add(sync);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== TASK_INFO_KEY) return;
-      // 其它窗口写入:直接重读 storage(loadTaskInfoFields 自带校验与默认回退)。
-      memoryValue = loadTaskInfoFields();
-      sync();
-    };
-    window.addEventListener('storage', onStorage);
     return () => {
       listeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
     };
   }, []);
 

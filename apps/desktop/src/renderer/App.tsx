@@ -8,6 +8,7 @@ import { RemoteDesktopHost } from '@/features/remote-desktop/RemoteDesktopHost';
 
 import { useCloseWindowFallbackShortcut } from '@/hooks/useCloseWindowShortcut';
 import { useNewMakerPrefsOwnerResync } from '@/hooks/useNewMakerPrefsOwnerResync';
+import { useAccountPreferencesSync } from '@/lib/accountPreferencesSync';
 import { useDisableContextMenu } from '@/hooks/useDisableContextMenu';
 import { ThemeProvider } from '@/hooks/useTheme';
 import { WallpaperSettingsProvider } from '@/hooks/useWallpaperSettings';
@@ -190,6 +191,11 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
 
 function MakerBootstrap() {
   const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
+
+  useAccountPreferencesSync(
+    isAuthenticated ? dataOwnerId : null,
+    getDataOwnerGeneration().generation,
+  );
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
 

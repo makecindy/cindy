@@ -98,6 +98,10 @@ import {
   type FilterLastActivity,
   type FilterSortBy,
   type FilterProjectOrder,
+  GROUP_BY_KEY,
+  GROUP_DIALOGUE_KEY,
+  GROUP_DEVICE_KEY,
+  SORT_BY_KEY,
 } from './helpers/sidebarFilterCore';
 
 export type {
@@ -274,6 +278,27 @@ export function useSidebarFilter(
     migrateLegacyManualSort();
     return loadSortBy();
   });
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      switch (event.key) {
+        case GROUP_BY_KEY:
+          setGroupByState(event.newValue === 'flat' ? 'flat' : 'project');
+          break;
+        case GROUP_DIALOGUE_KEY:
+          setGroupDialogueState(event.newValue !== 'false');
+          break;
+        case GROUP_DEVICE_KEY:
+          setGroupDeviceState(event.newValue !== 'false');
+          break;
+        case SORT_BY_KEY:
+          setSortByState(event.newValue === 'created' || event.newValue === 'priority'
+            ? event.newValue : 'recency');
+          break;
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   const [projectOrder, setProjectOrderState] = useState<FilterProjectOrder>(() =>
     loadProjectOrder(),
   );

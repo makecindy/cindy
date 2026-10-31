@@ -81,4 +81,5 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Notes:**
 
 - Click the sidebar collapse arrow to shrink it to an icon-only strip; nothing is lost.
-- Pins, pin order, hidden projects, project filters, and collapse state are kept separately for each Cindy account. Display preferences (list style, grouping, sorting, session info) are local to each installation.
+- Task pin / unpin changes are saved on the computer that owns the task and update its connected views, including newly pinned tasks outside the recent list. Pin order, project pins, hidden projects, project filters, and collapse state remain local to each installation and separate for each Cindy account.
+- On updated clients, list style, pinned-section style, grouping, session sorting, and session info synchronize between your signed-in computers. Devices exchange saved changes when online again; older clients keep their local preferences. This does not require remote control to be enabled, but explicitly revoked devices do not participate.

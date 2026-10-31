@@ -13,6 +13,7 @@ import { dispatchCredentialSwitchOutcome } from '@/session/credentialSwitchOutco
 import { mobileRuntimeIdentity } from '@/debug/mobileRuntimeIdentity';
 import {
   DeviceLinkClient,
+  ACCOUNT_PREFERENCES_SYNC_CHANNEL,
   createDirectRuntimeBridge,
   isSharedTaskPeer,
   probeSharedTaskHost,
@@ -63,6 +64,7 @@ import {
   waitForSelfHostedRelayRoute,
 } from './selfHostedRelayRouting';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { createMobileAccountPreferencesSync } from '@/settings/accountPreferencesStore';
 import { useSharedTaskApi } from './useSharedTaskApi';
 import {
   applyAccessRevokedFrame,
@@ -1068,6 +1070,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     meterDeviceLinkInvokes(client);
     clientRef.current = client;
+    const preferenceSyncOwner = getMobileAuthOwner();
+    const accountPreferenceSync = createMobileAccountPreferencesSync({
+      isCurrent: () => clientRef.current === client && isMobileAuthOwnerCurrent(preferenceSyncOwner),
+      isRevoked: deviceId => revokedDevicesStore.has(deviceId),
+      selfDeviceId: () => client.getSelfDeviceId(),
+      send: (deviceId, channel, frame) => client.sendPush(deviceId, channel, frame),
+    });
     const catalogRefresh = createDeviceCatalogRefresh({
       connectionEpoch: () => connectionEpochRef.current,
       canRead: (deviceId) => client === clientRef.current
@@ -1111,6 +1120,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const offIssue = client.onConnectionIssue(setConnectionIssue);
     const offStatus = client.onStatusChange((next) => {
       setStatus(next);
+      accountPreferenceSync.setOnline(next === 'online');
       setSharedTaskAvailable(next === 'online' ? client.hasServerCapability(SHARED_TASK_CAPABILITY) : undefined);
       if (next !== 'online') {
         catalogRefresh.clear();
@@ -1175,6 +1185,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (shouldRecover) void rehydrate(deviceId);
     });
     const applyPresence = (snap: PresenceSnapshot) => {
+      // Account appearance preferences do not require remote-control access.
+      accountPreferenceSync.peer(snap.deviceId, snap.online);
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
       // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
       // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
@@ -1263,7 +1275,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         }
       };
     };
-    const offFrame = client.onFrame((env) => routeFrameMeasured(env, {
+    const offFrame = client.onFrame((env) => {
+      if (env.kind === 'push' && env.src
+        && (env.payload as PushPayload | null)?.channel === ACCOUNT_PREFERENCES_SYNC_CHANNEL) {
+        void accountPreferenceSync.receive(env.src, (env.payload as PushPayload).payload).catch(() => undefined);
+        return;
+      }
+      routeFrameMeasured(env, {
       currentDataOwnerId: currentDataOwnerIdRef.current,
       onAccessRevoked: (deviceId) => {
         clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
@@ -1333,7 +1351,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       onAgentsChanged: (deviceId) => {
         for (const listener of remoteAgentRosterListeners) listener(deviceId);
       },
-    }));
+      });
+    });
     // 与 transport-timeout link-close 同族的链路死锁自救(互为兜底):对端还在按
     // 可靠流给本机发帧,而本机侧 link 未就绪——典型成因是 link-accept 在弱网丢失
     // 后互等(发送端等 ACK、接收端等 link)。transport-timeout 是对端主动通知
@@ -1552,6 +1571,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       offResponseEvidence();
       offBeforeLink();
       offFrame();
+      accountPreferenceSync.dispose();
       catalogRefresh.dispose();
       offPresence();
       offPeerTransportReset();

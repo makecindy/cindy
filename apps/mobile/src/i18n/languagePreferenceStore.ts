@@ -6,25 +6,29 @@
  * 「没有 override」这个状态本身——恢复跟随系统 = 删除存储项。
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  readMobileAccountPreference,
+  saveMobileAccountPreference,
+  subscribeMobileAccountPreferences,
+} from '@/settings/accountPreferencesStore';
 
 import { isSupportedLocale, type LocalePreference } from './locale';
 
 const STORAGE_KEY = 'xdt-maker.mobile.language-preference.v1';
 
 export async function readLanguagePreference(): Promise<LocalePreference> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  const raw = await readMobileAccountPreference('language');
   return isSupportedLocale(raw) ? raw : 'system';
 }
 
 export async function saveLanguagePreference(
   preference: LocalePreference,
 ): Promise<void> {
-  if (preference === 'system') {
-    await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
-    return;
-  }
-  await AsyncStorage.setItem(STORAGE_KEY, preference).catch(() => undefined);
+  await saveMobileAccountPreference('language', preference).catch(() => undefined);
+}
+
+export function subscribeLanguagePreference(listener: (next: LocalePreference) => void): () => void {
+  return subscribeMobileAccountPreferences(values => listener(isSupportedLocale(values.language) ? values.language : 'system'));
 }
 
 export const __testing = {

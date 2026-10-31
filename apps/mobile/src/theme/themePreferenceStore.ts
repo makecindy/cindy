@@ -6,7 +6,11 @@
  * override 这个状态本身——恢复跟随系统 = 删除存储项。
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  readMobileAccountPreference,
+  saveMobileAccountPreference,
+  subscribeMobileAccountPreferences,
+} from '@/settings/accountPreferencesStore';
 
 import type { ThemeMode } from './tokens';
 
@@ -31,17 +35,17 @@ export function resolveThemeMode(
 
 /** 读失败按「跟随系统」处理:启动不能因为本机存储异常卡住。 */
 export async function readThemePreference(): Promise<ThemePreference> {
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  const raw = await readMobileAccountPreference('theme');
   return isThemeOverride(raw) ? raw : 'system';
 }
 
 /** 写失败向上抛出:调用方需告知用户这次选择没有保存,不能把未落盘的选择当成已保存。 */
 export async function saveThemePreference(preference: ThemePreference): Promise<void> {
-  if (preference === 'system') {
-    await AsyncStorage.removeItem(STORAGE_KEY);
-    return;
-  }
-  await AsyncStorage.setItem(STORAGE_KEY, preference);
+  await saveMobileAccountPreference('theme', preference);
+}
+
+export function subscribeThemePreference(listener: (next: ThemePreference) => void): () => void {
+  return subscribeMobileAccountPreferences(values => listener(isThemeOverride(values.theme) ? values.theme : 'system'));
 }
 
 export const __testing = {

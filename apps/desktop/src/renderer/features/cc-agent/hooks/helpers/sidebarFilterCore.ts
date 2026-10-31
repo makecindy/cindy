@@ -1,4 +1,5 @@
 import { createLogger } from '@/lib/logger';
+import { notifyLocalPreferenceChanged } from '@/lib/accountPreferencesSync';
 import {
   clearClaimedLegacySidebarStorage,
   readClaimedLegacySidebarStorage,
@@ -357,6 +358,7 @@ export function loadGroupBy(): FilterGroupBy {
 }
 
 export function persistGroupBy(groupBy: FilterGroupBy): void {
+  notifyLocalPreferenceChanged(GROUP_BY_KEY, groupBy);
   const storage = safeStorage();
   if (!storage) return;
   try {
@@ -387,6 +389,7 @@ export function loadGroupDialogue(): boolean {
 }
 
 export function persistGroupDialogue(groupDialogue: boolean): void {
+  notifyLocalPreferenceChanged(GROUP_DIALOGUE_KEY, String(groupDialogue));
   const storage = safeStorage();
   if (!storage) return;
   try {
@@ -414,6 +417,7 @@ export function loadGroupDevice(): boolean {
 }
 
 export function persistGroupDevice(groupDevice: boolean): void {
+  notifyLocalPreferenceChanged(GROUP_DEVICE_KEY, String(groupDevice));
   const storage = safeStorage();
   if (!storage) return;
   try {
@@ -578,6 +582,7 @@ export function loadSortBy(): FilterSortBy {
 }
 
 export function persistSortBy(sortBy: FilterSortBy): void {
+  notifyLocalPreferenceChanged(SORT_BY_KEY, sortBy);
   const storage = safeStorage();
   if (!storage) return;
   try {
@@ -667,6 +672,11 @@ export function loadTaskInfoFields(): TaskInfoField[] {
     log.warn('[useSidebarFilter] failed to read taskInfo:', err);
     return [...DEFAULT_TASK_INFO_FIELDS];
   }
+  return parseTaskInfoFields(raw);
+}
+
+/** Decode both legacy versioned lists and the account replica's array representation. */
+export function parseTaskInfoFields(raw: string | null): TaskInfoField[] {
   if (raw == null) return [...DEFAULT_TASK_INFO_FIELDS];
   try {
     const parsed = JSON.parse(raw);
@@ -688,6 +698,7 @@ export function loadTaskInfoFields(): TaskInfoField[] {
 }
 
 export function persistTaskInfoFields(fields: readonly TaskInfoField[]): void {
+  notifyLocalPreferenceChanged(TASK_INFO_KEY, JSON.stringify(fields));
   const storage = safeStorage();
   if (!storage) return;
   try {

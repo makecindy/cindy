@@ -4714,6 +4714,15 @@ interface ElectronAPI {
     }) => Promise<import('@/lib/gitReview.types').ReviewPushResult>;
   };
 
+  accountPreferences: {
+    load: () => Promise<import('../shared/accountPreferences').AccountPreferencesSnapshot>;
+    set: (request: import('../shared/accountPreferences').AccountPreferenceWriteRequest) =>
+      Promise<import('../shared/accountPreferences').AccountPreferencesSnapshot>;
+    importLegacy: (request: import('../shared/accountPreferences').AccountPreferencesLegacyImportRequest) =>
+      Promise<import('../shared/accountPreferences').AccountPreferencesSnapshot>;
+    onChanged: (cb: (snapshot: import('../shared/accountPreferences').AccountPreferencesSnapshot) => void) => () => void;
+  };
+
   sidebarSettings: {
     claimLegacyRendererOwner: () => import('../shared/sidebarSettings').SidebarLegacyRendererOwnerClaim;
     loadSnapshot: () => import('../shared/sidebarSettings').SidebarSettingsSnapshot;

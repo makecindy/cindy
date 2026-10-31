@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DeviceLinkError,
+  ACCOUNT_PREFERENCES_SYNC_CHANNEL,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   SHARED_TASK_CAPABILITY,
   type DeviceLinkClient,
@@ -21,6 +22,9 @@ import type { MobileMakerTransport } from '../device-link/mobileMakerTransport';
 import { acquireDeviceSendSlot, resetDeviceResponsivenessTracking, settleDeviceSend, unresponsiveDevicesStore } from '../device-link/unresponsiveDevicesStore';
 import { revokedDevicesStore } from '../device-link/revokedDevicesStore';
 import { localNetworkStore, type NetworkState } from '../device-link/localNetworkStatus';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { readThemePreference } from '@/theme/themePreferenceStore';
+import { mobileAccountPreferencesTesting } from '@/settings/accountPreferencesStore';
 
 const auth = vi.hoisted(() => ({
   isAuthenticated: true,
@@ -85,6 +89,8 @@ const transport = vi.hoisted(() => {
     connectNow = vi.fn();
     restartConnection = vi.fn();
     notifyNetworkChanged = vi.fn();
+    sendPush = vi.fn();
+    getSelfDeviceId = () => 'phone';
     getStatus = () => this.status;
     serverCapabilities: string[] = [];
     hasServerCapability = (capability: string) => this.serverCapabilities.includes(capability);
@@ -144,6 +150,43 @@ beforeEach(async () => {
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+// Unit: only the wire is fake. The real Provider must route account preference
+// pushes from known same-account devices even when remote control is disabled,
+// without opening a task-control link. Store-only tests cannot cover this wiring.
+it('synchronizes appearance with a known device without a remote-control link', async () => {
+  await act(async () => {
+    setMobileAuthOwner('test-account');
+    auth.accountGeneration += 1;
+    render();
+  });
+  const client = transport.clients.at(-1)!;
+  try {
+    await act(async () => {
+      client.statusChanged('online');
+      client.presenceChanged({ deviceId: 'desktop', deviceName: 'Desktop', platform: 'darwin', appVersion: 'test',
+        online: true, remoteControlEnabled: false, busy: false, lastSeenAt: 1 });
+      await readThemePreference();
+    });
+    await act(async () => {
+      client.frame({ v: 1, kind: 'push', src: 'desktop', payload: {
+        channel: ACCOUNT_PREFERENCES_SYNC_CHANNEL,
+        payload: { version: 1, dataOwnerId: 'test-account', state: {
+          version: 1, fields: { theme: { value: 'dark', counter: 3, nodeId: 'desktop' } },
+        } },
+      } });
+      await vi.waitFor(async () => expect(await readThemePreference()).toBe('dark'));
+    });
+    expect(client.sendPush).toHaveBeenCalledWith('desktop', ACCOUNT_PREFERENCES_SYNC_CHANNEL,
+      expect.objectContaining({ dataOwnerId: 'test-account', state: { version: 1,
+        fields: { theme: { value: 'dark', counter: 3, nodeId: 'desktop' } } } }));
+    expect(client.openLink).not.toHaveBeenCalled();
+    expect(client.invoke).not.toHaveBeenCalled();
+  } finally {
+    setMobileAuthOwner(null);
+    await mobileAccountPreferencesTesting.reset();
+  }
+});
 
 describe('Provider device roster reads', () => {
   it('starts a fresh snapshot when Home joins a recovery read that predates its presence fence', async () => {
