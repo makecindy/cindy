@@ -3445,6 +3445,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // others. An owner or admin may stop everything (`all`). Work you may not stop is left running.
     stopRound: (roomId, scopeInput) => safe(async () => {
       const room = await groupRoom(id.parse(roomId));
+      const hadPlanning = planning.has(room) || !!pendingPlanCancels.get(room)?.size;
       await replacePlanIntent(room);
       // Older servers keep the whole-round stop; the narrower scope belongs to single-speaker groups (§4.0).
       if (!singleSpeaker) {
@@ -3467,21 +3468,59 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const refused = (error: unknown) => error instanceof ChatResponseError && [403, 404, 409].includes(error.status);
       const plans = await api<ServerPlan[]>(`/conversations/${room}/plans`);
       const stoppedPlans = new Set<string>();
-      for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && (everything || p.creator_id === selfId))) {
-        try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); }
-        catch (error) { if (!refused(error)) throw error; }
-      }
-      const executions = await api<Execution[]>(`/conversations/${room}/executions`);
-      for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
-        // Your own teammate stops its work for others as itself; a request you made, as you.
-        const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
-        if (!everything && !asBot && e.requester_id !== selfId) continue;
-        try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
-        catch (error) { if (refused(error)) continue; throw error; }
-        const run = running.get(e.id);
-        if (run) await cancelExecution(run);
-      }
-      changed(room); return { ok: true as const };
+      const refusedPlans = new Map<string, unknown>();
+      const refusedExecutions = new Map<string, unknown>();
+      let stopped = hadPlanning;
+      let unknownRequester = false;
+      try {
+        for (const plan of plans.filter(p => ['proposed','running','waiting'].includes(p.status) && (everything || p.creator_id === selfId))) {
+          try { await actPlan({ groupId: room, planId: plan.id }, 'stop'); stoppedPlans.add(plan.id); stopped = true; }
+          catch (error) { if (!refused(error) && !(error instanceof Error && error.message === 'PLAN_CLOSED')) throw error; refusedPlans.set(plan.id, error); }
+        }
+        const executions = await api<Execution[]>(`/conversations/${room}/executions`);
+        for (const e of executions.filter(e => ['queued', 'running', 'needs_input'].includes(e.status) && !(e.plan_id && stoppedPlans.has(e.plan_id)))) {
+          // Your own teammate stops its work for others as itself; a request you made, as you.
+          const asBot = !everything && e.requester_id !== selfId && ownBot(e.bot_id);
+          if (!everything && !asBot && e.requester_id !== selfId) {
+            // A source message author is not proof of who requested this execution.
+            if (!e.requester_id) unknownRequester = true;
+            continue;
+          }
+          try { await api(`/conversations/${room}/executions/${e.id}/control`, 'POST', { operationId: randomUUID(), action: 'stop' }, asBot ? e.bot_id : everything && e.requester_id !== selfId ? asManager : undefined); }
+          catch (error) { if (refused(error)) { refusedExecutions.set(e.id, error); continue; } throw error; }
+          stopped = true;
+          const run = running.get(e.id);
+          if (run) await cancelExecution(run);
+        }
+        // A rejection can race another stop or completion. Require an explicit settled
+        // state: absence from a recent list is not proof that the target has ended.
+        if (refusedPlans.size) {
+          const latest = await api<ServerPlan[]>(`/conversations/${room}/plans`);
+          for (const [planId, error] of refusedPlans) {
+            if (!latest.some(p => p.id === planId && ['done', 'stopped', 'dismissed', 'superseded'].includes(p.status))) {
+              if (error instanceof ChatResponseError && error.status === 409) throw new Error('REVISION_CONFLICT');
+              throw error;
+            }
+            stopped = true;
+          }
+        }
+        if (refusedExecutions.size) {
+          const latest = await api<Execution[]>(`/conversations/${room}/executions`);
+          for (const [executionId, error] of refusedExecutions) {
+            if (!latest.some(e => e.id === executionId && ['succeeded', 'failed', 'cancelled', 'stopping'].includes(e.status))) {
+              if (error instanceof ChatResponseError && error.status === 409) throw new Error('REVISION_CONFLICT');
+              throw error;
+            }
+            const run = running.get(executionId);
+            if (run) await cancelExecution(run);
+            stopped = true;
+          }
+        }
+        if (unknownRequester) throw new Error('STOP_OWNERSHIP_UNKNOWN');
+        if (!stopped) throw new Error(executions.some(e => ['queued', 'running', 'needs_input'].includes(e.status))
+          || plans.some(p => ['proposed', 'running', 'waiting'].includes(p.status)) ? 'ROLE_REQUIRED' : 'NOTHING_TO_STOP');
+        return { ok: true as const };
+      } finally { changed(room); }
     }),
     settleLaneTurn: async (terminal: BotGroupLaneTerminal) => {
       const run = [...running.values()].find(r => r.sessionId === terminal.sessionId);
