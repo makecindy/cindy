@@ -96,6 +96,7 @@ vi.mock('../model-discovery/xai.js', () => ({
 vi.mock('../model-discovery/xai-media.js', () => ({
   refreshXaiMediaModels: h.refreshXaiMediaModels,
   clearXaiMediaModels: vi.fn(),
+  clearAllXaiMediaModels: vi.fn(),
 }));
 
 vi.mock('../active-catalog.js', async () => {
