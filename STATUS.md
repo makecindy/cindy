@@ -10,6 +10,16 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-10-31 — Phase 1: ROADMAP 1.9a, conversation usage and cost model (`unit-tested`)
+
+**Outcome:** new `packages/maker-shared/src/sessionUsage.ts` (+ `src/__tests__/sessionUsage.test.ts`, 11 tests) and the `./session-usage` subpath export. `buildSessionUsage(turns)` rolls normalised per-turn records (model, provider, in/out/cache tokens, `local` flag, optional per-Mtok rates with a currency) into one conversation summary: totals, a compact token label from the shared `formatCompactTokens`, per-model rows sorted by tokens then model id, `costStatus` of `complete` / `partial` / `none`, the summed cost with its currency, and the unpriced models. Three rules the tests exist to protect: a local turn is tokens only and is never priced even when the caller supplies rates; a turn with tokens in a category that has no rate, or rates with no currency, is unpriced rather than under-reported; a turn priced in a different currency is excluded from the sum and forces `partial`. Malformed input never throws: blank model ids are skipped, negative / NaN / Infinity counts become 0, a non-array yields an empty summary. Cost is rounded once at the end (six decimals), not per turn, so many tiny turns do not drift.
+
+**Not claimed:** nothing here runs in the app. There is no adapter from stored turns, no rate lookup, no panel and no IPC. Per-turn detail already exists upstream (`apps/desktop/src/shared/turnUsageDetails.ts`, stored in `messages.agent_meta`, with recorded money on the claude-code path); 1.9b maps it into this model and owns the UI and the live proof. Mutation checks: removing the local-turn guard failed exactly the two local tests; turning the missing-rate guard into `continue` failed exactly the category-without-rate test; disabling the currency guard failed exactly the cross-currency test; reducing `acc.local && local` to `acc.local` failed exactly the local-flag test. All four restored, file byte-identical afterwards.
+
+**Gates (Node 22):** **Gates (Node 22, WorkBuddy session shell, proxy vars unset, final tree):** `pnpm typecheck` EXIT=0; `pnpm check:test-hygiene` EXIT=0 ("361 files within baseline", unchanged by the new test file); `pnpm test:runner` EXIT=0 (610 tests, 608 pass, 2 skipped). The `packages/maker-shared` suite is 103 files / 1892 tests passing, including this row's 12. `pnpm test:unit:related` escalated to the FULL unit sweep (the runner reported wide files changed) and ended EXIT=1 in this shell on the documented environmental set only: `packages/maker-shared unit` PASS (10.4 s), `apps/desktop unit` FAIL (324.7 s) and `packages/maker-core unit` FAIL (85.0 s); focused reruns pinned those to the `/bin/ps`-EPERM files, `cindySubagentRunner.test.ts` 5 failed / 43 passed and `askpass.native.test.ts` 1 failed / 2 passed, exactly the set recorded in the 2.3b-1/2 entry. A green unit run in the owner's shell is still outstanding, as for every row since 5.3a.
+
+---
+
 ## 2026-10-31 — Phase 1: ROADMAP 1.8c-2 closed, Hermes model switch from the desktop picker (`live-proven`)
 
 Three separate defects sat between the picker and a working switch. All three are fixed,

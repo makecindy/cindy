@@ -81,6 +81,7 @@
     "./session-operation": "./src/sessionOperation.ts",
     "./session-selection": "./src/sessionSelection.ts",
     "./session-title": "./src/sessionTitle.ts",
+    "./session-usage": "./src/sessionUsage.ts",
     "./synthetic-trigger": "./src/syntheticTrigger.ts",
     "./subagent-observation": "./src/subagentObservation.ts",
     "./subagent-workspace": "./src/subagentWorkspace.ts",
