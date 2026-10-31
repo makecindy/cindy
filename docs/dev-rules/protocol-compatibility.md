@@ -4358,6 +4358,14 @@ UNSUPPORTED_CAPABILITY；不得降级为普通消息或另建任务。旧 Host �
 Node 私有上传只接受 POST + uploadDir，短期 Bearer 不进入页面管道。旧 Host 无入口则不上传；不保存新凭据，不新增设置页授权协议。
 targets.get 按本插件 requestKey 查询原收据；settled 自然终态由原 inputClientId 的运行事件持久记录，取消另须确认原队列/执行结束。不开放伙伴历史。
 
+## 插件只读查看项目任务（未发布）
+
+agent.observe 为可选独立能力，不依赖 tasks/targets，只有 Host 确认的 observeCapabilityApproved 才授予；
+历史未知字段、旧 tasks/targets 批准不推断新授权。旧 receipt 缺少新可选字段照常读取，无需 schema migration。
+新包严格校验布尔值；已安装快照中的非布尔历史值原样保留但不授予，不因新校验停用。
+逻辑页管道新增 `observe-request`（`project-tasks` / `open-task`），只在本机 Desktop Main 消费，不进入 device-link 白名单。
+旧 Host 忽略声明且没有 `cindy.observe`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.8。
+
 ## 伙伴列表的可选活动摘要
 
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。

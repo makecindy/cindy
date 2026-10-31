@@ -545,6 +545,20 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentTasksRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.observe === true && ghost.observeCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'observe');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentObserveRequest')}
+          </Button>
+        ) : null}
 
         {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
 

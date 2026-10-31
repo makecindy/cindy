@@ -119,7 +119,7 @@ host 在 `browser-managed-config.ts` 用 `buildManagedConfig({proxyServer?})` �
   **只对代理挑战生效**的凭据通道(例如让 runtime 自己 launch 浏览器而非 `connectOverCDP`,
   用 launch 期的 `proxy:{username,password}`),并重新做 origin 泄漏验证。
 - 调用方的原生 Agent transcript 是 host 边界之前的上游记录:Claude/Codex 可能在 Cindy 收到 MCP 请求前已持久化模型生成的原始 tool input。由于本接口现在直接拒绝带 userinfo 的 URL,正常路径下不存在可被上游 transcript 保留的代理凭据;但调用方若**尝试**传入凭据,那次尝试仍可能留在其自身 transcript 里。
-- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 target 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。
+- 自动附加的新 page 只有在 `Fetch.enable(handleAuthRequests:true)` 成功后才恢复执行;后续 page / iframe 安装认证处理器失败时关闭整个受管浏览器,不得继续报告一条可用的认证代理路由。**worker 例外**(`service_worker` / `shared_worker` / `worker` / `worklet`,启动时已存在的与 auto-attach 新建的同样适用):Chromium 不保证 worker 暴露 Fetch / Target 域,单个 worker 准备失败只用 `Target.closeTarget` 关闭该 worker(同一 targetId 的并发关闭共享一次执行,结束后淘汰记录),它不会在未受门控的状态下运行;关闭失败时先重查 `Target.getTargets`,目标已不存在(`No target with given id`)视为幂等成功,仅目标仍存活才回落为整机 fail-closed(先标 blocked 再 `Browser.close`)。
 - 后续 target 的认证安装失败要先把 host route 标成 blocked,再尝试 `Browser.close`;即使 CDP 关闭命令失败,普通调用与 `start` 仍须拒绝,直到 `stop` 被验证成功。
 - 认证协调器初始化期间的异步 target 失败不得被最终成功赋值覆盖;认证 CDP WebSocket 意外断开也必须立即把 route 标成 blocked。只有显式 dispose/stop 的主动断开可以忽略。
 - 认证启动返回前必须用 CDP 命令响应作为消息屏障,等待屏障前收到的 auto-attach 认证任务全部完成;屏障内失败时 `start` 必须失败,不能先报告代理可用再异步改成 unknown。

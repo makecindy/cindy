@@ -2530,6 +2530,7 @@ export function getCindyGhostsMcpDeps(
       cardService.registerCall(callId, {
         ghostId: instanceId,
         logicalGhostId: pluginStoragePart(installedGhostLogicalIdentity(target)),
+        tool,
         toolUseId: agentToolUseId ?? null,
         // ALS 优先(codex 每单恢复)、闭包兜底(claude 建线期按 session 绑定)
         // ——此前 claude 路径这里恒为 null,卡片只能靠 toolUseId 启发式锚定。

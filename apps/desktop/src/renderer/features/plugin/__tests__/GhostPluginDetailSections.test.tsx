@@ -438,6 +438,20 @@ describe('Ghost plugin detail sections', () => {
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
   });
+  // unit: a declined first-use observe prompt is not retried by the plugin; this Host button is the only re-approval path.
+  it('offers a separate observe permission retry that requests only observe', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { observe: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { observeCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentTasksRequest' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' }));
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'observe');
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
+  });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
       'ResizeObserver',

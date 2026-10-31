@@ -243,6 +243,12 @@ export interface GhostAgentNeeds {
    * Host 只按明确支持的字段语义和运行时守门处理请求。
    */
   schedule?: boolean;
+  /**
+   * observe = 只读查看已登记本机项目的任务列表与状态,并在主窗口打开其中一个任务。
+   * 只返回标题、Agent 类型、归档与状态等元数据,不含消息、计划或文件;
+   * 不依赖 tasks,需独立批准(observeCapabilityApproved)。
+   */
+  observe?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -1778,6 +1784,8 @@ export interface InstalledGhost {
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
+  /** Independent Host consent for read-only project task observation. */
+  observeCapabilityApproved?: true;
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id> 或 userData/brain/_ns/<org>/<id>)。 */
   dir: string;
@@ -2199,6 +2207,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.tasks === true && manifest.agent.targets === true) {
       items.unshift({ key: 'agent:targets', kind: 'agent', labelKey: 'agentTargets', detailKey: 'agentTargetsDetail' });
+    }
+    if (manifest.agent?.observe === true) {
+      items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
     }
     // 后台隐藏任务:独立 key 单列(理由同 schedule —— 并进 agent:tasks 会让更新里
     // 新增 hiddenTasks 时 added 为空,扩权复核拦不住)。排在 agent:tasks 之后。
@@ -4766,15 +4777,18 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation'])).length === 0) {
+    if (!preserveHistoricalTasks && agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
+      return { ok: false, reason: 'agent.observe must be boolean' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档；仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -4782,6 +4796,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(agentRaw.tasks === true && agentRaw.targets === true && agentRaw.delegation === true ? { delegation: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.observe === true ? { observe: true } : {}),
     };
   }
 
@@ -9247,6 +9262,11 @@ export interface GhostPipeFetchRequest {
    * 复用 Agent 授权；自主调用可省略并按 network 声明守门。
    */
   callId?: string;
+  /**
+   * 是否带 Cindy-MCP-Apps-Manual / -Sha256 请求头：缺省时仅 callId 对应工具在
+   * mcpApps.ui 中对模型可见才带；true 强制带，false 强制不带。只发往已声明主机。
+   */
+  mcpAppsManual?: boolean;
 }
 
 /** 代理 fetch 的返回(cindy.send 的 resolve 值)。 */

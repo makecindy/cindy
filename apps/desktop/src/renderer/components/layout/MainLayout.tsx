@@ -1997,7 +1997,6 @@ export function MainLayout() {
               {/* 固定唤起入口只负责显示 / 聚焦。detach / maximize / 收起属于面板自身，
                 在 RightSidebarShell 的顶栏内渲染，不再与本入口混用。 */}
               <RightSidebarToggle
-                size="toolbar"
                 action="show"
                 collapsed={rsbDetached ? !rsbWindow.open : isRightSidebarCollapsed}
                 onToggle={handleOpenRightSidebar}

@@ -1460,8 +1460,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uiPrompts: (): Promise<Array<{id: string; name: string; version: string}>> => ipcRenderer.invoke('ghosts:ui-prompts'),
     deferUiPrompt: (id: string, version: string): Promise<void> => ipcRenderer.invoke('ghosts:defer-ui-prompt', id, version),
     requestUiApproval: (id: string): Promise<{ granted: boolean }> => ipcRenderer.invoke('ghosts:request-ui-approval', id),
-    requestTaskApproval: (id: string): Promise<{ granted: boolean }> =>
-      ipcRenderer.invoke('ghosts:request-task-approval', id),
+    requestTaskApproval: (id: string, capability?: 'observe'): Promise<{ granted: boolean }> =>
+      ipcRenderer.invoke('ghosts:request-task-approval', id, capability),
     /** 详情页「后台任务」:本插件转入后台的任务(仅本机窗口,不进 device-link)。 */
     listBackgroundTasks: (id: string): Promise<{
       items: Array<{ taskId: string; title: string; status: 'active' | 'archived'; updatedAt: number; running: boolean }>;

@@ -240,12 +240,18 @@ export function describeTextPreviewFailure(result: RemoteTextFilePreviewResultLi
   return result.error || '当前文件无法预览。';
 }
 
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB'] as const;
+
 export function formatByteSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  // 档位按取整后的展示值选:1048575 B 属于 MB 档,不该停在 KB 档被四舍五入成
+  // "1024.0 KB" —— 那一档的合法最大值是 1023,超过就该升到下一档。
+  let value = Math.round(bytes);
+  for (let unit = 0; ; unit += 1) {
+    const text = unit === 0 ? `${value}` : value.toFixed(1);
+    if (Number(text) < 1024 || unit === BYTE_UNITS.length - 1) return `${text} ${BYTE_UNITS[unit]}`;
+    value /= 1024;
+  }
 }
 
 export { HTML_PREVIEW_CSP, HTML_SNAPSHOT_CSP, withHtmlPreviewCsp, withSnapshotHtmlCsp } from './htmlPreviewCsp.js';

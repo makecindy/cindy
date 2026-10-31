@@ -183,6 +183,9 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   可查询本机项目、任务和伙伴的目标元数据，并投递文字/图片；该接口本身不授予其他任务的历史读取、设置修改或停止权限。
   安装/更新复用既有权限确认；历史 tasks 批准和未知 targets 字段不能自动扩权，缺新批准时只阻止新目标接口，首次调用复用既有宿主确认。
   实现与作者契约见 [通用投递目标](plugin-task-api-implementation.md#通用投递目标增量接口尚未发布)。
+- `agent.observe` 是独立能力，不依赖 `agent.tasks`，单列 `agent:observe` 权限并要求 Host receipt 的 `observeCapabilityApproved` 显式批准。
+  只读返回已登记本机项目中任务的标题、Agent 类型、归档与状态元数据，并可在主窗口打开其中的任务；不返回消息、计划或文件，也不能发送、修改或停止任务。
+  旧 tasks/targets 批准与历史未知字段不授予查看；首次调用复用既有宿主确认。实现见 [只读查看项目任务](plugin-task-api-implementation.md#只读查看项目任务增量接口尚未发布)。
 - `agent.hiddenTasks`（后台任务）只在与 `agent.tasks: true` 同时声明时有效：新包缺 tasks 或非布尔
   直接拒装；已安装快照里不成对的历史值原样保留但不授予。它单列为 `agent:hidden-tasks` 权限，
   更新新增即「权限变多」；运行期由 taskSlot 与任务服务按身份卡双重守门。透明性兜底与多端口径见
@@ -457,6 +460,11 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   给沙箱。Agent 在途调用可凭严格 `callId` 访问未预声明的普通 HTTPS 地址，仍须通过
   主机 URL、SSRF、超时、体积与重定向守门。此途径不注入任何未在 manifest 中声明且
   未命中目标 host 的托管凭证。
+- 沙箱 `cindy.fetch` 可由 Host 附加《Cindy MCP Apps 页面生成手册》的 `Cindy-MCP-Apps-Manual` /
+  `Cindy-MCP-Apps-Manual-Sha256` 请求头（`mcpAppsManualHeaders.ts`）：缺省仅当 callId 对应的在途工具在
+  `mcpApps.ui.tools` 中对模型可见时带上，`mcpAppsManual: true | false` 显式覆盖。它不是凭证，但与凭证头同样
+  逐跳只发往 `network.hosts` / 连接地址中已声明的主机，插件自带的同名头（不区分大小写）一律剥除；版本无关
+  （0.0.0）或找不到内置手册时不带。Node 工作进程的请求不带，只剥除同名头。
 - `source: "gh-cli"` 是只为官方 `cindy-github` 保留的宿主凭证来源：Host 优先读取
   本机 `gh auth token`，不可用时才回落到同 key 经 `/secrets` 保存的 PAT。两种 token
   均只在 Main 的 networkSlot 或受信本机账号检查中注入 `api.github.com` 的
@@ -799,6 +807,9 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
 （`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
 [`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
+手册 CDN 路径带客户端版本号与 sha256（`mcp-apps/manual/<版本号>/<sha256>.md`），发布脚本从打包产出的
+`build-info.json` 读取版本号、区域与发版提交；开发版（0.0.0）没有发布的手册。客户端在 `cindy.fetch` 中自动带手册地址（见第 4 节）后，每个发版版本、每个区域都
+必须发布，否则该版本带出去的地址会 404，因此带地址的客户端上线前要先把发布接进发版流程。
 **手册过期 = AI 按旧规则写出过不了校验的插件包**（校验拒装只是兜底，用户体验是“AI
 反复打包反复被拒”）。
 

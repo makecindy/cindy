@@ -375,3 +375,16 @@ describe('interactive page consent', () => {
     await expect(obtainGhostInstallConsent({ mode: 'automatic' }, old, reduced, reviewedDigest)).resolves.toEqual({ mode: 'unprompted' });
   });
 });
+
+it('records observe consent only when that capability was shown', async () => {
+  const previous = { ...manifest(['api.weather.test']), agent: { tasks: true } };
+  const next = { ...previous, agent: { tasks: true, observe: true } };
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const before = installed(previous);
+  const decision = await obtainGhostInstallConsent(policy, before, next, reviewedDigest);
+  assertGhostInstallConsent(decision, before, next, reviewedDigest);
+  expect(confirmedTaskCapability(decision, before, next, 'observe')).toBe(true);
+  expect(confirmedTaskCapability(decision, before, next, 'targets')).toBeUndefined();
+  expect(confirmedTaskCapability({ mode: 'unprompted' }, before, next, 'observe')).toBeUndefined();
+});

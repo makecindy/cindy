@@ -240,6 +240,8 @@ export interface GhostAgentNeeds {
   /** 后台隐藏任务;必须与 `tasks: true` 同时声明。 */
   hiddenTasks?: boolean;
   schedule?: boolean;
+  /** 只读查看项目任务的列表与状态并打开任务;不含任务内容,需独立批准。 */
+  observe?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -3090,15 +3092,18 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation'])).length === 0) {
+    if (agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
+      return { ok: false, reason: 'agent.observe must be boolean' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true 四项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true 五项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3106,6 +3111,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
       ...(agentRaw.tasks === true && agentRaw.targets === true && agentRaw.delegation === true ? { delegation: true } : {}),
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
+      ...(agentRaw.observe === true ? { observe: true } : {}),
     };
   }
 

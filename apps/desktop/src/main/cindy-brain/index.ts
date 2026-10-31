@@ -94,7 +94,8 @@ import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
-import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, PluginTaskApprovalGate } from './taskCapability.js';
+import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
+import { ensurePluginTaskApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -131,10 +132,10 @@ import { isDeepStrictEqual } from 'node:util';
 import type { GhostInstallConsentFacts } from '../../shared/ghostInstallConsent.js';
 
 const taskApprovalGate = new PluginTaskApprovalGate();
-function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: 'tasks' | 'targets' | 'delegation' = 'tasks'): Promise<boolean> {
+function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm: (facts: GhostInstallConsentFacts) => Promise<boolean>, explicit = false, capability: 'tasks' | 'targets' | 'delegation' | 'observe' = 'tasks'): Promise<boolean> {
   const ghost = findGhostForInstanceId(id);
   if (!isCurrent()) return Promise.resolve(false);
-  if ((capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval)(ghost)) return Promise.resolve(true);
+  if (pluginCapabilityApproval(capability)(ghost)) return Promise.resolve(true);
   const owner = getActiveDataOwnerPushStamp();
   const manager = getGhostManager();
   const revision = ghostInstallApprovalToken(ghost?.approval);
@@ -329,6 +330,9 @@ import {
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
 import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
+import { resolveBundledSystemSkillsRoot } from '../maker-host/built-in-skills.js';
+import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../../shared/pluginPageManual.mjs';
+import { createMcpAppsManualResolver } from './mcpAppsManualHeaders.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
 import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveCachedGhostRepoRoot, type GhostRepoRootCacheEntry } from './repoRoot.js';
@@ -2257,6 +2261,8 @@ export function setGhostSessionRevealer(reveal: ((sessionId: string) => void) | 
 
 const pluginTargetSlot = new PluginTargetSlot();
 export function setPluginTargetAdapter(adapter: PluginTargetAdapter): void { pluginTargetSlot.adapter = adapter; }
+let pluginObserveAdapter: PluginObserveAdapter | null = null;
+export function setPluginObserveAdapter(adapter: PluginObserveAdapter | null): void { pluginObserveAdapter = adapter; }
 export async function assertPluginTargetQueuedDelivery(taskId: string, clientId: string): Promise<void> {
   await pluginTargetSlot.assertQueuedDelivery(taskId, clientId);
 }
@@ -2287,6 +2293,11 @@ export function pluginTaskAuthorizationRevision(id: string): string | null {
 export function pluginTargetAuthorizationRevision(id: string): string | null {
   const ghost = findGhostForInstanceId(id);
   return hasPluginTargetApproval(ghost) ? pluginTaskAuthorizationRevision(id) : null;
+}
+
+function pluginObserveAuthorizationRevision(id: string): string | null {
+  const ghost = findGhostForInstanceId(id);
+  return hasPluginObserveApproval(ghost) ? ghostInstallApprovalToken(ghost?.approval) : null;
 }
 
 export function pluginDelegationAuthorizationRevision(id: string): string | null {
@@ -6162,6 +6173,26 @@ function captureGhostNetworkRequestGuard(ghostId: string): () => void {
   };
 }
 
+// 内置《Cindy MCP Apps 页面生成手册》的 CDN 引用(cindy.fetch 自动带给业务后端)；
+// 开发版 0.0.0 与找不到手册时为 null。
+const bundledMcpAppsManual = createMcpAppsManualResolver({
+  appVersion: () => app.getVersion(),
+  readManual: () => {
+    try {
+      return fs.readFileSync(path.join(resolveBundledSystemSkillsRoot({
+        isPackaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+      }), PLUGIN_PAGE_MANUAL_SKILL_PATH));
+    } catch (error) {
+      // 构建里没有手册是确定结果；其它读取错误交给 resolver 下次重试。
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  },
+  cdnBaseUrl: () => getClientEndpoint('cdnBaseUrl'),
+});
+
 export function getGhostNetworkSlot(): GhostNetworkSlot {
   if (!networkSlotSingleton) {
     networkSlotSingleton = new GhostNetworkSlot({
@@ -6187,6 +6218,7 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
         return ghost;
       },
       inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
+      mcpAppsManual: bundledMcpAppsManual,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
       readGhCliToken: () => getSharedGhCliTokenSource().readToken(),
       // source:'login-email' 凭证的值来源:现读登录态(切号/登出下一单即生效)。
@@ -7261,6 +7293,7 @@ async function installAndDockLocked(
     targetCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'targets'),
     uiCapabilityApproved: confirmedUiCapability(opts.consent.decision, installedBefore, opts.consent.manifest),
     delegationCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'delegation'),
+    observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -7448,6 +7481,7 @@ async function updateLocalGhostPackageLocked(
           targetCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(consent, previousGhost, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'delegation'),
+          observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           expectedPackageSha256,
           expectedInstalledApproval,
           installOrigin: installOrigin ?? 'manual',
@@ -7946,6 +7980,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           targetCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'targets'),
           uiCapabilityApproved: confirmedUiCapability(expected.consent, installed, inspected.manifest),
           delegationCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'delegation'),
+          observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(previousRelId ? { simulatorPreviousRelId: previousRelId } : {}),
@@ -9156,6 +9191,38 @@ export function registerGhostIpc(): void {
     // 专属 errand 会话跑一轮,最终回复文字取回给插件;任务文本同样只进
     // 普通 user 消息。资格审/频控/任务表在 errandSlot,会话与收口在注入
     // 的 runner(maker-ipc)。
+    // observe-request = 只读查看项目任务元数据并打开任务;独立于 tasks,仅本机逻辑页。
+    if (type === 'observe-request') {
+      if (findGhostForInstanceId(id)?.manifest.agent?.observe !== true) {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      if ((payload as { mobilePageId?: unknown } | null)?.mobilePageId !== undefined) {
+        return { ok: false, error: { code: 'UNSUPPORTED_CAPABILITY', message: 'UNSUPPORTED_CAPABILITY', retryable: false } };
+      }
+      const owner = getActiveDataOwnerPushStamp();
+      const isCurrent = () => {
+        const current = getActiveDataOwnerPushStamp();
+        return owner.dataOwnerId === current.dataOwnerId && owner.ownerGeneration === current.ownerGeneration &&
+          !event.sender.isDestroyed() && ghostIdForLogicWebContents(event.sender.id) === id;
+      };
+      const confirmCapability = (facts: GhostInstallConsentFacts) => {
+        const window = getDeepLinkMainWindow();
+        if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
+        return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
+      };
+      try {
+        if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, 'observe')) {
+          return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+        }
+      } catch {
+        return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+      }
+      const revision = pluginObserveAuthorizationRevision(id);
+      return handlePluginObserveRequest(pluginObserveAdapter, payload, () => {
+        if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
+          throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
+      });
+    }
     if (type === 'tasks-request' || type === 'targets-request') {
       const owner = getActiveDataOwnerPushStamp();
       const pageId = (payload as { mobilePageId?: unknown }).mobilePageId;
@@ -10168,15 +10235,16 @@ export function registerGhostIpc(): void {
     }
   });
 
-  ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown) => {
+  ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
+    if (capability !== undefined && capability !== 'observe') throwIpcError('INVALID_PARAMS', 'capability must be observe when provided');
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
       try { assertTrustedAppRendererEvent(event); return !event.sender.isDestroyed(); } catch { return false; }
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
-      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true);
+      createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true, capability === 'observe' ? 'observe' : 'tasks');
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });
