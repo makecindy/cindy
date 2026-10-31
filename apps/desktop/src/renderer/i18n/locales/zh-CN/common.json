@@ -15871,6 +15871,8 @@
       "summaryNote": "文件为二进制、过大或无法完整预览，仅显示文件大小。"
     },
     "home": {
+      "sortDownloads": "下载最多",
+      "sortUpdated": "最近更新",
       "title": "技能",
       "description": "管理已安装的技能，或从 SkillHub 发现更多技能。",
       "descriptionLocalOnly": "管理本机安装的本地技能。",

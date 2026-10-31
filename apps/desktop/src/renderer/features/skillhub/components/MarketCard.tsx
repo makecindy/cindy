@@ -1,3 +1,4 @@
+import { hasDownloadCount } from '../lib/downloads';
 import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Clock3, Download, Eye, Pencil, Trash2, type LucideIcon } from 'lucide-react';
@@ -149,7 +150,7 @@ export function MarketCard({
     <div
       onClick={onClick ? () => onClick(skill) : undefined}
       className={cn(
-        'select-text flex w-full flex-col rounded-xl border p-3',
+        'select-text flex w-full min-w-0 flex-col rounded-xl border p-3',
         'bg-[var(--cmd-palette-bg)]',
         // 选中只改颜色,border 厚度始终 1.5px。否则 1px↔1.5px 切换会让
         // 内容区高度抖动 1px,子元素重排,产生视觉跳变。
@@ -158,11 +159,11 @@ export function MarketCard({
           : 'border-[var(--cmd-palette-border)]',
         onClick ? 'cursor-pointer' : '',
       )}
-      style={{ gap: '10px', minHeight: '220px', borderWidth: '1.5px' }}
+      style={{ gap: '10px', minHeight: '160px', borderWidth: '1.5px' }}
     >
       {/* Title */}
       <div className="flex w-full min-w-0 items-center" style={{ gap: '10px' }}>
-        <SkillIcon url={skill.icon} />
+        <SkillIcon url={skill.icon} categories={skill.categories} tags={skill.tags} />
         <h3
           className="min-w-0 flex-1 truncate font-medium text-[var(--msg-assistant-text)]"
           style={{ fontSize: 'var(--text-16)' }}
@@ -177,12 +178,20 @@ export function MarketCard({
             </button>
           ) : skill.displayName || skill.name}
         </h3>
-        <SkillTagList tags={skill.tags} maxVisible={1} className="shrink-0" />
       </div>
 
+
+      {/* Description (max 2 lines) */}
+      <p
+        className="line-clamp-2 text-[var(--settings-section-desc)]"
+        style={{ fontSize: 'var(--text-13)', lineHeight: 1.55 }}
+      >
+        {skill.description}
+      </p>
+
       {/* Author · Version + Visibility tag */}
-      <div className="flex w-full items-center" style={{ gap: '8px' }}>
-        <span className="text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-12)' }}>
+      <div className="flex w-full min-w-0 flex-wrap items-center" style={{ gap: '8px' }}>
+        <span className="min-w-0 truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-12)' }}>
           {skillPublisherLabel(skill)} · {versionStr}
         </span>
         {status ? (
@@ -200,14 +209,6 @@ export function MarketCard({
           {visibilityLabel(skill, allowPrivateVisibilityLabel)}
         </span>
       </div>
-
-      {/* Description (max 3 lines) */}
-      <p
-        className="line-clamp-3 text-[var(--settings-section-desc)]"
-        style={{ fontSize: 'var(--text-13)', lineHeight: 1.55 }}
-      >
-        {skill.description}
-      </p>
 
       {/* Spacer */}
       <div style={{ flex: '1 1 auto' }} />
@@ -230,15 +231,7 @@ export function MarketCard({
             <Clock3 size={12} className="shrink-0" />
             <span className="truncate">{skill.relativeTime}</span>
           </span>
-          <span
-            className="flex shrink-0 items-center"
-            style={{ gap: '4px' }}
-            title={t('skillhub.marketCard.downloadsLabel')}
-            aria-label={t('skillhub.marketCard.downloadsLabel')}
-          >
-            <Download size={12} className="shrink-0" />
-            <span>{downloads}</span>
-          </span>
+
         </div>
         <div className="flex max-w-full flex-wrap items-center gap-2">
           <MarketInstallStatus skill={skill} onUpdate={onUpdate} updating={updating} />
@@ -253,6 +246,20 @@ export function MarketCard({
             />
           ) : null}
         </div>
+      </div>
+      <div className="flex min-h-6 w-full min-w-0 items-center gap-2 text-11 text-[var(--text-tertiary)]">
+        <SkillTagList tags={skill.tags} maxVisible={2} />
+        {hasDownloadCount(skill) && (
+          <span
+            className="ml-auto flex shrink-0 items-center"
+            style={{ gap: '4px' }}
+            title={t('skillhub.marketCard.downloadsLabel')}
+            aria-label={t('skillhub.marketCard.downloadsLabel')}
+          >
+            <Download size={12} className="shrink-0" />
+            <span>{downloads}</span>
+          </span>
+        )}
       </div>
     </div>
   );

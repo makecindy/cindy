@@ -73,7 +73,8 @@ export function mapHubSkillInfoToDesktopInfo(hub: HubSkillInfoForDesktop, opts?:
     })),
     githubUrl: hub.githubUrl,
     publishedAt: hub.updatedAt,
-    downloads: Number.isFinite(hub.stats?.downloads) ? hub.stats?.downloads ?? 0 : 0,
+    downloads: typeof hub.stats?.downloads === 'number' && Number.isFinite(hub.stats.downloads) && hub.stats.downloads >= 0 ? hub.stats.downloads : 0,
+    downloadsAvailable: typeof hub.stats?.downloads === 'number' && Number.isFinite(hub.stats.downloads) && hub.stats.downloads >= 0,
     latestPublishedFromDeviceId: null as string | null,
     catalogScope: opts?.catalogScope,
   };

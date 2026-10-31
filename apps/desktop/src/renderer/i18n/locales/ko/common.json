@@ -15871,6 +15871,8 @@
       "summaryNote": "바이너리, 큰 파일 또는 전체 내용을 미리 볼 수 없는 파일은 크기만 표시합니다."
     },
     "home": {
+      "sortDownloads": "다운로드순",
+      "sortUpdated": "최신순",
       "title": "스킬",
       "description": "설치된 스킬을 관리하거나 SkillHub에서 더 많은 스킬을 찾아보세요.",
       "descriptionLocalOnly": "이 기기에 설치된 로컬 스킬을 관리하세요.",

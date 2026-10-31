@@ -15938,6 +15938,8 @@
       "summaryNote": "Binary or large file, or full text unavailable. Showing file sizes."
     },
     "home": {
+      "sortDownloads": "Most downloaded",
+      "sortUpdated": "Recently updated",
       "title": "Skills",
       "description": "Manage installed skills or discover more in SkillHub.",
       "descriptionLocalOnly": "Manage the local skills installed on this device.",
