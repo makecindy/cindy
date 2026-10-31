@@ -40,12 +40,12 @@ describe('IM public image fetch', () => {
       throw new Error('stop before any network I/O');
     };
     await expect(fetchPublicImageBytes('https://cdn.example/a.png', 1024, guardedFetch)).rejects.toThrow('stop before');
-    expect(seen[0]).toEqual({ allowRfc2544BenchmarkRange: true, allowIpv6UniqueLocalRange: true });
+    expect(seen[0]).toEqual({ allowRfc2544BenchmarkRange: true });
 
     // The same policy through the real guard: these must still be refused
     // before any connection is attempted.
-    for (const address of ['127.0.0.1', '10.0.0.1', '169.254.169.254', '192.168.1.1']) {
-      const lookupFn = (async () => [{ address, family: 4 }]) as never;
+    for (const address of ['127.0.0.1', '10.0.0.1', '169.254.169.254', '192.168.1.1', 'fd00::1']) {
+      const lookupFn = (async () => [{ address, family: address.includes(':') ? 6 : 4 }]) as never;
       await expect(
         fetchPublicImageBytes('https://cdn.example/a.png', 1024, (params) => fetchWithSsrFGuard({ ...params, lookupFn })),
         address,
