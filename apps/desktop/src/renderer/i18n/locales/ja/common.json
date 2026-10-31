@@ -843,6 +843,7 @@
         "pausedLocal": "他のパソコンからの新しいタスクは受付停止中",
         "cooling": "クールダウン中",
         "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "quotaExhausted": "クォータを使い切りました",
         "offline": "オフライン",
         "unreachableHere": "このパソコンから接続できません",
         "unavailable": {

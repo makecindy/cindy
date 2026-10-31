@@ -236,6 +236,7 @@ function MemberRow({
   // 组所在电脑看它能用，这台电脑却连不上(换电脑时会跳过它)：不显示成能用。
   const unreachableHere = status?.unreachableHere === true;
   const ready = !unreachableHere && (status?.state === 'available' || status?.state === 'full');
+  const quotaExhausted = !unreachableHere && status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   const appendRunning = running > 0 && status != null
     && (unreachableHere || (status.state !== 'available' && status.state !== 'full'));
@@ -270,15 +271,17 @@ function MemberRow({
           />
         </span>
         <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-          <span
-            aria-hidden="true"
-            className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-          />
-          <span>
-            {unreachableHere
-              ? t('providerGroup.member.status.unreachableHere')
-              : memberStatusText(t, status, i18n.language)}
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: quotaExhausted ? 'var(--warning-fg)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+            />
+            <span className="min-w-0">
+              {unreachableHere
+                ? t('providerGroup.member.status.unreachableHere')
+                : memberStatusText(t, status, i18n.language)}
+            </span>
           </span>
           {appendRunning && (
             <>

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { useTranslation } from 'react-i18next';
 
-import { formatQuotaResetAt } from '@/components/status/usageCardModel';
+import { formatQuotaResetAt, formatQuotaResetCountdown } from '@/components/status/usageCardModel';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -388,6 +388,7 @@ function MemberRow({
   // 无障碍标签与移出确认用：账号行带上电脑名，同一台电脑的几个账号不会重名。
   const label = accountName === null ? computer : `${computer} · ${accountName}`;
   const ready = status?.state === 'available' || status?.state === 'full';
+  const quotaExhausted = status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；
   // 「已满」等于跑满上限，上限就在旁边的下拉里，不必再报一遍数。其余状态(冷却、不在线、已暂停)
@@ -446,15 +447,17 @@ function MemberRow({
                 />
               </span>
               <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-                />
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: quotaExhausted ? 'var(--warning-fg)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+                  />
+                  <span className="min-w-0">{member.kind === 'local' && status?.state === 'paused'
+                    ? t('providerGroup.member.status.pausedLocal')
+                    : memberStatusText(t, status, i18n.language)}</span>
+                </span>
                 {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
-                <span>{member.kind === 'local' && status?.state === 'paused'
-                  ? t('providerGroup.member.status.pausedLocal')
-                  : memberStatusText(t, status, i18n.language)}</span>
                 {appendRunning && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -560,6 +563,15 @@ export function memberStatusText(
     case 'paused':
       return t('providerGroup.member.status.paused');
     case 'cooling': {
+      if (status.usageLimit) {
+        const time = formatQuotaResetCountdown(
+          status.usageLimit.resetAtMs === null ? null : status.usageLimit.resetAtMs / 1000,
+          nowMs,
+          t,
+        );
+        const reason = t('providerGroup.member.status.quotaExhausted');
+        return time ? `${reason} · ${time}` : reason;
+      }
       // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
       const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
       return time
