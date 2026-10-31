@@ -3563,6 +3563,12 @@ class CindyMcpGateway {
       }));
   }
 
+  private registeredServers(): Set<string> {
+    const servers = new Set<string>();
+    for (const tool of this.tools.values()) servers.add(tool.serverName);
+    return servers;
+  }
+
   availableServers(): string[] {
     return [...new Set(this.list().map((tool) => tool.server))].sort();
   }
@@ -3602,6 +3608,27 @@ class CindyMcpGateway {
         reason: unavailableReason,
         availableServers: this.availableServers(),
       };
+    } else if (serverName && !this.registeredServers().has(serverName)) {
+      // 「网关里没有登记这个 server」必须先于工具匹配判定。未注册的 server 若同时带
+      // 了 tool，旧顺序会落进下面的 UNKNOWN_TOOL 分支，而此时 tools 已按 server
+      // 过滤成空数组 —— availableTools 恒为 []，把「server 不存在」说成「工具名
+      // 不对」，模型只会继续猜工具名而不会回头质疑 server（#6926）。前移到此处后，
+      // 未知 server 无论是否带 tool 都统一回 UNKNOWN_SERVER 并附上
+      // availableServers / unavailableServers。
+      //
+      // 存在性按「已注册工具归属的 server 集合」判定，不能按 list(serverName) 的
+      // 工具数：list() 在记忆门面开启时会过滤掉 cindy_memory 的全部工具，此时
+      // tools.length === 0 但 server 是真实存在的，按工具数判定会把它误报成
+      // UNKNOWN_SERVER，同时让下面 cindy_memory 的门面特判变成不可达分支
+      // （#7136 review）。已注册但整体不可用的 server 由上面的 SERVER_UNAVAILABLE
+      // 分支先截住。
+      payload = {
+        ok: false,
+        errorCode: 'UNKNOWN_SERVER',
+        requested: serverName,
+        availableServers: this.availableServers(),
+        unavailableServers,
+      };
     } else if (serverName && toolName) {
       const selected = this.botMemoryFacadeEnabled && serverName === 'cindy_memory'
         ? undefined
@@ -3625,14 +3652,6 @@ class CindyMcpGateway {
           }],
         };
       }
-    } else if (serverName && tools.length === 0) {
-      payload = {
-        ok: false,
-        errorCode: 'UNKNOWN_SERVER',
-        requested: serverName,
-        availableServers: this.availableServers(),
-        unavailableServers,
-      };
     } else {
       const query = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
       const offset = Number.isSafeInteger(input.offset) && Number(input.offset) >= 0 ? Number(input.offset) : 0;
