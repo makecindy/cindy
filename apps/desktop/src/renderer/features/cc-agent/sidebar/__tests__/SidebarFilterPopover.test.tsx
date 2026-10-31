@@ -198,7 +198,7 @@ describe('sidebar display settings menu', () => {
       within(group)
         .getAllByRole('menuitem')
         .map((row) => row.textContent),
-    ).toEqual(['项目', '对话']);
+    ).toEqual(['项目', '对话', '进行中']);
     expect(filter.groupDevice).toBe(true);
   });
 });

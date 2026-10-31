@@ -14095,6 +14095,11 @@
       "pinned": "고정",
       "pinnedToggleExpand": "고정 펼치기",
       "pinnedToggleCollapse": "고정 접기",
+      "inProgress": "진행 중",
+      "inProgressToggleExpand": "진행 중 펼치기",
+      "inProgressToggleCollapse": "진행 중 접기",
+      "pinSuggestion": "자주 연 항목: {{title}}",
+      "pinSuggestionDismiss": "다시 표시 안 함",
       "pinnedShowMore": "더 보기",
       "viewStyle": "표시 스타일 전환",
       "viewStyleList": "텍스트",
@@ -14150,7 +14155,8 @@
         "project": "프로젝트",
         "flat": "평면 목록",
         "device": "기기",
-        "dialogue": "대화"
+        "dialogue": "대화",
+        "inProgress": "진행 중"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -14476,7 +14482,8 @@
       "groupSummary": {
         "project": "프로젝트",
         "dialogue": "대화",
-        "device": "기기"
+        "device": "기기",
+        "inProgress": "진행 중"
       },
       "taskStatusHeading": "세션 상태",
       "taskStatus": {
