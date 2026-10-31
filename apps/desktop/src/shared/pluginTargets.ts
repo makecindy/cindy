@@ -27,6 +27,8 @@ export type PluginTargetRequest =
       kind: 'send';
       requestKey: string;
       target: PluginTargetRef;
+      /** Bot only: an opaque business topic, scoped by the Host to this plugin installation. */
+      topicKey?: string;
       text: string;
       context?: string;
       attachments?: PluginMessageAttachment[];

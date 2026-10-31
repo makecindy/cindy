@@ -302,6 +302,8 @@ export function createPluginTaskService(deps: PluginTaskServiceDeps) {
     });
   };
   return {
+    /** Topic bindings must serialize with source relocation and uninstall revocation. */
+    withTargetBinding: <T>(run: () => Promise<T>): Promise<T> => exclusive(run),
     relocatePlugin: (from: string, to: string) => exclusive(async () => {
       await deps.store.relocatePlugin(from, to);
       deps.assertCurrent();
