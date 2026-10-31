@@ -318,7 +318,15 @@
     "learnFailed": "技藝修習未能啟",
     "learnBusyBody": "已有一修習差事方行，候其畢再試。",
     "learnFailedBody": "啟之未成：{{detail}}",
-    "unknownError": "不明之謬"
+    "unknownError": "不明之謬",
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為此差事擇用 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用 {{model}}",
+        "failed": "{{plugin}} 未及回應，此差事用 {{model}}",
+        "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用 {{model}}"
+      }
+    }
   },
   "queuePresentation": {
     "panel": {

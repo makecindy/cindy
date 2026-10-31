@@ -91,6 +91,10 @@ export function registerMcpAppsIpc(
         return getGhostLibrarySlot().resolvePanelFilePath(instance, relativePath);
       },
       libraryMime: mediaTypeForLibraryPath,
+      openHandoff: async (instance, ref) => {
+        const { getGhostHandoffStore } = await import('../cindy-brain/index.js');
+        return getGhostHandoffStore().openForPage(instance, ref);
+      },
     }),
     owner: currentOwner,
     config: readAppServer,

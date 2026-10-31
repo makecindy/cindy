@@ -1,3 +1,20 @@
+/** Fade cleanup only removes opacity/color animation hooks (globals.css).
+ * Require the renderer's word key and an exact removal: other classes, text,
+ * styles and batched layout changes must still invalidate row geometry.
+ */
+function isCompletedFade(record: MutationRecord): boolean {
+  if (record.type !== 'attributes' || !(record.target instanceof HTMLElement)
+    || !record.target.hasAttribute('data-wf-key')) return false;
+  const element = record.target;
+  if (record.attributeName === 'data-stream-marker') {
+    return element.tagName === 'LI' && record.oldValue !== null && !element.hasAttribute('data-stream-marker');
+  }
+  if (record.attributeName !== 'class' || element.tagName !== 'SPAN' || record.oldValue === null) return false;
+  const before = record.oldValue.split(/\s+/).filter(Boolean);
+  return before.includes('stream-word') &&
+    before.filter(name => name !== 'stream-word').join(' ') === Array.from(element.classList).join(' ');
+}
+
 /** Geometry is rebuilt on structural/width changes, and patched for dirty rows.
  * Scrolling only queries the ordered numeric offsets; it never scans row DOM.
  */
@@ -46,6 +63,7 @@ export class MessageViewportGeometry {
 
   mutations(records: MutationRecord[], items: HTMLElement) {
     for (const record of records) {
+      if (isCompletedFade(record)) continue;
       if (record.target === items) {
         if (record.type === 'childList') this.structure = true;
         else this.full = true;

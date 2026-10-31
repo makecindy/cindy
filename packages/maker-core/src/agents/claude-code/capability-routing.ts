@@ -119,6 +119,12 @@ export function isClaudeCapabilityRouteEnforced(
   ) {
     return false;
   }
+  // A user-registered MCP is only ever replaced outright (denied server), never
+  // narrowed to explicit selection: Claude cannot tell its tools from a same-named
+  // harness server once flattened, so the deny list is the single safe control.
+  if (directive.source.kind === 'user-mcp') {
+    return directive.source.surface === 'mcp' && directive.invocation === 'disabled';
+  }
   switch (directive.source.surface) {
     case 'skill':
       return true;

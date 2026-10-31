@@ -261,6 +261,14 @@
     "waitingMessage": "Wartet auf das Senden: {{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} hat für diese Aufgabe {{model}} gewählt",
+      "kept": {
+        "no-opinion": "{{plugin}} hat das Modell diesmal nicht geändert, diese Aufgabe nutzt {{model}}",
+        "failed": "{{plugin}} hat nicht rechtzeitig geantwortet, diese Aufgabe nutzt {{model}}",
+        "unavailable-route": "{{plugin}} hat ein nicht nutzbares Modell gewählt, diese Aufgabe nutzt {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Kontext neu organisiert, wird fortgesetzt",
       "labelTimeout": "Letzter Durchlauf ohne Antwort; Kontext zum Fortsetzen neu organisiert",

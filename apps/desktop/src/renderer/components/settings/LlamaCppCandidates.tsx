@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { localModelDescription } from '@cindy/model-providers';
 import { useTranslation } from 'react-i18next';
 import type {
   LlamaCppCatalogEntry,
@@ -92,13 +93,7 @@ export function LlamaCppCandidates({
               : undefined
           }
           packaging={<LocalModelTag>{variant.quantization}</LocalModelTag>}
-          description={
-            entry.descriptions?.[
-              (i18n.resolvedLanguage ?? i18n.language) as keyof NonNullable<
-                typeof entry.descriptions
-              >
-            ] ?? entry.descriptions?.en
-          }
+          description={localModelDescription(entry.descriptions, i18n.resolvedLanguage ?? i18n.language)}
           details={
             <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
               {formatDownloadBytes(variant.sizeBytes)}

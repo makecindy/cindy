@@ -146,7 +146,7 @@ function sameHandleVersion(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
  * 请求区间,单次读会把合法文件截断成解析失败。EOF 提前时这里只返回实际字节；
  * 调用方随后用句柄版本复核（及可选复读）拒绝并发截断或改写。
  */
-async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
+export async function readToLength(handle: fs.promises.FileHandle, size: number): Promise<Buffer> {
   const buffer = Buffer.alloc(size);
   let offset = 0;
   while (offset < size) {

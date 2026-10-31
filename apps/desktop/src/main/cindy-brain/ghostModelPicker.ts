@@ -34,6 +34,27 @@ export function chooseModelPickerWindow<W>(
   return focused && usable(focused) ? focused : all.find(usable);
 }
 
+type AgentBinaryStatus = (agent: string) => Promise<{ binaryReady?: boolean } | null | undefined>;
+let agentBinaryStatus: AgentBinaryStatus = async () => null;
+
+export function setPluginRouteAgentStatusProvider(provider: AgentBinaryStatus): void {
+  agentBinaryStatus = provider;
+}
+
+/**
+ * A plugin may route to another Harness. If that Harness is not installed the send gate would stop the
+ * message with a dialog, so the route must fall back instead. Only a definite "missing" counts: when the
+ * check itself fails, the send gate still has the final say. Claude Code ships with the app.
+ */
+export async function isPluginRouteHarnessInstalled(agent: string): Promise<boolean> {
+  if (agent === 'claude-code') return true;
+  try {
+    return (await agentBinaryStatus(agent))?.binaryReady !== false;
+  } catch {
+    return true;
+  }
+}
+
 export interface PluginModelPickerTarget {
   id: string | number;
   isCurrent?(): boolean;

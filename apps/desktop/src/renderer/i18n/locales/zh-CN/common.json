@@ -7484,6 +7484,20 @@
         "unknownPublisher": "未知发布者",
         "unknownReviewerDetail": "包里带有审核声明，但当前 Cindy 不认识这把审核公钥，因此不会显示为已审核。"
       },
+      "controlPoints": {
+        "title": "运行前检查",
+        "description": "这个插件可以在自动化或例行任务运行前做检查：只能跳过或停止本次运行，不能替你批准。",
+        "titleWithStartTask": "插件介入的时机",
+        "descriptionWithStartTask": "只在你选了它的任务里介入：运行前只能跳过或停止本次运行，开新任务时只为第一条消息选一次模型。都不能替你批准。",
+        "usage": "使用方法：编辑自动化或例行任务时，在「前置检查」里选它。",
+        "usageStartTask": "使用方法：在新任务的模型选择器里选它提供的模型。",
+        "points": {
+          "will-schedule-run": "自动化运行前",
+          "will-routine-run": "伙伴的例行任务运行前",
+          "will-start-task": "开新任务时"
+        },
+        "inactive": "还不能使用。更新或重新安装这个插件时允许即可。"
+      },
       "perm": {
         "mail": "使用邮件草稿与发送卡片",
         "mailDetail": "可在卡片中编辑和同步草稿，并在发送前提供确认和撤销倒计时。",
@@ -7518,6 +7532,9 @@
         "agentDelegationDetail": "伙伴按委派范围执行并接受自动审核；不冒用主人身份，不修改伙伴权限。",
         "agentTargets": "可向项目、已有任务和伙伴投递消息",
         "agentTargetsDetail": "可查看本机项目目录、任务和伙伴的名称与标识，在项目中新建任务或向已有任务、伙伴发送文字和图片。可能触发 AI 执行并产生模型费用。该投递接口本身不能读取其他任务的历史、修改设置或停止任务。",
+        "agentObserve": "可查看本机项目的任务列表和状态",
+        "agentObserveDetail": "可查看已登记本机项目中任务的标题、Agent 类型、归档情况和状态（运行中、待处理、最近活动时间），并在主窗口打开某个任务。不能读取消息、计划或文件，也不能发送消息或修改任务。",
+        "agentObserveRequest": "确认任务查看权限",
         "agentHiddenTasks": "可创建不显示在任务列表里的后台任务",
         "agentHiddenTasksDetail": "本插件创建的任务可以不出现在任务列表、搜索和通知里。你可以随时在插件详情的「后台任务」中查看、打开，或显示到任务列表；卸载插件时这些任务会恢复显示。",
         "agentErrand": "可以新建任务、执行工作并读取结果",
@@ -7550,6 +7567,12 @@
         "subscribeHooksDetail": "发送前先经它审阅：可拦下消息，也可能改写正文后再发出；被拦的消息可编辑后重发。",
         "subscribeAssistantReply": "可读取并重写 AI 的回复",
         "subscribeAssistantReplyDetail": "AI 每轮回复完成后先经它处理：可润色改写正文(直接替换，不留原文)，或用自绘卡片替换回复气泡(卡片替换时原文保留，可一键查看)。",
+        "subscribeScheduleRun": "可在你选定的自动化运行前做检查",
+        "subscribeScheduleRunDetail": "在「前置检查」里选了它的自动化，运行前会先问它。它看得到这条自动化的名称和指令，可以让这次跳过或停止，但不能替你批准。",
+        "subscribeRoutineRun": "可在你选定的伙伴例行任务运行前做检查",
+        "subscribeRoutineRunDetail": "在「前置检查」里选了它的例行任务，每次触发后会先问它。它看得到例行任务的指令和触发它的事件内容，可以让这次跳过或停止，但不能替你批准。",
+        "subscribeStartTask": "可为新任务选模型",
+        "subscribeStartTaskDetail": "新任务选了它提供的模型时，它会看第一条消息，从你已连接的模型里选一个。只选一次，任务中途不会换模型。",
         "card": "渲染消息卡片",
         "cardExternalLink": "卡片内可声明外链，经你确认后打开浏览器",
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
@@ -7740,6 +7763,22 @@
         "reveal": "显示到任务列表",
         "revealed": "任务已显示到任务列表",
         "revealFailed": "未能将任务显示到任务列表"
+      },
+      "handoff": {
+        "title": "对话中交给插件的文件",
+        "description": "这些是你在对话中交给该插件的文件副本，7 天未使用后自动删除。",
+        "empty": "还没有在对话中交给该插件的文件。",
+        "loadFailed": "无法读取文件列表，请稍后重试。",
+        "refresh": "刷新",
+        "openInFinder": "在访达中打开",
+        "openInExplorer": "在资源管理器中打开",
+        "meta": "{{size}} · 交出于 {{handedAt}} · {{expiresAt}} 自动删除",
+        "delete": "删除",
+        "deleteNamed": "删除 {{name}}",
+        "deleteTitle": "删除这个文件？",
+        "deleteDescription": "删除后，插件和已打开的页面都无法再使用「{{name}}」，且无法恢复。",
+        "deleteFailed": "删除失败，请稍后重试。",
+        "cancel": "取消"
       },
       "library": {
         "title": "持久作品库",
@@ -12685,6 +12724,14 @@
     "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "为这个任务选了",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用",
+        "failed": "{{plugin}} 没有及时回应，这个任务用",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用"
+      }
+    },
     "teammateProcess": {"record":"处理记录","operations":"操作记录","elapsed":"已处理 {{duration}}","took":"用时 {{duration}}","processing":"正在处理","worked":"处理记录","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次调用失败","separator":"、","actions":{"running":{"read":"正在查看文件","edit":"正在编辑文件","search":"正在查找内容","web":"正在查阅网页","command":"正在运行命令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理计划"},"done":{"read":"查看了文件","edit":"编辑了文件","search":"查找了内容","web":"查阅了网页","command":"运行了命令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了计划"}}},
     "imageDelivery": {
       "stored": "图片已交付",
@@ -15220,6 +15267,25 @@
         },
         "browse": "选择脚本文件（也可直接拖拽到输入框）"
       },
+      "preRunPlugin": {
+        "sourceLabel": "检查方式",
+        "source": {
+          "script": "脚本",
+          "plugin": "插件"
+        },
+        "tooltip": "每次运行前先问你选的插件：它可以放行、跳过本次或停止本次运行，不能替你批准任何需要你确认的事。",
+        "choose": "选择插件",
+        "unavailable": "插件不可用",
+        "unavailableHint": "这个插件已经不可用。改选其它插件前，运行时按「插件出错时」的设置处理。",
+        "hint": "插件可以放行、跳过本次或停止本次运行，不能替你批准任何事。",
+        "empty": "还没有能做运行前检查的插件。安装支持运行前检查的插件，并在安装或更新时允许。",
+        "onFailureLabel": "插件出错时",
+        "onFailure": {
+          "allow": "照常运行",
+          "skip": "跳过本次",
+          "block": "停止并记为失败"
+        }
+      },
       "validation": {
         "nameRequired": "请填写名称",
         "promptRequired": "请填写 Prompt",
@@ -15232,6 +15298,7 @@
         "modelUnavailable": "模型 {{model}} 已不可用，请重新选择",
         "reasoningInvalid": "Reasoning 必须是 {{values}} 之一",
         "preRunHookCommandRequired": "请填写前置检查脚本命令",
+        "preRunPluginRequired": "请为前置检查选择插件",
         "templateParamRequired": "请填写{{label}}",
         "templateApplyFailed": "无法应用模板，请检查参数后重试"
       }
@@ -15717,6 +15784,7 @@
       "titleRevealPath": "允许 Agent 获取这个媒体文件的本机路径？",
       "count": "{{count}} 个文件",
       "descriptionAttachments": "以下文件在当前任务的工作目录之外。允许后，这些文件会交给该插件处理(它只拿到内容指纹，拿不到路径)。",
+      "descriptionHandoff": "以下文件在当前任务的工作目录之外。允许后，插件会收到这些文件的副本（拿不到路径），副本 7 天未使用后自动删除。",
       "descriptionDir": "以下目录/文件在当前任务的工作目录之外。允许后，其中的文件会交给该插件上传(它只拿到一次性票据，拿不到路径)。",
       "descriptionSaveDir": "以下目录在当前任务的工作目录之外。允许后，该插件可以把下载的文件存入其中(不会覆盖已有文件)。",
       "descriptionRevealPath": "该路径只会在你允许后返回给当前 Agent，并进入对话记录；配对设备可能同步到这条记录。此操作不授予插件读取文件的权限。",
@@ -17541,6 +17609,7 @@
     "sessionModeFresh": "每次新建任务（隔离上下文）",
     "sessionModeHint": "沿用同一任务会在同一条例行任务的对话里继续；每次新建会为每次触发创建一条独立任务，运行结束后关闭。",
     "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
+    "checkSource": "检查方式",
     "checkCommand": "前置检查命令",
     "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
     "timeoutMs": "检查超时（毫秒，留空不限时）",
@@ -17606,6 +17675,14 @@
         "skillDisabled": "停用了技能「{{title}}」",
         "skillMerged": "把技能「{{title}}」并入「{{into}}」并停用"
       }
+    },
+    "remote": {
+      "pause": "暂停例行任务",
+      "resume": "恢复例行任务",
+      "addSchedule": "添加定时条件",
+      "addInterval": "添加间隔条件",
+      "addEvent": "添加事件触发器",
+      "filterField": "筛选字段"
     }
   },
   "cindyMakeDoctor": {

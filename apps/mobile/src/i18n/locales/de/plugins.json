@@ -16,7 +16,22 @@
     "bcc": "Bcc",
     "subject": "Betreff",
     "choosePlugin": "Wähle ein Plugin, um diese E-Mail zu öffnen.",
-    "personalPlugin": "Persönliches Plugin"
+    "personalPlugin": "Persönliches Plugin",
+    "reply": "Antworten",
+    "replyAll": "Allen antworten",
+    "forward": "Weiterleiten",
+    "quote": {
+      "reply": "Auf diese E-Mail antworten",
+      "replyAll": "Allen auf diese E-Mail antworten",
+      "forward": "Diese E-Mail weiterleiten"
+    },
+    "messageCount_one": "{{count}} E-Mail",
+    "messageCount_other": "{{count}} E-Mails",
+    "showMessages_one": "{{count}} E-Mail anzeigen",
+    "showMessages_other": "{{count}} E-Mails anzeigen",
+    "conversationFailed": "Weitere E-Mails in dieser Unterhaltung konnten nicht geladen werden.",
+    "expandMessage": "E-Mail von {{from}} aufklappen",
+    "collapseMessage": "E-Mail von {{from}} zuklappen"
   },
   "title": "Plugins",
   "all": "Alle",
@@ -148,8 +163,6 @@
   "demo": {
     "hint": "Demodaten · Keine echte Konfiguration wird geändert"
   },
-  "mailPreview": "E-Mail-Vorschau",
-  "mailEnlarge": "Vorschau vergrößern",
   "mailInsertImage": "In Nachricht einfügen",
   "mailAttach": "Anhang hinzufügen",
   "mailUpdated": "Entwurf aktualisiert (schreibgeschützt)",

@@ -261,6 +261,14 @@
     "waitingMessage": "等待发送的消息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 为这个任务选了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 这次没有改模型，这个任务用 {{model}}",
+        "failed": "{{plugin}} 没有及时回应，这个任务用 {{model}}",
+        "unavailable-route": "{{plugin}} 选的模型现在用不了，这个任务用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文并继续",
       "labelTimeout": "上一轮没有响应，已整理后继续",

@@ -261,6 +261,14 @@
     "waitingMessage": "等待傳送的訊息：{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} 為這個任務選了 {{model}}",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用 {{model}}",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用 {{model}}",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用 {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "已整理上下文並繼續",
       "labelTimeout": "上一輪沒有回應，已整理後繼續",

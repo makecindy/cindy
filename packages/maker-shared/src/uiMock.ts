@@ -41,7 +41,9 @@ export type UiMockMessage =
   | { role: 'user'; text: string }
   | { role: 'assistant'; text: string }
   | { role: 'thinking'; text: string }
-  | { role: 'tool'; name: string; input: Record<string, unknown>; result: string };
+  | { role: 'tool'; name: string; input: Record<string, unknown>; result: string }
+  /** New task "Let a plugin choose": the one-line note under the first message. */
+  | { role: 'plugin-route'; note: Record<string, unknown> };
 
 export interface UiMockTask {
   id: string;
@@ -335,6 +337,38 @@ export const UI_MOCK_TASKS: readonly UiMockTask[] = [
       { role: 'assistant', text: '已替换 36 个图标，旧资源已删除。' },
     ],
   },
+  {
+    id: 'ui-mock-plugin-route-routed',
+    title: '插件模型：选了模型',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6-astra',
+    effort: 'high',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 2,
+    messages: [
+      { role: 'user', text: '写一个判断回文的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'routed', modelName: 'GPT-6-Astra', effort: 'high', reason: '写代码 98%' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
+  {
+    id: 'ui-mock-plugin-route-failed',
+    title: '插件模型：插件没回应',
+    project: null,
+    agentKind: 'codex',
+    model: 'gpt-6.1-sol',
+    effort: 'medium',
+    status: 'active',
+    source: 'desktop',
+    minutesAgo: 3,
+    messages: [
+      { role: 'user', text: '写一个求阶乘的函数。' },
+      { role: 'plugin-route', note: { pluginName: '决策闸门', outcome: 'kept', modelName: 'GPT-6.1-Sol', why: 'failed' } },
+      { role: 'assistant', text: '好的，函数已写好。' },
+    ],
+  },
 ];
 
 export interface UiMockSessionRow {
@@ -369,6 +403,7 @@ export interface UiMockMessageRow {
   /** Decoded content; Desktop stores `JSON.stringify(content)`. */
   content: unknown;
   toolUseId: string | null;
+  agentMeta?: Record<string, unknown>;
   /** Unix ms. */
   createdAt: number;
 }
@@ -422,9 +457,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
   const rows: UiMockMessageRow[] = [];
   const count = task.messages.reduce((total, message) => total + (message.role === 'tool' ? 2 : 1), 0);
   let at = endsAt - (count - 1) * 1_000;
-  const push = (role: UiMockMessageRole, content: unknown, toolUseId: string | null = null) => {
+  const push = (role: UiMockMessageRole, content: unknown, toolUseId: string | null = null, agentMeta?: Record<string, unknown>) => {
     const id = `${UI_MOCK_ID_PREFIX}${task.id}-${rows.length + 1}`;
-    rows.push({ id, clientId: id, sessionId: task.id, role, content, toolUseId, createdAt: at });
+    rows.push({ id, clientId: id, sessionId: task.id, role, content, toolUseId, ...(agentMeta ? { agentMeta } : {}), createdAt: at });
     at += 1_000;
   };
   task.messages.forEach((message, index) => {
@@ -434,6 +469,9 @@ function taskMessageRows(task: UiMockTask, endsAt: number): UiMockMessageRow[] {
         break;
       case 'assistant':
         push('assistant', message.text);
+        break;
+      case 'plugin-route':
+        push('assistant', '', null, { pluginModelRoute: message.note });
         break;
       case 'thinking':
         push('thinking', { kind: 'thinking', text: message.text, durationMs: 1_500, isRedacted: false });

@@ -30,6 +30,8 @@
   用户持久数据、临时文件与测试目录的安全边界。
 - [`media-storage-and-protocols.md`](media-storage-and-protocols.md)：Desktop 媒体总仓、
   `cindy-media://` 协议、引用生命周期与历史兼容边界。
+- [`browser-use.md`](browser-use.md)：Browser Use 三种浏览器后端的共同规则——优化做在共享层、
+  能力不设限风险交给审批、专用浏览器外链转回用户浏览器、配方目录维护。
 - [`database-and-migrations.md`](database-and-migrations.md)：Desktop SQLite schema、
   append-only migration、companion script、隔离运行与异步数据库访问规则。
 - [`ui-mock-data.md`](ui-mock-data.md)：Desktop 与 Mobile 共用的免登录 UI 模拟数据，`--mock`

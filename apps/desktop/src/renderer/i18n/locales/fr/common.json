@@ -7594,6 +7594,20 @@
         "unknownPublisher": "Éditeur inconnu",
         "unknownReviewerDetail": "Le paquet affirme avoir passé une revue, mais cette version de Cindy ne reconnaît pas la clé du relecteur : il n'est donc pas affiché comme ayant passé la revue."
       },
+      "controlPoints": {
+        "title": "Vérifications avant exécution",
+        "description": "Ce plugin peut vérifier les automatisations ou routines avant leur exécution. Il peut ignorer ou arrêter une exécution, jamais l’approuver à ta place.",
+        "titleWithStartTask": "Quand ce plugin intervient",
+        "descriptionWithStartTask": "Il n’intervient que dans les tâches où tu l’as choisi : avant une exécution, il peut seulement l’ignorer ou l’arrêter ; pour une nouvelle tâche, il choisit un modèle une seule fois, pour le premier message. Il n’approuve jamais rien à ta place.",
+        "usage": "Pour l’utiliser, choisis-le dans Vérification préalable en modifiant une automatisation ou une routine.",
+        "usageStartTask": "Pour l’utiliser, choisissez un modèle qu’il propose dans le sélecteur de modèles d’une nouvelle tâche.",
+        "points": {
+          "will-schedule-run": "Avant l’exécution d’une automatisation",
+          "will-routine-run": "Avant l’exécution d’une routine d’un coéquipier",
+          "will-start-task": "Au démarrage d’une nouvelle tâche"
+        },
+        "inactive": "Pas encore disponible. Autorise-le lors de la mise à jour ou de la réinstallation de ce plugin."
+      },
       "perm": {
         "mail": "Utiliser les brouillons d'e-mail et les cartes d'envoi",
         "mailDetail": "Modifier et synchroniser des brouillons dans une carte, avec confirmation et compte à rebours d'annulation avant l'envoi.",
@@ -7628,6 +7642,9 @@
         "agentDelegationDetail": "Les coéquipiers peuvent effectuer la tâche déléguée sous approbation automatique. Ne se fait pas passer pour le propriétaire et ne modifie pas les autorisations des coéquipiers.",
         "agentTargets": "Peut envoyer des messages aux projets, aux tâches existantes et aux compagnons",
         "agentTargetsDetail": "Peut voir les répertoires des projets locaux ainsi que les noms et ID des tâches et des coéquipiers, créer des tâches dans les projets, et envoyer du texte et des images aux tâches et coéquipiers existants. Peut déclencher une exécution IA et des frais de modèle. Cette API d'envoi ne peut elle-même ni lire l'historique des autres tâches, ni modifier leurs paramètres, ni les arrêter.",
+        "agentObserve": "Peut voir la liste et l'état des sessions des projets locaux",
+        "agentObserveDetail": "Peut voir le titre, le type d'Agent, l'archivage et l'état (en cours, action requise, dernière activité) des sessions des projets locaux enregistrés, et ouvrir une session dans la fenêtre principale. Ne peut pas lire les messages, les plans ni les fichiers, ni envoyer de messages ou modifier les sessions.",
+        "agentObserveRequest": "Vérifier l'autorisation de voir les sessions",
         "agentHiddenTasks": "Peut créer des tâches en arrière-plan masquées de la liste des tâches",
         "agentHiddenTasksDetail": "Les tâches créées par ce plugin peuvent ne pas apparaître dans la liste des tâches, la recherche et les notifications. Vous pouvez toujours les voir, les ouvrir ou les afficher dans la liste des tâches depuis Tâches en arrière-plan sur la page de ce plugin ; désinstaller le plugin les fait réapparaître.",
         "agentErrand": "Créer des tâches, effectuer du travail et lire les résultats",
@@ -7660,6 +7677,12 @@
         "subscribeHooksDetail": "Vérifie chaque message avant l'envoi : il peut le bloquer ou en réécrire le texte avant qu'il parte ; les messages bloqués peuvent être modifiés et renvoyés.",
         "subscribeAssistantReply": "Peut lire et réécrire les réponses de l'IA",
         "subscribeAssistantReplyDetail": "Traite chaque réponse de l'IA une fois terminée : il peut en peaufiner ou réécrire le texte (en le remplaçant directement, sans conserver l'original), ou remplacer la bulle de réponse par sa propre carte (dans ce cas, le texte original est conservé et consultable d'un simple toucher).",
+        "subscribeScheduleRun": "Peut vérifier les automatisations choisies avant leur exécution",
+        "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
+        "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",
@@ -7850,6 +7873,22 @@
         "reveal": "Afficher dans la liste des tâches",
         "revealed": "Tâche affichée dans la liste des tâches",
         "revealFailed": "Impossible d'afficher la tâche dans la liste des tâches"
+      },
+      "handoff": {
+        "title": "Fichiers transmis à ce plugin dans les conversations",
+        "description": "Copies des fichiers que vous avez transmis à ce plugin dans les conversations. Chaque copie est supprimée automatiquement après 7 jours sans utilisation.",
+        "empty": "Aucun fichier n'a encore été transmis à ce plugin dans une conversation.",
+        "loadFailed": "Impossible de charger la liste des fichiers. Réessayez plus tard.",
+        "refresh": "Actualiser",
+        "openInFinder": "Ouvrir dans le Finder",
+        "openInExplorer": "Ouvrir dans l'Explorateur de fichiers",
+        "meta": "{{size}} · Transmis le {{handedAt}} · Supprimé automatiquement le {{expiresAt}}",
+        "delete": "Supprimer",
+        "deleteNamed": "Supprimer {{name}}",
+        "deleteTitle": "Supprimer ce fichier ?",
+        "deleteDescription": "Après suppression, le plugin et les pages ouvertes ne pourront plus utiliser « {{name}} ». Cette action est irréversible.",
+        "deleteFailed": "Impossible de supprimer le fichier. Réessayez plus tard.",
+        "cancel": "Annuler"
       },
       "library": {
         "title": "Bibliothèque persistante",
@@ -12840,6 +12879,14 @@
     "verificationFailed": "Cindy n'a pas pu confirmer le rétablissement de la connexion ChatGPT. Vérifiez à nouveau."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "a choisi pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise"
+      }
+    },
     "imageDelivery": {
       "stored": "Image transmise",
       "failed": "Échec de la transmission de l'image. Réessayez de transférer l'image existante.",
@@ -15463,6 +15510,25 @@
         },
         "browse": "Choisir un fichier de script (ou le faire glisser sur le champ)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Vérifier avec",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Avant chaque exécution, Cindy consulte le plugin choisi. Il peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place ce qui demande ta confirmation.",
+        "choose": "Choisir un plugin",
+        "unavailable": "Plugin indisponible",
+        "unavailableHint": "Ce plugin n’est plus disponible. Tant que tu n’en choisis pas un autre, le réglage « Si le plugin échoue » s’applique.",
+        "hint": "Le plugin peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place.",
+        "empty": "Aucun plugin ne peut encore vérifier les exécutions. Installe un plugin compatible avec les vérifications préalables et autorise-le lors de l’installation ou de la mise à jour.",
+        "onFailureLabel": "Si le plugin échoue",
+        "onFailure": {
+          "allow": "Exécuter normalement",
+          "skip": "Ignorer cette exécution",
+          "block": "Arrêter et marquer comme échouée"
+        }
+      },
       "validation": {
         "nameRequired": "Le nom est obligatoire",
         "promptRequired": "Le prompt est obligatoire",
@@ -15475,6 +15541,7 @@
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
+        "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
       }
@@ -15962,6 +16029,7 @@
       "titleRevealPath": "Autoriser l'Agent à recevoir le chemin local de ce fichier multimédia ?",
       "count": "{{count}} fichiers",
       "descriptionAttachments": "Les fichiers ci-dessous se trouvent en dehors du répertoire de travail de cette session. Si vous l'autorisez, ils seront transmis à ce plugin (il ne reçoit que des empreintes de contenu, jamais les chemins).",
+      "descriptionHandoff": "Les fichiers ci-dessous se trouvent hors du répertoire de travail de cette session. Si vous autorisez, le plugin en reçoit des copies (jamais leurs chemins) ; les copies sont supprimées automatiquement après 7 jours sans utilisation.",
       "descriptionDir": "Le répertoire ou fichier ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ses fichiers seront transmis à ce plugin pour envoi (il ne reçoit qu'un ticket à usage unique, jamais les chemins).",
       "descriptionSaveDir": "Le répertoire ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ce plugin pourra y enregistrer des fichiers téléchargés (les fichiers existants ne sont jamais écrasés).",
       "descriptionRevealPath": "Le chemin n'est renvoyé à l'Agent actuel qu'après votre autorisation et sera ajouté à l'historique de la conversation ; les appareils associés peuvent synchroniser cet historique. Cela n'accorde à aucun plugin l'accès au fichier.",
@@ -17804,6 +17872,7 @@
     "sessionModeFresh": "Nouvelle session à chaque déclenchement (isoler le contexte)",
     "sessionModeHint": "Le mode persistant conserve une seule conversation pour la routine. Le mode nouvelle session crée puis ferme une conversation isolée à chaque déclenchement.",
     "quietHint": "Signaler uniquement les changements ou les problèmes. Désactivez pour les rappels et les messages planifiés.",
+    "checkSource": "Vérifier avec",
     "checkCommand": "Commande de vérification préalable",
     "checkHint": "Facultatif. Vérifie sur l'ordinateur avant chaque exécution : le code de sortie 2 ignore l'exécution, 0 la poursuit, les erreurs restent visibles. Videz le champ pour la retirer.",
     "timeoutMs": "Délai de vérification (ms, vide pour aucune limite)",
@@ -17872,6 +17941,14 @@
       "pendingTurns_many": "{{count}} échanges",
       "lastLearned_many": "{{count}} modifications",
       "readTurns_many": "{{count}} échanges lus"
+    },
+    "remote": {
+      "pause": "Suspendre la routine",
+      "resume": "Reprendre la routine",
+      "addSchedule": "Ajouter un horaire",
+      "addInterval": "Ajouter un intervalle",
+      "addEvent": "Ajouter un déclencheur d’événement",
+      "filterField": "Champ de filtre"
     }
   },
   "cindyMakeDoctor": {

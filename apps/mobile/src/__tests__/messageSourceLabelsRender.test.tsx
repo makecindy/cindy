@@ -78,6 +78,7 @@ vi.mock("react-native", async () => {
       loop: () => ({ start() {}, stop() {} }),
       sequence: () => ({ start() {}, stop() {} }),
     },
+    AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) },
     Platform: { OS: "ios", select: (s: any) => s.ios ?? s.default },
     StyleSheet: {
       create: (s: any) => s,
@@ -174,7 +175,17 @@ vi.mock("react-native-svg", () => ({
 }));
 vi.mock("react-native-uitextview", async () => {
   const { Text } = await import('react-native');
-  return { UITextView: (props: any) => createElement('div', { 'data-native-text-view': true }, createElement(Text, props)) };
+  return { UITextView: (props: any) => createElement('div', {
+    'data-native-text-view': true,
+    'data-selection-menu-label': props.menuActionLabel,
+    // Simulate the native layout and a menu action for a two-character selection.
+    // This exercises the renderer's real quote callback, not UIKit's gestures.
+    ...(props.onMenuAction ? { onDoubleClick: (event: any) => {
+      event.stopPropagation();
+      props.onTextLayout({ nativeEvent: { lines: [event.currentTarget.textContent] } });
+      props.onMenuAction({ nativeEvent: { target: 1, start: 1, end: 3 } });
+    } } : {}),
+  }, createElement(Text, props)) };
 });
 vi.mock("expo-image", () => ({ Image: () => null }));
 // The site-video preview imports this native surface; label tests keep the
@@ -772,6 +783,33 @@ describe("companion text selection and actions", () => {
       act(() => reply.dispatchEvent(new MouseEvent("click", { bubbles: true })));
       expect(onQuote).not.toHaveBeenCalled();
       expect(onAddMessageToComposer).toHaveBeenCalledExactlyOnceWith("e1");
+    } finally { h.unmount(); }
+  });
+});
+
+describe("table-heavy assistant replies", () => {
+  const table = (rows: number) => ["| a | b | c |", "| --- | --- | --- |",
+    ...Array.from({ length: rows }, (_, i) => `| ${i === 0 ? '甲春风乙' : `r${i}`} | x | y |`)].join("\n");
+  const rich = "```cindy-ui\n" + JSON.stringify({ version: 1, seq: 1, op: "create", id: "h", kind: "heading", props: { text: "Mid" } }) + "\n```";
+
+  // PR #7723's >120-cell fallback removed partial selection and native menu actions.
+  // Existing selectionQuote tests cover menu dispatch in isolation, not whether a large
+  // MessageRenderer reply still exposes it. Unit tier: a >120-cell reply, either one
+  // table or split by rich content, must quote only the native event's selected substring.
+  it.each([
+    ["single table", table(40)],
+    ["tables split by rich content", [table(20), rich, table(20)].join("\n\n")],
+  ])("keeps partial-selection quote actions in %s", (_name, markdown) => {
+    const onQuoteSelection = vi.fn();
+    const h = mount([{ ...msg("tables", markdown, { turnCompleted: true }), role: "assistant" }], { onQuoteSelection });
+    try {
+      const cell = [...h.host.querySelectorAll<HTMLElement>(
+        '[data-testid="message.markdownTable"] [data-selection-menu-label]',
+      )].find(node => node.textContent === '甲春风乙');
+      expect(cell).toBeDefined();
+      expect(cell!.getAttribute('data-selection-menu-label')).toBe(i18n.t('message.quote.menuLabel'));
+      act(() => cell!.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+      expect(onQuoteSelection).toHaveBeenCalledExactlyOnceWith({ text: '春风' });
     } finally { h.unmount(); }
   });
 });

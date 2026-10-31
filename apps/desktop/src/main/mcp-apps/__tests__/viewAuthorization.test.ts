@@ -593,7 +593,8 @@ it('approves a plugin page call before binding its card and task in Main', async
 
 // unit: device-link cannot serve execution-computer-only files. Minimal failures:
 // an existing result link at open, or one tools/call returning such a link later.
-it.each(['initial', 'tool-result', 'standard'] as const)('degrades only remote plugin files (%s)', async stage => {
+// Chat file handoff references are execution-computer files too (card attachments).
+it.each(['initial', 'tool-result', 'standard', 'handoff'] as const)('degrades only remote plugin files (%s)', async stage => {
   const { createPluginAppTransport, pluginAppTool } = await import('../pluginServer.js');
   const tools = [{ name: 'open', description: 'Open' }];
   const ui = { resources: [{
@@ -601,17 +602,20 @@ it.each(['initial', 'tool-result', 'standard'] as const)('degrades only remote p
             file: 'ui/form.html'
         }], tools: { open: { resourceUri: "ui://form" } } };
   const content = [{ type: 'resource_link' as const, name: 'photo.png', uri: stage === 'standard' ? 'https://example.com/photo.png' : 'library:photo.png' }];
+  const handoff = { type: 'resource_link' as const, name: 'a.csv', uri: 'handoff:00000000-0000-4000-8000-000000000000' };
   const config: AppServerConfig = { id: 'plugin-files', url: '', transport: 'in-process', plugin: {
     instance: 'plugin', revision: 'approved', packageSha256: 'hash', directory: '/fixture', title: 'Plugin', trust: 'unverified', domains: [], assertCurrent() {},
     createTransport: () => createPluginAppTransport({ instance: 'plugin', revision: 'approved', tools, ui, assertCurrent() {}, readHtml: () => '<p>Page</p>', call: async () => ({ content }) }),
   } };
   const owner = {}, connection = new AppConnection(config), target = pluginAppTool('plugin', tools[0], ui);
   const host = new McpAppsHost({ owner: () => owner, config: () => config, connection: () => connection,
-    readCard: async () => ({ version: 1, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form', tool: target, arguments: {}, ...(stage === 'initial' ? { result: { content } } : {}) }),
+    readCard: async () => ({ version: 1, serverId: config.id, serverRevision: appServerRevision(config), resourceUri: 'ui://form',
+      tool: stage === 'handoff' ? { ...target, _meta: { ...target._meta, 'cindy/attachments': [handoff] } } : target,
+      arguments: {}, ...(stage === 'initial' ? { result: { content } } : {}) }),
     writeCard: async () => {}, sendMessage: async () => {}, authorizeTool: async () => {},
   }); hosts.push(host);
   vi.spyOn(AppBridge.prototype, 'teardownResource').mockResolvedValue({});
-  if (stage === 'initial') {
+  if (stage === 'initial' || stage === 'handoff') {
     await expect(host.open('device:phone', 'task', 'card', {})).rejects.toThrow('MCP_APP_FILES_LOCAL_ONLY');
     return;
   }

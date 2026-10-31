@@ -8,7 +8,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { PluginTaskRoute } from '../../../shared/pluginTasks.js';
 import type { PluginModelPickerRequest } from '../../../shared/pluginModelPicker.js';
-import { GhostModelPicker, chooseModelPickerWindow, isPluginModelPickerRouteAvailable } from '../ghostModelPicker.js';
+import { GhostModelPicker, chooseModelPickerWindow, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, setPluginRouteAgentStatusProvider } from '../ghostModelPicker.js';
 
 const route: PluginTaskRoute = {
   agentKind: 'codex',
@@ -198,4 +198,16 @@ describe('chooseModelPickerWindow', () => {
     expect(chooseModelPickerWindow(main, [hidden, main], usable)).toBe(main);
     expect(chooseModelPickerWindow(null, [hidden], usable)).toBeUndefined();
   });
+});
+
+// Rule: a plugin model must never stop the message. A Harness that is not installed makes the send
+// gate block with a dialog, so the route falls back; a failed check is left to that gate.
+it('reports a routed Harness as missing only when the host says so', async () => {
+  setPluginRouteAgentStatusProvider(async (agent) => ({ binaryReady: agent !== 'codex' }));
+  expect(await isPluginRouteHarnessInstalled('codex')).toBe(false);
+  expect(await isPluginRouteHarnessInstalled('pi')).toBe(true);
+  setPluginRouteAgentStatusProvider(async () => { throw new Error('status failed'); });
+  expect(await isPluginRouteHarnessInstalled('codex')).toBe(true);
+  setPluginRouteAgentStatusProvider(async () => ({ binaryReady: false }));
+  expect(await isPluginRouteHarnessInstalled('claude-code')).toBe(true);
 });

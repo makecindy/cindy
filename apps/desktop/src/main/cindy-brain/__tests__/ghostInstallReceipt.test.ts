@@ -351,6 +351,36 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(approved).toMatchObject({ state: 'approved', receipt: { taskCapabilityApproved: true, targetCapabilityApproved: true, revision: receipt.revision } });
   });
 
+  // Rule: approved control points persist across reads, keep only names this manifest still declares,
+  // and an older receipt without the field stays approved with no control point granted.
+  it('round trips approved control points and keeps older receipts approved without them', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.subscribe = { hooks: ['will-routine-run', 'will-later-point'] as never };
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.approvedControlPoints).toBeUndefined();
+    await store.write({ ...old.receipt, approvedControlPoints: ['will-routine-run', 'will-later-point', 'undeclared'] });
+    const approved = store.read('hello');
+    expect(approved).toMatchObject({
+      state: 'approved',
+      receipt: { approvedControlPoints: ['will-later-point', 'will-routine-run'], revision: receipt.revision },
+    });
+  });
+
+  it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.agent = { tasks: true, targets: true, observe: true };
+    receipt.taskCapabilityApproved = true;
+    receipt.targetCapabilityApproved = true;
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt.observeCapabilityApproved).toBeUndefined();
+    await store.write({ ...old.receipt, observeCapabilityApproved: true });
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: { observeCapabilityApproved: true, revision: receipt.revision } });
+  });
+
   it('writes setup in the author format accepted by the v0.1.48 receipt reader', async () => {
     const receipt = createSetupReceipt();
     await store.write(receipt);

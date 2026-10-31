@@ -101,3 +101,20 @@ export function readCanonicalSessionActivity(
 ): Promise<SessionActivitySnapshot> {
   return readDefaultSessionActivity(sessionId);
 }
+
+/**
+ * Batch read for list views: one live projection pass, with persisted facts
+ * supplied by the caller's own query, so each session does not rebuild the live list.
+ */
+export function createCanonicalSessionActivityBatchReader(
+  persisted: ReadonlyMap<string, PersistedSessionActivityFacts>,
+) {
+  const live = new Map(
+    (getAgentIslandService()?.getSessionActivitySnapshots() ?? []).map((item) => [item.sessionId, item]),
+  );
+  return createSessionActivityReader({
+    getLiveSnapshot: (sessionId) => live.get(sessionId) ?? null,
+    getPersistedFacts: async (sessionId) => persisted.get(sessionId) ?? null,
+    getLatestTerminal: readLatestSessionTerminal,
+  });
+}

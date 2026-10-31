@@ -10,6 +10,7 @@ import {
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostAppContextLocale,
+  ghostAppContextLanguages,
   ghostContentKeys,
   ghostExternalLinkUrls,
   ghostLocalePathFor,
@@ -316,7 +317,7 @@ describe('ghost · 清单校验', () => {
     expect(validateGhostManifest({ ...goodManifest(), author: 42 }).ok).toBe(false);
   });
 
-  it('locales 只接受插件协议四种语言、安全 JSON 路径且必须提供英文', () => {
+  it('locales 接受十种语言、安全 JSON 路径且必须提供英文', () => {
     const valid = validateGhostManifest({
       ...goodManifest(),
       locales: {
@@ -344,7 +345,7 @@ describe('ghost · 清单校验', () => {
     expect(
       validateGhostManifest({
         ...goodManifest(),
-        locales: { en: 'locales/en.json', fr: 'locales/fr.json' },
+        locales: { en: 'locales/en.json', it: 'locales/it.json' },
       }).ok,
     ).toBe(false);
     expect(
@@ -370,7 +371,7 @@ describe('ghost · 清单校验', () => {
         ...goodManifest(),
         locales: { en: 'locales/en.json', 'zh-TW': 'locales/zh-TW.json' },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('无 manual 时保持 origin/main 的 locale 路径兼容语义', () => {
@@ -549,17 +550,31 @@ describe('ghost · 清单校验', () => {
   it('locale 选择完全跟随宿主，插件不支持或宿主值未知时固定回退英文', () => {
     const parsed = validateGhostManifest({
       ...goodManifest(),
-      locales: { en: 'locales/en.json', ja: 'locales/ja.json' },
+      locales: { en: 'locales/en.json', ja: 'locales/ja.json', fr: 'locales/fr.json', 'zh-TW': 'locales/zh-TW.json' },
     });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(ghostLocalePathFor(parsed.manifest, 'ja')).toBe('locales/ja.json');
     expect(ghostLocalePathFor(parsed.manifest, 'zh-CN')).toBe('locales/en.json');
-    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-TW')).toBe('locales/zh-TW.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-Hant-x-lzh')).toBe('locales/zh-TW.json');
+    // No simplified Chinese resource: its classical edition still falls back to English.
+    expect(ghostLocalePathFor(parsed.manifest, 'zh-Hans-x-lzh')).toBe('locales/en.json');
+    expect(ghostLocalePathFor(parsed.manifest, 'fr')).toBe('locales/fr.json');
     expect(ghostLocalePathFor(parsed.manifest, 'fr-FR')).toBe('locales/en.json');
     expect(withGhostResolvedLocale(parsed.manifest, 'ko').resolvedLocale).toBe('ko');
     expect(withGhostResolvedLocale(parsed.manifest, 'zh-TW').resolvedLocale).toBe('zh-TW');
     expect(withGhostResolvedLocale(parsed.manifest, 'fr-FR').resolvedLocale).toBe('en');
+  });
+
+  // PR #8210: both plugin context transports must resolve classical UI locales to authored resources.
+  // Unit: the production context builder preserves the legacy field while exposing a modern uiLocale.
+  it.each([
+    ['zh-Hant-x-lzh', 'zh-TW'],
+    ['zh-Hans-x-lzh', 'zh-CN'],
+    ['fr', 'fr'],
+  ] as const)('maps plugin context %s to %s without changing the legacy locale', (locale, uiLocale) => {
+    expect(ghostAppContextLanguages(locale)).toEqual({ locale: 'en', uiLocale });
   });
 
   it('app-context locale 保持插件协议旧四语，新增宿主语言固定回退英文', () => {

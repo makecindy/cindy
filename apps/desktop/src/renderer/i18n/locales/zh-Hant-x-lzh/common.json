@@ -7518,6 +7518,9 @@
         "agentDelegationDetail": "同僚依委派範圍行事，並受自動審核；不冒主人之名，不改同僚權柄。",
         "agentTargets": "可向案、現有差事與同僚遣訊",
         "agentTargetsDetail": "可觀此機案目錄、差事與同僚之名及識別碼，於案中新開差事，或向現有差事、同僚遣送文字與圖。或觸發 AI 運行並生模型費用。此投遞介面本身不能讀他差事之歷程、改其設定或止之。",
+        "agentObserve": "可觀此機案中差事之目與其狀",
+        "agentObserveDetail": "可觀已登記之此機案中差事之題、Agent 之類、歸檔與否及其狀（方行、待理、近動之時），並於主窗啟某差事。不能讀訊、謀劃與文件，亦不能遣訊或改差事。",
+        "agentObserveRequest": "確認觀差事之權柄",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentErrand": "可立差事、行事並讀結果",
@@ -7604,7 +7607,13 @@
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
-        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}"
+        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
+        "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
+        "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
+        "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "subscribeStartTask": "可為新差事擇模型",
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
       },
       "connections": {
         "confirmTitle": "增連線位址",
@@ -7740,6 +7749,22 @@
         "reveal": "顯於差事錄",
         "revealed": "差事已顯於差事錄",
         "revealFailed": "未能令差事顯於差事錄"
+      },
+      "handoff": {
+        "title": "對話中交予法器之卷",
+        "description": "此乃君於對話中交予此法器之卷之副本，七日不用則自刪。",
+        "empty": "對話中尚未交卷予此法器。",
+        "loadFailed": "卷之列表讀取未成，請稍後再試。",
+        "refresh": "重整",
+        "openInFinder": "於 Finder 中啟之",
+        "openInExplorer": "於檔案總管中啟之",
+        "meta": "{{size}} · 交於 {{handedAt}} · {{expiresAt}} 自刪",
+        "delete": "刪",
+        "deleteNamed": "刪 {{name}}",
+        "deleteTitle": "刪此卷乎？",
+        "deleteDescription": "刪之，則法器與已開之頁皆不得復用「{{name}}」，且不可復原。",
+        "deleteFailed": "刪除未成，請稍後再試。",
+        "cancel": "罷"
       },
       "library": {
         "title": "久藏之庫",
@@ -8187,6 +8212,20 @@
         "importing": "方納卷",
         "finished": "卷已理畢",
         "importFinished": "卷已納畢"
+      },
+      "controlPoints": {
+        "description": "此法器可於自動化或例行差事運行前行檢：僅能略過或止此番運行，不能代君准允。",
+        "inactive": "尚不可用。更新或重裝此法器時許之即可。",
+        "points": {
+          "will-routine-run": "同僚例行差事運行前",
+          "will-schedule-run": "自動化運行前",
+          "will-start-task": "開新差事時"
+        },
+        "title": "行前檢查",
+        "usage": "用法：編輯自動化或例行差事時，於「預檢」擇之。",
+        "descriptionWithStartTask": "僅於君所擇之差事介入：運行前僅能略過或止此番，開新差事時僅為首言擇模型一次。皆不能代君准允。",
+        "titleWithStartTask": "法器介入之時",
+        "usageStartTask": "用法：於新任務之模型擇器中，擇其所供之模型。"
       }
     },
     "mcp": {
@@ -13852,6 +13891,14 @@
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",
       "closeFailed": "刪追問未成，請稍後再試。"
+    },
+    "pluginModelRoute": {
+      "kept": {
+        "failed": "{{plugin}} 未及回應，此差事用",
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用",
+        "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用"
+      },
+      "routed": "為此差事擇用"
     }
   },
   "ccAgent": {
@@ -15266,7 +15313,27 @@
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",
         "templateParamRequired": "請填{{label}}",
-        "templateApplyFailed": "範本不可套，請察參數而後再試"
+        "templateApplyFailed": "範本不可套，請察參數而後再試",
+        "preRunPluginRequired": "請為預檢擇一法器"
+      },
+      "preRunPlugin": {
+        "choose": "擇法器",
+        "empty": "尚無可行前檢之法器。請裝能行前檢之法器，并於安裝或更新時許之。",
+        "hint": "法器可放行、略此番或止此番運行，不能代君准允何事。",
+        "onFailure": {
+          "allow": "照常運行",
+          "block": "止之并錄為未成",
+          "skip": "略此番"
+        },
+        "onFailureLabel": "法器有失時",
+        "source": {
+          "plugin": "法器",
+          "script": "脚本"
+        },
+        "sourceLabel": "檢查之法",
+        "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",
+        "unavailable": "法器不可用",
+        "unavailableHint": "此法器已不可用。未改擇他器前，運行時依「法器有失時」之設處置。"
       }
     },
     "chips": {
@@ -15750,6 +15817,7 @@
       "titleRevealPath": "許 Agent 取此媒體卷於此機之路徑？",
       "count": "{{count}} 卷",
       "descriptionAttachments": "下列之卷在今差事之工作目錄外。許之，則交此法器處之(其唯得內容指紋，不得路徑)。",
+      "descriptionHandoff": "下列之卷在今差事之工作目錄外。許之，則此法器得其副本(不得路徑)，副本七日不用則自刪。",
       "descriptionDir": "下列目錄/卷在今差事之工作目錄外。許之，則其中之卷交此法器上呈(其唯得一次性票據，不得路徑)。",
       "descriptionSaveDir": "下列目錄在今差事之工作目錄外。許之，此法器可將取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路徑唯於君許之後返予今之 Agent，並入言談錄；配對之裝置或同步此錄。此舉不授法器讀卷之權柄。",
@@ -17639,6 +17707,15 @@
         "skillDisabled": "停技藝「{{title}}」",
         "skillMerged": "併技藝「{{title}}」入「{{into}}」而停之"
       }
+    },
+    "checkSource": "檢查之法",
+    "remote": {
+      "pause": "暫停例行差事",
+      "resume": "續行例行差事",
+      "addSchedule": "增定時條件",
+      "addInterval": "增間隔條件",
+      "addEvent": "增事件條件",
+      "filterField": "篩選欄位"
     }
   },
   "cindyMakeDoctor": {

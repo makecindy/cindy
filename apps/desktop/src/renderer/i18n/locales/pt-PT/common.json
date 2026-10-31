@@ -7594,6 +7594,20 @@
         "unknownPublisher": "Editor desconhecido",
         "unknownReviewerDetail": "O pacote declara ter uma revisão, mas esta versão de Cindy não reconhece a chave do revisor, pelo que não é apresentado como revisto."
       },
+      "controlPoints": {
+        "title": "Verificações antes da execução",
+        "description": "Este plugin pode verificar automatizações ou rotinas antes de serem executadas. Pode ignorar ou parar uma execução, nunca aprová-la por ti.",
+        "titleWithStartTask": "Quando este plugin intervém",
+        "descriptionWithStartTask": "Só intervém nas tarefas em que o escolheste: antes de uma execução, só pode ignorá-la ou pará-la; numa tarefa nova, escolhe um modelo uma vez, para a primeira mensagem. Nunca aprova nada por ti.",
+        "usage": "Para o usar, escolhe-o em Verificação prévia ao editar uma automatização ou rotina.",
+        "usageStartTask": "Para usar, escolha um modelo fornecido por ele no seletor de modelos de uma nova tarefa.",
+        "points": {
+          "will-schedule-run": "Antes de executar uma automatização",
+          "will-routine-run": "Antes de executar uma rotina de um colega",
+          "will-start-task": "Ao iniciar uma nova tarefa"
+        },
+        "inactive": "Ainda indisponível. Permite-o ao atualizar ou reinstalar este plugin."
+      },
       "perm": {
         "mail": "Usar rascunhos de email e cartões de envio",
         "mailDetail": "Editar e sincronizar rascunhos num cartão, com confirmação e uma contagem decrescente para anular antes do envio.",
@@ -7628,6 +7642,9 @@
         "agentDelegationDetail": "Os companheiros podem executar a tarefa delegada com revisão Auto. Não permite fazer-se passar pelo proprietário nem alterar as permissões dos companheiros.",
         "agentTargets": "Pode enviar mensagens para projetos, tarefas existentes e companheiros",
         "agentTargetsDetail": "Pode ver diretórios de projetos locais e nomes e identificadores de tarefas e companheiros, criar tarefas em projetos e enviar texto e imagens para tarefas existentes e companheiros. Pode desencadear a execução de IA e custos de utilização do modelo. Esta API de entrega, por si só, não pode ler o histórico de outras tarefas, alterar as respetivas definições nem pará-las.",
+        "agentObserve": "Pode ver a lista e o estado das sessões dos projetos locais",
+        "agentObserveDetail": "Pode ver o título, o tipo de agente, se está arquivada e o estado (em execução, requer atenção, última atividade) das sessões dos projetos locais registados, e abrir uma sessão na janela principal. Não pode ler mensagens, planos ou ficheiros, nem enviar mensagens ou alterar sessões.",
+        "agentObserveRequest": "Rever permissão para ver sessões",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",
@@ -7660,6 +7677,12 @@
         "subscribeHooksDetail": "Revê cada mensagem antes do envio: pode bloqueá-la ou reescrever o texto antes de ser enviado; as mensagens bloqueadas podem ser editadas e reenviadas.",
         "subscribeAssistantReply": "Pode ler e reescrever as respostas da IA",
         "subscribeAssistantReplyDetail": "Processa cada resposta da IA depois de concluída: pode melhorar ou reescrever o texto (substituindo-o diretamente, sem manter o original), ou substituir o balão de resposta pelo seu próprio cartão renderizado (nesse caso, o texto original é mantido e pode ser visto com um toque).",
+        "subscribeScheduleRun": "Pode verificar automatizações escolhidas antes de serem executadas",
+        "subscribeScheduleRunDetail": "As automatizações em que o escolheres em Verificação prévia consultam-no primeiro. Vê o nome e as instruções e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
+        "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de serem executadas",
+        "subscribeRoutineRunDetail": "As rotinas em que o escolheres em Verificação prévia consultam-no primeiro. Vê as instruções e os eventos que as acionaram e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
+        "subscribeStartTask": "Pode escolher o modelo de novas tarefas",
+        "subscribeStartTaskDetail": "Quando uma nova tarefa usa um modelo fornecido por ele, lê a primeira mensagem e escolhe um dos seus modelos ligados. Escolhe uma vez; o modelo não muda durante a tarefa.",
         "card": "Apresenta cartões de mensagens",
         "cardExternalLink": "Os cartões podem declarar ligações externas que abrem o navegador após confirmação",
         "cardExternalLinkDetail": "Clicar numa ligação de um cartão apresenta uma caixa de diálogo de confirmação; o URL só abre no navegador do sistema após a sua aprovação. Apenas são permitidos endereços http/https.",
@@ -7850,6 +7873,22 @@
         "reveal": "Mostrar na lista de tarefas",
         "revealed": "Tarefa apresentada na lista de tarefas",
         "revealFailed": "Não foi possível mostrar a tarefa na lista de tarefas"
+      },
+      "handoff": {
+        "title": "Ficheiros entregues a este plugin em conversas",
+        "description": "Cópias dos ficheiros que entregou a este plugin em conversas. Cada cópia é eliminada automaticamente após 7 dias sem utilização.",
+        "empty": "Ainda não foram entregues ficheiros a este plugin numa conversa.",
+        "loadFailed": "Não foi possível carregar a lista de ficheiros. Tente novamente mais tarde.",
+        "refresh": "Atualizar",
+        "openInFinder": "Abrir no Finder",
+        "openInExplorer": "Abrir no Explorador de Ficheiros",
+        "meta": "{{size}} · Entregue em {{handedAt}} · Eliminado automaticamente em {{expiresAt}}",
+        "delete": "Eliminar",
+        "deleteNamed": "Eliminar {{name}}",
+        "deleteTitle": "Eliminar este ficheiro?",
+        "deleteDescription": "Após a eliminação, o plugin e as páginas abertas deixam de poder usar «{{name}}». Não é possível anular.",
+        "deleteFailed": "Não foi possível eliminar o ficheiro. Tente novamente mais tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -12840,6 +12879,14 @@
     "verificationFailed": "O Cindy não conseguiu confirmar se o início de sessão no ChatGPT foi restabelecido. Verifique novamente."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "escolheu para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa"
+      }
+    },
     "imageDelivery": {
       "stored": "Imagem entregue",
       "failed": "Não foi possível entregar a imagem. Tente transferir novamente a imagem existente.",
@@ -15463,6 +15510,25 @@
         },
         "browse": "Escolha um ficheiro de script (ou arraste um para o campo)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Verificar com",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Antes de cada execução, a Cindy consulta o plugin escolhido. Pode deixar a execução prosseguir, ignorar esta execução ou pará-la. Nunca pode aprovar algo que precise da tua confirmação.",
+        "choose": "Escolher plugin",
+        "unavailable": "Plugin indisponível",
+        "unavailableHint": "Este plugin já não está disponível. Até escolheres outro, aplica-se a opção “Se o plugin falhar”.",
+        "hint": "O plugin pode deixar a execução prosseguir, ignorar esta execução ou pará-la. Nunca pode aprovar nada por ti.",
+        "empty": "Ainda não há plugins que possam verificar execuções. Instala um plugin compatível com verificação prévia e permite-a ao instalar ou atualizar.",
+        "onFailureLabel": "Se o plugin falhar",
+        "onFailure": {
+          "allow": "Executar normalmente",
+          "skip": "Ignorar esta execução",
+          "block": "Parar e marcar como falhada"
+        }
+      },
       "validation": {
         "nameRequired": "O nome é obrigatório",
         "promptRequired": "O prompt é obrigatório",
@@ -15475,6 +15541,7 @@
         "modelUnavailable": "O modelo {{model}} já não está disponível. Selecione outro modelo.",
         "reasoningInvalid": "O raciocínio tem de ser um de {{values}}",
         "preRunHookCommandRequired": "Introduza o comando de verificação prévia",
+        "preRunPluginRequired": "Escolhe um plugin para a verificação prévia",
         "templateParamRequired": "Introduz {{label}}",
         "templateApplyFailed": "Não foi possível aplicar o modelo. Verifique os parâmetros e tente novamente."
       }
@@ -15962,6 +16029,7 @@
       "titleRevealPath": "Permitir que o Agent receba o caminho local deste ficheiro multimédia?",
       "count": "{{count}} ficheiros",
       "descriptionAttachments": "Os ficheiros abaixo estão fora do diretório de trabalho desta sessão. Se permitir, serão entregues a este plugin (que recebe apenas impressões digitais do conteúdo, nunca caminhos).",
+      "descriptionHandoff": "Os ficheiros abaixo estão fora do diretório de trabalho desta sessão. Se permitir, o plugin recebe cópias deles (nunca os caminhos); as cópias são eliminadas automaticamente após 7 dias sem utilização.",
       "descriptionDir": "O diretório/ficheiro abaixo está fora do diretório de trabalho desta sessão. Se permitir, os seus ficheiros serão entregues a este plugin para carregamento (que recebe apenas um comprovativo de utilização única, nunca caminhos).",
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, este plugin poderá guardar nele ficheiros transferidos (os ficheiros existentes nunca são substituídos).",
       "descriptionRevealPath": "O caminho só é devolvido ao Agent atual depois de dar permissão e passará a constar do registo da conversa; os dispositivos emparelhados poderão sincronizar esse registo. Isto não concede a nenhum plugin acesso ao ficheiro.",
@@ -17804,6 +17872,7 @@
     "sessionModeFresh": "Nova sessão por acionamento (isolar contexto)",
     "sessionModeHint": "O modo persistente mantém uma única conversa da rotina. Uma nova sessão cria e fecha uma conversa isolada para cada acionamento.",
     "quietHint": "Comunicar apenas alterações ou problemas. Desative para lembretes e mensagens agendadas.",
+    "checkSource": "Verificar com",
     "checkCommand": "Comando de verificação prévia à execução",
     "checkHint": "Opcional. Verifica o computador antes de cada execução: exit 2 ignora a execução, exit 0 continua e os erros permanecem visíveis. Limpe para remover.",
     "timeoutMs": "Tempo limite da verificação (ms, vazio para sem limite)",
@@ -17872,6 +17941,14 @@
       "pendingTurns_many": "{{count}} trocas",
       "lastLearned_many": "{{count}} alterações",
       "readTurns_many": "{{count}} trocas lidas"
+    },
+    "remote": {
+      "pause": "Pausar rotina",
+      "resume": "Retomar rotina",
+      "addSchedule": "Adicionar horário",
+      "addInterval": "Adicionar intervalo",
+      "addEvent": "Adicionar acionador de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

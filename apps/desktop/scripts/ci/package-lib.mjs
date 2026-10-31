@@ -6,6 +6,8 @@
 // 留在 package-desktop.mjs 编排层。
 // =============================================================================
 
+import { createHash } from 'node:crypto';
+
 /** 版本无关打包写入 package.json / APP_VERSION 的占位版本。
  *  必须保持纯数字段(NSIS / rcedit 的 PE FileVersion 只接受数字),且与
  *  CDN manifest 的「无有效版本」哨兵 '0.0.0' 同值——updateService 据此
@@ -227,6 +229,7 @@ export function artifactBaseName({ version, versionless }) {
  *   schemaVersionMax: number, migrationFiles: string[],
  *   files: Array<{ role: string, name: string, sha256: string, size: number }>,
  *   signing: Record<string, unknown>,
+ *   mcpAppsManual?: { sha256: string, size: number } | null,
  * }} ctx
  */
 export function buildBuildInfo(ctx) {
@@ -249,5 +252,25 @@ export function buildBuildInfo(ctx) {
     migrationFiles: ctx.migrationFiles,
     files: ctx.files,
     signing: ctx.signing,
+    // 打进安装包的《Cindy MCP Apps 页面生成手册》;发布脚本据此核对上传的字节。
+    // 版本无关包与没有内置手册的构建记 null。
+    mcpAppsManual: ctx.versionless ? null : (ctx.mcpAppsManual ?? null),
   };
+}
+
+/** 安装包内手册字节 → build-info 的 mcpAppsManual 字段;包里没有手册时为 null。 */
+export function pageManualBuildInfo(bytes) {
+  if (!bytes) return null;
+  return { sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+}
+
+/**
+ * 有版本打包时手册必须与提交一致:`git status --porcelain -- <手册>` 有输出
+ * (已修改、已暂存、未跟踪或已删除)即拒绝。版本无关包不发布手册,不拦。
+ */
+export function assertPageManualCommitted({ porcelain, versionless, manualPath }) {
+  if (versionless || !porcelain.trim()) return;
+  throw new Error(
+    `${manualPath} 有未提交改动,不能打有版本的包:安装包会内置未提交的手册,发布的手册就对不上。请先提交或还原。`,
+  );
 }

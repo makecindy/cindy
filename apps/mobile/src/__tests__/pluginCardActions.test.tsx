@@ -56,6 +56,7 @@ vi.mock("react-native", () => {
       loop: () => ({ start() {}, stop() {} }),
       timing: () => ({}),
     },
+    Keyboard: { addListener: () => ({ remove: () => {} }) },
   };
 });
 vi.mock("@/components/AppText", () => ({
@@ -245,7 +246,9 @@ describe("native plugin card deliberate actions", () => {
     try {
       const doc = frame.contentDocument!;
       doc.open(); doc.write(source.html); doc.close();
-      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', script)(doc, {}, doc.defaultView!.getComputedStyle.bind(doc.defaultView)));
+      const view = Object.assign(doc.defaultView!, { ReactNativeWebView: { postMessage: () => undefined } });
+      // Height fitting needs real layout; this test covers color repainting only.
+      h.inject.mockImplementation(script => new Function('document', 'window', 'getComputedStyle', 'requestAnimationFrame', 'setTimeout', script)(doc, view, view.getComputedStyle.bind(view), () => 0, () => 0));
       for (const mode of ['dark', 'light', 'dark']) {
         h.mode = mode;
         await render();

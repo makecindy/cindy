@@ -3218,6 +3218,13 @@ export function MessageStream({
     return resolveRestoredRenderWindow(restoreSnapshotRef.current).forwardItems;
   });
   const [highlightMessageClientId, setHighlightMessageClientId] = useState<string | null>(null);
+  // A navigation highlight is a temporary locator. Keep its expiry independent
+  // of streaming/layout updates so new content cannot leave it stuck on screen.
+  useEffect(() => {
+    if (!highlightMessageClientId) return;
+    const timer = window.setTimeout(() => setHighlightMessageClientId(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [highlightMessageClientId, focusMessageRequestId]);
   const lastAppliedFocusRef = useRef<string | null>(null);
   const lastMissingFocusRef = useRef<{
     clientId: string;
@@ -3976,6 +3983,7 @@ export function MessageStream({
       ? `${focusMessageRequestId ?? 0}:${focusMessageClientId}`
       : null;
     if (!focusMessageClientId || !focusRequestKey) {
+      setHighlightMessageClientId(null);
       lastAppliedFocusRef.current = null;
       lastMissingFocusRef.current = null;
       cancelFocusJump({ refreshAnchor: true });
@@ -3987,6 +3995,7 @@ export function MessageStream({
       cancelFocusJump({ refreshAnchor: true });
     }
     if (lastAppliedFocusRef.current === focusRequestKey) return;
+    setHighlightMessageClientId(null);
     const lastItemKey = allRenderItems.at(-1)?.key ?? null;
     const missingFocus = lastMissingFocusRef.current;
     if (
@@ -4055,8 +4064,8 @@ export function MessageStream({
       settleFocusJump,
       2500,
     );
-    // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
-    // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
+    // 高亮等落定后再点亮；点亮后由独立的到期 effect 清除并淡出。
+    // scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
     focusHighlightTimerRef.current = window.setTimeout(() => {
       setHighlightMessageClientId(focusMessageClientId);
       focusHighlightTimerRef.current = null;
@@ -6793,7 +6802,7 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 transition-colors', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
                           {startsUnread ? (
                             <div
@@ -6836,7 +6845,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 transition-colors',
+                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
                           shareable && 'relative',
                           highlightClass,
                         )}

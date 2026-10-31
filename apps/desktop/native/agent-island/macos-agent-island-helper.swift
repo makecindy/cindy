@@ -2479,8 +2479,12 @@ struct AgentIslandRootView: View {
           y: layout.shadowY
         )
 
-      content(layout: layout)
+      ZStack(alignment: .top) {
+        content(layout: layout)
+      }
         .frame(width: layout.width, height: layout.height, alignment: .top)
+        // Clip outgoing transition layers together with the incoming content.
+        .compositingGroup()
         .clipShape(NotchShape(
           topExtension: layout.topExtension,
           bottomRadius: layout.bottomRadius,

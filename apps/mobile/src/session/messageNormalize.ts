@@ -462,6 +462,22 @@ export function normalizeRemoteMessages(
         result.push(goalCard);
         continue;
       }
+      const routeNote = readRecord(message.agentMeta?.pluginModelRoute);
+      if (routeNote) {
+        result.push({
+          key: messageNormalizeKey(message),
+          source: message,
+          kind: 'system',
+          role: message.role,
+          label: 'system:plugin-model-route',
+          body: '',
+          systemCardType: 'plugin-model-route',
+          systemCardData: routeNote,
+          align: 'agent',
+          createdAt: message.createdAt,
+        });
+        continue;
+      }
     }
 
     // session-agent-switch 边界行(desktop 落库 role='agent_switch') → 'agent-switch'

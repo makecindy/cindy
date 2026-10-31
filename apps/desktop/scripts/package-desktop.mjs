@@ -38,7 +38,8 @@
 //   cindy-<version|unversioned>-Setup.exe / -<arch>.dmg /
 //              -<amd64|arm64>.deb                        安装包
 //   cindy-<version>-hotfix.zip                           热更包(仅有版本时)
-//   build-info.json                                      发布侧唯一输入
+//   build-info.json                                      发布侧唯一输入(含 mcpAppsManual:
+//                                                        安装包内手册的 sha256/size,无则 null)
 // =============================================================================
 
 import { execFileSync, execSync } from 'node:child_process';
@@ -81,7 +82,10 @@ import {
   artifactBaseName,
   buildBuildInfo,
   debianArch,
+  pageManualBuildInfo,
+  assertPageManualCommitted,
 } from './ci/package-lib.mjs';
+import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../src/shared/pluginPageManual.mjs';
 import { applyMacSigningConfigToEnv, applyReleaseCdnBaseUrlToEnv } from './ci/release-regions.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -563,6 +567,16 @@ async function main() {
 
   runDbValidate();
 
+  // 有版本的包会内置《Cindy MCP Apps 页面生成手册》并按其 sha256 发布,手册必须与提交一致。
+  const pageManualRepoPath = path.join('resources', 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));
+  assertPageManualCommitted({
+    porcelain: versionless
+      ? ''
+      : execFileSync('git', ['status', '--porcelain', '--', pageManualRepoPath], { cwd: DESKTOP_ROOT, encoding: 'utf8' }),
+    versionless,
+    manualPath: `apps/desktop/${pageManualRepoPath}`,
+  });
+
   // 版本号临时写入 package.json(asar 内 app.getVersion() 的来源),退出自动恢复。
   writePackageVersion(version);
 
@@ -612,6 +626,10 @@ async function main() {
         : path.join(DESKTOP_ROOT, 'out', `${appName}-${platformKey}`, 'resources', 'drizzle');
     verifyPackagedDrizzle(drizzleOut);
 
+    // 读安装包里实际打进去的手册(与 drizzle 同在 Resources 下),写入 build-info。
+    const packagedManual = path.join(path.dirname(drizzleOut), 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));
+    const mcpAppsManual = pageManualBuildInfo(fs.existsSync(packagedManual) ? fs.readFileSync(packagedManual) : null);
+
     if (skipSmoke) {
       console.log('==> Skipping packaged smoke test (--skip-smoke)');
     } else if (platform === 'darwin' && arch === 'arm64' && !isPhysicalArm64Mac()) {
@@ -655,6 +673,7 @@ async function main() {
         migrationFiles: meta.migrationFiles,
         files,
         signing,
+        mcpAppsManual,
       });
       buildInfoPath = path.join(artifactDir, 'build-info.json');
       fs.writeFileSync(buildInfoPath, JSON.stringify(buildInfo, null, 2) + '\n');

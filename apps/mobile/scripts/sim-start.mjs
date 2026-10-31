@@ -6,16 +6,17 @@
 // @expo/fingerprint → 每个 commit 都改 runtimeVersion、破坏 OTA(实测);EXPO_PUBLIC_*
 // 是 JS bundle 层注入,不进 fingerprint。
 //
-// 端口策略(重要):本 app **不含 expo-dev-client**,装好的 debug 包只会连它编译时的默认
-// packager 端口(8081)。所以这里**坚持用 8081**,不会自动挪到 8082+ —— 否则 Metro 起在
-// 8083、app 还连 8081,反而制造"看着像新版、其实是旧 bundle"的坑(正是本工具要消灭的)。
+// 端口策略(重要):本 app **不含 expo-dev-client**,iOS debug 包按设备上的 RCT_jsLocation
+// 选 Metro,没设或那个 Metro 不响应时退回编译时的默认端口(8081)。所以这里**坚持用 8081**,
+// 不会自动挪到 8082+ —— 否则 Metro 起在 8083、app 还连 8081,反而制造"看着像新版、其实是
+// 旧 bundle"的坑(正是本工具要消灭的)。多设备并行见 docs/simulator-debugging.md 的 Parallel devices。
 //   - 8081 空闲 → 起在 8081。
 //   - 8081 已被**本 worktree** 占 → 说明 Metro 已在跑,直接 Fast Refresh 即可,不重开。
 //   - 8081 被**别的 worktree** 占 → 默认明确报错;传 `--takeover` 时仅在确认占用者是
 //     Cindy Metro(cwd 以 /apps/mobile 结尾 + 注入了源码指纹)后停止它。不要求对方
 //     磁盘上的 git 指纹仍与启动时一致;对方目录已删则视为孤儿 Metro,同样可接管。
 //     未知进程 / 非 Metro 即使带 `--takeover` 也 fail closed。
-//     确实要换端口请 `--port <p>` 显式指定(你需自行把模拟器里的 app 指过去,如 dev menu)。
+//     确实要换端口请 `--port <p>` 显式指定;它只起 Metro,还要给目标设备写 RCT_jsLocation。
 //
 // 用法(仓库根):
 //   pnpm mobile:sim:start                 # Global，起在 8081(app 默认连这个)
@@ -23,7 +24,7 @@
 //   pnpm mobile:sim:start -- --region=cn  # 中国大陆版
 //   pnpm mobile:sim:start -- --region=cn --takeover # 显式接管另一个 Metro
 //   pnpm mobile:sim:start -- --mock        # 免登录的 UI 模拟数据(docs/dev-rules/ui-mock-data.md)
-//   pnpm mobile:sim:start -- --port 8082   # 显式换端口(透传给 expo;需自行把 app 指过去)
+//   pnpm mobile:sim:start -- --port 8082   # 显式换端口;再给目标设备写 RCT_jsLocation(见 Parallel devices)
 //   pnpm mobile:sim:start -- --no-emulator # Windows 只启动 Metro
 
 import { execFileSync, spawn } from 'node:child_process';

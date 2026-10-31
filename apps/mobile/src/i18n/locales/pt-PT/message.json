@@ -262,6 +262,14 @@
     "imagesNotUploaded_many": "Não foi possível carregar {{count}} imagens"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} escolheu {{model}} para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa {{model}}",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa {{model}}",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Contexto reorganizado, a continuar",
       "labelTimeout": "O último turno não respondeu; contexto reorganizado para continuar",

@@ -16,7 +16,20 @@
     "bcc": "密件副本",
     "subject": "題",
     "choosePlugin": "擇何法器以啟此郵件。",
-    "personalPlugin": "私家法器"
+    "personalPlugin": "私家法器",
+    "reply": "覆",
+    "replyAll": "悉覆",
+    "forward": "轉致",
+    "quote": {
+      "reply": "覆此函",
+      "replyAll": "悉覆此函諸受書者",
+      "forward": "轉致此函"
+    },
+    "messageCount_other": "凡 {{count}} 函",
+    "showMessages_other": "示 {{count}} 函",
+    "conversationFailed": "前後之函暫不可讀。",
+    "expandMessage": "展 {{from}} 之函",
+    "collapseMessage": "收 {{from}} 之函"
   },
   "title": "法器",
   "all": "全",
@@ -148,8 +161,6 @@
   "demo": {
     "hint": "示範之資 · 不改真實設定"
   },
-  "mailPreview": "郵件先覽",
-  "mailEnlarge": "放大觀之",
   "mailInsertImage": "入正文",
   "mailAttach": "增附件",
   "mailUpdated": "草稿已更（唯讀）",

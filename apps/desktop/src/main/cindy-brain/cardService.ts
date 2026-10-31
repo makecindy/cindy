@@ -160,6 +160,8 @@ const SWEEP_MIN_INTERVAL_MS = 30_000;
 interface CallEntry {
   ghostId: string;
   logicalGhostId?: string;
+  /** 被调用的插件工具名(ghost_call 登记时提供；其它通道省略)。 */
+  tool?: string;
   toolUseId: string | null;
   sessionId: string | null;
   sessionInstanceId?: string;
@@ -250,6 +252,8 @@ export class GhostCardService {
     info: {
       ghostId: string;
       logicalGhostId?: string;
+      /** 被调用的插件工具名；networkSlot 据此判断是否带 MCP Apps 手册头。 */
+      tool?: string;
       toolUseId: string | null;
       sessionId: string | null;
       sessionInstanceId?: string;
@@ -267,6 +271,7 @@ export class GhostCardService {
     this.calls.set(callId, {
       ghostId: info.ghostId,
       ...(info.logicalGhostId !== undefined ? { logicalGhostId: info.logicalGhostId } : {}),
+      ...(info.tool !== undefined ? { tool: info.tool } : {}),
       toolUseId: info.toolUseId,
       sessionId: info.sessionId,
       sessionInstanceId: info.sessionInstanceId,
@@ -342,10 +347,10 @@ export class GhostCardService {
    * 结束后继续充当"目录授权上下文"——否则插件记住一个旧 callId 就能跨
    * 调用复用当时会话的 workdir 自动放行。
    */
-  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script' } | null {
+  inFlightCallInfoOf(callId: string): { ghostId: string; sessionId: string | null; sessionInstanceId?: string; remoteHostId: string | null | undefined; scriptWorkdir: string | null; scriptWritePath: string | null; channel: 'session' | 'script'; tool?: string } | null {
     const e = this.calls.get(callId);
     if (!e || e.settledAt !== null || e.reopenedAt !== null) return null;
-    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel };
+    return { ghostId: e.ghostId, sessionId: e.sessionId, ...(e.sessionInstanceId ? { sessionInstanceId: e.sessionInstanceId } : {}), remoteHostId: e.remoteHostId, scriptWorkdir: e.scriptWorkdir, scriptWritePath: e.scriptWritePath, channel: e.channel, ...(e.tool !== undefined ? { tool: e.tool } : {}) };
   }
 
   /** An active tool may update its own earlier card in the same task. */

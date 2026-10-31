@@ -1013,12 +1013,20 @@ function describeDataImageUrl(url: string): { mimeLabel: string; sizeLabel: stri
   };
 }
 
+const PAYLOAD_BYTE_UNITS = ['KB', 'MB'] as const;
+
 function formatPayloadByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  const kib = bytes / 1024;
-  if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
-  const mib = kib / 1024;
-  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+  // 与 filePreview 的字节口吻同一个规则:档位按取整后的展示值选,约 1 MiB 的图片
+  // 不该显示成 "1024 KB" —— 那一档的合法最大值是 1023。
+  let value = Math.round(bytes) / 1024;
+  for (let unit = 0; ; unit += 1) {
+    const text = value < 10 ? value.toFixed(1) : `${Math.round(value)}`;
+    if (Number(text) < 1024 || unit === PAYLOAD_BYTE_UNITS.length - 1) {
+      return `${text} ${PAYLOAD_BYTE_UNITS[unit]}`;
+    }
+    value /= 1024;
+  }
 }
 
 export function isPayloadDesktopLocalMediaUrl(url: unknown): url is string {

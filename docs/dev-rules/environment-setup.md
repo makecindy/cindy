@@ -130,6 +130,23 @@ sudo chmod 4755 chrome-sandbox
   绕过（违反 Electron 安全边界，参见
   [`electron-security-and-process-boundaries.md`](electron-security-and-process-boundaries.md)）。
 
+## 多 worktree 仓库的 git 自动维护
+
+挂了几十个 worktree 的部分克隆（`blob:none`，例如本地的 `cindy-src` 主 checkout）要把
+git 自动维护留在前台：
+
+```bash
+git config maintenance.auto true
+git config maintenance.autoDetach false
+```
+
+原因：git 2.54（Xcode 附带的 Apple Git-157）把 `maintenance run --auto --detach` 转入后台后
+会丢失 `maintenance.lock`，geometric-repack 又不经过 `gc.pid`，于是每次按需拉取、commit、
+rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都可能再起一个重复压缩。
+2026-10-29 实测堆积了 649 组后台维护进程，占用 3297% CPU、48 GB 内存，对象库膨胀到 26 GB；
+改成前台后锁有效、只跑一个，偶尔某次操作慢十几秒属于正常。这是仓库级配置，与换 git 版本
+无关。症状复现时先 `ps aux | grep 'git maintenance'` 清掉积压，再手动 `git gc`。
+
 ## 不变量
 
 - 公开版本不包含内建插件种子；插件通过 SkillHub 或手动安装。不要把任何访问令牌写入

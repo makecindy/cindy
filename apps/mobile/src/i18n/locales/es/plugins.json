@@ -16,7 +16,24 @@
     "bcc": "Cco",
     "subject": "Asunto",
     "choosePlugin": "Elija un complemento para abrir este correo electrónico.",
-    "personalPlugin": "Complemento personal"
+    "personalPlugin": "Complemento personal",
+    "reply": "Responder",
+    "replyAll": "Responder a todos",
+    "forward": "Reenviar",
+    "quote": {
+      "reply": "Responder a este correo",
+      "replyAll": "Responder a todos en este correo",
+      "forward": "Reenviar este correo"
+    },
+    "messageCount_one": "{{count}} correo",
+    "messageCount_other": "{{count}} correos",
+    "showMessages_one": "Mostrar {{count}} correo",
+    "showMessages_other": "Mostrar {{count}} correos",
+    "conversationFailed": "No se pudieron cargar otros correos electrónicos en esta conversación.",
+    "expandMessage": "Ampliar correo electrónico de {{from}}",
+    "collapseMessage": "Contraer correo electrónico de {{from}}",
+    "messageCount_many": "{{count}} correos",
+    "showMessages_many": "Mostrar {{count}} correos"
   },
   "title": "Complementos",
   "all": "Todo",
@@ -148,8 +165,6 @@
   "demo": {
     "hint": "Datos de demostración · No se cambia ninguna configuración real"
   },
-  "mailPreview": "Vista previa de correo electrónico",
-  "mailEnlarge": "Ampliar vista previa",
   "mailInsertImage": "Insertar en mensaje",
   "mailAttach": "Agregar archivo adjunto",
   "mailUpdated": "Borrador actualizado (solo lectura)",
