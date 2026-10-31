@@ -38,6 +38,11 @@ export default {
       about: 'Ending an empty call leaves the existing conversation without a call card',
       data: { empty: true },
     },
+    elsewhere: {
+      about: 'Off its task page: open-conversation entry and a question waiting off screen',
+      viewport: { width: 320, height: 900 },
+      data: { mode: 'elsewhere' },
+    },
     muted: { about: 'Microphone-only mute retains its feedback', data: { mode: 'muted' } },
     speaking: { about: 'Speaking retains the interrupt control', data: { mode: 'speaking' } },
     countdown: {

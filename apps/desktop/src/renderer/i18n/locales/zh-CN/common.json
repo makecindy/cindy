@@ -11491,6 +11491,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "打开对话",
+      "inCallWith": "正在与 {{name}} 通话",
       "showDetails": "展开通话记录",
       "hideDetails": "收起通话记录",
       "transcriptTitle": "当前识别文字",
@@ -11559,6 +11561,7 @@
       "unsent": "尚未发送 · 可选中文字复制",
       "hint": "停顿后自动发送，回复由 AI 语音朗读。随时开口即可插话。",
       "status": {
+        "questionElsewhere": "任务里有问题等你回答 · 仍在通话",
         "idle": "准备好就开始",
         "connecting": "正在连接语音识别…",
         "listening": "正在听",
@@ -11574,6 +11577,7 @@
         "muted": "麦克风已关闭 · 可以继续收听"
       },
       "errors": {
+        "busy": "语音正被其他通话、朗读、试听或听写占用，请结束后重试。",
         "connection": "语音连接中断，未发送的文字已保留。",
         "microphone": "麦克风已停止，请检查权限和设备连接后继续。",
         "send": "这条消息未被接收，文字已保留。",

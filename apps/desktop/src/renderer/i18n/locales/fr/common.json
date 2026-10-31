@@ -11633,6 +11633,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Ouvrir la conversation",
+      "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
       "hideDetails": "Masquer la transcription de l'appel",
       "transcriptTitle": "Transcription en cours",
@@ -11701,6 +11703,7 @@
       "unsent": "Non envoyé · sélectionnez le texte pour le copier",
       "hint": "Faites une pause pour envoyer. Les réponses sont lues à voix haute par une voix IA. Parlez à tout moment pour interrompre.",
       "status": {
+        "questionElsewhere": "Une question attend dans la tâche · l’appel continue",
         "idle": "Prêt quand vous l'êtes",
         "connecting": "Connexion à la reconnaissance vocale…",
         "listening": "À l'écoute",
@@ -11716,6 +11719,7 @@
         "muted": "Micro désactivé · Vous pouvez toujours écouter"
       },
       "errors": {
+        "busy": "La voix est utilisée par un autre appel, une lecture, un aperçu ou une dictée. Terminez-le et réessayez.",
         "connection": "Connexion vocale interrompue. Votre texte non envoyé est conservé ci-dessous.",
         "microphone": "Le micro s'est arrêté. Vérifiez son autorisation et sa connexion, puis reprenez.",
         "send": "Ce message n'a pas été accepté. Votre texte est conservé ci-dessous.",

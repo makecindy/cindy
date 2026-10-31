@@ -19,6 +19,12 @@ import { getBotRemoteResourceSource } from '../localDb/ipc/bots.js';
 import { isProviderModelRouteDisabled } from '../utility-model/oneShotCandidates.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
+import { voiceCallCoordinator } from './callCoordinator.js';
+import type {
+  VoiceCallCommand,
+  VoiceCallStatus,
+  VoiceCallStatusUpdate,
+} from '../../shared/voiceConversation.js';
 import { VoiceConversationService } from './service.js';
 import { SpeechError } from './speechError.js';
 import { resolveSpeechConnection, speechModels, type SpeechCatalogDeps } from './models.js';
@@ -44,6 +50,48 @@ export interface VoiceSettingsHostApi {
 let settingsApi: VoiceSettingsHostApi | null = null;
 export function getVoiceSettingsHostApi(): VoiceSettingsHostApi | null {
   return settingsApi;
+}
+
+/** Status comes from the trusted main window; bound only what Main itself reads. */
+function readVoiceCallStatusUpdate(raw: unknown): VoiceCallStatusUpdate | null {
+  const value = requireObject(raw);
+  if (value.status === null) return { status: null };
+  if (typeof value.level === 'number' && Number.isFinite(value.level))
+    return { level: value.level };
+  const status = value.status as Partial<VoiceCallStatus> | undefined;
+  return status && typeof status === 'object' && typeof status.open === 'boolean'
+    ? { status: status as VoiceCallStatus }
+    : null;
+}
+
+function readVoiceCallCommand(raw: unknown): VoiceCallCommand {
+  const value = requireObject(raw);
+  const sessionId = boundedString(value.sessionId, 'sessionId', 256);
+  if (value.type === 'start') {
+    const bot = requireObject(value.bot);
+    const optional = (key: string, limit: number) => {
+      const text = bot[key];
+      return typeof text === 'string' && text.length <= limit ? { [key]: text } : {};
+    };
+    return {
+      type: 'start',
+      sessionId,
+      bot: {
+        id: boundedString(bot.id, 'botId', 256),
+        name: boundedString(bot.name, 'botName', 256),
+        ...optional('templateId', 256),
+        ...optional('avatar', 4_096),
+        ...optional('avatarColor', 64),
+      },
+    };
+  }
+  if (
+    !['end', 'mute', 'interrupt', 'send', 'cancel-exit', 'resume', 'pause'].includes(
+      value.type as string,
+    )
+  )
+    throwIpcError('INVALID_PARAMS', 'Invalid call command');
+  return { type: value.type, sessionId } as VoiceCallCommand;
 }
 
 function boundedString(value: unknown, name: string, limit: number): string {
@@ -104,10 +152,17 @@ export function registerVoiceConversationIpc(deps: {
     if (observed.has(event.sender.id)) return;
     const sender = event.sender.id;
     observed.add(sender);
+    const released = () => {
+      void service.end(sender);
+      voiceCallCoordinator.windowGone(sender);
+    };
     event.sender.once('destroyed', () => {
       observed.delete(sender);
-      void service.end(sender);
+      released();
     });
+    // A reload loses the renderer's controller without destroying its webContents.
+    // In-page routing is a separate event, so task navigation never reaches this.
+    event.sender.on('did-navigate', released);
   };
   const handle = (
     name: string,
@@ -122,6 +177,8 @@ export function registerVoiceConversationIpc(deps: {
         log.warn('IPC operation failed', { operation: name });
         if (error instanceof SpeechError && error.code === 'timeout')
           throwIpcError('VOICE_SPEECH_TIMEOUT', 'Speech response timed out.');
+        if (error instanceof Error && error.message === 'busy')
+          throwIpcError('VOICE_CONVERSATION_BUSY', 'Another voice session is using the microphone.');
         throwIpcError('PRECONDITION_FAILED', 'Voice conversation is unavailable.');
       }
     });
@@ -281,6 +338,24 @@ export function registerVoiceConversationIpc(deps: {
     if (typeof muted !== 'boolean') throwIpcError('INVALID_PARAMS', 'Invalid microphone state');
     if (!muted && isAppSessionBoundaryPending()) throw new Error('changing_account');
     return service.setInputMuted(event.sender.id, boundedString(id, 'callId', 64), muted);
+  });
+  handle('call-status', (event) => {
+    observe(event);
+    return voiceCallCoordinator.subscribe(event.sender.id);
+  });
+  handle('call-command', (event, raw) => {
+    observe(event);
+    return { ok: voiceCallCoordinator.command(readVoiceCallCommand(raw)) };
+  });
+  ipcMain.on('voice-conversation:call-publish', (event, raw: unknown) => {
+    try {
+      assertTrustedAppRendererEvent(event);
+      observe(event);
+      const update = readVoiceCallStatusUpdate(raw);
+      if (update) voiceCallCoordinator.publish(event.sender.id, update);
+    } catch {
+      log.warn('IPC operation failed', { operation: 'call-publish' });
+    }
   });
   handle('end', (event, id) => service.end(event.sender.id, boundedString(id, 'callId', 64)));
   handle('interrupt', (event, id) =>

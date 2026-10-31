@@ -11538,6 +11538,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Unterhaltung öffnen",
+      "inCallWith": "Im Anruf mit {{name}}",
       "showDetails": "Anruftranskript anzeigen",
       "hideDetails": "Anruftranskript ausblenden",
       "transcriptTitle": "Aktuelle Transkription",
@@ -11606,6 +11608,7 @@
       "unsent": "Nicht gesendet · Text zum Kopieren auswählen",
       "hint": "Mach eine Sprechpause zum Senden. Antworten werden mit einer KI-Stimme vorgelesen. Sprich jederzeit, um zu unterbrechen.",
       "status": {
+        "questionElsewhere": "Eine Frage wartet in der Aufgabe · Anruf läuft weiter",
         "idle": "Bereit, wenn du es bist",
         "connecting": "Verbindung zur Spracherkennung wird hergestellt…",
         "listening": "Hört zu",
@@ -11621,6 +11624,7 @@
         "muted": "Mikrofon aus · Du kannst weiter zuhören"
       },
       "errors": {
+        "busy": "Die Sprachfunktion wird von einem anderen Anruf, Vorlesen, einer Hörprobe oder Diktat verwendet. Beende diese und versuche es erneut.",
         "connection": "Sprachverbindung unterbrochen. Dein ungesendeter Text bleibt unten erhalten.",
         "microphone": "Mikrofon gestoppt. Prüfe Berechtigung und Verbindung und fahre dann fort.",
         "send": "Diese Nachricht wurde nicht angenommen. Dein Text bleibt unten erhalten.",

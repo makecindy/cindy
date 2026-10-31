@@ -11491,6 +11491,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "開啟對話",
+      "inCallWith": "正在與 {{name}} 通話",
       "showDetails": "展開通話記錄",
       "hideDetails": "收起通話記錄",
       "transcriptTitle": "目前辨識文字",
@@ -11559,6 +11561,7 @@
       "unsent": "尚未傳送 · 可選取文字複製",
       "hint": "停頓後自動傳送，回覆由 AI 語音朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務裡有問題等你回答 · 仍在通話",
         "idle": "準備好就開始",
         "connecting": "正在連接語音辨識…",
         "listening": "正在聽",
@@ -11574,6 +11577,7 @@
         "muted": "麥克風已關閉 · 可以繼續收聽"
       },
       "errors": {
+        "busy": "語音正被其他通話、朗讀、試聽或聽寫占用，請結束後重試。",
         "connection": "語音連線中斷，未傳送的文字已保留。",
         "microphone": "麥克風已停止，請檢查權限和裝置連線後繼續。",
         "send": "這則訊息未被接收，文字已保留。",

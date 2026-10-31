@@ -77,6 +77,7 @@ import {
   session,
   shell,
   Tray,
+  webContents,
 } from 'electron';
 import {
   resolveVibrancyConfig,
@@ -1202,6 +1203,7 @@ import {
 } from './scheduler-host/index.js';
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
+import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
@@ -1276,6 +1278,17 @@ configureRoutineHost({
 });
 // 伙伴自主跟进：跟随例行任务引擎生命周期（引擎每次创建后重新登记 host:sessions 事件源）。
 configureBotAutonomyHost({ getMainWindow: () => mainWindowRef });
+voiceCallCoordinator.configure({
+  hostSender: () => {
+    const win = mainWindowRef;
+    return win && !win.isDestroyed() && !win.webContents.isDestroyed() ? win.webContents.id : null;
+  },
+  send: (sender, channel, payload) => {
+    const target = webContents.fromId(sender);
+    if (target && !target.isDestroyed()) target.send(channel, payload);
+  },
+  onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
+});
 initBotAutonomy();
 
 /**
@@ -3244,6 +3257,8 @@ const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
   },
 });
 let mainWindowBackgroundThrottlingAllowed = true;
+let mainWindowHasRunningTurn = false;
+let mainWindowHasVoiceCall = false;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
 let updatePresentationRecoveryInitialized = false;
@@ -3762,7 +3777,18 @@ function applyMainWindowBackgroundThrottling(): void {
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
-  const nextAllowed = !hasRunningTurn;
+  mainWindowHasRunningTurn = hasRunningTurn;
+  syncMainWindowBackgroundThrottling();
+}
+
+/** The live call runs in the main window, including while that window is hidden. */
+function setMainWindowBackgroundThrottlingForVoiceCall(active: boolean): void {
+  mainWindowHasVoiceCall = active;
+  syncMainWindowBackgroundThrottling();
+}
+
+function syncMainWindowBackgroundThrottling(): void {
+  const nextAllowed = !mainWindowHasRunningTurn && !mainWindowHasVoiceCall;
   if (mainWindowBackgroundThrottlingAllowed === nextAllowed) return;
   mainWindowBackgroundThrottlingAllowed = nextAllowed;
   applyMainWindowBackgroundThrottling();

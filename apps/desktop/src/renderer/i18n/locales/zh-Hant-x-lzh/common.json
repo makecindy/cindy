@@ -11491,6 +11491,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "啟對話",
+      "inCallWith": "正與 {{name}} 通話",
       "showDetails": "展通話錄",
       "hideDetails": "收通話錄",
       "transcriptTitle": "今所辨之文",
@@ -11559,6 +11561,7 @@
       "unsent": "尚未遣 · 可選文錄之",
       "hint": "稍頓即自遣，回覆由 AI 之聲朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務有問待答 · 通話如故",
         "idle": "君備則始",
         "connecting": "方接語音辨識…",
         "listening": "方聆",
@@ -11574,6 +11577,7 @@
         "muted": "麥克風已闔 · 仍可聆聽"
       },
       "errors": {
+        "busy": "語音為他事所占，請畢之再試。",
         "connection": "語音連線中斷，未遣之文已留。",
         "microphone": "麥克風已止，請查權柄與裝置連線後再續。",
         "send": "此訊未獲接收，文已留。",

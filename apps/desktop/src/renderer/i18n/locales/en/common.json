@@ -11538,6 +11538,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Open conversation",
+      "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
       "hideDetails": "Hide call transcript",
       "transcriptTitle": "Current transcription",
@@ -11606,6 +11608,7 @@
       "unsent": "Not sent · select the text to copy it",
       "hint": "Pause to send. Replies are read aloud with an AI voice. Speak at any time to interrupt.",
       "status": {
+        "questionElsewhere": "A question is waiting in the task · call continues",
         "idle": "Ready when you are",
         "connecting": "Connecting to speech recognition…",
         "listening": "Listening",
@@ -11621,6 +11624,7 @@
         "muted": "Microphone off · You can still listen"
       },
       "errors": {
+        "busy": "Voice is in use by another call, read-aloud, preview or dictation. End it and try again.",
         "connection": "Voice connection interrupted. Your unsent text is kept below.",
         "microphone": "Microphone stopped. Check its permission and connection, then resume.",
         "send": "This message was not accepted. Your text is kept below.",

@@ -170,6 +170,8 @@ function Fixture({
               onClose={() => setLive(false)}
               onConfigure={forbid('configure')}
               onOpenTask={() => setFocused(true)}
+              questionElsewhere={mode === 'elsewhere'}
+              onOpenConversation={mode === 'elsewhere' ? () => undefined : undefined}
             />
           )}
           <div
