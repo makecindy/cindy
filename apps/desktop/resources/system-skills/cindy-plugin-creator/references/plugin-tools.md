@@ -20,10 +20,8 @@ AI 会照做。直接声明工具时,工具/参数 description 是单工具局�
 当前类别内、随实时工具集合与参数变化的规则走 §3.5 的类目 RULES。多工具或跨类别的完整
 工作流与长期稳定共同原则走 §3.6 的 Manual。都不要塞进 `whenToUse`,也不要重复维护。
 
-工具结果可返回标准 `{content, structuredContent, _meta}`：`structuredContent` 给交互页面渲染，
-根 `_meta` 只给页面，不交给模型；普通工具文字结果照旧。`mcpApps.ui.tools[工具名].visibility`
-控制 model/app 可见性，app-only 不出现在模型清单，也不能直接 ghost_call。
-原 `tools[]` 声明不变，页面资源和完整示例见[交互页面 §4.23](plugin-interactive-pages.md)。
+交互页面工具返回 {content, structuredContent, _meta}：content 和 structuredContent 对 AI 可见，
+根 _meta 只给页面。模型/页面可见性及示例见[§4.23](plugin-interactive-pages.md)。
 
 ### 3.1 @ 插件入口
 

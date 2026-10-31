@@ -56,7 +56,7 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 
 Use for the UI surfaces and interactions the plugin actually exposes; mobile pages are optional.
 
-- [插件交互页面 MCP Apps（§4.23）](references/plugin-interactive-pages.md)
+- [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
 - [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)

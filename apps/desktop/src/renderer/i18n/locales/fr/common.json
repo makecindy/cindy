@@ -245,6 +245,7 @@
     "completeWithSkipped_many": "Copié, {{count}} éléments ignorés"
   },
   "sharedTask": {
+    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu des tâches partagées continue de passer par le relais Cindy.",
     "selfJoin": "Vous avez lancé cette tâche partagée, vous n'avez donc pas besoin de la rejoindre. Ouvrez-la depuis « Partagées par moi ».",
     "manageSharing": "Gérer le partage",
     "manageMembers": "Gérer les membres…",
@@ -346,6 +347,7 @@
     "closeAllDescription": "Les invités perdront l'accès. L'historique des tâches est conservé."
   },
   "providerShare": {
+    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu du partage de fournisseurs continue de passer par le relais Cindy.",
     "owned": {
       "title": "Fournisseurs que je partage"
     },
@@ -2454,7 +2456,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Écriture et style",
+        "hint": "L’IA répond dans le style choisi. Avec « Réponses habituelles », l’interface reste en chinois classique et les réponses suivent votre langue.",
+        "scriptAriaLabel": "Écriture du chinois classique",
+        "styleAriaLabel": "Style de réponse de l’IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prose classique (par défaut)",
+          "tang-poetry": "Poésie Tang",
+          "song-ci": "Ci des Song",
+          "yuan-qu": "Qu des Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prose parallèle",
+          "pre-qin": "Maîtres pré-Qin",
+          "historian": "Style du Grand Historien",
+          "ming-qing-essay": "Essais Ming–Qing",
+          "plain": "Réponses habituelles"
+        }
       }
     },
     "userProfile": {
@@ -5822,7 +5847,7 @@
         "current": "Utilisé",
         "ownerName": "Cet ordinateur",
         "unavailable": "Pour utiliser votre propre relais, connectez-vous à Cindy et vérifiez que le trousseau du système est disponible.",
-        "limits": "Tant que vous utilisez votre propre relais, les notifications push sur téléphone, le partage de fournisseurs et les tâches partagées ne sont pas disponibles.",
+        "limits": "Tant que vous utilisez votre propre relais, les notifications push sur téléphone ne sont pas disponibles. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy.",
         "actions": {
           "join": "Rejoindre un autre relais",
           "useOfficial": "Revenir au relais Cindy",
@@ -6038,7 +6063,7 @@
           "switchFromHost": "Le relais de cet ordinateur s'arrête, et les appareils qui l'ont rejoint sont déconnectés.",
           "switchFromMember": "Cet ordinateur quitte {{name}}. Pour le rejoindre plus tard, son propriétaire devra créer un nouveau lien d'invitation.",
           "switchConfirm": "Basculer",
-          "switchFromOfficial": "Le contrôle à distance entre vos appareils passera par {{name}}. Les notifications push sur téléphone, le partage de fournisseurs et les tâches partagées ne sont pas disponibles tant que vous utilisez votre propre relais."
+          "switchFromOfficial": "Le contrôle à distance entre vos appareils passera par {{name}}. Les notifications push sur téléphone ne sont pas disponibles tant que vous utilisez votre propre relais. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy."
         },
         "dialog": {
           "steps": {
@@ -10621,6 +10646,7 @@
       "header": {
         "stepRunning": "{{name}} en est à l'étape {{step}}",
         "speaking": "{{name}} répond…",
+        "queued": "{{name}} est en attente",
         "planning": "{{name}} répartit le travail…"
       },
       "memberCount_one": "{{count}} membre",
@@ -17765,9 +17791,8 @@
       "name": "Suivre les sessions assignées (intégrée)",
       "hint": "Suit les sessions assignées lorsqu'elles stagnent, ont besoin de vous, échouent, atteignent une limite de consommation ou se terminent."
     },
-    "builtinTodoCheck": {
-      "name": "Vérification quotidienne des tâches à faire (intégrée)",
-      "hint": "Recherche de nouvelles tâches à faire dans les sources connectées les jours ouvrés à 9:00 et reste silencieuse s'il n'y a rien de nouveau. S'active ou se désactive depuis l'aperçu ; elle peut uniquement être mise en pause ou reprise."
+    "todoCheck": {
+      "name": "Vérification quotidienne des tâches à faire"
     },
     "builtinNightlyLearning": {
       "name": "Apprentissage nocturne (intégré)",

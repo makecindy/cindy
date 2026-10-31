@@ -12,7 +12,7 @@ import {
   type NewSessionLocale,
 } from "@/session/newSessionMessages";
 
-const LOCALES: NewSessionLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"];
+const LOCALES: NewSessionLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"];
 
 describe("newSessionMessages", () => {
   it("keeps the 5 locale catalogs key-aligned and non-empty", () => {

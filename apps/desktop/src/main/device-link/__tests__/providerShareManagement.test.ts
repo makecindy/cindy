@@ -41,6 +41,7 @@ vi.mock('../providerShareMemberNotes.js', () => ({ providerShareMemberNotes: mem
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.owner,
   isAppSessionBoundaryPending: () => state.boundaryPending,
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
@@ -112,6 +113,9 @@ import {
   trimProviderUsageHistory,
 } from '../providerShareRuntime';
 import { startProviderShareHost } from '../providerShareHost';
+import { startProviderShareGuest } from '../providerShareGuest';
+import { setBroadcastTapListener } from '../broadcast-tap';
+import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledModelCatalog';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { revokeProviderShareControllers } from '../dispatch';
 
@@ -166,7 +170,23 @@ beforeEach(() => {
   startProviderShareRuntime(vi.fn());
 });
 
-afterEach(() => stopProviderShareRuntime());
+afterEach(() => { setBroadcastTapListener(null); stopProviderShareRuntime(); });
+
+// #8010 review / unit: real runtime callbacks must reach the device-link tap,
+// not just local windows. Existing management tests only observed local delivery.
+it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to remote catalog viewers', trigger => {
+  const local = vi.fn();
+  const remote = vi.fn();
+  startProviderShareRuntime(local);
+  setBroadcastTapListener(remote);
+  const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
+  if (trigger === 'catalog') events.catalogChanged!('share:b-only');
+  else if (trigger === 'received') events.changed([]);
+  else stopProviderShareRuntime();
+  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
+  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
+    { dataOwnerId: 'owner-a', ownerGeneration: 1 });
+});
 
 /* Deleting a member must use the live host callback and retain offline M until it ACKs. tier: unit. */
 describe('direct guest deletion delivery', () => {

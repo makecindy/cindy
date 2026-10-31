@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
   },
   "sharedTask": {
+    "officialRelayNote": "You're using your own relay. Shared task content still goes through the Cindy relay.",
     "selfJoin": "You started this shared task, so you don’t need to join. Open it from “Shared by Me”.",
     "manageSharing": "Manage Sharing",
     "manageMembers": "Manage Members…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "Guests will lose access. Task history is kept."
   },
   "providerShare": {
+    "officialRelayNote": "You're using your own relay. Provider sharing content still goes through the Cindy relay.",
     "owned": {
       "title": "Providers I Share"
     },
@@ -2419,7 +2421,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Script and style",
+        "hint": "AI replies in the chosen style. “Usual replies” keeps the Classical Chinese interface while replies follow your language.",
+        "scriptAriaLabel": "Classical Chinese script",
+        "styleAriaLabel": "AI reply style",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Classical prose (default)",
+          "tang-poetry": "Tang poetry",
+          "song-ci": "Song ci",
+          "yuan-qu": "Yuan qu",
+          "chu-ci": "Chu ci",
+          "parallel-prose": "Parallel prose",
+          "pre-qin": "Pre-Qin masters",
+          "historian": "Grand Historian style",
+          "ming-qing-essay": "Ming–Qing essays",
+          "plain": "Usual replies"
+        }
       }
     },
     "userProfile": {
@@ -5767,7 +5792,7 @@
         "current": "In use",
         "ownerName": "This computer",
         "unavailable": "To use your own relay, sign in to Cindy and make sure the system keychain is available.",
-        "limits": "While you use your own relay, phone push notifications, provider sharing and shared tasks are unavailable.",
+        "limits": "While you use your own relay, phone push notifications are unavailable, and provider sharing and shared tasks still go through the Cindy relay.",
         "actions": {
           "join": "Join another relay",
           "useOfficial": "Switch back to Cindy relay",
@@ -5983,7 +6008,7 @@
           "switchFromHost": "The relay on this computer stops, and devices that joined it disconnect.",
           "switchFromMember": "This computer leaves {{name}}. To join again later, its owner needs to create a new join link.",
           "switchConfirm": "Switch",
-          "switchFromOfficial": "Remote control between your devices will go through {{name}}. Phone push notifications, provider sharing, and shared tasks aren't available while you use your own relay."
+          "switchFromOfficial": "Remote control between your devices will go through {{name}}. Phone push notifications aren't available while you use your own relay, and provider sharing and shared tasks still go through the Cindy relay."
         },
         "dialog": {
           "steps": {
@@ -10538,6 +10563,7 @@
       "header": {
         "stepRunning": "{{name}} is on step {{step}}",
         "speaking": "{{name}} is replying…",
+        "queued": "{{name}} is queued",
         "planning": "{{name}} is splitting the work…"
       },
       "memberCount_one": "{{count}} member",
@@ -17570,9 +17596,8 @@
       "name": "Follow assigned sessions (built-in)",
       "hint": "Follow assigned sessions when they stall, need you, fail, reach a usage limit or finish."
     },
-    "builtinTodoCheck": {
-      "name": "Daily todo check (built-in)",
-      "hint": "Looks for new todos in connected sources on weekdays at 9:00 and stays quiet when there is nothing new. Turned on or off from the glance; it can only be paused or resumed."
+    "todoCheck": {
+      "name": "Daily todo check"
     },
     "builtinNightlyLearning": {
       "name": "Nightly learning (built-in)",

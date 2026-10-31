@@ -30,10 +30,10 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { net } from 'electron';
-import type { AttachmentIntegrity } from '@cindy/device-link';
+import { isSharedTaskMediaKey, type AttachmentIntegrity } from '@cindy/device-link';
 
 import { requireAppCapability } from '../appCapabilities.js';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from './deviceLinkApi.js';
 import { sharedTaskMediaId } from './sharedTaskMediaContext.js';
 import { describeErrorChain } from '../utils/errorChain.js';
 import { createLogger } from '../logger.js';
@@ -88,9 +88,11 @@ async function presignPut(
   contentType: string,
 ): Promise<PresignPutResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return deviceLinkApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
+  const sharedTaskId = sharedTaskMediaId();
+  const apiFetch = sharedTaskId ? officialDeviceLinkApiFetch : deviceLinkApiFetch;
+  return apiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
-    body: { size, ext, contentType, ...(sharedTaskMediaId() ? { sharedTaskId: sharedTaskMediaId() } : {}) },
+    body: { size, ext, contentType, ...(sharedTaskId ? { sharedTaskId } : {}) },
   });
 }
 
@@ -105,13 +107,28 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   });
 }
 const REMOVE_REMOTE_TIMEOUT_MS = 15_000;
+/**
+ * 首个正文字节前共用 12s 预算(含 presign、响应头),为手机 enqueue 的默认 15s 窗口
+ * 留出回包时间;presign 自身仍限 8s。收到字节后只按相邻两块数据间的 15s 无进展计时,
+ * 不限制整个文件的完成时间,大附件慢速下载照常完成。附件取不到时回明确的媒体失败,
+ * 避免控制端只拿到「结果未知」并在被控端堆积永不结束的下载。
+ */
+const DOWNLOAD_PRESIGN_TIMEOUT_MS = 8_000;
+const DOWNLOAD_START_TIMEOUT_MS = 12_000;
+const DOWNLOAD_STALL_TIMEOUT_MS = 15_000;
+
+/** 共享任务附件只存在于官方存储,其余对象跟随当前中转。 */
+function mediaApiFetchFor(key: string): typeof deviceLinkApiFetch {
+  return isSharedTaskMediaKey(key) ? officialDeviceLinkApiFetch : deviceLinkApiFetch;
+}
 
 /** 向 relay server 申请下载预签名(server 校验请求方 == key 内嵌 userId)。 */
-async function presignGet(key: string): Promise<PresignGetResponse> {
+async function presignGet(key: string, timeoutMs?: number): Promise<PresignGetResponse> {
   requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-  return deviceLinkApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
+  return mediaApiFetchFor(key)<PresignGetResponse>(PRESIGN_GET_PATH, {
     method: 'POST',
     body: { key },
+    ...(timeoutMs ? { timeoutMs } : {}),
   });
 }
 
@@ -654,48 +671,100 @@ export async function downloadToFile(
   onProgress?: (downloadedBytes: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { getUrl } = await presignGet(key);
-  const resp = await net.fetch(getUrl, { method: 'GET', signal });
-  if (!resp.ok) throw Object.assign(new Error(`OSS GET 失败 (${resp.status})`), { code: 'OSS_DOWNLOAD_FAILED', status: resp.status });
-  if (!resp.body) throw Object.assign(new Error('OSS GET 响应无 body'), { code: 'OSS_DOWNLOAD_EMPTY', status: resp.status });
-  const partPath = `${destPath}.${randomUUID()}.part`;
-  const hasher = createHash('sha256');
-  let size = 0;
-  const counter = new Transform({
-    transform(chunk: Buffer, _enc, cb) {
-      size += chunk.length;
-      if (expected && size > expected.size) {
-        cb(new AttachmentIntegrityError('size', '附件下载超出声明大小。'));
-        return;
-      }
-      hasher.update(chunk);
-      onProgress?.(size);
-      cb(null, chunk);
-    },
-  });
+  // 调用方取消与无进展超时共用一个中止信号;只有超时会被改写成 OSS_DOWNLOAD_STALLED。
+  const controller = new AbortController();
+  const forwardAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener('abort', forwardAbort, { once: true });
+  let stalled = false;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let startWatchdog: ReturnType<typeof setTimeout> | undefined;
+  const abortStalled = () => {
+    stalled = true;
+    controller.abort();
+  };
+  const expectProgressWithin = (ms: number) => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(abortStalled, ms);
+  };
+  // presign 与等响应头时网络可能毫无回应;中止后立即放弃,不再等底层请求自己结束。
+  const untilAborted = <T>(promise: Promise<T>) =>
+    new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(controller.signal.reason);
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener('abort', onAbort, { once: true });
+      promise
+        .then(resolve, reject)
+        .finally(() => controller.signal.removeEventListener('abort', onAbort));
+    });
   try {
-    await pipeline(
-      Readable.fromWeb(resp.body as Parameters<typeof Readable.fromWeb>[0]),
-      counter,
-      createWriteStream(partPath, { flags: 'wx' }),
-    );
-    const sha256 = hasher.digest('hex');
-    if (expected && size !== expected.size) {
-      throw new AttachmentIntegrityError(
-        'size',
-        `附件下载不完整:预期 ${expected.size} 字节,实际 ${size} 字节,请重新上传。`,
+    startWatchdog = setTimeout(abortStalled, DOWNLOAD_START_TIMEOUT_MS);
+    expectProgressWithin(DOWNLOAD_PRESIGN_TIMEOUT_MS);
+    // 请求自身的超时只是兜底回收被放弃的连接,晚于上面的计时触发,用户看到的是明确的超时。
+    const { getUrl } = await untilAborted(presignGet(key, DOWNLOAD_PRESIGN_TIMEOUT_MS + 1_000));
+    expectProgressWithin(DOWNLOAD_STALL_TIMEOUT_MS);
+    const resp = await untilAborted(net.fetch(getUrl, { method: 'GET', signal: controller.signal }));
+    if (!resp.ok) throw Object.assign(new Error(`OSS GET 失败 (${resp.status})`), { code: 'OSS_DOWNLOAD_FAILED', status: resp.status });
+    if (!resp.body) throw Object.assign(new Error('OSS GET 响应无 body'), { code: 'OSS_DOWNLOAD_EMPTY', status: resp.status });
+    expectProgressWithin(DOWNLOAD_STALL_TIMEOUT_MS);
+    const partPath = `${destPath}.${randomUUID()}.part`;
+    const hasher = createHash('sha256');
+    let size = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        if (chunk.length > 0) {
+          clearTimeout(startWatchdog);
+          startWatchdog = undefined;
+          expectProgressWithin(DOWNLOAD_STALL_TIMEOUT_MS);
+        }
+        size += chunk.length;
+        if (expected && size > expected.size) {
+          cb(new AttachmentIntegrityError('size', '附件下载超出声明大小。'));
+          return;
+        }
+        hasher.update(chunk);
+        onProgress?.(size);
+        cb(null, chunk);
+      },
+    });
+    try {
+      await pipeline(
+        Readable.fromWeb(resp.body as Parameters<typeof Readable.fromWeb>[0]),
+        counter,
+        createWriteStream(partPath, { flags: 'wx' }),
+        { signal: controller.signal },
       );
+      clearTimeout(watchdog);
+      clearTimeout(startWatchdog);
+      const sha256 = hasher.digest('hex');
+      if (expected && size !== expected.size) {
+        throw new AttachmentIntegrityError(
+          'size',
+          `附件下载不完整:预期 ${expected.size} 字节,实际 ${size} 字节,请重新上传。`,
+        );
+      }
+      if (expected && sha256 !== expected.sha256) {
+        throw new AttachmentIntegrityError(
+          'sha256',
+          '附件完整性校验失败:下载内容与发送端不一致,请重新上传。',
+        );
+      }
+      await rename(partPath, destPath);
+    } catch (error) {
+      clearTimeout(watchdog);
+      clearTimeout(startWatchdog);
+      await rm(partPath, { force: true }).catch(() => undefined);
+      throw error;
     }
-    if (expected && sha256 !== expected.sha256) {
-      throw new AttachmentIntegrityError(
-        'sha256',
-        '附件完整性校验失败:下载内容与发送端不一致,请重新上传。',
-      );
-    }
-    await rename(partPath, destPath);
   } catch (error) {
-    await rm(partPath, { force: true }).catch(() => undefined);
-    throw error;
+    if (!stalled) throw error;
+    throw Object.assign(new Error('附件下载超时:网络长时间没有响应。'), {
+      code: 'OSS_DOWNLOAD_STALLED',
+    });
+  } finally {
+    clearTimeout(watchdog);
+    clearTimeout(startWatchdog);
+    signal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -704,7 +773,7 @@ export async function downloadToFile(
 export async function removeRemote(key: string): Promise<void> {
   try {
     requireAppCapability('canUseDeviceLink', 'Device Link requires a Cindy account.');
-    await deviceLinkApiFetch<{ deleted: boolean }>(DELETE_PATH, {
+    await mediaApiFetchFor(key)<{ deleted: boolean }>(DELETE_PATH, {
       method: 'DELETE',
       body: { key },
       // Best-effort (the OSS lifecycle rule is the backstop): never let an unresponsive relay

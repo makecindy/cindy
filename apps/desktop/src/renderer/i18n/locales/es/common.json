@@ -245,6 +245,7 @@
     "completeWithSkipped_many": "Copiado, elementos {{count}} omitidos"
   },
   "sharedTask": {
+    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido de las tareas compartidas sigue pasando por el retransmisor de Cindy.",
     "selfJoin": "Usted inició esta tarea compartida, por lo que no necesita unirse. Ábrelo desde “Compartido por mí”.",
     "manageSharing": "Gestionar el uso compartido",
     "manageMembers": "Administrar miembros…",
@@ -346,6 +347,7 @@
     "closeAllDescription": "Los invitados perderán el acceso. Se mantiene el historial de tareas."
   },
   "providerShare": {
+    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido del uso compartido de proveedores sigue pasando por el retransmisor de Cindy.",
     "owned": {
       "title": "Proveedores que comparto"
     },
@@ -2454,7 +2456,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Escritura y estilo",
+        "hint": "La IA responde en el estilo elegido. Con «Respuestas habituales», la interfaz sigue en chino clásico y las respuestas siguen tu idioma.",
+        "scriptAriaLabel": "Escritura del chino clásico",
+        "styleAriaLabel": "Estilo de respuesta de la IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prosa clásica (predeterminado)",
+          "tang-poetry": "Poesía Tang",
+          "song-ci": "Ci de los Song",
+          "yuan-qu": "Qu de los Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prosa paralela",
+          "pre-qin": "Maestros pre-Qin",
+          "historian": "Estilo del Gran Historiador",
+          "ming-qing-essay": "Ensayos Ming–Qing",
+          "plain": "Respuestas habituales"
+        }
       }
     },
     "userProfile": {
@@ -5822,7 +5847,7 @@
         "current": "En uso",
         "ownerName": "esta computadora",
         "unavailable": "Para usar tu propio retransmisor, inicia sesión en Cindy y asegúrate de que el llavero del sistema esté disponible.",
-        "limits": "Mientras uses tu propio retransmisor, no estarán disponibles las notificaciones push en el teléfono, el uso compartido de proveedores ni las tareas compartidas.",
+        "limits": "Mientras uses tu propio retransmisor, las notificaciones push en el teléfono no estarán disponibles. El uso compartido de proveedores y las tareas compartidas seguirán pasando por el retransmisor de Cindy.",
         "actions": {
           "join": "Unirse a otro retransmisor",
           "useOfficial": "Volver al retransmisor de Cindy",
@@ -6038,7 +6063,7 @@
           "switchFromHost": "El relé de esta computadora se detiene y los dispositivos que se unieron a él se desconectan.",
           "switchFromMember": "Esta computadora sale de {{name}}. Para volver a unirse después, su propietario debe crear un nuevo enlace de unión.",
           "switchConfirm": "Cambiar",
-          "switchFromOfficial": "El control remoto entre tus dispositivos pasará por {{name}}. Las notificaciones push al teléfono, el uso compartido de proveedores y las tareas compartidas no están disponibles mientras uses tu propio relé."
+          "switchFromOfficial": "El control remoto entre tus dispositivos pasará por {{name}}. Las notificaciones push al teléfono no están disponibles mientras uses tu propio relé. El uso compartido de proveedores y las tareas compartidas siguen pasando por el retransmisor de Cindy."
         },
         "dialog": {
           "steps": {
@@ -10621,6 +10646,7 @@
       "header": {
         "stepRunning": "{{name}} está en el paso {{step}}",
         "speaking": "{{name}} está respondiendo…",
+        "queued": "{{name}} está en cola",
         "planning": "{{name}} está dividiendo el trabajo…"
       },
       "memberCount_one": "Miembro de {{count}}",
@@ -17765,9 +17791,8 @@
       "name": "Seguimiento de sesiones asignadas (integrado)",
       "hint": "Da seguimiento a las sesiones asignadas cuando se estancan, te necesitan, fallan, alcanzan un límite de uso o terminan."
     },
-    "builtinTodoCheck": {
-      "name": "Revisión diaria de pendientes (integrada)",
-      "hint": "Busca nuevos pendientes en las fuentes conectadas de lunes a viernes a las 9:00 y permanece en silencio cuando no hay novedades. Se activa o desactiva desde la vista rápida; solo se puede pausar o reanudar."
+    "todoCheck": {
+      "name": "Revisión diaria de pendientes"
     },
     "builtinNightlyLearning": {
       "name": "Aprendizaje nocturno (integrado)",

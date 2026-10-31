@@ -23,7 +23,7 @@ import {
 } from "@/auth/loginMessages";
 import { LOGIN_CONSENT_DIALOG } from "@/auth/loginSkinLayout";
 
-const LOCALES: LoginLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR"];
+const LOCALES: LoginLocale[] = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "pt-PT", "pt-BR", "zh-Hant-x-lzh", "zh-Hans-x-lzh"];
 
 describe("loginMessages 5 语 catalog", () => {
   it("catalog 覆盖全部 5 个 locale", () => {

@@ -9,7 +9,9 @@ import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
-import { initMenubarService, refreshMenubarControlState, refreshMenubarLocalization, stopMenubarService } from './menubar/service.js';
+import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
+import { getQuotaOverviewService } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -620,6 +622,8 @@ import {
   initDeviceLinkService,
   getDeviceLinkStatus,
   isSharedTaskAvailable,
+  isSharedTaskRelayOnline,
+  waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
   getControllerName,
@@ -1178,7 +1182,8 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { setMainLocale, t } from './i18n.js';
+import { setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -3158,6 +3163,12 @@ ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
 // 详见 deepLink.ts 的 pending buffer 段。
 ipcMain.handle('deep-link:take-pending', takePendingDeepLinkFromRenderer);
 
+ipcMain.handle('app-locale:set-classical-style', (_event, style: unknown): { ok: true } => {
+  // Unknown values keep the current style; only catalog ids reach the reply note.
+  if (isClassicalReplyStyle(style)) setMainClassicalStyle(style);
+  return { ok: true };
+});
+
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   const previousLocale = currentApplicationMenuLocale;
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
@@ -3182,7 +3193,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   }
   refreshDesktopTrayMenus();
   getAgentIslandService()?.refreshLocalization();
-  refreshMenubarLocalization();
+  getQuotaOverviewService().rebuildSoon();
   return { ok: true };
 });
 
@@ -9982,7 +9993,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
-    onControlledStateChanged: refreshMenubarControlState,
+    onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
@@ -10008,7 +10019,7 @@ app.on('ready', async () => {
       drain: drainPersistQueue,
     },
   );
-  registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
+  registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();

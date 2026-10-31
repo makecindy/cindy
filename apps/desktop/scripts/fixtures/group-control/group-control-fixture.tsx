@@ -2,6 +2,8 @@ import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
+import type { BotGroupSummary } from '../../../src/shared/botGroupChat';
+import { BotGroupSidebarRow } from '../../../src/renderer/features/bots/BotGroupSidebarRow';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { BOT_GROUP_SETTINGS_PARAM } from '../../../src/renderer/features/bots/botGroupPresentation';
@@ -22,9 +24,10 @@ interface GroupData {
   /** Controlled receipts for the real renderer send/settle layout regression. */
   sendStatus?: boolean;
   sharePending?: boolean;
-  workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown';
+  workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown' | 'queued';
   workRemote?: boolean;
   workParallel?: boolean;
+  workQueuedStep?: boolean;
   workLastStopping?: boolean;
   workNoStart?: boolean;
   bodyAnswer?: boolean;
@@ -260,9 +263,9 @@ function groupFrom(data: GroupData) {
     organizerBotId: data.members[0]?.botId ?? null,
     projectDir: null,
     lastMessage: null,
-    speakingBotIds: [],
+    speakingBotIds: data.workState ? data.workParallel ? ['a', 'b'] : ['a'] : [],
     planningBotId: null,
-    openPlan: null,
+    openPlan: data.workQueuedStep ? { id: 'queued-plan', kind: 'work', status: 'running', currentStep: 0, stepCount: 2, currentBotName: 'Aster', currentStepStatus: 'running' } : null,
     createdAt: 1,
     updatedAt: 1,
     plans: data.arrangement ? [{ ...arrangementPlan(data.arrangement), kind: planKind }] : data.division ? [divisionPlan(data.division)] : [],
@@ -296,7 +299,7 @@ function groupFrom(data: GroupData) {
       createdAt: 1700000000000 + i,
     })),
     hasMoreBefore: false,
-    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' ? null : 'fixture-work', activity: 'reply', executionStatus: data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
+    round: data.workState ? { status: 'running', speakers: [{ botId: 'a', executionId: 'fixture-execution', sessionId: data.workRemote || data.workState === 'unknown' || data.workState === 'queued' ? null : 'fixture-work', activity: data.workQueuedStep ? 'step' : 'reply', executionStatus: data.workState === 'queued' ? 'queued' : data.workState === 'waiting' ? 'needs_input' : 'running', startedAt: data.workNoStart ? undefined : Date.now() - 83_000, stopping: data.workState === 'stopping' },
       ...(data.workParallel ? [{ botId: 'b', executionId: 'fixture-second', sessionId: 'fixture-second-work', activity: 'reply', startedAt: Date.now() - 41_000, stopping: !!data.workLastStopping, executionStatus: data.workLastStopping ? 'stopping' : 'running' }] : [])], canContinue: false }
       : { status: 'idle', speakers: [], canContinue: false },
   };
@@ -366,6 +369,11 @@ void mountPage({
         updateBotGroup: forbid('maker.updateBotGroup'),
       },
       deviceLink: {
+        subscribe: async () => undefined,
+        unsubscribe: async () => undefined,
+        onStatusChanged: subscription('deviceLinkStatus'),
+        onPresenceChanged: subscription('deviceLinkPresence'),
+        onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
         invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
           { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
@@ -387,7 +395,10 @@ void mountPage({
   },
   render: (ctx) => {
     const data = ctx.data as unknown as GroupData;
-    const sidebar = data.sidebar ? <div className="p-5" /> : undefined;
+    const sidebar = data.sidebar ? <div className="p-5">{data.workState ? <BotGroupSidebarRow
+      group={groupFrom(data) as BotGroupSummary} bots={[]} islandActivity={new Map()}
+      now={Date.now()} selected={true} onOpenGroup={() => undefined}
+    /> : null}</div> : undefined;
     return (
       <>
         <AppFrame sidebar={sidebar}>

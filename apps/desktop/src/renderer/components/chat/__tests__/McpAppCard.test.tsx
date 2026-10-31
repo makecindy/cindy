@@ -110,6 +110,8 @@ it.each(['unmount', 'failure-retry', 'disconnected', 'rejected-move', 'no-move-a
       controller.close.mockReturnValue(closed);
       const receive = added.mock.calls.find(([type]) => type === 'message')![1];
       const frame = container.querySelector('iframe')!;
+      // The ancestor sandbox must also allow the inner App's submit event (G5).
+      expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms');
       if (scenario === 'disconnected') frame.remove();
       if (scenario === 'failure-retry') {
         await act(async () => controller.fail(new Error('MCP_APP_FAILED')));

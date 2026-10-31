@@ -67,6 +67,8 @@ import {
 } from '@/components/new-chat/AddRemoteProjectDialog';
 import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -995,16 +997,23 @@ export function NewMakerDraftRoute() {
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
   /**
    * 远程控制下新建任务(建到被控电脑上)时,Agent 同样可以在第三台电脑运行(与手机新建任务、
-   * 远程控制的已建任务同一套):被控电脑的供应商目录带「允许被远程调用」标记才提供(它认得
-   * create-session 的 agentDeviceId)。共享任务访客读到的是自己账号的设备,与这台电脑无关。
+   * 远程控制的已建任务同一套):新版按被控电脑的路由目录提供;旧版仍依赖供应商目录的
+   * 「允许被远程调用」标记。共享任务访客读到的是自己账号的设备,与这台电脑无关。
    */
   const { providers: deviceLinkHostProviders } = useDeviceProviders(effectiveDeviceLinkDeviceId);
+  // 新版主机的目录通道本身支持路由来源，不要求主机还配置了本地供应商。
+  const controlledModelRoute = useModelRouteDevices({
+    controlledDeviceId: effectiveDeviceLinkDeviceId,
+    leadAgentDeviceId: draft.agentDeviceId,
+    sshRemote: !!effectiveRemoteHostId,
+  });
   // 已经选好的另一台电脑一定是在这台被控电脑确认支持时选的(换被控电脑 store 即清空):被控电脑的
   // 目录暂时读不到(首次加载 / 重连)时继续生效,不让草稿在两份目录之间来回重种。
   const deviceLinkRemoteAgentSupported =
     !!effectiveDeviceLinkDeviceId &&
     !isSharedTaskPeer(effectiveDeviceLinkDeviceId) &&
-    (controlledComputerSupportsRemoteAgent(deviceLinkHostProviders) ||
+    (controlledModelRoute.catalogHostDeviceId != null ||
+      controlledComputerSupportsRemoteAgent(deviceLinkHostProviders) ||
       (draft.agentDeviceId != null && deviceLinkHostProviders.length === 0));
   /**
    * 「Agent 在另一台电脑运行」:任务、项目文件与命令留在任务所在电脑(本机,或上面那种被控电脑),
@@ -1025,6 +1034,7 @@ export function NewMakerDraftRoute() {
     useProviderShareAgentDevices([effectiveAgentDeviceId], effectiveDeviceLinkDeviceId);
   const remoteAgentDevices = useMemo(() => {
     if (effectiveDeviceLinkDeviceId) {
+      if (deviceLinkRemoteAgentSupported && controlledModelRoute.catalogHostDeviceId) return controlledModelRoute.devices;
       // 建到被控电脑的任务:候选去掉被控电脑本身，分享需在两端名单中可用。
       // 被控电脑不支持时不传,模型面板维持只列被控电脑的目录。
       return deviceLinkRemoteAgentSupported
@@ -1048,6 +1058,7 @@ export function NewMakerDraftRoute() {
   }, [
     selectableDevices,
     providerShareDevices,
+    controlledModelRoute,
     effectiveDeviceLinkDeviceId,
     deviceLinkRemoteAgentSupported,
     effectiveAgentDeviceId,
@@ -1056,7 +1067,9 @@ export function NewMakerDraftRoute() {
    * 模型目录所在的电脑:Agent 在另一台电脑运行时是那台(模型、Agent 登录与可用引擎都以运行
    * Agent 的电脑为准);否则任务建到远程设备时是那台。本机任务为 undefined。
    */
-  const catalogDeviceId = effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId;
+  const catalogDeviceId = modelCatalogKey(
+    effectiveAgentDeviceId ?? effectiveDeviceLinkDeviceId, controlledModelRoute.catalogHostDeviceId,
+  );
   /** 草稿的模型选择以 catalogDeviceId 那台的目录为准(dlSel),不读写本机草稿记忆。 */
   const usesDeviceCatalog = catalogDeviceId != null;
   // 入口门控:只在 runtime 已注册的 agent 上开放创建入口(Pi 二进制缺失时 buildPiAgent 返回
@@ -5964,6 +5977,7 @@ export function NewMakerDraftRoute() {
                     agentDeviceId={effectiveAgentDeviceId ?? null}
                     agentDeviceName={draft.agentDeviceName}
                     remoteAgentDevices={remoteAgentDevices}
+                    catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
                     modelMemoryOverride={deviceLinkDraftMemory}
                     initialModel={draftInitialModel}
                     initialEffort={draftInitialEffort}
@@ -6231,6 +6245,7 @@ export function NewMakerDraftRoute() {
           // 其他电脑 / 分享的供应商，可以换到任务所在电脑或别处。
           leadAgentDeviceId={effectiveAgentDeviceId ?? null}
           remoteAgentDevices={effectiveRemoteHostId ? undefined : remoteAgentDevices}
+          catalogHostDeviceId={controlledModelRoute.catalogHostDeviceId}
         />
 
         {/* 添加远程项目弹窗 (入口在 mode pill 的 FolderPickerPopover 里, gate 走 hasAnyRemoteTarget =

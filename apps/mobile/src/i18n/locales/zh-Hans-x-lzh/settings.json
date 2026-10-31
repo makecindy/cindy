@@ -1,0 +1,355 @@
+{
+  "localLogs": {
+    "upload": "上呈日志",
+    "uploadResult": {
+      "unavailable": "此版未设日志上呈。",
+      "consentRequired": "上呈日志前，须同意隐私政策。",
+      "empty": "近日无日志，请先打开记录并重现其疾。",
+      "failed": "上呈未成，日志仍存于手机。"
+    },
+    "title": "Debug 日志",
+    "record": "记日志",
+    "export": "输日志",
+    "clear": "清日志",
+    "busy": "方理…",
+    "failed": "日志未能存或分享，请再试。",
+    "clearHint": "删已存之诊断日志？",
+    "cancel": "罢",
+    "uploadCopied": "日志已上呈，编号 {{code}} 已录",
+    "uploadSucceeded": "日志已上呈，编号 {{code}}",
+    "footer": "日志存于手机，至多 7 天、8 MB，不自动上呈。所输之完整日志不含言谈内文与凭证；上呈仅遣筛后之运行记录与版本信息。"
+  },
+  "title": "规制",
+  "appearance": {
+    "title": "仪容",
+    "modeLabel": "显示之式",
+    "options": {
+      "system": "随系统",
+      "light": "昼",
+      "dark": "夜"
+    },
+    "saveFailed": "显示模式未能存，重启后将复前设",
+    "userBubble": {
+      "title": "吾讯气泡之色",
+      "presets": "色",
+      "default": "常例",
+      "peach": "初稿",
+      "yellow": "曙色",
+      "sage": "灵犀",
+      "blue": "幽梦",
+      "lavender": "夜猫",
+      "red": "朱环",
+      "custom": "自拟色",
+      "hue": "色相",
+      "preview": "讯之先览",
+      "sampleUser": "助我理一理今日之灵感。",
+      "sampleAssistant": "善，且与君一同理清思绪。",
+      "hint": "深浅模式下自调明暗，以保文字清晰。仅存于此设备。",
+      "customHint": "左右拖曳色带以择色。深浅模式下自调明暗，仅存于此设备。",
+      "saveFailed": "颜色已于此番使用中生效，然未能存。",
+      "retry": "再试",
+      "cancel": "罢",
+      "reset": "复预设",
+      "apply": "用之",
+      "hex": "颜色值"
+    }
+  },
+  "language": {
+    "title": "语言",
+    "hint": "界面用文言，AI 亦以文言应答；君若明言欲用他语，从君所命",
+    "options": {
+      "system": "随系统",
+      "zh-CN": "简体中文",
+      "zh-TW": "繁体中文",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "es": "Español",
+      "fr": "Français",
+      "de": "Deutsch",
+      "pt-PT": "Português (Portugal)",
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "简繁与文风",
+      "hint": "AI 依所择文风作答；择「照常作答」，则界面仍为文言，回答从君之语",
+      "scriptAriaLabel": "文言简繁",
+      "styleAriaLabel": "作答文风",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "雅正文言（常例）",
+        "tang-poetry": "唐诗",
+        "song-ci": "宋词",
+        "yuan-qu": "元曲",
+        "chu-ci": "楚辞",
+        "parallel-prose": "骈文",
+        "pre-qin": "先秦诸子",
+        "historian": "史传",
+        "ming-qing-essay": "明清小品",
+        "plain": "照常作答"
+      }
+    }
+  },
+  "version": {
+    "sectionTitle": "版本",
+    "updateMethodInApp": "可于 App 内更新，重启后生效。",
+    "updateMethodPackage": "须取下并安装新版。",
+    "updateMethodUnavailable": "开发版不能于 App 内更新。",
+    "checkAction": "察更新",
+    "testFlightCheckAction": "察内容更新",
+    "checking": "方察",
+    "checkingAccessibility": "方察更新",
+    "testFlightCheckingAccessibility": "方察内容更新",
+    "testFlightUpdateManaged": "新测试版请于 TestFlight 中安装。",
+    "testFlightNoContentUpdate": "今无可用之内容更新。",
+    "testFlightContentUpdateUnavailable": "此建置不能察内容更新。",
+    "googlePlayUpdateManaged": "新版请于 Google Play 中更新。",
+    "googlePlayNoContentUpdate": "今无可用之内容更新。",
+    "googlePlayContentUpdateUnavailable": "此建置不能察内容更新。",
+    "bundleUpdateFound": "有整包更新",
+    "upToDate": "已是最新",
+    "bundleUpToDateNoOta": "已是最新，此版不支持热更新。",
+    "downloadedRestarting": "更新已取下，方重启",
+    "downloadedRestartRequired": "更新已取下，须尽退并重开 App 方生效。",
+    "bundleCheckFailed": "整包更新未能察，请稍后再试",
+    "checkFailedDetail": "察更新未成：{{detail}}",
+    "checkFailed": "察更新未成，请稍后再试",
+    "currentLabel": "当前版本",
+    "pairedDesktopLabel": "所配桌面版"
+  },
+  "betaChannel": {
+    "title": "Beta 试行之途",
+    "badge": "Beta",
+    "description": "先受将发之用户端更新。内容更新于下次察时取下，重启 App 后生效。",
+    "saveFailed": "Beta 测试管道之设未能存",
+    "unavailable": "Beta 测试管道暂不可用，连不上 Beta 更新服务器。"
+  },
+  "notifications": {
+    "sectionTitle": "告",
+    "taskDone": "讯与差事之告",
+    "taskDoneHint": "有新讯，或差事毕、有谬、待君回复时告君。",
+    "permissionDenied": "告之权柄未开，请于系统设置中允许 Cindy 发送通知。",
+    "unregisterQueued": "已阖，连网后自动完成注销。",
+    "preview": "示讯之先览",
+    "background": "于背景保持讯之连接",
+    "backgroundActive": "方于背景收讯",
+    "backgroundStop": "止收",
+    "backgroundHint": "背景连接不依赖 Google，将示常驻之告；可随时于通知栏止之。",
+    "googleUnavailable": "Google 推播暂不可用。可启背景讯之连接以收讯。"
+  },
+  "about": {
+    "sectionTitle": "关于此手机",
+    "deviceName": "设备之名",
+    "deviceNameDetail": "示于电脑之授权列表",
+    "platform": "平台",
+    "editAccessibility": "修{{label}}"
+  },
+  "relay": {
+    "online": "Relay 已连",
+    "connecting": "方连 Relay",
+    "stopped": "Relay 未连",
+    "lastSynced": "前次同步 {{time}}",
+    "canSync": "可同步远程差事。",
+    "reconnectHint": "网络一复，自当重新订阅远程差事。",
+    "resumeHint": "归返前台或重新登门，连接自复。"
+  },
+  "header": {
+    "notSignedIn": "未登门",
+    "thisPhone": "此手机"
+  },
+  "debug": {
+    "sectionTitle": "调试 / 开发者",
+    "userId": "用户 ID",
+    "notSynced": "未同步",
+    "deviceId": "设备 ID",
+    "initializing": "方初始化",
+    "authServer": "Auth Server",
+    "authRegion": "登门之域"
+  },
+  "devServerEnvironment": {
+    "title": "服务器环境",
+    "description": "仅影响 CindyDev 所连之业务服务器",
+    "accessibility": "易服务器环境",
+    "options": {
+      "dev": "Dev",
+      "release": "Release"
+    },
+    "confirmTitle": "切至 {{environment}}？",
+    "confirmBody": "切换将辞出当前名籍并重启 App。",
+    "cancel": "罢",
+    "switchAction": "易",
+    "switching": "方切换",
+    "switchFailed": "服务器环境未能切换，请再试。"
+  },
+  "updateInfo": {
+    "embedded": "随整包",
+    "embeddedFallback": "随整包（热更未行）",
+    "unknown": "不详",
+    "source": "所行之源",
+    "sourceEmbedded": "内置之版(随包)",
+    "sourceEmergencyFallback": "内置之版(应急启动，热更未行)",
+    "sourceOta": "OTA 热更新",
+    "updateId": "更新 ID",
+    "updatedAt": "更新之时",
+    "channel": "Channel",
+    "runtime": "Runtime",
+    "otaMarker": "热更标记",
+    "emergencyLaunch": "应急启动",
+    "emergencyLaunchYes": "是（此次运行内热更不能生效）",
+    "otaVersion": "热更版本"
+  },
+  "legal": {
+    "sectionTitle": "备案信息",
+    "privacyPolicy": "隐私政策",
+    "userAgreement": "用户协议",
+    "view": "览",
+    "openPrivacyPolicy": "启隐私政策",
+    "openUserAgreement": "启用户协议",
+    "appFilingNumber": "App 备案号",
+    "analytics": "使用统计",
+    "analyticsHint": "用以了解启动与留存。上报设备型号、系统与应用版本、设备标识符等信息，登门后含名籍 ID；不含言谈、卷或提示词。",
+    "analyticsSaveFailed": "设置未能存，重启后或复原值。",
+    "analyticsReset": "复预设",
+    "analyticsResetAction": "复"
+  },
+  "account": {
+    "logoutConfirmTitle": "辞出？",
+    "logoutConfirmRunning": "尚有差事方行。辞出后差事仍于电脑上运行，然此手机将不再接收与操控之；此手机上所存之名籍与本地远程镜像亦将清除。",
+    "logoutHint": "辞出将清此手机上全部名籍与远程镜像，不涉电脑上之差事。",
+    "logout": "辞出",
+    "loggingOut": "方辞出",
+    "loggingOutAccessibility": "方辞出"
+  },
+  "copyRow": {
+    "action": "录之",
+    "done": "已录",
+    "accessibility": "录{{label}}"
+  },
+  "voiceDictionary": {
+    "sectionTitle": "语音词典",
+    "label": "览词典",
+    "hint": "词典于电脑上修而自同步，手机仅可览。",
+    "openAccessibility": "览语音词典",
+    "screenTitle": "语音词典",
+    "entryCount": "词条 {{count}}",
+    "aliasSeparator": "、",
+    "aliases": "常误听为：{{aliases}}",
+    "refresh": "重整",
+    "refreshing": "方重整…",
+    "refreshAccessibility": "重整词典",
+    "readOnlyHint": "手机仅供览阅，增删词条请至电脑为之",
+    "offlineHint": "电脑不在线，今示前次同步之词典",
+    "noDesktops": "于电脑登门同一名籍，即可同步词典"
+  },
+  "voiceSpeakerFilter": {
+    "actionFailed": "操作未能存，请再试。",
+    "title": "辨吾之声",
+    "sectionTitle": "声纹滤别",
+    "label": "辨吾之声",
+    "entryHint": "语音输入时，令旁人之声静默。声纹仅存于此手机。",
+    "openAccessibility": "启「辨吾之声」之设",
+    "on": "已启",
+    "off": "未启",
+    "hint": "语音输入时，令旁人之声静默，唯辨君所言；与君同时发言之声不能尽滤。声纹加密存于此手机，不上呈亦不同步。",
+    "unsupported": "此版不支持声纹辨识，请更新至最新版。",
+    "model": {
+      "title": "识别模型",
+      "needed": "首用须取下约 {{size}} 之辨识模型，宜连 Wi-Fi。",
+      "download": "取下辨识模型",
+      "downloading": "方取下（{{done}} / {{total}}）",
+      "cancel": "罢取下",
+      "retry": "重新取下",
+      "failed": {
+        "network": "辨识模型取下未成，请察网络后再试。",
+        "disk": "辨识模型未能存，请察手机保存空间后再试。",
+        "checksum": "所取之辨识模型验证未过，请再试。",
+        "unavailable": "暂不能取得辨识模型，请稍后再试。"
+      }
+    },
+    "profile": {
+      "title": "声纹",
+      "missing": "尚未录声纹",
+      "missingHint": "录入声纹后方生效。",
+      "enrolled": "声纹已录",
+      "enrolledAt": "{{date}} 录",
+      "enroll": "录声纹",
+      "reenroll": "重录",
+      "delete": "删声纹",
+      "deleteConfirm": {
+        "title": "删声纹？",
+        "description": "删之则语音输入不再滤旁人之声，直至君重录。",
+        "confirm": "删",
+        "cancel": "罢"
+      }
+    },
+    "strictness": {
+      "label": "严度",
+      "hint": "愈严则愈能挡旁人之声，然喧哗之时亦易剪去君之言。",
+      "restoreDefault": "复预设",
+      "options": {
+        "relaxed": "宽",
+        "standard": "常",
+        "strict": "严"
+      }
+    },
+    "enroll": {
+      "description": "请以平常语气朗读下列 {{clips}} 段文字。每段至多录 {{seconds}} 秒，读毕点击结束录音。请于平日用语音输入之处录之，勿令他人同时说话。",
+      "step": "第 {{current}} / {{total}} 段",
+      "record": "始朗读",
+      "stop": "止录",
+      "rerecord": "重录此段",
+      "recording": "方录…尚余 {{seconds}} 秒",
+      "saving": "方生声纹…",
+      "submit": "录毕",
+      "cancel": "罢",
+      "passages": {
+        "p1": "今晨我先理一理本周之事务，午后再将须议之事列出，传与诸位先览。",
+        "p2": "明日若天晴，我们可早些出发，路上顺道买些果子零食，午间便在园中用饭。",
+        "p3": "请帮我将此段改得简洁些，留其关键数字与结论，再以三至五句总其要点。"
+      },
+      "errors": {
+        "too_short": "第 {{index}} 段所测语音不足，请重录。",
+        "no_embedding": "第 {{index}} 段未能辨出声纹，请重录此段。",
+        "inconsistent": "第 {{index}} 段与他段不似同一人，或混入他人之声或噪音，请重录此段。",
+        "models_missing": "辨识模型尚未取下毕，请稍后再试。",
+        "storage_unavailable": "系统钥匙圈暂不可用，声纹无法加密保存，请稍后再试。",
+        "failed": "声纹生成未成，请再试。",
+        "microphone": "麦克风不可用，请察麦克风权柄后再试。",
+        "noAudio": "麦克风无声传来，请察后再试。"
+      },
+      "stepChoice": "第 {{index}} 段，{{status}}",
+      "stepStatus": {
+        "pending": "待录",
+        "recorded": "已录",
+        "retry": "待再录",
+        "recording": "方录"
+      },
+      "rerecordStep": "再录第 {{index}} 段",
+      "readHint": "备妥即始朗读，读毕点击结束录音。",
+      "otherClipsKept": "他段之录音皆存。"
+    }
+  },
+  "deviceNameEditor": {
+    "screenTitle": "设备之名",
+    "placeholder": "本机之名",
+    "resetAccessibility": "复本机预设之名",
+    "emptyError": "设备之名不可为空。",
+    "deviceInitializing": "设备尚在初始化，请稍后再试。",
+    "restoredDefault": "已复预设之名。",
+    "resetAction": "复预设之名",
+    "clearAccessibility": "清名",
+    "discardTitle": "弃所改？",
+    "discardBody": "设备之名所改尚未存。",
+    "discardConfirm": "弃所改",
+    "keepEditing": "续修"
+  },
+  "developer": {
+    "title": "开发者",
+    "identity": "标识信息",
+    "updateInfo": "更新之讯"
+  }
+}

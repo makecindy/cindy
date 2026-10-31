@@ -1,3 +1,7 @@
+import { createAppMessageSender } from '../messageSender.js';
+import { queuedAppMessageGuard } from '../message.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import type { McpAppsHostDeps } from '../host.js';
 import { GhostPickSlot } from '../../cindy-brain/pickSlot.js';
 import { GhostPipeDispatcher } from '../../cindy-brain/pipeDispatcher.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
@@ -93,7 +97,7 @@ const requests = [
   ['prompts/list', {}, 'listPrompts', { prompts: [{ name: marker }] }],
 ] as const;
 
-async function fixture(caller = 'renderer:1', plugin = false) {
+async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p>', options: { uninitialized?: boolean; pendingTool?: boolean; sendMessage?: McpAppsHostDeps['sendMessage']; attachments?: boolean } = {}) {
   let owner = {};
   let enabled = true;
   let visible = true;
@@ -109,6 +113,7 @@ async function fixture(caller = 'renderer:1', plugin = false) {
     tool,
     arguments: {},
   };
+  if (options.attachments) card.tool = { ...tool, _meta: { ...tool._meta, 'cindy/attachments': [{ type: 'resource_link', uri: 'library:fixture.txt', name: 'fixture' }] } };
   const methods = {
     callTool: vi.fn(),
     tools: vi.fn(async () => [tool]),
@@ -127,7 +132,7 @@ async function fixture(caller = 'renderer:1', plugin = false) {
     resource: async () => ({
       result: {
         contents: [
-          { uri: card.resourceUri, mimeType: 'text/html;profile=mcp-app', text: '<p>Form</p>' },
+          { uri: card.resourceUri, mimeType: 'text/html;profile=mcp-app', text: html },
         ],
       },
     }),
@@ -163,35 +168,40 @@ async function fixture(caller = 'renderer:1', plugin = false) {
     readCard,
     writeCard: async () => {},
     authorizeTool,
-    sendMessage: async () => {},
+    sendMessage: options.sendMessage ?? (async () => {}),
+    ...(options.attachments ? { pluginFiles: { describe: async () => ({ mimeType: 'text/plain', size: 1 }), read: async () => new Response('x') } } : {}),
     connection: () => connection,
   });
   hosts.push(host);
+  if (options.pendingTool) card.connectionId = host.registerConnection(connection);
   const document = await host.open(caller, 'task', 'card', {});
   const dispatch = (message: JSONRPCMessage) =>
     host.dispatch(caller, 'task', document.viewId, message);
-  await dispatch({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'ui/initialize',
-    params: {
-      protocolVersion: '2026-01-26',
-      appInfo: { name: 'Authorization fixture', version: '1' },
-      appCapabilities: {},
-    },
-  });
-  await vi.waitFor(() =>
-    expect(outgoing).toContainEqual(expect.objectContaining({ id: 1, result: expect.anything() })),
-  );
-  await dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
-  await vi.waitFor(() =>
-    expect(outgoing).toContainEqual(
-      expect.objectContaining({ method: 'ui/notifications/tool-input' }),
-    ),
-  );
-  outgoing.length = 0;
+  if (!options.uninitialized) {
+    await dispatch({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'ui/initialize',
+      params: {
+        protocolVersion: '2026-01-26',
+        appInfo: { name: 'Authorization fixture', version: '1' },
+        appCapabilities: {},
+      },
+    });
+    await vi.waitFor(() =>
+      expect(outgoing).toContainEqual(expect.objectContaining({ id: 1, result: expect.anything() })),
+    );
+    await dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+    await vi.waitFor(() =>
+      expect(outgoing).toContainEqual(
+        expect.objectContaining({ method: 'ui/notifications/tool-input' }),
+      ),
+    );
+    outgoing.length = 0;
+  }
   return {
     host,
+    document,
     viewId: document.viewId,
     readCard,
     poll: (after: number) => host.poll(caller, 'task', document.viewId, after),
@@ -701,4 +711,144 @@ it.each(['renderer:1', 'device:phone'])('requires plugin tool approval before is
   }
   expect(f.authorizeTool).toHaveBeenCalledTimes(2);
   expect(f.methods.callTool).not.toHaveBeenCalled();
+});
+
+// Host dispatch/poll must isolate reused JSON-RPC IDs across documents (unit).
+// Existing revocation cases close the whole View; none replace a document while
+// an approval or upstream call is pending. The old signal and late reply are observable.
+it.each(['approval', 'call'] as const)('reinitializes a document and cancels its old %s without replaying card input', async phase => {
+  const f = await fixture('renderer:1', false, '<script type="module">import "@modelcontextprotocol/ext-apps";</script>');
+  const old = deferred<{ content: { type: 'text'; text: string }[] }>();
+  let signal: AbortSignal | undefined;
+  if (phase === 'approval') f.authorizeTool.mockImplementationOnce(async (_s, _t, _a, value) => { signal = value; await old.promise; });
+  else f.methods.callTool.mockImplementationOnce((_p, _schema, options) => { signal = options.signal; return old.promise; });
+  f.methods.callTool.mockResolvedValue({ content: [{ type: 'text', text: 'new document' }] });
+  await f.dispatch({ jsonrpc: '2.0', id: 70, method: 'tools/call', params: { name: 'form' } });
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  f.host.context('renderer:1', 'task', f.viewId, { theme: 'dark' });
+  await f.dispatch({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {
+    protocolVersion: '2026-01-26', appInfo: { name: 'Replacement', version: '1' }, appCapabilities: {},
+  } });
+  expect(signal!.aborted).toBe(true);
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 1, result: expect.objectContaining({ hostContext: expect.objectContaining({ theme: 'dark' }) }) })));
+  await f.dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  await f.dispatch({ jsonrpc: '2.0', id: 70, method: 'tools/call', params: { name: 'form' } });
+  await vi.waitFor(() => expect(f.methods.callTool).toHaveBeenCalledTimes(phase === 'call' ? 2 : 1));
+  old.resolve({ content: [{ type: 'text', text: 'old document' }] });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 70, result: { content: [{ type: 'text', text: 'new document' }] } })));
+  const delivered = await f.poll(0);
+  const messages = delivered.flatMap(e => e.message ? [e.message] : []);
+  expect(f.methods.callTool).toHaveBeenCalledTimes(phase === 'call' ? 2 : 1);
+  expect(f.document.sdk).toBeDefined();
+  expect(messages.filter(m => 'id' in m && m.id === 70)).toEqual([{ jsonrpc: '2.0', id: 70, result: { content: [{ type: 'text', text: 'new document' }] } }]);
+  expect(messages.some(m => 'method' in m && ['ui/notifications/tool-input', 'ui/notifications/tool-result', 'ui/notifications/tool-cancelled'].includes(m.method))).toBe(false);
+});
+
+// Unit: adding SDK bytes must not reject an existing near-limit remote page.
+it('keeps an old large remote page usable without the optional SDK', async () => {
+  const html = 'x'.repeat(4 * 1024 * 1024 - 66 * 1024);
+  const f = await fixture('device:phone', false, html);
+  expect(f.document.html).toBe(html);
+  expect(f.document.sdk).toBeUndefined();
+});
+
+// Unit: a poll can snapshot old replies before its final authorization read.
+// Reinitialize during that read must discard the already-captured old snapshot.
+it('drops an old poll snapshot when its final authorization straddles a new document', async () => {
+  const f = await fixture();
+  const card = await f.readCard();
+  const pending = deferred<McpAppRecord>();
+  f.readCard.mockClear().mockResolvedValueOnce(card).mockReturnValueOnce(pending.promise);
+  const poll = f.poll(0);
+  await vi.waitFor(() => expect(f.readCard).toHaveBeenCalledTimes(2));
+  await f.dispatch({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {
+    protocolVersion: '2026-01-26', appInfo: { name: 'Replacement', version: '1' }, appCapabilities: {},
+  } });
+  pending.resolve(card);
+  expect(await poll).toEqual([]);
+  const next = await f.poll(0);
+  expect(next.some(e => e.message && 'id' in e.message && e.message.id === 1)).toBe(true);
+  expect(next.every(event => event.generation === 1)).toBe(true);
+  expect(next.some(e => e.message && 'method' in e.message && e.message.method === 'ui/notifications/tool-input')).toBe(false);
+});
+
+// Lead R1: accepted messages belong to the card, not a replaceable document.
+// Unit, Host -> production sender -> real queued guard, with a busy Agent.
+it('keeps an accepted queued ui/message after the document changes', async () => {
+  let queued!: AgentInputQueuedMessage;
+  const owner = {};
+  const sendMessage = createAppMessageSender({ owner: () => owner, readClearBoundary: async () => null,
+    restoreQueue: async () => {}, clearBoundary: () => null, shouldQueue: () => true,
+    getSessionMeta: async () => ({}), buildCreateOpts: async () => ({ agentKind: 'pi' as const }),
+    createClientId: () => 'queued', buildQueueItem: async params => ({ ...params, text: params.message }) as unknown as AgentInputQueuedMessage,
+    enqueue: (_session, item) => { queued = item; }, sendToAgentAccepted: vi.fn(),
+  });
+  const f = await fixture('renderer:1', false, '<p>Form</p>', { sendMessage });
+  await f.dispatch({ jsonrpc: '2.0', id: 91, method: 'ui/message', params: { role: 'user', content: [{ type: 'text', text: 'Please continue' }] } });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual({ jsonrpc: '2.0', id: 91, result: {} }));
+  await f.dispatch({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: { protocolVersion: '2026-01-26', appInfo: { name: 'New', version: '1' }, appCapabilities: {} } });
+  await expect(queuedAppMessageGuard(queued)!()).resolves.toBeUndefined();
+  expect(queued.text).toBe('Please continue');
+  f.revoke('card');
+  await expect(queuedAppMessageGuard(queued)!()).rejects.toThrow();
+});
+
+// Lead R2: a completion never delivered to a document must survive replacement.
+it.each(['result', 'cancelled'] as const)('delivers the first pending tool %s after document replacement', async ending => {
+  const f = await fixture('renderer:1', false, '<p>Pending</p>', { pendingTool: true });
+  await f.dispatch({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: { protocolVersion: '2026-01-26', appInfo: { name: 'New', version: '1' }, appCapabilities: {} } });
+  const record = await f.readCard();
+  if (ending === 'result') record.result = { content: [{ type: 'text', text: 'Done' }] };
+  else record.cancelled = 'Cancelled';
+  await f.host.updateResult('task', 'card', record);
+  expect(f.outgoing.some(m => 'method' in m && m.method === 'ui/notifications/tool-' + ending)).toBe(false);
+  await f.dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  await vi.waitFor(() => expect(f.outgoing.filter(m => 'method' in m && m.method === 'ui/notifications/tool-' + ending)).toHaveLength(1));
+  expect(f.outgoing.some(m => 'method' in m && m.method === 'ui/notifications/tool-input')).toBe(false);
+});
+
+// Lead R3: retrying initialize before initialized stays within the first document.
+it('keeps initial input and attachment projection across an initialize retry', async () => {
+  const f = await fixture('renderer:1', true, '<p>Retry</p>', { uninitialized: true, pendingTool: true, attachments: true });
+  for (const id of [1, 2]) {
+    await f.dispatch({ jsonrpc: '2.0', id, method: 'ui/initialize', params: { protocolVersion: '2026-01-26', appInfo: { name: 'Retry', version: '1' }, appCapabilities: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, result: expect.anything() })));
+  }
+  await f.dispatch({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ method: 'ui/notifications/tool-input' })));
+  const context = f.outgoing.find(m => 'method' in m && m.method === 'ui/notifications/host-context-changed' && m.params?.toolInfo);
+  expect(JSON.stringify(context)).toContain('/__cindy/files/');
+});
+
+// #8148: every page receives the optional SDK; the Host never rewrites page bytes.
+it('keeps BOM page bytes while supplying the SDK to a remote viewer', async () => {
+  const html = '\ufeff<!doctype html><html><head></head><body>Old page</body></html>';
+  const f = await fixture('device:phone', false, html);
+  expect(f.document.html).toBe(html);
+  expect(typeof f.document.sdk?.source).toBe('string');
+});
+
+// Accepted queued input must survive replacement, but preparation has not accepted it yet.
+// Unit / Host -> real sender, hold session metadata before the enqueue fence.
+it('cancels a ui/message still preparing when its document is replaced', async () => {
+  const metadata = deferred<Record<string, never>>();
+  const getSessionMeta = vi.fn(() => metadata.promise);
+  const enqueue = vi.fn();
+  const owner = {};
+  let finished = false;
+  const sender = createAppMessageSender({ owner: () => owner, readClearBoundary: async () => null,
+    restoreQueue: async () => {}, clearBoundary: () => null, shouldQueue: () => true,
+    getSessionMeta, buildCreateOpts: async () => ({ agentKind: 'pi' as const }),
+    createClientId: () => 'preparing', buildQueueItem: async params => ({ ...params, text: params.message }) as unknown as AgentInputQueuedMessage,
+    enqueue, sendToAgentAccepted: vi.fn(),
+  });
+  const f = await fixture('renderer:1', false, '<p>Form</p>', {
+    sendMessage: async (...args) => { try { await sender(...args); } finally { finished = true; } },
+  });
+  await f.dispatch({ jsonrpc: '2.0', id: 91, method: 'ui/message', params: { role: 'user', content: [{ type: 'text', text: 'Not accepted yet' }] } });
+  await vi.waitFor(() => expect(getSessionMeta).toHaveBeenCalledOnce());
+  await f.dispatch({ jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: { protocolVersion: '2026-01-26', appInfo: { name: 'New', version: '1' }, appCapabilities: {} } });
+  metadata.resolve({});
+  await vi.waitFor(() => expect(finished).toBe(true));
+  expect(enqueue).not.toHaveBeenCalled();
 });

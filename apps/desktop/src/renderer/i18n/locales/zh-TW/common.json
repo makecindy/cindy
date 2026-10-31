@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
   },
   "sharedTask": {
+    "officialRelayNote": "你正在使用自己的中繼，共享任務的內容仍經 Cindy 官方中繼。",
     "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
     "manageSharing": "共享管理",
     "manageMembers": "管理成員…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "所有訪客將無法繼續存取，任務記錄保留。"
   },
   "providerShare": {
+    "officialRelayNote": "你正在使用自己的中繼，供應商分享的內容仍經 Cindy 官方中繼。",
     "owned": {
       "title": "我分享的供應商"
     },
@@ -2389,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "簡繁與文風",
+        "hint": "AI 依所選文風作答；選「照常作答」時介面仍為文言，回答隨你的語言",
+        "scriptAriaLabel": "文言簡繁",
+        "styleAriaLabel": "AI 作答文風",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "文言（預設）",
+          "tang-poetry": "唐詩",
+          "song-ci": "宋詞",
+          "yuan-qu": "元曲",
+          "chu-ci": "楚辭",
+          "parallel-prose": "駢文",
+          "pre-qin": "先秦諸子",
+          "historian": "史傳",
+          "ming-qing-essay": "明清小品",
+          "plain": "照常作答"
+        }
       }
     },
     "userProfile": {
@@ -5724,7 +5749,7 @@
         "current": "目前使用",
         "ownerName": "這台電腦",
         "unavailable": "登入 Cindy 帳號，並且系統鑰匙圈可用時，才能使用自己的中繼。",
-        "limits": "使用自己的中繼時，手機系統推播、供應商分享和共享任務暫不可用。",
+        "limits": "使用自己的中繼時，手機系統推播暫不可用；供應商分享和共享任務仍經 Cindy 官方中繼。",
         "actions": {
           "join": "加入別的中繼",
           "useOfficial": "切回官方中繼",
@@ -5940,7 +5965,7 @@
           "switchFromHost": "這台電腦上的中繼會停用，已加入它的裝置會斷線。",
           "switchFromMember": "這台電腦會退出「{{name}}」，之後要再加入，需要對方重新產生加入連結。",
           "switchConfirm": "切換",
-          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播、供應商分享和共享任務暫時無法使用。"
+          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播暫時無法使用；供應商分享和共享任務仍經 Cindy 官方中繼。"
         },
         "dialog": {
           "steps": {
@@ -10492,6 +10517,7 @@
       "header": {
         "stepRunning": "{{name}} 正在做第 {{step}} 步",
         "speaking": "{{name}} 正在說…",
+        "queued": "{{name}} 排隊中",
         "planning": "{{name}} 正在安排…"
       },
       "memberCount_one": "{{count}} 位成員",
@@ -17502,9 +17528,8 @@
       "name": "跟進已接手的任務（內建）",
       "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
     },
-    "builtinTodoCheck": {
-      "name": "每天查待辦（內建）",
-      "hint": "工作日 9:00 在已連接的來源裡找新待辦，沒有就不打擾；在近況裡開關，只能暫停或恢復。"
+    "todoCheck": {
+      "name": "每天查待辦"
     },
     "builtinNightlyLearning": {
       "name": "夜間學習（內建）",

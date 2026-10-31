@@ -124,7 +124,8 @@ import { PromptRecommendation } from '@/session/PromptRecommendation';
 import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
+import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndicator';
@@ -1162,7 +1163,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     status,
     subscribe,
     unsubscribe,
-  } = useDeviceLink();
+  } = useDeviceLink(deviceId);
   const revokedDevices = useRevokedDevices();
   const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
@@ -1957,7 +1958,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!media.ossKey) return; // 磁盘缓存命中的条目没有在世 OSS 对象
     const doDelete = (): void => {
       void remoteMediaDepsRef.current.auth.apiFetch('/api/device-link/media', {
-        baseUrl: DEVICE_LINK_API_BASE_URL,
+        baseUrl: deviceLinkMediaApiBaseUrl(media.ossKey),
         method: 'DELETE',
         body: { key: media.ossKey },
       }).catch(() => undefined);
@@ -2012,7 +2013,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           } } : {}),
           presignGet: (ossKey) => deps.auth.apiFetch<MobileRemoteMediaPresignResult>(
             '/api/device-link/media/presign-get',
-            { baseUrl: DEVICE_LINK_API_BASE_URL, method: 'POST', body: { key: ossKey } },
+            { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
           ),
         }, { ...opts, ...(media.thumbnail ? { thumbnail: true } : {}) });
         // inline 缩略图:字节已随回包到手(data URI 可直接渲染),落盘后换 file://
@@ -9240,11 +9241,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       const name = pathDisplayName(target.relPath ?? target.absPath);
       const presignGet = (ossKey: string) => auth.apiFetch<MobileRemoteMediaPresignResult>(
         '/api/device-link/media/presign-get',
-        { baseUrl: DEVICE_LINK_API_BASE_URL, method: 'POST', body: { key: ossKey } },
+        { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
       );
       const deleteOssObject = (key: string) => {
         void auth.apiFetch('/api/device-link/media', {
-          baseUrl: DEVICE_LINK_API_BASE_URL, method: 'DELETE', body: { key },
+          baseUrl: deviceLinkMediaApiBaseUrl(key), method: 'DELETE', body: { key },
         }).catch(() => undefined);
       };
       let url: string;

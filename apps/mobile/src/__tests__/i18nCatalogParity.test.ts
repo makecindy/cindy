@@ -18,6 +18,9 @@ import zhCNCommon from "@/i18n/locales/zh-CN";
 import jaCommon from "@/i18n/locales/ja";
 import koCommon from "@/i18n/locales/ko";
 import zhTWCommon from "@/i18n/locales/zh-TW";
+import lzhHantCommon from "@/i18n/locales/zh-Hant-x-lzh";
+import lzhHansCommon from "@/i18n/locales/zh-Hans-x-lzh";
+import { SUPPORTED_LOCALES } from "@/i18n/locale";
 
 const CATALOGS: Record<string, unknown> = {
   en: enCommon,
@@ -30,6 +33,8 @@ const CATALOGS: Record<string, unknown> = {
   ja: jaCommon,
   ko: koCommon,
   "zh-TW": zhTWCommon,
+  "zh-Hant-x-lzh": lzhHantCommon,
+  "zh-Hans-x-lzh": lzhHansCommon,
 };
 
 /** 展平嵌套 catalog 为 dot-path → 叶子字符串。遇到非 string 叶子直接失败。 */
@@ -60,6 +65,10 @@ function placeholdersOf(value: string): string[] {
 }
 
 describe("mobile i18n catalog parity", () => {
+  it("checks every supported locale", () => {
+    expect(Object.keys(CATALOGS).sort()).toEqual([...SUPPORTED_LOCALES].sort());
+  });
+
   const locales = Object.keys(CATALOGS);
   const flat = new Map(locales.map((locale) => [locale, flatCatalog(locale)]));
   const enKeys = [...flat.get("en")!.keys()].sort();

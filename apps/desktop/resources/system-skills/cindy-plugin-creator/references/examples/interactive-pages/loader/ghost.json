@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 3,
+  "id": "interactive-loader",
+  "name": "动态页面示例",
+  "version": "1.0.0",
+  "minCindyVersion": "0.1.122-beta",
+  "entry": "main.js",
+  "command": "interactive-loader",
+  "whenToUse": "需要查看和编辑记录、显示交互表单时使用",
+  "tools": [
+    {
+      "name": "open_view",
+      "description": "按意图打开页面。intent 是用户意图的简短描述；示例后端只识别 items、form、chart、overview，其余按总览处理。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": ["intent"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "show_page",
+      "description": "显示 AI 生成的完整 MCP Apps HTML 页面。html 必须是以 <!doctype html> 开头的完整文档，直接 import '@modelcontextprotocol/ext-apps'，不写 importmap、不用 CDN。用户在对话里发的图片，用 ghost_call 的 attachments 交给 show_page，页面从 hostContext 读取。写页面前先用 ghost_manual({ ghost_id: \"interactive-loader\", path: \"pages\" }) 读《Cindy MCP Apps 页面生成手册》，完整规则以手册为准。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "html": {
+            "type": "string",
+            "maxLength": 200000
+          }
+        },
+        "required": ["title", "html"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "load_view",
+      "description": "只读：按意图获取页面内容",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "fields": {
+            "type": "object"
+          }
+        },
+        "required": ["intent"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "api_read",
+      "description": "只读：查询 /api/items 或 /api/records",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "query": {
+            "type": "object"
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "api_write",
+      "description": "写入：保存记录或确认文件批次；同一编号只执行一次",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "body": {
+            "type": "object"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": ["path", "body", "idempotencyKey"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pick_files",
+      "description": "选择文件并保存到插件 Library",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "accept": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "multiple": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "upload_files",
+      "description": "将本次选择的文件上传到暂存接口；离线示例不上传",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "minItems": 1,
+            "maxItems": 4
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["files", "path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "fetch_file",
+      "description": "下载后端文件到插件 Library；离线示例把当前记录写成 CSV",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": ["path", "name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "import_file",
+      "description": "接收 ghost_call.dir 交接的单文件，立即上传暂存并打开预览；离线示例不读取真实文件，预览会标明",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "manual": {
+    "items": [
+      {
+        "dir": "manual/pages",
+        "name": "pages",
+        "description": "Cindy MCP Apps 页面生成手册：写页面前先读，含页面写法、SDK 方法、标准工具与规则"
+      }
+    ]
+  },
+  "mcpApps": {
+    "ui": {
+      "resources": [
+        {
+          "uri": "ui://interactive-loader/v1",
+          "file": "ui/page.html",
+          "prefersBorder": true,
+          "csp": {
+            "connectDomains": [],
+            "resourceDomains": []
+          }
+        }
+      ],
+      "tools": {
+        "open_view": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["model"]
+        },
+        "show_page": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["model"]
+        },
+        "load_view": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "api_read": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "api_write": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "pick_files": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "upload_files": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "fetch_file": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["app"]
+        },
+        "import_file": {
+          "resourceUri": "ui://interactive-loader/v1",
+          "visibility": ["model"]
+        }
+      }
+    }
+  },
+  "pick": true,
+  "library": true,
+  "network": {
+    "hosts": ["api.example.com"]
+  }
+}

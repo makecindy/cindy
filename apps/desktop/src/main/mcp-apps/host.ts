@@ -1,3 +1,5 @@
+import { createLogger } from '../logger.js';
+import { hostAppSdkAsset } from './hostSdk.js';
 import { GHOST_PIPE_CALL_MAX_TOTAL_MS } from '../../shared/ghost.js';
 import { pagePermissionGrants } from './pagePermissions.js';
 import { PluginAppFiles, type PluginFileAccess } from './pluginFiles.js';
@@ -78,13 +80,16 @@ class ViewTransport implements Transport {
   private failed = false;
   private localFilesUnavailable = false;
   private closed = false;
+  private discardedThrough = 0;
+  private generation = 0;
   constructor(private readonly maxBytes: number, private readonly localFilesAllowed = true) {}
   async start(): Promise<void> {}
   async send(message: JSONRPCMessage): Promise<void> {
-    this.enqueue({ seq: ++this.seq, message });
+    // Always tag events: viewers treat a missing generation as a legacy Host.
+    this.enqueue({ seq: ++this.seq, generation: this.generation, message });
   }
   openLink(id: string, url: string): void {
-    this.enqueue({ seq: ++this.seq, openLink: { id, url } });
+    this.enqueue({ seq: ++this.seq, generation: this.generation, openLink: { id, url } });
   }
   private enqueue(event: (typeof this.events)[number]): void {
     if (!this.localFilesAllowed && hasExecutionComputerFile(event)) {
@@ -130,6 +135,17 @@ class ViewTransport implements Transport {
     if (this.failed) throw new Error('MCP_APP_BACKPRESSURE');
     return this.events.filter((event) => event.seq > after);
   }
+  discardDocumentEvents(generation: number): void {
+    this.generation = generation;
+    this.discardedThrough = this.seq;
+    this.events.length = 0;
+    this.bytes = 2;
+    this.failed = false;
+    this.localFilesUnavailable = false;
+  }
+  currentEvents(events: (typeof this.events)): typeof this.events {
+    return events.filter(event => event.seq > this.discardedThrough);
+  }
   async close(): Promise<void> {
     // Revocation can win after Host authorization but before poll installs its wake.
     this.closed = true;
@@ -150,6 +166,10 @@ interface View {
   bridge: AppBridge;
   transport: ViewTransport;
   initialized: boolean;
+  generation: number;
+  documentTransport: Transport;
+  documentReady: Promise<void>;
+  restartDocument(): Promise<void>;
   inputSent: boolean;
   resultSent: boolean;
   context: McpUiHostContext;
@@ -373,6 +393,7 @@ export class McpAppsHost {
         throw new Error('MCP_APP_VIEW_LIMIT');
       const viewId = randomUUID();
       const document: McpAppDocument = {
+        sdk: hostAppSdkAsset,
         viewId,
         html: resource.html,
         csp: policy.header,
@@ -380,8 +401,14 @@ export class McpAppsHost {
         prefersBorder: resource.meta.prefersBorder !== false,
       };
       const remote = caller.startsWith('device:');
-      if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
-        throw new Error('MCP_APP_RESOURCE_TOO_LARGE');
+      // The optional runtime must not reduce the budget of an installed page.
+      // With no source detection, a missing SDK can only fail that page's import.
+      if (remote && Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES) {
+        delete document.sdk;
+        if (Buffer.byteLength(JSON.stringify(document)) > MCP_APPS_MAX_REMOTE_BYTES)
+          throw new Error('MCP_APP_RESOURCE_TOO_LARGE');
+        createLogger('mcp-apps').warn('Host SDK omitted: page fits the remote budget, but page plus SDK exceeds it; bare SDK imports will fail in this View');
+      }
       const transport = new ViewTransport(remote ? MCP_APPS_MAX_REMOTE_BYTES : MCP_APPS_MAX_BYTES, !remote || !config.plugin);
       const context: McpUiHostContext = {
         ...hostContext,
@@ -391,7 +418,7 @@ export class McpAppsHost {
           hostContext.platform === 'mobile' ? ['inline'] : ['inline', 'fullscreen'],
       };
       const capabilities = client.getServerCapabilities();
-      const bridge = new AppBridge(
+      const createBridge = (currentContext = context) => new AppBridge(
         null,
         { name: 'Cindy', version: '1.0.0' },
         {
@@ -408,8 +435,9 @@ export class McpAppsHost {
           updateModelContext: { text: {}, structuredContent: {} },
           sandbox: { permissions: {}, csp: policy.csp },
         },
-        { hostContext: context },
+        { hostContext: currentContext },
       );
+      const bridge = createBridge();
       const view: View = {
         openId,
         owner,
@@ -422,6 +450,23 @@ export class McpAppsHost {
         transport,
         context,
         initialized: false,
+        generation: 0,
+        documentTransport: transport,
+        documentReady: Promise.resolve(),
+        restartDocument: async () => {
+          // Revoke before closing the old SDK Protocol, including its error replies.
+          view.generation++;
+          view.initialized = false;
+          transport.discardDocumentEvents(view.generation);
+          view.links.forEach(link => link.resolve(false));
+          view.unlisten.splice(0).forEach(remove => remove());
+          const old = view.bridge;
+          const next = view.bridge = createBridge(view.context);
+          const generation = view.generation;
+          await old.close();
+          if (this.views.get(viewId) === view && view.generation === generation)
+            await connectDocument(next);
+        },
         inputSent: false,
         resultSent: false,
         lastUsed: Date.now(),
@@ -435,258 +480,287 @@ export class McpAppsHost {
         }, 30_000);
         this.sweepTimer.unref();
       }
-      const assertCurrent = () => this.assertCurrentView(viewId, view);
+      const assertView = () => this.assertCurrentView(viewId, view);
       if (config.plugin && !remote && this.deps.pluginFiles) {
-        view.files = new PluginAppFiles(viewId, config.plugin.instance, this.deps.pluginFiles, assertCurrent);
+        view.files = new PluginAppFiles(viewId, config.plugin.instance, this.deps.pluginFiles, assertView);
         document.csp = document.csp.replace(/connect-src [^;]*/, match => match.replace("'none'", "").concat(" 'self'"));
       }
-      const currentClient = async (signal: AbortSignal) => {
-        await assertCurrent();
-        signal.throwIfAborted();
-        const current = await connection.getClient(signal);
-        // Reconnecting can outlive a cancellation, card clear or owner change.
-        await assertCurrent();
-        signal.throwIfAborted();
-        return current;
-      };
-      const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
-        const result = await pending;
-        // Authorization can change while the server is working. Discard the late
-        // result before AppBridge can send it; never replay the upstream request.
-        await assertCurrent();
-        signal.throwIfAborted();
-        return result;
-      };
-      bridge.oninitialized = () => {
-        if (view.initialized || !bridge.getAppCapabilities()) return;
-        view.initialized = true;
-        void assertCurrent()
-          .then(async () => {
-            const attachments = (record.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
-            if (view.files && attachments) {
-              const projected = await view.files.project(attachments);
-              view.context = { ...view.context, toolInfo: { tool: {
-                ...tool, _meta: { ...tool._meta, 'cindy/attachments': projected },
-              }, id: clientId } };
-            }
+      const connectDocument = async (bridge: AppBridge): Promise<void> => {
+        const generation = view.generation;
+        const assertCurrent = async () => {
+          if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
+          await assertView();
+          if (view.generation !== generation) throw new Error('MCP_APP_DOCUMENT_CHANGED');
+        };
+        const scopedTransport: Transport = {
+          async start() {},
+          send: async (message) => {
+            if (this.views.get(viewId) === view && view.generation === generation) await transport.send(message);
+          },
+          async close() { scopedTransport.onclose?.(); },
+        };
+        view.documentTransport = scopedTransport;
+        const currentClient = async (signal: AbortSignal) => {
+          await assertCurrent();
+          signal.throwIfAborted();
+          const current = await connection.getClient(signal);
+          // Reconnecting can outlive a cancellation, card clear or owner change.
+          await assertCurrent();
+          signal.throwIfAborted();
+          return current;
+        };
+        const currentResult = async <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
+          const result = await pending;
+          // Authorization can change while the server is working. Discard the late
+          // result before AppBridge can send it; never replay the upstream request.
+          await assertCurrent();
+          signal.throwIfAborted();
+          return result;
+        };
+        bridge.oninitialized = () => {
+          if (view.initialized || !bridge.getAppCapabilities()) return;
+          view.initialized = true;
+          void assertCurrent()
+            .then(async () => {
+              const attachments = (record.tool._meta as Record<string, unknown> | undefined)?.['cindy/attachments'];
+              if (!view.inputSent && view.files && attachments) {
+                const projected = await view.files.project(attachments);
+                await assertCurrent();
+                view.context = { ...view.context, toolInfo: { tool: {
+                  ...tool, _meta: { ...tool._meta, 'cindy/attachments': projected },
+                }, id: clientId } };
+              }
+              await assertCurrent();
+              bridge.setHostContext(view.context);
+            })
+            .then(async () => {
+              if (view.inputSent) return;
+              const args = view.files ? await view.files.project(record.arguments) : record.arguments;
+              await assertCurrent();
+              view.inputSent = true;
+              await bridge.sendToolInput({ arguments: args });
+            })
+            .then(() => {
+              if (view.generation !== generation) return;
+              return this.sendResult(viewId, view);
+            })
+            .catch(() => {
+              if (view.generation === generation) void this.disposeView(viewId, view);
+            });
+        };
+        bridge.oncalltool = async (params, extra) => {
+          await assertCurrent();
+          const tools = await currentResult(connection.tools(extra.signal), extra.signal);
+          const target = tools.find((item) => item.name === params.name);
+          if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
+          // Page calls use the tool's normal policy regardless of how the script started.
+          // The one-use ticket below binds identity; it does not grant approval.
+          await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId: record.serverId, title: record.tool.title ?? record.tool.name });
+          const client = await currentClient(extra.signal);
+          const invoke = (ticket?: string) => currentResult(client.callTool({ ...params,
+            ...(ticket ? { _meta: { ...params._meta, [PLUGIN_PAGE_TICKET]: ticket } } : {}),
+          }, CallToolResultSchema, { signal: extra.signal, ...(config.plugin ? { timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS } : {}) }), extra.signal) as Promise<CallToolResult>;
+          if (!config.plugin) return invoke();
+          const token = params._meta?.progressToken;
+          const progress = createPageProgressRelay(async (value, progressSignal) => {
             await assertCurrent();
-            bridge.setHostContext(view.context);
-          })
-          .then(async () => bridge.sendToolInput({ arguments: view.files ? await view.files.project(record.arguments) : record.arguments }))
-          .then(() => {
-            view.inputSent = true;
-            return this.sendResult(viewId, view);
-          })
-          .catch(() => {
-            void this.disposeView(viewId, view);
+            extra.signal.throwIfAborted();
+            progressSignal.throwIfAborted();
+            // AppBridge's notification union omits this base MCP notification.
+            // Use its bound transport, retaining the standard wire shape and token.
+            await scopedTransport.send({ jsonrpc: '2.0', method: 'notifications/progress', params: { ...value, progressToken: token! } });
           });
-      };
-      bridge.oncalltool = async (params, extra) => {
-        await assertCurrent();
-        const tools = await currentResult(connection.tools(extra.signal), extra.signal);
-        const target = tools.find((item) => item.name === params.name);
-        if (!target || !toolVisibleTo(target, 'app')) throw new Error('MCP_APP_TOOL_NOT_VISIBLE');
-        // Page calls use the tool's normal policy regardless of how the script started.
-        // The one-use ticket below binds identity; it does not grant approval.
-        await this.deps.authorizeTool(sessionId, target, params.arguments ?? {}, extra.signal, { clientId, serverId: record.serverId, title: record.tool.title ?? record.tool.name });
-        const client = await currentClient(extra.signal);
-        const invoke = (ticket?: string) => currentResult(client.callTool({ ...params,
-          ...(ticket ? { _meta: { ...params._meta, [PLUGIN_PAGE_TICKET]: ticket } } : {}),
-        }, CallToolResultSchema, { signal: extra.signal, ...(config.plugin ? { timeout: GHOST_PIPE_CALL_MAX_TOTAL_MS } : {}) }), extra.signal) as Promise<CallToolResult>;
-        if (!config.plugin) return invoke();
-        const token = params._meta?.progressToken;
-        const progress = createPageProgressRelay(async (value, progressSignal) => {
-          await assertCurrent();
-          extra.signal.throwIfAborted();
-          progressSignal.throwIfAborted();
-          // AppBridge's notification union omits this base MCP notification.
-          // Use its bound transport, retaining the standard wire shape and token.
-          await transport.send({ jsonrpc: '2.0', method: 'notifications/progress', params: { ...value, progressToken: token! } });
-        });
-        const closeProgress = () => progress.close();
-        extra.signal.addEventListener('abort', closeProgress, { once: true });
-        try {
-          const result = await withPluginPageTicket({ instance: config.plugin.instance,
-            revision: config.plugin.revision, sessionId, clientId, tool: target.name, assertCurrent,
-            ...(typeof token === 'string' || typeof token === 'number' ? { onProgress: progress.update } : {}),
-          }, invoke);
-          return view.files ? await view.files.project(result) : result;
-        } finally {
-          extra.signal.removeEventListener('abort', closeProgress);
-          progress.close();
-        }
-      };
-      bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
-        await assertCurrent();
-        const tools = await currentResult(connection.tools(extra.signal), extra.signal);
-        return { tools: tools.filter((item) => toolVisibleTo(item, 'app')) };
-      });
-      bridge.onreadresource = async (params, extra) => {
-        const client = await currentClient(extra.signal);
-        return currentResult(client.readResource(params, { signal: extra.signal }), extra.signal);
-      };
-      bridge.onlistresources = async (params, extra) => {
-        const client = await currentClient(extra.signal);
-        return currentResult(client.listResources(params, { signal: extra.signal }), extra.signal);
-      };
-      bridge.onlistresourcetemplates = async (params, extra) => {
-        const client = await currentClient(extra.signal);
-        return currentResult(
-          client.listResourceTemplates(params, { signal: extra.signal }),
-          extra.signal,
-        );
-      };
-      bridge.onlistprompts = async (params, extra) => {
-        const client = await currentClient(extra.signal);
-        return currentResult(client.listPrompts(params, { signal: extra.signal }), extra.signal);
-      };
-      bridge.onmessage = async (params) => {
-        await assertCurrent();
-        const content = Array.isArray(params.content) ? params.content : [params.content];
-        if (content.some((block) => block.type !== 'text' && block.type !== 'resource_link'))
-          throw new Error('MCP_APP_MESSAGE_CONTENT_UNSUPPORTED');
-        const files: AgentInputSerializedFile[] = [];
-        if (view.files) {
-          for (const block of content) {
-            if (block.type !== 'resource_link' || !block.uri.startsWith('cindy-media:')) continue;
-            const info = await view.files.describeGranted(block.uri);
-            if (!info.mimeType.startsWith('image/')) continue;
-            files.push({ id: randomUUID(), name: block.name, originalName: block.name,
-              category: 'image', ext: block.uri.split('.').pop() ?? '', mimeType: info.mimeType,
-              size: info.size, url: block.uri, path: block.uri });
+          const closeProgress = () => progress.close();
+          extra.signal.addEventListener('abort', closeProgress, { once: true });
+          try {
+            const result = await withPluginPageTicket({ instance: config.plugin.instance,
+              revision: config.plugin.revision, sessionId, clientId, tool: target.name, assertCurrent,
+              ...(typeof token === 'string' || typeof token === 'number' ? { onProgress: progress.update } : {}),
+            }, invoke);
+            return view.files ? await view.files.project(result) : result;
+          } finally {
+            extra.signal.removeEventListener('abort', closeProgress);
+            progress.close();
           }
-        }
-        const assertMessageCurrent = async () => {
-          await assertCurrent();
-          for (const file of files) await view.files!.describeGranted(file.url!);
         };
-        if (files.length) await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent, files);
-        else await this.deps.sendMessage(sessionId, record, content, assertCurrent);
-        return {};
-      };
-      if (!remote && config.plugin && this.deps.downloadFile) bridge.ondownloadfile = async (params, extra) => {
-        await assertCurrent();
-        if (params.contents.length > 16) throw new Error('MCP_APP_DOWNLOAD_LIMIT');
-        for (const content of params.contents) {
-          if (content.type === 'resource_link') {
-            if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
-            await view.files.describeGranted(content.uri);
-          }
-          const result = await this.deps.downloadFile!({ content, signal: extra.signal, assertCurrent,
-            readGranted: uri => {
-              if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
-              return view.files.readGranted(uri, extra.signal);
-            },
-          });
-          if (result.isError) return result;
-        }
-        return {};
-      };
-      bridge.onupdatemodelcontext = async (params) => {
-        await assertCurrent();
-        if (Buffer.byteLength(JSON.stringify(params), 'utf8') > 128_000)
-          throw new Error('MCP_APP_CONTEXT_TOO_LARGE');
-        const { content, structuredContent } = params;
-        if (content?.some((block) => block.type !== 'text'))
-          throw new Error('MCP_APP_CONTEXT_CONTENT_UNSUPPORTED');
-        const key = `${sessionId}:${clientId}`;
-        if (this.contexts.size >= 256 && !this.contexts.has(key)) {
-          await this.pruneModelContexts();
-          // Pruning reads other cards and can outlive this View's authorization.
+        bridge.setRequestHandler(ListToolsRequestSchema, async (_params, extra) => {
           await assertCurrent();
-        }
-        const next = {
-          app: record.serverId,
-          resourceUri: record.resourceUri,
-          content,
-          structuredContent,
-        };
-        const aggregateBytes = () => {
-          const values = [...this.contexts.entries()]
-            .filter(
-              ([id, item]) => id !== key && item.owner === owner && item.sessionId === sessionId,
-            )
-            .map(([, item]) => item.value);
-          values.push(next);
-          return Buffer.byteLength(JSON.stringify(values), 'utf8');
-        };
-        let bytes = aggregateBytes();
-        if (bytes > 512_000) {
-          await this.pruneModelContexts();
-          await assertCurrent();
-          bytes = aggregateBytes();
-        }
-        // Recompute from the live map after cleanup; no await may separate the
-        // final budget checks from publishing, or a concurrent update can overfill it.
-        if (bytes > 512_000) throw new Error('MCP_APP_CONTEXT_TOO_LARGE');
-        if (this.contexts.size >= 256 && !this.contexts.has(key))
-          throw new Error('MCP_APP_CONTEXT_LIMIT');
-        this.contexts.set(key, {
-          owner,
-          sessionId,
-          clientId,
-          serverId: record.serverId,
-          revision: record.serverRevision,
-          value: next,
+          const tools = await currentResult(connection.tools(extra.signal), extra.signal);
+          return { tools: tools.filter((item) => toolVisibleTo(item, 'app')) };
         });
-        return {};
-      };
-      bridge.onopenlink = async (params) => {
-        await assertCurrent();
-        const url = safeAppLink(params.url);
-        if (view.links.size >= 4) throw new Error('MCP_APP_LINK_LIMIT');
-        const id = randomUUID();
-        const success = await new Promise<boolean>((resolve) => {
-          const finish = (success: boolean) => {
-            clearTimeout(timer);
-            view.links.delete(id);
-            resolve(success);
+        bridge.onreadresource = async (params, extra) => {
+          const client = await currentClient(extra.signal);
+          return currentResult(client.readResource(params, { signal: extra.signal }), extra.signal);
+        };
+        bridge.onlistresources = async (params, extra) => {
+          const client = await currentClient(extra.signal);
+          return currentResult(client.listResources(params, { signal: extra.signal }), extra.signal);
+        };
+        bridge.onlistresourcetemplates = async (params, extra) => {
+          const client = await currentClient(extra.signal);
+          return currentResult(
+            client.listResourceTemplates(params, { signal: extra.signal }),
+            extra.signal,
+          );
+        };
+        bridge.onlistprompts = async (params, extra) => {
+          const client = await currentClient(extra.signal);
+          return currentResult(client.listPrompts(params, { signal: extra.signal }), extra.signal);
+        };
+        bridge.onmessage = async (params) => {
+          await assertCurrent();
+          const content = Array.isArray(params.content) ? params.content : [params.content];
+          if (content.some((block) => block.type !== 'text' && block.type !== 'resource_link'))
+            throw new Error('MCP_APP_MESSAGE_CONTENT_UNSUPPORTED');
+          const files: AgentInputSerializedFile[] = [];
+          if (view.files) {
+            for (const block of content) {
+              if (block.type !== 'resource_link' || !block.uri.startsWith('cindy-media:')) continue;
+              const info = await view.files.describeGranted(block.uri);
+              if (!info.mimeType.startsWith('image/')) continue;
+              files.push({ id: randomUUID(), name: block.name, originalName: block.name,
+                category: 'image', ext: block.uri.split('.').pop() ?? '', mimeType: info.mimeType,
+                size: info.size, url: block.uri, path: block.uri });
+            }
+          }
+          await assertCurrent();
+          // Preparation still belongs to this document. Once accepted, queued
+          // input belongs to the card/View and keeps only its current file grants.
+          let accepted = false;
+          const assertMessageCurrent = async () => {
+            for (const file of files) await view.files!.describeGranted(file.url!);
+            await (accepted ? assertView() : assertCurrent());
           };
-          let timer = setTimeout(() => finish(false), 10_000);
-          let claimed = false;
-          view.links.set(id, {
-            url,
-            claim: () => {
-              if (claimed) throw new Error('MCP_APP_LINK_ALREADY_AUTHORIZED');
-              claimed = true;
-              clearTimeout(timer);
-              // The pending request cannot fail at its old deadline while the grant travels.
-              timer = setTimeout(() => finish(false), MCP_APP_LINK_GRANT_MS);
-            },
-            resolve: finish,
+          if (files.length) await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent, files);
+          else await this.deps.sendMessage(sessionId, record, content, assertMessageCurrent);
+          accepted = true;
+          return {};
+        };
+        if (!remote && config.plugin && this.deps.downloadFile) bridge.ondownloadfile = async (params, extra) => {
+          await assertCurrent();
+          if (params.contents.length > 16) throw new Error('MCP_APP_DOWNLOAD_LIMIT');
+          for (const content of params.contents) {
+            if (content.type === 'resource_link') {
+              if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+              await view.files.describeGranted(content.uri);
+            }
+            const result = await this.deps.downloadFile!({ content, signal: extra.signal, assertCurrent,
+              readGranted: uri => {
+                if (!view.files) throw new Error('MCP_APP_FILE_NOT_AUTHORIZED');
+                return view.files.readGranted(uri, extra.signal);
+              },
+            });
+            if (result.isError) return result;
+          }
+          return {};
+        };
+        bridge.onupdatemodelcontext = async (params) => {
+          await assertCurrent();
+          if (Buffer.byteLength(JSON.stringify(params), 'utf8') > 128_000)
+            throw new Error('MCP_APP_CONTEXT_TOO_LARGE');
+          const { content, structuredContent } = params;
+          if (content?.some((block) => block.type !== 'text'))
+            throw new Error('MCP_APP_CONTEXT_CONTENT_UNSUPPORTED');
+          const key = `${sessionId}:${clientId}`;
+          if (this.contexts.size >= 256 && !this.contexts.has(key)) {
+            await this.pruneModelContexts();
+            // Pruning reads other cards and can outlive this View's authorization.
+            await assertCurrent();
+          }
+          const next = {
+            app: record.serverId,
+            resourceUri: record.resourceUri,
+            content,
+            structuredContent,
+          };
+          const aggregateBytes = () => {
+            const values = [...this.contexts.entries()]
+              .filter(
+                ([id, item]) => id !== key && item.owner === owner && item.sessionId === sessionId,
+              )
+              .map(([, item]) => item.value);
+            values.push(next);
+            return Buffer.byteLength(JSON.stringify(values), 'utf8');
+          };
+          let bytes = aggregateBytes();
+          if (bytes > 512_000) {
+            await this.pruneModelContexts();
+            await assertCurrent();
+            bytes = aggregateBytes();
+          }
+          // Recompute from the live map after cleanup; no await may separate the
+          // final budget checks from publishing, or a concurrent update can overfill it.
+          if (bytes > 512_000) throw new Error('MCP_APP_CONTEXT_TOO_LARGE');
+          if (this.contexts.size >= 256 && !this.contexts.has(key))
+            throw new Error('MCP_APP_CONTEXT_LIMIT');
+          this.contexts.set(key, {
+            owner,
+            sessionId,
+            clientId,
+            serverId: record.serverId,
+            revision: record.serverRevision,
+            value: next,
           });
-          transport.openLink(id, url);
-        });
-        if (!success) throw new Error('MCP_APP_LINK_OPEN_FAILED');
-        return {};
+          return {};
+        };
+        bridge.onopenlink = async (params) => {
+          await assertCurrent();
+          const url = safeAppLink(params.url);
+          if (view.links.size >= 4) throw new Error('MCP_APP_LINK_LIMIT');
+          const id = randomUUID();
+          const success = await new Promise<boolean>((resolve) => {
+            const finish = (success: boolean) => {
+              clearTimeout(timer);
+              view.links.delete(id);
+              resolve(success);
+            };
+            let timer = setTimeout(() => finish(false), 10_000);
+            let claimed = false;
+            view.links.set(id, {
+              url,
+              claim: () => {
+                if (claimed) throw new Error('MCP_APP_LINK_ALREADY_AUTHORIZED');
+                claimed = true;
+                clearTimeout(timer);
+                // The pending request cannot fail at its old deadline while the grant travels.
+                timer = setTimeout(() => finish(false), MCP_APP_LINK_GRANT_MS);
+              },
+              resolve: finish,
+            });
+            transport.openLink(id, url);
+          });
+          if (!success) throw new Error('MCP_APP_LINK_OPEN_FAILED');
+          return {};
+        };
+        bridge.onrequestdisplaymode = async (params) => {
+          await assertCurrent();
+          const modes = bridge.getAppCapabilities()?.availableDisplayModes ??
+            context.availableDisplayModes ?? ['inline'];
+          const mode =
+            modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode)
+              ? params.mode
+              : (view.context.displayMode ?? 'inline');
+          view.context = { ...view.context, displayMode: mode };
+          bridge.setHostContext(view.context);
+          return { mode };
+        };
+        // Accept application logging without persisting user data to the host diagnostic log.
+        bridge.onloggingmessage = () => {};
+        view.unlisten.push(
+          connection.listen((message) => {
+            if (view.generation !== generation || !view.initialized || owner !== this.deps.owner()) return;
+            if (message.method === 'notifications/tools/list_changed')
+              void bridge.sendToolListChanged(message.params).catch(() => {});
+            if (message.method === 'notifications/resources/list_changed')
+              void bridge.sendResourceListChanged(message.params).catch(() => {});
+            if (message.method === 'notifications/prompts/list_changed')
+              void bridge.sendPromptListChanged(message.params).catch(() => {});
+          }),
+        );
+        await bridge.connect(scopedTransport);
       };
-      bridge.onrequestdisplaymode = async (params) => {
-        await assertCurrent();
-        const modes = bridge.getAppCapabilities()?.availableDisplayModes ??
-          context.availableDisplayModes ?? ['inline'];
-        const mode =
-          modes.includes(params.mode) && view.context.availableDisplayModes?.includes(params.mode)
-            ? params.mode
-            : (view.context.displayMode ?? 'inline');
-        view.context = { ...view.context, displayMode: mode };
-        bridge.setHostContext(view.context);
-        return { mode };
-      };
-      // Accept application logging without persisting user data to the host diagnostic log.
-      bridge.onloggingmessage = () => {};
-      view.unlisten.push(
-        connection.listen((message) => {
-          if (!view.initialized || owner !== this.deps.owner()) return;
-          if (message.method === 'notifications/tools/list_changed')
-            void bridge.sendToolListChanged(message.params).catch(() => {});
-          if (message.method === 'notifications/resources/list_changed')
-            void bridge.sendResourceListChanged(message.params).catch(() => {});
-          if (message.method === 'notifications/prompts/list_changed')
-            void bridge.sendPromptListChanged(message.params).catch(() => {});
-        }),
-      );
       try {
-        await bridge.connect(transport);
+        await (view.documentReady = connectDocument(bridge));
         // Register before rereading: tool completion during loading must reach this
         // View, and a clear or configuration change must prevent publishing it.
         const latest = await this.deps.readCard(sessionId, clientId);
@@ -770,7 +844,9 @@ export class McpAppsHost {
   }
 
   private async sendResult(id: string, view: View): Promise<void> {
-    if (view.resultSent || (!view.record.result && !view.record.cancelled)) return;
+    if (!view.initialized || view.resultSent || (!view.record.result && !view.record.cancelled)) return;
+    const generation = view.generation;
+    const bridge = view.bridge;
     try {
       await this.assertCurrentView(id, view);
     } catch (error) {
@@ -780,19 +856,20 @@ export class McpAppsHost {
       throw error;
     }
     // Initialization and completion can both wait on the same authorization read.
-    if (view.resultSent) return;
+    if (view.resultSent || view.generation !== generation) return;
     try {
       if (view.record.result) {
-        view.resultSent = true;
         const result = view.files ? await view.files.project(view.record.result) : view.record.result;
-        await view.bridge.sendToolResult(result as CallToolResult);
+        if (view.generation !== generation || view.resultSent) return;
+        view.resultSent = true;
+        await bridge.sendToolResult(result as CallToolResult);
       } else if (view.record.cancelled) {
         view.resultSent = true;
-        await view.bridge.sendToolCancelled({ reason: view.record.cancelled });
+        await bridge.sendToolCancelled({ reason: view.record.cancelled });
       }
     } catch {
       // A broken transport cannot invalidate a successfully persisted card.
-      await this.disposeView(id, view).catch(() => {});
+      if (view.generation === generation) await this.disposeView(id, view).catch(() => {});
     }
   }
 
@@ -827,15 +904,13 @@ export class McpAppsHost {
     ) {
       message = { ...message, params: { ...message.params, content: [message.params.content] } };
     }
-    if ('method' in message && message.method === 'ui/initialize' && view.initialized) {
-      if ('id' in message)
-        await view.transport.send({
-          jsonrpc: '2.0',
-          id: message.id,
-          error: { code: -32600, message: 'MCP_APP_ALREADY_INITIALIZED' },
-        });
-      return;
+    if ('method' in message && message.method === 'ui/initialize' && 'id' in message && view.initialized) {
+      view.documentReady = view.restartDocument();
     }
+    const generation = view.generation;
+    await view.documentReady;
+    if (view.generation !== generation) return;
+    this.view(caller, sessionId, id);
     if (
       'method' in message &&
       !view.initialized &&
@@ -858,7 +933,7 @@ export class McpAppsHost {
         );
       this.deps.audit?.(known ? message.method : 'unknown');
     }
-    view.transport.onmessage?.(message);
+    view.documentTransport.onmessage?.(message);
   }
 
   async poll(caller: string, sessionId: string, id: string, after: number) {
@@ -868,7 +943,9 @@ export class McpAppsHost {
     await this.assertCurrentView(id, view);
     const events = await view.transport.poll(after);
     await this.assertCurrentView(id, view);
-    return events;
+    // An authorization read may straddle a new initialize after poll has already
+    // taken a snapshot. Do not return that snapshot's old-document replies.
+    return view.transport.currentEvents(events);
   }
 
   context(caller: string, sessionId: string, id: string, patch: McpUiHostContext): void {
@@ -970,6 +1047,7 @@ export class McpAppsHost {
     this.deps.disposeDocument?.(id);
     view.unlisten.forEach((remove) => remove());
     await view.bridge.close();
+    await view.transport.close();
     const entry = this.connections.get(this.connectionIds.get(view.connection) ?? '');
     if (entry?.retired) await this.releaseConnection(view.connection);
   }

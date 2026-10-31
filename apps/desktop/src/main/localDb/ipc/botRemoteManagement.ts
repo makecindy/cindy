@@ -131,7 +131,7 @@ async function getInvitation(context: RemoteResourceHostContext, botId: string) 
   const resource = botRemoteResourceFromSource(source);
   if (source.invitation?.stage !== 'failed' || source.status !== 'active') return resource;
   const revision = `${source.currentVersion}:${source.invitation.stage}:${source.status}`;
-  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' , "es":"Volver a intentar","fr":"Réessayer","de":"Erneut versuchen","pt-PT":"Tentar novamente","pt-BR":"Tentar novamente"} } }] }, async () => {
+  return settings.bindResource(context, { ...resource, revision, actions: [{ id: 'retry-invitation', label: { fallback: 'Try Again', translations: { 'zh-CN': '重试', 'zh-TW': '重試', ja: '再試行', ko: '다시 시도' , "es":"Volver a intentar","fr":"Réessayer","de":"Erneut versuchen","pt-PT":"Tentar novamente","pt-BR":"Tentar novamente","zh-Hant-x-lzh":"再試","zh-Hans-x-lzh":"再试"} } }] }, async () => {
     const current = await getBotRemoteResourceSource(botId); deps.assertOwner(owner);
     return `${current.currentVersion}:${current.invitation?.stage}:${current.status}`;
   }, async request => {

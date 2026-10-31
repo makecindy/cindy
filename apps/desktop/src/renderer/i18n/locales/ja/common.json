@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "プロジェクトのファイルが {{limit, number}} 個を超えているため、コピーできません。ファイル数の少ないプロジェクトをコピーしてください。"
   },
   "sharedTask": {
+    "officialRelayNote": "自分のリレーを使用中です。共有タスクの内容は引き続き Cindy 公式リレーを経由します。",
     "selfJoin": "これは自分が開始した共有タスクのため、参加する必要はありません。「自分が共有中」から開いてください。",
     "manageSharing": "共有管理",
     "manageMembers": "メンバーを管理…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "すべてのゲストがアクセスできなくなります。タスクの履歴は保持されます。"
   },
   "providerShare": {
+    "officialRelayNote": "自分のリレーを使用中です。プロバイダー共有の内容は引き続き Cindy 公式リレーを経由します。",
     "owned": {
       "title": "自分が共有したプロバイダー"
     },
@@ -2389,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "字体と文体",
+        "hint": "AI は選んだ文体で回答します。「通常の回答」では画面は文言のまま、回答はあなたの言語に合わせます。",
+        "scriptAriaLabel": "文言の字体",
+        "styleAriaLabel": "AI の回答文体",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "文言文（既定）",
+          "tang-poetry": "唐詩",
+          "song-ci": "宋詞",
+          "yuan-qu": "元曲",
+          "chu-ci": "楚辞",
+          "parallel-prose": "駢文",
+          "pre-qin": "先秦諸子",
+          "historian": "史伝",
+          "ming-qing-essay": "明清小品",
+          "plain": "通常の回答"
+        }
       }
     },
     "userProfile": {
@@ -5724,7 +5749,7 @@
         "current": "使用中",
         "ownerName": "このコンピュータ",
         "unavailable": "自分のリレーを使うには、Cindy にサインインし、システムのキーチェーンが使える必要があります。",
-        "limits": "自分のリレーを使っている間は、スマホのプッシュ通知、プロバイダー共有、共有タスクは使えません。",
+        "limits": "自分のリレーを使っている間は、スマホのプッシュ通知は使えません。プロバイダー共有と共有タスクは引き続き Cindy 公式リレーを経由します。",
         "actions": {
           "join": "別のリレーに参加",
           "useOfficial": "公式リレーに戻す",
@@ -5940,7 +5965,7 @@
           "switchFromHost": "このコンピュータのリレーは停止し、参加しているデバイスは切断されます。",
           "switchFromMember": "このコンピュータは「{{name}}」から退出します。再参加するには、相手に新しい参加リンクを作ってもらう必要があります。",
           "switchConfirm": "切り替える",
-          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知、プロバイダーの共有、共有タスクは使えません。"
+          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知は使えません。プロバイダーの共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
         },
         "dialog": {
           "steps": {
@@ -10492,6 +10517,7 @@
       "header": {
         "stepRunning": "{{name}} がステップ {{step}} を作業中",
         "speaking": "{{name}} が返信中…",
+        "queued": "{{name}} は待機中",
         "planning": "{{name}} が役割分担を考え中…"
       },
       "memberCount_one": "メンバー {{count}} 人",
@@ -17502,9 +17528,8 @@
       "name": "担当セッションのフォロー（標準）",
       "hint": "担当セッションの停滞、返答待ち、エラー、利用上限、完了を受けてフォローします。"
     },
-    "builtinTodoCheck": {
-      "name": "毎日の Todo 確認（組み込み）",
-      "hint": "平日 9:00 に接続済みのソースから新しい Todo を探し、なければ通知しません。近況からオン・オフでき、一時停止と再開のみできます。"
+    "todoCheck": {
+      "name": "毎日の Todo 確認"
     },
     "builtinNightlyLearning": {
       "name": "夜間の学習（組み込み）",

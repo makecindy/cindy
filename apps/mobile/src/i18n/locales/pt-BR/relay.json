@@ -5,7 +5,7 @@
     "official": "Retransmissor oficial do {{appName}}",
     "switchToOfficial": "Voltar ao retransmissor oficial",
     "officialHint": "Seus dispositivos se conectam pelo retransmissor oficial do {{appName}}. Para usar seu próprio retransmissor, exiba o QR code de conexão no computador em que ele está sendo executado e escaneie o código com a câmera do celular.",
-    "selfHostedHint": "Seus dispositivos se conectam pelo seu próprio retransmissor em {{address}}. O login, os modelos e outros serviços continuam usando o {{appName}}.",
+    "selfHostedHint": "Seus dispositivos se conectam pelo seu próprio retransmissor em {{address}}. O login, os modelos, as tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
     "removedHint": "Este celular foi removido do retransmissor, ou o retransmissor foi desativado. Volte ao retransmissor oficial ou conecte-se novamente pelo computador.",
     "credentialMissingHint": "A credencial do retransmissor não está mais neste celular. Conecte-se novamente pelo computador ou volte ao retransmissor oficial.",
     "confirmTitle": "Voltar ao retransmissor oficial?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Entrar no relay",
     "checking": "Conectando ao relay…",
-    "body": "Após entrar, este celular se conectará aos seus computadores por este relay. Login, modelos e outros serviços continuarão usando o {{appName}}. Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular.",
+    "body": "Após entrar, este celular se conectará aos seus computadores por este relay. Login, modelos, tarefas compartilhadas e outros serviços continuarão usando o {{appName}}. Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular.",
     "switchNote": "Ao entrar, este celular passará de “{{current}}” para este relay.",
     "action": "Entrar",
     "pairingCodeLabel": "Código de pareamento",

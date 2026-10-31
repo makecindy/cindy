@@ -1,8 +1,8 @@
 import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { MCP_APPS_MAX_BYTES } from '../mcp-apps/protocol.js';
-import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/ghost.json?raw';
-import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/main.js?raw';
-import interactiveExampleHtml from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/minimal/ui/page.html?raw';
+import interactiveExampleManifest from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ghost.json?raw';
+import interactiveExampleMain from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/main.js?raw';
+import interactiveExampleHtml from '../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/static/ui/page.html?raw';
 import { PLUGIN_UI_MIN_CINDY_VERSION, compareCindyVersions, pluginHasToolUi } from '@cindy/plugin-protocol';
 /**
  * forge.ts — 意识锻造(agent 帮用户做意识的主机真身,2026-07-11 Lizi 定案)。

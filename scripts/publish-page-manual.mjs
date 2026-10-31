@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // =============================================================================
-// publish-page-manual.mjs — 发布《页面生成手册》到按内容寻址的 CDN 路径
+// publish-page-manual.mjs — 发布《Cindy MCP Apps 页面生成手册》到按内容寻址的 CDN 路径
 //
 // 业务后端里生成交互页面的模型需要读 PAGE-GENERATION.md。手册随客户端内置 Skill 发版，
 // 这里把仓库当前的手册按 sha256 上传：

@@ -14,6 +14,14 @@ const messages = {
     showHiddenDirectories: "顯示隱藏資料夾",
     emptyDirectory: "沒有可顯示的子目錄。",
   },
+  "zh-Hant-x-lzh": {
+    showHiddenDirectories: "顯隱匿之卷匣",
+    emptyDirectory: "無子目錄可示。",
+  },
+  "zh-Hans-x-lzh": {
+    showHiddenDirectories: "显隐匿之卷匣",
+    emptyDirectory: "无子目录可示。",
+  },
   en: {
     showHiddenDirectories: "Show Hidden Folders",
     emptyDirectory: "No folders to show.",

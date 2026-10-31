@@ -9,6 +9,7 @@ import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
+import { UsageWidgetBridge } from '@/widgets/UsageWidgetBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -393,6 +394,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <PrecreatedWorktreeRecoveryBridge />
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
+        <UsageWidgetBridge />
         <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>

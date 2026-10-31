@@ -721,7 +721,6 @@ export function AddProviderWizard({
     if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
     if (presetsLoadState === 'loading') return;
     presetEntryConsumedRef.current = entry.presetId;
-    if (presetsLoadState === 'failed') { onEntryUnavailable?.(); return; }
     const preset = presets.find((p) => p.id === entry.presetId) ?? [...Object.values(OFFICIAL_API_PRESETS), ...SPEECH_API_PRESETS].find(p => p.id === entry.presetId);
     if (preset) pickPreset(preset, entry.speechOnly === true);
     else onEntryUnavailable?.();

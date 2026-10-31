@@ -10,6 +10,7 @@
 export * from "./protocol.js";
 export * from "./allowlist.js";
 export * from "./client.js";
+export * from "./routedClient.js";
 export * from "./directPath.js";
 export * from "./directNegotiation.js";
 export * from "./directRuntimeBridge.js";

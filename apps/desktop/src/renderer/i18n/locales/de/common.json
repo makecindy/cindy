@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "Das Projekt enthält mehr als {{limit, number}} Dateien und kann nicht kopiert werden. Kopiere stattdessen ein Projekt mit weniger Dateien."
   },
   "sharedTask": {
+    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte geteilter Aufgaben laufen weiterhin über das Cindy-Relay.",
     "selfJoin": "Du hast diese geteilte Aufgabe gestartet und musst daher nicht beitreten. Öffne sie unter „Von mir geteilt“.",
     "manageSharing": "Freigabe verwalten",
     "manageMembers": "Mitglieder verwalten…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "Gäste verlieren den Zugriff. Der Aufgabenverlauf bleibt erhalten."
   },
   "providerShare": {
+    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte von Anbieterfreigaben laufen weiterhin über das Cindy-Relay.",
     "owned": {
       "title": "Von mir geteilte Anbieter"
     },
@@ -2419,7 +2421,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Schrift und Stil",
+        "hint": "Die KI antwortet im gewählten Stil. Mit „Übliche Antworten“ bleibt die Oberfläche in klassischem Chinesisch und die Antworten folgen deiner Sprache.",
+        "scriptAriaLabel": "Schrift des klassischen Chinesisch",
+        "styleAriaLabel": "Antwortstil der KI",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Klassische Prosa (Standard)",
+          "tang-poetry": "Tang-Lyrik",
+          "song-ci": "Song-Ci",
+          "yuan-qu": "Yuan-Qu",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Parallelprosa",
+          "pre-qin": "Vor-Qin-Meister",
+          "historian": "Stil des Großen Historikers",
+          "ming-qing-essay": "Ming-Qing-Essays",
+          "plain": "Übliche Antworten"
+        }
       }
     },
     "userProfile": {
@@ -5767,7 +5792,7 @@
         "current": "In Verwendung",
         "ownerName": "Dieser Computer",
         "unavailable": "Um dein eigenes Relay zu nutzen, melde dich bei Cindy an und stelle sicher, dass der Systemschlüsselbund verfügbar ist.",
-        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone, Anbieterfreigaben und geteilte Aufgaben nicht verfügbar.",
+        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone nicht verfügbar. Anbieterfreigaben und geteilte Aufgaben laufen weiterhin über das Cindy-Relay.",
         "actions": {
           "join": "Anderem Relay beitreten",
           "useOfficial": "Zurück zum Cindy-Relay wechseln",
@@ -5983,7 +6008,7 @@
           "switchFromHost": "Das Relay auf diesem Computer wird gestoppt und die Verbindung zu den beigetretenen Geräten getrennt.",
           "switchFromMember": "Dieser Computer verlässt {{name}}. Um später erneut beizutreten, muss der Eigentümer einen neuen Beitrittslink erstellen.",
           "switchConfirm": "Wechseln",
-          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone, das Teilen von Anbietern und gemeinsame Aufgaben sind nicht verfügbar, solange du dein eigenes Relay nutzt."
+          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone sind nicht verfügbar, solange du dein eigenes Relay nutzt. Das Teilen von Anbietern und gemeinsame Aufgaben laufen weiterhin über das Cindy-Relay."
         },
         "dialog": {
           "steps": {
@@ -10538,6 +10563,7 @@
       "header": {
         "stepRunning": "{{name}} ist bei Schritt {{step}}",
         "speaking": "{{name}} antwortet…",
+        "queued": "{{name}} wartet",
         "planning": "{{name}} teilt die Arbeit auf…"
       },
       "memberCount_one": "{{count}} Mitglied",
@@ -17604,9 +17630,8 @@
       "name": "Zugewiesene Sitzungen verfolgen (integriert)",
       "hint": "Verfolge zugewiesene Sitzungen, wenn sie stocken, dich brauchen, fehlschlagen, ein Nutzungslimit erreichen oder fertig sind."
     },
-    "builtinTodoCheck": {
-      "name": "Tägliche To-do-Prüfung (integriert)",
-      "hint": "Sucht werktags um 9:00 Uhr in verbundenen Quellen nach neuen To-dos und bleibt still, wenn es nichts Neues gibt. Wird in der Übersicht ein- oder ausgeschaltet; kann nur pausiert oder fortgesetzt werden."
+    "todoCheck": {
+      "name": "Tägliche To-do-Prüfung"
     },
     "builtinNightlyLearning": {
       "name": "Nächtliches Lernen (integriert)",
