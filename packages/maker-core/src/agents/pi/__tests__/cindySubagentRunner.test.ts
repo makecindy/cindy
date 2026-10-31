@@ -270,6 +270,10 @@ async function makeFixture(options: {
   poisonResultPath?: boolean;
   /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
   profilePrompt?: string;
+  /** Extra top-level runner config fields, e.g. the host's extension allow list. */
+  extraConfig?: Record<string, unknown> | ((paths: { runDir: string; bridgeFile: string }) => Record<string, unknown>);
+  /** Extra fields on every task, to prove the runner ignores task-supplied ones. */
+  extraTaskFields?: Record<string, unknown>;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -516,6 +520,9 @@ process.stdin.on('end', () => {
     parentSessionId: path.basename(root),
     ...(options.runtimeOwnerId ? { runtimeOwnerId: options.runtimeOwnerId } : {}),
     ...(options.guestIsolation ? { guestIsolation: true } : {}),
+    ...(typeof options.extraConfig === 'function'
+      ? options.extraConfig({ runDir, bridgeFile })
+      : options.extraConfig ?? {}),
     runDir,
     cwd: root,
     binary: process.execPath,
@@ -545,6 +552,7 @@ process.stdin.on('end', () => {
       model: 'fixture-model',
       thinking: 'high',
       cwd: root,
+      ...(options.extraTaskFields ?? {}),
     })),
   };
   const configPath = path.join(runDir, 'config.json');
@@ -741,6 +749,143 @@ describe('Cindy durable PI Subagent runner', () => {
       return run?.state === 'completed' ? run : null;
     });
     expect(completed.tasks[0]?.status).toBe('completed');
+  });
+
+  /**
+   * The host — never a task, a profile prompt or child output — writes
+   * `extensionPaths` into this run's config.json. Default-off is the whole
+   * contract: a run without the field must keep the exact argv it had before
+   * the field existed, and a malformed list must stop the run rather than
+   * launch a child that silently lacks an extension the host asked for.
+   */
+  describe('host-injected extensions', () => {
+    type Fixture = Awaited<ReturnType<typeof makeFixture>>;
+
+    const extensionArgs = (args: string[]): string[] =>
+      args.flatMap((arg, index) => (arg === '--extension' ? [args[index + 1]] : []));
+
+    const firstChildArgs = async (fixture: Fixture): Promise<string[]> => {
+      const [args] = (await readFile(fixture.argsFile, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as string[]);
+      return args;
+    };
+
+    const awaitCompletion = (fixture: Fixture) => waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'completed' ? run : null;
+    });
+
+    /** The config check throws before any child exists, so the runner exits on its own. */
+    async function awaitFailure(fixture: Fixture): Promise<{ code: number | null; stderr: string }> {
+      if (fixture.child.exitCode === null && fixture.child.signalCode === null) {
+        await new Promise<void>((resolve) => fixture.child.once('close', () => resolve()));
+      }
+      return { code: fixture.child.exitCode, stderr: fixture.stderr() };
+    }
+
+    it('loads only the bridge when the host config carries no allow list', async () => {
+      const fixture = await makeFixture();
+      await awaitCompletion(fixture);
+      const args = await firstChildArgs(fixture);
+      expect(args).toContain('--no-extensions');
+      expect(extensionArgs(args)).toEqual([path.join(fixture.runDir, 'cindy-bridge.ts')]);
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('appends every host-listed extension after the bridge, in order', async () => {
+      const extras = await tempRoot();
+      const alpha = path.join(extras, 'alpha-extension.ts');
+      const beta = path.join(extras, 'beta-extension.ts');
+      await writeFile(alpha, 'export default function () {}\n');
+      await writeFile(beta, 'export default function () {}\n');
+      const fixture = await makeFixture({ extraConfig: { extensionPaths: [alpha, beta] } });
+      await awaitCompletion(fixture);
+      const args = await firstChildArgs(fixture);
+      expect(args).toContain('--no-extensions');
+      expect(extensionArgs(args)).toEqual([path.join(fixture.runDir, 'cindy-bridge.ts'), alpha, beta]);
+      // The rest of the child contract is untouched by the extra argv entries.
+      expect(args).toContain('--tools');
+      expect(args).toContain('--session-id');
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('ignores an extension list carried by a task instead of the host config', async () => {
+      const extras = await tempRoot();
+      const taskSupplied = path.join(extras, 'task-supplied-extension.ts');
+      await writeFile(taskSupplied, 'export default function () {}\n');
+      const fixture = await makeFixture({ extraTaskFields: { extensionPaths: [taskSupplied] } });
+      await awaitCompletion(fixture);
+      const args = await firstChildArgs(fixture);
+      expect(extensionArgs(args)).toEqual([path.join(fixture.runDir, 'cindy-bridge.ts')]);
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('refuses an injected extension reached through a symlink', async () => {
+      const extras = await tempRoot();
+      const real = path.join(extras, 'real-extension.ts');
+      const link = path.join(extras, 'linked-extension.ts');
+      await writeFile(real, 'export default function () {}\n');
+      try {
+        await symlink(real, link, 'file');
+      } catch (error) {
+        // Windows without developer mode refuses file symlinks (EPERM); the
+        // rule is still asserted on the platforms that can express it.
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+        throw error;
+      }
+      const fixture = await makeFixture({ extraConfig: { extensionPaths: [link] } });
+      const failed = await awaitFailure(fixture);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toMatch(/must not be a symlink/);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+    });
+
+    it.each([
+      ['the field is not an array', { extensionPaths: 'one-extension.ts' }],
+      ['a path is relative', { extensionPaths: ['./relative-extension.ts'] }],
+      ['an entry is not a string', { extensionPaths: [42] }],
+      ['an entry is empty', { extensionPaths: [''] }],
+    ])('fails closed before launching a child when %s', async (_label, extraConfig) => {
+      const fixture = await makeFixture({ extraConfig });
+      const failed = await awaitFailure(fixture);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toMatch(/injected extension/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+    });
+
+    it('fails closed when a listed extension does not exist', async () => {
+      const extras = await tempRoot();
+      const fixture = await makeFixture({
+        extraConfig: { extensionPaths: [path.join(extras, 'missing-extension.ts')] },
+      });
+      const failed = await awaitFailure(fixture);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toMatch(/injected extension is missing/);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+    });
+
+    it('fails closed when the allow list repeats an entry', async () => {
+      const extras = await tempRoot();
+      const alpha = path.join(extras, 'alpha-extension.ts');
+      await writeFile(alpha, 'export default function () {}\n');
+      const fixture = await makeFixture({ extraConfig: { extensionPaths: [alpha, alpha] } });
+      const failed = await awaitFailure(fixture);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toMatch(/listed twice/);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+    });
+
+    it('fails closed when the allow list repeats the always-loaded bridge', async () => {
+      const fixture = await makeFixture({
+        extraConfig: ({ bridgeFile }) => ({ extensionPaths: [bridgeFile] }),
+      });
+      const failed = await awaitFailure(fixture);
+      expect(failed.code).toBe(1);
+      expect(failed.stderr).toMatch(/duplicates the bridge/);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+    });
   });
 
   it('uses unique exact child session ids and persists terminal output/usage', async () => {

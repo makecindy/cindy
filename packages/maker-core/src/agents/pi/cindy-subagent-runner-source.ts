@@ -219,6 +219,56 @@ function safeAppendTranscript(state, record) {
   } catch (_) {}
 }
 
+// Host-injected PI extensions.
+//
+// extensionPaths is an allow list computed and written by the host into this
+// run's own config.json. It is deliberately never read from a task, a profile
+// prompt or any child output: those are untrusted text, and accepting a path
+// from them would let a child load arbitrary code into its own process. The
+// field is optional, and an absent or empty list reproduces the previous argv
+// byte for byte, so every existing run is unaffected. Anything malformed fails
+// closed here — a host that asked for an extension must never end up with a
+// child that silently started without it.
+const MAX_INJECTED_EXTENSIONS = 16;
+
+function resolveInjectedExtensionPaths(config) {
+  const declared = config.extensionPaths;
+  if (declared === undefined) return [];
+  if (!Array.isArray(declared)) throw new Error('injected extension paths must be an array');
+  if (declared.length > MAX_INJECTED_EXTENSIONS) {
+    throw new Error('too many injected extensions (max ' + MAX_INJECTED_EXTENSIONS + ')');
+  }
+  const resolved = [];
+  for (let index = 0; index < declared.length; index += 1) {
+    const entry = declared[index];
+    if (typeof entry !== 'string' || entry.length === 0) {
+      throw new Error('injected extension path must be a non-empty string');
+    }
+    if (!path.isAbsolute(entry)) {
+      throw new Error('injected extension path must be absolute: ' + entry);
+    }
+    const absolute = path.resolve(entry);
+    let info;
+    try {
+      info = fs.lstatSync(absolute);
+    } catch (_) {
+      throw new Error('injected extension is missing: ' + absolute);
+    }
+    // A symlink could resolve somewhere else after the check, so only a real
+    // file is accepted as an injected extension.
+    if (info.isSymbolicLink()) throw new Error('injected extension must not be a symlink: ' + absolute);
+    if (!info.isFile()) throw new Error('injected extension is not a file: ' + absolute);
+    if (absolute === path.resolve(config.bridgeExtension)) {
+      throw new Error('injected extension duplicates the bridge: ' + absolute);
+    }
+    if (resolved.indexOf(absolute) !== -1) {
+      throw new Error('injected extension is listed twice: ' + absolute);
+    }
+    resolved.push(absolute);
+  }
+  return resolved;
+}
+
 function main() {
   const configPath = process.argv[2];
   if (!configPath) throw new Error('config path required');
@@ -240,6 +290,7 @@ function main() {
   if (!path.resolve(config.childConfigHome).startsWith(containedPrefix)) {
     throw new Error('child config home escaped the run directory');
   }
+  const injectedExtensionPaths = resolveInjectedExtensionPaths(config);
 
   fs.mkdirSync(config.runDir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(config.runDir, 0o700); } catch (_) {}
@@ -771,14 +822,24 @@ function main() {
       const args = [
         '--mode', 'rpc',
         '--no-approve',
+        // Discovery stays off: only the bridge and the host's explicit allow
+        // list are ever loaded, never project or user packages.
         '--no-extensions',
         '--extension', config.bridgeExtension,
+      ];
+      // Host-injected extensions load after the bridge, in the order the host
+      // listed them. Empty by default, so the argv above is then exactly what
+      // this runner produced before the field existed.
+      for (let index = 0; index < injectedExtensionPaths.length; index += 1) {
+        args.push('--extension', injectedExtensionPaths[index]);
+      }
+      args.push(
         '--tools', task.tools,
         '--append-system-prompt', task.profilePrompt,
         '--session-dir', task.sessionDir,
         '--session-id', task.sessionId,
         '--provider', task.provider,
-      ];
+      );
       if (task.model) args.push('--model', task.model);
       if (task.thinking) args.push('--thinking', task.thinking);
       // 受邀者(另一个账号)的托管会话：不发现本机用户的技能与会话目录之外的说明文件。
