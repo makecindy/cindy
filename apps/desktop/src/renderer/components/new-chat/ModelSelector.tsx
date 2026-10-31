@@ -3585,6 +3585,7 @@ function ModelSelectorContentView({
               remoteProviders.modelVisibilityOverrides ? 'ov' : 'no-ov',
             ].join('|')}
             query={query}
+            onQueryChange={setQuery}
             // field 形态的面板宽度绑 trigger,定宽 sizer 无用武之地(见该 prop 说明)。
             panelWidthFluid={fluidWidth}
             selected={panelSelection}

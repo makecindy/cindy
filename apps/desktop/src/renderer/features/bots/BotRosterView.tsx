@@ -2,6 +2,7 @@ import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGen
 import { useAuth } from '@/contexts/AuthContext';
 import { BotImportForm } from './BotImportForm';
 import { Button } from '@/components/ui/button';
+import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowRight } from 'lucide-react';
@@ -156,7 +157,11 @@ export function BotRosterView({ onCreated, onClose, restoreFocus, inline = false
     <Dialog.Root open onOpenChange={open => { if (!open && !creating) close(); }}>
       <Dialog.Portal>
         {/* Keep portaled controls inside the overlay’s React tree so its scroll lock allows them. */}
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-50">
+        <Dialog.Overlay
+          className="modal-scrim fixed inset-0 z-50"
+          // The untransformed scrim clears background drag regions for portaled pickers.
+          style={WINDOW_NO_DRAG_STYLE}
+        >
           <Dialog.Content aria-describedby={undefined} onPointerDownOutside={(event) => event.preventDefault()} onCloseAutoFocus={event => { if (restoreFocus) { event.preventDefault(); restoreFocus(); } }}
             className={`modal-panel fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 ${importing ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'} p-6 text-[var(--text-primary)] outline-none sm:p-8`}>
             {content}
