@@ -157,7 +157,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     last = null,
     multi = null,
     hold = null,
-    moved = false;
+    moved = false,
+    // 虚拟鼠标手柄的“光标 - 手指”偏移;只在按住期间有效。
+    handleOffset = null;
   const pointers = new Map();
   const mouseButtons = find("mouse-buttons"),
     wheel = find("mouse-wheel"),
@@ -719,6 +721,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     clipNetworkStatus(r);
     paintBackground();
     if (remoteCursor) {
+      // 宿主回传了真实光标位图:清掉手柄模式的箭头样式,否则会盖在位图上。
+      cursor.style.background = "";
+      cursor.style.clipPath = "";
+      cursor.style.filter = "";
       cursor.style.width = remoteCursor.width + "px";
       cursor.style.height = remoteCursor.height + "px";
       cursor.style.border = "0";
@@ -731,7 +737,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         directTouch
           ? touchFeedback
           : remoteCursor.visible ||
-            (control && (mode === "pointer" || nativeTouchpad) && localCursorAwake)
+            (control && (mode === "pointer" || mode === "handle" || nativeTouchpad) && localCursorAwake) ||
+            (control && mode === "handle")
       )
         ? "1"
         : "0";
@@ -739,15 +746,24 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       cursor.style.opacity = (directTouch ? !touchFeedback : false)
         ? "0"
         : "1";
-      cursor.style.width = "18px";
-      cursor.style.height = "18px";
-      cursor.style.border = "2px solid var(--foreground)";
-      cursor.style.borderRadius = "50%";
-      cursor.style.transform = "translate(-50%,-50%)";
+      // 手柄模式:在光标位置画一个真正的鼠标箭头,并让热点落在箭头尖上。
+      const handle = mode === "handle";
+      cursor.style.width = handle ? "30px" : "18px";
+      cursor.style.height = handle ? "30px" : "18px";
+      cursor.style.border = handle ? "0" : "2px solid var(--foreground)";
+      cursor.style.borderRadius = handle ? "0" : "50%";
+      cursor.style.background = handle ? "var(--foreground)" : "";
+      cursor.style.clipPath = handle ? HANDLE_ARROW_CLIP : "";
+      cursor.style.filter = handle
+        ? "drop-shadow(0 2px 3px rgba(0,0,0,.55))"
+        : "";
+      cursor.style.transform = handle
+        ? "translate(-2px,-2px)"
+        : "translate(-50%,-50%)";
       cursor.style.left = r.x + cursorX * r.width + "px";
       cursor.style.top = r.y + cursorY * r.height + "px";
       cursor.style.display =
-        !config.desktop && control && (mode === "pointer" || mode === "touch")
+        !config.desktop && control && (mode === "pointer" || mode === "touch" || mode === "handle")
           ? "block"
           : "none";
     }
@@ -823,8 +839,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         performance.now() - Math.max(lastLocalMove, nativeTouchpad.endedAt ?? 0) <= 200);
     if (
       !control ||
-      (!nativeOwnsCursor && (!remoteCursor || mode !== "pointer" ||
-        (!pointers.size && performance.now() - lastLocalMove > 200)))
+      (!nativeOwnsCursor &&
+        (!remoteCursor ||
+          (mode !== "pointer" && mode !== "handle") ||
+          (!pointers.size && performance.now() - lastLocalMove > 200)))
     ) {
       cx = value.x;
       cy = value.y;
@@ -848,7 +866,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!pending.length) pendingSince = performance.now();
     // Remote visibility can remain hidden after synthetic mouse movement. Wake
     // the local touchpad cursor until the host reports a visible cursor again.
-    if (event.kind === "move" && (mode === "pointer" || nativeTouchpad)) localCursorAwake = true;
+    if (event.kind === "move" && (mode === "pointer" || mode === "handle" || nativeTouchpad)) localCursorAwake = true;
     if (event.kind === "key" || event.kind === "text") {
       localCursorAwake = false;
       render();
@@ -1057,6 +1075,45 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       x: clamp((p.x - r.x) / r.width),
       y: clamp((p.y - r.y) / r.height),
     };
+  }
+  /**
+   * 虚拟鼠标手柄:光标跟随手指,但默认浮在手指上方一个拇指高度,不会被指尖遮住;
+   * 手指落在光标附近时保持原有相对位置,便于小距离微调。坐标全部是桌面归一化坐标。
+   */
+  const HANDLE_LIFT_PX = 52;
+  const HANDLE_GRAB_PX = 44;
+  // 箭头轮廓:尖端在左上角(0,0),与热点对齐。
+  const HANDLE_ARROW_CLIP =
+    "polygon(0 0,0 26px,7px 19px,12px 29px,17px 27px,12px 17px,21px 17px)";
+  function moveHandle(finger) {
+    if (!handleOffset) return;
+    cx = clamp(finger.x + handleOffset.x);
+    cy = clamp(finger.y + handleOffset.y);
+    queue({ kind: "move", x: cx, y: cy });
+    render();
+  }
+  function grabHandle(finger) {
+    const r = layout();
+    const onCursor =
+      Math.hypot((finger.x - cx) * r.width, (finger.y - cy) * r.height) <=
+      HANDLE_GRAB_PX;
+    if (onCursor) {
+      handleOffset = { x: cx - finger.x, y: cy - finger.y };
+    } else {
+      // 默认浮在手指上方;桌面内或屏幕上放不下时改放下方。
+      const lift = HANDLE_LIFT_PX / Math.max(1, r.height);
+      const roomAbove =
+        finger.y - lift >= 0 && r.y + (finger.y - lift) * r.height >= 0;
+      const roomBelow =
+        finger.y + lift <= 1 &&
+        r.y + (finger.y + lift) * r.height <= viewportHeight();
+      // 越靠近桌面底边抬升量越小,否则光标永远差一截,够不到最下面几行(Dock / 任务栏)。
+      const dy = roomAbove || !roomBelow
+        ? Math.max(-lift, finger.y - 1)
+        : Math.min(lift, 1 - finger.y);
+      handleOffset = { x: 0, y: dy };
+    }
+    moveHandle(finger);
   }
   const desktopPoint = (e) => {
     const bounds = stage.getBoundingClientRect();
@@ -1320,6 +1377,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       start = { x: e.clientX, y: e.clientY };
       last = start;
       moved = false;
+      // 手柄模式下立刻把光标提到手指旁边,后续拖动 1:1 跟随。
+      if (mode === "handle" && control) grabHandle(point(start));
       hold = setTimeout(() => {
         if (
           control &&
@@ -1393,6 +1452,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       moved = true;
       clearTimeout(hold);
     }
+    if (mode === "handle") {
+      if (control) moveHandle(point(now));
+      return;
+    }
     if (
       !control ||
       mode === "pan" ||
@@ -1436,6 +1499,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       gestureFrame = null;
     }
     pointers.delete(e.pointerId);
+    handleOffset = null;
     if (drag) {
       queue({ kind: "button", button: 0, down: false, x: cx, y: cy });
       drag = false;
@@ -2507,6 +2571,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         settlePan();
         clearTimeout(touchCursorTimer);
         touchCursorVisible = false;
+        handleOffset = null;
         mode = message.mode;
         render();
         break;

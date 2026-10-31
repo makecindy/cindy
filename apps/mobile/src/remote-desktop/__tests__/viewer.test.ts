@@ -1725,3 +1725,191 @@ describe("remote desktop three-segment backdrop", () => {
     expect(side + centerW + side).toBeCloseTo(800, 2);
   });
 });
+
+describe("virtual mouse handle (手持设备的虚拟鼠标)", () => {
+  const rectOf = (v: ReturnType<typeof viewer>) => {
+    const style = v.elements.image.style as Record<string, string>;
+    return {
+      x: parseFloat(style.left),
+      y: parseFloat(style.top),
+      width: parseFloat(style.width),
+      height: parseFloat(style.height),
+    };
+  };
+  const setup = (nativeMedia = false) => {
+    const v = viewer(false, true, nativeMedia);
+    v.send({ type: "init", epoch: "handle", width: 1920, height: 1080 });
+    // 先切模式再接管:切换模式会释放一次输入,此时还不能操作,免得占住本轮 ACK。
+    v.send({ type: "mode", mode: "handle" });
+    v.send({ type: "control", enabled: true });
+    return v;
+  };
+  const events = (v: ReturnType<typeof viewer>, kind: string) =>
+    v.messages.flatMap((m) => m.events ?? []).filter((e) => e.kind === kind) as Array<{
+      kind: string;
+      x?: number;
+      y?: number;
+      button?: number;
+      down?: boolean;
+    }>;
+  /** 按下/抬起一次并等待这一批事件落地。 */
+  const act = (v: ReturnType<typeof viewer>, run: () => void) => {
+    run();
+    v.flush();
+    v.ack();
+  };
+
+  it("按下时光标浮到手指上方,拖动 1:1 跟随,画面不动", () => {
+    const v = setup();
+    const r = rectOf(v);
+    const lift = 52 / r.height;
+    const picture = { ...v.elements.image.style };
+    // 落在桌面中部偏下,离默认光标位置(正中)足够远,才会走"浮起"分支。
+    act(v, () => v.pointer("pointerdown", 1, 120, 350));
+    expect(events(v, "move").at(-1)!.x).toBeCloseTo((120 - r.x) / r.width, 3);
+    expect(events(v, "move").at(-1)!.y).toBeCloseTo(
+      (350 - r.y) / r.height - lift,
+      3,
+    );
+    act(v, () => v.pointer("pointermove", 1, 160, 380));
+    expect(events(v, "move").at(-1)!.x).toBeCloseTo((160 - r.x) / r.width, 3);
+    expect(events(v, "move").at(-1)!.y).toBeCloseTo(
+      (380 - r.y) / r.height - lift,
+      3,
+    );
+    // 手柄模式只移动远端光标;底图位置必须保持原样。
+    expect(v.elements.image.style).toMatchObject({
+      left: picture.left,
+      top: picture.top,
+      width: picture.width,
+    });
+  });
+
+  it("在箭头处轻点就是一次左键点击", () => {
+    const v = setup();
+    const r = rectOf(v);
+    const lift = 52 / r.height;
+    const y = (350 - r.y) / r.height - lift;
+    act(v, () => {
+      v.pointer("pointerdown", 1, 120, 350);
+      v.pointer("pointerup", 1, 120, 350);
+    });
+    expect(events(v, "button")).toEqual([
+      {
+        kind: "button",
+        button: 0,
+        down: true,
+        x: expect.closeTo((120 - r.x) / r.width, 3),
+        y: expect.closeTo(y, 3),
+      },
+      {
+        kind: "button",
+        button: 0,
+        down: false,
+        x: expect.closeTo((120 - r.x) / r.width, 3),
+        y: expect.closeTo(y, 3),
+      },
+    ]);
+  });
+
+  it("手指落在箭头附近时保持相对位置,可以微调", () => {
+    const v = setup();
+    const r = rectOf(v);
+    act(v, () => {
+      v.pointer("pointerdown", 1, 120, 350);
+      v.pointer("pointerup", 1, 120, 350);
+    });
+    const before = events(v, "move").at(-1)!;
+    const arrowX = r.x + (before.x as number) * r.width;
+    const arrowY = r.y + (before.y as number) * r.height;
+    // 手指按在箭头附近(4px 内):保持原位置,不跳。
+    act(v, () => v.pointer("pointerdown", 2, arrowX + 4, arrowY + 2));
+    expect(events(v, "move").at(-1)!.x).toBeCloseTo(before.x as number, 3);
+    expect(events(v, "move").at(-1)!.y).toBeCloseTo(before.y as number, 3);
+    // 之后手指移动 (+10, +10),光标跟着走同样的桌面距离。
+    act(v, () => v.pointer("pointermove", 2, arrowX + 14, arrowY + 12));
+    expect(events(v, "move").at(-1)!.x).toBeCloseTo(
+      (arrowX + 10 - r.x) / r.width,
+      3,
+    );
+    expect(events(v, "move").at(-1)!.y).toBeCloseTo(
+      (arrowY + 10 - r.y) / r.height,
+      3,
+    );
+  });
+
+  it("桌面顶端放不下时把箭头放到手指下方", () => {
+    const v = setup();
+    const r = rectOf(v);
+    const fingerY = 2 / r.height;
+    act(v, () => v.pointer("pointerdown", 1, 200, r.y + 2));
+    const move = events(v, "move").at(-1)!;
+    expect(move.x).toBeCloseTo(0.5, 3);
+    expect(move.y).toBeCloseTo(fingerY + 52 / r.height, 3);
+    expect(move.y as number).toBeGreaterThan(fingerY);
+  });
+
+  it("没有宿主光标时画箭头;宿主回传光标位图时不叠加箭头样式", () => {
+    // 宿主光标位图只在原生媒体(游标叠加)链路上到达。
+    const v = setup(true);
+    act(v, () => v.pointer("pointerdown", 1, 120, 350));
+    expect(v.elements.cursor.style.width).toBe("30px");
+    expect(String(v.elements.cursor.style.clipPath)).toContain("polygon");
+    v.send({
+      type: "nativeCursor",
+      epoch: "handle",
+      cursor: {
+        x: 0.5,
+        y: 0.5,
+        visible: true,
+        width: 16,
+        height: 16,
+        hotX: 0,
+        hotY: 0,
+        png: "iVBORw0KGgo=",
+      },
+    });
+    expect(v.elements.cursor.style.width).toBe("16px");
+    expect(v.elements.cursor.style.clipPath).toBe("");
+    expect(v.elements.cursor.style.background).toBe("");
+  });
+
+  it("拖动期间迟到的宿主光标不会把点击位置拉回去", () => {
+    // 宿主光标位图可能比手指事件晚到。手柄模式必须像触控板一样保留本地坐标,
+    // 否则抬手点击会落在被覆盖的旧位置上。
+    const v = setup(true);
+    const r = rectOf(v);
+    const lift = 52 / r.height;
+    // 先让宿主光标位图到位,再模拟它在本轮拖动中迟到。
+    const hostCursor = (x: number, y: number) =>
+      v.send({
+        type: "nativeCursor",
+        epoch: "handle",
+        cursor: {
+          x,
+          y,
+          visible: true,
+          width: 16,
+          height: 16,
+          hotX: 0,
+          hotY: 0,
+          png: "iVBORw0KGgo=",
+        },
+      });
+    hostCursor(0.5, 0.5);
+    act(v, () => v.pointer("pointerdown", 1, 120, 350));
+    hostCursor(0.1, 0.1);
+    act(v, () => v.pointer("pointerup", 1, 120, 350));
+    expect(events(v, "button")[0]).toMatchObject({
+      x: expect.closeTo((120 - r.x) / r.width, 3),
+      y: expect.closeTo((350 - r.y) / r.height - lift, 3),
+    });
+  });
+
+  it("拖到桌面最底边时仍然够得到最后一行", () => {
+    const v = setup();
+    const r = rectOf(v);
+    act(v, () => v.pointer("pointerdown", 1, 200, r.y + r.height));
+    expect(events(v, "move").at(-1)!.y).toBeCloseTo(1, 3);
+  });
+});

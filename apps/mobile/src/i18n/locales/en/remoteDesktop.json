@@ -119,6 +119,8 @@
   "displayNumber": "Display {{number}}",
   "touchHint": "Tap to click, hold to drag. Two fingers scroll; pinch to zoom.",
   "pointerHint": "Slide to move the pointer, tap to click. Two fingers scroll; pinch to zoom.",
+  "handle": "Virtual mouse",
+  "handleHint": "Press on the desktop and an arrow appears; drag to move precisely, tap to click, hold to drag. Two fingers scroll; pinch to zoom.",
   "panHint": "Slide to move the view; pinch to zoom. Turn off to restore your input mode.",
   "viewOnlyHint": "View only is on. Slide to move the view or pinch to zoom without controlling the computer.",
   "close": "Close",
