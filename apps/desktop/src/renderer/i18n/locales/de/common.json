@@ -9953,6 +9953,17 @@
     }
   },
   "bots": {
+    "mediaModels": {
+      "unavailable": "Verfügbare Modelle konnten nicht geladen werden. Deine gespeicherten Auswahlen bleiben erhalten.",
+      "vision": "Vision-Bridge-Modell",
+      "fallback": "Vision-Bridge-Ersatzmodell",
+      "image": "Modell zur Bilderzeugung",
+      "video": "Modell zur Videoerzeugung",
+      "inherit": "App-Einstellungen verwenden",
+      "none": "Kein Ersatzmodell",
+      "title": "Medienmodelle",
+      "hint": "Wähle Modelle für dieses Teammitglied. Vision Bridge verwendet den Aktivierungsschalter und die Zielmodelle der App. Starte dieses Teammitglied neu, um Vision-Bridge-Änderungen auf Pi-Werkzeuge anzuwenden. Die gewählten Generierungsmodelle gelten für Cindy-Medienwerkzeuge; unabhängige Dienste behalten ihre eigenen Einstellungen."
+    },
     "avatarStatus": {
       "awaiting": "Benötigt deine Bestätigung",
       "error": "Erfordert Aufmerksamkeit",

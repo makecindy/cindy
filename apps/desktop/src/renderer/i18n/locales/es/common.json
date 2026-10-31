@@ -10030,6 +10030,17 @@
     }
   },
   "bots": {
+    "mediaModels": {
+      "unavailable": "No se pudieron cargar los modelos disponibles. Se conservaron tus elecciones.",
+      "vision": "Modelo de Vision Bridge",
+      "fallback": "Modelo alternativo de Vision Bridge",
+      "image": "Modelo de generación de imágenes",
+      "video": "Modelo de generación de vídeo",
+      "inherit": "Usar ajustes de la aplicación",
+      "none": "Sin modelo alternativo",
+      "title": "Modelos multimedia",
+      "hint": "Elige modelos para este compañero. Vision Bridge utiliza el interruptor de activación y los modelos de destino de la aplicación. Reinicia este compañero para aplicar los cambios de Vision Bridge a las herramientas de Pi. Los modelos de generación elegidos se aplican a las herramientas multimedia de Cindy; los servicios independientes conservan sus propios ajustes."
+    },
     "avatarStatus": {
       "awaiting": "Necesita tu confirmación",
       "error": "necesita atencion",
