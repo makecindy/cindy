@@ -1536,6 +1536,12 @@ export const schedules = sqliteTable(
      */
     silentWhenIdle: integer('silent_when_idle', { mode: 'boolean' }).notNull().default(false),
     /**
+     * 程序变化门。true → 没有脚本放行或插件前置检查时不启动模型。
+     * 默认 false：已有任务和桌面表单仍按原检查行为启动模型。
+     * 详见 @cindy/maker-scheduler Schedule.programChangeGate。
+     */
+    programChangeGate: integer('program_change_gate', { mode: 'boolean' }).notNull().default(false),
+    /**
      * 前置检查脚本(Pre-run Hook)命令。NULL = 未启用,完全走原有流程。
      * 非空 → runner fire 前先经系统 shell 执行该命令(cwd=本轮工作目录):
      * exit 0 放行 / exit 2 跳过本轮(run 记 'skipped') / 其它、超时阻止本轮并记 failed。

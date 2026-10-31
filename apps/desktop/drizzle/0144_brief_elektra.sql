@@ -1,0 +1,1 @@
+ALTER TABLE `schedules` ADD `program_change_gate` integer DEFAULT false NOT NULL;

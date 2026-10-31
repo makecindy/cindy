@@ -82,6 +82,7 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
     useWorktree: false,
     persistentSession: false,
     silentWhenIdle: false,
+    programChangeGate: false,
     notify: { desktop: true, feishu: false },
     status: 'active',
     createdAt: 1_700_000_000_000,

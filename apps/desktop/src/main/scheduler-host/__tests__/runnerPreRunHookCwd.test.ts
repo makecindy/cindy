@@ -228,6 +228,59 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     expect(context.onPreRunHookCompleted).toHaveBeenCalledOnce();
   });
 
+  it('a gated check without a program signal does not start a model', async () => {
+    const { runner, maker, notifier } = createRunner(vi.fn() as never);
+    const result = await runner.fire(
+      baseSchedule({ silentWhenIdle: true, programChangeGate: true, preRunHook: undefined }),
+      createFireContext(),
+    );
+    expect(result).toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: 'skipped: no program change signal; model not started',
+    });
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('a gated check still runs its hook and skips the model when the hook says unchanged', async () => {
+    const { runner, maker } = createRunner(vi.fn() as never);
+    const result = await runner.fire(baseSchedule({ programChangeGate: true }), createFireContext());
+    expect(mocks.executePreRunHook).toHaveBeenCalledOnce();
+    expect(result.skipped).toBe(true);
+    expect(maker.createSession).not.toHaveBeenCalled();
+  });
+
+  it('turning a gated check back into a reminder still starts the model path', async () => {
+    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('past-gate'));
+    const { runner } = createRunner(vi.fn() as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: false,
+        programChangeGate: true,
+        preRunHook: undefined,
+        targetSessionId: 'owner',
+      }),
+      createFireContext(),
+    )).rejects.toThrow('past-gate');
+  });
+
+  it('a selected plugin is a change signal, so the gate does not skip before it', async () => {
+    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('past-gate'));
+    const { runner } = createRunner(vi.fn() as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: undefined,
+        preRunPlugin: { pluginId: 'gate', onFailure: 'skip' },
+        targetSessionId: 'owner',
+      }),
+      createFireContext(),
+    )).rejects.toThrow('past-gate');
+  });
+
   it('heartbeat 任务(workingDir 空)→ 先解析绑定会话 meta.workDir 再跑 hook', async () => {
     const getSessionMeta = vi.fn(async () => ({ workDir: '/bound/project' }) as never);
     const { runner } = createRunner(getSessionMeta as never);

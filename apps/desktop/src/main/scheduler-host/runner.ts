@@ -878,6 +878,25 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throw new Error(errMsg);
     }
 
+    // 检查的「有没有变化」由程序信号决定。没有脚本放行、也没有插件前置检查时，
+    // 不恢复目标、不建会话、不启动模型。提醒和显式交给模型发现变化的任务不带这道门。
+    if (
+      schedule.programChangeGate === true &&
+      schedule.silentWhenIdle === true &&
+      !schedule.preRunHook?.command?.trim() &&
+      !schedule.preRunPlugin
+    ) {
+      this.deps.logger.info?.('[runner] check has no program change signal; model not started', {
+        scheduleId: schedule.id,
+        runId: ctx.runId,
+      });
+      return {
+        sessionId: '',
+        skipped: true,
+        resultText: 'skipped: no program change signal; model not started',
+      };
+    }
+
     // A scheduled message restores its ordinary target just like user input.
     // Do this before hooks/model selection, while keeping deleted-target behavior
     // and service-owned Bot lifecycle separate.
