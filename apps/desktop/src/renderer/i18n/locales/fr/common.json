@@ -1119,7 +1119,7 @@
     "allow": "Autoriser le bureau à distance",
     "allowHint": "Autorisez vos appareils connectés à voir et utiliser toutes les apps de cet ordinateur. Activez aussi le contrôle de l'appareil ci-dessus.",
     "permissionHint": "Sur l'ordinateur, autorisez l'enregistrement de l'écran et l'accessibilité dans les réglages système, puis reconnectez-vous.",
-    "inputUnsupported": "Cindy ne prend pas encore en charge le contrôle du clavier et de la souris à distance pour l’environnement de bureau actuel de cet ordinateur.",
+    "inputUnsupported": "L'environnement de bureau actuel de cet ordinateur ne prend pas en charge le contrôle à distance du clavier et de la souris dans Cindy.",
     "controlUnavailable": "L'ordinateur distant ne peut pas recevoir de saisie. Vérifiez ses autorisations de contrôle et sa connexion, puis reconnectez-vous.",
     "beingControlled": "Votre bureau est contrôlé à distance",
     "beingViewed": "Votre bureau est visionné à distance",

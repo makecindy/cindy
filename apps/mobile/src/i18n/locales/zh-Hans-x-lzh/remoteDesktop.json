@@ -130,7 +130,7 @@
   "rotate": "转屏",
   "sound": "声",
   "smallWindow": "幕后行",
-  "inputUnsupported": "此机桌面之境，Cindy 尚难遥控其键鼠。",
+  "inputUnsupported": "Cindy 暂不支持此机目前桌面环境的远程键鼠控制。",
   "controlUnavailableHint": "暂不能操此机，仍可移动及缩放画面。",
   "backgroundRunningHint": "离远程桌面或转入背景时，以小窗续示画面。",
   "displaySettings": "示",

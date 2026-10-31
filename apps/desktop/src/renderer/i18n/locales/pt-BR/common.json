@@ -1119,7 +1119,7 @@
     "allow": "Permitir área de trabalho remota",
     "allowHint": "Permita que seus dispositivos conectados à conta visualizem e operem todos os apps neste computador. Ative também o controle de dispositivos acima.",
     "permissionHint": "No computador, permita a gravação de tela e a acessibilidade nas configurações do sistema e reconecte.",
-    "inputUnsupported": "A Cindy ainda não suporta o controle remoto do teclado e do mouse na área de trabalho atual deste computador.",
+    "inputUnsupported": "O ambiente de área de trabalho atual deste computador não oferece suporte ao controle remoto do teclado e do mouse no Cindy.",
     "controlUnavailable": "O computador remoto não aceita comandos. Verifique as permissões de controle e a conexão e reconecte.",
     "beingControlled": "Sua área de trabalho está sendo controlada",
     "beingViewed": "Sua área de trabalho está sendo visualizada",

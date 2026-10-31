@@ -130,7 +130,7 @@
   "rotate": "Girar tela",
   "sound": "Som",
   "smallWindow": "Executar em segundo plano",
-  "inputUnsupported": "A Cindy ainda não suporta o controle remoto do teclado e do mouse na área de trabalho atual deste computador.",
+  "inputUnsupported": "O ambiente de área de trabalho atual deste computador não oferece suporte ao controle remoto do teclado e do mouse no Cindy.",
   "controlUnavailableHint": "O controle do computador está temporariamente indisponível. Você ainda pode mover e ampliar a tela.",
   "backgroundRunningHint": "Continue exibindo a tela em uma janela flutuante ao sair da área de trabalho remota ou trocar de app.",
   "displaySettings": "Exibição",
