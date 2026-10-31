@@ -14,11 +14,13 @@ import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { createReadStream } from 'node:fs';
+import type { Readable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { createZstdDecompress } from 'node:zlib';
 import { parse as parseToml } from 'smol-toml';
 
 import {
@@ -652,8 +654,8 @@ async function prepareExternalCodexSessionStorage(threadId: string): Promise<str
         }
         // Save the exact source before SQLite stops pointing at it. A custom
         // history root need not be discoverable, including after a failed retry.
-        if (readPaginatedBase(threadId, adopted.path)) {
-          rememberCodexHistorySource(threadId, targetHome, adopted.path, targetRollout);
+        if (await readPaginatedBase(threadId, adopted.path)) {
+          await rememberCodexHistorySource(threadId, targetHome, adopted.path, targetRollout);
         }
         if (handoffThreadToCopiedRollout(
           targetDbPath,
@@ -1264,10 +1266,96 @@ function originalCodexRolloutName(file: string): string {
   return path.basename(file).replace(/^(?:rollout-cindy-(?:adopted|empty-recovery|synthetic)(?:-\d+)?-)+/, '');
 }
 
+function uncompressedCodexRolloutName(file: string): string {
+  return originalCodexRolloutName(file).replace(/\.zst$/, '');
+}
+
 function nativeRolloutIdentity(file: string): { threadId: string; rolloutId: string } | undefined {
   const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-  const match = originalCodexRolloutName(file).match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl$`, 'i'));
+  const match = originalCodexRolloutName(file).match(new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${uuid})(?:_(${uuid}))?\\.jsonl(?:\\.zst)?$`, 'i'));
   return match ? { threadId: match[1]!.toLowerCase(), rolloutId: (match[2] ?? match[1])!.toLowerCase() } : undefined;
+}
+
+function isZstdRollout(file: string): boolean {
+  return file.endsWith('.jsonl.zst');
+}
+
+function createRolloutReadStream(file: string): Readable {
+  const input = createReadStream(file);
+  if (!isZstdRollout(file)) return input;
+  const decompressor = createZstdDecompress();
+  input.on('error', error => decompressor.destroy(error));
+  decompressor.on('close', () => input.destroy());
+  input.pipe(decompressor);
+  return decompressor;
+}
+
+class RolloutByteCursor {
+  private readonly iterator: AsyncIterator<Buffer>;
+  private buffered: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  private done = false;
+
+  constructor(private readonly stream: Readable) {
+    this.iterator = stream[Symbol.asyncIterator]();
+  }
+
+  async readUpTo(maxBytes: number): Promise<Buffer> {
+    while (this.buffered.length < maxBytes && !this.done) {
+      const next = await this.iterator.next();
+      if (next.done) {
+        this.done = true;
+        break;
+      }
+      const chunk = Buffer.isBuffer(next.value) ? next.value : Buffer.from(next.value);
+      this.buffered = this.buffered.length > 0 ? Buffer.concat([this.buffered, chunk]) : chunk;
+    }
+    const length = Math.min(maxBytes, this.buffered.length);
+    const result = this.buffered.subarray(0, length);
+    this.buffered = this.buffered.subarray(length);
+    return result;
+  }
+
+  close(): void {
+    this.stream.destroy();
+  }
+}
+
+async function rolloutHasAtLeastBytes(file: string, byteCount: number): Promise<boolean> {
+  if (!isZstdRollout(file)) return (readNonEmptyRolloutSnapshot(file)?.size ?? 0) >= byteCount;
+  const cursor = new RolloutByteCursor(createRolloutReadStream(file));
+  let total = 0;
+  try {
+    while (total < byteCount) {
+      const chunk = await cursor.readUpTo(Math.min(64 * 1024, byteCount - total));
+      if (chunk.length === 0) return false;
+      total += chunk.length;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    cursor.close();
+  }
+}
+
+async function filesHaveSamePlaintextPrefix(leftPath: string, rightPath: string, byteCount: number): Promise<boolean> {
+  const left = new RolloutByteCursor(createRolloutReadStream(leftPath));
+  const right = new RolloutByteCursor(createRolloutReadStream(rightPath));
+  try {
+    let remaining = byteCount;
+    while (remaining > 0) {
+      const length = Math.min(64 * 1024, remaining);
+      const [leftChunk, rightChunk] = await Promise.all([left.readUpTo(length), right.readUpTo(length)]);
+      if (leftChunk.length !== length || rightChunk.length !== length || !leftChunk.equals(rightChunk)) return false;
+      remaining -= length;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    left.close();
+    right.close();
+  }
 }
 
 interface CodexHistoryBase {
@@ -1276,8 +1364,8 @@ interface CodexHistoryBase {
   end_byte_offset: number;
 }
 
-function readPaginatedBase(threadId: string, file: string): CodexHistoryBase | undefined {
-  const line = readFirstLineSync(file);
+async function readPaginatedBase(threadId: string, file: string): Promise<CodexHistoryBase | undefined> {
+  const line = await readFirstLineAsync(file);
   if (!line) return;
   let record: unknown;
   try { record = JSON.parse(line); } catch { return; }
@@ -1306,9 +1394,14 @@ export async function prepareCodexRolloutForResume(
   return repairCodexRolloutPath(threadId, rolloutPath, sqliteHome);
 }
 
-function rememberCodexHistorySource(threadId: string, targetHome: string, rolloutPath: string, sourcePath: string): void {
+async function rememberCodexHistorySource(
+  threadId: string,
+  targetHome: string,
+  rolloutPath: string,
+  sourcePath: string,
+): Promise<void> {
   const file = `${rolloutPath}.source.json`;
-  const contents = JSON.stringify({ sourceHome: historyHomeForRollout(sourcePath), rootLine: readFirstLineSync(rolloutPath) });
+  const contents = JSON.stringify({ sourceHome: historyHomeForRollout(sourcePath), rootLine: await readFirstLineAsync(rolloutPath) });
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, contents, { flag: 'wx', mode: 0o600 });
@@ -1325,9 +1418,9 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
   const rootSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, rolloutPath);
   if (!rootSnapshot) return; // Preserve existing missing/empty/unsafe recovery behavior.
   // Most histories are self-contained. Do not scan external homes on this path.
-  let base = readPaginatedBase(threadId, rolloutPath);
+  let base = await readPaginatedBase(threadId, rolloutPath);
   if (!base) return;
-  const rootLine = readFirstLineSync(rolloutPath);
+  const rootLine = await readFirstLineAsync(rolloutPath);
   const rootIdentity = nativeRolloutIdentity(rolloutPath);
   if (!rootIdentity || rootIdentity.threadId !== threadId.toLowerCase()) {
     throw resumePreparationBlocked(threadId, 'the selected paginated history has an invalid identity');
@@ -1335,12 +1428,12 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
   const filesByHome = new Map<string, string[]>();
   const files = (home: string) => {
     let value = filesByHome.get(home);
-    if (!value) { value = collectRolloutFiles(home, samePath(home, targetHome)); filesByHome.set(home, value); }
+    if (!value) { value = collectRolloutFiles(home, samePath(home, targetHome), true); filesByHome.set(home, value); }
     return value;
   };
   let sourceHome: string | undefined;
   let searchedSource = false;
-  const source = () => {
+  const source = async () => {
     if (!searchedSource) {
       searchedSource = true;
       // Anchor recovery to the exact imported child's immutable metadata and
@@ -1360,22 +1453,28 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
       } else {
         candidates = discoverExternalCodexHomesSync();
       }
-      const homes = candidates.filter(home => !samePath(home, targetHome)
-        && files(home).some(file => path.basename(file) === originalCodexRolloutName(rolloutPath)
-          && !!readPrivateNonEmptyRolloutSnapshot(home, file) && readFirstLineSync(file) === rootLine));
+      const homes = (await Promise.all(candidates.filter(home => !samePath(home, targetHome)).map(async home => {
+        for (const file of files(home)) {
+          if (uncompressedCodexRolloutName(file) !== uncompressedCodexRolloutName(rolloutPath)
+            || !readPrivateNonEmptyRolloutSnapshot(home, file)) continue;
+          if (await readFirstLineAsync(file) === rootLine) return home;
+        }
+        return undefined;
+      }))).filter((home): home is string => home !== undefined);
       if (homes.length > 1) throw resumePreparationBlocked(threadId, 'ambiguous paginated history source');
       sourceHome = homes[0];
     }
     return sourceHome;
   };
-  if (verifyExternalSource) source();
+  if (verifyExternalSource) await source();
   const find = (home: string, id: string) => {
-    const matches = files(home).filter(file => nativeRolloutIdentity(file)?.rolloutId === id.toLowerCase())
-      .sort((a, b) => Number(path.basename(a) !== originalCodexRolloutName(a)) - Number(path.basename(b) !== originalCodexRolloutName(b)));
-    if (matches.some(file => !sameRegularFileIdentity(file, matches[0]!))) {
+    const matches = files(home).filter(file => nativeRolloutIdentity(file)?.rolloutId === id.toLowerCase());
+    const plain = matches.filter(file => !isZstdRollout(file));
+    const preferred = plain.length > 0 ? plain : matches;
+    if (preferred.some(file => !sameRegularFileIdentity(file, preferred[0]!))) {
       throw resumePreparationBlocked(threadId, 'ambiguous paginated history ancestor');
     }
-    return matches[0];
+    return preferred[0];
   };
   const seen = new Set([rootIdentity.rolloutId]);
   const plan: Array<{ sourcePath?: string; localAlias?: string; destination: string; snapshot: NonEmptyRolloutSnapshot }> = [];
@@ -1384,16 +1483,16 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
     if (seen.has(id)) throw resumePreparationBlocked(threadId, 'cyclic paginated history ancestry');
     seen.add(id);
     const local = find(targetHome, id);
-    if (!local) source();
+    if (!local) await source();
     const external = sourceHome ? find(sourceHome, id) : undefined;
     const selected = external ?? local;
     const home = external ? sourceHome! : targetHome;
     if (!selected) throw resumePreparationBlocked(threadId, 'missing paginated history ancestor');
     const snapshot = readPrivateNonEmptyRolloutSnapshot(home, selected);
-    if (!snapshot || snapshot.size < base.end_byte_offset) {
+    if (!snapshot || !(await rolloutHasAtLeastBytes(selected, base.end_byte_offset))) {
       throw resumePreparationBlocked(threadId, 'paginated history ancestor is unsafe or shorter than its referenced range');
     }
-    const metaLine = readFirstLineSync(selected);
+    const metaLine = await readFirstLineAsync(selected);
     let meta: unknown;
     try { meta = metaLine ? JSON.parse(metaLine) : undefined; }
     catch { throw resumePreparationBlocked(threadId, 'invalid paginated history ancestor metadata'); }
@@ -1404,7 +1503,7 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
     }
     if (local && external) {
       const localSnapshot = readPrivateNonEmptyRolloutSnapshot(targetHome, local);
-      if (!localSnapshot || !filesHaveSameContents(local, external, base.end_byte_offset)
+      if (!localSnapshot || !await filesHaveSamePlaintextPrefix(local, external, base.end_byte_offset)
         || !nonEmptyRolloutStillMatches(local, localSnapshot) || !nonEmptyRolloutStillMatches(external, snapshot)) {
         throw resumePreparationBlocked(threadId, 'paginated history ancestor conflicts with local history');
       }
@@ -1417,7 +1516,7 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
       if (!isPathInside(targetHome, destination)) throw resumePreparationBlocked(threadId, 'invalid paginated ancestor destination');
       plan.push({ sourcePath: selected, destination, snapshot });
     }
-    base = readPaginatedBase(threadId, selected);
+    base = await readPaginatedBase(threadId, selected);
   }
   // Validate the entire chain before publishing anything. Ancestors are published
   // oldest-first without replacement; interrupted attempts can reuse exact copies.
@@ -1451,7 +1550,7 @@ async function ensureCodexHistoryAncestors(threadId: string, rolloutPath: string
     publications.push(publication);
   }
   if (!privateRolloutPublicationOwnsPath(targetHome, { path: rolloutPath, created: false, snapshot: rootSnapshot })
-    || readFirstLineSync(rolloutPath) !== rootLine
+    || await readFirstLineAsync(rolloutPath) !== rootLine
     || publications.some(publication => !privateRolloutPublicationStillMatches(targetHome, publication))) {
     throw resumePreparationBlocked(threadId, 'paginated history changed before resume');
   }
@@ -4390,7 +4489,11 @@ function isCindyRolloutArtifactFileName(name: string): boolean {
     || name.startsWith('.cindy-state-less-recovery');
 }
 
-function collectRolloutFiles(home: string, includeCindyArtifacts = false): string[] {
+function collectRolloutFiles(
+  home: string,
+  includeCindyArtifacts = false,
+  includeCompressed = false,
+): string[] {
   const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
   const files: Array<{ file: string; mtime: number }> = [];
   const visit = (dir: string, depth: number) => {
@@ -4407,7 +4510,7 @@ function collectRolloutFiles(home: string, includeCindyArtifacts = false): strin
         visit(full, depth + 1);
       } else if (
         entry.isFile()
-        && entry.name.endsWith('.jsonl')
+        && (entry.name.endsWith('.jsonl') || (includeCompressed && entry.name.endsWith('.jsonl.zst')))
         && entry.name.includes('rollout-')
         && (includeCindyArtifacts || !isCindyRolloutArtifactFileName(entry.name))
       ) {
@@ -4544,6 +4647,29 @@ function readFirstLineSync(file: string): string | null {
 
 // readFirstLineSync 的异步版(扫描路径用):同样最多读 2MB 找首行。
 async function readFirstLineAsync(file: string): Promise<string | null> {
+  if (isZstdRollout(file)) {
+    const stream = createRolloutReadStream(file);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    try {
+      for await (const value of stream) {
+        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        const newline = chunk.indexOf(10);
+        if (newline >= 0) {
+          chunks.push(Buffer.from(chunk.subarray(0, newline)));
+          return Buffer.concat(chunks).toString('utf-8');
+        }
+        chunks.push(chunk);
+        total += chunk.length;
+        if (total >= 2 * 1024 * 1024) break;
+      }
+      return chunks.length > 0 ? Buffer.concat(chunks).toString('utf-8') : null;
+    } catch {
+      return null;
+    } finally {
+      stream.destroy();
+    }
+  }
   let fh: Awaited<ReturnType<typeof fsp.open>> | null = null;
   try {
     fh = await fsp.open(file, 'r');
