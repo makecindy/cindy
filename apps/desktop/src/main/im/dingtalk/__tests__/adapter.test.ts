@@ -154,6 +154,24 @@ describe('dingtalk teammate-owned connection', () => {
     expect(adapter.turnPermissionPolicyFor?.(event)?.forceConfirmToolCall('file_change', {})).toBe(true);
     expect(adapter.companionLane?.(event.senderId)).toEqual({ kind: 'guest-dm', userId: 'guest-1' });
   });
+
+  // A received guest DM inherits the teammate's permission mode. In Full access,
+  // attaching a mandatory turn policy rejects the message before model dispatch.
+  it('honors teammate Full access for guest DMs while retaining Auto and personal policies', () => {
+    const adapter = buildDingTalkAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    const personal = buildDingTalkAdapter(im, CONFIG);
+    const event = {
+      messageId: 'guest-full-access', senderId: 'guest-1',
+      speaker: { id: 'guest-1', name: 'Guest', isOwner: false },
+    } as IMMessageEvent;
+    const policy = adapter.turnPermissionPolicyFor?.(event);
+    expect(policy?.autoReviewContext?.requesterAuthority).toBe('guest');
+    expect(adapter.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).toBe(true);
+    for (const mode of ['auto', 'ask', 'acceptEdits'] as const) {
+      expect(adapter.turnPolicyOptionalForMode?.(mode, policy!)).toBe(false);
+    }
+    expect(personal.turnPolicyOptionalForMode?.('bypassPermissions', policy!)).not.toBe(true);
+  });
 });
 
 describe('dingtalk group window', () => {

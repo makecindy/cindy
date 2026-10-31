@@ -122,6 +122,10 @@ export function buildDingTalkAdapter(
       if (companion && event.speaker.isOwner) return undefined;
       return createDingTalkTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
     },
+    // Match Telegram / Feishu companions: the owner's Full access setting is the
+    // teammate's authority, including guest turns. Agent approval hooks cannot
+    // enforce a turn policy in that mode; Auto / Ask retain the member policy.
+    turnPolicyOptionalForMode: (mode) => companion && mode === 'bypassPermissions',
     // 群里发言人已由下面的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
     channelNoteSourceFor: (event) => decodeDingTalkLaneUserId(event.senderId)
       ? imChannelNoteSourceFromEvent(event, { omitSender: true })
