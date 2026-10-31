@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { markdownPreviewText } from '../../../shared/markdownPreviewText';
 
 vi.mock('../../../shared/markdownPreviewText', async (importOriginal) => {
@@ -26,6 +27,61 @@ describe('sidebar Markdown preview', () => {
     expect(sessionToCamel({ ...row, listPreview: '**Changed preview**' }).preview).toBe('Changed preview');
     expect(sessionToCamel({ ...row, listPreviewRole: 'user' }).preview).toBe(`Cache regression ${marker}`);
     expect(sessionToCamel(row).preview).toBe('Cache regression');
+  });
+
+  it('reuses previews larger than the cache key bound across task list refreshes', () => {
+    const text = `**Large preview** ${'repeated markdown [link](https://example.com) '.repeat(120)}`;
+    const before = vi.mocked(markdownPreviewText).mock.calls.length;
+    const first = finalizePlainPreview(text, 'assistant');
+    const second = finalizePlainPreview(text, 'assistant');
+    expect(second).toBe(first);
+    expect(vi.mocked(markdownPreviewText).mock.calls.length - before).toBe(1);
+  });
+
+  it('does not confuse a short preview with a long preview cache digest', () => {
+    const longText = `**Long cache entry** ${'details '.repeat(600)}`;
+    const shortText = `${longText.length}:${createHash('sha256').update(longText).digest('base64url')}`;
+    const longPreview = finalizePlainPreview(longText, 'assistant');
+
+    expect(finalizePlainPreview(shortText, 'assistant')).toBe(shortText);
+    expect(finalizePlainPreview(longText, 'assistant')).toBe(longPreview);
+  });
+
+  it('keeps recently used long previews and evicts old entries at the character budget', () => {
+    const makeText = (index: number) => `entry-${index}: ${'plain content '.repeat(4680)}`;
+    const parser = vi.mocked(markdownPreviewText);
+    const originalParser = parser.getMockImplementation()!;
+    parser.mockImplementation((text) => text.slice(0, 140));
+    try {
+      const before = parser.mock.calls.length;
+      const oldest = makeText(0);
+      const recent = makeText(1);
+      finalizePlainPreview(oldest, 'user');
+      finalizePlainPreview(recent, 'user');
+      finalizePlainPreview(oldest, 'user');
+      for (let index = 2; index < 64; index += 1) {
+        finalizePlainPreview(makeText(index), 'user');
+      }
+
+      const afterFill = parser.mock.calls.length;
+      finalizePlainPreview(oldest, 'user');
+      expect(parser.mock.calls.length).toBe(afterFill);
+      finalizePlainPreview(recent, 'user');
+      expect(parser.mock.calls.length).toBe(afterFill + 1);
+      expect(afterFill - before).toBe(64);
+    } finally {
+      parser.mockImplementation(originalParser);
+    }
+  });
+
+  it('does not cache preview input larger than the per-entry character limit', () => {
+    const text = 'unbounded preview boundary '.repeat(2500);
+    const before = vi.mocked(markdownPreviewText).mock.calls.length;
+    const first = finalizePlainPreview(text, 'user');
+    const second = finalizePlainPreview(text, 'user');
+
+    expect(second).toBe(first);
+    expect(vi.mocked(markdownPreviewText).mock.calls.length - before).toBe(2);
   });
 
   const markdown =
