@@ -6077,15 +6077,15 @@ function MarkdownBodyBase({
       const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
-          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
                 paddingBottom: layout.codePaddingVertical,
-                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
+                paddingTop: layout.codePaddingVertical,
               },
+              showCodeCopyButton && styles.markdownCodeContentWithCopy,
             ]}
           >
             <HighlightedCodeText
@@ -6097,6 +6097,7 @@ function MarkdownBodyBase({
               text={block.text}
             />
           </View>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
         </View>
       );
     }
@@ -9290,6 +9291,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   markdownCodeContent: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+  },
+  markdownCodeContentWithCopy: {
+    // Keep code beside the floating action and its hitSlop, including on one-line blocks.
+    paddingRight: spacing.sm + spacing.xxl + spacing.md,
+    minHeight: spacing.sm + spacing.xxl + spacing.sm,
   },
   markdownCodeText: {
     color: colors.textPrimary,
