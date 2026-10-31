@@ -162,6 +162,7 @@
     "mediaErrorLine": "エラー: {{message}}",
     "mediaDeviceLinkHint": "開く前に、スマートフォンからリモートデバイスにこのメディアのアップロードを依頼します。",
     "controlDelete": "メッセージを削除",
+    "controlEdit": "編集",
     "controlRewind": "ここまで戻る",
     "controlFork": "ここから新しいセッションを始める",
     "markdownDocAriaLabel": "メッセージ本文",

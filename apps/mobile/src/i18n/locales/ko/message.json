@@ -162,6 +162,7 @@
     "mediaErrorLine": "오류: {{message}}",
     "mediaDeviceLinkHint": "열기 전에 휴대폰이 원격 기기에 이 미디어 업로드를 요청합니다.",
     "controlDelete": "메시지 삭제",
+    "controlEdit": "편집",
     "controlRewind": "여기로 돌아가기",
     "controlFork": "여기서 새 세션 시작",
     "markdownDocAriaLabel": "메시지 본문",

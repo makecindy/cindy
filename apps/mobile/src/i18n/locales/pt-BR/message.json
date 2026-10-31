@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erro: {{message}}",
     "mediaDeviceLinkHint": "Antes de abrir, seu celular solicita ao dispositivo remoto o upload desta mídia.",
     "controlDelete": "Excluir mensagem",
+    "controlEdit": "Editar",
     "controlRewind": "Voltar até aqui",
     "controlFork": "Iniciar nova sessão daqui",
     "markdownDocAriaLabel": "Corpo da mensagem",

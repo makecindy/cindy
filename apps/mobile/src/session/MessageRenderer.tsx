@@ -69,6 +69,7 @@ import {
   MessageSquare,
   Monitor,
   RefreshCw,
+  Pencil,
   PencilLine,
   Share as ShareIcon,
   Send,
@@ -546,6 +547,11 @@ export interface MobileMessageDraft {
 
 export type MobileMessageActionBusyKind = 'fork' | 'rewind' | 'delete';
 
+/** 编辑最后一条用户消息:载入 composer 的正文 + 原消息附件(重发时原样带回)。 */
+export interface MobileMessageEditDraft extends MobileMessageDraft {
+  attachments: readonly NormalizedAttachment[];
+}
+
 /** Desktop BotAvatar `sm` beside teammate replies; exported so the host renders a matching portrait. */
 export const COMPANION_AVATAR_SIZE = 28;
 const COMPANION_AVATAR_GAP = 10;
@@ -623,6 +629,10 @@ interface MessageActions {
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
   onOpenSessionLink?: (url: string) => void;
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
+  /** 编辑最后一条用户消息(对齐桌面铅笔入口);未传时不显示。 */
+  onEditMessage?: (clientId: string, draft: MobileMessageEditDraft) => void;
+  /** 正在 composer 里编辑的消息:它的编辑按钮保持禁用。 */
+  editingMessageClientId?: string | null;
   onEnterShareSelection?: (clientId: string) => void;
   onShareableMessageViewChange?: (clientId: string, view: View | null) => void;
   shareSelectionActive?: boolean;
@@ -648,6 +658,8 @@ interface MessageActions {
   continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** 含自动续跑合成行、排除 steer 的最后一条用户输入。 */
   lastUserInputClientId?: string | null;
+  /** 已加载窗口里最后一条用户消息(含 steer):只有它挂编辑入口。 */
+  lastUserMessageClientId?: string | null;
 }
 
 export function MessageRenderer({
@@ -682,6 +694,8 @@ export function MessageRenderer({
   onOpenSourceDevice,
   onOpenSessionLink,
   onPreviewRewind,
+  onEditMessage,
+  editingMessageClientId,
   onEnterShareSelection,
   shareSelectionActive,
   shareSelectionBusy,
@@ -807,6 +821,10 @@ export function MessageRenderer({
   );
   const lastUserInputClientId = useMemo(
     () => findLastUserInputClientId(itemsForStructureRef.current),
+    [itemStructureIdentity],
+  );
+  const lastUserMessageClientId = useMemo(
+    () => findLastUserMessageClientId(itemsForStructureRef.current),
     [itemStructureIdentity],
   );
   const focusedItemKeyRef = useRef(focusedItemKey);
@@ -1752,6 +1770,8 @@ export function MessageRenderer({
     onOpenSourceDevice,
     onOpenSessionLink,
     onPreviewRewind,
+    onEditMessage,
+    editingMessageClientId,
     onEnterShareSelection,
     onShareableMessageViewChange: handleShareableMessageViewChange,
     onOpenPayload: openPayload,
@@ -1769,6 +1789,7 @@ export function MessageRenderer({
     busyAction,
     firstUserMessageClientId,
     lastUserInputClientId,
+    lastUserMessageClientId,
     makerTurnRunning,
     continuationTurnClientId,
     continuationInFlightProjectionCapability,
@@ -1793,6 +1814,7 @@ export function MessageRenderer({
     firstUserMessageClientId,
     isSessionStreaming,
     lastUserInputClientId,
+    lastUserMessageClientId,
     makerTurnRunning,
     onCopyMessageLink,
     onAddMessageToComposer,
@@ -1808,6 +1830,8 @@ export function MessageRenderer({
     onRetryImageDelivery,
     onOpenSessionLink,
     onPreviewRewind,
+    onEditMessage,
+    editingMessageClientId,
     onEnterShareSelection,
     handleShareableMessageViewChange,
     onResolveRemoteMedia,
@@ -3528,6 +3552,16 @@ function MessageBubble({
     && item.message.kind === 'user'
     && !isFirstUserMessage
   );
+  // 对齐桌面 edit-last-message:只在最后一条用户消息开放,首条同样可编辑;
+  // 运行中也显示(点了先停止当前回复)。
+  const canEdit = !!(
+    showCompletedActionBar
+    && clientId
+    && actions.onEditMessage
+    && item.message.kind === 'user'
+    && clientId === actions.lastUserMessageClientId
+  );
+  const editing = canEdit && clientId === actions.editingMessageClientId;
   // 对齐桌面:任务运行中也保留删除入口,点了由页面提示等回复结束,不让菜单项时有时无。
   const canDelete = !!(
     showCompletedActionBar
@@ -3611,13 +3645,14 @@ function MessageBubble({
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
+    canEdit,
     canFork,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
     // 金额与 token 回退占同一格,任一有值就保留该位置。
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
+  }), [canCopy, canEdit, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const threadEligible = !actions.intermediateProcess && actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
     && !!companionReplyQuoteFor(item.message);
   const hasActions = !actions.intermediateProcess && (actionBar.items.length > 0 || canShare || !!threadEligible);
@@ -3670,6 +3705,16 @@ function MessageBubble({
       });
       return;
     }
+    if (id === 'edit' && clientId) {
+      actions.onEditMessage?.(clientId, {
+        document: composerDraftDocument ?? composerDocumentFromSerializedMessage(draftBody),
+        text: draftText,
+        quotes: messageQuotes,
+        ...(item.message.quotesEncoded === true ? { orderedBody: draftBody } : {}),
+        attachments: item.message.attachments ?? [],
+      });
+      return;
+    }
     if (id === 'fork' && clientId) {
       actions.onForkMessage?.(
         clientId,
@@ -3694,6 +3739,7 @@ function MessageBubble({
     composerDraftDocument,
     copyMessage,
     draftBody,
+    item.message.attachments,
     item.message.kind,
     item.message.quotesEncoded,
     messageQuotes,
@@ -4121,7 +4167,7 @@ function MessageBubble({
                     buttonSize={actionBar.buttonSize}
                     busy={id === 'fork' && forkBusy}
                     copyState={copyState}
-                    disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying')}
+                    disabled={disabled || actionBusy || (id === 'copy' && copyState === 'copying') || (id === 'edit' && editing)}
                     id={id}
                     iconSize={actionBar.iconSize}
                     onPress={() => selectControlAction(id)}
@@ -8546,8 +8592,8 @@ function MessageShareButton({
   );
 }
 
-function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'fork' {
-  return id === 'copy' || id === 'fork';
+function isMessageControlActionId(id: MessageActionBarItemId): id is 'copy' | 'edit' | 'fork' {
+  return id === 'copy' || id === 'edit' || id === 'fork';
 }
 
 function messageControlActionLabel(
@@ -8556,6 +8602,7 @@ function messageControlActionLabel(
 ): string {
   if (id === 'copy') return copyActionLabel(copyState);
   if (id === 'delete') return i18n.t('message.renderer.controlDelete');
+  if (id === 'edit') return i18n.t('message.renderer.controlEdit');
   if (id === 'rewind') return i18n.t('message.renderer.controlRewind');
   return i18n.t('message.renderer.controlFork');
 }
@@ -8563,6 +8610,7 @@ function messageControlActionLabel(
 function messageControlActionTestID(id: MobileMessageControlActionId): string {
   if (id === 'copy') return 'message.copyButton';
   if (id === 'delete') return 'message.deleteButton';
+  if (id === 'edit') return 'message.editButton';
   if (id === 'rewind') return 'message.rewindButton';
   return 'message.forkButton';
 }
@@ -8585,6 +8633,7 @@ function messageControlActionIcon(
         : <Copy color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   }
   if (id === 'delete') return <Trash2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
+  if (id === 'edit') return <Pencil color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   if (id === 'rewind') return <Undo2 color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
   return <Split color={colors.textSecondary} size={iconSize} strokeWidth={iconStroke.regular} />;
 }
@@ -8643,6 +8692,27 @@ function findFirstUserMessageClientIdInItem(
     }
   }
   return undefined;
+}
+
+function findLastUserMessageClientId(items: readonly MobileMessageRenderItem[]): string | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const found = findLastUserMessageClientIdInItem(items[index]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLastUserMessageClientIdInItem(
+  item: MobileMessageRenderItem | MobileWorkChildItem,
+): string | null {
+  if (item.type === 'message' && item.message.role === 'user') return messageClientId(item);
+  if (item.type === 'work_group') {
+    for (let index = item.children.length - 1; index >= 0; index--) {
+      const found = findLastUserMessageClientIdInItem(item.children[index]);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 function findLastUserInputClientId(items: readonly MobileMessageRenderItem[]): string | null {

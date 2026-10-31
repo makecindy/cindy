@@ -162,6 +162,7 @@
     "mediaErrorLine": "錯誤：{{message}}",
     "mediaDeviceLinkHint": "開啟前，手機會先請遠端裝置上傳這個媒體。",
     "controlDelete": "刪除訊息",
+    "controlEdit": "編輯",
     "controlRewind": "回到此處",
     "controlFork": "從這裡開啟新任務",
     "markdownDocAriaLabel": "訊息正文",

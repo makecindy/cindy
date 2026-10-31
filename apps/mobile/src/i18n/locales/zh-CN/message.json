@@ -162,6 +162,7 @@
     "mediaErrorLine": "错误：{{message}}",
     "mediaDeviceLinkHint": "打开前，手机会先请远程设备上传这个媒体。",
     "controlDelete": "删除消息",
+    "controlEdit": "编辑",
     "controlRewind": "回到此处",
     "controlFork": "从这里开启新任务",
     "markdownDocAriaLabel": "消息正文",

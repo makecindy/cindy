@@ -775,5 +775,17 @@
     "confirm": "改之",
     "remember": "改之，此後自動改（僅此差事）",
     "cancel": "罷"
+  },
+  "messageEdit": {
+    "editing": "方修此訊",
+    "discard": "棄此訊之修改",
+    "stopTimeout": "候差事停止逾時，請稍後再試",
+    "queueNotEmpty": "差事有排隊之訊，請先遣出或移除，再修",
+    "notLast": "差事中已有更新之訊，此條非末條，不能修而重遣",
+    "failed": "修而重遣未成，請再試",
+    "noPriorAssistant": "此訊之前尚無 AI 之復，電腦端今版未能修之；請更新電腦端 Cindy 再試。",
+    "uploadsPending": "尚有附件上傳，待其畢，再修此訊。",
+    "rollbackHint": "遣之，將撤上一輪對 {{count}} 卷之改動",
+    "conversationOnlyHint": "遣之不復原案中之卷，上一輪之卷改動仍存"
   }
 }

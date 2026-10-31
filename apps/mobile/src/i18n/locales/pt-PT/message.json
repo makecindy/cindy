@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erro: {{message}}",
     "mediaDeviceLinkHint": "Antes de abrir, o telemóvel pede ao dispositivo remoto para carregar este conteúdo multimédia.",
     "controlDelete": "Eliminar mensagem",
+    "controlEdit": "Editar",
     "controlRewind": "Voltar até aqui",
     "controlFork": "Iniciar nova sessão a partir daqui",
     "markdownDocAriaLabel": "Corpo da mensagem",
