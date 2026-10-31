@@ -727,6 +727,12 @@ export function markCindyBuiltInAgentSkills(
   });
 }
 
+/** True only when Pi's live session snapshot says the exact command is loaded. */
+export function isPiRuntimeSkillAvailable(skill: AgentSkillCommand, name: string): boolean {
+  return skill.runtimeStatus === 'loaded'
+    && (skill.runtimeCommandName === `skill:${name}` || skill.runtimeCommandName === `cindy:${name}`);
+}
+
 /** Mark trusted Cindy entries, then apply the live activation override to those entries only. */
 export function activeCindyBuiltInAgentSkills(
   skills: readonly AgentSkillCommand[],

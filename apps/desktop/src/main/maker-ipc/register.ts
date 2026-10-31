@@ -591,6 +591,7 @@ import {
   botLifecycleEvents,
   botProfileVersions,
   botProfiles,
+  botRuntimeSnapshots,
   botSessionLinks,
   messages,
   orcaTeams,
@@ -624,6 +625,7 @@ import { prepareSharedProjectSkillLinks } from '../maker-host/shared-global-skil
 import {
   activeCindyBuiltInAgentSkills,
   builtInSkillDescriptors,
+  isPiRuntimeSkillAvailable,
 } from '../maker-host/built-in-skills.js';
 import { isCindySkillEnabled, readDisabledSkillPaths, skillActivationKey } from '../skillhub/activationPreferences.js';
 import {
@@ -631,6 +633,7 @@ import {
   canGrantUnqualifiedClaudeLearnInvocation,
   type CindyLearnInvocationGrant,
 } from '../learn-host/invocationGrant.js';
+import { botRuntimeSnapshotIncludesSkill } from '../learn-host/botRuntimePolicy.js';
 import { ensurePiManagerInstalled } from '../maker-host/pi-manager-client.js';
 import {
   setRemoteCodexLiveTurnChecker,
@@ -18530,6 +18533,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       prepareUserMessageForAgent(sessionId, message, 'send'),
     materializeDirectSendOssAttachments,
     captureCindyLearnInvocation: async (session, persistedContent, dispatchedText) => {
+      const botRuntimeAllowsLearn = async (resolvedPath: string, commandName: string): Promise<boolean> => {
+        try {
+          const db = getDbClient().drizzle;
+          const [botLink] = await db.select({ sessionId: botSessionLinks.sessionId })
+            .from(botSessionLinks)
+            .where(and(eq(botSessionLinks.sessionId, session.id), isNull(botSessionLinks.archivedAt)))
+            .limit(1);
+          if (!botLink) return true;
+          const [runtime] = await db.select({ resolvedJson: botRuntimeSnapshots.resolvedJson })
+            .from(botRuntimeSnapshots)
+            .where(and(
+              eq(botRuntimeSnapshots.sessionId, session.id),
+              inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
+            ))
+            .orderBy(desc(botRuntimeSnapshots.preparedAt))
+            .limit(1);
+          if (!runtime) return false;
+          const snapshot = JSON.parse(runtime.resolvedJson) as { skillResources?: unknown };
+          if (!Array.isArray(snapshot.skillResources)) return false;
+          for (const resource of snapshot.skillResources) {
+            if (!resource || typeof resource !== 'object') continue;
+            const item = resource as { name?: unknown; path?: unknown };
+            if (item.name !== commandName || typeof item.path !== 'string' || !item.path) continue;
+            try {
+              if (await fsp.realpath(item.path) === resolvedPath
+                && botRuntimeSnapshotIncludesSkill(runtime.resolvedJson, commandName, resolvedPath)) return true;
+            } catch {
+              // A missing or changed configured source is not an authorization.
+            }
+          }
+        } catch {
+          // An unreadable policy or runtime snapshot is not an authorization.
+        }
+        return false;
+      };
       const invocationText = visibleMessageTextForConversationSearch(
         'user',
         typeof persistedContent === 'string' ? persistedContent : JSON.stringify(persistedContent),
@@ -18574,6 +18612,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         descriptors,
         isCindySkillEnabled,
       ).filter((skill) => (skill.name.toLowerCase() === 'learn' || skill.runtimeCommandName === 'cindy:learn')
+        && (session.agentKind !== 'pi' || isPiRuntimeSkillAvailable(skill, 'learn'))
         && (!/^\/cindy:learn(?:\s|$)/i.test(dispatchedText.trim())
           || (skill.builtIn === true && skill.runtimeCommandName === 'cindy:learn')));
       if (
@@ -18581,7 +18620,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         || learnCandidates.some((skill) => skill.builtIn !== true || !skill.path)
       ) return null;
 
-      const resolvedSkillPath = await fsp.realpath(learnCandidates[0]!.path!);
+      const learnCandidate = learnCandidates[0]!;
+      const resolvedSkillPath = await fsp.realpath(learnCandidate.path!);
+      if (maker.getSession(session.id) !== session) return null;
+      if (
+        session.agentKind === 'pi'
+        && !await botRuntimeAllowsLearn(resolvedSkillPath, learnCandidate.runtimeCommandName ?? '')
+      ) return null;
       if (maker.getSession(session.id) !== session) return null;
       return {
         version: 1,
