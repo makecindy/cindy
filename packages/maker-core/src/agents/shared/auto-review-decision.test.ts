@@ -245,6 +245,24 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
+  // 诊断通道只能带 Cindy 自己的确定性原因。模型自由文本可能含参数、路径、片段，
+  // 不得原样进 UI / 日志，所以来源必须逐条标出来。
+  it('marks the reason source so only policy copy may enter diagnostics', async () => {
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+      async () => ({ verdict: 'allow' }),
+    )).resolves.toMatchObject({ verdict: 'block', policyReason: true });
+    // The model boundary never marks its reason as policy copy.
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.toMatchObject({ verdict: 'block', reason: 'model free text about the command' });
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => ({ verdict: 'block', reason: 'model free text about the command' }),
+    )).resolves.not.toHaveProperty('policyReason');
+  });
+
   it('counts exec cwd in the complete evidence size limit', async () => {
     let called = false;
     await expect(resolveAutoReviewDecision(
