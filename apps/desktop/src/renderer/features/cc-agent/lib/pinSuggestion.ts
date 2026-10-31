@@ -16,12 +16,11 @@ export const REOPEN_DEDUP_MS = 30 * 60 * 1000;
 export const MIN_PIN_SUGGESTION_SCORE = 4;
 const MAX_OPENS_PER_SESSION = 20;
 const MAX_TRACKED_SESSIONS = 200;
-const MAX_DISMISSED = 200;
 
 export interface SessionOpenHistory {
   /** sessionId → 打开时刻(unix ms,升序)。 */
   opens: Readonly<Record<string, readonly number[]>>;
-  /** 点过「不再提示」的 sessionId,先进先出限量。 */
+  /** 点过「不再提示」的 sessionId。永久保留(只随用户点击增长),承诺不再提示。 */
   dismissed: readonly string[];
 }
 
@@ -85,7 +84,7 @@ export function dismissPinSuggestion(
   if (history.dismissed.includes(sessionId)) return history;
   return {
     opens: history.opens,
-    dismissed: [...history.dismissed, sessionId].slice(-MAX_DISMISSED),
+    dismissed: [...history.dismissed, sessionId],
   };
 }
 

@@ -131,6 +131,15 @@ function hasLegacyUsageTrace(storage: Storage): boolean {
  * 首次调用时推断并固化;此后直接读固化值。localStorage 不可用时按 fresh 处理
  * (读不到痕迹也写不了标记,给新默认是更合理的兜底)。
  */
+/**
+ * 此刻本机是否已有使用过 Cindy 的痕迹(不读也不写固化结果)。供后来新增、同样要求
+ * 「老用户升级后不变」的默认值在自己首次读取时各自判定一次。
+ */
+export function hasSidebarUsageTrace(): boolean {
+  const storage = safeStorage();
+  return storage ? hasLegacyUsageTrace(storage) : false;
+}
+
 export function getSidebarInstallVintage(): SidebarInstallVintage {
   if (memoized !== null) return memoized;
   const storage = safeStorage();

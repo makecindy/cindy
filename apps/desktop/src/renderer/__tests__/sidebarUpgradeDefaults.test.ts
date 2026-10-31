@@ -18,9 +18,12 @@ import {
   loadGroupBy,
   loadGroupDevice,
   loadGroupDialogue,
+  loadGroupInProgress,
+  persistGroupInProgress,
   loadSortBy,
   loadTaskInfoFields,
   GROUP_DIALOGUE_KEY,
+  GROUP_IN_PROGRESS_KEY,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
 import {
   getSidebarInstallVintage,
@@ -104,6 +107,41 @@ describe('侧边栏升级兼容性:默认配置', () => {
   it('对话归组仍可显式关闭(默认翻转后 false 必须仍被尊重)', () => {
     localStorage.setItem(GROUP_DIALOGUE_KEY, 'false');
     expect(loadGroupDialogue()).toBe(false);
+  });
+});
+
+// 「进行中」段(2026-11 用户裁决):新装默认开、老用户升级后默认关,§3.0「尽量不变」。
+// 不复用 installVintage 的固化结果:侧栏重设计之后才装的用户对本功能同样是老用户。
+describe('「进行中」段:按首次读取时的使用痕迹分叉默认', () => {
+  beforeEach(() => {
+    installMemoryLocalStorage();
+    vintageTesting.resetMemo();
+  });
+  afterEach(() => {
+    uninstallLocalStorage();
+    vintageTesting.resetMemo();
+  });
+
+  it('新装默认开,之后留下使用痕迹也不翻转', () => {
+    expect(loadGroupInProgress()).toBe(true);
+    localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
+    expect(loadGroupInProgress()).toBe(true);
+  });
+
+  it('已有使用痕迹的老用户默认关,即使 installVintage 早已固化为 fresh', () => {
+    localStorage.setItem('cc-agent.sidebar.installVintage.v1', 'fresh');
+    localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
+    expect(loadGroupInProgress()).toBe(false);
+  });
+
+  it('只存与默认值不同的覆盖,切回默认即删除', () => {
+    localStorage.setItem('cc-agent.lastChatView.v1', '{"kind":"new"}');
+    persistGroupInProgress(true);
+    expect(localStorage.getItem(GROUP_IN_PROGRESS_KEY)).toBe('true');
+    expect(loadGroupInProgress()).toBe(true);
+    persistGroupInProgress(false);
+    expect(localStorage.getItem(GROUP_IN_PROGRESS_KEY)).toBeNull();
+    expect(loadGroupInProgress()).toBe(false);
   });
 });
 

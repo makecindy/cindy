@@ -109,7 +109,7 @@ describe('置顶提示', () => {
     expect(pickPinSuggestion(spread, [session('a', '2026-10-01T00:00:00Z')], now)?.id).toBe('a');
   });
 
-  it('挑得分最高者;已置顶、已归档、点过不再提示的跳过;7 天外的打开不计', () => {
+  it('挑得分最高者;已置顶、已归档、点过不再提示(永久)的跳过;7 天外的打开不计', () => {
     const times = (n: number, base: number) =>
       Array.from({ length: n }, (_, i) => base - (n - 1 - i) * (REOPEN_DEDUP_MS + hour));
     let history = EMPTY_SESSION_OPEN_HISTORY;
@@ -125,6 +125,12 @@ describe('置顶提示', () => {
     ];
     expect(pickPinSuggestion(history, candidates, now)?.id).toBe('high');
     expect(pickPinSuggestion(dismissPinSuggestion(history, 'high'), candidates, now)?.id).toBe('low');
+    // 「不再提示」永久有效:之后再关掉多少个别的任务,也不会把它挤出去。
+    const manyDismissed = Array.from({ length: 250 }, (_, i) => `other-${i}`).reduce(
+      dismissPinSuggestion,
+      dismissPinSuggestion(history, 'high'),
+    );
+    expect(pickPinSuggestion(manyDismissed, candidates, now)?.id).toBe('low');
     expect(pickPinSuggestion(history, candidates, now + PIN_SUGGESTION_WINDOW_MS)).toBeNull();
 
     // 7 天后再打开别的任务时,过期记录被裁掉,存储不会只增不减。

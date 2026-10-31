@@ -14163,7 +14163,7 @@
       "inProgress": "方行",
       "inProgressToggleExpand": "展方行",
       "inProgressToggleCollapse": "收方行",
-      "pinSuggestion": "「{{title}}」屢啟",
+      "pinSuggestion": "屢啟：{{title}}",
       "pinSuggestionDismiss": "勿復示",
       "pinnedShowMore": "餘者",
       "viewStyle": "易顯示之式",

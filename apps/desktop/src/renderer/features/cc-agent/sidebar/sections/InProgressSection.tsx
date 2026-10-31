@@ -7,7 +7,8 @@
  *
  * 段头与置顶段同款:文字标题 + hover 浮现的折叠箭头,折叠态按本机记住。
  * 列表复用 SessionEntryList,跟随主列表的显示形态(文字 / 列表),行尾带项目来源
- * 标签;不做「最多 N 条」折叠——进行中的任务都需要看得见。
+ * 标签;不做「最多 N 条」折叠,也不把同一定时任务的多次运行收成组头——进行中的
+ * 任务都需要直接看得见。
  *
  * 受控组件——sessions 为空时返回 null(不渲染段)。
  */
@@ -36,6 +37,9 @@ import {
   persistInProgressSectionCollapsed,
 } from '../../hooks/helpers/sidebarFilterCore';
 
+/** 空索引 = 不做定时任务分组,每次运行各占一行。 */
+const NO_AUTOMATION_GROUPING: SessionEntryListProps['scheduleSessionIndex'] = new Map();
+
 const HEADER_HOVER_ACTION_CLASS = cn(
   'pointer-events-none opacity-0 transition-opacity duration-150',
   'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
@@ -45,7 +49,7 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 export interface InProgressSectionProps
   extends Omit<
     SessionEntryListProps,
-    'sessions' | 'sourceLabelMap' | 'sessionVariant' | 'sectionCollapsed'
+    'sessions' | 'sourceLabelMap' | 'sessionVariant' | 'sectionCollapsed' | 'scheduleSessionIndex'
   > {
   sessions: readonly Session[];
   /** 已知项目全集,用于行尾的项目来源标签。 */
@@ -139,6 +143,7 @@ export function InProgressSection({
           <SessionEntryList
             {...listProps}
             sessions={sessions}
+            scheduleSessionIndex={NO_AUTOMATION_GROUPING}
             sourceLabelMap={sourceLabelMap}
             sectionCollapsed={collapsed}
             sessionVariant={mainViewMode === 'list' ? 'list' : 'text'}
