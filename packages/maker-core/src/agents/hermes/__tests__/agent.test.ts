@@ -32,7 +32,7 @@ const noopLogger: Logger = {
 };
 
 type FakeHelloMode = 'ok' | 'version-error' | 'version-mismatch';
-type FakeTurnMode = 'happy' | 'abort' | 'manual';
+type FakeTurnMode = 'happy' | 'abort' | 'abort-result' | 'manual';
 
 interface FakeDaemonOptions {
   hello?: FakeHelloMode;
@@ -187,7 +187,7 @@ async function startFakeDaemon(
               is_error: false,
             },
           });
-          if (turnMode === 'abort') return;
+          if (turnMode === 'abort' || turnMode === 'abort-result') return;
           notify('query/event', {
             sessionId,
             seq: ++seq,
@@ -205,6 +205,22 @@ async function startFakeDaemon(
           return;
         case 'query/interrupt':
           respond(message.id!, {});
+          if (turnMode === 'abort-result') {
+            // The real CLI answers SIGINT with a failing terminal result
+            // (exit code 130 = 128 + SIGINT) on stdout before it dies; the
+            // daemon's killed close follows it (observed live 2026-10-31).
+            notify('query/event', {
+              sessionId,
+              seq: ++seq,
+              ts: new Date().toISOString(),
+              event: {
+                type: 'result',
+                session_id: 'hermes-session-1',
+                exit_code: 130,
+                text: '',
+              },
+            });
+          }
           notify('session/closed', { sessionId, reason: 'killed' });
           return;
         case 'query/close':
@@ -606,6 +622,54 @@ describe('HermesAgent', () => {
       await handle.send({ type: 'user', content: 'carry on' });
       expect(daemon.sendTexts).toEqual(['start a long task', 'carry on']);
       expect(daemon.methods.filter((method) => method === 'query/send')).toHaveLength(2);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('settles a user-stopped turn whose result reports failure as cancelled, not failed', async () => {
+    // Real Hermes answers SIGINT with an exit-code-130 result before the
+    // killed close (observed live 2026-10-31, ROADMAP 1.10b). Without the
+    // abort-intent record that result surfaced a "Hermes exited with code
+    // 130" error banner and counted as a provider-group failure for a plain
+    // Stop.
+    const daemon = await startDaemon({ turn: 'abort-result' });
+    const handle = await start(buildAgent());
+    const pump = createEventPump(handle);
+    try {
+      await handle.send({ type: 'user', content: 'write a detailed 2000-word essay' });
+      await handle.abort();
+      const events = await pump.until((event) => event.type === 'done');
+
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+      expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+        status: 'cancelled',
+      });
+      expect(daemon.methods).toContain('query/interrupt');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('still surfaces a genuine failing result when the user did not stop the turn', async () => {
+    const daemon = await startDaemon({ turn: 'manual' });
+    const handle = await start(buildAgent());
+    const pump = createEventPump(handle);
+    try {
+      await handle.send({ type: 'user', content: 'doomed task' });
+      daemon.emit({
+        type: 'result',
+        session_id: 'hermes-session-1',
+        exit_code: 1,
+        text: '',
+        error: 'simulated hermes crash',
+      });
+      const events = await pump.until((event) => event.type === 'done');
+
+      expect(events.some((event) => event.type === 'error')).toBe(true);
+      expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+        status: 'failed',
+      });
     } finally {
       await handle.close();
     }

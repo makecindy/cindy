@@ -339,6 +339,13 @@ export class HermesAgent extends BaseAgent {
     let sendEpoch = 0;
     let activeEpoch: number | null = null;
     let awaitingCloseEpoch: number | null = null;
+    // The epoch of the turn the user asked to stop (handle.abort). Real Hermes
+    // answers SIGINT with a failing terminal `result` (exit code 130 = 128 +
+    // SIGINT) before the daemon's killed close arrives, so the result handler
+    // needs this to settle that turn as a user cancellation instead of a
+    // provider failure: a Stop must not raise an error banner or count as a
+    // provider-group failure (ROADMAP 1.10b, observed live 2026-10-31).
+    let userAbortEpoch: number | null = null;
     // Session/closed is per-turn; only losing the daemon connection or the
     // handle's own close ends the logical session.
     let connectionLost = false;
@@ -471,6 +478,8 @@ export class HermesAgent extends BaseAgent {
           // The daemon emits exactly one session/closed per run after `result`;
           // remember that close so it cannot settle a later turn.
           if (settledEpoch !== null) awaitingCloseEpoch = settledEpoch;
+          const userAborted = settledEpoch !== null && userAbortEpoch === settledEpoch;
+          if (userAborted) userAbortEpoch = null;
           const tokens: NormalizedHermesTokens = normalized.tokens;
           if (normalized.hermesSessionId && normalized.hermesSessionId !== hermesSessionId) {
             // Fallback for a lost session-bound lifecycle event: the result event
@@ -485,7 +494,12 @@ export class HermesAgent extends BaseAgent {
           usage.tokenUsage += tokens.input + tokens.output;
           usage.contextTokens = tokens.input + tokens.cacheRead + tokens.cacheWrite;
           const succeeded = normalized.exitCode === 0;
-          if (!succeeded) {
+          // A turn the user stopped reports a failing result (SIGINT → exit
+          // code 130); that is the cancellation itself, not a provider fault.
+          // Surfacing it as an error would show a banner over a deliberate
+          // Stop and feed the desktop's turn-failure machinery (auto-resume,
+          // provider-group failure decisions) on a healthy provider.
+          if (!succeeded && !userAborted) {
             queue.push({
               type: 'error',
               data: {
@@ -507,8 +521,8 @@ export class HermesAgent extends BaseAgent {
             data: {
               type: 'hermes/turn-complete',
               result: succeeded ? normalized.text : '',
-              status: succeeded ? 'completed' : 'failed',
-              ...(normalized.error ? { error: normalized.error } : {}),
+              status: succeeded ? 'completed' : userAborted ? 'cancelled' : 'failed',
+              ...(normalized.error && !userAborted ? { error: normalized.error } : {}),
               usage: {
                 inputTokens: tokens.input,
                 outputTokens: tokens.output,
@@ -540,6 +554,9 @@ export class HermesAgent extends BaseAgent {
       if (activeEpoch === null) return;
       const settledEpoch = activeEpoch;
       activeEpoch = null;
+      // Whatever the reason, this turn is settling here; a recorded user-stop
+      // intent belongs to it and must not leak into a later epoch.
+      userAbortEpoch = null;
       logger.debug('hermes session closed during a turn', {
         reason: notification.reason,
         epoch: settledEpoch,
@@ -664,6 +681,10 @@ export class HermesAgent extends BaseAgent {
       },
       async abort(): Promise<void> {
         if (closedByUser || transport.isClosed()) return;
+        // Mark the intent before the RPC: the failing terminal result of a
+        // SIGINTed run can arrive while the interrupt request is still in
+        // flight, and it must already settle as cancelled, not failed.
+        if (activeEpoch !== null) userAbortEpoch = activeEpoch;
         try {
           await transport.request(HERMES_METHODS.QUERY_INTERRUPT, { sessionId });
         } catch (error) {
