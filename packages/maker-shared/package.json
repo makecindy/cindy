@@ -23,6 +23,7 @@
     "./client-endpoints": "./src/clientEndpoints.ts",
     "./cindy-make-feature": "./src/cindyMakeFeature.ts",
     "./companion-import": "./src/companionImport.ts",
+    "./import-source-marks": "./src/importSourceMarks.ts",
     "./composer-palette": "./src/composerPalette.ts",
     "./conversation-search": "./src/conversationSearch.ts",
     "./device-list": "./src/deviceList.ts",

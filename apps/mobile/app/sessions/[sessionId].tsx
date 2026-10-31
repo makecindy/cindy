@@ -13,7 +13,7 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
-import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
@@ -1211,6 +1211,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
   const recommendationSession = currentSession;
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
+  // A terminal event carries the persisted identity; never guess from matching history text.
+  const activeErrorClientId = inputProjection.error
+    && remoteSessionRunStatus.terminalError?.message === inputProjection.error
+    ? remoteSessionRunStatus.terminalError.clientId : null;
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
   const [composerDraftStateKey, setComposerDraftStateKey] = useState(activeComposerDraftScopeKey);
@@ -4922,10 +4926,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates,
           pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
         },
-        forkOrigin, errorTailClientId, previousRenderState: previousRenderItemsRef.current,
+        forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
-    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
@@ -4934,7 +4938,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   [renderWindow.items, optimisticClientIds]);
   const renderItemsStructureKey = useMemo(
     () => ({}),
-    [optimisticUsers, historyView.snapshot, errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+    [optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
@@ -6187,8 +6191,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ],
   );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(companionChat ? companionConversationItems(renderWindow.items) : renderWindow.items, pendingSendItems, optimisticClientIds),
-    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds],
+    () => mergePendingSendItems(companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items, pendingSendItems, optimisticClientIds),
+    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds, isMessageListStreaming],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;
@@ -10491,6 +10495,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <MessageRenderer companion={companionChat} companionQuote={companionQuoteOptions}
                     companionThreads={companionThreads} conversationHeader={companionThreadRoot}
                     onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
+                    companionAttentionLabel={activePendingKind ? companionWorkGroupLabel ?? undefined : undefined}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
@@ -10925,7 +10930,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}
-              {companionChat && companionWorkingLabel && !companionInlineInteraction
+              {companionChat && companionWorkingLabel && !messageListItems.some(item => item.type === 'work_group' && item.teammateJournal && item.isStreaming) && !companionInlineInteraction
                 && !(syncingWhileEmpty && !hasRenderedMessages) ? (
                 <View
                   style={[

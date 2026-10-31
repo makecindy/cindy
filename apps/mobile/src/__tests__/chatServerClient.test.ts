@@ -5,7 +5,7 @@ import { botGroupNewMessageCount } from '@cindy/maker-shared/botGroupPresentatio
 import { createChatHistory, type ChatHistoryState } from '@cindy/maker-shared/chat-history';
 import { chatGroupView, chatRoomRow, chatReadAt, createChatServerClient, type ChatMessage, type ChatPage, type ChatRoom, type ChatSnapshot } from '@/chat/chatServerClient';
 import type { ChatHistory } from '@cindy/maker-shared/chat-history';
-import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard } from '@cindy/maker-shared/botGroupChat';
+import { botGroupQuoteFromMessage, resolveBotGroupQuote, buildBotGroupQuoteCard, buildBotGroupTaskCard, botGroupProcessCard } from '@cindy/maker-shared/botGroupChat';
 import { orderedBotGroups } from '@/session/botGroupRemote';
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const room = (n = 1, state = 'joined'): ChatRoom => ({ id: id(n), name: 'Discussion', kind: 'group', state, archived: false,
@@ -415,6 +415,30 @@ describe('direct Chat Server client', () => {
     });
     expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
   });
+  // Unit: broadcasts must override an implicit quoted companion and retain their wire audience.
+  it.each([true, false])('keeps human broadcasts directed with server capability=%s', async supported => {
+    const original = { ...message(20), authorId: id(12), author: { kind: 'bot', name: 'Companion' } };
+    const member = { ...snapshot().members[0], id: id(12), kind: 'bot', state: 'joined' };
+    const request = vi.fn(async (path: string, method?: string) => {
+      if (path === '/me') return { actor: { id: id(11), kind: 'human' }, capabilities: supported ? { groupMentionAudiences: 1 } : {} };
+      if (method === 'POST') return { id: id(21) };
+      return path.endsWith('/members') ? [member] : original;
+    });
+    const client = createChatServerClient(request as any);
+    const input = { clientId: 'broadcast', text: '@Everyone', mentions: { all: true, botIds: [] }, quote: { messageId: id(20) } };
+    await client.send(id(1), input);
+    const posted = request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>];
+    expect(posted[2].mentions).toEqual(supported ? [] : [id(11)]);
+    expect(posted[2].mentionAudience).toBe(supported ? 'humans' : undefined);
+    const bots = { ...input, clientId: 'bots', mentions: { all: false, allBots: true, botIds: [] } };
+    if (supported) {
+      await client.send(id(1), bots);
+      expect((request.mock.calls.at(-1) as unknown as [string, string, Record<string, unknown>])[2]).toMatchObject({ mentionAudience: 'bots', mentions: [] });
+    } else {
+      await expect(client.send(id(1), bots)).rejects.toThrow('ALL_BOTS_MENTION_DISABLED');
+      expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    }
+  });
   // Product rule: quoting a present companion addresses that companion; a deleted
   // original must not send a stale quote or silently lose the user's reply.
   it('sends a fresh quote with the companion recipient and rejects a deleted original', async () => {
@@ -580,6 +604,21 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
   expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+});
+
+// Unit: group and thread projections retain the optional process locator while
+// old messages, human-authored cards and deleted replies keep their prior behavior.
+it('keeps process metadata out of the reply and preview, and exposes it only for a bot', () => {
+  const ref = { groupId: id(1), executionId: id(40), sessionId: 'lane', clientId: 'source' };
+  const reply = { ...message(20), author: { kind: 'bot' as const, name: 'Cindy' },
+    threadRootId: id(15), content: [{ type: 'text', text: 'Result' }, botGroupProcessCard(ref)] };
+  const page = { snapshot: snapshot(), messages: [reply], before: null } as ChatPage;
+  const [view] = chatGroupView(page, id(11)).messages;
+  expect(view).toMatchObject({ content: 'Result', process: ref, threadRootId: id(15) });
+  expect(chatRoomRow(room(), { ...snapshot(), messages: [reply] }, id(11)).item.display.preview).toBe('Result');
+  for (const changed of [{ ...reply, author: { kind: 'human' as const, name: 'Other' } }, { ...reply, deleted: true }]) {
+    expect(chatGroupView({ ...page, messages: [changed] }, id(11)).messages[0]?.process).toBeUndefined();
+  }
 });
 
 // Unit: invitation contract (bot-group-chat §10). Existing client tests covered joined rooms only.

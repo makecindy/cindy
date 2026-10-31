@@ -16,7 +16,7 @@ describe('documented supplier interfaces', () => {
     for (const agent of provider.agents) {
       expect(provider.models[agent]?.[0]).toMatchObject({
         contextWindow: 512000, maxOutput: 65536, supportsImageInput: true,
-        selectedInterface: { api: agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
+        selectedInterface: { api: agent === 'pi' ? 'openai-completions' : agent === 'codex' ? 'openai-responses' : 'anthropic-messages' },
       });
     }
     for (const contextWindow of [undefined, 510000]) {
@@ -26,6 +26,20 @@ describe('documented supplier interfaces', () => {
       } } }, { modelRegistry: catalog.modelRegistry });
       expect(saved.models.pi?.[0]).toMatchObject({ contextWindow: contextWindow ?? 512000, defaultEnabled: false });
       expect(saved.routing.pi?.upstream).toBe('https://apihub.agnes-ai.com/v1');
+    }
+    // Pi auto follows the Chat default even on an old Messages connection;
+    // explicit V6 selections and legacy per-model API choices remain intact.
+    for (const [selection, api] of [
+      [{ interfaceId: 'auto' }, 'openai-completions'],
+      [{ interfaceId: 'agnes-anthropic-messages' }, 'anthropic-messages'],
+      [{ interfaceId: 'agnes-openai-responses' }, 'openai-responses'],
+      [{ piApi: 'anthropic-messages' }, 'anthropic-messages'],
+    ] as const) {
+      const saved = buildUserProvider({ id: 'saved-agnes', name: 'Agnes', runtimes: { pi: {
+        catalogPresetId: 'agnes', baseUrl: 'https://apihub.agnes-ai.com', wireProtocol: 'anthropic-messages',
+        models: [{ id: 'agnes-3.0-flash', name: 'Agnes', ...selection }],
+      } } }, { presets: catalog.presets, modelRegistry: catalog.modelRegistry });
+      expect(saved.models.pi?.[0]).toMatchObject({ api, selectedInterface: { api }, userModelConfig: selection });
     }
   });
   // r4365890304 (unit): import saved Model Studio connections through the

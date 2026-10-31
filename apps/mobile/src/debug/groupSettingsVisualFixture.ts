@@ -10,6 +10,7 @@ const person = (id: string, name: string, role: string, isSelf = false) => ({ bo
 const teammate = (id: string, name: string, owned: boolean, avatar: string) => ({ botId: id, actorId: id, actorKind: 'bot', name, avatar, isOwned: owned, role: 'member', status: 'active', guestAccess: 'chat' });
 let group = {
   id: 'settings-qa', name: 'Cindy 讨论', topic: 'Cindy 产品与群聊体验', serverBacked: true, supportsSettingsManagement: true,
+  supportsMentionAudiences: true, allowMentionAllBots: true,
   supportsMemberRemoval: true, supportsListRemoval: true, supportsGroupLeave: true, supportsDissolve: true, selfActorId: 'qa-me', revision: 3,
   description: '讨论 Cindy 的产品方向、群聊体验和伙伴协作。\n提问时 @ 对应的伙伴；要写代码的事交给负责人安排分工，会在项目文件夹里新开分支。',
   replyMode: 'mentioned', speakingMode: 'auto', organizerBotId: 'qa-cindy', projectDir: null, projectDirName: 'cindy', archived: false,

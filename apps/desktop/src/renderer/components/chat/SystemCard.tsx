@@ -1,4 +1,6 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
+import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
+import { isImportSourceId } from '../../../shared/sessionImport';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -85,7 +87,8 @@ interface SystemCardProps {
     | 'bot-session-task-result'
     | 'bot-direct-message'
     | 'bot-authorization'
-    | 'context-rebuild';
+    | 'context-rebuild'
+    | 'session-import';
   data?: Record<string, unknown>;
   /**
    * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
@@ -1310,6 +1313,48 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+const IMPORT_HARNESS_LABEL: Record<string, string> = { cc: 'Claude Code', codex: 'Codex', pi: 'Pi' };
+
+/** 任务导入的时间线标记：开头说明来源与原文件夹，结尾一条分隔说明之后由谁接着做。 */
+function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  const source = typeof data?.source === 'string' && isImportSourceId(data.source) ? data.source : null;
+  const sourceLabel = source ? IMPORT_SOURCE_NAMES[source] : typeof data?.sourceLabel === 'string' ? data.sourceLabel : '';
+  if (data?.phase === 'end') {
+    const harness = typeof data.harness === 'string' ? IMPORT_HARNESS_LABEL[data.harness] : undefined;
+    const label = data.mode === 'handoff' && harness
+      ? t('settings.sessionImport.marker.endHandoff', { source: sourceLabel, harness })
+      : t('settings.sessionImport.marker.end', { source: sourceLabel });
+    return (
+      <div className="flex w-full select-none items-center gap-3 py-2 text-12 leading-[1.33] text-[var(--text-tertiary)]" role="separator" aria-label={label}>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+        <span className="max-w-[78%] text-center">{label}</span>
+        <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      </div>
+    );
+  }
+  const importedAt = typeof data?.importedAt === 'number' ? data.importedAt : 0;
+  const date = importedAt > 0
+    ? new Intl.DateTimeFormat(i18n.language, { month: 'short', day: 'numeric' }).format(new Date(importedAt))
+    : '';
+  const folder = typeof data?.originalCwd === 'string' && data.originalCwd ? data.originalCwd : null;
+  return (
+    <div className="flex w-full select-none flex-col items-center gap-1 py-2 text-center">
+      <span className="inline-flex items-center gap-2 text-13 font-medium leading-[1.38] text-[var(--text-secondary)]">
+        {source && <ImportSourceMark source={source} size={16} />}
+        {date
+          ? t('settings.sessionImport.marker.from', { source: sourceLabel, date })
+          : sourceLabel}
+      </span>
+      {folder && (
+        <span className="max-w-full truncate text-12 leading-[1.33] text-[var(--text-tertiary)] select-text" title={folder}>
+          {t('settings.sessionImport.marker.folder', { path: folder })}
+        </span>
+      )}
+    </div>
+  );
+}
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1471,6 +1516,8 @@ export function SystemCard({
       return <AgentSwitchCard data={data} sessionId={sessionId} />;
     case 'context-rebuild':
       return <ContextRebuildCard data={data} />;
+    case 'session-import':
+      return <SessionImportCard data={data} />;
     case 'learn':
       return <LearnStatusCard data={data} contextSessionId={sessionId} />;
     case 'review':

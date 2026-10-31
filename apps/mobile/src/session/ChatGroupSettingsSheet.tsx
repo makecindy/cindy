@@ -35,7 +35,7 @@ import { CompanionSheet } from './CompanionSheet';
 import { FileBrowserSegmentedControl } from './FileBrowserSegmentedControl';
 import { GroupMaskAvatar } from './GroupMaskControls';
 import { pickGroupAvatar } from './groupAvatarPicker';
-import { ActionInfoRow, SettingsGroup } from './SettingsGroupRows';
+import { ActionInfoRow, SettingsGroup, SettingsSwitchRow } from './SettingsGroupRows';
 import { useHostTeammates } from './useHostTeammates';
 import { useCloudGroupCandidates, type GroupSettingsActionId, type useBotGroupSettingsManagement } from './useBotGroupSettingsManagement';
 import type { GroupPersonalMask } from './useGroupPersonalMask';
@@ -436,6 +436,11 @@ function ManagePage({ k, group, owner, writable, online, busy, direct, identityO
         { id: 'mentioned', title: t('groupChat.settings.replyModeMentioned') }, { id: 'all', title: t('groupChat.settings.replyModeAll') },
       ], 'replyMode', 'botGroup.settings.replyMode')}
     </SettingsGroup>
+    {group.supportsMentionAudiences && owner ? <SettingsGroup footer={t('groupChat.settings.allowMentionAllBotsHint')}>
+      <SettingsSwitchRow label={t('groupChat.settings.allowMentionAllBots')} value={group.allowMentionAllBots === true}
+        disabled={!writable || busy} switchTestID="botGroup.settings.allowMentionAllBots"
+        onValueChange={allowMentionAllBots => { void settings('update', { allowMentionAllBots }); }} />
+    </SettingsGroup> : null}
     {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
     {group.singleSpeaker ? null : <SettingsGroup footer={t(group.speakingMode === 'sequential' ? 'groupChat.settings.speakingModeSequentialNote' : 'groupChat.settings.speakingModeAutoNote')}>
       {choice(t('groupChat.settings.speakingMode'), group.speakingMode, [

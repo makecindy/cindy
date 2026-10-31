@@ -420,6 +420,7 @@
     "sent": "已提交",
     "sendFailed": "消息未提交，已保留填写内容",
     "playVideo": "播放视频",
+    "downloadVideo": "下载视频",
     "openVideoSource": "打开原视频",
     "calculationUnavailable": "此项暂时无法计算。",
     "incomplete": "部分内容未能显示。"

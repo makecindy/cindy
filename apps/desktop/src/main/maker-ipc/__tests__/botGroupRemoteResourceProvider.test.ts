@@ -153,8 +153,8 @@ describe('bot group remote resources', () => {
   it('passes the edited revision to the server and adds just one visible companion', async () => {
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
-      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5 } });
-    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5 });
+      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false } });
+    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'abu', expectedRevision: 5 } });
     expect(service.setMembers).toHaveBeenCalledWith({ groupId: 'g1', botIds: ['abu'], addOnly: true });
@@ -271,6 +271,8 @@ describe('bot group remote resources', () => {
     expect(preview).toEqual({ fallback: 'Taylor joined the group', translations: {
       'zh-CN': 'Taylor加入了群聊', 'zh-TW': 'Taylor加入了群聊',
       ja: 'Taylorさんがグループに参加しました', ko: 'Taylor 님이 그룹에 참여했습니다',
+      es: 'Taylor se unió al grupo', fr: 'Taylor a rejoint le groupe', de: 'Taylor ist der Gruppe beigetreten',
+      'pt-PT': 'Taylor juntou-se ao grupo', 'pt-BR': 'Taylor se juntou ao grupo',
     } });
   });
 

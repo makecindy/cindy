@@ -112,6 +112,27 @@ describe('MessageActionBar', () => {
     });
   });
 
+  it('keeps companion quote and copy visible and opens a topic from More with a persistent focus target', async () => {
+    const onAddToChat = vi.fn();
+    let opener: Element | null = null;
+    const openTopic = vi.fn(() => { opener = document.activeElement; });
+    render(<MessageActionBar copyText="private reply" align="left" hovered={false}
+      simplifiedBotConversation companionFooter onAddToChat={onAddToChat}
+      replyAction={{ label: 'Open topic', count: 3, onClick: openTopic }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.reply' }));
+    expect(onAddToChat).toHaveBeenCalledOnce();
+    expect(openTopic).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('private reply'));
+    expect(screen.queryByRole('button', { name: 'Open topic' })).toBeNull();
+    const more = screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' });
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open topic' }));
+    await waitFor(() => expect(openTopic).toHaveBeenCalledOnce());
+    expect(opener).toBe(more);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('keeps fork beside copy and groups the remaining actions under ellipsis', async () => {
     const onFork = vi.fn(async () => undefined);
     const onAddToChat = vi.fn();

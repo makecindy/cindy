@@ -33,8 +33,10 @@
   },
   "mention": {
     "all": "全員",
-    "allHint": "全員が返信",
-    "label": "仲間をメンション"
+    "allHint": "人のみ",
+    "label": "仲間をメンション",
+    "allBots": "すべての仲間",
+    "allBotsHint": "仲間のみ"
   },
   "composer": {
     "label": "グループチャットのメッセージ",
@@ -228,7 +230,7 @@
     "speakingMode": "発言の順番",
     "speakingModeAuto": "自動",
     "speakingModeSequential": "常に順番に",
-    "speakingModeAutoNote": "メンションなし・@全員：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
+    "speakingModeAutoNote": "メンションなし・@すべての仲間：最初の一巡は同時に考え、その後は順番に発言。特定の仲間へのメンションは指定順です。",
     "speakingModeSequentialNote": "一度に一人の仲間だけが話し、後の仲間は前の返信を見てから答えます。",
     "speakingModeSaveFailed": "発言の順番を保存できませんでした。もう一度お試しください。",
     "setOrganizer": "まとめ役にする",
@@ -254,7 +256,9 @@
     "cloudStatus": {
       "loading": "設定を読み込み中…",
       "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
-    }
+    },
+    "allowMentionAllBots": "すべての仲間への @ を許可",
+    "allowMentionAllBotsHint": "変更できるのはグループ所有者のみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
   "errors": {
     "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
@@ -278,7 +282,8 @@
     "quoteUnavailable": "引用したメッセージは削除されたか、表示できなくなりました。引用を外したので、もう一度送信してください。",
     "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
-    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
+    "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
+    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。"
   },
   "followUp": {
     "next": "分担 · 次のステップ",

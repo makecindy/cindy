@@ -54,6 +54,23 @@ function at(seconds: number): string {
 }
 
 describe('message render shared model', () => {
+  // Unit regression: a generated video appeared both as a tool artifact and a
+  // cindy-ui video. Existing URL dedupe covered only tools within one segment.
+  it('keeps rich-answer media once per turn without losing other artifacts or tool history', () => {
+    const url = 'cindy-media://blobs/video.mp4';
+    const body = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'v', kind: 'video', props: { src: url } }) + '\n```';
+    const tool = message({ kind: 'tool', source: source('video', {}, 1), media: [{ kind: 'video', url }, { kind: 'image', url: 'other.png' }] });
+    const answer = message({ kind: 'assistant', source: source('answer', body, 2), body, turnCompleted: true });
+    const artifacts = (rows: FixtureMessage[]) => buildMessageRenderItems(rows).flatMap(item => item.type === 'tool_media' ? item.tools.flatMap(t => t.media ?? []) : []);
+    expect(artifacts([tool, answer]).map(m => m.url)).toEqual(['other.png']);
+    expect(tool.media).toHaveLength(2);
+    expect(artifacts([tool, { ...answer, isStreaming: true }])).toHaveLength(2);
+    expect(artifacts([tool, message({ kind: 'user', source: { ...source('next', 'again', 2), role: 'user' } }), answer])).toHaveLength(2);
+    expect(artifacts([tool, { ...answer, body: '````markdown\n' + body + '\n````' }])).toHaveLength(2);
+    const removed = body.replace('\n```', '\n' + JSON.stringify({ seq: 2, op: 'remove', id: 'v' }) + '\n```');
+    expect(artifacts([tool, { ...answer, body: removed }])).toHaveLength(2);
+  });
+
   it('keeps sealed work folded while subsequent work in the same turn remains active', () => {
     const messages = [
       message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),

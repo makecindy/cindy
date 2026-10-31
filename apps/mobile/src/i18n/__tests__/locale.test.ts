@@ -15,4 +15,13 @@ describe("mobile locale resolution", () => {
     expect(resolveSystemLocale("zh-HK")).toBe("zh-TW");
     expect(resolveSystemLocale("zh-Hant")).toBe("zh-TW");
   });
+
+  // #8142: keep mobile OS selection aligned with Desktop, including Portuguese regions.
+  it.each([
+    ["es-MX", "es"], ["es-419", "es"], ["fr-CA", "fr"], ["de-AT", "de"],
+    ["pt-PT", "pt-PT"], ["pt-BR", "pt-BR"], ["PT_br", "pt-BR"],
+    ["pt-Latn-BR", "pt-BR"], ["pt-AO", "pt-PT"], ["pt", "pt-PT"],
+  ])("resolves %s to %s", (tag, expected) => {
+    expect(resolveSystemLocale(tag)).toBe(expected);
+  });
 });

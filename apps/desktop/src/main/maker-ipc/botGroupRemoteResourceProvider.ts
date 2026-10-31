@@ -1,3 +1,4 @@
+import type { SupportedLocale } from '../../shared/locale.js';
 import { teammateGroupActivity } from '@cindy/maker-shared/teammate-status';
 /**
  * Bot group chat for controllers (phones) through the Remote Resource protocol
@@ -55,74 +56,134 @@ import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/mak
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
 
-type Locale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko';
+type Locale = SupportedLocale;
 type Copy = Record<Locale, string>;
 
 const COPY = {
-  title: { en: 'Group chats', 'zh-CN': '群聊', 'zh-TW': '群聊', ja: 'グループチャット', ko: '그룹 채팅' },
+  title: { en: 'Group chats', 'zh-CN': '群聊', 'zh-TW': '群聊', ja: 'グループチャット', ko: '그룹 채팅',
+  "es": "Chats grupales",
+  "fr": "Discussions de groupe",
+  "de": "Gruppenchats",
+  "pt-PT": "Conversas de grupo",
+  "pt-BR": "Conversas em grupo",
+},
   planning: {
     en: '{name} is splitting the work…',
     'zh-CN': '{name}正在安排…',
     'zh-TW': '{name}正在安排…',
     ja: '{name} が役割分担を考えています…',
     ko: '{name} 님이 역할을 나누는 중…',
-  },
+
+  "es": "{name} está repartiendo el trabajo…",
+  "fr": "{name} répartit le travail…",
+  "de": "{name} teilt die Arbeit auf…",
+  "pt-PT": "{name} está a dividir o trabalho…",
+  "pt-BR": "{name} está dividindo o trabalho…",
+},
   proposed: {
     en: '{name}: plan ready, waiting for you',
     'zh-CN': '{name}：安排好了，等你开始',
     'zh-TW': '{name}：安排好了，等你開始',
     ja: '{name}：分担が決まりました。開始を待っています',
     ko: '{name}: 분담을 정했어요. 시작을 기다려요',
-  },
+
+  "es": "{name}: plan listo, esperando tu respuesta",
+  "fr": "{name} : plan prêt, en attente de votre part",
+  "de": "{name}: Plan bereit, wartet auf dich",
+  "pt-PT": "{name}: plano pronto, à sua espera",
+  "pt-BR": "{name}: plano pronto, esperando por você",
+},
   running: {
     en: 'Step {step}/{total} · {name} is working',
     'zh-CN': '分工 {step}/{total} · {name}正在做',
     'zh-TW': '分工 {step}/{total} · {name}正在做',
     ja: '分担 {step}/{total} · {name} が作業中',
     ko: '분담 {step}/{total} · {name} 작업 중',
-  },
+
+  "es": "Paso {step}/{total} · {name} está trabajando",
+  "fr": "Étape {step}/{total} · {name} travaille",
+  "de": "Schritt {step}/{total} · {name} arbeitet",
+  "pt-PT": "Passo {step}/{total} · {name} está a trabalhar",
+  "pt-BR": "Etapa {step}/{total} · {name} está trabalhando",
+},
   stepDone: {
     en: '{name} is done — continue when ready',
     'zh-CN': '{name}做完了，等你继续',
     'zh-TW': '{name}做完了，等你繼續',
     ja: '{name} が完了しました。続行を待っています',
     ko: '{name} 님이 끝냈어요. 계속을 기다려요',
-  },
+
+  "es": "{name} terminó. Continúa cuando quieras.",
+  "fr": "{name} a terminé, continuez quand vous voulez",
+  "de": "{name} ist fertig – fahre fort, sobald du bereit bist",
+  "pt-PT": "{name} terminou — continue quando quiser",
+  "pt-BR": "{name} terminou — continue quando quiser",
+},
   stepFailed: {
     en: "{name} didn't finish",
     'zh-CN': '{name}没做完',
     'zh-TW': '{name}沒做完',
     ja: '{name} は完了できませんでした',
     ko: '{name} 님이 끝내지 못했어요',
-  },
+
+  "es": "{name} no terminó",
+  "fr": "{name} n'a pas terminé",
+  "de": "{name} hat die Arbeit nicht abgeschlossen",
+  "pt-PT": "{name} não terminou",
+  "pt-BR": "{name} não terminou",
+},
   lastMessage: {
     en: '{name}: {text}',
     'zh-CN': '{name}：{text}',
     'zh-TW': '{name}：{text}',
     ja: '{name}：{text}',
     ko: '{name}: {text}',
-  },
+
+  "es": "{name}: {text}",
+  "fr": "{name} : {text}",
+  "de": "{name}: {text}",
+  "pt-PT": "{name}: {text}",
+  "pt-BR": "{name}: {text}",
+},
   memberJoined: {
     en: '{name} joined the group',
     'zh-CN': '{name}加入了群聊',
     'zh-TW': '{name}加入了群聊',
     ja: '{name}さんがグループに参加しました',
     ko: '{name} 님이 그룹에 참여했습니다',
-  },
+
+  "es": "{name} se unió al grupo",
+  "fr": "{name} a rejoint le groupe",
+  "de": "{name} ist der Gruppe beigetreten",
+  "pt-PT": "{name} juntou-se ao grupo",
+  "pt-BR": "{name} se juntou ao grupo",
+},
   sharedReplyYou: {
     en: 'You shared a thread reply',
     'zh-CN': '你贴回了一条话题回复',
     'zh-TW': '你貼回了一則話題回覆',
     ja: 'スレッドの返信を共有しました',
     ko: '스레드 답글을 공유했습니다',
-  },
+
+  "es": "Compartiste una respuesta al hilo.",
+  "fr": "Vous avez partagé une réponse du fil",
+  "de": "Du hast eine Antwort aus einem Thema geteilt",
+  "pt-PT": "Partilhou uma resposta a um tópico",
+  "pt-BR": "Você compartilhou uma resposta a um tópico",
+},
   sharedReply: {
     en: '{name} shared a thread reply',
     'zh-CN': '{name} 贴回了一条话题回复',
     'zh-TW': '{name} 貼回了一則話題回覆',
     ja: '{name} がスレッドの返信を共有しました',
     ko: '{name} 님이 스레드 답글을 공유했습니다',
-  },
+
+  "es": "{name} compartió una respuesta al hilo.",
+  "fr": "{name} a partagé une réponse du fil",
+  "de": "{name} hat eine Antwort aus einem Thema geteilt",
+  "pt-PT": "{name} partilhou uma resposta a um tópico",
+  "pt-BR": "{name} compartilhou uma resposta a um tópico",
+},
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -479,7 +540,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;

@@ -1872,6 +1872,7 @@ function CCAgentSessionContent({
     errorIsRecoverable,
     errorRetryText,
     errorCanContinue,
+    errorPersistId,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -5306,6 +5307,7 @@ function CCAgentSessionContent({
       botUnreadBoundaryAt={botChatIdentity ? botUnreadBoundaryAt : null}
       onBotReadThrough={viewVisible ? onBotReadThrough : undefined}
       messages={timelineMessages}
+      activeErrorClientId={!readOnly && error ? errorPersistId : null}
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'

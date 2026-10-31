@@ -15,7 +15,7 @@ import { toast } from '@/lib/toast';
 import { marketActionErrorMessage } from '../lib/marketErrors';
 import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
-import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
+import { type SupportedLocale } from '../../../../shared/locale';
 
 const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
@@ -127,7 +127,7 @@ export function MarketInfoEditDialog({
           displayName: displayName.trim(),
           summary: description,
           description,
-          contentLocale: (SUPPORTED_LOCALES as readonly string[]).includes(i18n.resolvedLanguage ?? '')
+          contentLocale: (['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as readonly string[]).includes(i18n.resolvedLanguage ?? '')
             ? i18n.resolvedLanguage as SupportedLocale
             : 'en',
           tags: categorySlugs,

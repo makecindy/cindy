@@ -8,78 +8,424 @@
       "accept": "A/B/C/D/F 五门:truth 提取自源码带 provenance / 状态覆盖 / 支持语言全集无截断 / computed-style 绑定(4px·12px·13px·主题 token) / 拉伸几何 oracle 比对(卡片宽随 inputWidth、与输入框同宽、高度恒定)"
     }
   },
-
   "matrix": {
-    "platforms": ["desk"],
-    "regions": ["na"],
-    "systems": ["desktop"],
-    "themes": ["light", "dark"],
-    "langs": ["zh-CN", "zh-TW", "en", "ja", "ko"]
+    "platforms": [
+      "desk"
+    ],
+    "regions": [
+      "na"
+    ],
+    "systems": [
+      "desktop"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "langs": [
+      "zh-CN",
+      "zh-TW",
+      "en",
+      "ja",
+      "ko",
+      "es",
+      "fr",
+      "de",
+      "pt-PT",
+      "pt-BR"
+    ]
   },
-
   "states": [
-    { "id": "id", "via": [{ "expect": "id" }] },
-    { "id": "filled", "via": [
-      { "click": "[data-qa-card='explore']" },
-      { "expect": "filled" }
-    ] }
+    {
+      "id": "id",
+      "via": [
+        {
+          "expect": "id"
+        }
+      ]
+    },
+    {
+      "id": "filled",
+      "via": [
+        {
+          "click": "[data-qa-card='explore']"
+        },
+        {
+          "expect": "filled"
+        }
+      ]
+    }
   ],
-
   "verify": {
     "cases": [
-      { "id": "zh-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "zh-CN" } },
-      { "id": "zh-tw-dark", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark", "lang": "zh-TW" } },
-      { "id": "en-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "en" } },
-      { "id": "ja-light", "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "light", "lang": "ja" } },
-      { "id": "ko-dark",  "prefs": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark",  "lang": "ko" } }
+      {
+        "id": "zh-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "zh-tw-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "zh-TW"
+        }
+      },
+      {
+        "id": "en-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "ja-light",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "ko-dark",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      },
+      {
+        "id": "en-dark-es",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "es"
+        }
+      },
+      {
+        "id": "en-dark-fr",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "fr"
+        }
+      },
+      {
+        "id": "en-dark-de",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "de"
+        }
+      },
+      {
+        "id": "en-dark-pt-PT",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "pt-PT"
+        }
+      },
+      {
+        "id": "en-dark-pt-BR",
+        "prefs": {
+          "plat": "desk",
+          "region": "na",
+          "os": "desktop",
+          "mode": "dark",
+          "lang": "pt-BR"
+        }
+      }
     ],
-    "noClip": [".qa-card-label", ".qa-section-title"],
+    "noClip": [
+      ".qa-card-label",
+      ".qa-section-title"
+    ],
     "persistence": {
       "via": [
-        { "click": "[data-qa-pref='mode:dark']" },
-        { "click": "[data-qa-pref='lang:ja']" }
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        },
+        {
+          "click": "[data-qa-pref='lang:ja']"
+        }
       ],
-      "expected": { "plat": "desk", "region": "na", "os": "desktop", "mode": "dark", "lang": "ja" },
+      "expected": {
+        "plat": "desk",
+        "region": "na",
+        "os": "desktop",
+        "mode": "dark",
+        "lang": "ja"
+      },
       "storageKey": "qa-hifi:cindy-newmaker-cards-hifi:prefs",
       "reloads": 2,
       "initialState": "id"
     }
   },
-
   "bindings": [
-    { "sel": ".qa-card", "prop": "column-gap", "truth": "card.gapPx", "kind": "length" },
-    { "sel": ".qa-card", "prop": "border-top-left-radius", "truth": "card.radiusPx", "kind": "length" },
-    { "sel": ".qa-card", "prop": "border-top-width", "truth": "card.borderPx", "kind": "length" },
-    { "sel": ".qa-card-icon", "prop": "width", "truth": "card.iconCirclePx", "kind": "length" },
-    { "sel": ".qa-card-icon", "prop": "height", "truth": "card.iconCirclePx", "kind": "length" },
-    { "sel": ".qa-card-label", "prop": "font-size", "truth": "card.labelFontPx", "kind": "length" },
-    { "sel": ".qa-section-title", "prop": "font-size", "truth": "section.titleFontPx", "kind": "length" },
-
-    { "sel": ".qa-card", "prop": "background-color", "truth": "colors.light.cardBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
-    { "sel": ".qa-card", "prop": "border-top-color", "truth": "colors.light.cardBorder", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
-    { "sel": ".qa-card-label", "prop": "color", "truth": "colors.light.cardText", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
-    { "sel": ".qa-card-icon", "prop": "background-color", "truth": "colors.light.iconBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
-    { "sel": ".qa-section-title", "prop": "color", "truth": "colors.light.textSecondary", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:light']" }] },
-
-    { "sel": ".qa-card", "prop": "background-color", "truth": "colors.dark.cardBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
-    { "sel": ".qa-card", "prop": "border-top-color", "truth": "colors.dark.cardBorder", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
-    { "sel": ".qa-card-label", "prop": "color", "truth": "colors.dark.cardText", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
-    { "sel": ".qa-card-icon", "prop": "background-color", "truth": "colors.dark.iconBg", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] },
-    { "sel": ".qa-section-title", "prop": "color", "truth": "colors.dark.textSecondary", "kind": "color", "via": [{ "click": "[data-qa-pref='mode:dark']" }] }
+    {
+      "sel": ".qa-card",
+      "prop": "column-gap",
+      "truth": "card.gapPx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "border-top-left-radius",
+      "truth": "card.radiusPx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "border-top-width",
+      "truth": "card.borderPx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card-icon",
+      "prop": "width",
+      "truth": "card.iconCirclePx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card-icon",
+      "prop": "height",
+      "truth": "card.iconCirclePx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card-label",
+      "prop": "font-size",
+      "truth": "card.labelFontPx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-section-title",
+      "prop": "font-size",
+      "truth": "section.titleFontPx",
+      "kind": "length"
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "background-color",
+      "truth": "colors.light.cardBg",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:light']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "border-top-color",
+      "truth": "colors.light.cardBorder",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:light']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card-label",
+      "prop": "color",
+      "truth": "colors.light.cardText",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:light']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card-icon",
+      "prop": "background-color",
+      "truth": "colors.light.iconBg",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:light']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-section-title",
+      "prop": "color",
+      "truth": "colors.light.textSecondary",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:light']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "background-color",
+      "truth": "colors.dark.cardBg",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card",
+      "prop": "border-top-color",
+      "truth": "colors.dark.cardBorder",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card-label",
+      "prop": "color",
+      "truth": "colors.dark.cardText",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-card-icon",
+      "prop": "background-color",
+      "truth": "colors.dark.iconBg",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        }
+      ]
+    },
+    {
+      "sel": ".qa-section-title",
+      "prop": "color",
+      "truth": "colors.dark.textSecondary",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref='mode:dark']"
+        }
+      ]
+    }
   ],
-
   "adaptive": {
-    "min": { "w": 480, "h": 560 },
+    "min": {
+      "w": 480,
+      "h": 560
+    },
     "sampleSizes": [
-      [480, 700], [540, 700], [559, 700], [560, 700], [561, 700],
-      [640, 700], [680, 700], [699, 700], [700, 700], [720, 700],
-      [779, 700], [780, 700], [781, 700], [1000, 700], [1299, 700],
-      [1300, 700], [1440, 900]
+      [
+        480,
+        700
+      ],
+      [
+        540,
+        700
+      ],
+      [
+        559,
+        700
+      ],
+      [
+        560,
+        700
+      ],
+      [
+        561,
+        700
+      ],
+      [
+        640,
+        700
+      ],
+      [
+        680,
+        700
+      ],
+      [
+        699,
+        700
+      ],
+      [
+        700,
+        700
+      ],
+      [
+        720,
+        700
+      ],
+      [
+        779,
+        700
+      ],
+      [
+        780,
+        700
+      ],
+      [
+        781,
+        700
+      ],
+      [
+        1000,
+        700
+      ],
+      [
+        1299,
+        700
+      ],
+      [
+        1300,
+        700
+      ],
+      [
+        1440,
+        900
+      ]
     ],
     "probes": [
-      { "id": "quickstarts", "sel": ".qa-quickstarts" },
-      { "id": "input", "sel": ".qa-input" },
-      { "id": "card0", "sel": ".qa-card" }
+      {
+        "id": "quickstarts",
+        "sel": ".qa-quickstarts"
+      },
+      {
+        "id": "input",
+        "sel": ".qa-input"
+      },
+      {
+        "id": "card0",
+        "sel": ".qa-card"
+      }
     ],
     "tolerancePx": 1
   }

@@ -6,6 +6,16 @@ import { BotGroupComposer } from '../../../src/renderer/features/bots/BotGroupCo
 import { useWallpaperBackground } from '../../../src/renderer/hooks/useWallpaperBackground';
 import wallpaper from '../../../src/renderer/assets/wallpapers/cindy-window.webp';
 import type { BotGroupDetail } from '../../../src/shared/botGroupChat';
+import fixturePhoto from '../../../src/renderer/assets/bot-presets/cindy.png';
+
+const sends: unknown[] = [];
+const imageCacheControl: { finish?: () => void } = {};
+const photoUrl = fixturePhoto;
+// The fixture's HTTP test origin is not a secure context; production localhost has this API.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
 
 const text = '原消息开头 · Original message\n\n' + Array.from({ length: 6 }, (_,i) =>
   `### ${i + 1}. 完整阅读 · Full text\n\n原消息和回复一起滚动，不应被固定高度遮挡。The entire original message remains readable.\n\n- 第一项 First item\n- 第二项 Second item`).join('\n\n') + '\n\n原消息末尾 · End of original';
@@ -42,6 +52,8 @@ function Scenario({ kind }: { kind: string }) {
     <div className="min-w-0 flex-1 p-4">
       <button type="button" aria-pressed={wallpaperEnabled}
         onClick={() => setWallpaperEnabled(enabled => !enabled)}>Wallpaper</button>
+      {kind === 'group-cache-pending' && closed ?
+        <button type="button" onClick={() => setClosed(false)}>Reopen thread</button> : null}
     </div>
     {closed ? <span data-closed="" /> : kind.startsWith('group') ? <ChatThreadPanel
       group={{ id: 'fixture-group', members: [], messages: [kind === 'group-narrow' ? reportRoot : root] } as unknown as BotGroupDetail}
@@ -57,8 +69,15 @@ void mountPage({
   host: ctx => {
     let following = false;
     return {
+      getFilePath: (file: File) => `/fixture/${file.name}`,
+      cacheImageFromPath: async () => ctx.case === 'group-cache-pending'
+        ? new Promise<{ url: string }>(resolve => { imageCacheControl.finish = () => resolve({ url: photoUrl }); })
+        : { url: photoUrl },
       maker: { onBotGroupChanged: subscription('groupChanged'), chatServer: {
-        thread: async () => ({ ok: true, root: ctx.case === 'group-narrow' ? reportRoot : root, replies: [], hasMore: false, following }),
+        thread: async () => ({ ok: true,
+          root: ctx.case === 'group-narrow' ? reportRoot : ['group-attachments', 'group-cache-pending'].includes(ctx.case) ? { ...root, content: '图片附件验收 · Attachment check' } : root,
+          replies: [], hasMore: false, following }),
+        reply: async (input: unknown) => { sends.push(input); return { ok: true, messageId: 'fixture-image-reply' }; },
         followThread: async (input: { following: boolean }) => {
           following = input.following;
           return { ok: true, following };
@@ -71,6 +90,8 @@ void mountPage({
     (window as unknown as { __threadRoot: unknown }).__threadRoot = {
       messages: [{ clientId: 'root', role: 'assistant', content: text, createdAt: new Date(root.createdAt).toISOString() }],
     };
+    (window as unknown as { __threadSends: unknown[] }).__threadSends = sends;
+    (window as unknown as { __threadImageCache: typeof imageCacheControl }).__threadImageCache = imageCacheControl;
     return ctx.case === 'composer-attachments' ? <AttachmentComposer /> : <Scenario kind={ctx.case} />;
   },
 });

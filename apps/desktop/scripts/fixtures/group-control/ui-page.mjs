@@ -31,8 +31,12 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status controls host receipts), round control, real device-link control and revocation, answering pending interactions, plans and attachments; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
+    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
   cases: {
+    'share-pending': {
+      about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
+      data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
+    },
     'send-status': {
       about: 'Mac send flicker regression: real composer/outbox/timeline, controlled slow receipt; row geometry stays stable and failed sends remain retryable',
       data: { ...base, messages: 40, sendStatus: true },
@@ -42,6 +46,8 @@ export default {
       viewport: { width: 720, height: 700 },
       data: { ...base, sidebar: false, remoteLimits: true },
     },
+    'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
     'work-reading': { about: 'Actual group work status, scenario data: file reading', data: { ...base, messages: 2, workState: 'reading-file' } },
@@ -132,6 +138,39 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (definition.data.processRecord) {
+      const journal = page.locator('[data-teammate-process]');
+      await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
+      if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
+      await journal.waitFor();
+      const heading = journal.locator(':scope > button');
+      assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+      await heading.click();
+      await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await ui.capture('history-expanded');
+      const endError = await journal.evaluate(root => {
+        const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
+        const body = root.querySelector('[data-process-guide] + div').getBoundingClientRect();
+        return Math.abs(rail.bottom - body.bottom);
+      });
+      assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
+      await heading.click();
+      await ui.capture('history-collapsed');
+      return;
+    }
+    if (ui.case === 'share-pending') {
+      await page.locator('[data-bot-group-message-id="a1"] [data-thread-preview]').click();
+      const source = page.locator('aside [data-bot-group-message-id="r1"]');
+      await source.hover();
+      await source.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
+      await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.server.thread.postToMain'), exact: true }).click();
+      const pending = page.locator('[data-testid="bot-group-timeline"] [data-bot-group-message-id="pending:share:r1"]');
+      await pending.waitFor({ timeout: 1500 });
+      assert.equal(await pending.locator('article').getAttribute('aria-busy'), 'true');
+      await pending.scrollIntoViewIfNeeded();
+      await ui.capture('share-pending');
+      return;
+    }
     if (ui.case === 'send-status') {
       // Renderer integration: jsdom's send tests cannot measure the 600ms layout jump.
       const input = page.locator('textarea');

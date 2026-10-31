@@ -1,6 +1,7 @@
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { useNavigate } from 'react-router-dom';
 import { standardSessionRoute } from '@/lib/orcaSessionIdentity';
-/** Group progress stays above the composer. Each execution opens its original standard
+/** Group progress stays with the timeline. Each execution opens its original standard
  * task, locally or on its authenticated home computer; confirmations stay inline. */
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
@@ -18,7 +19,7 @@ import { isBotGroupNoReplyText, type BotGroupMemberView, type BotGroupSpeakerAct
 import { BotAvatar } from './BotAvatar';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { formatBotGroupElapsed, useBotGroupNow } from './BotGroupElapsed';
-import { BotGroupLivePreview } from './BotGroupLivePreview';
+import { BotGroupProcessNotes, BotGroupRemoteProcessNotes } from './BotGroupLivePreview';
 import { BotGroupPendingInteraction } from './BotGroupPendingInteraction';
 import type { BotGroupRunningStep } from './BotGroupTimelineModel';
 
@@ -152,7 +153,6 @@ function BotGroupSingleProgressStrip({
   stopPending,
 }: BotGroupProgressStripProps & { showStop?: boolean; stopPending?: boolean }) {
   const { t } = useTranslation();
-  const [mountedAt] = useState(() => Date.now());
   const navigate = useNavigate();
   const stepSpeaker = step
     ? speakers.find((speaker) => speaker.activity === 'step' && speaker.member.botId === step.step.botId)
@@ -163,8 +163,8 @@ function BotGroupSingleProgressStrip({
   const lead = step ? stepSpeaker : speakers.find((speaker) => speaker.activity !== 'planning');
   const sessionId = lead?.sessionId ?? null;
   const live = useSpeakerActivity(lead);
-  // Mount time (and a plan's last edit) is not an execution start. Keep it only
-  // for the brief entrance delay, never as evidence that old work just started.
+  // Only an execution or activity timestamp establishes elapsed time. A mount
+  // or a plan edit must not make old work look newly started.
   const since = [live?.startedAtMs, lead?.startedAt].find(
     (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0,
   );
@@ -172,7 +172,7 @@ function BotGroupSingleProgressStrip({
   const buttonPending = stopPending ?? isStopping;
   const now = useBotGroupNow(true);
   const waiting = live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input';
-  if (!step && (!lead || (!waiting && now - (since ?? mountedAt) < BOT_GROUP_PROGRESS_STRIP_DELAY_MS))) return null;
+  if (!step && !lead) return null;
   const member = step ? step.member : lead?.member;
   const name = step ? step.displayName : lead?.displayName ?? '';
   // A queue turn is someone speaking, not a numbered step of work.
@@ -182,38 +182,23 @@ function BotGroupSingleProgressStrip({
   const rawAction = live?.currentActionSummary?.trim() || live?.compactDetail?.trim() || '';
   const action = isBotGroupNoReplyText(rawAction) ? '' : rawAction;
   const canView = !!sessionId;
-  return (
-    <div data-testid="bot-group-work" className="shrink-0 px-5 pt-2">
-      <div
-        data-testid="bot-group-progress"
-        // Process opens the existing task page; the strip stays compact.
-        className="mx-auto flex min-w-0 flex-col border border-[var(--border-default)] bg-[var(--surface-elevated)] w-fit max-w-[min(760px,100%)] rounded-full"
-      >
-        <div className="flex min-h-9 min-w-0 items-center gap-2 py-1 pl-2 pr-1">
-          {member ? <BotAvatar bot={member} size="xs" /> : null}
-          <p role="status" aria-live="polite" className="flex min-w-0 flex-1 items-center gap-1 truncate text-12 leading-5 text-[var(--text-secondary)]">
-            {workStep ? (
-              <span className="shrink-0 font-medium text-[var(--text-primary)]">
-                {t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })}
-              </span>
-            ) : null}
-            <span className="min-w-0 truncate">
-              {workStep ? ` · ${name} ${workStep.step.task}` : name}
-            </span>
-            {!workStep || isStopping || live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input' ? <span className="min-w-0 truncate">
-              {isStopping
-                ? t('bots.groupChat.progress.stopping')
-                : lead?.executionStatus === 'queued'
-                  ? t('bots.groupChat.progress.queued')
-                : live?.phase === 'needs-interaction' || lead?.executionStatus === 'needs_input'
-                  ? t('bots.groupChat.waitingConfirm', { name: '' })
-                  : <BotGenerationLabel sessionId={sessionId ?? undefined} remote={lead?.target ? { deviceId: lead.target.deviceId, botId: lead.target.botId } : undefined} phase={live?.workingPhase ?? 'processing'} startedAt={live?.startedAtMs ?? null} />}
-            </span> : null}
-            {since !== undefined ? <span className="shrink-0 tabular-nums">
-              {' · '}
-              {t('bots.groupChat.progress.elapsed', { time: formatBotGroupElapsed(now - since, t) })}
-            </span> : null}
-          </p>
+  const title = <span className="inline-flex min-w-0 flex-wrap items-baseline gap-x-2">
+    <span className="font-medium text-[var(--text-primary)]">{name}</span>
+    <span>{isStopping ? t('bots.groupChat.progress.stopping')
+      : lead?.executionStatus === 'queued' ? t('bots.groupChat.progress.queued')
+      : waiting ? t('bots.groupChat.waitingConfirm', { name: '' })
+      : since !== undefined ? t('chat.teammateProcess.elapsed', { duration: formatBotGroupElapsed(Math.max(0, now - since), t) })
+      : t('chat.teammateProcess.processing')}</span>
+  </span>;
+  return <div data-testid="bot-group-work" className="mt-3 flex min-w-0 items-start gap-2.5">
+    {member ? <div className="flex h-8 w-7 shrink-0 items-center"><BotAvatar bot={member} size="xs" /></div> : null}
+    <div data-testid="bot-group-progress" className="min-w-0 flex-1">
+      <WorkGroupBlock journal isStreaming blockId={`group-process:${lead?.executionId ?? sessionId ?? name}`}
+        journalTitle={title} childItems={[{ kind: 'rendered', key: 'notes', prose: false, renderNode: () => <>
+          {workStep ? <p className="text-13 text-[var(--text-secondary)]">{t('bots.groupChat.progress.step', { step: workStep.index, total: workStep.total })} · {workStep.step.task}</p> : null}
+          {sessionId && since !== undefined ? lead?.target ? <BotGroupRemoteProcessNotes sessionId={sessionId} deviceId={lead.target.deviceId} since={since} />
+            : <BotGroupProcessNotes sessionId={sessionId} since={since} /> : action ? <p className="break-words text-13 text-[var(--text-secondary)]">{action}</p> : null}
+        </> }]} />
           <span className="flex shrink-0 items-center gap-1">
             {canView ? (
               <Button type="button" variant="secondary" tone="quiet" size="sm" compact onClick={() => sessionId && navigate(standardSessionRoute(sessionId, lead?.target?.deviceId))}>
@@ -254,13 +239,9 @@ function BotGroupSingleProgressStrip({
               </Button>
             )}
           </span>
-        </div>
-      </div>
-      {action ? <p data-testid="bot-group-work-action" className="mx-auto mt-1 max-w-[760px] truncate px-2 text-center text-13 leading-5 text-[var(--text-secondary)]" title={action}>{action}</p> : null}
-      {lead?.target ? <p className="mt-1 text-center text-12 leading-5 text-[var(--text-secondary)]">{lead.target.deviceName}</p> : null}
-      {sessionId && !lead?.target && live?.phase === 'running' ? <BotGroupLivePreview sessionId={sessionId} className="mx-auto mt-1 max-w-[760px] px-2" /> : null}
     </div>
-  );
+  </div>;
+
 }
 
 /** Header status: who is doing which step, or who is speaking or planning. */

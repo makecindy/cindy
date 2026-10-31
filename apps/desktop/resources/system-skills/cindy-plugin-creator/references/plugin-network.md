@@ -38,7 +38,15 @@ const r = await cindy.fetch({
 //   识别失败的真实 UTF-8 文本继续回落文本形态,未知二进制拒绝。
 //   媒体模式下 2xx 的文本响应(如轮询"生成中"JSON)自动
 //   回落文本形态给你看;非 2xx 同样回落文本,方便诊断。
-// 失败:{ ok:false, message: '原因' }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+// 失败:{ ok:false, message: '原因', errorCode? }(白名单外 / 凭证未配置 / 超时 / 网络错误…)
+//   请求已发出后的网络层失败带 errorCode,message 形如「请求失败:<原因>(<底层码>)」:
+//   NETWORK_TIMEOUT(超时,含主机到点中断「请求失败:请求超时(30000ms)」)/
+//   TLS_ERROR(证书过期、域名不匹配等,多为服务端问题)/ DNS_FAILED / CONNECTION_REFUSED /
+//   CONNECTION_RESET(连接中途断开)/ NETWORK_UNREACHABLE / NETWORK_ERROR(其余网络错误)。
+//   主机守门类失败(白名单外、凭证未配置等)不带 errorCode,message 自带处理指引。
+//   旧版主机不带 errorCode:以 errorCode 优先,缺省时按 message 处理。
+//   非幂等请求(POST 等)遇到 NETWORK_TIMEOUT / CONNECTION_RESET 时,服务端可能已执行,
+//   不要自动重放,提示用户先确认结果。
 ```
 
 **凭证语义(必读)**:你在详单里只声明"需要一条叫什么的凭证、注入到哪个请求头";

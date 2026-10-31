@@ -7,6 +7,12 @@ export const TITLE_LANGUAGE_BY_LOCALE: Record<SupportedLocale, string> = {
   en: 'English',
   ja: 'Japanese',
   ko: 'Korean',
+
+  "es": "Spanish",
+  "fr": "French",
+  "de": "German",
+  "pt-PT": "European Portuguese",
+  "pt-BR": "Brazilian Portuguese",
 };
 
 function escapeReferenceData(value: string): string {

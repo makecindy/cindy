@@ -1117,3 +1117,18 @@ export function richMediaSource(node: RichNode): string | null {
     : src;
 }
 
+/** Sources actually rendered by component blocks, excluding code examples and
+ * removed/replaced nodes. Used to suppress duplicate tool-result previews. */
+export function richAnswerMediaSources(source: string): ReadonlySet<string> {
+  const urls = new Set<string>();
+  for (const part of splitRichAnswer(source)) {
+    if (part.kind !== 'rich') continue;
+    const doc = new RichAnswerStream().update(part.source, true);
+    for (const node of doc.nodes.values()) {
+      if (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio') continue;
+      const url = richMediaSource(node);
+      if (url) urls.add(url);
+    }
+  }
+  return urls;
+}

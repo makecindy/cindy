@@ -78,6 +78,7 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
         if (typeof input.name === 'string') action.name = input.name;
         if (typeof input.topic === 'string') action.topic = input.topic;
         if (typeof input.description === 'string') action.description = input.description;
+        if (typeof input.allowMentionAllBots === 'boolean') action.allowMentionAllBots = input.allowMentionAllBots;
         if (input.replyMode === 'all' || input.replyMode === 'mentioned') action.responseMode = input.replyMode;
         if (input.speakingMode === 'auto' || input.speakingMode === 'sequential') action.speakingMode = input.speakingMode;
         if (typeof input.organizerBotId === 'string' || input.organizerBotId === null) action.organizerId = input.organizerBotId;

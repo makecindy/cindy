@@ -125,6 +125,50 @@ describe('completed work-group rendering during a text stream', () => {
 });
 
 describe('remote running work preview', () => {
+  // Unit regression for the retain/release history contract introduced by #8066.
+  // Existing preview coverage uses ordinary work groups, not the teammate journal.
+  // One completed remote work range must release its Host detail interest on both
+  // manual collapse and unmount; otherwise closed process records keep reading.
+  it('releases teammate history details when collapsed or unmounted', async () => {
+    const row = (id: number, role: HistoryChatMessage['role'], content: string): HistoryChatMessage => ({
+      id: String(id), clientId: `c${id}`, role, content,
+      createdAt: new Date(Date.UTC(2026, 9, 30) + id * 1000).toISOString(),
+    });
+    const rows = [row(1, 'user', 'Work'), row(2, 'thinking', 'Working'), row(3, 'assistant', 'Answer')];
+    const view = new HistoryViewController<HistoryChatMessage>({
+      page: async () => ({ version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, hasMore: false, nextCursor: null, messages: [rows[1]!] }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    function RemoteJournal() {
+      const snapshot = useSyncExternalStore(view.subscribe, view.getSnapshot);
+      const projection = buildMessageStreamRenderProjection({
+        historyView: view, historySnapshot: snapshot, historyLiveMessages: [], isSessionStreaming: false,
+        generatedFilesItemCache: new Map(), buildRaw: () => ({ items: [], singleResultMap: new Map() }),
+      });
+      return projection.items.map((item) => item.type === 'work_group'
+        ? <WorkGroupRenderItemView key={item.key} item={{ ...item, teammateJournal: true }} context={context} compact={false} />
+        : null);
+    }
+    const mounted = render(<RemoteJournal />);
+    const header = () => mounted.container.querySelector('[data-teammate-process] > button') as HTMLButtonElement;
+    try {
+      expect(header().getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(header());
+      await waitFor(() => expect(view.getSnapshot().expanded.size).toBe(1));
+      fireEvent.click(header());
+      await waitFor(() => expect(view.getSnapshot().expanded.size).toBe(0));
+      fireEvent.click(header());
+      await waitFor(() => expect(view.getSnapshot().expanded.size).toBe(1));
+      mounted.unmount();
+      expect(view.getSnapshot().expanded.size).toBe(0);
+    } finally {
+      mounted.unmount();
+      view.setActive(false);
+    }
+  });
+
   // Regression (React #185): a read preview tail ending in prose seals the regrouped
   // group, which released the preview, which reopened the running group, repeatedly.
   it('keeps the tail open when the read rows regroup the running block', async () => {

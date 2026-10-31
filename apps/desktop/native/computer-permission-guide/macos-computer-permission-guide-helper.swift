@@ -15,6 +15,11 @@ private enum GuideLocale: String {
     case en
     case ja
     case ko
+    case es
+    case fr
+    case de
+    case ptPT = "pt-PT"
+    case ptBR = "pt-BR"
 }
 
 /** Localized native copy selected from the renderer-synchronized app locale. */
@@ -97,6 +102,81 @@ private struct GuideCopy {
                 waiting: "켜기 대기",
                 dragTitle: "CuaDriver를 {{permission}}으로 드래그",
                 dragHint: "드래그"
+            )
+        case .es:
+            return GuideCopy(
+                close: "Cerrar",
+                turnThisOn: "Activa esto",
+                pointsToSwitch: "Señala el interruptor",
+                accessibility: "Accesibilidad",
+                screenRecording: "Grabación de pantalla",
+                completeEyebrow: "Permisos completados",
+                readyTitle: "Computer Use está listo",
+                step: "Abrir automatización del equipo",
+                turnOnAppTitle: "Activa CuaDriver en {{permission}}",
+                waiting: "Esperando tu acción",
+                dragTitle: "Arrastra CuaDriver a {{permission}}",
+                dragHint: "Arrastrar"
+            )
+        case .fr:
+            return GuideCopy(
+                close: "Fermer",
+                turnThisOn: "Activer cette option",
+                pointsToSwitch: "Pointe vers l’interrupteur",
+                accessibility: "Accessibilité",
+                screenRecording: "Enregistrement de l’écran",
+                completeEyebrow: "Autorisations accordées",
+                readyTitle: "Computer Use est prêt",
+                step: "Ouvrir l’automatisation de l’ordinateur",
+                turnOnAppTitle: "Activez CuaDriver dans {{permission}}",
+                waiting: "En attente de votre intervention",
+                dragTitle: "Faites glisser CuaDriver dans {{permission}}",
+                dragHint: "Faire glisser"
+            )
+        case .de:
+            return GuideCopy(
+                close: "Schließen",
+                turnThisOn: "Aktiviere dies",
+                pointsToSwitch: "Zeigt auf den Schalter",
+                accessibility: "Bedienungshilfen",
+                screenRecording: "Bildschirmaufnahme",
+                completeEyebrow: "Berechtigungen vollständig erteilt",
+                readyTitle: "Computer Use ist bereit",
+                step: "Computerautomatisierung öffnen",
+                turnOnAppTitle: "Aktiviere CuaDriver unter {{permission}}",
+                waiting: "Warte auf dich",
+                dragTitle: "Ziehe CuaDriver in {{permission}}",
+                dragHint: "Ziehen"
+            )
+        case .ptPT:
+            return GuideCopy(
+                close: "Fechar",
+                turnThisOn: "Ativar esta opção",
+                pointsToSwitch: "Aponta para o interruptor",
+                accessibility: "Acessibilidade",
+                screenRecording: "Gravação do ecrã",
+                completeEyebrow: "Permissões concluídas",
+                readyTitle: "Computer Use está pronto",
+                step: "Abrir automatização do computador",
+                turnOnAppTitle: "Ative o CuaDriver em {{permission}}",
+                waiting: "À sua espera",
+                dragTitle: "Arraste o CuaDriver para {{permission}}",
+                dragHint: "Arrastar"
+            )
+        case .ptBR:
+            return GuideCopy(
+                close: "Fechar",
+                turnThisOn: "Ativar",
+                pointsToSwitch: "Aponta para o interruptor",
+                accessibility: "Acessibilidade",
+                screenRecording: "Gravação de Tela",
+                completeEyebrow: "Permissões concluídas",
+                readyTitle: "Computer Use está pronto",
+                step: "Abrir automação do computador",
+                turnOnAppTitle: "Ative o CuaDriver em {{permission}}",
+                waiting: "Aguardando você",
+                dragTitle: "Arraste o CuaDriver para {{permission}}",
+                dragHint: "Arrastar"
             )
         case .en:
             return GuideCopy(

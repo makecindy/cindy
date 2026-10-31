@@ -33,13 +33,13 @@ describe('Pi-owned transport for Cindy harnesses', () => {
       ];
       return new Response(agent === 'codex'
         ? 'data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n'
-        : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        : agent === 'pi' ? reply : events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
       { headers: { 'content-type': 'text/event-stream' } });
     } });
     const result = await (await send('https://unused.invalid', { body: JSON.stringify({
       model: model.id, input: 'Hello', max_output_tokens: 1024, stream: true,
     }) })).text();
-    expect(destination.split('?')[0]).toBe(`https://apihub.agnes-ai.com/v1/${agent === 'codex' ? 'responses' : 'messages'}`);
+    expect(destination.split('?')[0]).toBe(`https://apihub.agnes-ai.com/v1/${agent === 'pi' ? 'chat/completions' : agent === 'codex' ? 'responses' : 'messages'}`);
     expect(result).toContain('response.completed');
     expect(result).not.toContain('response.failed');
     expect(runtime.modelsUrl).toBe('https://apihub.agnes-ai.com/v1/models');

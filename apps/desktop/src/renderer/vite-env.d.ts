@@ -5199,40 +5199,12 @@ interface ElectronAPI {
       onChanged: (cb: () => void) => () => void;
     };
     sessionImport: {
-      scan: (request?: { force?: boolean }) => Promise<{
-        sources: {
-          codexHomes: string[];
-          claudeRoots: string[];
-        };
-        candidates: Array<{
-          key: string;
-          source: 'codex' | 'claude';
-          id: string;
-          title: string;
-          cwd: string;
-          updatedAt: string;
-          archived: boolean;
-          workspaceKind: import('@/lib/ccAgent.types').WorkspaceKind;
-          sidebarBucket: 'project' | 'dialogue';
-          projectDir: string | null;
-        }>;
-        rejected: {
-          codex: number;
-          claude: number;
-          existing: number;
-        };
-        currentProjectDirs: string[];
-        /** 候选与本机已有项目里是 git 仓库的目录。 */
-        gitRepoDirs?: string[];
-        /** 主目录、应用数据目录、系统临时目录(伙伴工作台过滤非项目目录用)。 */
-        pathHints?: { homeDir: string | null; userDataDir: string | null; tempDirs: string[] };
-      }>;
-      importSelected: (
-        items: Array<{ source: 'codex' | 'claude'; id: string }>,
-      ) => Promise<{ inserted: number; updated: number; scanned: number }>;
-      linkCodexProject: (
-        workingDir: string,
-      ) => Promise<{ matched: number; inserted: number; updated: number; scanned: number }>;
+      scan: (request?: { force?: boolean }) => Promise<import('../shared/sessionImport').ImportScanResult>;
+      start: (keys: string[]) => Promise<import('../shared/sessionImport').ImportJobView>;
+      status: (requestId?: string) => Promise<import('../shared/sessionImport').ImportJobView | null>;
+      cancel: (requestId: string) => Promise<boolean>;
+      relocate: (sessionId: string, workingDir: string) => Promise<{ ok: true }>;
+      onProgress: (cb: (view: import('../shared/sessionImport').ImportJobView) => void) => () => void;
     };
     sessionShare: {
       export: (request: {

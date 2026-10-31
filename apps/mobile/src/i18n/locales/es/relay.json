@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Servicio de retransmisión",
+    "currentLabel": "Servicio de retransmisión",
+    "official": "Relevo oficial {{appName}}",
+    "switchToOfficial": "Volver al relevo oficial",
+    "officialHint": "Tus dispositivos se conectan a través del relé oficial {{appName}}. Para usar su propio relé, muestre su código QR de unión en la computadora que lo ejecuta y escanee el código con la cámara de su teléfono.",
+    "selfHostedHint": "Tus dispositivos se conectan a través de tu propio relé en {{address}}. El inicio de sesión, los modelos y otros servicios todavía usan {{appName}}.",
+    "removedHint": "Este teléfono fue eliminado del relé o el relé fue desactivado. Vuelva al relevo oficial o únase nuevamente desde su computadora.",
+    "credentialMissingHint": "La credencial de retransmisión ya no está en este teléfono. Únase nuevamente desde su computadora o vuelva al relevo oficial.",
+    "confirmTitle": "¿Volver al relevo oficial?",
+    "confirmBody": "Este teléfono dejará “{{name}}” y utilizará el relé oficial {{appName}}. Para volver a utilizar ese relevo, únete nuevamente desde tu computadora.",
+    "confirmAction": "Volver atrás",
+    "switchFailed": "No se pudo volver al relevo oficial. Inténtalo de nuevo en un momento.",
+    "pushUnavailable": "Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono."
+  },
+  "issue": {
+    "removedTitle": "Eliminado del relevo",
+    "removedHint": "Este teléfono fue eliminado del relé o el relé fue desactivado. Puedes volver al relevo oficial en Configuración."
+  },
+  "join": {
+    "title": "Unirse al relevo",
+    "checking": "Conectando al relé…",
+    "body": "Después de unirse, este teléfono se conecta a sus computadoras a través de este relé. El inicio de sesión, los modelos y otros servicios todavía usan {{appName}}. Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono.",
+    "switchNote": "Al unirse se cambia este teléfono de “{{current}}” a este relé.",
+    "action": "Unirse",
+    "pairingCodeLabel": "Código de emparejamiento",
+    "verifyHint": "En la computadora que ejecuta el relé, verifique que muestre estos dígitos y luego apruebe.",
+    "waiting": "Esperando aprobación…",
+    "cancel": "Cancelar",
+    "joinedTitle": "Se unió al relevo",
+    "joinedBody": "Este teléfono ahora se conecta a sus computadoras a través de \"{{name}}\".",
+    "done": "Listo",
+    "retry": "Inténtalo de nuevo",
+    "signedOut": "Primero inicie sesión en {{appName}} y luego únase a este relevo.",
+    "signIn": "Iniciar sesión",
+    "invalidLink": "Este enlace para unirse no es válido o ha caducado. Crea uno nuevo en tu computadora.",
+    "cancelled": "La unión fue cancelada. Para unirse a este relevo, cree un nuevo enlace de unión en su computadora."
+  },
+  "errors": {
+    "unreachable": "No puedo alcanzar este relevo. Asegúrese de que su teléfono y computadora estén en la misma red, o que su teléfono pueda abrir esta dirección.",
+    "insecureUnreachable": "No puedo alcanzar este relevo. Los teléfonos pueden unirse a un relé solo a través de HTTPS. Configure un certificado para la retransmisión en su computadora y luego cree un nuevo enlace para unirse.",
+    "notRelay": "Esta dirección no es un relé {{appName}}. Consulte el enlace para unirse.",
+    "incompatible": "Este relé no funciona con esta versión de {{appName}}. Actualice tanto el relé como {{appName}}.",
+    "accountMismatch": "Este relevo pertenece a una cuenta {{appName}} diferente.",
+    "codeInvalid": "Este enlace para unirse ha caducado. Crea uno nuevo en tu computadora.",
+    "rateLimited": "Demasiados intentos. Vuelve a intentarlo más tarde.",
+    "rejected": "La solicitud de unión fue rechazada en la computadora.",
+    "expired": "La solicitud expiró mientras esperaba aprobación. Cree un nuevo enlace para unirse en su computadora.",
+    "ownerMismatch": "El relé devolvió un certificado que el propietario del enlace para unirse no emitió. Es posible que esté conectado a un relé falso, por lo que se detuvo la conexión.",
+    "failed": "No pude unirme al relevo. Vuelve a intentarlo más tarde.",
+    "saveFailed": "La solicitud fue aprobada, pero la credencial de retransmisión no se pudo guardar en este teléfono. Cree un nuevo enlace para unirse en su computadora e inténtelo nuevamente.",
+    "credentialUnavailable": "Este teléfono no tiene una credencial de retransmisión utilizable. Únete de nuevo o vuelve al relevo oficial en Configuración."
+  }
+}

@@ -32,7 +32,12 @@
       "zh-TW",
       "en",
       "ja",
-      "ko"
+      "ko",
+      "es",
+      "fr",
+      "de",
+      "pt-PT",
+      "pt-BR"
     ]
   },
   "states": [
@@ -2103,6 +2108,56 @@
           "os": "ios",
           "mode": "dark",
           "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-es",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "es"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-fr",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "fr"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-de",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "de"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-pt-PT",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "pt-PT"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en-pt-BR",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "pt-BR"
         }
       }
     ],

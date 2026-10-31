@@ -48,6 +48,9 @@ const runtime = vi.hoisted(() => ({
 vi.mock("expo-router", () => ({
   useNavigation: () => ({ setOptions: () => undefined }),
 }));
+vi.mock('@/session/VideoDownloadButton', () => ({ VideoDownloadButton: (props: any) => {
+  runtime.nodes.set('message.videoDownload', props); return null;
+} }));
 vi.mock("react-i18next", async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: (key: string) => key }),
@@ -1102,12 +1105,12 @@ describe('gallery prefetch boundaries', () => {
       page(0);
       if (selected === 1) page(1);
       const image = images[selected];
-      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      expect(isMounted('message.imageLightboxLoadingBar')).toBe(true);
       await act(async () => { pending.get('block-1')!(result('block-1')); });
       expect(download.mock.calls.map(([media]) => media.url)).toEqual(['block-1', 'block-2', image.url]);
       await act(async () => { pending.get(image.url)!(result(image.key)); });
       expect(runtime.nodes.get('Image').source.uri).toBe(`file:///${image.key}.png`);
-      expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
+      expect(isMounted('message.imageLightboxShareButton')).toBe(false);
       act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
       await act(async () => { press('message.imageLightboxShareButton'); });
       expect(onShareImage).toHaveBeenCalledWith(image.payload.media, `file:///${image.key}.png`, 'image/png', 1);
@@ -1972,7 +1975,7 @@ describe("chrome toggle, loading and video pages", () => {
     expect(chromeOpacity()).toBe(1);
   });
 
-  it("lets the placeholder zoom and shows the tools disabled while the original is loading", async () => {
+  it("lets the placeholder zoom and shows a loading bar instead of the tools while the original is loading", async () => {
     const url = "xdt-image://cache/photo.png";
     const image = {
       key: "remote", title: "Photo", url,
@@ -1993,9 +1996,11 @@ describe("chrome toggle, loading and video pages", () => {
     expect(runtime.gesture).not.toBeNull();
     const preview = () => runtime.nodes.get("message.imageLightboxPreviewLayer");
     expect(preview().source.uri).toBe("file:///thumb.png");
-    expect(runtime.nodes.get("message.imageLightboxShareButton").disabled).toBe(true);
-    expect(runtime.nodes.get("message.imageLightboxSendToChatButton").disabled).toBe(true);
-    expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(true);
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(true);
+    expect(container.textContent).toContain("message.lightbox.loadingOriginal");
+    expect(isMounted("message.imageLightboxShareButton")).toBe(false);
+    expect(isMounted("message.imageLightboxSendToChatButton")).toBe(false);
+    expect(isMounted("message.imageLightboxAnnotateButton")).toBe(false);
 
     act(() => preview().onLoad({ source: { width: 160, height: 90 } }));
     doubleTapAtCorner();
@@ -2005,7 +2010,10 @@ describe("chrome toggle, loading and video pages", () => {
     await act(async () => {
       finish({ url: "file:///full.png", previewable: true, mimeType: "image/png" });
     });
+    // 取件完成但原图还在解码:仍是载入提示。
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(true);
     act(() => runtime.nodes.get("Image").onLoad({ source: { width: 1600, height: 900 } }));
+    expect(isMounted("message.imageLightboxLoadingBar")).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxShareButton").disabled).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxSendToChatButton").disabled).toBe(false);
     expect(runtime.nodes.get("message.imageLightboxAnnotateButton").disabled).toBe(false);
@@ -2067,6 +2075,8 @@ describe("chrome toggle, loading and video pages", () => {
     expect(container.textContent).toContain('message.lightbox.deviceOffline');
     expect(runtime.nodes.has("message.imageLightboxRetryButton")).toBe(true);
     expect(runtime.nodes.get("FlatList").scrollEnabled).toBe(false);
+    // 失败不算载入:不留永远转圈的提示,按钮置灰、由页内重试接手。
+    expect(isMounted('message.imageLightboxLoadingBar')).toBe(false);
     expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
     expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
 
@@ -2089,8 +2099,7 @@ describe("chrome toggle, loading and video pages", () => {
     await act(async () => { finish({ url: 'file:///full.png', previewable: true, mimeType: 'image/png' }); });
     expect(preview()).toBeDefined();
     expect(runtime.nodes.get('message.imageLightboxRetryButton').disabled).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxShareButton').disabled).toBe(true);
-    expect(runtime.nodes.get('message.imageLightboxSendToChatButton').disabled).toBe(true);
+    expect(isMounted('message.imageLightboxLoadingBar')).toBe(true);
     act(() => runtime.nodes.get('Image').onLoad({ source: { width: 1600, height: 900 } }));
     expect(isMounted('message.imageLightboxPreviewLayer')).toBe(false);
     expect(isMounted('message.imageLightboxOriginalNotice')).toBe(false);
@@ -2166,6 +2175,10 @@ describe("chrome toggle, loading and video pages", () => {
       });
     });
     const player = runtime.nodes.get("message.imageLightboxVideoPlayer");
+    expect(runtime.nodes.get('message.videoDownload')).toMatchObject({ source: resolved.url, mimeType: 'video/mp4', immersive: true });
+    // The download toolbar must not cover the native scrubber, even if actions wrap.
+    act(() => runtime.nodes.get('message.imageLightboxVideoActions').onLayout({ nativeEvent: { layout: { height: 96 } } }));
+    expect(runtime.nodes.get('message.imageLightboxVideoPage').style.paddingBottom).toBe(runtime.insets.bottom + 96 + 24);
     expect(player.url).toBe(resolved.url);
     expect(player.visible).toBe(true);
     expect(runtime.nodes.has("message.imageLightboxShareButton")).toBe(false);

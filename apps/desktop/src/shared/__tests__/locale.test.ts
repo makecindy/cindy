@@ -13,8 +13,17 @@ describe('desktop locale resolution', () => {
   });
 
   it('uses the first supported locale in the OS preference list', () => {
-    expect(resolvePreferredSystemLocale(['fr-FR', 'zh-Hant-TW', 'en-US'])).toBe('zh-TW');
-    expect(resolvePreferredSystemLocale(['fr-FR', 'ja-JP'])).toBe('ja');
-    expect(resolvePreferredSystemLocale(['fr-FR'])).toBe('en');
+    expect(resolvePreferredSystemLocale(['it-IT', 'zh-Hant-TW', 'en-US'])).toBe('zh-TW');
+    expect(resolvePreferredSystemLocale(['it-IT', 'ja-JP'])).toBe('ja');
+    expect(resolvePreferredSystemLocale(['it-IT'])).toBe('en');
+  });
+
+  // #8142: each catalog must be reachable from real OS regional language tags.
+  it.each([
+    ['es-MX', 'es'], ['es-419', 'es'], ['fr-CA', 'fr'], ['de-AT', 'de'],
+    ['pt-PT', 'pt-PT'], ['pt-BR', 'pt-BR'], ['PT_br', 'pt-BR'],
+    ['pt-Latn-BR', 'pt-BR'], ['pt-AO', 'pt-PT'], ['pt', 'pt-PT'],
+  ])('resolves %s to %s', (tag, expected) => {
+    expect(resolveSystemLocale(tag)).toBe(expected);
   });
 });

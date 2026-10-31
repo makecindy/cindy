@@ -569,7 +569,7 @@ function turnTextsFor(observer: HookTurnObserver): HookTurnTexts {
 /** 附件未发出提示跟随界面语言, 并点名没发出的附件。 */
 function formatHookIncompleteNotice(skippedNames: string[]): string {
   const locale = getResolvedMainLocale();
-  const separator = locale === 'en' || locale === 'ko' ? ', ' : '、';
+  const separator = locale === 'zh-CN' || locale === 'zh-TW' || locale === 'ja' ? '、' : ', ';
   const names = skippedNames.map((name) => name || t('imBot.unnamedAttachment', locale));
   return t('imBot.outboundAttachmentsIncomplete', locale)
     .replace('{{count}}', String(skippedNames.length))

@@ -616,6 +616,7 @@ const fanOutPluginUpdateConsentHoldsChanged = createIpcFanOut(
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
+const fanOutSessionImportProgress = createIpcFanOut('session-import:progress');
 const fanOutSidebarPinnedOrderChanged = createIpcFanOut('sidebar-settings:pinned-order-changed');
 const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
   'sidebar-settings:hidden-project-keys-changed',
@@ -6081,11 +6082,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionImport: {
       scan: (request?: { force?: boolean }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:session-import:scan', request),
-      importSelected: (
-        items: Array<{ source: 'codex' | 'claude'; id: string }>,
-      ): Promise<unknown> => ipcRenderer.invoke('local-db:session-import:import', { items }),
-      linkCodexProject: (workingDir: string): Promise<unknown> =>
-        ipcRenderer.invoke('local-db:session-import:link-codex-project', { workingDir }),
+      start: (keys: string[]): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:session-import:start', { keys }),
+      status: (requestId?: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:session-import:status', { requestId }),
+      cancel: (requestId: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:session-import:cancel', { requestId }),
+      relocate: (sessionId: string, workingDir: string): Promise<unknown> =>
+        ipcRenderer.invoke('local-db:session-import:relocate', { sessionId, workingDir }),
+      onProgress: (cb: (view: unknown) => void) => fanOutSessionImportProgress(cb as IpcCallback),
     },
     sessionShare: {
       /** 导出会话为 .cshare(main 弹保存对话框;password 可选,不落日志)。 */

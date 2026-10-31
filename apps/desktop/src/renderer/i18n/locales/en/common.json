@@ -2413,7 +2413,12 @@
         "zh-TW": "Traditional Chinese",
         "en": "English",
         "ja": "日本語",
-        "ko": "한국어"
+        "ko": "한국어",
+        "es": "Español",
+        "fr": "Français",
+        "de": "Deutsch",
+        "pt-PT": "Português (Portugal)",
+        "pt-BR": "Português (Brasil)"
       }
     },
     "userProfile": {
@@ -2882,7 +2887,8 @@
         "hint": "Auto detects the spoken language. Choose one to reduce multilingual mix-ups.",
         "ariaLabel": "Language selection",
         "options": {
-          "auto": "Auto"
+          "auto": "Auto",
+          "es": "Español"
         },
         "optionDescriptions": {
           "auto": "Let the recognition service detect it",
@@ -2890,7 +2896,8 @@
           "zh-TW": "Traditional Chinese (Taiwan)",
           "en": "English",
           "ja": "Japanese",
-          "ko": "Korean"
+          "ko": "Korean",
+          "es": "Spanish"
         }
       },
       "shortcut": {
@@ -3153,49 +3160,100 @@
       }
     },
     "sessionImport": {
-      "title": "Local Session Import",
-      "description": "Read-only scan of local Claude Code and Codex history. Only checked sessions in the list will be imported; skipped internal sessions are hidden and cannot be imported.",
-      "scan": "Scan",
-      "scanning": "Scanning",
-      "emptyTitle": "Scan local history first",
-      "emptyDescription": "Scanning does not write the database or change the sidebar.",
-      "noCandidates": "No importable sessions for the current filter.",
-      "collapse": "Collapse group",
-      "expand": "Expand group",
-      "selectGroup": "Select group",
-      "sessions": "sessions",
-      "selected": "{{count}} selected",
-      "importSelected": "Import selected",
-      "importing": "Importing",
+      "title": "Session Import",
+      "description": "Bring sessions from other AI coding tools into Cindy and keep working. Cindy only reads the originals and never changes them.",
+      "rescan": "Scan Again",
+      "allSources": "All Sources",
+      "search": "Search sessions or folders",
+      "projectFilter": "Only {{name}}",
+      "clearProjectFilter": "Show all projects",
+      "hiddenCount_one": "{{count}} hidden",
+      "hiddenCount_other": "{{count}} hidden",
+      "hidden": {
+        "head": "Not listed",
+        "hint": "Checked items appear in the list",
+        "cindy": "Sessions Cindy ran itself",
+        "temp": "Sessions in temporary folders",
+        "internal": "Internal sessions (reviews, subagents)",
+        "imported": "Already imported",
+        "sourceError": "Couldn’t read {{name}} history"
+      },
+      "missingDir": "Folder missing",
+      "groupTasks_one": "1 session",
+      "groupTasks_other": "{{count}} sessions",
+      "dialogue": "Chat",
       "archived": "Archived",
+      "unsupported": "Format not supported yet",
       "untitled": "Untitled Session",
-      "noWorkingDir": "No working directory",
-      "summary": {
-        "total": "Shown",
-        "totalHint": "Selectable for import",
-        "projects": "Project sessions",
-        "projectsHint": "Sessions that will appear under project groups",
-        "dialogue": "Chat",
-        "dialogueHint": "Codex projectless sessions",
-        "filtered": "Skipped",
-        "filteredHint": "Internal or already in app"
+      "selectAll": "Select All",
+      "selectGroup": "Select whole group",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "selectedSummary_one": "{{count}} selected · {{size}}",
+      "selectedSummary_other": "{{count}} selected · {{size}}",
+      "pickHint": "Select the sessions to bring into Cindy",
+      "importCount_one": "Import 1 Session",
+      "importCount_other": "Import {{count}} Sessions",
+      "import": "Import",
+      "scanning": "Looking for sessions on this computer…",
+      "scanFailed": "The scan didn’t finish. Try again.",
+      "emptyTitle": "No sessions to import on this computer",
+      "emptyDescription": "Cindy can import sessions from these tools. After you use one of them, come back and scan again.",
+      "noMatch": "No matching sessions",
+      "allHidden": "All sessions here are hidden. Turn them on from “Hidden” in the top right.",
+      "confirm": {
+        "title_one": "Import 1 session?",
+        "title_other": "Import {{count}} sessions?",
+        "body": "This takes about {{minutes}} minutes and uses up to {{size}} of disk space. It runs in the background; you can stop at any time and keep what’s already imported.",
+        "cancel": "Cancel"
       },
-      "filters": {
-        "source": "Source",
-        "placement": "Placement",
-        "all": "All",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "Existing projects",
-        "dialogue": "Chat"
+      "progress": {
+        "title_one": "Importing 1 session",
+        "title_other": "Importing {{count}} sessions",
+        "background": "You can leave this page. Importing continues in the background.",
+        "stop": "Stop",
+        "queued": "Waiting",
+        "copy": "Copying the original history",
+        "messages_one": "Saving 1 message",
+        "messages_other": "Saving {{count}} messages",
+        "verify": "Checking it can continue"
       },
-      "toast": {
-        "scanFailed": "Scan failed",
-        "importFailed": "Import failed",
-        "imported": "Import complete: {{inserted}} inserted, {{updated}} updated"
+      "result": {
+        "title_one": "Imported 1 session",
+        "title_other": "Imported {{count}} sessions",
+        "stoppedTitle": "Import stopped",
+        "ready_one": "1 ready to continue",
+        "ready_other": "{{count}} ready to continue",
+        "action_one": "1 needs your attention",
+        "action_other": "{{count}} need your attention",
+        "failed_one": "1 failed",
+        "failed_other": "{{count}} failed",
+        "readyGroup": "Ready to continue ({{count}})",
+        "readyNative": "Ready to continue in {{harness}}",
+        "readyHandoff": "Ready — {{harness}} picks it up; switch any time",
+        "missingDir": "The original folder no longer exists. Choose a folder to continue.",
+        "chooseFolder": "Choose Folder",
+        "relocateFailed": "Couldn’t switch to that folder. Try again.",
+        "cancelled": "Stopped before importing",
+        "retry": "Retry",
+        "open": "Open",
+        "done": "Done"
       },
-      "selectAll": "Select all in current filter ({{count}})",
-      "selectedOutsideFilter": "({{count}} of them outside the current filter)"
+      "failure": {
+        "read-failed": "Couldn’t import: the original history can’t be read",
+        "unsupported-version": "Couldn’t import: this version’s history format isn’t supported yet",
+        "empty": "Couldn’t import: the original history has no messages",
+        "not-found": "Couldn’t import: the original history is gone",
+        "disk-full": "Couldn’t import: not enough disk space",
+        "native-unloadable": "Couldn’t import: the original history can’t be loaded"
+      },
+      "marker": {
+        "from": "Imported from {{source}} · {{date}}",
+        "folder": "Original folder {{path}}",
+        "end": "Everything above was imported from {{source}}",
+        "endHandoff": "Everything above was imported from {{source}}. {{harness}} continues from here."
+      },
+      "projectMenu": "Import this project’s sessions from other tools…"
     },
     "connections": {
       "codex": {
@@ -3634,6 +3692,7 @@
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "baseUrlRequired": "Enter this runtime's Base URL, or switch its protocol back to the default",
           "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
@@ -10524,8 +10583,10 @@
       },
       "mention": {
         "all": "Everyone",
-        "allHint": "Everyone replies",
-        "label": "Mention a teammate"
+        "allHint": "People only",
+        "label": "Mention a teammate",
+        "allBots": "All teammates",
+        "allBotsHint": "Teammates only"
       },
       "composer": {
         "label": "Group chat message",
@@ -10636,7 +10697,7 @@
         "speakingMode": "Speaking order",
         "speakingModeAuto": "Automatic",
         "speakingModeSequential": "One at a time",
-        "speakingModeAutoNote": "No mentions or @Everyone: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
+        "speakingModeAutoNote": "No mentions or @All teammates: think simultaneously on the first pass, then reply one by one. Mentioned teammates reply in mention order.",
         "speakingModeSequentialNote": "One teammate speaks at a time, and each one sees the replies before it.",
         "speakingModeSaveFailed": "Couldn't save the speaking order. Try again.",
         "setOrganizer": "Make Organizer",
@@ -10650,7 +10711,9 @@
         "projectDirClear": "Clear Folder",
         "projectDirNote": "Teammates work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
-        "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again."
+        "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
+        "allowMentionAllBots": "Allow @all teammates",
+        "allowMentionAllBotsHint": "Only the group owner can change this. Teammates may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
       "errors": {
         "memberLimit": "A group chat needs 2–6 teammates",
@@ -10674,7 +10737,8 @@
         "quoteUnavailable": "The quoted message was deleted or is no longer visible. The quote was removed. Send again.",
         "lifecycleUnavailable": "The current server or computer does not support this action yet.",
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
-        "lastOwner": "Transfer ownership or dissolve this group before leaving."
+        "lastOwner": "Transfer ownership or dissolve this group before leaving.",
+        "allBotsMentionDisabled": "The group owner has not enabled @all teammates."
       },
       "organizer": "Organizer",
       "plan": {
@@ -12646,6 +12710,7 @@
     "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
   },
   "chat": {
+    "teammateProcess": {"record":"Activity","operations":"Activity log","elapsed":"Working for {{duration}}","took":"Took {{duration}}","processing":"Working","worked":"Activity","thinking":"Thinking","thought":"Thought","failed_one":"{{count}} call failed","failed_other":"{{count}} calls failed","separator":", ","actions":{"running":{"read":"Reading files","edit":"Editing files","search":"Searching","web":"Browsing the web","command":"Running commands","tools":"Using tools","delegate":"Delegating work","plan":"Updating the plan"},"done":{"read":"Read files","edit":"Edited files","search":"Searched","web":"Browsed the web","command":"Ran commands","tools":"Used tools","delegate":"Delegated work","plan":"Updated the plan"}}},
     "imageDelivery": {
       "stored": "Image delivered",
       "failed": "Image delivery failed. Retry transferring the existing image.",
@@ -14399,11 +14464,6 @@
         "openInExplorer": "Open in file manager",
         "newInDirectory": "New session in this directory",
         "copyDeepLink": "Copy Project Link",
-        "syncCodex": "Sync Codex sessions for this project",
-        "syncCodexDone": "Codex sync complete: {{inserted}} linked, {{updated}} updated",
-        "syncCodexAlreadyLinked": "Codex sessions for this project are already linked",
-        "syncCodexNone": "No Codex sessions found for this project",
-        "syncCodexFailed": "Codex sync failed: {{error}}",
         "search": "Search sessions in this project"
       },
       "deepLink": {

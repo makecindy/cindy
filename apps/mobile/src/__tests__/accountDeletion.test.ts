@@ -221,7 +221,7 @@ describe("mobile account deletion", () => {
     expect(confirmBody).not.toContain("router.replace('/login')");
   });
 
-  it("localizes the deletion entry, screen, and restored notice across all five locales", () => {
+  it("localizes the deletion entry, screen, and restored notice across all supported locales", () => {
     const settings = source("app/settings.tsx");
     const layout = source("app/_layout.tsx");
     const loginMessages = source("src/auth/loginMessages.ts");
@@ -230,8 +230,8 @@ describe("mobile account deletion", () => {
     expect(layout).toContain("loginText('accountDeletionRestoredTitle')");
     expect(layout).toContain("loginText('accountDeletionRestoredCopy')");
     expect(
-      loginMessages.match(/accountDeletionAcknowledgeCopy:/g),
-    ).toHaveLength(5);
+      loginMessages.match(/(?:["']accountDeletionAcknowledgeCopy["']|accountDeletionAcknowledgeCopy):/g),
+    ).toHaveLength(10);
     expect(loginMessages).toContain("其他客户端会在登录状态失效后退出");
     expect(loginMessages).toContain(
       "other clients will sign out when their sign-in session becomes invalid",

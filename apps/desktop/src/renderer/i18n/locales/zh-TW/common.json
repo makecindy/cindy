@@ -2383,7 +2383,12 @@
         "en": "English",
         "ja": "日本語",
         "ko": "한국어",
-        "zh-TW": "繁體中文"
+        "zh-TW": "繁體中文",
+        "es": "Español",
+        "fr": "Français",
+        "de": "Deutsch",
+        "pt-PT": "Português (Portugal)",
+        "pt-BR": "Português (Brasil)"
       }
     },
     "userProfile": {
@@ -2852,7 +2857,8 @@
         "hint": "自動識別當前語音；指定語言可減少多語言誤判。",
         "ariaLabel": "語言選擇",
         "options": {
-          "auto": "自動"
+          "auto": "自動",
+          "es": "Español"
         },
         "optionDescriptions": {
           "auto": "由識別服務自動判斷",
@@ -2860,7 +2866,8 @@
           "zh-TW": "繁體中文（臺灣）",
           "en": "English",
           "ja": "日本語",
-          "ko": "한국어"
+          "ko": "한국어",
+          "es": "西班牙語"
         }
       },
       "shortcut": {
@@ -3123,49 +3130,89 @@
       }
     },
     "sessionImport": {
-      "title": "本地任務匯入",
-      "description": "只讀掃描本機 Claude Code 與 Codex 歷史。只有列表裡勾選的任務會被匯入；已跳過的內部 Agent 會話不會展示，也不會匯入。",
-      "scan": "掃描",
-      "scanning": "掃描中",
-      "emptyTitle": "先掃描本地歷史",
-      "emptyDescription": "掃描不會寫入資料庫，也不會改變側邊欄。",
-      "noCandidates": "當前篩選下沒有可匯入的任務。",
-      "collapse": "收起分組",
-      "expand": "展開分組",
-      "selectGroup": "選擇整個分組",
-      "sessions": "條任務",
-      "selected": "已選擇 {{count}} 條",
-      "importSelected": "匯入選中",
-      "importing": "匯入中",
+      "title": "任務匯入",
+      "description": "把其他 AI 程式設計工具裡的任務接到 Cindy 接著做。只讀取原始記錄，不會改動它們。",
+      "rescan": "重新掃描",
+      "allSources": "全部來源",
+      "search": "搜尋任務或資料夾",
+      "projectFilter": "只看 {{name}}",
+      "clearProjectFilter": "顯示全部專案",
+      "hiddenCount_other": "已隱藏 {{count}} 個",
+      "hidden": {
+        "head": "這些沒有列出",
+        "hint": "勾選的會顯示在列表裡",
+        "cindy": "Cindy 自己執行過的任務",
+        "temp": "暫存資料夾裡的任務",
+        "internal": "工具內部任務（自動審查、子 Agent）",
+        "imported": "已經匯入過的任務",
+        "sourceError": "{{name}} 的記錄讀不出來"
+      },
+      "missingDir": "原資料夾已不存在",
+      "groupTasks_other": "{{count}} 個任務",
+      "dialogue": "對話",
       "archived": "已歸檔",
+      "unsupported": "格式暫不支援",
       "untitled": "未命名任務",
-      "noWorkingDir": "無工作目錄",
-      "summary": {
-        "total": "列表中",
-        "totalHint": "可以勾選匯入",
-        "projects": "專案任務",
-        "projectsHint": "匯入後進入專案分組的任務",
-        "dialogue": "對話",
-        "dialogueHint": "Codex 標記為不屬於專案的任務",
-        "filtered": "已跳過",
-        "filteredHint": "內部 Agent 會話或已在應用內"
+      "selectAll": "全選",
+      "selectGroup": "選擇整個分組",
+      "expand": "展開",
+      "collapse": "收起",
+      "selectedSummary_other": "已選 {{count}} 個任務 · {{size}}",
+      "pickHint": "勾選要接到 Cindy 的任務",
+      "importCount_other": "匯入 {{count}} 個任務",
+      "import": "匯入",
+      "scanning": "正在尋找這台電腦上的任務…",
+      "scanFailed": "掃描沒有完成，請重試",
+      "emptyTitle": "這台電腦上沒有找到可以匯入的任務",
+      "emptyDescription": "Cindy 可以匯入以下工具裡的任務。用過這些工具後，回來重新掃描即可。",
+      "noMatch": "沒有符合條件的任務",
+      "allHidden": "這裡的任務都被隱藏了，可在右上角「已隱藏」裡打開顯示。",
+      "confirm": {
+        "title_other": "匯入 {{count}} 個任務？",
+        "body": "大約需要 {{minutes}} 分鐘，最多佔用 {{size}} 磁碟空間。匯入在背景進行，可以隨時停止，已經匯入的會保留。",
+        "cancel": "取消"
       },
-      "filters": {
-        "source": "來源",
-        "placement": "位置",
-        "all": "全部",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "已有專案",
-        "dialogue": "對話"
+      "progress": {
+        "title_other": "正在匯入 {{count}} 個任務",
+        "background": "可以離開這個頁面，匯入會在背景繼續。",
+        "stop": "停止",
+        "queued": "等待中",
+        "copy": "正在複製原始記錄",
+        "messages_other": "正在寫入 {{count}} 則訊息",
+        "verify": "正在確認能接著做"
       },
-      "toast": {
-        "scanFailed": "掃描失敗",
-        "importFailed": "匯入失敗",
-        "imported": "匯入完成：新增 {{inserted}} 條，更新 {{updated}} 條"
+      "result": {
+        "title_other": "已匯入 {{count}} 個任務",
+        "stoppedTitle": "匯入已停止",
+        "ready_other": "{{count}} 個可以繼續",
+        "action_other": "{{count}} 個需要你處理",
+        "failed_other": "{{count}} 個沒匯入成功",
+        "readyGroup": "可以繼續（{{count}}）",
+        "readyNative": "可以繼續，用 {{harness}} 原樣接著做",
+        "readyHandoff": "可以繼續，由 {{harness}} 接著做，可隨時更換",
+        "missingDir": "原資料夾已不存在，選一個資料夾就能繼續",
+        "chooseFolder": "選擇資料夾",
+        "relocateFailed": "沒能換到這個資料夾，請重試",
+        "cancelled": "已停止，沒有匯入",
+        "retry": "重試",
+        "open": "開啟",
+        "done": "完成"
       },
-      "selectAll": "全選當前篩選結果（{{count}} 條）",
-      "selectedOutsideFilter": "（其中 {{count}} 條在當前篩選之外）"
+      "failure": {
+        "read-failed": "沒匯入成功：原始記錄檔讀不出來",
+        "unsupported-version": "沒匯入成功：這個版本的記錄格式暫不支援",
+        "empty": "沒匯入成功：原始記錄裡沒有訊息",
+        "not-found": "沒匯入成功：原始記錄已經不在了",
+        "disk-full": "沒匯入成功：磁碟空間不足",
+        "native-unloadable": "沒匯入成功：原始記錄無法載入"
+      },
+      "marker": {
+        "from": "從 {{source}} 匯入 · {{date}}",
+        "folder": "原資料夾 {{path}}",
+        "end": "以上是從 {{source}} 匯入的記錄",
+        "endHandoff": "以上是從 {{source}} 匯入的記錄，接下來由 {{harness}} 接著做"
+      },
+      "projectMenu": "匯入此專案在其他工具裡的任務…"
     },
     "connections": {
       "codex": {
@@ -3604,6 +3651,7 @@
           "nameRequired": "請填寫顯示名稱",
           "runtimeRequired": "請至少配置一個 Runtime（填寫它的基礎 URL 和模型）",
           "baseUrlInvalid": "基礎 URL 必須是合法的 http(s) 地址",
+          "baseUrlRequired": "請填寫該 Runtime 的基礎 URL，或把協議改回預設",
           "contextWindowInvalid": "上下文視窗必須是合法的正整數（數字組之間可用分隔符）",
           "requestPathInvalid": "精確請求路徑需以單個 / 開頭，不含片段標識或 .、.. 路徑段；空格和不安全字元請使用百分號編碼",
           "modelRequired": "請至少新增一個模型",
@@ -10489,8 +10537,10 @@
       },
       "mention": {
         "all": "所有人",
-        "allHint": "大家都回答",
-        "label": "點名夥伴"
+        "allHint": "僅真人",
+        "label": "點名夥伴",
+        "allBots": "所有夥伴",
+        "allBotsHint": "僅夥伴"
       },
       "composer": {
         "label": "群聊訊息",
@@ -10601,7 +10651,7 @@
         "speakingMode": "發言方式",
         "speakingModeAuto": "自動",
         "speakingModeSequential": "一律輪流",
-        "speakingModeAutoNote": "未 @ 人或 @所有人時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
+        "speakingModeAutoNote": "未 @ 人或 @所有夥伴時，首輪同時思考，之後輪流；@ 夥伴按提及順序輪流。",
         "speakingModeSequentialNote": "每次只有一位夥伴發言，後說的能看到前面的回答。",
         "speakingModeSaveFailed": "發言方式沒能儲存，請再試一次",
         "setOrganizer": "設為負責人",
@@ -10615,7 +10665,9 @@
         "projectDirClear": "清除",
         "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
         "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
-        "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試"
+        "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
+        "allowMentionAllBots": "允許 @所有夥伴",
+        "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
       },
       "errors": {
         "memberLimit": "一個群聊需要 2–6 位夥伴",
@@ -10639,7 +10691,8 @@
         "quoteUnavailable": "引用的訊息已刪除或無法查看，已取消引用，請再傳送一次",
         "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
         "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
-        "lastOwner": "請先轉讓群主或解散群聊，再退出。"
+        "lastOwner": "請先轉讓群主或解散群聊，再退出。",
+        "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。"
       },
       "organizer": "負責人",
       "plan": {
@@ -12604,6 +12657,7 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "teammateProcess": {"record":"處理紀錄","operations":"操作記錄","elapsed":"已處理 {{duration}}","took":"用時 {{duration}}","processing":"正在處理","worked":"處理紀錄","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次呼叫失敗","separator":"、","actions":{"running":{"read":"正在檢視檔案","edit":"正在編輯檔案","search":"正在尋找內容","web":"正在查閱網頁","command":"正在執行指令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理計畫"},"done":{"read":"檢視了檔案","edit":"編輯了檔案","search":"尋找了內容","web":"查閱了網頁","command":"執行了指令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了計畫"}}},
     "imageDelivery": {
       "stored": "圖片已交付",
       "failed": "圖片交付失敗，可重試傳輸已有圖片。",
@@ -14344,11 +14398,6 @@
         "openInExplorer": "在檔案管理器中開啟",
         "newInDirectory": "在此目錄新建任務",
         "copyDeepLink": "複製專案連結",
-        "syncCodex": "同步此專案的 Codex 任務",
-        "syncCodexDone": "Codex 同步完成：連結 {{inserted}} 條，更新 {{updated}} 條",
-        "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
-        "syncCodexNone": "沒有找到此專案的 Codex 任務",
-        "syncCodexFailed": "Codex 同步失敗：{{error}}",
         "search": "在專案內搜尋任務"
       },
       "deepLink": {

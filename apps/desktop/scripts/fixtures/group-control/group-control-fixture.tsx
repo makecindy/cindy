@@ -1,3 +1,4 @@
+import { makerChatStore } from '../../../src/renderer/lib/makerChatStore';
 import { useEffect, useRef } from 'react';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
 import { AppFrame, forbid, mountPage, subscription } from '../../ui-page/harness';
@@ -16,8 +17,11 @@ if (!crypto.randomUUID) {
 }
 
 interface GroupData {
+  processRecord?: boolean;
+  processOtherOwner?: boolean;
   /** Controlled receipts for the real renderer send/settle layout regression. */
   sendStatus?: boolean;
+  sharePending?: boolean;
   workState?: 'thinking' | 'reading-file' | 'testing' | 'waiting' | 'stopping' | 'unknown';
   workRemote?: boolean;
   workParallel?: boolean;
@@ -303,6 +307,12 @@ void mountPage({
   host: (ctx) => {
     const data = ctx.data as unknown as GroupData;
     const group = groupFrom(data);
+    if (data.processRecord) {
+      Object.assign(group, { serverBacked: true, members: group.members.map(member => ({ ...member, isOwned: !data.processOtherOwner, homeDeviceId: 'fixture-mac' })),
+        messages: [message({ id: 'process-answer', sequence: 1, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster',
+          content: '任务与 PR 的进展已整理，以下是需要跟进的事项。', createdAt: T0,
+          process: { groupId: group.id, executionId: 'fixture-completed', sessionId: 'fixture-lane', clientId: 'fixture-source', durationMs: 47000 } })] });
+    }
     if (data.workRemote) applyRemoteSessionActivity('fixture-mac', { sessionId: 'fixture-work', phase: 'running', workingPhase: 'testing', compactDetail: '正在运行群聊回归检查', attention: false });
     let following = false;
     const followThread = async (input: { following: boolean }) => {
@@ -351,11 +361,20 @@ void mountPage({
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
           ...(data.threadPanel ? { thread, followThread } : {}),
+          ...(data.sharePending ? { shareToMain: () => new Promise(() => {}) } : {}),
         },
         updateBotGroup: forbid('maker.updateBotGroup'),
       },
       deviceLink: {
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => args[0]?.ref?.collectionId === 'bot-groups' ? {
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? [
+          { clientId: 'fixture-source', role: 'user', content: 'Request' },
+          { clientId: 'fixture-thought', role: 'thinking', content: 'Hidden reasoning' },
+          { clientId: 'fixture-note', role: 'assistant', content: '我先核对任务的最近进展，再看未完成 PR 的阻塞点。', agentMeta: { assistantPhase: 'commentary' } },
+          { clientId: 'fixture-tool', role: 'tool_use', content: { toolName: 'Read', toolUseId: 'fixture-tool', input: { file_path: '/repo/tasks.md' } } },
+          { clientId: 'fixture-result', role: 'tool_result', toolUseId: 'fixture-tool', content: 'Task records' },
+          { clientId: 'fixture-note2', role: 'assistant', content: '已经继续获取任务信息，接下来核对未完成 PR 的当前状态。', agentMeta: { assistantPhase: 'commentary' } },
+          { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true } },
+        ] : args[0]?.ref?.collectionId === 'bot-groups' ? {
           ref: { collectionId: 'bot-groups', kind: 'bot-group', id: group.id },
           blocks: [{ primitive: 'bot-group-chat', data: { ...group, round: { ...group.round, speakers: [{ ...group.round.speakers[0], sessionId: 'fixture-work' }] } } }],
         } : { blocks: [] },
@@ -379,6 +398,7 @@ void mountPage({
           </div>
         </AppFrame>
         <ControlledBanner />
+        {data.workState && !data.workRemote ? <SeedProcessNotes /> : null}
         {data.settings ? <OpenSettings /> : null}
       </>
     );
@@ -398,4 +418,19 @@ function OpenSettings() {
     setSearchParams({ [BOT_GROUP_SETTINGS_PARAM]: '1' }, { replace: true });
   }, [setSearchParams]);
   return <BotGroupSettingsDrawer />;
+}
+
+// Input events only; the real store and process renderer produce the journal.
+function SeedProcessNotes() {
+  useEffect(() => {
+    // The HTTP-only screenshot harness lacks secure-context randomUUID.
+    let id = 0;
+    if (!crypto.randomUUID) Object.defineProperty(crypto, 'randomUUID', { configurable: true,
+      value: () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}` });
+    for (const text of ['我先核对任务的最近进展，再看未完成 PR 的阻塞点。', '已经找到需要跟进的两项工作，正在核对当前状态。']) {
+      makerChatStore.__applyStreamEventForTest('fixture-work', { type: 'text', source: 'codex', data: { text, isFinal: true, phase: 'commentary' } });
+    }
+    return () => makerChatStore.purgeSession('fixture-work');
+  }, []);
+  return null;
 }

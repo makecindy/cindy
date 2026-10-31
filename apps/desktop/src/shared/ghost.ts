@@ -9285,7 +9285,17 @@ export type GhostPipeFetchResult =
     }
   | { ok: true; status: number; headers: Record<string, string>;
       library: { path: string; bytes: number; sha256: string; ref: string } }
-  | { ok: false; message: string; errorCode?: string; limitBytes?: number };
+  | {
+      ok: false;
+      message: string;
+      /**
+       * 可选的稳定失败码。网络层失败为 NETWORK_TIMEOUT / TLS_ERROR / DNS_FAILED /
+       * CONNECTION_REFUSED / CONNECTION_RESET / NETWORK_UNREACHABLE / NETWORK_ERROR;
+       * Library 等通道另有自己的码。缺省 = 未分类,插件按 message 处理(旧主机不带)。
+       */
+      errorCode?: string;
+      limitBytes?: number;
+    };
 
 /** 工具调用的结构化失败分类(与 cindy-tools 的 CindyGhostCallErrorCode 同构)。 */
 export type GhostToolCallErrorCode =

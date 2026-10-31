@@ -73,6 +73,12 @@ const LOCALE_NAME: Record<HelpLocale, string> = {
   en: 'English',
   ja: 'Japanese',
   ko: 'Korean',
+
+  "es": "Spanish",
+  "fr": "French",
+  "de": "German",
+  "pt-PT": "European Portuguese",
+  "pt-BR": "Brazilian Portuguese",
 };
 
 type HelpOneShotTarget = {
@@ -107,7 +113,7 @@ async function isHelpSessionAgentDispatchAllowed(
 }
 
 function normalizeLocale(locale: unknown): HelpLocale {
-  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko'
+  return locale === 'zh-CN' || locale === 'zh-TW' || locale === 'en' || locale === 'ja' || locale === 'ko' || locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
     ? locale
     : 'en';
 }

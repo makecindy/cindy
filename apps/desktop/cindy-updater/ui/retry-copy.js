@@ -18,6 +18,51 @@ const RETRY_COPY = {
     archive_unavailable: '更新檔案已不存在或無法讀取，請重新檢查更新',
     spawn_failed: '無法啟動更新重試，請關閉此視窗後重新檢查更新',
   },
+  "es": {
+    "retry": "Reintentar",
+    "processes_running": "Cierra Cindy y todos los procesos que se ejecuten desde su carpeta de instalación y vuelve a intentarlo",
+    "updater_busy": "Ya hay otra actualización en curso. Cierra esta ventana y vuelve a buscar actualizaciones",
+    "in_progress": "Ya hay un reintento de actualización en curso",
+    "unavailable": "No se puede reintentar esta actualización fallida",
+    "archive_unavailable": "El archivo de actualización falta o no se puede leer. Vuelve a buscar actualizaciones",
+    "spawn_failed": "No se pudo reiniciar el actualizador. Cierra esta ventana y vuelve a buscar actualizaciones"
+  },
+  "fr": {
+    "retry": "Réessayer",
+    "processes_running": "Fermez Cindy et tous les processus exécutés depuis son dossier d’installation, puis réessayez",
+    "updater_busy": "Une autre mise à jour est déjà en cours. Fermez cette fenêtre et recherchez à nouveau les mises à jour",
+    "in_progress": "Une nouvelle tentative de mise à jour est déjà en cours",
+    "unavailable": "Cette mise à jour ne peut pas être retentée après cet échec",
+    "archive_unavailable": "Le fichier de mise à jour est manquant ou illisible. Recherchez à nouveau les mises à jour",
+    "spawn_failed": "Impossible de redémarrer le programme de mise à jour. Fermez cette fenêtre et recherchez à nouveau les mises à jour"
+  },
+  "de": {
+    "retry": "Wiederholen",
+    "processes_running": "Schließe Cindy und alle Prozesse, die aus dem Installationsordner ausgeführt werden, und versuche es erneut",
+    "updater_busy": "Ein anderes Update läuft bereits. Schließe dieses Fenster und suche erneut nach Updates",
+    "in_progress": "Ein erneuter Updateversuch läuft bereits",
+    "unavailable": "Dieses fehlgeschlagene Update kann nicht erneut versucht werden",
+    "archive_unavailable": "Die Updatedatei fehlt oder ist nicht lesbar. Suche bitte erneut nach Updates",
+    "spawn_failed": "Das Updateprogramm konnte nicht neu gestartet werden. Schließe dieses Fenster und suche erneut nach Updates"
+  },
+  "pt-PT": {
+    "retry": "Repetir",
+    "processes_running": "Feche o Cindy e quaisquer processos em execução a partir da respetiva pasta de instalação e tente novamente",
+    "updater_busy": "Já está outra atualização em curso. Feche esta janela e volte a procurar atualizações",
+    "in_progress": "Já está em curso uma nova tentativa de atualização",
+    "unavailable": "Não é possível repetir esta atualização após a falha",
+    "archive_unavailable": "O ficheiro de atualização está em falta ou não pode ser lido. Volte a procurar atualizações",
+    "spawn_failed": "Não foi possível reiniciar o atualizador. Feche esta janela e volte a procurar atualizações"
+  },
+  "pt-BR": {
+    "retry": "Tentar novamente",
+    "processes_running": "Feche o Cindy e todos os processos em execução na pasta de instalação e tente novamente",
+    "updater_busy": "Outra atualização já está em andamento. Feche esta janela e verifique se há atualizações novamente",
+    "in_progress": "Uma nova tentativa de atualização já está em andamento",
+    "unavailable": "Não é possível tentar novamente após esta falha de atualização",
+    "archive_unavailable": "O arquivo de atualização está ausente ou não pode ser lido. Verifique se há atualizações novamente",
+    "spawn_failed": "Não foi possível reiniciar o atualizador. Feche esta janela e verifique se há atualizações novamente"
+  },
   en: {
     retry: 'Retry',
     processes_running:
@@ -59,5 +104,10 @@ globalThis.retryCopy = function retryCopy(language = 'en') {
   const locale = language.toLowerCase();
   if (/^zh-(tw|hk|mo|hant)(-|$)/.test(locale)) return RETRY_COPY['zh-TW'];
   if (locale === 'zh' || locale.startsWith('zh-')) return RETRY_COPY['zh-CN'];
+  if (locale.split('-')[0] === 'pt') {
+    const parts = locale.split('-');
+    const region = parts[/^[a-z]{4}$/.test(parts[1] || '') ? 2 : 1];
+    return RETRY_COPY[region === 'br' ? 'pt-BR' : 'pt-PT'];
+  }
   return RETRY_COPY[locale.split('-')[0]] || RETRY_COPY.en;
 };

@@ -393,44 +393,84 @@
       },
       "labels": {
         "en": {
+          "value": "Explore and understand code",
           "provenance": {
-            "hash": "82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
             "locator": "newChat.createAgent.quickStarts.explore",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
-          },
-          "value": "Explore and understand code"
+            "hash": "626b24e6dde0f1b806012325819f9930410ef52d84b08749c1c43213dae47eae"
+          }
         },
         "ja": {
+          "value": "コードを探索して理解",
           "provenance": {
-            "hash": "080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
             "locator": "newChat.createAgent.quickStarts.explore",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
-          },
-          "value": "コードを探索して理解"
+            "hash": "56fb7a33c535ec5d163b9dbb606630f0c67fac30f3aff78c0a5240ba5eaf262a"
+          }
         },
         "ko": {
+          "value": "코드 탐색 및 이해",
           "provenance": {
-            "hash": "f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
             "locator": "newChat.createAgent.quickStarts.explore",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
-          },
-          "value": "코드 탐색 및 이해"
+            "hash": "4394aedf36668d85663c9622f3e57142a2f9d538f8b4627fbc8a0f1f13356555"
+          }
         },
         "zh-CN": {
+          "value": "探索并理解代码",
           "provenance": {
-            "hash": "6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
             "locator": "newChat.createAgent.quickStarts.explore",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
-          },
-          "value": "探索并理解代码"
+            "hash": "490684d77b5be749cbd975ffd0d611e205fa10b298880a1566386d1013aad46a"
+          }
         },
         "zh-TW": {
+          "value": "探索並理解程式碼",
           "provenance": {
-            "hash": "7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
             "locator": "newChat.createAgent.quickStarts.explore",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
-          },
-          "value": "探索並理解程式碼"
+            "hash": "f1b631f88a4a3f12b4c822ef238efcb0ea2f4fce50a1bed9eb3f8fdafe0d7725"
+          }
+        },
+        "es": {
+          "value": "Explorar y comprender código",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "5026f5bb4ddb77cfc51a08976ecb7b5c5e43311a9223b091e9559c0b65135096"
+          }
+        },
+        "fr": {
+          "value": "Explorer et comprendre du code",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "27aabcdf9e44b518a8d616a2cabbe74883e9453207c751eb7058eb3c24f26f61"
+          }
+        },
+        "de": {
+          "value": "Code erkunden und verstehen",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "b0caa5263749209d531fe734ebab77a5c4f63a212545926278350ba7b86f736b"
+          }
+        },
+        "pt-PT": {
+          "value": "Explorar e compreender código",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "39dad9d7b82f56ecbbdde2719fc1b3c0514b4659804ee25c871b5464dc709480"
+          }
+        },
+        "pt-BR": {
+          "value": "Explorar e entender código",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "locator": "newChat.createAgent.quickStarts.explore",
+            "hash": "1034b745520093f412693d746ce0a25bc0e591b78a7a647853d1850d4d336d1c"
+          }
         }
       }
     },
@@ -453,44 +493,84 @@
       },
       "labels": {
         "en": {
+          "value": "Build a feature, app, or tool",
           "provenance": {
-            "hash": "82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
-          },
-          "value": "Build a feature, app, or tool"
+            "hash": "626b24e6dde0f1b806012325819f9930410ef52d84b08749c1c43213dae47eae"
+          }
         },
         "ja": {
+          "value": "新機能、アプリ、ツールを構築",
           "provenance": {
-            "hash": "080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
-          },
-          "value": "新機能、アプリ、ツールを構築"
+            "hash": "56fb7a33c535ec5d163b9dbb606630f0c67fac30f3aff78c0a5240ba5eaf262a"
+          }
         },
         "ko": {
+          "value": "새 기능, 앱 또는 도구 만들기",
           "provenance": {
-            "hash": "f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
-          },
-          "value": "새 기능, 앱 또는 도구 만들기"
+            "hash": "4394aedf36668d85663c9622f3e57142a2f9d538f8b4627fbc8a0f1f13356555"
+          }
         },
         "zh-CN": {
+          "value": "构建新功能、应用或工具",
           "provenance": {
-            "hash": "6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
-          },
-          "value": "构建新功能、应用或工具"
+            "hash": "490684d77b5be749cbd975ffd0d611e205fa10b298880a1566386d1013aad46a"
+          }
         },
         "zh-TW": {
+          "value": "構建新功能、應用或工具",
           "provenance": {
-            "hash": "7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
             "locator": "newChat.createAgent.quickStarts.build",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
-          },
-          "value": "構建新功能、應用或工具"
+            "hash": "f1b631f88a4a3f12b4c822ef238efcb0ea2f4fce50a1bed9eb3f8fdafe0d7725"
+          }
+        },
+        "es": {
+          "value": "Crear una función, app o herramienta",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "5026f5bb4ddb77cfc51a08976ecb7b5c5e43311a9223b091e9559c0b65135096"
+          }
+        },
+        "fr": {
+          "value": "Créer une fonctionnalité, une application ou un outil",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "27aabcdf9e44b518a8d616a2cabbe74883e9453207c751eb7058eb3c24f26f61"
+          }
+        },
+        "de": {
+          "value": "Eine Funktion, App oder ein Tool entwickeln",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "b0caa5263749209d531fe734ebab77a5c4f63a212545926278350ba7b86f736b"
+          }
+        },
+        "pt-PT": {
+          "value": "Criar uma funcionalidade, aplicação ou ferramenta",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "39dad9d7b82f56ecbbdde2719fc1b3c0514b4659804ee25c871b5464dc709480"
+          }
+        },
+        "pt-BR": {
+          "value": "Criar um recurso, aplicativo ou ferramenta",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "locator": "newChat.createAgent.quickStarts.build",
+            "hash": "1034b745520093f412693d746ce0a25bc0e591b78a7a647853d1850d4d336d1c"
+          }
         }
       }
     },
@@ -513,44 +593,84 @@
       },
       "labels": {
         "en": {
+          "value": "Review code and suggest changes",
           "provenance": {
-            "hash": "82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
             "locator": "newChat.createAgent.quickStarts.review",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
-          },
-          "value": "Review code and suggest changes"
+            "hash": "626b24e6dde0f1b806012325819f9930410ef52d84b08749c1c43213dae47eae"
+          }
         },
         "ja": {
+          "value": "コードをレビューして修正を提案",
           "provenance": {
-            "hash": "080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
             "locator": "newChat.createAgent.quickStarts.review",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
-          },
-          "value": "コードをレビューして修正を提案"
+            "hash": "56fb7a33c535ec5d163b9dbb606630f0c67fac30f3aff78c0a5240ba5eaf262a"
+          }
         },
         "ko": {
+          "value": "코드 검토 및 수정 제안",
           "provenance": {
-            "hash": "f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
             "locator": "newChat.createAgent.quickStarts.review",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
-          },
-          "value": "코드 검토 및 수정 제안"
+            "hash": "4394aedf36668d85663c9622f3e57142a2f9d538f8b4627fbc8a0f1f13356555"
+          }
         },
         "zh-CN": {
+          "value": "审查代码并提出修改建议",
           "provenance": {
-            "hash": "6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
             "locator": "newChat.createAgent.quickStarts.review",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
-          },
-          "value": "审查代码并提出修改建议"
+            "hash": "490684d77b5be749cbd975ffd0d611e205fa10b298880a1566386d1013aad46a"
+          }
         },
         "zh-TW": {
+          "value": "審查程式碼並提出修改建議",
           "provenance": {
-            "hash": "7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
             "locator": "newChat.createAgent.quickStarts.review",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
-          },
-          "value": "審查程式碼並提出修改建議"
+            "hash": "f1b631f88a4a3f12b4c822ef238efcb0ea2f4fce50a1bed9eb3f8fdafe0d7725"
+          }
+        },
+        "es": {
+          "value": "Revisar código y sugerir cambios",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "5026f5bb4ddb77cfc51a08976ecb7b5c5e43311a9223b091e9559c0b65135096"
+          }
+        },
+        "fr": {
+          "value": "Faire une revue de code et suggérer des modifications",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "27aabcdf9e44b518a8d616a2cabbe74883e9453207c751eb7058eb3c24f26f61"
+          }
+        },
+        "de": {
+          "value": "Code prüfen und Änderungen vorschlagen",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "b0caa5263749209d531fe734ebab77a5c4f63a212545926278350ba7b86f736b"
+          }
+        },
+        "pt-PT": {
+          "value": "Rever código e sugerir alterações",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "39dad9d7b82f56ecbbdde2719fc1b3c0514b4659804ee25c871b5464dc709480"
+          }
+        },
+        "pt-BR": {
+          "value": "Revisar código e sugerir alterações",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "locator": "newChat.createAgent.quickStarts.review",
+            "hash": "1034b745520093f412693d746ce0a25bc0e591b78a7a647853d1850d4d336d1c"
+          }
         }
       }
     },
@@ -573,44 +693,84 @@
       },
       "labels": {
         "en": {
+          "value": "Fix issues and failures",
           "provenance": {
-            "hash": "82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
-          },
-          "value": "Fix issues and failures"
+            "hash": "626b24e6dde0f1b806012325819f9930410ef52d84b08749c1c43213dae47eae"
+          }
         },
         "ja": {
+          "value": "問題や失敗を修正",
           "provenance": {
-            "hash": "080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
-          },
-          "value": "問題や失敗を修正"
+            "hash": "56fb7a33c535ec5d163b9dbb606630f0c67fac30f3aff78c0a5240ba5eaf262a"
+          }
         },
         "ko": {
+          "value": "문제와 실패 수정",
           "provenance": {
-            "hash": "f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
-          },
-          "value": "문제와 실패 수정"
+            "hash": "4394aedf36668d85663c9622f3e57142a2f9d538f8b4627fbc8a0f1f13356555"
+          }
         },
         "zh-CN": {
+          "value": "修复问题和失败",
           "provenance": {
-            "hash": "6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
-          },
-          "value": "修复问题和失败"
+            "hash": "490684d77b5be749cbd975ffd0d611e205fa10b298880a1566386d1013aad46a"
+          }
         },
         "zh-TW": {
+          "value": "修復問題和失敗",
           "provenance": {
-            "hash": "7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
             "locator": "newChat.createAgent.quickStarts.fix",
-            "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
-          },
-          "value": "修復問題和失敗"
+            "hash": "f1b631f88a4a3f12b4c822ef238efcb0ea2f4fce50a1bed9eb3f8fdafe0d7725"
+          }
+        },
+        "es": {
+          "value": "Corregir problemas y fallos",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "5026f5bb4ddb77cfc51a08976ecb7b5c5e43311a9223b091e9559c0b65135096"
+          }
+        },
+        "fr": {
+          "value": "Corriger des problèmes et des échecs",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "27aabcdf9e44b518a8d616a2cabbe74883e9453207c751eb7058eb3c24f26f61"
+          }
+        },
+        "de": {
+          "value": "Probleme und Fehler beheben",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "b0caa5263749209d531fe734ebab77a5c4f63a212545926278350ba7b86f736b"
+          }
+        },
+        "pt-PT": {
+          "value": "Corrigir problemas e falhas",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "39dad9d7b82f56ecbbdde2719fc1b3c0514b4659804ee25c871b5464dc709480"
+          }
+        },
+        "pt-BR": {
+          "value": "Corrigir problemas e falhas",
+          "provenance": {
+            "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+            "locator": "newChat.createAgent.quickStarts.fix",
+            "hash": "1034b745520093f412693d746ce0a25bc0e591b78a7a647853d1850d4d336d1c"
+          }
         }
       }
     }
@@ -834,87 +994,167 @@
     },
     "titles": {
       "en": {
+        "value": "Quick start",
         "provenance": {
-          "hash": "82bfd5c361cdd206335281081f5a38f83a3e9dfec73b20e2e40daff781c2f6be",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json",
           "locator": "newChat.createAgent.quickStart",
-          "source": "../../../apps/desktop/src/renderer/i18n/locales/en/common.json"
-        },
-        "value": "Quick start"
+          "hash": "626b24e6dde0f1b806012325819f9930410ef52d84b08749c1c43213dae47eae"
+        }
       },
       "ja": {
+        "value": "クイックスタート",
         "provenance": {
-          "hash": "080d96878a334d7e306fa69ef8bb62d25009e112d6a7a33f17aed1638a33f86e",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json",
           "locator": "newChat.createAgent.quickStart",
-          "source": "../../../apps/desktop/src/renderer/i18n/locales/ja/common.json"
-        },
-        "value": "クイックスタート"
+          "hash": "56fb7a33c535ec5d163b9dbb606630f0c67fac30f3aff78c0a5240ba5eaf262a"
+        }
       },
       "ko": {
+        "value": "빠른 시작",
         "provenance": {
-          "hash": "f70c76cbda37d6e223d5385b3bbd56974310555d5a75dca27b13f920052a8356",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json",
           "locator": "newChat.createAgent.quickStart",
-          "source": "../../../apps/desktop/src/renderer/i18n/locales/ko/common.json"
-        },
-        "value": "빠른 시작"
+          "hash": "4394aedf36668d85663c9622f3e57142a2f9d538f8b4627fbc8a0f1f13356555"
+        }
       },
       "zh-CN": {
+        "value": "快速开始",
         "provenance": {
-          "hash": "6071491df8a53e436e94937e32590a203a44b98cedd5819fc591ce938273e41d",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json",
           "locator": "newChat.createAgent.quickStart",
-          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-CN/common.json"
-        },
-        "value": "快速开始"
+          "hash": "490684d77b5be749cbd975ffd0d611e205fa10b298880a1566386d1013aad46a"
+        }
       },
       "zh-TW": {
+        "value": "快速開始",
         "provenance": {
-          "hash": "7180dda313e46f1291e1373206ffa1e2b642349d70a2b6c2c81e2b4240e1531d",
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json",
           "locator": "newChat.createAgent.quickStart",
-          "source": "../../../apps/desktop/src/renderer/i18n/locales/zh-TW/common.json"
-        },
-        "value": "快速開始"
+          "hash": "f1b631f88a4a3f12b4c822ef238efcb0ea2f4fce50a1bed9eb3f8fdafe0d7725"
+        }
+      },
+      "es": {
+        "value": "Inicio rápido",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/es/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "5026f5bb4ddb77cfc51a08976ecb7b5c5e43311a9223b091e9559c0b65135096"
+        }
+      },
+      "fr": {
+        "value": "Démarrage rapide",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/fr/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "27aabcdf9e44b518a8d616a2cabbe74883e9453207c751eb7058eb3c24f26f61"
+        }
+      },
+      "de": {
+        "value": "Schnellstart",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/de/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "b0caa5263749209d531fe734ebab77a5c4f63a212545926278350ba7b86f736b"
+        }
+      },
+      "pt-PT": {
+        "value": "Início rápido",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-PT/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "39dad9d7b82f56ecbbdde2719fc1b3c0514b4659804ee25c871b5464dc709480"
+        }
+      },
+      "pt-BR": {
+        "value": "Início rápido",
+        "provenance": {
+          "source": "../../../apps/desktop/src/renderer/i18n/locales/pt-BR/common.json",
+          "locator": "newChat.createAgent.quickStart",
+          "hash": "1034b745520093f412693d746ce0a25bc0e591b78a7a647853d1850d4d336d1c"
+        }
       }
     }
   },
   "supportedLocales": [
     {
+      "value": "zh-CN",
       "provenance": {
-        "hash": "219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
         "locator": "SUPPORTED_LOCALES[0]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
-      },
-      "value": "zh-CN"
+      }
     },
     {
+      "value": "zh-TW",
       "provenance": {
-        "hash": "219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
         "locator": "SUPPORTED_LOCALES[1]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
-      },
-      "value": "zh-TW"
+      }
     },
     {
+      "value": "en",
       "provenance": {
-        "hash": "219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
         "locator": "SUPPORTED_LOCALES[2]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
-      },
-      "value": "en"
+      }
     },
     {
+      "value": "ja",
       "provenance": {
-        "hash": "219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
         "locator": "SUPPORTED_LOCALES[3]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
-      },
-      "value": "ja"
+      }
     },
     {
+      "value": "ko",
       "provenance": {
-        "hash": "219f54bce0a14a3c717f1d20db0954ca85d3501c3be2cb75a931e3208931aa4d",
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
         "locator": "SUPPORTED_LOCALES[4]",
         "source": "../../../apps/desktop/src/shared/locale.ts"
-      },
-      "value": "ko"
+      }
+    },
+    {
+      "value": "es",
+      "provenance": {
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
+        "locator": "SUPPORTED_LOCALES[5]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "fr",
+      "provenance": {
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
+        "locator": "SUPPORTED_LOCALES[6]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "de",
+      "provenance": {
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
+        "locator": "SUPPORTED_LOCALES[7]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "pt-PT",
+      "provenance": {
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
+        "locator": "SUPPORTED_LOCALES[8]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
+    },
+    {
+      "value": "pt-BR",
+      "provenance": {
+        "hash": "5da0eec6bd8f1f3d5fba11f536aa29884dcba08654ad7b2c8395b84e83915f0d",
+        "locator": "SUPPORTED_LOCALES[9]",
+        "source": "../../../apps/desktop/src/shared/locale.ts"
+      }
     }
   ]
 }

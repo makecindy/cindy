@@ -88,6 +88,7 @@ import { HomeListViewportContext, HomeSessionRow } from '@/session/HomeSurface';
 import { useTeammateRoster } from '@/session/useTeammateRoster';
 import { createDisclosureListCell, ListDisclosureScope, useListDisclosureTransition } from '@/session/listDisclosureTransition';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
+import { SessionImportSheet } from '@/session/SessionImportSheet';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import type { SessionSwipeAction } from '@/session/swipeRowRegistry';
@@ -230,6 +231,7 @@ function DeviceDetailScreenContent() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(() => readRouteString(params.search) === '1');
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
+  const [sessionImportOpen, setSessionImportOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const [loading, setLoading] = useState(false);
@@ -753,6 +755,14 @@ function DeviceDetailScreenContent() {
         setActionSheetSession={setActionSheetSession}
         setRenameSessionDraft={setRenameSessionDraft}
       />
+      <SessionImportSheet
+        deviceId={deviceId}
+        deviceName={deviceName}
+        online={status === 'online' && !deviceUnresponsive}
+        onClose={() => setSessionImportOpen(false)}
+        onOpenSession={(id) => openSession(id)}
+        visible={sessionImportOpen}
+      />
     </>
   );
 
@@ -1019,11 +1029,18 @@ function DeviceDetailScreenContent() {
         }}
         testID="deviceDetail.summary"
       >
-        <MainWindowActionButton action={{
-          label: t('remoteDesktop.title'),
-          onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
-          testID: 'deviceDetail.remoteDesktop',
-        }} />
+        <View style={[styles.summaryActions, { gap: windowLayout.metricGap }]}>
+          <MainWindowActionButton action={{
+            label: t('remoteDesktop.title'),
+            onPress: () => guardedPush({ pathname: '/devices/desktop/[deviceId]', params: { deviceId, deviceName } }),
+            testID: 'deviceDetail.remoteDesktop',
+          }} />
+          <MainWindowActionButton action={{
+            label: t('devices.sessionImport.entry'),
+            onPress: () => setSessionImportOpen(true),
+            testID: 'deviceDetail.sessionImport',
+          }} />
+        </View>
         <View style={[styles.summaryTopRow, { gap: windowLayout.metricGap }]}>
           <MainWindowMetric
             accessibilityLabel={t('devices.detail.metric.activeA11y')}
@@ -1519,6 +1536,10 @@ function readRouteString(value: unknown): string | null {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: colors.surface },
+  summaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   summaryTopRow: {
     alignItems: 'stretch',
     flexDirection: 'row',

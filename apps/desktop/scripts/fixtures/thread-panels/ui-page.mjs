@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 export default {
   name: 'thread-panels', entry: './fixture.tsx', viewport: { width: 960, height: 640 },
   real: 'BotDmThreadPanel, ChatThreadPanel, shared ThreadPanel/ThreadPanelRoot, BotGroupTimelineItem, Markdown, wallpaper, theme and translations',
-  notCovered: 'Private ready-state task runtime, model execution, server persistence and attachment IO; attachment layout uses scenario files',
+  notCovered: 'Private ready-state task runtime, model execution, real media upload, server persistence and attachment IO; attachment selection and layout use scenario host data',
   stubs: {
     'src/renderer/features/cc-agent/CCAgentSessionView': 'export const CCAgentSessionView = () => { throw new Error("Use full Desktop for ready-state task verification"); };',
     'src/renderer/lib/makerChatStore': { partial: 'export const makerChatStore = { subscribe: () => () => {}, getSnapshot: () => window.__threadRoot };' },
@@ -13,6 +13,8 @@ export default {
   },
   cases: {
     group: { about: 'Group topic with a long source message and working follow switch, with and without wallpaper' },
+    'group-attachments': { about: 'Thread + menu, image-only send and tray reset at narrow panel width' },
+    'group-cache-pending': { about: 'Reopen a thread before its delayed image cache finishes; retain the image and newer text' },
     default: { about: 'Private topic opening with the same long source message' },
     failed: { about: 'Private topic failure keeps the entire source and retry reachable' },
     'group-narrow': { about: '2026-10-29: 320px topic preserves bubble width, readable table columns and bounded file chips', viewport: { width: 640, height: 800 } },
@@ -38,6 +40,49 @@ export default {
       return;
     }
     const panel = page.locator('aside');
+    if (ui.case === 'group-cache-pending') {
+      await panel.locator('input[type="file"]').setInputFiles({
+        name: 'late.png', mimeType: 'image/png', buffer: Buffer.from('fixture-image-bytes'),
+      });
+      await page.waitForFunction(() => typeof window.__threadImageCache.finish === 'function');
+      await panel.getByRole('button', { name: await ui.t('bots.close'), exact: true }).click();
+      await page.locator('[data-closed]').waitFor({ state: 'attached' });
+      await ui.capture('closed-during-cache');
+      await page.getByRole('button', { name: 'Reopen thread', exact: true }).click();
+      await panel.locator('textarea').fill('Keep this newer draft');
+      assert.equal(await panel.locator('img[alt="late.png"]').count(), 0);
+      await page.evaluate(() => window.__threadImageCache.finish());
+      await panel.locator('img[alt="late.png"]').waitFor();
+      assert.equal(await panel.locator('textarea').inputValue(), 'Keep this newer draft');
+      await ui.capture('reopened-with-image');
+      return;
+    }
+    if (ui.case === 'group-attachments') {
+      const more = panel.getByRole('button', { name: await ui.t('bots.groupChat.composer.more'), exact: true });
+      await more.click();
+      await page.getByRole('menuitem', { name: await ui.t('extraDirs.addFiles'), exact: true }).waitFor();
+      assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.composer.division'), exact: false }).count(), 0);
+      await ui.capture('attachment-menu');
+      await page.keyboard.press('Escape');
+      await panel.locator('input[type="file"]').setInputFiles({
+        name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from('fixture-image-bytes'),
+      });
+      const send = panel.getByRole('button', { name: await ui.t('bots.groupChat.server.sendReply'), exact: true });
+      await page.waitForFunction(() => document.querySelector('aside input[type="file"]') &&
+        window.__threadSends.length === 0 && document.querySelector('aside img[alt="photo.png"]'));
+      assert.equal(await send.isEnabled(), true);
+      await ui.capture('image-ready');
+      await send.click();
+      await page.waitForFunction(() => window.__threadSends.length === 1);
+      const [sent] = await page.evaluate(() => window.__threadSends);
+      assert.equal(sent.rootId, 'root');
+      assert.equal(sent.text, '');
+      assert.equal(sent.attachments[0].name, 'photo.png');
+      await send.waitFor({ state: 'visible' });
+      assert.equal(await send.isDisabled(), true);
+      await ui.capture('sent');
+      return;
+    }
     if (ui.case === 'group-narrow') {
       const bubble = panel.getByTestId('bot-group-bubble');
       await bubble.waitFor();

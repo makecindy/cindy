@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fileSymlinkFixture } from './fileSymlinkFixture';
 
 const h = vi.hoisted(() => ({
   dir: '',
@@ -17,13 +19,28 @@ import { ingestClientWallpaper } from '../ingest';
 import { recycleClientWallpapers } from '../recycler';
 import { registerCindyMediaProtocolHandler } from '../cindyMediaProtocol';
 
-beforeEach(() => {
-  h.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'client-wallpaper-media-'));
-  vi.clearAllMocks();
-});
-afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
-describe('client wallpaper media scope', () => {
+// #8109: production ingest/read/protocol/delete must work through a redirected
+// userData root, while links below that root remain forbidden. Existing tests
+// only used a regular root; this unit matrix uses real temporary directories.
+describe.each(['regular', 'redirected'] as const)('client wallpaper media scope (%s userData)', (kind) => {
+  let scratch: string;
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'client-wallpaper-media-'));
+    const target = path.join(scratch, 'target');
+    fs.mkdirSync(target);
+    h.dir = target;
+    if (kind === 'redirected') {
+      h.dir = path.join(scratch, 'userData');
+      fs.symlinkSync(target, h.dir, directoryLinkType);
+    }
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
   it('isolates deletion and deduplication from identical account-owned blobs', async () => {
     const params = { buffer: Buffer.from('image-content'), mimeType: 'image/webp' as const };
     const account = await store.writeBlob(params);
@@ -107,28 +124,36 @@ describe('client wallpaper media scope', () => {
     expect(() => store.getBlobsRoot('../outside' as never)).toThrow();
   });
 
-  it('rejects symlinked client roots without reading or deleting the target', async () => {
-    const external = path.join(h.dir, 'outside');
-    const mediaRoot = path.join(h.dir, 'cindy-media');
-    fs.mkdirSync(external);
-    fs.mkdirSync(mediaRoot);
-    const hash = 'a'.repeat(64);
-    fs.mkdirSync(path.join(external, 'aa'));
-    const file = path.join(external, 'aa', hash + '.webp');
-    fs.writeFileSync(file, 'private');
-    fs.symlinkSync(
-      external,
-      path.join(mediaRoot, 'client-wallpaper'),
-      process.platform === 'win32' ? 'junction' : 'dir',
-    );
-    const url = `cindy-media://client-wallpaper/${hash}.webp`;
-    await expect(store.readClientWallpaperFile(url)).rejects.toThrow('symlink');
-    await expect(store.deleteBlobFile(hash, '.webp', 'client-wallpaper')).rejects.toThrow(
-      'symlink',
-    );
-    await expect(
-      ingestClientWallpaper({ buffer: Buffer.from('new'), mimeType: 'image/webp' }),
-    ).rejects.toThrow('symlink');
-    expect(fs.readFileSync(file, 'utf8')).toBe('private');
-  });
+  it.each(['media', 'scope', 'bucket', 'file'] as const)(
+    'rejects a linked %s without reading, writing or deleting its target', async (level) => {
+      const bytes = Buffer.from('private');
+      const hash = createHash('sha256').update(bytes).digest('hex');
+      const parts = ['cindy-media', 'client-wallpaper', hash.slice(0, 2), `${hash}.webp`];
+      const depth = ['media', 'scope', 'bucket', 'file'].indexOf(level);
+      const external = path.join(scratch, 'outside');
+      const target = level === 'file' ? path.join(external, 'private.webp') : path.join(external, ...parts.slice(depth + 1));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes);
+      // Use the physical root so the Windows file-link fallback observes the
+      // same filesystem identity as production after resolving userData.
+      const link = path.join(await fs.promises.realpath(h.dir), ...parts.slice(0, depth + 1));
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      const fixture = level === 'file' ? fileSymlinkFixture(target, link) : undefined;
+      if (!fixture) fs.symlinkSync(external, link, directoryLinkType);
+      try {
+        const url = `cindy-media://client-wallpaper/${hash}.webp`;
+        await expect(store.readClientWallpaperFile(url)).rejects.toThrow('symlink');
+        await expect(store.deleteBlobFile(hash, '.webp', 'client-wallpaper')).rejects.toThrow('symlink');
+        await expect(ingestClientWallpaper({ buffer: bytes, mimeType: 'image/webp' })).rejects.toThrow('symlink');
+        registerCindyMediaProtocolHandler();
+        const response: Response = await h.handle.mock.calls[0][1](new Request(url));
+        expect(response.status).toBe(403);
+        expect(fs.readFileSync(target)).toEqual(bytes);
+        expect(fs.readdirSync(path.dirname(target))).toEqual([path.basename(target)]);
+        fixture?.expectIntact();
+      } finally {
+        fixture?.restore();
+      }
+    },
+  );
 });
