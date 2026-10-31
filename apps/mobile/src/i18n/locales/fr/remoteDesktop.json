@@ -130,6 +130,7 @@
   "rotate": "Faire pivoter l'écran",
   "sound": "Son",
   "smallWindow": "Exécuter en arrière-plan",
+  "inputUnsupported": "L’environnement de bureau actuel de cet ordinateur ne prend pas en charge le contrôle à distance du clavier et de la souris dans Cindy.",
   "controlUnavailableHint": "Le contrôle de l'ordinateur est temporairement indisponible. Vous pouvez toujours déplacer la vue et zoomer.",
   "backgroundRunningHint": "Continuer à afficher l'écran dans une fenêtre flottante lorsque vous quittez le bureau à distance ou changez d'app.",
   "displaySettings": "Écran",

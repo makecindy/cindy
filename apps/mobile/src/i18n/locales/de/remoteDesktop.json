@@ -130,6 +130,7 @@
   "rotate": "Bildschirm drehen",
   "sound": "Ton",
   "smallWindow": "Im Hintergrund ausführen",
+  "inputUnsupported": "Die aktuelle Desktop-Umgebung dieses Computers unterstützt in Cindy keine Fernsteuerung per Tastatur und Maus.",
   "controlUnavailableHint": "Die Computersteuerung ist vorübergehend nicht verfügbar. Du kannst die Bildschirmansicht weiterhin verschieben und zoomen.",
   "backgroundRunningHint": "Zeigt den Bildschirm weiterhin in einem schwebenden Fenster an, wenn du Remotedesktop verlässt oder die App wechselst.",
   "displaySettings": "Anzeige",

@@ -1100,6 +1100,7 @@
     "allow": "Remotedesktop erlauben",
     "allowHint": "Erlaube deinen angemeldeten Geräten, alle Apps auf diesem Computer anzuzeigen und zu bedienen. Aktiviere oben auch die Gerätesteuerung.",
     "permissionHint": "Erlaube auf dem Computer in den Systemeinstellungen die Bildschirmaufnahme und die Bedienungshilfen und stelle dann die Verbindung erneut her.",
+    "inputUnsupported": "Die aktuelle Desktop-Umgebung dieses Computers unterstützt in Cindy keine Fernsteuerung per Tastatur und Maus.",
     "controlUnavailable": "Der entfernte Computer kann keine Eingaben annehmen. Prüfe seine Steuerungsberechtigungen und die Verbindung und verbinde dich dann erneut.",
     "beingControlled": "Dein Desktop wird gesteuert",
     "beingViewed": "Dein Desktop wird angesehen",
