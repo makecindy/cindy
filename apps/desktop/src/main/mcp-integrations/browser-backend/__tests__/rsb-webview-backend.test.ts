@@ -2100,7 +2100,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(res.ok).toBe(true);
   });
 
-  it('recovers when the tab re-registers during the bounded wait', async () => {
+  it.each([true, false])('recovers a pooled tab in detached=%s using the request session', async (detached) => {
     const rows: TabRecord[] = [];
     const wcMap = new Map<string, WebContents>();
     const registry = fakeRegistry(rows, wcMap);
@@ -2108,11 +2108,11 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     dispatchTabOpSpy.mockResolvedValue({ reqId: 'x', ok: true, tabId: 't1' });
     const backend = new RsbWebviewBackend({
       registry,
-      getActiveSessionId: () => 's1',
+      getActiveSessionId: () => 's2',
       bridge: {
         getHostWebContents: () => null,
         ensureHost,
-        isDetached: () => true,
+        isDetached: () => detached,
         logger: logger(),
       },
       logger: logger(),
@@ -2127,6 +2127,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     const res = await backend.call({
       action: 'navigate',
       targetId: 't1',
+      __mcpSessionId: 's1',
       url: 'https://example.com',
     } as never);
     expect(res.ok).toBe(true);
@@ -2140,7 +2141,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     );
   });
 
-  it('targetless direct action recovers via targetless ensure (registry pruned)', async () => {
+  it.each([true, false])('targetless action recovers in detached=%s', async (detached) => {
     // detached 收起后 registry 空,targetless navigate 不能死在 'targetId required':
     // 先发无 tabId 的 ensure,由 renderer 从 bucket 选默认浏览器 tab 物化并回传 tabId。
     const rows: TabRecord[] = [];
@@ -2162,7 +2163,7 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
       bridge: {
         getHostWebContents: () => null,
         ensureHost,
-        isDetached: () => true,
+        isDetached: () => detached,
         logger: logger(),
       },
       logger: logger(),
@@ -2256,9 +2257,9 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(res.message).toMatch(/host context not ready/);
   });
 
-  it('embedded mode (isDetached false) → resolve miss fails fast, no polling', async () => {
-    // 生产环境 ensureHost 恒有值(内嵌时是即时 no-op),不能只靠它的存在与否
-    // 判断要不要等 —— gate 在 isDetached 上,内嵌 miss 即真失效。
+  it('embedded mode rejects closed tabs after bucket validation without polling', async () => {
+    // Missing registry entries need persisted-bucket validation even in embedded mode.
+    dispatchTabOpSpy.mockResolvedValue({ reqId: 'x', ok: false, error: 'tab not found' });
     const ensureHost = vi.fn(async () => undefined);
     const backend = new RsbWebviewBackend({
       registry: fakeRegistry([], new Map()),
@@ -2281,7 +2282,11 @@ describe('RsbWebviewBackend — detached-window ensure/wait for direct actions',
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/t-ghost not in active session s1/);
     expect(Date.now() - started).toBeLessThan(1000);
-    expect(dispatchTabOpSpy).not.toHaveBeenCalled();
+    expect(dispatchTabOpSpy).toHaveBeenCalledWith(
+      { op: 'ensure', sessionId: 's1', tabId: 't-ghost' },
+      expect.any(Object),
+      expect.any(Function),
+    );
   });
 
   it('no ensureHost in bridge → immediate failure, no polling delay', async () => {
