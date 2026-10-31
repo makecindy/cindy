@@ -179,6 +179,8 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/xUsageGuideRiskContrast.test.ts',
   'src/main/__tests__/authHostedCallback.contract.test.ts',
   'src/main/__tests__/loginScenarioHarness.contract.test.ts',
+  // DESIGN.md §16.2 copy budget: locale catalogs against the login layout tokens.
+  'src/renderer/components/login/__tests__/loginConsentCopyBudget.test.ts',
   'src/main/__tests__/officialProfileMigrationPolicy.contract.test.ts',
   'src/renderer/__tests__/authContextRace.contract.test.ts',
   'src/main/__tests__/mobileClientPromptNote.contract.test.ts',

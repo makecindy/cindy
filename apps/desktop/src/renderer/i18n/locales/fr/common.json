@@ -8805,9 +8805,9 @@
     "localModeEntry": "Passer la connexion",
     "localModeOpening": "Connexion ignorée…",
     "localModeDescription": "Aucun compte Cindy requis. Les données restent sur cet appareil ; les modèles cloud, l'accès multi-appareils et les services de la marketplace ne sont pas disponibles.",
-    "consentStatement": "J'ai lu et j'accepte les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy>",
+    "consentStatement": "J'accepte les <terms>CGU</terms> et la <privacy>Politique de confidentialité</privacy>",
     "consentDialog": {
-      "title": "Conditions et confidentialité",
+      "title": "CGU et Politique de confidentialité",
       "body": "Lisez et acceptez les <terms>Conditions d'utilisation</terms> et la <privacy>Politique de confidentialité</privacy> de Cindy pour continuer.",
       "agree": "Accepter",
       "disagree": "Plus tard"
