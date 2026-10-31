@@ -3730,9 +3730,10 @@ class CindyMcpGateway {
       // 信封的 args 里又是一个 {name, args} 或只含 args 的对象。服务端只回 schema 不回显
       // 收到的结构, 模型无法自愈; 宿主转发前看穿并一次说清。
       // 此检查是确定性的: 原样重发会被同一条规则再拦一次, 误拦即永久拒绝 — 所以放行条件
-      // 必须从宽: 内层工具的真实 schema 声明了 args 参数时放行(含数组参数, typeof 拦不住);
-      // 信封 name 查无此工具时也放行, 让服务端报 UNKNOWN_TOOL。只有内层 schema 查得到
-      // 且未声明 args、或 name 缺失/填了入口名时, 双包诊断才本地成立。
+      // 必须从宽: 内层工具的真实 schema 声明了 args 参数时放行(含数组参数, typeof 拦不住)。
+      // 内层工具查不到 ≠ 不存在: lizi-mcps 七个 Cindy 服务只向 MCP 暴露 list_tools/call_tool
+      // 两个入口, 内层工具藏在自家 registry 不进 tools/list — 这类服务查不到仍按双包拦;
+      // 暴露了其他工具的第三方服务, 查不到就交给服务端报 UNKNOWN_TOOL, 保持宽松放行。
       const envelope = recordInput(resolved.args);
       const nested = recordInput(envelope.args);
       const innerName = typeof envelope.name === 'string' ? envelope.name : '';
@@ -3743,9 +3744,12 @@ class CindyMcpGateway {
       const innerSchema = innerTool?.inputSchema as { properties?: Record<string, unknown> } | null;
       const innerDeclaresArgs = innerSchema?.properties != null
         && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args');
+      const hidesInnerRegistry = innerTool === null && !entrySelf
+        && ![...this.tools.values()].some((tool) => tool.serverName === resolved.tool.serverName
+          && tool.name !== 'call_tool' && tool.name !== 'list_tools');
       const doubleWrap = typeof nested.args === 'object' && nested.args !== null
         && !Array.isArray(nested.args)
-        && (entrySelf || (innerTool !== null && !innerDeclaresArgs));
+        && (entrySelf || (innerTool !== null && !innerDeclaresArgs) || hidesInnerRegistry);
       if (doubleWrap) {
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name

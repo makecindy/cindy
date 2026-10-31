@@ -2660,15 +2660,16 @@ it('intercepts a double-wrapped envelope and an entry-tool name before they reac
   } };
   const gateway = new context.Gateway();
   gateway.add('cindy_memory', client, [
+    // 真实 cindy_memory 的两入口形态: 只向 MCP 暴露 list_tools + call_tool(token economy),
+    // memory_write 藏在服务端自家 registry, 不进 tools/list。
     { name: 'list_tools', inputSchema: { type: 'object' } },
     { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
-    // 真实 cindy_memory/memory_write: 无 args 参数 — 双包诊断对其成立。
-    { name: 'memory_write', inputSchema: { type: 'object', properties: { type: { type: 'string' }, name: { type: 'string' }, body: { type: 'string' } }, required: ['type'] } },
   ]);
   gateway.register({ registerTool: () => undefined });
   await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
   // 2026-10-31 实测双包形状一: {name:外层名, args:{name:内层名, args:参数}} ——
   // 转发到服务端只会拿到 UNKNOWN_TOOL(requested=call_tool), 模型无从自纠; 桥在本地看穿。
+  // 形状一/二里的内层工具都不在本地工具表(真实服务不进 tools/list), 靠两入口形状判定拦截。
   await expect(gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool',
     args: { name: 'call_tool', args: { name: 'memory_write', args: { type: 'project' } } },
