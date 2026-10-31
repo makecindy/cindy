@@ -48,6 +48,12 @@ token）与 [`engineering-conventions.md`](engineering-conventions.md)（i18n）
 保存的用户选择需能跨进程恢复；恢复失败保留它，下次发送前重试，不能悄悄沿用自动任务模型。
 用户在运行期间主动改选的模型优先；修改推理档位与 Fast 更新用户配置，不改正在运行的自动任务。
 
+绑定在另一台电脑执行的会话时，应用与恢复模型选择都以执行电脑的可用目录为准；控制端不能
+用本机供应商目录或 Codex 原生线程身份映射否决远程路由。显式模型／来源一起传给执行电脑，
+远程目录不可用、切换失败或排队派发需要重建线程时停止本轮，不回退到未经确认的来源。
+实现与回归见 [scheduledModelSelection](../../apps/desktop/src/main/maker-ipc/scheduledModelSelection.ts)、
+[runnerQueuedDispatch](../../apps/desktop/src/main/scheduler-host/__tests__/runnerQueuedDispatch.test.ts)。
+
 <a id="模型可见性2026-09-13-用户更正"></a>
 
 ### 模型可见性
