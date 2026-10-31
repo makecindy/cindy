@@ -517,7 +517,13 @@ export class GoalController {
 
   /** 唤醒 waiting 目标:清等待态、排防抖续跑,并立即刷新 payload(chip 不等 finalize)。 */
   private wakeWaitingGoal(sessionId: string): void {
-    if (!this.waitingSessions.delete(sessionId)) return;
+    if (!this.waitingSessions.has(sessionId)) return;
+    // busy-wake 走 deferred 重试时,boundary 是 cancelled 且等待标记就是重试识别唤醒的
+    // 唯一凭据 —— 此刻的新输入(worker 回报 / 用户消息 / 打开会话)不能删标记改排普通
+    // 续跑:那发不出轮(cancelled boundary),还会让 deferred 重试失去唤醒意图而取消,
+    // 目标卡死。让 deferred resume 兑现唤醒即可,这里保持沉默。
+    if (this.deferredManualResumes.has(sessionId)) return;
+    this.waitingSessions.delete(sessionId);
     this.scheduleContinuation(sessionId);
     void this.deps.storage
       .get(sessionId)
@@ -1332,18 +1338,26 @@ export class GoalController {
       this.dispatchRejectionRetries.delete(sessionId);
     }
     const budgetAlreadyExhausted = exceedsGoalBudget(state);
+    // 唤醒失败路径的换代判据:boundary 被换、或原地 bump(setGoal/update 换代)都算失去归属。
+    const adoptedGeneration = lookupBoundary.generation;
     if (!budgetAlreadyExhausted) {
       let ensured: SessionLike | undefined;
       try {
         ensured = await this.deps.ensureSession(sessionId);
       } catch (error) {
-        // 唤醒在 ensureSession 期间失败:目标仍是 active,恢复等待标记,让安全网/
-        // 后续事件继续接管(否则 chip 显示进行中却无任何后续调度)。
-        if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+        // 唤醒在 ensureSession 期间失败:仅当本请求仍拥有边界时,恢复等待标记并保留边界
+        // —— 安全网 timer 与事件唤醒都要靠它发轮,删了就永远醒不来;并发 setGoal 换代后
+        // 不得给新目标误挂等待态,旧请求只默默退出。
+        const stillOwner =
+          this.turns.get(sessionId) === lookupBoundary && lookupBoundary.generation === adoptedGeneration;
+        if (wakingTargeted && stillOwner) {
+          this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+        } else if (stillOwner) {
+          this.turns.delete(sessionId);
+        }
         if (!opts?.auto) {
           this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
         }
-        if (this.turns.get(sessionId) === lookupBoundary) this.turns.delete(sessionId);
         throw new GoalSessionRestoreError(error);
       }
       if (this.turns.get(sessionId) !== lookupBoundary) return;
@@ -1383,13 +1397,17 @@ export class GoalController {
         }),
       );
     } catch (error) {
-      // 与 ensureSession 失败同理:唤醒未兑现前保住等待语义。
-      if (wakingTargeted) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+      // 与 ensureSession 失败同理:仅在本请求仍拥有边界(generation 未变)时恢复等待态并
+      // 保留边界;并发换界后不得给新目标误挂等待态,也不删新 owner 的边界。
+      const stillOwner =
+        this.turns.get(sessionId) === lookupBoundary && lookupBoundary.generation === adoptedGeneration;
+      if (wakingTargeted && stillOwner) {
+        this.waitingSessions.set(sessionId, { sinceMs: this.now() });
+      } else if (stillOwner && ownsLookupBoundary) {
+        this.turns.delete(sessionId);
+      }
       if (!opts?.auto) {
         this.cancelDeferredManualResume(sessionId, { restoreUsageResume: true });
-      }
-      if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
-        this.turns.delete(sessionId);
       }
       throw error;
     }

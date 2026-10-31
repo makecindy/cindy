@@ -2588,6 +2588,79 @@ describe('GoalController', () => {
     expect((await local.storage.get('s1'))?.lastReason).toBeNull();
   });
 
+  it('intervention during a busy-deferred wake lets the deferred resume finish the wake', async () => {
+    await startGoal(h);
+    h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    h.session.running = true;
+    await h.controller.resumeGoal('s1');
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    // defer 期间 worker 回报/用户消息到达:boundary 是 cancelled,若删标记改排普通续跑
+    // 会发不出轮且让 deferred 重试失去唤醒意图 —— 必须保持沉默,由 deferred resume 兑现。
+    publishUiSessionIntervention('s1');
+    await tick();
+    expect((await h.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    expect(h.session.sends).toHaveLength(1);
+    h.session.running = false;
+    await h.controller.maybeContinueActiveGoal('s1');
+    await tick();
+    expect(h.session.sends).toHaveLength(2);
+    expect((await h.storage.get('s1'))?.lastReason).toBeNull();
+  });
+
+  it('wake whose ensureSession throws keeps waiting semantics and the safety net alive', async () => {
+    const local = makeController({
+      waitingRecheckMs: 25,
+      ensureSession: async (id) => {
+        if (id === 's1' && wakeBoom.on) { wakeBoom.on = false; throw new Error('restore boom'); }
+        return id === 's1' ? local?.session : undefined;
+      },
+    });
+    const wakeBoom = { on: false };
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    expect(local.session.sends).toHaveLength(1);
+    wakeBoom.on = true;
+    await expect(local.controller.resumeGoal('s1')).rejects.toBeInstanceOf(GoalSessionRestoreError);
+    // 标记恢复 + 边界保留:安全网到点仍能补检(删了边界则等待目标永久失联)。
+    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    await tick();
+    await tick();
+    expect(local.session.sends.length).toBeGreaterThan(1);
+  });
+
+  it('wake losing ownership to a concurrent setGoal does not stamp waiting on the new goal', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const holdOnce = { on: false };
+    const local = makeController({
+      ensureSession: async (id) => {
+        if (id !== 's1') return undefined;
+        if (holdOnce.on) {
+          holdOnce.on = false;
+          await gate;
+          throw new Error('restore boom');
+        }
+        return local?.session;
+      },
+    });
+    await startGoal(local);
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    holdOnce.on = true; // 只卡唤醒这一次 ensureSession
+    const wake = local.controller.resumeGoal('s1').catch(() => {});
+    await tick(); // 唤醒挂起在 gate 上,边界仍归唤醒请求所有
+    await local.controller.setGoal({ sessionId: 's1', objective: 'brand new goal', agentKind: 'claude-code' });
+    release();
+    await tick();
+    await tick();
+    // 旧唤醒已失去归属:不得把等待态盖到新目标上(chip 会假显示等待中 + 唤醒按钮)。
+    expect((await local.storage.get('s1'))?.objective).toBe('brand new goal');
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+    await wake;
+  });
+
   it('resumeOnOpen wakes a waiting goal (opening the session re-checks)', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
