@@ -410,6 +410,55 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('guards every per-task usage-limit fallback IPC before reading or mutating it', () => {
+    for (const [channel, nextChannel] of [
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_GET',
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_SET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_SET',
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_CLEAR',
+      ],
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_CLEAR',
+        'MAKER_IPC_INVOKE.COMPACTION_GET_PCT',
+      ],
+    ] as const) {
+      const body = handlerBody(bootstrapSource, channel, nextChannel);
+      const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+      expect(guard).toBeGreaterThan(-1);
+      const storeAccess = Math.min(
+        ...[
+          'requireUsageLimitFallbackSessionId(',
+          'readUsageLimitFallbackTarget(',
+          'tryGetUsageLimitFallbackCommands()',
+          'commands.get(',
+          'commands.set(',
+        ]
+          .map((needle) => body.indexOf(needle))
+          .filter((index) => index >= 0),
+      );
+      expect(guard).toBeLessThan(storeAccess);
+    }
+  });
+
+  it('routes per-task usage-limit fallback writes through the MCP control-plane path', () => {
+    const start = registerSource.indexOf('usageLimitFallbackCommandsHolder = {');
+    expect(start).toBeGreaterThan(-1);
+    const holder = registerSource.slice(
+      start,
+      registerSource.indexOf('const createUserMessageDurably', start),
+    );
+    // 写入必须是同一条路径（sessionControlService → setSessionRuntime 的 usageLimitFallback 分支），
+    // 否则 renderer 与 Agent 会各有一套校验、门禁与错误码。
+    expect(holder).toContain('sessionControlService.setSessionRuntime(');
+    expect(holder).toContain('patch: { usageLimitFallback: target }');
+    // 读取用同一份 store 与运行时快照；失效判定复用触发端的同一谓词。
+    expect(holder).toContain('readSessionUsageLimitFallback(sessionId)');
+    expect(holder).toContain('matchesUsageLimitFallbackSource(policy, profiles.effective)');
+  });
+
   it('binds compaction writes to the initiating owner stamp', () => {
     for (const [channel, nextChannel] of [
       ['MAKER_IPC_INVOKE.COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_SET_PCT'],

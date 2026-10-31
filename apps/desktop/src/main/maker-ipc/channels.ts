@@ -443,6 +443,16 @@ export const MAKER_INVOKE = {
   SESSION_RUNTIME_FALLBACK_SET: 'maker:session-runtime-fallback:set',
   SESSION_RUNTIME_FALLBACK_RESET: 'maker:session-runtime-fallback:reset',
   /**
+   * 任务级额度备用路线（per task，不是全局开关）——
+   *  - GET: 读当前任务配置的备用目标与是否已失效
+   *  - SET: 复用 MCP 控制面同一套校验与门禁写入；target=null 等价清除
+   *  - CLEAR: target=null 的语义化入口
+   * 设置类写操作: 仅本机主页面可调, **不进 device-link / 手机 allowlist**。
+   */
+  SESSION_USAGE_LIMIT_FALLBACK_GET: 'maker:session-usage-limit-fallback:get',
+  SESSION_USAGE_LIMIT_FALLBACK_SET: 'maker:session-usage-limit-fallback:set',
+  SESSION_USAGE_LIMIT_FALLBACK_CLEAR: 'maker:session-usage-limit-fallback:clear',
+  /**
    * Claude Code 的自动上下文压缩触发阈值 —— <userData>/compaction-settings.json。
    * 经 runtimeConfig.autoCompactThresholdPct getter 热读，当前会话下一轮结束即按新值判断。
    */
