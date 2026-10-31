@@ -5,7 +5,13 @@ import { InputHandoffSession, type HandoffResult, type HandoffTargetSpec } from 
 import type { NativeAxNode } from '../types.js';
 
 const node = (ref: string, role: string, extra: Partial<NativeAxNode> = {}): NativeAxNode => ({
-  ref, role, depth: 1, fp: `${role}|${extra.title ?? ''}`, enabled: true, frame: [10, 10, 100, 20], ...extra,
+  ref,
+  role,
+  depth: 1,
+  fp: `${role}|${extra.title ?? ''}`,
+  enabled: true,
+  frame: [10, 10, 100, 20],
+  ...extra,
 });
 const frame = [0, 0, 800, 600];
 const chrome = { pid: 20, app: 'Google Chrome', bundleId: 'com.google.Chrome' };
@@ -15,8 +21,13 @@ const page = (url: string, nodes: NativeAxNode[]) => [
   ...nodes,
 ];
 const screens = {
-  email: page('https://login.example.com/', [node('1.0', 'AXTextField', { title: 'Email' }), node('1.1', 'AXButton', { title: 'Continue' })]),
-  password: page('https://login.example.com/', [node('1.0', 'AXTextField', { title: 'Password', secure: true })]),
+  email: page('https://login.example.com/', [
+    node('1.0', 'AXTextField', { title: 'Email' }),
+    node('1.1', 'AXButton', { title: 'Continue' }),
+  ]),
+  password: page('https://login.example.com/', [
+    node('1.0', 'AXTextField', { title: 'Password', secure: true }),
+  ]),
   blank: page('https://login.example.com/', []),
   signedIn: page('https://app.example.com/inbox', [node('1.0', 'AXTextArea', { title: 'Reply' })]),
   address: page('https://shop.example.com/', [node('1.0', 'AXTextField', { title: 'Street' })]),
@@ -38,15 +49,36 @@ function desktop(first: keyof typeof screens = 'email') {
     windows: async () => ({
       frontmost: state.frontmost,
       apps: state.running
-        ? [{ ...chrome, windows: [
-            { index: 0, title: 'X', frame, focused: true, minimized: false },
-            ...(state.closed ? [] : [{ index: 1, title: state.windowTitle, frame, focused: false, minimized: state.minimized }]),
-          ] }]
+        ? [
+            {
+              ...chrome,
+              windows: [
+                { index: 0, title: 'X', frame, focused: true, minimized: false },
+                ...(state.closed
+                  ? []
+                  : [
+                      {
+                        index: 1,
+                        title: state.windowTitle,
+                        frame,
+                        focused: false,
+                        minimized: state.minimized,
+                      },
+                    ]),
+              ],
+            },
+          ]
         : [],
     }),
-    snapshot: async (_pid, window) => (window?.title === state.windowTitle && !state.closed
-      ? { ...chrome, frontmost: true, window: { index: 1, title: state.windowTitle, frame }, nodes: screens[state.screen] }
-      : { error: 'target_gone' }),
+    snapshot: async (_pid, window) =>
+      window?.title === state.windowTitle && !state.closed
+        ? {
+            ...chrome,
+            frontmost: true,
+            window: { index: 1, title: state.windowTitle, frame },
+            nodes: screens[state.screen],
+          }
+        : { error: 'target_gone' },
     commandLine: async () => (state.running ? 'Google Chrome' : ''),
     act: async () => ({ ok: true }),
     raise: async () => {
@@ -57,15 +89,28 @@ function desktop(first: keyof typeof screens = 'email') {
   return { driver, state };
 }
 
-function start(driver: HandoffDriver, target: HandoffTargetSpec = { app: 'Google Chrome', windowTitle: 'Sign in' }) {
+function start(
+  driver: HandoffDriver,
+  target: HandoffTargetSpec = { app: 'Google Chrome', windowTitle: 'Sign in' },
+) {
   const published: InputHandoffSnapshot[] = [];
   const finished: HandoffResult[] = [];
   const guarded: Array<string | undefined> = [];
   const session = new InputHandoffSession({
-    requestId: 'req1', purpose: 'Sign in', target, timeoutMs: 600_000, hostPid: 1, remoteInput: true, driver,
-    publish: (snapshot) => published.push(snapshot), finish: (result) => finished.push(result),
+    requestId: 'req1',
+    purpose: 'Sign in',
+    target,
+    timeoutMs: 600_000,
+    hostPid: 1,
+    remoteInput: true,
+    driver,
+    publish: (snapshot) => published.push(snapshot),
+    finish: (result) => finished.push(result),
     onSecretEntered: ({ url }) => guarded.push(url),
-    sleep: async () => undefined, finishingDelayMs: 1, settleTimeoutMs: 50, windowWatchMs: 2,
+    sleep: async () => undefined,
+    finishingDelayMs: 1,
+    settleTimeoutMs: 50,
+    windowWatchMs: 2,
   });
   return { session, finished, guarded, published, latest: () => published[published.length - 1] };
 }
@@ -79,7 +124,9 @@ describe('a sign-in step', () => {
     await run.session.start();
     expect(state.raised).toBe(1);
     expect(run.latest()).toMatchObject({ phase: 'ready', directSignIn: true });
-    expect(run.latest().controls.map((control) => control.kind === 'text' && control.contentType)).toEqual(['email']);
+    expect(
+      run.latest().controls.map((control) => control.kind === 'text' && control.contentType),
+    ).toEqual(['email']);
     run.session.cancel();
   });
 
@@ -108,7 +155,11 @@ describe('a sign-in step', () => {
     await run.session.start();
     expect(run.guarded).toEqual([]);
     state.screen = 'password';
-    await vi.waitFor(() => expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toEqual(['password']));
+    await vi.waitFor(() =>
+      expect(run.latest().controls.map((c) => c.kind === 'text' && c.contentType)).toEqual([
+        'password',
+      ]),
+    );
     expect(run.latest().directSignIn).toBe(true);
     expect(run.guarded).toContain('https://login.example.com/');
     run.session.cancel();
@@ -121,8 +172,17 @@ describe('a sign-in step', () => {
     state.screen = 'signedIn';
     state.windowTitle = 'Inbox';
     await vi.waitFor(() => expect(run.finished).toHaveLength(1));
-    expect(run.finished[0]).toMatchObject({ status: 'succeeded', reason: 'detected', steps: 0, finalWindow: 'Inbox' });
-    expect(run.published.some((snapshot) => snapshot.controls.some((c) => c.kind === 'text' && c.label === 'Reply'))).toBe(false);
+    expect(run.finished[0]).toMatchObject({
+      status: 'succeeded',
+      reason: 'detected',
+      steps: 0,
+      finalWindow: 'Inbox',
+    });
+    expect(
+      run.published.some((snapshot) =>
+        snapshot.controls.some((c) => c.kind === 'text' && c.label === 'Reply'),
+      ),
+    ).toBe(false);
   });
 
   it('does not hand back on a page that only clears its form for a moment', async () => {
@@ -198,7 +258,10 @@ describe('a waiting card watching its window', () => {
     const { driver, state } = desktop();
     const run = start(driver);
     await run.session.start();
-    await run.session.decide({ kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision }, { deviceId: 'phone' });
+    await run.session.decide(
+      { kind: 'input_handoff', action: 'claim', expectedRevision: run.latest().revision },
+      { deviceId: 'phone' },
+    );
     state.screen = 'blank';
     await settle();
     expect(run.finished).toEqual([]);

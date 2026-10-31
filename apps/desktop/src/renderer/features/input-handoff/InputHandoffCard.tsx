@@ -195,7 +195,7 @@ export function InputHandoffCard({ sessionId, snapshot, remote }: InputHandoffCa
         label: t(onThisComputer ? 'inputHandoff.action.openWindow' : 'inputHandoff.action.openRemoteDesktop'),
         primary: true,
         onClick: () => {
-          void window.electronAPI.raiseInputHandoff(snapshot.requestId).catch(() => setError(t('inputHandoff.error.raise')));
+          void window.electronAPI.maker.raiseInputHandoff(snapshot.requestId).catch(() => setError(t('inputHandoff.error.raise')));
         },
         ...(liveView ? { element: <LiveViewButton deviceId={liveView} requestId={snapshot.requestId} /> } : {}),
       },

@@ -405,7 +405,7 @@ describe('InputHandoffCard', () => {
     const signIn = (overrides: Partial<InputHandoffSnapshot> = {}) => step({ directSignIn: true, ...overrides });
     const raise = vi.fn(async () => true);
     const stubDesktop = () => {
-      Object.assign(window, { electronAPI: { raiseInputHandoff: raise, openRemoteDesktop: mocks.openRemoteDesktop } });
+      Object.assign(window, { electronAPI: { maker: { raiseInputHandoff: raise }, openRemoteDesktop: mocks.openRemoteDesktop } });
     };
 
     it('sends the owner to the window on this computer, with no form', async () => {
