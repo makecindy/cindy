@@ -667,6 +667,34 @@ html:lang(ko) {
     opacity: 1;
   }
 }
+/* Wide decorative waveform for the island voice-reply HUD. The bars animate
+   only while the listening state is live; reduced motion keeps them still. */
+.voice-input-wave-bar {
+  width: 2px;
+  height: 100%;
+  border-radius: 9999px;
+  background: currentColor;
+  transform-origin: center;
+  animation: voice-input-wave 1s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+@keyframes voice-input-wave {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+    opacity: 0.42;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-input-wave-bar {
+    animation: none;
+    transform: scaleY(0.6);
+  }
+}
 .ProseMirror :is([data-mention-chip], [data-pasted-text-chip], [data-composer-quote]) {
   /* Small vertical lift so every atomic chip aligns with the inline text
      caret; the pills are a tad taller than 1em because of padding + border. */
@@ -1045,6 +1073,7 @@ body.resizing-pane [data-ghost-webview] {
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
 [data-app-hidden='true'] [data-voice-mic-bar],
+[data-app-hidden='true'] .voice-input-wave-bar,
 /* .status-bar-shimmer 已 cadenced 化为一次性动画(2026-08-07),按「一次性动画
    不得纳入冻结清单」原则移出 —— 冻在中途帧会让状态栏停在半暗。 */
 [data-app-hidden='true'] .session-status-breathing,

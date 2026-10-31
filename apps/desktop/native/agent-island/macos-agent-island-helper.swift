@@ -1391,6 +1391,7 @@ struct AgentIslandSession: Codable, Equatable, Identifiable {
   let interactionKind: String?
   let permissionAction: AgentIslandPermissionAction?
   let attention: Bool
+  var voicePromptAvailable: Bool? = nil
   let activityLines: [AgentIslandActivityLine]
   let startedAt: Double
   let lastActivityAt: Double
@@ -1456,6 +1457,7 @@ struct AgentIslandStrings: Codable, Equatable {
   let deny: String
   var markRead: String? = nil
   var archive: String? = nil
+  var voiceReply: String? = nil
 
   // Older main-process payloads do not contain appName; keep their idle view brand-current.
   var displayAppName: String { appName ?? "Cindy" }
@@ -1481,7 +1483,8 @@ struct AgentIslandStrings: Codable, Equatable {
     permissionPromptTitle: "Confirm permission",
     allowOnce: "Allow once",
     alwaysAllowForSession: "Always allow",
-    deny: "Deny"
+    deny: "Deny",
+    voiceReply: "Voice reply"
   )
 }
 
@@ -3066,6 +3069,39 @@ struct ExpandedIslandToolbarButton: View {
         .contentShape(Circle())
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(Text(help))
+    .help(help)
+    .onHover { hovering in
+      withAnimation(.easeOut(duration: 0.12)) {
+        isHovered = hovering
+      }
+    }
+  }
+}
+
+struct ExpandedIslandVoicePromptButton: View {
+  let help: String
+  let action: () -> Void
+  @State private var isHovered = false
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: "mic.fill")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundColor(Color.white.opacity(isHovered ? 0.92 : 0.62))
+        .frame(width: 26, height: 26)
+        .background(
+          Circle()
+            .fill(Color.white.opacity(isHovered ? 0.14 : 0.06))
+            .overlay(
+              Circle()
+                .stroke(Color.white.opacity(isHovered ? 0.16 : 0.06), lineWidth: 1)
+            )
+        )
+        .contentShape(Circle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(Text(help))
     .help(help)
     .onHover { hovering in
       withAnimation(.easeOut(duration: 0.12)) {
@@ -3349,6 +3385,9 @@ struct ExpandedSessionsView: View {
         onPermissionAction: emitPermissionAction,
         onCompletionAction: { action, requestId in
           eventSink(["type": "completion-action", "sessionId": current.sessionId, "action": action, "requestId": requestId, "completionToken": current.completionToken ?? ""])
+        },
+        onVoicePrompt: {
+          eventSink(["type": "voice-prompt", "sessionId": current.sessionId])
         }
       )
       .equatable()
@@ -3392,6 +3431,9 @@ struct ExpandedSessionsView: View {
           onPermissionAction: emitPermissionAction,
           onCompletionAction: { action, requestId in
             eventSink(["type": "completion-action", "sessionId": session.sessionId, "action": action, "requestId": requestId, "completionToken": session.completionToken ?? ""])
+          },
+          onVoicePrompt: {
+            eventSink(["type": "voice-prompt", "sessionId": session.sessionId])
           }
         )
         .equatable()
@@ -3418,6 +3460,7 @@ struct ExpandedSessionRow: View, Equatable {
   let onFocus: () -> Void
   let onPermissionAction: (AgentIslandPermissionAction, String) -> Void
   let onCompletionAction: (String, String) -> Void
+  let onVoicePrompt: () -> Void
   @State private var isHovered = false
 
   static func == (lhs: ExpandedSessionRow, rhs: ExpandedSessionRow) -> Bool {
@@ -3432,7 +3475,9 @@ struct ExpandedSessionRow: View, Equatable {
   var body: some View {
     if session.phase == "completed", let completionToken = session.completionToken {
       CompletedSessionSwipeRow(strings: strings, canArchive: session.companion == nil,
-        onFocus: onFocus, onAction: onCompletionAction) {
+        onFocus: onFocus, onAction: onCompletionAction,
+        onVoicePrompt: onVoicePrompt,
+        voicePromptHitWidth: session.voicePromptAvailable == true ? 44 : 0) {
         card
       }
       .id("\(session.sessionId):\(completionToken)")
@@ -3444,9 +3489,7 @@ struct ExpandedSessionRow: View, Equatable {
   @ViewBuilder private var card: some View {
     let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
     VStack(alignment: .leading, spacing: rowSpacing) {
-      if session.permissionAction == nil {
-        rowMainContent
-      } else {
+      if session.permissionAction != nil {
         Button(action: onFocus) {
           rowMainContent
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3454,6 +3497,22 @@ struct ExpandedSessionRow: View, Equatable {
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
+      } else if session.voicePromptAvailable == true {
+        HStack(alignment: .center, spacing: 10) {
+          Button(action: onFocus) {
+            rowMainContent
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          ExpandedIslandVoicePromptButton(
+            help: strings.voiceReply ?? "Voice reply",
+            action: onVoicePrompt
+          )
+        }
+      } else {
+        rowMainContent
       }
 
       if let permissionAction = session.permissionAction {
@@ -3480,7 +3539,7 @@ struct ExpandedSessionRow: View, Equatable {
     .help(expandedMetaText(for: session, updatedAt: updatedAt))
     .onHover { isHovered = $0 }
     .onTapGesture {
-      if session.permissionAction == nil {
+      if session.permissionAction == nil && session.voicePromptAvailable != true {
         onFocus()
       }
     }
@@ -3520,6 +3579,7 @@ struct ExpandedSessionRow: View, Equatable {
         )
         ExpandedRowSummaryLine(session: session, strings: strings)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
   }
@@ -3541,6 +3601,8 @@ struct CompletedSessionSwipeRow<Content: View>: View {
   let canArchive: Bool
   let onFocus: () -> Void
   let onAction: (String, String) -> Void
+  let onVoicePrompt: () -> Void
+  let voicePromptHitWidth: CGFloat
   @ViewBuilder let content: () -> Content
   @State private var offset: CGFloat = 0
   @State private var armed = false
@@ -3608,6 +3670,8 @@ struct CompletedSessionSwipeRow<Content: View>: View {
             }
             else if offset != 0 {
               withAnimation(settleAnimation) { offset = 0 }
+            } else if voicePromptHitWidth > 0 && x >= geometry.size.width - voicePromptHitWidth {
+              onVoicePrompt()
             } else { onFocus() }
           })
       })
@@ -6833,6 +6897,7 @@ enum AgentIslandDebugHarness {
       interactionKind: interactionKind,
       permissionAction: interactionKind == "permission" ? AgentIslandPermissionAction(requestId: "\(id)-request", canAllowForSession: true) : nil,
       attention: phase == "needs-interaction" || phase == "completed" || phase == "error",
+      voicePromptAvailable: phase == "completed" || phase == "error",
       activityLines: [
         AgentIslandActivityLine(id: "\(id)-1", kind: "user", text: title),
         AgentIslandActivityLine(id: "\(id)-2", kind: "assistant", text: detail.isEmpty ? expandedStatusTextForPhase(phase, strings: .fallback) : detail),

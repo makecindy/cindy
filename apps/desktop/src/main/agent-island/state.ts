@@ -2845,6 +2845,9 @@ function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapsho
         }
       : null,
     attention: isAttentionSession(session),
+    ...((session.phase === 'completed' || session.phase === 'error') && !session.groupChat && !session.companionChat
+      ? { voicePromptAvailable: true }
+      : {}),
     activityLines: session.activityLines,
     startedAt: session.startedAt,
     lastActivityAt: session.lastActivityAt,

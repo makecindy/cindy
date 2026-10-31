@@ -10,6 +10,7 @@ import {
 } from 'electron';
 import type { Display, IpcMainInvokeEvent, NativeImage, Point, Rectangle, WebContents } from 'electron';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import {
@@ -24,8 +25,14 @@ import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { onQuit } from '../lifecycle.js';
-import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { assertTrustedAppRendererEvent, isTrustedCindyRendererWindow } from '../security/trustedAppRenderer.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
+import type {
+  SessionVoicePromptResult,
+  SessionVoicePromptTarget,
+} from '../../shared/sessionVoicePrompt.js';
 import { prewarmVoiceInputProvider } from './index.js';
+import { dispatchSessionVoicePrompt } from './sessionPromptDispatch.js';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning.js';
@@ -323,6 +330,7 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 2500;
 const MAC_TEXT_INSERTION_HELPER_PASTE_TIMEOUT_MS = 5000;
 const CLIPBOARD_RESTORE_DELAY_MS = 600;
 const OVERLAY_CANCEL_ACCELERATOR = 'Escape';
+const SESSION_VOICE_PROMPT_MAX_CHARS = 20_000;
 const PASTE_DEBUG_TAG = '[global-paste-debug]';
 // Explicit dev diagnostics for tuning external dictionary learning. This
 // intentionally includes captured text, so it is limited to dev builds and
@@ -341,6 +349,13 @@ let overlayWindow: BrowserWindow | null = null;
 let overlayLoaded = false;
 let overlayPresentationActive = false;
 let pendingOverlayStart: { shortcutInvokedAt: number } | null = null;
+type SessionPromptPresentation = SessionVoicePromptTarget & {
+  clientId: string;
+  ownerScope: string;
+  submission?: Promise<SessionVoicePromptResult>;
+};
+let sessionPromptPresentation: SessionPromptPresentation | null = null;
+let pendingSessionPromptStart: SessionPromptPresentation | null = null;
 let pendingModifierOverlaySubmit = false;
 let pendingModifierOverlaySuppressNextTap = false;
 let pendingModifierOverlaySuppressNextRelease = false;
@@ -474,6 +489,33 @@ export function prewarmGlobalVoiceInputOverlay(): void {
     shortcut: shortcutLabel,
     windowId: window.id,
   });
+}
+
+/**
+ * Opens the same dictation HUD for a terminal island task. The HUD keeps its
+ * existing capture/ASR pipeline, but submits recognized text to the task
+ * instead of pasting it into the focused app.
+ */
+export function showSessionVoicePromptOverlay(target: SessionVoicePromptTarget): void {
+  const existing = getOverlayWindow();
+  if (pendingOverlayStart || pendingSessionPromptStart || isOverlayPresentationOpen(existing)) {
+    if (sessionPromptPresentation?.sessionId === target.sessionId
+      && sessionPromptPresentation.sourceDeviceId === target.sourceDeviceId) return;
+    throw new Error('VOICE_INPUT_BUSY');
+  }
+  const presentation: SessionPromptPresentation = {
+    ...target,
+    clientId: `session-voice-prompt:${randomUUID()}`,
+    ownerScope: activeOwnerScopeKey(),
+  };
+  sessionPromptPresentation = presentation;
+  const window = existing ?? createOverlayWindow(Date.now());
+  if (window.isDestroyed()) return;
+  if (!overlayLoaded) {
+    pendingSessionPromptStart = presentation;
+    return;
+  }
+  startSessionPromptPresentation(window, presentation);
 }
 
 export function isGlobalVoiceInputOverlayVisible(): boolean {
@@ -1039,6 +1081,12 @@ function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
 export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
+  onAppSessionInvalidated(() => {
+    if (!sessionPromptPresentation) return;
+    getOverlayWindow()?.webContents.send('voice-input:global-overlay-command', { type: 'cancel' });
+    sessionPromptPresentation = null;
+    pendingSessionPromptStart = null;
+  });
 
   // 从系统设置切回 Cindy 就会走到这里 —— 这正是用户刚打开开关的那一刻，且与设置页开着
   // 没关系。设置页自己那条权限 effect 保留：它还负责录制期只补 Fn capture 那条路。
@@ -1498,6 +1546,12 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     if (!window || event.sender !== window.webContents) return;
     overlayLoaded = true;
     log.debug('global overlay renderer ready');
+    if (pendingSessionPromptStart) {
+      const presentation = pendingSessionPromptStart;
+      pendingSessionPromptStart = null;
+      startSessionPromptPresentation(window, presentation);
+      return;
+    }
     if (!pendingOverlayStart) {
       // The overlay renderer can emit ready more than once around startup/HMR.
       // Only park the cached window when it is genuinely idle. During an
@@ -1512,6 +1566,38 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     const start = pendingOverlayStart;
     pendingOverlayStart = null;
     startLoadedOverlaySession(window, start.shortcutInvokedAt);
+  });
+
+  ipcMain.handle('voice-input:session-prompt:submit', async (event, requestId: unknown, rawText: unknown): Promise<SessionVoicePromptResult> => {
+    if (!isGlobalVoiceInputOverlaySender(event.sender)
+      || event.senderFrame !== event.sender.mainFrame
+      || !isTrustedCindyRendererWindow(getOverlayWindow())) {
+      return { ok: false, errorCode: 'NO_TARGET' };
+    }
+    const presentation = sessionPromptPresentation;
+    if (!presentation || requestId !== presentation.clientId
+      || isAppSessionBoundaryPending() || presentation.ownerScope !== activeOwnerScopeKey()) {
+      return { ok: false, errorCode: 'NO_TARGET' };
+    }
+    if (typeof rawText !== 'string') return { ok: false, errorCode: 'EMPTY' };
+    const text = rawText.trim();
+    if (!text) return { ok: false, errorCode: 'EMPTY' };
+    if (text.length > SESSION_VOICE_PROMPT_MAX_CHARS) return { ok: false, errorCode: 'TOO_LONG' };
+    if (presentation.submission) return presentation.submission;
+    const submission = dispatchSessionVoicePrompt({
+      sessionId: presentation.sessionId,
+      sourceDeviceId: presentation.sourceDeviceId,
+      text,
+      clientId: presentation.clientId,
+      assertCurrent: () => {
+        if (sessionPromptPresentation !== presentation || isAppSessionBoundaryPending()
+          || presentation.ownerScope !== activeOwnerScopeKey()) throw new Error('VOICE_PROMPT_EXPIRED');
+      },
+    });
+    presentation.submission = submission;
+    const result = await submission;
+    if (!result.ok) presentation.submission = undefined;
+    return result;
   });
 
   ipcMain.handle('voice-input:global-restore-target-focus', async (): Promise<VoiceInputGlobalResult> => {
@@ -1879,6 +1965,7 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
+  if (pendingSessionPromptStart) return;
   if (overlay && overlay.isVisible()) {
     setOverlayIdlePresentationState(overlay);
   }
@@ -1923,6 +2010,7 @@ function handleGlobalVoiceInputShortcutTap(): void {
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
+  if (pendingSessionPromptStart) return;
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {
     focusedWindow.webContents.send('voice-input:global-shortcut-trigger', { phase: 'tap' });
@@ -1942,6 +2030,7 @@ function handleGlobalVoiceInputShortcutSubmit(): void {
     overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
+  if (pendingSessionPromptStart) return;
   if (pendingOverlayStart) {
     pendingModifierOverlaySubmit = true;
     return;
@@ -2113,6 +2202,8 @@ async function hideOverlayWindow(options?: HideOverlayWindowOptions): Promise<vo
     overlayPasteTargetPromise = null;
   }
   pendingOverlayStart = null;
+  sessionPromptPresentation = null;
+  pendingSessionPromptStart = null;
   pendingModifierOverlaySubmit = false;
   pendingModifierOverlaySuppressNextTap = false;
   pendingModifierOverlaySuppressNextRelease = false;
@@ -2151,6 +2242,8 @@ function destroyOverlayWindow(): void {
   overlayPresentationSeq += 1;
   overlayPresentationAwaitingShow = false;
   pendingOverlayStart = null;
+  sessionPromptPresentation = null;
+  pendingSessionPromptStart = null;
   pendingModifierOverlaySubmit = false;
   pendingModifierOverlaySuppressNextTap = false;
   pendingModifierOverlaySuppressNextRelease = false;
@@ -2202,6 +2295,60 @@ function prepareOverlayForDisplay(window: BrowserWindow): void {
   window.setFocusable(true);
 }
 
+function startSessionPromptPresentation(
+  window: BrowserWindow,
+  presentation: SessionPromptPresentation,
+): void {
+  if (window.isDestroyed()) return;
+  const display = resolveSessionPromptDisplay(presentation.displayId);
+  overlayPresentationSeq += 1;
+  overlayPresentationAwaitingShow = false;
+  pendingOverlayStart = null;
+  pendingSessionPromptStart = null;
+  overlayPasteTarget = null;
+  overlayPasteContext = null;
+  overlayPasteTargetPromise = null;
+  window.setBounds(computeSessionPromptOverlayBounds(display));
+  prepareOverlayForDisplay(window);
+  window.setFocusable(false);
+  window.setAlwaysOnTop(true, 'pop-up-menu');
+  window.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+    skipTransformProcessType: process.platform === 'darwin',
+  });
+  registerOverlayCancelShortcut();
+  window.webContents.send('voice-input:session-prompt:start', {
+    requestId: presentation.clientId,
+    sessionId: presentation.sessionId,
+    title: presentation.title,
+  });
+  window.showInactive();
+  scheduleMainAppPresenceRestore('session-voice-prompt-shown');
+  log.debug('session voice prompt overlay shown', {
+    sessionId: presentation.sessionId,
+    displayId: display.id,
+  });
+}
+
+function resolveSessionPromptDisplay(displayId: number | null): Display {
+  if (displayId !== null) {
+    const match = screen.getAllDisplays().find((display) => display.id === displayId);
+    if (match) return match;
+  }
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+}
+
+function computeSessionPromptOverlayBounds(display: Display): Rectangle {
+  const x = Math.round(display.workArea.x + (display.workArea.width - OVERLAY_WIDTH) / 2);
+  const cardTop = display.workArea.y + 8;
+  const maxY = display.workArea.y + display.workArea.height - OVERLAY_HEIGHT - OVERLAY_EDGE_PADDING;
+  const y = Math.max(
+    display.bounds.y - OVERLAY_SHADOW_PADDING,
+    Math.min(cardTop - OVERLAY_SHADOW_PADDING, maxY),
+  );
+  return { x, y, width: OVERLAY_WIDTH, height: OVERLAY_HEIGHT };
+}
+
 function cancelExternalDictionaryLearningWatch(): void {
   const watch = externalDictionaryLearningWatch;
   externalDictionaryLearningWatch = null;
@@ -2235,6 +2382,9 @@ async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> 
     existing.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
     return;
   }
+  if (pendingSessionPromptStart) return;
+  pendingSessionPromptStart = null;
+  sessionPromptPresentation = null;
 
   log.debug('global overlay show requested', {
     elapsedSinceShortcutMs: Date.now() - shortcutInvokedAt,

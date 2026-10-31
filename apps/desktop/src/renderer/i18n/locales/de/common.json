@@ -1398,7 +1398,9 @@
       "permissionPromptTitleWithTool": "{{toolName}} erlauben?",
       "allowOnce": "Einmal erlauben",
       "alwaysAllowForSession": "Für diese Sitzung immer erlauben",
-      "deny": "Ablehnen"
+      "deny": "Ablehnen",
+      "voiceReply": "Sprachantwort",
+      "voicePromptFailed": "Spracheingabe konnte nicht geöffnet werden. Versuch es erneut."
     }
   },
   "menubar": {
@@ -12710,6 +12712,15 @@
       "transcriptKept": "Erkannter Text beibehalten",
       "permissionRequired": "Berechtigung erforderlich",
       "error": "Spracheingabe fehlgeschlagen"
+    },
+    "sessionPrompt": {
+      "listening": "Auf „{{title}}“ antworten",
+      "sending": "Wird gesendet",
+      "statusSendFailed": "Senden fehlgeschlagen",
+      "sendFailed": "Konnte nicht senden. Versuch es erneut.",
+      "taskUnavailable": "Diese Aufgabe kann derzeit keine Nachrichten empfangen. Sie ist möglicherweise archiviert oder der Computer ist offline.",
+      "placeholder": "Sag, was du an diese Aufgabe senden möchtest…",
+      "submit": "An Aufgabe senden"
     },
     "hint": "Tastenkürzel erneut drücken, um Text einzugeben",
     "placeholder": "Sprich jetzt…",

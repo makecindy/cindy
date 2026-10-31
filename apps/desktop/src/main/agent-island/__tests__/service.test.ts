@@ -666,6 +666,33 @@ describe('AgentIslandService native publishing', () => {
     service.resetRuntimeState();
   });
 
+  it('opens voice replies only for terminal task cards with the task identity', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn<(state: AgentIslandDisplayState) => boolean>(() => true);
+    const openSessionVoicePrompt = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      openSessionVoicePrompt,
+    });
+    syncEnabledForTest(service, publish);
+    service.handleUserPrompt({ sessionId: 'task' }, 'run');
+    service.handleAgentEvent({ sessionId: 'task' }, doneEvent());
+    (service as unknown as { handleVoicePrompt(id: string): void }).handleVoicePrompt('task');
+    await Promise.resolve();
+    expect(openSessionVoicePrompt).toHaveBeenCalledWith({
+      sessionId: 'task',
+      title: 'task',
+      sourceDeviceId: null,
+      displayId: null,
+    });
+    openSessionVoicePrompt.mockClear();
+    service.handleUserPrompt({ sessionId: 'running' }, 'run');
+    (service as unknown as { handleVoicePrompt(id: string): void }).handleVoicePrompt('running');
+    expect(openSessionVoicePrompt).not.toHaveBeenCalled();
+    service.resetRuntimeState();
+  });
+
   // #7307 review: accepted group input provenance exists before the avatar/identity read.
   // Unit: done arriving during that read must never emit completion attention or sound.
   it('silences a fast group reply before companion identity finishes loading', async () => {

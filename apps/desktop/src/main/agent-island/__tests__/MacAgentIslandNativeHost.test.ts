@@ -266,6 +266,25 @@ describe('MacAgentIslandNativeHost', () => {
     });
   });
 
+  it('forwards terminal task voice-prompt clicks and ignores empty session ids', async () => {
+    const child = createFakeChild();
+    h.spawn.mockReturnValue(child);
+    const options = { ...createOptions(), onVoicePrompt: vi.fn() };
+    const { MacAgentIslandNativeHost } = await import('../MacAgentIslandNativeHost.js');
+    const host = new MacAgentIslandNativeHost(options);
+
+    expect(host.publish(createDisplayState(), createFrame())).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'ready' })}\n`);
+    (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'voice-prompt', sessionId: 's1' })}\n`);
+    (child.stdout as PassThrough).write(`${JSON.stringify({ type: 'voice-prompt', sessionId: '' })}\n`);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(options.onVoicePrompt).toHaveBeenCalledTimes(1);
+    expect(options.onVoicePrompt).toHaveBeenCalledWith('s1', null);
+    host.stop();
+  });
+
   it('forwards collapse events from the helper', async () => {
     const child = createFakeChild();
     h.spawn.mockReturnValue(child);

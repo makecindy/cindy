@@ -89,6 +89,7 @@ describe('companion chat unread projection', () => {
     expect(overview.map(row => row.sessionId).sort()).toEqual(['companion-chat', 'waiting', 'working']);
     expect(overview.filter(row => row.attention)).toHaveLength(display.pillSnapshot.attentionCount);
     expect(overview.find(row => row.sessionId === chat.sessionId)).toMatchObject({ companion: { name: 'Cindy' }, attention: true });
+    expect(overview.find(row => row.sessionId === chat.sessionId)?.voicePromptAvailable).toBeUndefined();
     expect(buildAgentIslandTaskOverview(state, 104, [{ ...chat, unread: false }]).some(row => row.sessionId === chat.sessionId)).toBe(false);
   });
   it.each([null, 'offline-home'])('restores old unread without runtime activity or notifications (%s)', deviceId => {
@@ -157,6 +158,7 @@ describe('group message cards', () => {
     expect(display.pillSnapshot.attentionCount).toBe(1);
     expect(display.sessions[0]).toMatchObject({ title: 'Product', compactDetail: 'Chris: hello', attention: true, groupChat: { avatars: [] } });
     expect(display.sessions[0].completionToken).toBeUndefined();
+    expect(display.sessions[0].voicePromptAvailable).toBeUndefined();
     expect(buildAllSessionActivitySnapshots(state)).toEqual([]);
     expect(state.remoteUnreadTerminals.size).toBe(0);
     syncAgentIslandGroupChat(state, input.groupId, null, [], '@you', now + 1);
@@ -534,6 +536,7 @@ describe('Agent Island display state', () => {
     const completedDisplay = buildAgentIslandDisplayState(state, 1_150);
     expect(completedDisplay.currentSessionId).toBe('done');
     expect(completedDisplay.displayPolicy).toBe('transient');
+    expect(completedDisplay.sessions[0]).toMatchObject({ phase: 'completed', voicePromptAvailable: true });
 
     applyAgentIslandEvent(state, { sessionId: 'running', title: 'Running', agentKind: 'codex' }, statusEvent(true, 'Still running'), 1_200);
     const afterRunningUpdate = buildAgentIslandDisplayState(state, 1_250);
