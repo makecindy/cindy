@@ -2222,7 +2222,8 @@
           "dune-sphere": "Sphère des dunes",
           "ocean-clouds": "Nuages océaniques",
           "rose-quartz": "Quartz rose",
-          "custom": "Fond d'écran personnalisé"
+          "custom": "Fond d'écran personnalisé",
+          "memory": "Fond d'écran de mémoire"
         },
         "visibilityLabel": "Visibilité du fond d'écran",
         "visibilityHint": "0 % masque le fond d'écran ; 100 % l'affiche sans superposition.",
@@ -2252,6 +2253,25 @@
         "resetFailed": "Impossible de rétablir la disposition des panneaux.",
         "saved": "Position du panneau enregistrée. Rétablissez la disposition par défaut dans Paramètres → Apparence.",
         "saveFailed": "Impossible d'enregistrer les positions des panneaux."
+      },
+      "desktopCompanion": {
+        "empty": "Activez pour générer le premier fond",
+        "enableAria": "Activer la génération du fond d'écran de mémoire",
+        "enableHint": "Tisse les tâches récentes, les titres de mémoire et l'heure du jour dans de petits détails visuels, avec une vérification horaire. La génération utilise votre modèle d'images configuré.",
+        "enableLabel": "Générer depuis la mémoire",
+        "failed": "Cette mise à jour n'a pas abouti. Vérifiez la configuration du modèle ou les autorisations système, puis réessayez.",
+        "lastTopic": "Actuel : {{topic}}",
+        "locationAria": "Activer ou désactiver la localisation du bureau",
+        "locationHint": "Demande la localisation au système pour esquisser une vue de fenêtre d'une ville approximative. En cas de refus ou de désactivation, seule l'heure du jour est représentée.",
+        "locationLabel": "Utiliser la position actuelle",
+        "needImageModel": "Configurez d'abord un modèle d'images prenant en charge les références dans Réglages",
+        "needVideoModel": "Configurez d'abord un modèle vidéo dans Réglages",
+        "previewAlt": "Bureau actuel",
+        "systemLabel": "Définir aussi comme bureau du système macOS",
+        "title": "Fond d'écran de mémoire",
+        "updateNow": "Mettre à jour",
+        "updating": "Génération…",
+        "useInApp": "Utiliser comme fond d'écran de Cindy"
       }
     },
     "notifications": {
@@ -2435,6 +2455,25 @@
         "secret-chime": "Carillon secret",
         "custom": "Fichier local…",
         "customSelected": "Fichier local : {{name}}"
+      },
+      "desktopCompanion": {
+        "empty": "Activez pour générer le premier fond",
+        "enableAria": "Activer la génération du fond d'écran de mémoire",
+        "enableHint": "Tisse les tâches récentes, les titres de mémoire et l'heure du jour dans de petits détails visuels, avec une vérification horaire. La génération utilise votre modèle d'images configuré.",
+        "enableLabel": "Générer depuis la mémoire",
+        "failed": "Cette mise à jour n'a pas abouti. Vérifiez la configuration du modèle ou les autorisations système, puis réessayez.",
+        "lastTopic": "Actuel : {{topic}}",
+        "locationAria": "Activer ou désactiver la localisation du bureau",
+        "locationHint": "Demande la localisation au système pour esquisser une vue de fenêtre d'une ville approximative. En cas de refus ou de désactivation, seule l'heure du jour est représentée.",
+        "locationLabel": "Utiliser la position actuelle",
+        "needImageModel": "Configurez d'abord un modèle d'images prenant en charge les références dans Réglages",
+        "needVideoModel": "Configurez d'abord un modèle vidéo dans Réglages",
+        "previewAlt": "Bureau actuel",
+        "systemLabel": "Définir aussi comme bureau du système macOS",
+        "title": "Fond d'écran de mémoire",
+        "updateNow": "Mettre à jour",
+        "updating": "Génération…",
+        "useInApp": "Utiliser comme fond d'écran de Cindy"
       }
     },
     "language": {

@@ -572,6 +572,7 @@ import {
 import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { disposeDesktopCompanion, ensureDesktopCompanionRuntime, resetDesktopCompanion, startDesktopCompanion } from './desktop-companion/host.js';
 import { setCompanionAvatarResolver } from './agent-island/companionIdentity.js';
 import { companionAvatarCache } from './companion-cloud/avatarCacheHost.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -1973,6 +1974,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     await flushUsageLimitWaits();
     agentIslandService = getAgentIslandService();
     agentIslandService?.resetRuntimeState();
+    try {
+      await resetDesktopCompanion();
+    } catch (error) {
+      blockingFailures.push(error);
+    }
     // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
     // closeLocalDb 之前先 stop;否则下一秒 tick 会撞 'localDb not ready'。
     // resetScheduler 把 scheduler-host 的 _scheduler 单例置 null,下一次
@@ -2213,6 +2219,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       authBoundaryLog.error(`close local DB on ${reason} failed`, error);
     }
     agentIslandService?.resetRuntimeState();
+    try {
+      await resetDesktopCompanion();
+    } catch (error) {
+      blockingFailures.push(error);
+    }
   }
 
   if (blockingFailures.length > 0) {
@@ -3624,6 +3635,7 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
 
 app.on('before-quit', () => {
   isQuitting = true;
+  void disposeDesktopCompanion();
   disposePiRuntimeRecovery?.();
   retryPiRuntimeAfterNetworkRecovery = null;
   disposePiRuntimeRecovery = null;
@@ -4620,6 +4632,7 @@ const registerIpcHandlers = () => {
       showDeviceSessionDesktopEvent(() => getWindow() ?? null, event);
     },
   })?.setAppFocused(hasFocusedAppWindow());
+  ensureDesktopCompanionRuntime();
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
   // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
@@ -9829,6 +9842,7 @@ app.on('ready', async () => {
           });
           attemptStartScheduler();
           attemptStartEmbeddingHost();
+          startDesktopCompanion();
         });
       };
       // localDb 与 splash 可以任意先后完成。协调器已配置就立即开后台任务；
@@ -9843,6 +9857,7 @@ app.on('ready', async () => {
         });
         attemptStartScheduler();
         attemptStartEmbeddingHost();
+        startDesktopCompanion();
       });
       accountProviderReadinessArm.publish(
         userId,

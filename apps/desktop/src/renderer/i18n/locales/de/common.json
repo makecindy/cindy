@@ -2187,7 +2187,8 @@
           "dune-sphere": "Dünenkugel",
           "ocean-clouds": "Wolken über dem Ozean",
           "rose-quartz": "Rosenquarz",
-          "custom": "Eigenes Hintergrundbild"
+          "custom": "Eigenes Hintergrundbild",
+          "memory": "Erinnerungshintergrundbild"
         },
         "visibilityLabel": "Sichtbarkeit des Hintergrundbilds",
         "visibilityHint": "0 % blendet das Hintergrundbild aus; 100 % zeigt es ohne Überlagerung.",
@@ -2217,6 +2218,25 @@
         "resetFailed": "Panel-Layout konnte nicht wiederhergestellt werden.",
         "saved": "Panelposition gespeichert. Das Standardlayout kannst du unter Einstellungen → Darstellung wiederherstellen.",
         "saveFailed": "Panel-Positionen konnten nicht gespeichert werden."
+      },
+      "desktopCompanion": {
+        "empty": "Aktivieren, um den ersten Desktop zu erzeugen",
+        "enableAria": "Erinnerungs-Hintergrundbild-Erzeugung aktivieren",
+        "enableHint": "Verwebt aktuelle Aufgaben, Erinnerungstitel und Tageszeit in kleine visuelle Details und prüft stündlich auf Änderungen. Die Erzeugung verwendet dein konfiguriertes Bildmodell.",
+        "enableLabel": "Aus Erinnerungen erzeugen",
+        "failed": "Diese Aktualisierung wurde nicht abgeschlossen. Prüfe Modellkonfiguration oder Systemberechtigungen und versuche es erneut.",
+        "lastTopic": "Aktuell: {{topic}}",
+        "locationAria": "Desktop-Standort ein- oder ausschalten",
+        "locationHint": "Fragt das System nach dem Standort, um eine Fensteransicht einer ungefähren Stadt zu skizzieren. Bei Deaktivierung oder Ablehnung wird nur die Tageszeit dargestellt.",
+        "locationLabel": "Aktuellen Standort verwenden",
+        "needImageModel": "Konfiguriere zuerst ein Bildmodell mit Referenzunterstützung in den Einstellungen",
+        "needVideoModel": "Konfiguriere zuerst ein Videomodell in den Einstellungen",
+        "previewAlt": "Aktueller Desktop",
+        "systemLabel": "Zusätzlich als macOS-Systemdesktop festlegen",
+        "title": "Erinnerungshintergrundbild",
+        "updateNow": "Jetzt aktualisieren",
+        "updating": "Wird erzeugt…",
+        "useInApp": "Als Cindy-Hintergrundbild verwenden"
       }
     },
     "notifications": {
@@ -2400,6 +2420,25 @@
         "secret-chime": "Geheimnisklang",
         "custom": "Lokale Datei…",
         "customSelected": "Lokale Datei: {{name}}"
+      },
+      "desktopCompanion": {
+        "empty": "Aktivieren, um den ersten Desktop zu erzeugen",
+        "enableAria": "Erinnerungs-Hintergrundbild-Erzeugung aktivieren",
+        "enableHint": "Verwebt aktuelle Aufgaben, Erinnerungstitel und Tageszeit in kleine visuelle Details und prüft stündlich auf Änderungen. Die Erzeugung verwendet dein konfiguriertes Bildmodell.",
+        "enableLabel": "Aus Erinnerungen erzeugen",
+        "failed": "Diese Aktualisierung wurde nicht abgeschlossen. Prüfe Modellkonfiguration oder Systemberechtigungen und versuche es erneut.",
+        "lastTopic": "Aktuell: {{topic}}",
+        "locationAria": "Desktop-Standort ein- oder ausschalten",
+        "locationHint": "Fragt das System nach dem Standort, um eine Fensteransicht einer ungefähren Stadt zu skizzieren. Bei Deaktivierung oder Ablehnung wird nur die Tageszeit dargestellt.",
+        "locationLabel": "Aktuellen Standort verwenden",
+        "needImageModel": "Konfiguriere zuerst ein Bildmodell mit Referenzunterstützung in den Einstellungen",
+        "needVideoModel": "Konfiguriere zuerst ein Videomodell in den Einstellungen",
+        "previewAlt": "Aktueller Desktop",
+        "systemLabel": "Zusätzlich als macOS-Systemdesktop festlegen",
+        "title": "Erinnerungshintergrundbild",
+        "updateNow": "Jetzt aktualisieren",
+        "updating": "Wird erzeugt…",
+        "useInApp": "Als Cindy-Hintergrundbild verwenden"
       }
     },
     "language": {

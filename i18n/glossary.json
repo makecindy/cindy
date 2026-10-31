@@ -3386,6 +3386,31 @@
         "ko": "성능 기록"
       },
       "note": "用户按需录制 Cindy 性能现场的诊断入口；完整轨迹留在本地，结构化报告经用户提交。"
+    },
+    {
+      "id": "desktop-presence",
+      "status": "proposed",
+      "en": "Desktop presence",
+      "translations": {
+        "zh-CN": "桌面互动",
+        "zh-TW": "桌面互動",
+        "ja": "デスクトップ連動",
+        "ko": "데스크톱 연동"
+      },
+      "note": "旧版桌面互动名称；当前统一入口为外观设置中的记忆壁纸，保留旧术语供历史记录使用。"
+    },
+    {
+      "id": "memory-wallpaper",
+      "status": "proposed",
+      "en": "Memory wallpaper",
+      "translations": {
+        "zh-CN": "记忆壁纸",
+        "zh-TW": "記憶桌布",
+        "ja": "記憶の壁紙",
+        "ko": "기억 배경화면"
+      },
+      "checkCase": false,
+      "note": "外观壁纸里的记忆生成模式，同一画面可用于 Cindy 应用和 macOS 系统桌面。只使用当前账号记忆标题，图片不进入跨账号共享壁纸。"
     }
   ]
 }

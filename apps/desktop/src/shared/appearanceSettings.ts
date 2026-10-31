@@ -100,6 +100,7 @@ export const SELECTABLE_WALLPAPER_IDS = [
   'ocean-clouds',
   'rose-quartz',
   'custom',
+  'memory',
 ] as const;
 
 /** Removed from the picker; saved selections keep working until the user switches away. */

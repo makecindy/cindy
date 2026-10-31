@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Slider } from '@/components/ui/slider';
 import { Tip } from '@/components/ui/tooltip';
+import { DesktopCompanionSection } from './DesktopCompanionSection';
 import { cn } from '@/lib/utils';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
-import { getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
+import { useDesktopCompanionSettings } from '@/hooks/useDesktopCompanionSettings';
+import { getBuiltinWallpaperBackground, getBuiltinWallpaperPreview, isCdnWallpaper, isSceneWallpaper } from '@/lib/wallpaper';
 import {
   APPEARANCE_LIMITS,
   DEFAULT_APPEARANCE_SETTINGS,
@@ -30,6 +32,7 @@ export function WallpaperSection() {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const { previewDataUrl, setEnabled } = useDesktopCompanionSettings();
   const feedbackId = useId();
   const buttons = useRef(new Map<WallpaperId, HTMLButtonElement>());
   const [focusedWallpaperId, setFocusedWallpaperId] = useState<WallpaperId | null>(null);
@@ -110,6 +113,7 @@ export function WallpaperSection() {
   };
 
   return (
+    <>
     <section
       id="settings-search-target-appearance-wallpaper"
       className="flex flex-col gap-[14px]"
@@ -152,7 +156,9 @@ export function WallpaperSection() {
               const selected = wallpaperId === id;
               const label = t('settings.appearance.wallpaper.options.' + id);
               const background =
-                id === 'custom' && customWallpaperUrl && !customVideo
+                id === 'memory' && previewDataUrl
+                  ? `url("${previewDataUrl}")`
+                  : id === 'custom' && customWallpaperUrl && !customVideo
                   ? `url("${customWallpaperUrl}")`
                   : getBuiltinWallpaperPreview(id);
               return (
@@ -434,5 +440,7 @@ export function WallpaperSection() {
         </div>
       </div>
     </section>
+      <DesktopCompanionSection />
+    </>
   );
 }

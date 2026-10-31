@@ -2222,7 +2222,8 @@
           "dune-sphere": "Esfera de dunas",
           "ocean-clouds": "Nubes del océano",
           "rose-quartz": "Cuarzo Rosa",
-          "custom": "Fondo de pantalla personalizado"
+          "custom": "Fondo de pantalla personalizado",
+          "memory": "Fondo de memoria"
         },
         "visibilityLabel": "Visibilidad del fondo de pantalla",
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
@@ -2252,6 +2253,25 @@
         "resetFailed": "No se pudo restaurar el diseño del panel.",
         "saved": "Posición del panel guardada. Restaure el diseño predeterminado en Configuración → Apariencia.",
         "saveFailed": "No se pudieron guardar las posiciones del panel."
+      },
+      "desktopCompanion": {
+        "empty": "Actívalo para generar el primer escritorio",
+        "enableAria": "Activar la generación del fondo de memoria",
+        "enableHint": "Teje tareas recientes, títulos de memoria y la hora del día en pequeños detalles visuales, comprobando cambios cada hora. La generación usa tu modelo de imágenes configurado.",
+        "enableLabel": "Generar desde la memoria",
+        "failed": "Esta actualización no se completó. Revisa la configuración del modelo o los permisos del sistema e inténtalo de nuevo.",
+        "lastTopic": "Actual: {{topic}}",
+        "locationAria": "Activar o desactivar la ubicación del escritorio",
+        "locationHint": "Pide la ubicación al sistema para dibujar una vista de ventana de una ciudad aproximada. Si se desactiva o se deniega, solo se reflejará la hora del día.",
+        "locationLabel": "Usar ubicación actual",
+        "needImageModel": "Configura antes en Ajustes un modelo de imágenes que admita referencias",
+        "needVideoModel": "Configura antes un modelo de vídeo en Ajustes",
+        "previewAlt": "Escritorio actual",
+        "systemLabel": "Fijar también como escritorio del sistema macOS",
+        "title": "Fondo de memoria",
+        "updateNow": "Actualizar ahora",
+        "updating": "Generando…",
+        "useInApp": "Usar como fondo de Cindy"
       }
     },
     "notifications": {
@@ -2435,6 +2455,25 @@
         "secret-chime": "timbre secreto",
         "custom": "Archivo local…",
         "customSelected": "Archivo local: {{name}}"
+      },
+      "desktopCompanion": {
+        "empty": "Actívalo para generar el primer escritorio",
+        "enableAria": "Activar la generación del fondo de memoria",
+        "enableHint": "Teje tareas recientes, títulos de memoria y la hora del día en pequeños detalles visuales, comprobando cambios cada hora. La generación usa tu modelo de imágenes configurado.",
+        "enableLabel": "Generar desde la memoria",
+        "failed": "Esta actualización no se completó. Revisa la configuración del modelo o los permisos del sistema e inténtalo de nuevo.",
+        "lastTopic": "Actual: {{topic}}",
+        "locationAria": "Activar o desactivar la ubicación del escritorio",
+        "locationHint": "Pide la ubicación al sistema para dibujar una vista de ventana de una ciudad aproximada. Si se desactiva o se deniega, solo se reflejará la hora del día.",
+        "locationLabel": "Usar ubicación actual",
+        "needImageModel": "Configura antes en Ajustes un modelo de imágenes que admita referencias",
+        "needVideoModel": "Configura antes un modelo de vídeo en Ajustes",
+        "previewAlt": "Escritorio actual",
+        "systemLabel": "Fijar también como escritorio del sistema macOS",
+        "title": "Fondo de memoria",
+        "updateNow": "Actualizar ahora",
+        "updating": "Generando…",
+        "useInApp": "Usar como fondo de Cindy"
       }
     },
     "language": {

@@ -926,6 +926,7 @@ function isMacForgePlatform(platform: ForgePlatform): boolean {
 
 const MACOS_VOICE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 const MACOS_AGENT_ISLAND_HELPER_DEPLOYMENT_TARGET = 'macos14.0';
+const MACOS_DESKTOP_COMPANION_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 const MACOS_COMPUTER_PERMISSION_GUIDE_HELPER_DEPLOYMENT_TARGET = 'macos13.0';
 const MACOS_SESSION_DRAG_RELEASE_HELPER_DEPLOYMENT_TARGET = 'macos10.15';
 // Swift Charts and the macOS 14 SwiftUI animation APIs.
@@ -1618,6 +1619,35 @@ function buildMacAgentIslandHelper(platform: ForgePlatform, arch: ForgeArch): vo
   );
 }
 
+
+function buildMacDesktopCompanionHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  const src = path.join(__dirname, 'native', 'desktop-companion', 'macos-desktop-companion-helper.swift');
+  const characterSrc = path.join(__dirname, 'native', 'desktop-companion', 'cindy-character.jpg');
+  const destDir = path.join(__dirname, 'resources', 'tools', 'desktop-companion');
+  const dest = path.join(destDir, 'cindy-macos-desktop-companion-helper');
+  const characterDest = path.join(destDir, 'cindy-character.jpg');
+  if (!fs.existsSync(characterSrc)) {
+    throw new Error('[forge] macOS desktop companion character missing at ' + characterSrc);
+  }
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.copyFileSync(characterSrc, characterDest);
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  if (!fs.existsSync(src)) {
+    throw new Error('[forge] macOS desktop companion helper source missing at ' + src);
+  }
+  buildSwiftHelperForForgeArch(
+    src,
+    dest,
+    arch,
+    MACOS_DESKTOP_COMPANION_HELPER_DEPLOYMENT_TARGET,
+    ['-O'],
+    'desktop companion helper',
+  );
+  fs.chmodSync(dest, 0o755);
+  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
+  console.log('[forge:prePackage] macOS desktop companion helper (' + swiftArchLabel(arch, MACOS_DESKTOP_COMPANION_HELPER_DEPLOYMENT_TARGET) + ') -> ' + dest + ' (' + sizeMb + ' MB)');
+}
+
 function buildMacComputerPermissionGuideHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(
@@ -1886,6 +1916,7 @@ const config: ForgeConfig = {
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSLocationWhenInUseUsageDescription: 'Cindy uses your approximate location to match desktop scenes to the city you are in.',
       NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
@@ -1955,6 +1986,7 @@ const config: ForgeConfig = {
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
+      NSLocationWhenInUseUsageDescription: 'Cindy uses your approximate location to match desktop scenes to the city you are in.',
       NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
@@ -2049,6 +2081,7 @@ const config: ForgeConfig = {
       }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
+      buildMacDesktopCompanionHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
       buildMacSessionDragReleaseHelper(platform, arch);
       buildMacMenubarHelper(platform, arch);

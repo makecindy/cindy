@@ -2222,7 +2222,8 @@
           "dune-sphere": "Esfera de dunas",
           "ocean-clouds": "Nuvens oceânicas",
           "rose-quartz": "Quartzo rosa",
-          "custom": "Papel de parede personalizado"
+          "custom": "Papel de parede personalizado",
+          "memory": "Papel de parede de memória"
         },
         "visibilityLabel": "Visibilidade do papel de parede",
         "visibilityHint": "0% oculta o papel de parede; 100% o exibe sem sobreposição.",
@@ -2252,6 +2253,25 @@
         "resetFailed": "Não foi possível restaurar o layout dos painéis.",
         "saved": "Posição do painel salva. Restaure o layout padrão em Configurações → Aparência.",
         "saveFailed": "Não foi possível salvar as posições dos painéis."
+      },
+      "desktopCompanion": {
+        "empty": "Ative para gerar o primeiro área de trabalho",
+        "enableAria": "Ativar a geração do papel de parede de memória",
+        "enableHint": "Entrelaça tarefas recentes, títulos de memória e a hora do dia em pequenos detalhes visuais, verificando alterações de hora a hora. A geração usa o seu modelo de imagens configurado.",
+        "enableLabel": "Gerar a partir da memória",
+        "failed": "Esta atualização não foi concluída. Verifique a configuração do modelo ou as permissões do sistema e tente novamente.",
+        "lastTopic": "Atual: {{topic}}",
+        "locationAria": "Ativar ou desativar a localização do área de trabalho",
+        "locationHint": "Pede a localização ao sistema para esboçar uma vista de janela de uma cidade aproximada. Se desativar ou recusar, apenas a hora do dia é representada.",
+        "locationLabel": "Usar localização atual",
+        "needImageModel": "Configure primeiro nas Definições um modelo de imagens que suporte referências",
+        "needVideoModel": "Configure primeiro um modelo de vídeo nas Definições",
+        "previewAlt": "Área de trabalho atual",
+        "systemLabel": "Definir também como área de trabalho do sistema macOS",
+        "title": "Papel de parede de memória",
+        "updateNow": "Atualizar agora",
+        "updating": "A gerar…",
+        "useInApp": "Usar como papel de parede da Cindy"
       }
     },
     "notifications": {
@@ -2435,6 +2455,25 @@
         "secret-chime": "Toque de segredo",
         "custom": "Arquivo local…",
         "customSelected": "Arquivo local: {{name}}"
+      },
+      "desktopCompanion": {
+        "empty": "Ative para gerar o primeiro área de trabalho",
+        "enableAria": "Ativar a geração do papel de parede de memória",
+        "enableHint": "Entrelaça tarefas recentes, títulos de memória e a hora do dia em pequenos detalhes visuais, verificando alterações de hora a hora. A geração usa o seu modelo de imagens configurado.",
+        "enableLabel": "Gerar a partir da memória",
+        "failed": "Esta atualização não foi concluída. Verifique a configuração do modelo ou as permissões do sistema e tente novamente.",
+        "lastTopic": "Atual: {{topic}}",
+        "locationAria": "Ativar ou desativar a localização do área de trabalho",
+        "locationHint": "Pede a localização ao sistema para esboçar uma vista de janela de uma cidade aproximada. Se desativar ou recusar, apenas a hora do dia é representada.",
+        "locationLabel": "Usar localização atual",
+        "needImageModel": "Configure primeiro nas Definições um modelo de imagens que suporte referências",
+        "needVideoModel": "Configure primeiro um modelo de vídeo nas Definições",
+        "previewAlt": "Área de trabalho atual",
+        "systemLabel": "Definir também como área de trabalho do sistema macOS",
+        "title": "Papel de parede de memória",
+        "updateNow": "Atualizar agora",
+        "updating": "A gerar…",
+        "useInApp": "Usar como papel de parede da Cindy"
       }
     },
     "language": {

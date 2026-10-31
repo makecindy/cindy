@@ -126,6 +126,17 @@ The grid has one Tab entry, using the selected visible tile or the first tile fo
 a hidden saved selection. Arrow keys move focus and selection with wrapping; Home /
 End reach the first / last tile. An empty Custom tile only receives focus during
 arrow navigation; Enter / Space explicitly opens the file picker.
+The built-in wallpaper catalog contains only Window Companion, Future Atelier and Dream
+Wander, plus None to restore the theme canvas (user decision, 2026-10-01).
+Memory wallpaper (user decision, 2026-10-05) joins the existing wallpaper section.
+It generates an account-private still from recent task and memory titles and the
+time of day. Selecting it uses the same continuous application canvas and
+Light/Dark readability veil. Only the current account's managed media URL is
+exposed; signing out or changing accounts clears the previous image immediately.
+Generation and optional location are explicit opt-ins. An independent macOS
+desktop switch can apply the same generated image outside the app; it is off
+for new users and preserves the system-desktop behavior of existing enabled users.
+Generation failures are reported and do not invoke a different image operation.
 Custom wallpaper is available through Choose Wallpaper, Replace Wallpaper and Remove Wallpaper
 in the same section (user addition, 2026-10-01; video support, 2026-10-05). Accept local PNG/JPEG/WebP up to
 20 MB and 40 megapixels, store a metadata-free static image up to 3840 pixels
@@ -1848,6 +1859,12 @@ The splash wordmark is a separate asset pair (`assets/splash/wordmark.png`, whit
 - **Lockup**: Desktop uses one static 40×40px product-approved Cindy character crop (8px radius), followed by the active theme's 24px-high wordmark with an 8px gap. Mobile uses the same crop at 22×22px (6px radius), followed by an 18px-high wordmark with a 6px gap, keeping the narrower export understated. Do not append a website or regional host. The character keeps the source asset's original color and opacity without component-authored filtering.
 - **Constraints**: no animation, shadow, decorative background, additional brand color, enlarged hero treatment, or alternate character composition. This approval identifies the source of an exported Cindy conversation; it is not precedent for adding mascots to cards, dialogs, tool output, or other share-adjacent UI.
 - **Theme boundary**: Light and Dark use their matching wordmark assets. The same static character crop may be used in both modes because it is an exported brand asset, not a UI color surface.
+
+**Sanctioned brand surface — macOS desktop presence (Desktop approved 2026-09-18).**
+
+- **Where**: Settings → Appearance → Wallpaper groups memory generation and the optional macOS system-desktop destination (user decision, 2026-10-05). The same generated still can be explicitly selected as the application wallpaper under the canvas rule in §2. Generated stills and looping videos use the product-approved Cindy portrait as identity. She occupies about 15% of the frame in a corner; the rest stays empty for Finder icons.
+- **Constraints**: no desktop pet overlay, no click-to-talk character, no mascot in the Cindy app chrome. Reduced Motion keeps the still wallpaper and does not play video.
+- **Scope boundary**: the explicitly selected application canvas and macOS system desktop only. It is not precedent for artwork inside message content, settings cards, or other product surfaces.
 
 **Sanctioned brand surface — mobile download dialog (approved 2026-07-25).**
 

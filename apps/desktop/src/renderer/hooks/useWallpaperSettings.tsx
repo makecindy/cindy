@@ -23,6 +23,7 @@ import {
 } from '@/../shared/appearanceSettings';
 
 import { getBuiltinWallpaperBackground } from '@/lib/wallpaper';
+import { useDesktopCompanionSettings } from './useDesktopCompanionSettings';
 import { useIsDarkMode } from '@/components/markdown/useIsDarkMode';
 import { WallpaperVideo } from '@/components/layout/WallpaperVideo';
 import { useWallpaperAsset } from './useWallpaperAsset';
@@ -89,6 +90,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
+  const { previewDataUrl } = useDesktopCompanionSettings();
   const visibility = getWallpaperVisibility(settings, isDark);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
@@ -108,7 +110,11 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   }, [imageAsset.retry, videoAsset.retry]);
   const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
   const background =
-    settings.wallpaperId === 'custom'
+    settings.wallpaperId === 'memory'
+      ? previewDataUrl
+        ? `url("${previewDataUrl}")`
+        : undefined
+      : settings.wallpaperId === 'custom'
       ? customUrl
         ? isCustomWallpaperVideo(customUrl)
           ? 'none'
@@ -300,3 +306,4 @@ export function useWallpaperSettings(): WallpaperSettingsContextValue {
     throw new Error('useWallpaperSettings must be used within WallpaperSettingsProvider');
   return context;
 }
+

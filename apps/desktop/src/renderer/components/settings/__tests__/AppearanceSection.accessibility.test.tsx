@@ -141,6 +141,7 @@ describe('AppearanceSection accessibility', () => {
       'settings.appearance.wallpaper.options.ocean-clouds',
       'settings.appearance.wallpaper.options.rose-quartz',
       'settings.appearance.wallpaper.options.custom',
+      'settings.appearance.wallpaper.options.memory',
     ]);
     expect(
       screen.getByRole('spinbutton', { name: 'settings.appearance.font.uiSize.label' }),
