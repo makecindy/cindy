@@ -1804,6 +1804,71 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    '413 Failed to buffer the request body: length limit exceeded',
+    '413 Request Entity Too Large',
+    '413 Content Too Large',
+    'PI_REQUEST_BODY_RECOVERY_EXHAUSTED: pi compact failed: upstream connection closed',
+  ])('recovers a Pi byte-limit failure on the failed turn without resending old images: %s', async message => {
+    const imageMessage = JSON.stringify({ text: '查看图片', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
+    const deps = makeDeps([
+      msg('user', imageMessage, 'u1', 1),
+      msg('assistant', '图片中有一只猫', 'a1', 2),
+      msg('user', '接着做', 'u2', 3),
+    ]);
+    const rollover = createContextOverflowRollover(deps);
+    expect(rollover.claim('s1')).toBe('claimed');
+    await expect(rollover.tryRecover('s1', { message })).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledWith('s1');
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    const handoff = (deps.commitRebuild.mock.calls as unknown as Array<[string, string]>)[0]?.[1] ?? '';
+    expect(handoff).toContain('图片中有一只猫');
+    expect(handoff).not.toContain('data:image/png;base64');
+    expect(handoff).not.toContain('接着做');
+    expect(deps.replayUserMessage).toHaveBeenCalledWith('s1', '接着做', undefined, { signal: expect.any(AbortSignal) });
+    expect(deps.onRebuilt).toHaveBeenCalledOnce();
+  });
+
+  it('does not take over an externally owned Pi 413 turn', async () => {
+    const deps = makeDeps([msg('user', 'IM message', 'u1')]);
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['413 Failed to buffer the request body: length limit exceeded', '413 Request Entity Too Large', '413 Content Too Large'])('rebuilds before send after Pi byte-limit failure: %s', async message => {
+    const error = { message };
+    const imageMessage = JSON.stringify({ text: '之前的内容', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
+    const source = [msg('user', imageMessage, 'u1'), msg('assistant', '已完成', 'a1'),
+      msg('user', '继续', 'u2'), msg('error', JSON.stringify(error), 'e1')];
+    expect(findLatestRebuildableError(source, true)).toEqual(error);
+    expect(findLatestRebuildableError(source, false)).toBeNull();
+    expect(shouldRebuildPiNativeSession(error)).toBe(true);
+    expect(shouldRebuildPiNativeSession({ sdkError: '413 length limit exceeded' })).toBe(true);
+    expect(shouldRebuildPiNativeSession({ message: '413 invalid authentication' })).toBe(false);
+
+    const deps = makeDeps(source);
+    deps.getSessionRow.mockResolvedValue({
+      status: 'active', agentKind: 'pi', remoteHostId: null, clearedAt: null,
+      sdkSessionId: '/tmp/pi-session', contextTokens: 10_000, contextWindow: 1_000_000,
+      model: 'test-model', providerId: 'local-test',
+    });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(true);
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(deps.commitRebuild).toHaveBeenCalledWith(
+      's1', expect.stringContaining('已完成'),
+      expect.objectContaining({ sourceUserClientId: 'u2' }), expect.anything(),
+    );
+    const handoff = (deps.commitRebuild.mock.calls as unknown as Array<[string, string]>)[0]?.[1] ?? '';
+    expect(handoff).not.toContain('继续');
+    expect(handoff).not.toContain('data:image/png;base64');
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('rebuilds before send when host auto-compact has latched a deterministic failure', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1'), msg('assistant', '好', 'a1')]);
     deps.getSessionRow.mockResolvedValue({
