@@ -315,7 +315,12 @@ export function AddProviderWizard({
   );
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
-  const [presetsLoaded, setPresetsLoaded] = useState(false);
+  const [presetsLoadState, setPresetsLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const presetEntryConsumedRef = useRef<string | null>(null);
+  // 用户改选后，原搜索入口就已消费；目录迟到的成功/失败均不得再接管新选择。
+  const consumePresetEntry = useCallback(() => {
+    if (entry?.kind === 'preset') presetEntryConsumedRef.current = entry.presetId;
+  }, [entry]);
   const [query, setQuery] = useState('');
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
@@ -411,9 +416,9 @@ export function AddProviderWizard({
     void window.electronAPI.maker
       .listProviderPresets()
       .then((r) => {
-        if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoaded(true); }
+        if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoadState('ready'); }
       })
-      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets([])); setPresetsLoaded(true); if (entry?.kind === 'preset') onEntryUnavailable?.(); } });
+      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets([])); setPresetsLoadState('failed'); } });
     return () => {
       cancelled = true;
     };
@@ -569,6 +574,7 @@ export function AddProviderWizard({
 
   const pickOauth = useCallback((provider: ProviderView) => {
     if (savingRef.current) return;
+    consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -577,9 +583,10 @@ export function AddProviderWizard({
     setSel({ kind: 'oauth', provider });
     setApiKey('');
     setStep(2);
-  }, []);
+  }, [consumePresetEntry]);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
     if (savingRef.current) return;
+    consumePresetEntry();
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -588,9 +595,10 @@ export function AddProviderWizard({
     setSel({ kind: 'builtinApiKey', provider });
     setApiKey('');
     setStep(2);
-  }, []);
+  }, [consumePresetEntry]);
   const connectLlamaCpp = useCallback(async () => {
     if (savingRef.current) return;
+    consumePresetEntry();
     if (providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
       onDone(MANAGED_LLAMACPP_PROVIDER_ID);
       return;
@@ -607,11 +615,12 @@ export function AddProviderWizard({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [onDone, providers, t, entry, onEntryUnavailable]);
+  }, [onDone, providers, t, entry, onEntryUnavailable, consumePresetEntry]);
 
   const pickPreset = useCallback(
     (preset: ProviderPreset, useApiKey = false) => {
       if (savingRef.current) return;
+      consumePresetEntry();
       const oauth = providerPresetOAuth(preset.id);
       if (oauth && !useApiKey) {
         pickOauth({ ...buildUserProvider({
@@ -639,11 +648,12 @@ export function AddProviderWizard({
       setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers, pickOauth],
+    [i18n.language, onDone, providers, pickOauth, consumePresetEntry],
   );
 
   const connectOllama = useCallback(async () => {
     if (savingRef.current) return;
+    consumePresetEntry();
     savingRef.current = true;
     setSaving(true);
     try {
@@ -683,7 +693,7 @@ export function AddProviderWizard({
       savingRef.current = false;
       setSaving(false);
     }
-  }, [onDone, t, entry, onEntryUnavailable]);
+  }, [onDone, t, entry, onEntryUnavailable, consumePresetEntry]);
 
   useEffect(() => {
     if (entry?.kind === 'builtin' && !providers.some(p => p.id === entry.providerId)) onEntryUnavailable?.();
@@ -706,15 +716,15 @@ export function AddProviderWizard({
   // entry(preset 直达):presets 异步载入,到位后消费;找不到该预设则留在目录页。
   // 按 presetId 记录已消费值(而非布尔):同一挂载期内 entry 换成另一个 preset
   // (如深链二次进入)仍能直达,同一 entry 不重复触发。
-  const presetEntryConsumedRef = useRef<string | null>(null);
   useEffect(() => {
     if (entry?.kind !== 'preset' || presetEntryConsumedRef.current === entry.presetId) return;
-    if (!presetsLoaded) return;
+    if (presetsLoadState === 'loading') return;
     presetEntryConsumedRef.current = entry.presetId;
+    if (presetsLoadState === 'failed') { onEntryUnavailable?.(); return; }
     const preset = presets.find((p) => p.id === entry.presetId) ?? [...Object.values(OFFICIAL_API_PRESETS), ...SPEECH_API_PRESETS].find(p => p.id === entry.presetId);
     if (preset) pickPreset(preset, entry.speechOnly === true);
     else onEntryUnavailable?.();
-  }, [entry, presets, presetsLoaded, pickPreset, onEntryUnavailable]);
+  }, [entry, presets, presetsLoadState, pickPreset, onEntryUnavailable]);
 
   const localLoginRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => () => {

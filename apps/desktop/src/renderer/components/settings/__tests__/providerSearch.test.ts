@@ -41,9 +41,14 @@ it('keeps managed llama.cpp separate from the existing-service preset', () => {
   ]);
 });
 
-it('describes managed llama.cpp as install/download/run, separately from the editable server preset', () => {
-  const choices = providerSearchChoices([], [{ id: 'llamacpp', name: 'llama.cpp', runtimes: {} }], 'en', 'Ollama');
-  const managed = choices.find(choice => choice.target.kind === 'llamacpp')!;
-  expect(managed.metaKey).toBe('llamacpp.subtitle');
-  expect(choices.find(choice => choice.key === 'preset:llamacpp')!.metaKey).not.toBe(managed.metaKey);
+// #8065 r4430752294: the public search result pairs each managed setup action
+// with its existing install/run description, distinct from server-only presets.
+it.each([
+  ['llamacpp', 'llamacpp.subtitle'],
+  ['ollama', 'local.subtitle'],
+])('describes managed %s separately from the editable server preset', (id, metaKey) => {
+  const choices = providerSearchChoices([], [{ id, name: id, runtimes: {} }], 'en', 'Ollama');
+  const managed = choices.find(choice => choice.target.kind === id)!;
+  expect(managed.metaKey).toBe(metaKey);
+  expect(choices.find(choice => choice.key === `preset:${id}`)!.metaKey).not.toBe(managed.metaKey);
 });

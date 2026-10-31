@@ -44,7 +44,7 @@ export function providerSearchChoices(providers: ProviderView[], presets: Provid
       target: { kind: 'preset', presetId: p.id } });
   }
   if (!providers.some(p => p.id === MANAGED_OLLAMA_PROVIDER_ID)) {
-    results.push({ key: 'ollama', id: 'ollama', name: ollamaName, names: [ollamaName, 'Ollama'], metaKey: 'wizard.metaLocalConnect', target: { kind: 'ollama' } });
+    results.push({ key: 'ollama', id: 'ollama', name: ollamaName, names: [ollamaName, 'Ollama'], metaKey: 'local.subtitle', target: { kind: 'ollama' } });
   }
   if (!providers.some(p => p.id === MANAGED_LLAMACPP_PROVIDER_ID)) {
     results.push({ key: 'llamacpp', id: 'llamacpp', name: llamaCppName, names: [llamaCppName, 'llama.cpp'], metaKey: 'llamacpp.subtitle', target: { kind: 'llamacpp' } });

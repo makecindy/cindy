@@ -18,6 +18,9 @@ mountPage({
     localModelList: async () => ({ status: { kind: 'absent', appInstalled: false }, models: [], memoryGb: 0 }),
     scanLocalCli: async () => ({ detections: [] }),
     onProviderOAuthProgress: subscription('providerOAuthProgress'),
+    localModelStatus: async () => ({ runtime: 'ollama', kind: 'absent', appInstalled: false, canInstallRuntime: true }),
+    onLocalModelInstallProgress: subscription('localModelInstallProgress'),
+    onLocalModelStatus: subscription('localModelStatus'),
   } }),
   render: () => <Page />,
 });

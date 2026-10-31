@@ -3596,9 +3596,10 @@ export function ProvidersSection() {
           }}
           onClose={() => setWizard(null)}
           onDone={async (providerId) => {
+            // 只清理本次搜索挂起的草稿；刷新期间用户可以打开另一个编辑框。
+            setDialog(current => current?.mode === 'create' && current === dialog ? null : current);
             await refetch();
-            setWizard(null);
-            setDialog(null);
+            setWizard(current => current === wizard ? null : current);
             if (providerId) selectProvider(providerId);
           }}
         />

@@ -25,6 +25,7 @@ const {
   toastError,
   setModelVisibilitiesSpy,
   customDialogSpy,
+  providerRefetch,
 } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
   wizardPropsSpy: vi.fn(),
@@ -43,6 +44,7 @@ const {
   toastError: vi.fn(),
   setModelVisibilitiesSpy: vi.fn(() => true),
   customDialogSpy: vi.fn(),
+  providerRefetch: vi.fn(async (): Promise<void> => undefined),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -55,7 +57,7 @@ vi.mock('@/hooks/useProviders', () => ({
     providerOrder: providersState.order,
     ownerGeneration: 1,
     loading: false,
-    refetch: vi.fn(),
+    refetch: providerRefetch,
   }),
 }));
 
@@ -119,9 +121,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 }));
 
 vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
-  ProviderConnectionDialog: (props: unknown) => {
+  ProviderConnectionDialog: (props: { initial?: { name?: string } }) => {
     customDialogSpy(props);
-    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' });
+    return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' },
+      props.initial && React.createElement('input', { 'aria-label': 'edit connection draft', defaultValue: props.initial.name }));
   },
 }));
 
@@ -186,6 +189,7 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
+  providerRefetch.mockReset().mockResolvedValue(undefined);
   vi.mocked(useProviderSubscriptionCard).mockReset().mockReturnValue(null);
   confirmSpy.mockReset().mockResolvedValue(true);
   codexAuthState.state = { kind: 'unauthenticated' };
@@ -1218,4 +1222,31 @@ it('routes a custom-name search through the existing wizard and resumes its draf
   act(() => wizardPropsSpy.mock.lastCall![0].onClose());
   expect(screen.queryByTestId('wizard-stub')).toBeNull();
   expect(customDialogSpy.mock.lastCall![0].suspended).toBe(false);
+});
+
+// #8065 r4430752284: the existing cancel test never deferred completion/refetch.
+// Renderer unit: real parent state, mocked child boundaries; a newly opened edit
+// and its unsaved input must survive the old search wizard's refresh completion.
+it('keeps a newly opened edit draft when the completed search wizard refresh settles', async () => {
+  providersState.providers = [makeProvider('existing-endpoint', {
+    name: 'Existing endpoint', source: 'user', connected: false, auth: { method: 'apiKey' },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture', contextWindow: 100, efforts: [], defaultEffort: null }] },
+  })];
+  renderAt('?tab=providers&connect=existing-endpoint');
+  await screen.findByRole('button', { name: 'settings.providers.custom.editAria' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.addProvider' }));
+  await screen.findByTestId('wizard-stub');
+  act(() => wizardPropsSpy.mock.lastCall![0].onOpenCustomForm());
+  act(() => customDialogSpy.mock.lastCall![0].onSelectProvider({ kind: 'preset', presetId: 'deepseek' }));
+  let release!: () => void;
+  providerRefetch.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
+  let completion!: Promise<void>;
+  act(() => { completion = wizardPropsSpy.mock.lastCall![0].onDone('added-endpoint'); });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.editAria' }));
+  const input = screen.getByRole('textbox', { name: 'edit connection draft' });
+  fireEvent.change(input, { target: { value: 'Unsaved edit' } });
+  await act(async () => { release(); await completion; });
+  expect(screen.getByRole('textbox', { name: 'edit connection draft' })).toBe(input);
+  expect((input as HTMLInputElement).value).toBe('Unsaved edit');
+  expect(customDialogSpy.mock.lastCall![0].initial.id).toBe('existing-endpoint');
 });

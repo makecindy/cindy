@@ -9,7 +9,7 @@
  *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -2103,4 +2103,57 @@ it('blocks supplier switches and custom-form navigation until the Ollama search 
   expect(onOpenCustomForm).not.toHaveBeenCalled();
   ready({ kind: 'ready' });
   await waitFor(() => expect(onDone).toHaveBeenCalledWith('cindy-local-ollama'));
+});
+
+// #8065 r4430752290: existing entry tests resolve the directory before switching.
+// Renderer unit, deferred IPC: each public choice must keep its own setup/input
+// when the original search entry's directory subsequently resolves or rejects.
+it.each(['oauth', 'oauth-api', 'builtin-key', 'ollama', 'failed-directory'] as const)(
+  'keeps the newer %s choice after the search directory settles', async choice => {
+    let resolve!: (value: { presets: typeof deepseekPreset[] }) => void;
+    let reject!: (error: Error) => void;
+    window.electronAPI.maker.listProviderPresets = vi.fn(() => new Promise<{ presets: typeof deepseekPreset[] }>((ok, fail) => { resolve = ok; reject = fail; }));
+    window.electronAPI.maker.localModelStatus = vi.fn(async () => ({ runtime: 'ollama' as const, kind: 'absent' as const, appInstalled: false, canInstallRuntime: false }));
+    if (choice === 'ollama') Object.assign(window.electronAPI.maker, {
+      onLocalModelInstallProgress: vi.fn(() => () => undefined),
+      onLocalModelStatus: vi.fn(() => () => undefined),
+    });
+    const mediaProvider = { ...anthropicProvider, id: 'gemini', name: 'Media Only', agents: [], models: {},
+      auth: { method: 'apiKey' }, embeddingModels: [{ id: 'embedding', name: 'Embedding' }] } as ProviderView;
+    const onUnavailable = vi.fn();
+    render(<AddProviderWizard providers={[anthropicProvider, mediaProvider]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+      onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByRole('button', { name: /Anthropic/ });
+    if (choice === 'ollama') {
+      fireEvent.change(screen.getByPlaceholderText('settings.providers.wizard.searchPlaceholder'), { target: { value: 'ollama' } });
+      fireEvent.click(await screen.findByRole('button', { name: /settings.providers.local.title/ }));
+      await screen.findByText('settings.providers.local.onboardingTitle');
+    } else if (choice === 'builtin-key') {
+      fireEvent.click(screen.getByRole('button', { name: /Media Only/ }));
+      fireEvent.change(screen.getByRole('dialog').querySelector('input[type="password"]')!, { target: { value: 'unsaved-key' } });
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: /Anthropic/ }));
+      if (choice === 'oauth-api') {
+        fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.useApiKey' }));
+        fireEvent.change(screen.getByDisplayValue('Anthropic API'), { target: { value: 'My latest provider' } });
+      }
+    }
+    await act(async () => {
+      if (choice === 'failed-directory') reject(new Error('directory unavailable'));
+      else resolve({ presets: [deepseekPreset] });
+    });
+    if (choice === 'ollama') expect(screen.getByText('settings.providers.local.onboardingTitle')).toBeTruthy();
+    else if (choice === 'builtin-key') expect(screen.getByDisplayValue('unsaved-key')).toBeTruthy();
+    else if (choice === 'oauth-api') expect(screen.getByDisplayValue('My latest provider')).toBeTruthy();
+    else expect(screen.getByRole('button', { name: 'settings.providers.localAccount.useClaude' })).toBeTruthy();
+    expect(onUnavailable).not.toHaveBeenCalled();
+  },
+);
+
+it('returns the untouched search draft once when its directory fails', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const onUnavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(onUnavailable).toHaveBeenCalledOnce());
 });

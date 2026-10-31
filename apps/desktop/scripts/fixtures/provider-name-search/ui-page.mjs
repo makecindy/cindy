@@ -9,14 +9,21 @@ export default {
     scroll: { about: 'Real mouse-wheel input scrolls to a bottom supplier that can be selected' },
     custom: { about: 'Unmatched names remain valid custom endpoint names' },
     jump: { about: 'Selecting DeepSeek opens its existing configuration form' },
+    ollama: { about: 'Managed Ollama describes installation and opens its existing install guide' },
   },
   async check(page, ui) {
     const input = page.getByRole('combobox');
-    const query = ui.case === 'custom' ? 'My private gateway' : ['many', 'scroll'].includes(ui.case) ? 'de' : 'dee';
+    const query = ui.case === 'ollama' ? 'Ollama' : ui.case === 'custom' ? 'My private gateway' : ['many', 'scroll'].includes(ui.case) ? 'de' : 'dee';
     await input.fill(query);
     await page.getByText(await ui.t('settings.providers.custom.nameSearchHint'), { exact: true }).waitFor();
     assert.equal(await page.getByText('匹配的供应商', { exact: true }).count(), 0);
-    if (ui.case === 'custom') {
+    if (ui.case === 'ollama') {
+      const managed = page.getByRole('option').filter({ has: page.getByText(await ui.t('settings.providers.local.subtitle'), { exact: true }) });
+      assert.equal(await managed.count(), 1);
+      await ui.capture('ollama-search-result');
+      await managed.click();
+      await page.getByText(await ui.t('settings.providers.local.onboardingTitle'), { exact: true }).waitFor();
+    } else if (ui.case === 'custom') {
       assert.equal(await page.getByRole('option').count(), 0);
       assert.equal(await input.inputValue(), query);
     } else if (['many', 'scroll'].includes(ui.case)) {
