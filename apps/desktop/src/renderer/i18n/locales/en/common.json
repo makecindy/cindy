@@ -14193,6 +14193,11 @@
       "pinned": "Pinned",
       "pinnedToggleExpand": "Expand pinned",
       "pinnedToggleCollapse": "Collapse pinned",
+      "inProgress": "In Progress",
+      "inProgressToggleExpand": "Expand in progress",
+      "inProgressToggleCollapse": "Collapse in progress",
+      "pinSuggestion": "Often opened: {{title}}",
+      "pinSuggestionDismiss": "Don't Suggest Again",
       "pinnedShowMore": "More",
       "viewStyle": "Switch view style",
       "viewStyleList": "Text",
@@ -14248,7 +14253,8 @@
         "project": "Project",
         "flat": "Flat list",
         "device": "Device",
-        "dialogue": "Chat"
+        "dialogue": "Chat",
+        "inProgress": "In Progress"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -14574,7 +14580,8 @@
       "groupSummary": {
         "project": "Project",
         "dialogue": "Chat",
-        "device": "Device"
+        "device": "Device",
+        "inProgress": "In Progress"
       },
       "taskStatusHeading": "Session status",
       "taskStatus": {

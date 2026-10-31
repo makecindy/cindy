@@ -38,6 +38,7 @@ import {
   ChevronRight,
   CircleDot,
   Clock,
+  Activity,
   Coins,
   Filter,
   Folder,
@@ -403,6 +404,7 @@ export function SidebarFilterPopover({
     groupBy,
     groupDialogue,
     groupDevice,
+    groupInProgress,
     sortBy,
     projectOrder,
     manualProjectOrder,
@@ -415,6 +417,7 @@ export function SidebarFilterPopover({
     setGroupBy,
     setGroupDialogue,
     setGroupDevice,
+    setGroupInProgress,
     setSortBy,
     setProjectOrder: setViewerProjectOrder,
   } = filter;
@@ -433,6 +436,7 @@ export function SidebarFilterPopover({
       groupBy === 'project' ? t('ccAgent.sidebar.groupSummary.project') : null,
       groupDialogue ? t('ccAgent.sidebar.groupSummary.dialogue') : null,
       hasRemoteDevices && groupDevice ? t('ccAgent.sidebar.groupSummary.device') : null,
+      groupInProgress ? t('ccAgent.sidebar.groupSummary.inProgress') : null,
     ]
       .filter(Boolean)
       .join(t('ccAgent.sidebar.taskInfoSummarySeparator')) ||
@@ -661,6 +665,12 @@ export function SidebarFilterPopover({
                     Icon={Monitor}
                   />
                 )}
+                <CheckMenuItem
+                  label={t('ccAgent.sidebar.filterGroupBy.inProgress')}
+                  checked={groupInProgress}
+                  onToggle={() => setGroupInProgress(!groupInProgress)}
+                  Icon={Activity}
+                />
               </MenuSubRow>
               <MenuSubRow
                 label={t('ccAgent.sidebar.filterTaskSortHeading')}
