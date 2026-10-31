@@ -55,6 +55,7 @@ import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
+  RuntimeRefreshConfirmation,
   runRefreshWithReplacementRetry,
   resolveSessionExpiredReason,
   type RefreshFailureAction,
@@ -383,6 +384,7 @@ let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
 const refreshBackoff = new AuthRefreshBackoff();
+const runtimeRefreshConfirmation = new RuntimeRefreshConfirmation();
 let sessionInvalidationPromise: Promise<void> | null = null;
 // Real owner change / logout: keep the renderer fail-closed even if a late
 // notifyRenderer() races the teardown. Same-owner Ghost repair must not set
@@ -3188,6 +3190,7 @@ async function openLoopbackBrowserAuthorization(
 
 function scheduleRefresh(token: string): void {
   refreshBackoff.clear();
+  runtimeRefreshConfirmation.clear();
   if (refreshTimer !== null) {
     clearTimeout(refreshTimer);
     refreshTimer = null;
@@ -3842,6 +3845,7 @@ function clearAuth(
     coldStartRetryWait?.(true);
   }
   refreshBackoff.clear();
+  runtimeRefreshConfirmation.clear();
   loginFlowEpoch += 1;
   // Explicit logout clears health. Failed startup keeps its recovery reason
   // in the same synchronous commit, so owner cleanup cannot erase the error.
@@ -6156,6 +6160,18 @@ export async function refresh(_options?: { networkRecovered?: boolean }): Promis
         // newer owner, even when both accounts live in the same realm.
         log.warn('runtime auth session changed on disk; discarding stale refresh failure');
         scheduleRefreshRetryAfterTransientFailure(refreshEpoch);
+        return false;
+      }
+      const confirmInvalid = runtimeRefreshConfirmation.observe(
+        { epoch: refreshEpoch, realm: refreshRealm, refreshToken: requestedToken },
+        result,
+        failureAction,
+      );
+      if (confirmInvalid) {
+        log.warn(
+          'runtime refresh: invalid token after an uncertain network result — keeping this session for one confirmation after the shared retry wait',
+        );
+        scheduleRefreshRetryAfterTransientFailure(refreshEpoch, result.retryAt);
         return false;
       }
       if (!result.ok) {

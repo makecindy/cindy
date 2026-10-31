@@ -165,6 +165,64 @@ export interface RefreshFetchResult<T> {
   retryAt?: number;
 }
 
+type RefreshConfirmationScope = { epoch: number; realm: string; refreshToken: string };
+
+/**
+ * A transport failure cannot tell us whether the server rotated the token.
+ * After the normal disk-replacement checks, allow one INVALID_REFRESH_TOKEN
+ * confirmation through the existing runtime backoff. This is a request budget,
+ * not an authorization grant: resource APIs still reject invalid access tokens.
+ * Only recent uncertainty qualifies (15 minutes covers the capped 10-minute
+ * retry plus disk rechecks). Later network failures cannot re-arm a used budget.
+ * A lost rotation response remains unrecoverable without server replay support.
+ */
+export class RuntimeRefreshConfirmation {
+  private state: (RefreshConfirmationScope & { uncertainAt: number | null; used: boolean }) | null =
+    null;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  observe(
+    scope: RefreshConfirmationScope,
+    result: RefreshFetchResult<unknown>,
+    action?: RefreshFailureAction,
+  ): boolean {
+    if (result.ok) {
+      this.clear();
+      return false;
+    }
+    if (
+      !this.state ||
+      this.state.epoch !== scope.epoch ||
+      this.state.realm !== scope.realm ||
+      this.state.refreshToken !== scope.refreshToken
+    ) {
+      this.state = { ...scope, uncertainAt: null, used: false };
+    }
+    const state = this.state;
+    // apiFetch retains a 2xx status when reading the success body failed.
+    if (result.status === 0 || (result.status >= 200 && result.status < 300)) {
+      if (!state.used) state.uncertainAt = this.now();
+      return false;
+    }
+    if (
+      action?.kind !== 'definitive-failure' ||
+      getRefreshErrorCode(result) !== 'INVALID_REFRESH_TOKEN'
+    ) {
+      return false;
+    }
+    const age =
+      state.uncertainAt === null ? Number.POSITIVE_INFINITY : this.now() - state.uncertainAt;
+    const confirm = !state.used && age >= 0 && age <= 15 * 60_000;
+    state.used = true;
+    return confirm;
+  }
+
+  clear(): void {
+    this.state = null;
+  }
+}
+
 /** 每次失败时回传给调用方的诊断信息(供日志)。 */
 export interface RefreshFailureInfo {
   /** 第几次请求(1-based)。 */
