@@ -613,7 +613,12 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
-  it.each(['resolve', 'reject'] as const)('keeps New draft after a hung save %s and autosaves only that draft', async (outcome) => {
+  it.each([
+    ['resolve', false],
+    ['reject', false],
+    ['resolve', true],
+    ['reject', true],
+  ] as const)('keeps New draft after a hung save %s (ime=%s) and autosaves only that draft', async (outcome, ime) => {
     vi.useFakeTimers();
     try {
       let settle!: (result: 'resolve' | 'reject') => void;
@@ -629,10 +634,13 @@ describe('Bot settings profile consolidation', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
       expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
-      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'New draft' } });
+      const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+      if (ime) fireEvent.compositionStart(name);
+      fireEvent.change(name, { target: { value: 'New draft' } });
       const callsBeforeSettle = mocks.updateBotProfile.mock.calls.length;
       await act(async () => { settle(outcome); });
-      expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('New draft');
+      expect((name as HTMLInputElement).value).toBe('New draft');
+      if (ime) fireEvent.compositionEnd(name);
       mocks.updateBotProfile.mockImplementation(async (_id, patch) => ({ id: 'bot-1', currentVersion: 3, ...patch }));
       await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
       const later = mocks.updateBotProfile.mock.calls.slice(callsBeforeSettle);

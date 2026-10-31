@@ -221,6 +221,8 @@ export interface BotSettingsAutosaveHandle {
    * 之后的编辑会重新允许保存。
    */
   abandon(): Promise<boolean>;
+  /** 记录一次编辑但不提交。输入法组合中的半成品不能保存，但仍要挡住迟到恢复。 */
+  markEdited(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
 }
@@ -297,6 +299,9 @@ export function createBotSettingsAutosave(
   };
 
   return {
+    markEdited() {
+      revision += 1;
+    },
     schedule(trigger) {
       if (detached) return;
       revision += 1;

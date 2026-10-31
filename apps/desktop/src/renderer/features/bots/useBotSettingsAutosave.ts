@@ -136,7 +136,10 @@ export function useBotSettingsAutosave(
   const onEdit = useCallback(
     (trigger: BotAutosaveTrigger) => {
       if (!enabledRef.current) return;
-      if (trigger === 'text' && composingRef.current) return;
+      if (trigger === 'text' && composingRef.current) {
+        autosave.markEdited();
+        return;
+      }
       autosave.schedule(trigger);
     },
     [autosave],
