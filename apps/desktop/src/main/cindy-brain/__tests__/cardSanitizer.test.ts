@@ -397,6 +397,15 @@ describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
   });
 });
 
+// 宿主按归一后的字面量判断卡片是否排到本轮末尾,净化器只能放出这一种写法。
+describe('sanitizeGhostCardHtml · 位置声明(data-ghost-placement)', () => {
+  it('只在 div 上放行 turn-end,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-placement=" turn-end ">x</div>')).toBe('<div data-ghost-placement="turn-end">x</div>');
+    expect(ok('<div data-ghost-placement="top">x</div><span data-ghost-placement="turn-end">y</span>'))
+      .toBe('<div>x</div><span>y</span>');
+  });
+});
+
 describe('sanitizeGhostCardHtml · 卡内音频播放器插槽(data-ghost-audio)', () => {
   const mp3 = `cindy-media://blobs/${'d'.repeat(64)}.mp3`;
 

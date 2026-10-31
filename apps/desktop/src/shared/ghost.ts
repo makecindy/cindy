@@ -7582,6 +7582,16 @@ export function isGhostCardLinkAllowed(url: string): boolean {
  */
 export const GHOST_CARD_SPAWN_SEP = '::sp';
 
+/**
+ * 卡片排在本轮末尾:插件在卡内 div 上标 `data-ghost-placement="turn-end"`,
+ * 宿主把这张卡排到这一轮的最后(「已更改 N 个文件」卡之后),而不是调用发生的位置。
+ * 适合等用户拍板的卡(如「要发 PR 吗」)。只读净化后的 html:净化器只放行这一个值,
+ * 正文里的引号已转义,不会误中。
+ */
+export function isTurnEndGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-placement="turn-end"');
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
