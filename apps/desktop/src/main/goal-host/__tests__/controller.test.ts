@@ -2672,6 +2672,25 @@ describe('GoalController', () => {
     expect(h.updates.at(-1)?.goal?.waitingSince ?? null).toBeNull();
   });
 
+  it('a wake landing during the waiting persist is not postponed by the safety timer', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    // 卡住 finalize 的 waiting 落库,在窗口内让 resume-on-open 抢先唤醒(排短 timer)。
+    // 整条链都是微任务:落库完成、finalize 尾部、唤醒的 0ms timer 触发按此顺序,
+    // 所以未修复时尾部会用 25ms 安全网顶掉短 timer,唤醒被推迟到 25ms 后。
+    const realUpdate = local.storage.update.bind(local.storage);
+    const spy = vi.spyOn(local.storage, 'update').mockImplementation(async (id, patch) => {
+      spy.mockRestore(); // 只 gate 这一次
+      await local.controller.resumeOnOpen('s1');
+      return realUpdate(id, patch);
+    });
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    // 打开会话的唤醒必须立即发轮(第一个 tick 内);被安全网顶掉时这里仍是 1。
+    expect(local.session.sends).toHaveLength(2);
+    expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
+  });
+
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
     await startGoal(h);
     const active = await h.storage.get('s1');

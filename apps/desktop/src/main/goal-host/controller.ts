@@ -2218,7 +2218,11 @@ export class GoalController {
     } else if (waitingEntry) {
       // waiting:不 detach(listener 保留,用户轮 finalize / idle observer 才能唤醒),
       // 只排安全网重检轮;事件唤醒会把这条长 timer 换成防抖续跑。
-      this.scheduleContinuation(sessionId, this.waitingRecheckMs);
+      // 若 persist 期间已被唤醒(resume-on-open / intervention 抢先删了标记并排了
+      // 短 timer),这里不得用 30 分钟 timer 覆盖它 —— 否则打开会话的立即唤醒被延后。
+      if (this.waitingSessions.has(sessionId)) {
+        this.scheduleContinuation(sessionId, this.waitingRecheckMs);
+      }
     } else {
       // 停:budgetLimited(终态)/ blocked / paused / usageLimited 都 detach。
       this.stopSession(sessionId);
