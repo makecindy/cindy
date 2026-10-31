@@ -63,6 +63,7 @@ export type LoginHandoffPhase =
   | 'settle' // t=0~300ms
   | 'shift' // t=300~950ms
   | 'awaiting-splash-exit' // handoff 尚未等到 Splash 实际卸载(例如数据库清理)
+  | 'awaiting-cover-release' // 已认证,等待主界面加载盖释放后才淡出品牌
   | 'awaiting-panel' // shift 结束但「面板已挂载」信号未到(仅未登录)
   | 'panel' // 面板入场中
   | 'slogan' // Slogan 入场中(面板开始 +100ms)
@@ -82,7 +83,7 @@ export interface LoginHandoffStartSignals {
 export interface LoginHandoffContextValue {
   phase: LoginHandoffPhase;
   branch: LoginHandoffBranch;
-  /** Splash 与已登录淡出期间保持 Splash 布局,未登录面板入场流程再切到登录避让布局。 */
+  /** 冷启动已登录淡出保持 Splash 布局；中途认证翻转的淡出保持翻转前布局。 */
   brandLayout: LoginBrandLayout;
   /**
    * 登录面板下方内容需要预留的高度；null 表示 LoginPage 尚未上报，
@@ -170,6 +171,11 @@ export function LoginHandoffProvider({
   const [splashExitCompleted, setSplashExitCompleted] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
   const [panelBottomReserve, setPanelBottomReserve] = useState<number | null>(null);
+  const [exitPresentation, setExitPresentation] = useState({
+    layout: 'splash' as LoginBrandLayout,
+    sloganRevealed: false,
+    panelBottomReserve: null as number | null,
+  });
 
   // 冷启动只播一次:进程生命周期内 resize/reset/登出重回 /login 均不重播。
   const playedRef = useRef(false);
@@ -184,13 +190,28 @@ export function LoginHandoffProvider({
     return timer;
   }, []);
 
+  const clearScheduledTimers = useCallback(() => {
+    timersRef.current.forEach((timer) => clearTimeout(timer));
+    timersRef.current = [];
+  }, []);
+
+  const exitToAuthenticated = useCallback(() => {
+    if (coverHeld) {
+      setPhase('awaiting-cover-release');
+      return;
+    }
+    if (reducedMotionRef.current) {
+      setPhase('done');
+      return;
+    }
+    setPhase('brand-exit');
+    schedule(() => setPhase('done'), LOGIN_HANDOFF_TIMINGS.brandExitMs);
+  }, [coverHeld, schedule]);
+
   // 卸载时清全部在途 timer(handoff fake-timer 用例断言清理)。
   useEffect(() => {
-    return () => {
-      timersRef.current.forEach((timer) => clearTimeout(timer));
-      timersRef.current = [];
-    };
-  }, []);
+    return clearScheduledTimers;
+  }, [clearScheduledTimers]);
 
   const reportBrandAssetsReady = useCallback(() => setBrandReady(true), []);
   const reportSplashExited = useCallback(() => setSplashExited(true), []);
@@ -256,23 +277,53 @@ export function LoginHandoffProvider({
     );
   }, [brandReady, splashExited, authResolved, authenticated, schedule]);
 
+  // 未登录分支起播后认证仍可能完成。旧 settle/shift/panel 计时器不能再写回等待态，
+  // 否则登录面板已卸载时会永久卡在 awaiting-panel，品牌层遮住已就绪主界面。
+  useEffect(() => {
+    if (!playedRef.current || branch !== 'unauthenticated' || phase === 'done'
+      || !authResolved || !authenticated) return;
+    clearScheduledTimers();
+    setExitPresentation({
+      layout: splashExitCompleted && (phase === 'panel' || phase === 'slogan') ? 'login' : 'splash',
+      sloganRevealed: phase === 'slogan',
+      panelBottomReserve,
+    });
+    setBranch('authenticated');
+    if (!splashExitCompletedRef.current) {
+      setPhase('awaiting-splash-exit');
+      return;
+    }
+    exitToAuthenticated();
+  }, [branch, phase, splashExitCompleted, panelBottomReserve, authResolved, authenticated, clearScheduledTimers, exitToAuthenticated]);
+
   // Splash 延迟卸载时冻结;实际卸载后再恢复终态或 panel/awaiting-panel。
   useEffect(() => {
     if (phase !== 'awaiting-splash-exit' || !splashExitCompleted) return;
+    // 与上方认证翻转 effect 同轮触发时由它接管；下一轮 branch 已切换再继续。
+    if (branch === 'unauthenticated' && authResolved && authenticated) return;
+    if (branch === 'authenticated') {
+      exitToAuthenticated();
+      return;
+    }
     if (reducedMotionRef.current) {
       setPhase('done');
       return;
     }
     setPhase(panelMountedRef.current ? 'panel' : 'awaiting-panel');
-  }, [phase, splashExitCompleted]);
+  }, [phase, splashExitCompleted, branch, authResolved, authenticated, exitToAuthenticated]);
+
+  useEffect(() => {
+    if (phase === 'awaiting-cover-release' && !coverHeld) exitToAuthenticated();
+  }, [phase, coverHeld, exitToAuthenticated]);
 
   // awaiting-panel → panel:面板挂载信号到达即刻放行。
   useEffect(() => {
-    if (phase === 'awaiting-panel' && panelMounted) setPhase('panel');
-  }, [phase, panelMounted]);
+    if (phase === 'awaiting-panel' && panelMounted && !authenticated) setPhase('panel');
+  }, [phase, panelMounted, authenticated]);
 
   // panel → slogan(+100ms) → done(slogan 起步 +500ms 动画 +60ms demo buffer)。
   useEffect(() => {
+    if (authenticated) return;
     if (phase === 'panel') {
       schedule(() => setPhase('slogan'), LOGIN_HANDOFF_TIMINGS.sloganDelayMs);
       return;
@@ -283,11 +334,12 @@ export function LoginHandoffProvider({
         LOGIN_HANDOFF_TIMINGS.sloganMs + LOGIN_HANDOFF_TIMINGS.doneBufferMs,
       );
     }
-  }, [phase, schedule]);
+  }, [phase, authenticated, schedule]);
 
   const value = useMemo<LoginHandoffContextValue>(() => {
     const isPlaying = phase !== 'boot' && phase !== 'done';
     const panelRevealed = phase === 'panel' || phase === 'slogan' || phase === 'done';
+    const isAuthenticationExit = phase === 'brand-exit' || phase === 'awaiting-cover-release';
     return {
       phase,
       branch,
@@ -296,14 +348,17 @@ export function LoginHandoffProvider({
       // unauthenticated panel is actually revealed; switching earlier makes
       // the artwork shrink while the panel is still hidden. Authenticated
       // startup has no login panel, so it never switches to login geometry.
-      brandLayout:
-        (branch === 'unauthenticated' && splashExitCompleted && panelRevealed) ||
-        (phase === 'done' && panelMounted)
-          ? 'login'
-          : 'splash',
-      panelBottomReserve,
+      brandLayout: isAuthenticationExit
+        ? exitPresentation.layout
+        : (branch === 'unauthenticated' && splashExitCompleted && panelRevealed) ||
+          (phase === 'done' && panelMounted)
+            ? 'login'
+            : 'splash',
+      panelBottomReserve: isAuthenticationExit
+        ? exitPresentation.panelBottomReserve
+        : panelBottomReserve,
       isPlaying,
-      // startup 期(含 boot/播放中/brand-exit)恒挂以维持不透明白底全盖;done 后
+      // startup 期(含 boot/播放中/等待加载盖/brand-exit)恒挂以维持不透明白底全盖;done 后
       // 跟随登录面板或 AppShellCover:登录页要品牌底;已登录但 LocalDbGate 还在
       // checking 时也要留着,避免登录成功卸面板后露出默认白底。登出回 /login
       // 由 LoginPage 上报面板挂载重挂(phase 恒 done = 终态,不重播)。
@@ -312,7 +367,9 @@ export function LoginHandoffProvider({
       brandStageMounted: phase !== 'done' ? true : panelMounted || coverHeld,
       brandExiting: phase === 'brand-exit',
       panelRevealed: phase === 'panel' || phase === 'slogan' || phase === 'done',
-      sloganRevealed: phase === 'slogan' || phase === 'done',
+      sloganRevealed: isAuthenticationExit
+        ? exitPresentation.sloganRevealed
+        : phase === 'slogan' || phase === 'done',
       startSignals: {
         brandAssetsReady: brandReady,
         splashExited,
@@ -335,6 +392,7 @@ export function LoginHandoffProvider({
     splashExited,
     splashExitCompleted,
     panelBottomReserve,
+    exitPresentation,
     reportBrandAssetsReady,
     reportSplashExited,
     reportSplashExitCompleted,
