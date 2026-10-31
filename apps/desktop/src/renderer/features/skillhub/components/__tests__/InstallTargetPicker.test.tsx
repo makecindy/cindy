@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { InstallTargetPicker } from '../InstallTargetPicker';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('../../hooks/useProjectsForPicker', () => ({ useProjectsForPicker: () => ({ projects: [], loading: false }) }));
+const projectMocks = vi.hoisted(() => ({ projects: [] as Array<{ projectRoot: string; displayName: string }> }));
+vi.mock('../../hooks/useProjectsForPicker', () => ({ useProjectsForPicker: () => ({ projects: projectMocks.projects, loading: false }) }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({ useConfirmDialog: () => ({ confirm: vi.fn() }) }));
+beforeEach(() => { projectMocks.projects = []; });
 afterEach(cleanup);
 
 function Harness({
@@ -24,6 +26,36 @@ function Harness({
     <InstallTargetPicker open={open} skill={{ name: 'demo' }} onClose={() => setOpen(false)} onInstallComplete={onInstallComplete} runAction={runAction} />
   </>;
 }
+
+// Unit regression for PR #8019 / discussion_r4420676333: render the real
+// picker with one merged project and a registry entry under its other spelling.
+// Prior picker coverage only tests focus/busy locks with no projects/installs.
+it.each([
+  { platform: 'win32', installed: true },
+  { platform: 'linux', installed: false },
+])('classifies the UNC registry install for $platform', async ({ platform, installed }) => {
+  projectMocks.projects = [{ projectRoot: '//Server/Share/hf-parent', displayName: 'hf-parent' }];
+  window.electronAPI = {
+    platform,
+    skillhub: { registry: { getByName: vi.fn().mockResolvedValue({
+      success: true,
+      manifest: { installs: { '//server/share/hf-parent/.agents/skills/demo': { version: '1.2.3' } } },
+    }) } },
+  } as never;
+  const run = vi.fn().mockResolvedValue({ success: true });
+  render(<Harness runAction={run} />);
+  await userEvent.click(screen.getByText('Open picker'));
+  await screen.findByText('v1.2.3');
+  const projectRow = screen.getByRole('button', { name: /hf-parent/ }) as HTMLButtonElement;
+  const globalRow = screen.getByRole('button', { name: /skillhub.installPicker.global/ }) as HTMLButtonElement;
+  expect(projectRow.disabled).toBe(installed);
+  expect(globalRow.disabled).toBe(!installed);
+  expect(within(installed ? projectRow : globalRow).getByText('v1.2.3')).not.toBeNull();
+  if (installed) {
+    fireEvent.click(projectRow);
+    expect(run).not.toHaveBeenCalled();
+  }
+});
 
 it('focuses Cancel, contains Tab, closes on Escape and restores the opener', async () => {
   window.electronAPI = { skillhub: { registry: { getByName: vi.fn().mockResolvedValue({ success: false }) } } } as never;
