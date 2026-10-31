@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
-import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, type ProviderSearchTarget } from './providerSearch';
+import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, builtinChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
@@ -1696,11 +1696,7 @@ export function AddProviderWizard({
                         key={p.id}
                         icon={cardIcon({ providerId: p.id, name: p.name })}
                         name={p.name}
-                        meta={t(
-                          OFFICIAL_API_PRESETS[p.id]
-                            ? 'settings.providers.wizard.metaOAuthOrApi'
-                            : 'settings.providers.wizard.metaOAuth',
-                        )}
+                        meta={t(`settings.providers.${builtinChoiceMeta(p, !!OFFICIAL_API_PRESETS[p.id])}`)}
                         onClick={() => pickOauth(p)}
                       />
                     ))}

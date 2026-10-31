@@ -31,6 +31,10 @@ export interface ProviderSearchResult {
   metaValues?: { product: string };
   target: ProviderSearchTarget;
 }
+export function builtinChoiceMeta(provider: ProviderView, hasOfficialApiPreset: boolean): string {
+  if (isWizardApiKeyChoice(provider)) return 'wizard.metaApiKey';
+  return hasOfficialApiPreset ? 'wizard.metaOAuthOrApi' : 'wizard.metaOAuth';
+}
 /** The catalog and name search describe the same setup route. */
 export function presetChoiceMeta(preset: ProviderPreset): Pick<ProviderSearchResult, 'metaKey' | 'metaValues'> {
   if (isMimoTokenPlanPreset(preset)) {
@@ -40,12 +44,12 @@ export function presetChoiceMeta(preset: ProviderPreset): Pick<ProviderSearchRes
   if ((LOCAL_ADVANCED_PRESET_IDS as readonly string[]).includes(preset.id)) return { metaKey: 'wizard.metaNoAuth' };
   return { metaKey: providerPresetOAuth(preset.id) ? 'wizard.metaLoginOrApi' : preset.authMethod === 'none' ? 'wizard.metaNoAuth' : 'wizard.metaApiKey' };
 }
-export function providerSearchChoices(providers: ProviderView[], presets: ProviderPreset[], locale: string, ollamaName: string, llamaCppName = 'llama.cpp'): ProviderSearchResult[] {
+export function providerSearchChoices(providers: ProviderView[], presets: ProviderPreset[], locale: string, ollamaName: string, llamaCppName = 'llama.cpp', officialApiPresets: Readonly<Record<string, ProviderPreset>> = {}): ProviderSearchResult[] {
   const results: ProviderSearchResult[] = [];
   for (const p of providers) {
     if (!isWizardOAuthChoice(p) && !isWizardApiKeyChoice(p)) continue;
     results.push({ key: `builtin:${p.id}`, id: p.id, name: p.name, names: [p.name],
-      metaKey: isWizardApiKeyChoice(p) ? 'wizard.metaApiKey' : 'wizard.metaLoginOrApi', target: { kind: 'builtin', providerId: p.id } });
+      metaKey: builtinChoiceMeta(p, !!officialApiPresets[p.id]), target: { kind: 'builtin', providerId: p.id } });
   }
   for (const p of presets) {
     results.push({ key: `preset:${p.id}`, id: p.id, name: presetDisplayName(p, locale),

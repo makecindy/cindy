@@ -617,7 +617,7 @@ export function ProviderConnectionDialog({
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [runtimeFill, setRuntimeFill] = useState<RuntimeFillDialogState | null>(null);
   const picker = childLayer?.kind === 'model-picker' ? childLayer.value : null;
-  const providerChoices = useMemo(() => providerSearchChoices(providers, sortPresetsForRegion(withSpeechApiPresets(presets), CURRENT_CINDY_REGION), i18n.language, t('settings.providers.local.title'), t('settings.providers.llamacpp.title')), [providers, presets, i18n.language, t]);
+  const providerChoices = useMemo(() => providerSearchChoices(providers, sortPresetsForRegion(withSpeechApiPresets(presets), CURRENT_CINDY_REGION), i18n.language, t('settings.providers.local.title'), t('settings.providers.llamacpp.title'), OFFICIAL_API_PRESETS), [providers, presets, i18n.language, t]);
   const presetMenuOpen = childLayer?.kind === 'preset-menu';
   const [keyHydrationReady, setKeyHydrationReady] = useState(!editing);
   const [keyHydrationFailed, setKeyHydrationFailed] = useState<Record<DialogAgentKind, boolean>>({

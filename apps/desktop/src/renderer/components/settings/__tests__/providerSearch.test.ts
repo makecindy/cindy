@@ -72,3 +72,17 @@ it.each([
   expect(result.metaKey).toBe(metaKey);
   expect(result.metaValues).toEqual(metaValues);
 });
+
+// #8065 r4431221445: OAuth-only builtins must not advertise an API-key route.
+it.each([
+  ['anthropic', true, 'wizard.metaOAuthOrApi'],
+  ['openai', true, 'wizard.metaOAuthOrApi'],
+  ['xai', true, 'wizard.metaOAuthOrApi'],
+  ['oauth-only', false, 'wizard.metaOAuth'],
+])('matches the wizard builtin auth summary for %s', (id, hasOfficialApi, expected) => {
+  const provider = { id, name: id, source: 'builtin', connected: false,
+    auth: { method: 'oauth', oauth: { flow: 'device-code' } } } as unknown as ProviderView;
+  const official = hasOfficialApi ? { [id]: { id, name: id, runtimes: {} } } : {};
+  const choice = providerSearchChoices([provider], [], 'en', 'Ollama', 'llama.cpp', official).find(p => p.key === `builtin:${id}`)!;
+  expect(choice.metaKey).toBe(expected);
+});
