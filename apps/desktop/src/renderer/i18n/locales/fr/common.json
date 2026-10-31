@@ -5473,7 +5473,6 @@
         "title": "Utiliser mes connexions du navigateur",
         "description": "L'Agent ouvrira les sites avec les comptes auxquels vous êtes connecté dans Chrome, Edge ou Brave.",
         "toggleAria": "Utiliser mes connexions du navigateur",
-        "unavailableEmbedded": "S'applique uniquement au navigateur autonome. Le désactiver supprime les fichiers de connexion copiés.",
         "confirmTitle": "Autoriser l'Agent à utiliser vos connexions du navigateur ?",
         "confirmDescription": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
         "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. La lecture des fichiers de connexion de Chrome nécessite également l'accès complet au disque. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",

@@ -5418,7 +5418,6 @@
         "title": "Meine Browser-Anmeldedaten verwenden",
         "description": "Der Agent öffnet Websites mit deinen angemeldeten Chrome-, Edge- oder Brave-Konten.",
         "toggleAria": "Meine Browser-Anmeldedaten verwenden",
-        "unavailableEmbedded": "Gilt nur für den Standalone-Browser. Durch das Ausschalten werden die kopierten Anmeldedateien gelöscht.",
         "confirmTitle": "Dem Agent Zugriff auf deine Browser-Anmeldedaten erlauben?",
         "confirmDescription": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",
         "confirmDescriptionMac": "Der Agent kann Websites mit deinen angemeldeten Konten öffnen, einschließlich E-Mail, Cloud-Speichern und Arbeitskonsolen. Zum Lesen der Chrome-Anmeldedateien ist außerdem Festplattenvollzugriff erforderlich. Du kannst dies jederzeit deaktivieren; die Kopie wird dann gelöscht.",

@@ -5375,7 +5375,6 @@
         "title": "用我之瀏覽器登入態",
         "description": "Agent 將以君於 Chrome、Edge 或 Brave 中已登入之身分造訪網站。",
         "toggleAria": "用我之瀏覽器登入態",
-        "unavailableEmbedded": "僅於獨立瀏覽器生效。關之則刪已複製之登入檔。",
         "confirmTitle": "許 Agent 用君之瀏覽器登入態乎？",
         "confirmDescription": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。可隨時關之，拷貝即刪。",
         "confirmDescriptionMac": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。讀 Chrome 登入檔另需「完全磁碟存取權」。可隨時關之，拷貝即刪。",

@@ -5473,7 +5473,6 @@
         "title": "Usar meus logins do navegador",
         "description": "O Agent abrirá sites com suas contas conectadas no Chrome, Edge ou Brave.",
         "toggleAria": "Usar meus logins do navegador",
-        "unavailableEmbedded": "Aplica-se apenas ao navegador independente. Desativar esta opção exclui os arquivos de login copiados.",
         "confirmTitle": "Permitir que o Agent use seus logins do navegador?",
         "confirmDescription": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. Você pode desativar a opção a qualquer momento; a cópia será excluída.",
         "confirmDescriptionMac": "O Agent poderá abrir sites com suas contas conectadas, incluindo e-mail, armazenamento na nuvem e consoles de trabalho. A leitura dos arquivos de login do Chrome também exige Acesso Total ao Disco. Você pode desativar esta opção a qualquer momento; a cópia será excluída.",

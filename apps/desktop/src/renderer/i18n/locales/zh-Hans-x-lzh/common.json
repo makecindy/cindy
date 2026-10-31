@@ -5375,7 +5375,6 @@
         "title": "用我之浏览器登录态",
         "description": "Agent 将以君于 Chrome、Edge 或 Brave 中已登录之身分造访网站。",
         "toggleAria": "用我之浏览器登录态",
-        "unavailableEmbedded": "仅于独立浏览器生效。关之则删已拷贝之登录档。",
         "confirmTitle": "许 Agent 用君之浏览器登录态乎？",
         "confirmDescription": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。可随时关之，拷贝即删。",
         "confirmDescriptionMac": "Agent 将能以君已登录之身分开网页，信箱、云端硬盘与公司后台皆在其列。读 Chrome 登录档另需「完全磁盘访问权」。可随时关之，拷贝即删。",
