@@ -613,6 +613,35 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
+  it.each(['resolve', 'reject'] as const)('keeps New draft after a hung save %s and autosaves only that draft', async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      let settle!: (result: 'resolve' | 'reject') => void;
+      mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+        const result = await new Promise<'resolve' | 'reject'>((resolve) => { settle = resolve; });
+        if (result === 'reject') throw new Error('late failure');
+        return { id: 'bot-1', currentVersion: 2, ...patch };
+      });
+      renderSettings();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'First draft' } });
+      fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+      expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'New draft' } });
+      const callsBeforeSettle = mocks.updateBotProfile.mock.calls.length;
+      await act(async () => { settle(outcome); });
+      expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('New draft');
+      mocks.updateBotProfile.mockImplementation(async (_id, patch) => ({ id: 'bot-1', currentVersion: 3, ...patch }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+      const later = mocks.updateBotProfile.mock.calls.slice(callsBeforeSettle);
+      expect(later.map((call) => call[1])).toEqual([{ name: 'New draft' }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(['ok', 'fail'] as const)('keeps a draft typed after leaving when the hung save %s late', async (result) => {
     vi.useFakeTimers();
     try {
