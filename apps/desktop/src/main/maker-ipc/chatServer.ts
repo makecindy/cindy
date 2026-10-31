@@ -2517,10 +2517,24 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
         'Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.',
       ].join('\n');
-      await updateExecution(run, 'heartbeat');
+      // The hidden envelope is model context, not user intent. Only this execution's
+      // original human owner message can supply review intent; quotes, cards, AI replies
+      // and other members' messages cannot mint owner authorization (#8072).
+      let autoReviewUserText = '';
+      if (run.context.kind === 'message' && !execution.mask_owner_id && !digest
+        && execution.access_mode === 'owner' && execution.requester_id === selfId
+        && source?.authorId === selfId && source.author.kind === 'human'
+        && source.origin === 'user' && !source.deleted && !source.maskAttribution) {
+        await validateExecutionAuthority(run);
+        autoReviewUserText = source.content.filter(block => block.type === 'text')
+          .map(block => block.text ?? '').join('\n');
+      } else {
+        await updateExecution(run, 'heartbeat');
+      }
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');
       const dispatched = await deps.dispatch({ targetSessionId: lane.sessionId, clientId: run.clientId, message: prompt,
-        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${prompt}`, attachments, toolsDisabled: execution.access_mode === 'chat',
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${prompt}`, autoReviewUserText,
+        attachments, toolsDisabled: execution.access_mode === 'chat',
         onQueued: async clientId => { run.clientId = clientId; }, onAccepted: async () => {
           if (!current() || running.get(execution.id) !== run) { await deps.abortLane(lane.sessionId); throw new Error('STALE_EXECUTOR'); }
           run.accepted = true;
