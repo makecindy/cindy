@@ -32,7 +32,7 @@ describe('production channel policy for Pi management', () => {
 });
 
 describe('channel policy for scheduler command execution', () => {
-  it.each(['schedule_create', 'schedule_update', 'schedule_set_pre_run_hook', 'schedule_resume', 'schedule_run_now', 'schedule_move'])(
+  it.each(['schedule_create', 'schedule_update', 'schedule_set_pre_run_hook', 'schedule_resume', 'schedule_run_now'])(
     'requires per-turn confirmation for %s, even inside a trusted scheduler MCP', (name) => {
       expect(channelForceConfirmToolCall('mcp__cindy_scheduler__call_tool', { name, args: {} })).toBe(true);
       expect(channelForceConfirmToolCall('mcp:cindy_scheduler', {

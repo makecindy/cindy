@@ -968,7 +968,7 @@ describe('teammate turn principal', () => {
     },
   );
 
-  it('accepts a verified owner continuation on a non-teammate task', async () => {
+  it('uses ordinary task permission for remote create on a non-teammate task', async () => {
     const h = desktopFixture('automatic');
     live(h);
     h.caller.botId = null;
@@ -979,26 +979,19 @@ describe('teammate turn principal', () => {
     const remoteCreate = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_create',
       args: { device: 'spark', name: 'radar', prompt: 'scan', cronExpr: '0 9 * * 1-5', timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', notify: { desktop: true, feishu: false } } };
     const effect = vi.fn(async () => 'created');
-    expect(JSON.stringify(await withToolCallAuthority(h.authorize, remoteCreate, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
-    h.activeInput.ownerContinuation = true;
     expect(await withToolCallAuthority(h.authorize, remoteCreate, effect)).toBe('created');
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses remote schedule placement unless this turn is a verified owner request', async () => {
+  it('uses the existing execution-risk confirmation for autonomous remote create', async () => {
     const h = desktopFixture('automatic');
     live(h);
     const remoteCreate = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_create',
       args: { device: 'spark', name: 'radar', prompt: 'scan', cronExpr: '0 9 * * 1-5', timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', notify: { desktop: true, feishu: false } } };
-    const moved = { ...remoteCreate, tool: 'schedule_move', args: { id: 'src', targetDevice: 'spark' } };
     const effect = vi.fn(async () => 'created');
-    expect(JSON.stringify(await withToolCallAuthority(h.authorize, remoteCreate, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
-    expect(JSON.stringify(await withToolCallAuthority(h.authorize, moved, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
-    expect(effect).not.toHaveBeenCalled();
-    h.activeInput.ownerContinuation = true;
     expect(await withToolCallAuthority(h.authorize, remoteCreate, effect)).toBe('created');
-    expect(await withToolCallAuthority(h.authorize, moved, effect)).toBe('created');
-    expect(effect).toHaveBeenCalledTimes(2);
+    expect(h.confirm).toHaveBeenCalledTimes(1);
+    expect(effect).toHaveBeenCalledTimes(1);
   });
 
   it.each(['schedule_list', 'schedule_get', 'schedule_list_runs', 'schedule_notify_current_run', 'routine_list'])(

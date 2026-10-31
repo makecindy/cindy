@@ -108,24 +108,6 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
 });
 
 
-/** Remote create/move stores the alarm on another computer. Only a host-verified
- * owner turn (including a verified relay of the owner's words) may authorize it.
- * Unverified agent relays, guests and unknown senders stay refused. */
-export function remoteSchedulePlacement(call: Pick<Call, 'server' | 'tool' | 'args'>): boolean {
-  if (call.server !== 'cindy_scheduler') return false;
-  const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-    ? call.args as Record<string, unknown> : {};
-  const remote = (value: unknown) => typeof value === 'string' && value !== '' && value !== 'local' && value !== 'all';
-  if (call.tool === 'schedule_create') return remote(args.device);
-  if (call.tool === 'schedule_move') return remote(args.targetDevice) || remote(args.sourceDevice);
-  return false;
-}
-
-export const REMOTE_SCHEDULE_OWNER_REQUIRED = {
-  ok: false as const,
-  errorCode: 'REMOTE_SCHEDULE_OWNER_REQUIRED',
-  message: 'Creating or moving a schedule onto another computer needs a host-verified owner request in this turn. An unverified relay, guest, or unknown sender cannot authorize it. Do not retry.',
-};
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
 ]);
@@ -134,7 +116,7 @@ export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
 export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now',
   'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
-  'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook', 'schedule_move',
+  'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
 ]);
 
 export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority';

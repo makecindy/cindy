@@ -27,8 +27,6 @@ import {
   type TaskActionRoutineSnapshot,
   type TaskActionScheduleDefinition,
   taskActionFingerprint,
-  remoteSchedulePlacement,
-  REMOTE_SCHEDULE_OWNER_REQUIRED,
   type TaskActionPrincipal,
   type TaskActionScope,
 } from './taskActionAuthorization.js';
@@ -243,13 +241,6 @@ export function createDesktopTaskActionAuthorizer(deps: {
           ? { workingDir: typeof args.workingDir === 'string' ? args.workingDir : undefined } : undefined;
         const scheduleIdArg = hookInstallation ? args.scheduleId : args.id;
         const scheduleDevice = call.server === 'cindy_scheduler' && typeof args.device === 'string' ? args.device : undefined;
-        // Verified owner relays set ownerContinuation even when this is not a teammate
-        // turn, so principal stays unset. Cross-computer handoff alone is not consent.
-        const ownerTurn = principal === 'owner' || input.ownerInput || input.ownerContinuation === true;
-        if (remoteSchedulePlacement(call) && !ownerTurn) {
-          rejectedDecision = REMOTE_SCHEDULE_OWNER_REQUIRED;
-          return null;
-        }
         const scheduleId = principal === 'autonomous' && runtimePermissionApplies &&
           (hookInstallation || call.server === 'cindy_scheduler' &&
             ['schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) && typeof scheduleIdArg === 'string'

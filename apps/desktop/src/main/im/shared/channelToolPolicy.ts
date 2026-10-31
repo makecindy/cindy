@@ -32,7 +32,7 @@ const DESTRUCTIVE_INNER_NAME_RE = /(?:^|_)(?:merge|system_write|overwrite)(?:_|$
 // A restored trusted MCP must still pass the channel's per-turn approval.
 const SCHEDULER_EXECUTION_TOOL_NAMES = new Set([
   'schedule_create', 'schedule_update', 'schedule_set_pre_run_hook',
-  'schedule_resume', 'schedule_run_now', 'schedule_move',
+  'schedule_resume', 'schedule_run_now',
 ]);
 
 function schedulerExecutionNeedsConfirmation(toolName: string): boolean {

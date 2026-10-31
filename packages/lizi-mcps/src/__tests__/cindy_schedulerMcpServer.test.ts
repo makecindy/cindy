@@ -105,6 +105,10 @@ class InMemoryStorage implements ScheduleStorage {
       (r) => r.status === 'running' && (scheduleId === undefined || r.scheduleId === scheduleId),
     );
   }
+  async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
+    return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
+      (r.status === 'running' || r.status === 'interrupted'));
+  }
   // 与真实现相同的 CAS 语义:active 且 nextFireAt 精确匹配才认领(置空),否则 null。
   async claimDueFire(id: string, expectedNextFireAt: number): Promise<Schedule | null> {
     const ex = this.schedules.get(id);
@@ -251,7 +255,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(payload.ok).toBe(true);
     // 类目概览要在第一步就写明用途与作用范围(本机 / 可跨电脑)。
     expect(payload.categories).toEqual([
-      { name: 'scheduler', tool_count: 12, description: expect.stringMatching(/各自的电脑.*schedule_move.*只在本机/) },
+      { name: 'scheduler', tool_count: 11, description: expect.stringMatching(/各自的电脑.*schedule_create.*只在本机/) },
     ]);
     await h.cleanup();
   });
@@ -266,7 +270,7 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     } finally { await h.cleanup(); }
   });
 
-  it('list_tools(category=scheduler) lists all 12 tools by name', async () => {
+  it('list_tools(category=scheduler) lists all 11 tools by name', async () => {
     const result = await h.client.callTool({
       name: 'list_tools',
       arguments: { category: 'scheduler' },
@@ -284,7 +288,6 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_get',
       'schedule_list',
       'schedule_list_runs',
-      'schedule_move',
       'schedule_notify_current_run',
       'schedule_pause',
       'schedule_resume',
