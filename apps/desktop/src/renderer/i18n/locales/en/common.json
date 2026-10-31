@@ -13806,6 +13806,22 @@
       "cancelTitle": "Stop waiting and remove this message"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI passed",
+        "ciFailed": "CI failed",
+        "ciRunning": "CI running",
+        "threadsOpen": "Open review threads: {{count}}",
+        "threadsNone": "No open review threads",
+        "mergeReady": "Ready to merge",
+        "mergeConflict": "Has conflicts",
+        "mergeBehind": "Behind the base branch",
+        "mergeApproval": "Waiting for approval",
+        "mergeChanges": "Changes requested",
+        "mergeWaiting": "Waiting to merge",
+        "merged": "Merged",
+        "closed": "Closed",
+        "draft": "Draft"
+      },
       "verb": "Used plugin",
       "cardRunning": "Plugin is drawing",
       "cardDone": "Done",

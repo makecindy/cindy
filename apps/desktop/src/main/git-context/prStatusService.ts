@@ -61,6 +61,10 @@ export type PrStatusResult =
        */
       unresolvedCount: number | null;
       checks?: PrChecksSummary | null;
+      /** GitHub mergeStateStatus(CLEAN / DIRTY / BEHIND / BLOCKED …);null = 未知。 */
+      mergeState?: string | null;
+      /** GitHub reviewDecision(APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED);null = 无要求或未知。 */
+      reviewDecision?: string | null;
     }
   | {
       ok: false;
@@ -94,6 +98,8 @@ export interface PrRemoteState {
   /** 未解决 review thread 数;fetch 端拿不到(GraphQL 失败)时为 null。 */
   unresolved_count?: number | null;
   checks?: PrChecksSummary | null;
+  merge_state?: string | null;
+  review_decision?: string | null;
 }
 
 export interface PrStatusServiceDeps {
@@ -251,6 +257,8 @@ export class PrStatusService {
         branch: remote.branch,
         unresolvedCount: remote.unresolved_count ?? null,
         checks: remote.checks ?? null,
+        mergeState: remote.merge_state ?? null,
+        reviewDecision: remote.review_decision ?? null,
       };
     } catch (err) {
       const status = (err as { status?: unknown })?.status;

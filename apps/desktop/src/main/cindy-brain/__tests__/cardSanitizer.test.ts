@@ -397,6 +397,15 @@ describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
   });
 });
 
+// 宿主把标题栏的 PR 状态填进这个位置;只认 owner/repo#编号,别的值连同它可能夹带的内容都只丢属性。
+describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
+  it('div 上放行 owner/repo#编号,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>')).toBe('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>');
+    expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
+      .toBe('<div>a</div><div>b</div><span>c</span>');
+  });
+});
+
 // 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。
 describe('sanitizeGhostCardHtml · 位置与宽度声明(data-ghost-placement / data-ghost-width)', () => {
   it('只在 div 上放行 turn-end / full,其它值和标签只丢属性', () => {

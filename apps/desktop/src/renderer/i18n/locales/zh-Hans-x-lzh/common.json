@@ -13770,6 +13770,22 @@
       "cancelTitle": "罢候并除此讯"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 已过",
+        "ciFailed": "CI 未过",
+        "ciRunning": "CI 运行中",
+        "threadsOpen": "{{count}} 条意见待理",
+        "threadsNone": "无待理之意见",
+        "mergeReady": "可合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "须同步目标分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "须修改",
+        "mergeWaiting": "待合并",
+        "merged": "已合并",
+        "closed": "已闭",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器绘制",
       "cardDone": "已毕",
@@ -15931,6 +15947,9 @@
       "importFailed": "纳技艺未成"
     },
     "builtIn": {
+      "pr": {
+        "description": "开新分支以始其事，于 GitHub 发 PR，后台修 CI 与审阅之见，至于合并。"
+      },
       "official": "官方",
       "officialDetail": "Cindy 随应用程序附之，并自行维护。",
       "skillCreator": {

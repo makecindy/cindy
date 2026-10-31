@@ -70,7 +70,7 @@ Hard convergence lines (the check output repeats them with the current round num
 
 ## 4. Following in the background
 
-**When to follow:** when the user asked you to (including `/pr <link>` and the PR card's "Auto-follow until merged" button), or when the card's "Follow after opening" setting or their saved preference says so. With a PR card, its button and setting are the offer: do not also ask in text. Without one, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked.
+**When to follow:** when the user asked you to (including `/pr <link>` and the PR card's "Auto-follow until merged" button), or when the card's "Follow after opening" setting or their saved preference says so. With a PR card, its button and setting are the offer: do not also ask in text. Without one, after opening a ready PR, offer it once in one short sentence: you can keep following it in the background, fixing CI and review feedback and telling them when it is ready or needs them. If the user answers "always" or "never", save that preference where your memory tools allow and do not ask again. Do not follow draft PRs unless asked: a draft is still being worked on. A draft's card offers "Mark ready for review" instead; the plugin converts it itself and, when the card's setting says so, then asks you to start following.
 
 If this task has no PR card for this PR yet (for example `/pr <link>` or "follow <link>"), show one first with `pr_card` (`repo`, `pr`) when the plugin offers it, and keep its `card_id` for the schedule prompt.
 
@@ -119,6 +119,8 @@ The schedule wakes this task only when the check found something worth a look. E
 **Notifications.** The schedule runs silently. Call `schedule_notify_current_run` (then write one short message) only when the user should know now: the PR became ready to merge for the first time, it was merged or closed, you need their decision, or the check reports a problem stuck for several backoff cycles. Never notify to say nothing changed, and never nag about pending approval or merge.
 
 If the user asks to stop (the card's Stop button sends this request too), delete the schedule and update the card with `following: false`.
+
+**Draft and ready.** When the user asks in text to mark a draft ready, run `gh pr ready <PR_URL>`, refresh the card (`pr_card` with `card_id`, `repo`, `pr`) and apply its follow setting as after opening. When they ask to turn a PR back into a draft, run `gh pr ready --undo <PR_URL>`; if it was being followed, stop following as above, then refresh the card.
 
 ## 6. Cleanup after merge or close
 

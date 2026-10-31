@@ -13740,6 +13740,22 @@
       "cancelTitle": "取消等待并移除这条消息"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 通过",
+        "ciFailed": "CI 未通过",
+        "ciRunning": "CI 运行中",
+        "threadsOpen": "{{count}} 条意见待处理",
+        "threadsNone": "没有待处理意见",
+        "mergeReady": "可以合并",
+        "mergeConflict": "有冲突",
+        "mergeBehind": "需要同步目标分支",
+        "mergeApproval": "等待审批",
+        "mergeChanges": "需要修改",
+        "mergeWaiting": "等待合并",
+        "merged": "已合并",
+        "closed": "已关闭",
+        "draft": "草稿"
+      },
       "verb": "调用插件",
       "cardRunning": "插件绘制中",
       "cardDone": "已完成",

@@ -13804,6 +13804,22 @@
       "cancelTitle": "Warten beenden und diese Nachricht entfernen"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI bestanden",
+        "ciFailed": "CI fehlgeschlagen",
+        "ciRunning": "CI läuft",
+        "threadsOpen": "Offene Review-Threads: {{count}}",
+        "threadsNone": "Keine offenen Review-Threads",
+        "mergeReady": "Bereit zum Mergen",
+        "mergeConflict": "Hat Konflikte",
+        "mergeBehind": "Hinter dem Basis-Branch",
+        "mergeApproval": "Wartet auf Freigabe",
+        "mergeChanges": "Änderungen angefordert",
+        "mergeWaiting": "Wartet auf Merge",
+        "merged": "Gemergt",
+        "closed": "Geschlossen",
+        "draft": "Entwurf"
+      },
       "verb": "Plugin verwendet",
       "cardRunning": "Plugin zeichnet",
       "cardDone": "Fertig",
@@ -16000,6 +16016,9 @@
       "importFailed": "Skill konnte nicht importiert werden"
     },
     "builtIn": {
+      "pr": {
+        "description": "Beginnt die Arbeit auf einem neuen Branch, öffnet einen GitHub-Pull-Request und behebt anschließend CI-Fehler und Review-Feedback im Hintergrund, bis er gemergt ist."
+      },
       "official": "Offiziell",
       "officialDetail": "Von Cindy mitgeliefert und gepflegt.",
       "skillCreator": {

@@ -125,6 +125,8 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
     branch: pr.head.ref,
     unresolved_count: summary?.unresolved ?? null,
     checks: summary && summary.headOid === pr.head.sha ? summary.checks : null,
+    merge_state: summary?.mergeState ?? null,
+    review_decision: summary?.reviewDecision ?? null,
   };
 }
 

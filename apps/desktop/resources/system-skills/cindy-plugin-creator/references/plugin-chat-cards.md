@@ -87,6 +87,9 @@ cindy.onHostMessage(async function (msg) {
 - **铺满消息列**:卡内任一 `div` 加 `data-ghost-width="full"`(只认这个值),主机取消默认的
   460px 上限,卡片和「已更改 N 个文件」卡一样宽。按宽版排版:标题行左边图标和文字、右边按钮,
   并给按钮组加 `flex-wrap`,窄窗口和手机上能自动换到下一行。
+- **PR 状态位**:`div` 加 `data-ghost-pr-status="owner/repo#123"`,主机用任务标题栏同一份 PR 状态
+  (检查、未解决意见、能否合并)实时替换这个 `div` 的内容,并随标题栏定时刷新。`div` 里写你自己的
+  状态快照作兜底:旧版主机、手机,或这条 PR 不在本任务的 PR 列表里时原样显示。
 - **卡内音频播放器**:`<div data-ghost-audio="cindy-media://blobs/<指纹>.mp3">`
   (仅挂 div;mp3/wav/m4a,你名下已落库的地址,整串精确匹配)。主机会**清空该
   div 的子树**、注入与基座音频卡同款的标准播放器行(播放/暂停 + 进度 scrub +

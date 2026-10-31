@@ -63,6 +63,8 @@ import {
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
+import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import { usePrStatus } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -312,6 +314,14 @@ function GhostCardCanvas({
   const settledOnceRef = useRef(false);
   const pendingSettleRef = useRef(false);
   const renderedCardHtml = running && animatedHtml ? animatedHtml : html;
+  // PR 状态位:用标题栏同一份状态(随它定时刷新)替换插件的兜底快照。
+  const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
+  const prStatus = usePrStatus(sessionId ?? '', prSlotKey ?? '');
+  const prStatusRef = useRef(prStatus);
+  prStatusRef.current = prStatus;
+  const fillPrStatus = useCallback((doc: Document) => {
+    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => (key === prSlotKey ? prStatusRef.current : undefined), t);
+  }, [prSlotKey, t]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -470,6 +480,7 @@ function GhostCardCanvas({
       liveDisposeRef.current?.();
       liveDisposeRef.current = startGhostCardLiveIndicators(doc, iframeRef.current);
     }
+    fillPrStatus(doc);
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {
@@ -636,7 +647,7 @@ function GhostCardCanvas({
       });
     });
     measureHeight();
-  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId]);
+  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus]);
 
   const cardSrcDoc = buildCardSrcDoc(renderedCardHtml, themeVars);
   const initialMailDocument = useRef(cardSrcDoc);
@@ -655,6 +666,14 @@ function GhostCardCanvas({
     // 含 themeVars:主题切换重建 srcDoc 后同样要重挂点击桥并重测。
     attachClickBridge();
   }, [html, animatedHtml, running, themeVars, attachClickBridge]);
+
+  // 标题栏的 PR 状态刷新时重填当前文档(换行可能改变高度,随后重测)。
+  useEffect(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc?.body || !prSlotKey) return;
+    fillPrStatus(doc);
+    measureHeight();
+  }, [prStatus, prSlotKey, fillPrStatus, measureHeight]);
 
   // 权威实测的高度提交落地后才放开缓动开关:依赖 measuredHeight = 只在
   // 新高度**已渲染提交**的那次 commit 之后翻闸——若挂在"每次渲染后跑",

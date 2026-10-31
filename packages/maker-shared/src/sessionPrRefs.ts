@@ -51,6 +51,10 @@ export type PrStatusResult =
       unresolvedCount: number | null;
       /** Missing on older hosts; null means unavailable, not zero. */
       checks?: PrChecksSummary | null;
+      /** GitHub mergeStateStatus (CLEAN / DIRTY / BEHIND / BLOCKED …). Missing on older hosts. */
+      mergeState?: string | null;
+      /** GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). Missing on older hosts. */
+      reviewDecision?: string | null;
     }
   | {
       ok: false;

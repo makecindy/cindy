@@ -10,6 +10,7 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
+vi.mock('@/contexts/PrRefsContext', () => ({ usePrStatus: () => undefined }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 // User regression (unit): syncing between pointerdown/click lost Send, and

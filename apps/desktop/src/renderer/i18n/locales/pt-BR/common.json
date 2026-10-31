@@ -13932,6 +13932,22 @@
       "cancelTitle": "Parar de esperar e remover esta mensagem"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI aprovada",
+        "ciFailed": "CI falhou",
+        "ciRunning": "CI em execução",
+        "threadsOpen": "Threads de revisão abertas: {{count}}",
+        "threadsNone": "Nenhuma thread de revisão aberta",
+        "mergeReady": "Pronta para mesclar",
+        "mergeConflict": "Tem conflitos",
+        "mergeBehind": "Atrás do branch base",
+        "mergeApproval": "Aguardando aprovação",
+        "mergeChanges": "Alterações solicitadas",
+        "mergeWaiting": "Aguardando mesclagem",
+        "merged": "Mesclada",
+        "closed": "Fechada",
+        "draft": "Rascunho"
+      },
       "verb": "Plugin usado",
       "cardRunning": "O plugin está desenhando",
       "cardDone": "Concluído",
@@ -16148,6 +16164,9 @@
       "importFailed": "Falha ao importar Skill"
     },
     "builtIn": {
+      "pr": {
+        "description": "Começa o trabalho em um branch novo, abre um pull request no GitHub e depois corrige a CI e o feedback de revisão em segundo plano até ser mesclado."
+      },
       "official": "Oficial",
       "officialDetail": "Incluída e mantida pelo Cindy.",
       "skillCreator": {

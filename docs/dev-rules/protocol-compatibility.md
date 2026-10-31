@@ -4395,3 +4395,11 @@ Chat Server `/me` 新增可选能力 `groupMentionAudiences: 1`，群快照新�
 Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`，不新增服务端字段或消息类型。
 无数据库迁移、权限扩大或服务端改动；回退客户端只收起电脑话题的附件输入，已有媒体消息仍可读取。
 回归入口：`ChatServerControls.test.tsx`、`chatServer.test.ts`。
+
+## PR 状态的合并就绪字段
+
+`PrStatusResult`（`git-context:pr-status`，含 device-link 远程会话）成功结果新增可选 `mergeState`、`reviewDecision`，
+取自同一次 GraphQL 汇总查询的 `mergeStateStatus` / `reviewDecision`，不增加请求。GitHub 插件 PR 卡片的状态位
+（`data-ghost-pr-status`）用它显示「可以合并 / 有冲突 / 等待审批」。旧控制端忽略字段；新控制端连接旧宿主时字段缺失，
+卡片省掉这一项而不是猜测。不改握手、白名单、relay 或服务端，无数据库迁移。
+回归入口：`gitContextPrStatusService.test.ts`、`ghostCardPrStatus.test.ts`。

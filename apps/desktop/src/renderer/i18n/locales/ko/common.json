@@ -13740,6 +13740,22 @@
       "cancelTitle": "대기를 중단하고 이 메시지를 삭제"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 통과",
+        "ciFailed": "CI 실패",
+        "ciRunning": "CI 실행 중",
+        "threadsOpen": "처리할 리뷰 의견 {{count}}개",
+        "threadsNone": "처리할 리뷰 의견 없음",
+        "mergeReady": "병합 가능",
+        "mergeConflict": "충돌 있음",
+        "mergeBehind": "기준 브랜치 동기화 필요",
+        "mergeApproval": "승인 대기 중",
+        "mergeChanges": "수정 요청됨",
+        "mergeWaiting": "병합 대기 중",
+        "merged": "병합됨",
+        "closed": "닫힘",
+        "draft": "초안"
+      },
       "verb": "플러그인 호출",
       "cardRunning": "플러그인이 그리는 중",
       "cardDone": "완료",
