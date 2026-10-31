@@ -6342,6 +6342,7 @@
         "renameFailed": "重新命名失敗",
         "deleted": "裝置已刪除",
         "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
+        "deleteRejectedWhileOffline": "未能刪除裝置：伺服器仍將它記為線上，與清單中的離線狀態不一致",
         "deleteFailed": "刪除失敗",
         "disconnected": "已斷開所有遠端連線",
         "disconnectFailed": "斷開遠端連線失敗",

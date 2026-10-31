@@ -6342,6 +6342,7 @@
         "renameFailed": "重命名失败",
         "deleted": "设备已删除",
         "deleteOnline": "当前服务端尚不支持移除在线设备，请待服务升级后重试。",
+        "deleteRejectedWhileOffline": "未能删除设备：服务端仍将它记为在线，与列表中的离线状态不一致",
         "deleteFailed": "删除失败",
         "disconnected": "已断开所有远程连接",
         "disconnectFailed": "断开远程连接失败",

@@ -6385,6 +6385,7 @@
         "renameFailed": "Rename failed",
         "deleted": "Device deleted",
         "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
+        "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
         "deleteFailed": "Delete failed",
         "disconnected": "Disconnected all remote connections",
         "disconnectFailed": "Failed to disconnect remote connection",

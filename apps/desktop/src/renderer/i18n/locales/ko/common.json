@@ -6342,6 +6342,7 @@
         "renameFailed": "이름 변경에 실패했습니다",
         "deleted": "기기를 삭제했습니다",
         "deleteOnline": "현재 서버는 온라인 기기 제거를 지원하지 않습니다. 서비스 업데이트 후 다시 시도하세요.",
+        "deleteRejectedWhileOffline": "기기를 삭제하지 못했습니다. 목록에서는 오프라인이지만 서버에는 아직 온라인으로 기록되어 있습니다.",
         "deleteFailed": "삭제에 실패했습니다",
         "disconnected": "모든 원격 연결를 끊었습니다",
         "disconnectFailed": "원격 연결 끊기에 실패했습니다",
