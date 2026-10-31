@@ -8,7 +8,10 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { resolveBranchPick } from '../components/new-chat/branchPick';
+import {
+  isSourceBranchIgnoredWithoutWorktree,
+  resolveBranchPick,
+} from '../components/new-chat/branchPick';
 
 describe('resolveBranchPick', () => {
   it('worktree ON: picking a different branch changes the source branch', () => {
@@ -50,5 +53,18 @@ describe('resolveBranchPick', () => {
         'feat/x',
       ),
     ).toEqual({ kind: 'noop' });
+  });
+});
+
+// 回归:用户在远程电脑上未勾 worktree、选了另一条分支后发送，任务静默建在当前(默认)
+// 分支上。Send / Goal 用这条判据拦下并提示，而不是忽略用户选择。
+describe('isSourceBranchIgnoredWithoutWorktree', () => {
+  it.each([
+    ['未勾 + 选了另一条分支 → 拦下', { worktreeEnabled: false, currentBranch: 'main', sourceBranch: 'feat/x' }, true],
+    ['未勾 + 选的就是当前分支 → 放行', { worktreeEnabled: false, currentBranch: 'main', sourceBranch: 'main' }, false],
+    ['已勾 → 所选分支作 worktree 源分支生效，放行', { worktreeEnabled: true, currentBranch: 'main', sourceBranch: 'feat/x' }, false],
+    ['当前分支未知(探测中 / detached HEAD)→ 无法判断，放行', { worktreeEnabled: false, currentBranch: null, sourceBranch: 'feat/x' }, false],
+  ] as const)('%s', (_name, state, expected) => {
+    expect(isSourceBranchIgnoredWithoutWorktree(state)).toBe(expected);
   });
 });

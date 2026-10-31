@@ -86,6 +86,8 @@ export interface WorktreeChipsRowProps {
   sourceBranch: string;
   onSourceBranchChange: (v: string) => void;
   onBaseRepoChange?: (baseRepo: string | null) => void;
+  /** 仓库当前 checkout 的分支(探测中 / detached HEAD 为 null)，供发送侧判断所选分支是否生效。 */
+  onCurrentBranchChange?: (currentBranch: string | null) => void;
   /**
    * 被控端是否支持 recoveryKey 预创建回收。null 表示当前探测结果尚未就绪；
    * 上层发送侧必须把非 true 视为不具备该能力。
@@ -139,6 +141,7 @@ export function WorktreeChipsRow({
   sourceBranch,
   onSourceBranchChange,
   onBaseRepoChange,
+  onCurrentBranchChange,
   onRecoveryKeyDiscardSupportChange,
   onConfirmedIneligibleChange,
   onSuggestedNameChange,
@@ -174,6 +177,7 @@ export function WorktreeChipsRow({
   // 阶段 fence，切目标时这里先写 null。
   useLayoutEffect(() => {
     onBaseRepoChange?.(baseRepo);
+    onCurrentBranchChange?.(detect.data?.currentBranch ?? null);
     onRecoveryKeyDiscardSupportChange?.(
       detect.data ? detect.data.supportsRecoveryKeyDiscard === true : null,
     );
@@ -185,6 +189,7 @@ export function WorktreeChipsRow({
     // 保留仅满足 exhaustive-deps lint，运行时不会独立触发此 effect。
     confirmedIneligible,
     onBaseRepoChange,
+    onCurrentBranchChange,
     onRecoveryKeyDiscardSupportChange,
     onConfirmedIneligibleChange,
   ]);
