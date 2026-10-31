@@ -246,23 +246,39 @@ export function BotSettings({
     setSelectedSkills(saved.skills);
     setCapabilities(saved.capabilities);
   }, []);
-  const canLeave = useCallback(async () => {
-    if (avatarInFlight.current) return false;
-    // A failed or hung save must not trap the user on this page. Drop the
-    // unsaved draft and still allow going back.
+  const waitForSave = useCallback(async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       autosave.flush(),
-      new Promise((resolve) => setTimeout(resolve, 8_000)),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 8_000);
+      }),
     ]);
-    if (autosave.isDirty()) {
-      autosave.cancel();
-      restoreSavedSettings();
-    }
+    if (timer !== undefined) clearTimeout(timer);
+  }, [autosave]);
+  const discardUnsavedSettings = useCallback(() => {
+    if (!autosave.isDirty()) return;
+    const settled = autosave.abandon();
+    restoreSavedSettings();
+    void settled.then(() => restoreSavedSettings());
+  }, [autosave, restoreSavedSettings]);
+  const canLeave = useCallback(async () => {
+    if (avatarInFlight.current) return false;
+    // A failed or hung save must not trap the user on this page. Subpages
+    // confirm first, so cancelling their prompt keeps this draft.
+    await waitForSave();
     if (!((await voiceLeaveRef.current?.()) ?? true)) return false;
     if (!((await memoryLeaveRef.current?.()) ?? true)) return false;
     if (!((await capabilityLeaveRef.current?.()) ?? true)) return false;
-    return (await routineLeaveRef.current?.()) ?? true;
-  }, [autosave, restoreSavedSettings]);
+    if (!((await routineLeaveRef.current?.()) ?? true)) return false;
+    discardUnsavedSettings();
+    return true;
+  }, [discardUnsavedSettings, waitForSave]);
+  const savedForRetry = useCallback(async () => {
+    if (avatarInFlight.current) return false;
+    await autosave.flush();
+    return !autosave.isDirty();
+  }, [autosave]);
   useEffect(() => {
     if (!beforeCloseRef) return;
     beforeCloseRef.current = canLeave;
@@ -454,8 +470,9 @@ export function BotSettings({
           <BotInvitationWelcome bot={bot}
             onConfigureModel={page === 'model' ? undefined : () => go('model')}
             onRetry={async () => {
-              // A retry must use the confirmed selection, never race an autosave.
-              if (!await canLeave()) throw new Error('Bot settings have not been saved');
+              // Leaving may drop a failed draft. Retry must keep the new model
+              // and stop when that save did not land.
+              if (!await savedForRetry()) throw new Error('Bot settings have not been saved');
               await target.profile.retryInvitation(bot.id);
             }} />
         ) : null}

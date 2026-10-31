@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => {
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
+  autonomySettings: null as { schedulerBotId: string | null; isCustomized?: boolean } | null,
   modelListeners: new Set<() => void>(),
   runtimeListeners: new Set<() => void>(),
   updateBotProfile: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({
@@ -99,7 +100,7 @@ vi.mock('../botStore', () => ({
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
-  useBotAutonomySettings: () => null,
+  useBotAutonomySettings: () => mocks.autonomySettings,
   setBotSchedulerBotId: vi.fn(),
   resetBotAutonomySettings: vi.fn(),
 }));
@@ -246,6 +247,7 @@ beforeEach(() => {
   mocks.params = {};
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
+  mocks.autonomySettings = null;
   mocks.modelListeners.clear();
   mocks.runtimeListeners.clear();
   mocks.getSession.mockReset().mockResolvedValue({ agentKind: 'cc', workingDir: '/bot/workspace' });
@@ -611,18 +613,58 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
-  it('keeps the current inner page and its draft when saving before navigation fails', async () => {
+  it('returns home and restores the saved name when saving before navigation fails', async () => {
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
     render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
-    await screen.findByRole('button', { name: 'bots.autosave.retry' });
-    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
-    let allowed = true;
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.profile.title' })).toBeTruthy());
+    expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('PR steward');
+    let allowed = false;
     await act(async () => { allowed = await beforeCloseRef.current!(); });
+    expect(allowed).toBe(true);
+  });
+
+  it('keeps the unsaved teammate draft when a routine leave is cancelled', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
+    mocks.autonomySettings = { schedulerBotId: 'holder', isCustomized: false };
+    mocks.profiles = [bot(), bot({ id: 'holder', name: 'Cindy' })];
+    const routine = {
+      id: 'routine', botId: 'bot-1', name: 'Review', prompt: 'Old instructions', enabled: true,
+      revision: 1, createdAt: 1, updatedAt: 1, triggers: [{ id: 'timer', kind: 'interval', intervalMs: 3600000 }],
+    };
+    const api = window.electronAPI as unknown as { routines?: unknown };
+    api.routines = {
+      list: vi.fn(async () => [routine]),
+      sources: vi.fn(async () => []),
+      history: vi.fn(async () => []),
+      onChanged: vi.fn(() => () => undefined),
+      save: vi.fn(async () => routine),
+    };
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(
+      <ConfirmDialogProvider>
+        <BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />
+      </ConfirmDialogProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
+    const followName = 'bots.autonomy.allowSchedulerFollow.title:{"name":"Cindy"}';
+    fireEvent.click(await screen.findByRole('switch', { name: followName }));
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    fireEvent.change(screen.getByLabelText('routines.instructions'), { target: { value: 'Edited instructions' } });
+    const closing = beforeCloseRef.current!();
+    fireEvent.click(await screen.findByRole('button', { name: 'routines.continueEditing' }));
+    let allowed = true;
+    await act(async () => { allowed = await closing; });
     expect(allowed).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'routines.discard' }));
+    expect((await screen.findByRole('switch', { name: followName })).getAttribute('aria-checked')).toBe('true');
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {
