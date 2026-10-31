@@ -1500,6 +1500,24 @@
       "note": "Privacy Policy 是同一份法律文件。繁中设置页与日志上传提示已统一使用「隱私政策」，登录文案曾漂移为「隱私協議」，因此在 zh-TW 中统一为「隱私政策」。禁用项按英文源限定，避免误伤真正指 Agreement 的文案；本次只锁定新增繁中 catalog，不借此改写既有简中口径。"
     },
     {
+      "id": "terms-of-service",
+      "status": "proposed",
+      "en": "Terms of Service",
+      "translations": {
+        "zh-CN": "服务条款",
+        "zh-TW": "服務條款",
+        "ja": "利用規約",
+        "ko": "서비스 이용약관",
+        "es": "Términos del servicio",
+        "fr": "Conditions d'utilisation",
+        "de": "Nutzungsbedingungen",
+        "pt-PT": "Termos de Serviço",
+        "pt-BR": "Termos de Serviço"
+      },
+      "checkCase": false,
+      "note": "与 privacy-policy 成对的法律文件名，取自现有 termsOfServiceLabel 与 login.consentDialog.body。登录协议行与协议弹窗标题是单行槽（DESIGN.md §16.2），带两个全称的句子超出预算，所以这两处只缩写本条（privacy-policy 保持已裁决全称）：协议行 fr「CGU」；弹窗标题 es「Términos」、fr「CGU」、de「Bedingungen」、pt「Termos」（#8188 / #8181）。弹窗正文与设置页仍用全称。待裁决：这些单行槽简称（尤其 fr 用「CGU」还是其他写法）。"
+    },
+    {
       "id": "overview",
       "status": "proposed",
       "en": "Overview",
