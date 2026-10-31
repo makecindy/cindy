@@ -33,6 +33,7 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { CompanionThreadRoot, useCompanionThreads } from '@/session/CompanionThreads';
 import { CompanionHeader } from '@/session/CompanionHeader';
+import { CompanionContextControl } from '@/session/CompanionContextControl';
 import { CloudHomeUnreachableNotice, useSustained } from '@/session/CloudHomeUnreachableNotice';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from '@/session/ChatIdentityHeader';
@@ -11114,6 +11115,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 composerPullThrough={composerPullThrough}
                 renderControls={renderComposerControls}
               /> : null}
+              {companionChat && !companionEntry.threadRootSessionId && currentSession && !shareSelectionActive ? (
+                <CompanionContextControl key={`${auth.accountGeneration}:${deviceId}:${sessionId}:${currentSession.runtimeGeneration ?? 0}:${currentSession.agentKind}:${currentSession.model}`}
+                  session={currentSession} capabilities={capabilitiesLoading ? null : capabilities} reader={maker}
+                  available={canUseComposer && companionEntry.ready && !remoteUnavailableReason}
+                  running={remoteSessionRunning || isSessionStreaming}
+                  onRefresh={() => { void requestSync({ reason: 'manual', replaceMessages: false }); }} />
+              ) : null}
             </>
         )}
           {shareSelectionActive ? (

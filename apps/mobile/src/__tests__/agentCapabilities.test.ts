@@ -208,3 +208,8 @@ describe('mobile agent capabilities', () => {
     });
   });
 });
+
+// #8215: native Pi compaction is advertised by the host; older/malformed hosts fail closed.
+it.each([[{ supported: true }, true], [{ supported: false }, false], [undefined, false], [{ supported: 'true' }, false]])('normalizes host manual compaction %o as %s', (manualCompact, expected) => {
+  expect(normalizeMobileAgentCapabilities({ ...desktopCapabilitiesPayload, manualCompact })?.manualCompactSupported).toBe(expected);
+});

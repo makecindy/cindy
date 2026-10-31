@@ -73,6 +73,8 @@ export const visualMockUser: MobileUser = {
   passportId: 'visual-mock-passport',
 };
 
+// Context examples: Tuantuan unknown, LiZi live Pi, Dash unstarted Pi, Xiaoman Codex.
+const visualCompanionContextTokens = new Map<string, number>();
 let realDataSnapshot: VisualRealDataSnapshot | null = null;
 let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
 let preparedContextPromise: Promise<DeviceLinkContextValue> | null = null;
@@ -343,8 +345,19 @@ async function visualMockInvoke<T = unknown>(
         { sessionId: 'visual-running', agentKind: 'cc', isTurnRunning: true },
         { sessionId: 'visual-automation-running', agentKind: 'cc', isTurnRunning: true },
       ] as T;
+    case 'maker:input:compact':
+    case 'maker:compact-session': {
+      const id = String(args[0] ?? '');
+      if (!id.startsWith(VISUAL_TEAMMATE_SESSION_ID)) return {} as T;
+      if (channel === 'maker:compact-session' && id.endsWith(':visual-bot-dash')) return null as T;
+      const before = visualMockSession(id).contextTokens ?? 0;
+      if (before <= 30_000) return { noop: true } as T;
+      visualCompanionContextTokens.set(id, 30_000);
+      return (channel === 'maker:input:compact' ? visualMockProjection(id)
+        : { tokensBefore: before, estimatedTokensAfter: 30_000 }) as T;
+    }
     case 'maker:get-capabilities':
-      return visualMockCapabilities() as T;
+      return { ...visualMockCapabilities() as object, manualCompact: { supported: true } } as T;
     case 'maker:provider:list':
       return { providers: [] } as T;
     case 'maker:api-key:present':
@@ -570,6 +583,9 @@ function visualMockSession(id: string): RemoteSession {
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
     || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
+    agentKind: id.endsWith(':visual-bot-lizi') || id.endsWith(':visual-bot-dash') ? 'pi' : id.endsWith(':visual-bot-xiaoman') ? 'codex' : 'cc',
+    contextTokens: id.endsWith(':visual-bot-tuantuan') ? undefined : visualCompanionContextTokens.get(id) ?? 120_000,
+    contextWindow: id.endsWith(':visual-bot-tuantuan') ? undefined : 1_000_000,
   };
   return visualMockSessions('all').find((session) => session.id === id) ?? visualMockSessions()[0];
 }
