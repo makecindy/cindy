@@ -2184,30 +2184,41 @@ export class GoalController {
       !shouldFire && status === 'active' && outcome.verdict?.status === 'waiting';
     if (waitingEntry) this.waitingSessions.set(sessionId, { sinceMs: this.now() });
     if (!isCurrentTurn()) return;
-    const updated = await this.trackPersistence(
-      turn,
-      this.deps.storage.update(sessionId, {
-        // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
-        // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
-        ...(status === 'active' ? {} : { status }),
-        lastReason,
-        turnsUsed: decision.turnsUsed,
-        tokensUsed: decision.tokensUsed,
-        noProgressStreak: decision.noProgressStreak,
-        usageResetAt: status === 'usageLimited' ? usageResetAt : null,
-        ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
-        updatedAt: this.now(),
-      }),
-      async (persisted) => {
-        // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
-        // 不能留下“文案已改但更新标记缺失”的半提交。
-        if (objectiveRewrite && persisted) {
-          await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
-            goalObjective: { updated: true },
-          });
-        }
-      },
-    );
+    let updated: GoalState | null;
+    try {
+      updated = await this.trackPersistence(
+        turn,
+        this.deps.storage.update(sessionId, {
+          // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
+          // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
+          ...(status === 'active' ? {} : { status }),
+          lastReason,
+          turnsUsed: decision.turnsUsed,
+          tokensUsed: decision.tokensUsed,
+          noProgressStreak: decision.noProgressStreak,
+          usageResetAt: status === 'usageLimited' ? usageResetAt : null,
+          ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
+          updatedAt: this.now(),
+        }),
+        async (persisted) => {
+          // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
+          // 不能留下“文案已改但更新标记缺失”的半提交。
+          if (objectiveRewrite && persisted) {
+            await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
+              goalObjective: { updated: true },
+            });
+          }
+        },
+      );
+    } catch (error) {
+      // waiting 落库失败:标记已在但 idle 兕底被它挡住 —— 补排安全网,让 DB 恢复后
+      // 目标能自愈补检(否则只有 intervention / 手动唤醒能救)。唤醒窗口内标记被删
+      // 的情况不补:短 timer 已由唤醒方排好。
+      if (waitingEntry && this.waitingSessions.has(sessionId)) {
+        this.scheduleContinuation(sessionId, this.waitingRecheckMs);
+      }
+      throw error;
+    }
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated, state.status);
 

@@ -2691,6 +2691,25 @@ describe('GoalController', () => {
     expect((await local.controller.getStatus('s1'))?.waitingSince ?? null).toBeNull();
   });
 
+  it('waiting persist failure still arms the safety net (self-heal after DB recovery)', async () => {
+    const local = makeController({ waitingRecheckMs: 25 });
+    await startGoal(local);
+    const realUpdate = local.storage.update.bind(local.storage);
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async () => {
+      throw new Error('db down');
+    });
+    local.session.emitGoalTurn({ toolUse: true, verdictJson: '```json\n{"goal_status":"waiting","reason":"等"}\n```' });
+    await tick();
+    await tick();
+    // 落库失败:等待标记保留(chip 显示等待中),安全网照排 —— DB 恢复后能自愈补检
+    // (idle 兜底被等待标记挡住,安全网是唯一的自动自愈通道)。
+    expect((await local.controller.getStatus('s1'))?.waitingSince).not.toBeNull();
+    await tick();
+    await tick();
+    await tick(); // 30ms > 25ms:安全网重检轮发出
+    expect(local.session.sends.length).toBeGreaterThan(1); // 未修复时永远为 1
+  });
+
   it('detaches goal continuation synchronously before pause persistence can block', async () => {
     await startGoal(h);
     const active = await h.storage.get('s1');
