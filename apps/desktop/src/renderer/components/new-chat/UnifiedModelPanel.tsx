@@ -1,4 +1,5 @@
 import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
+import type { ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import {
   parseProviderShareFavoriteSource,
   providerShareFavoriteRegionsOf,
@@ -327,6 +328,7 @@ export interface UnifiedModelPanelProps {
      * 运行位置编进 providerId(见 state/agentDeviceFavorites)。
      */
     favoritesDeviceId?: string;
+    shareFavoriteSources?: ReadonlyMap<string, ControlledModelFavoriteSource>;
     /** 任务所在电脑自己的设备 id(已知时):收藏里编码成它的条目按普通收藏处理。 */
     homeDeviceId?: string | null;
     /** 在列表里、但目录还在读取或读取失败的电脑:收藏区里它的收藏置灰列出,不丢。 */
@@ -434,8 +436,9 @@ export function UnifiedModelPanel({
     deviceId,
     storedFavorites,
     remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    remoteSources?.shareFavoriteSources,
   );
-  const sharedFavoriteSources = useProviderShareFavoriteSources();
+  const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
   const hasRemoteSources = !!remoteSources;
   const favoritesHomeDeviceId = remoteSources?.homeDeviceId ?? null;
   const agentDeviceFavorites = useAgentDeviceFavorites({

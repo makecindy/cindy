@@ -245,6 +245,7 @@
     "completeWithSkipped_many": "Copiado, {{count}} itens ignorados"
   },
   "sharedTask": {
+    "officialRelayNote": "Você está usando seu próprio retransmissor. O conteúdo das tarefas compartilhadas continua passando pelo Retransmissor Cindy.",
     "selfJoin": "Você iniciou esta tarefa compartilhada, então não precisa entrar. Abra-a em “Compartilhadas por mim”.",
     "manageSharing": "Gerenciar compartilhamento",
     "manageMembers": "Gerenciar membros…",
@@ -346,6 +347,7 @@
     "closeAllDescription": "Os convidados perderão o acesso. O histórico das tarefas será mantido."
   },
   "providerShare": {
+    "officialRelayNote": "Você está usando seu próprio retransmissor. O conteúdo do compartilhamento de provedores continua passando pelo Retransmissor Cindy.",
     "owned": {
       "title": "Provedores que compartilho"
     },
@@ -2453,7 +2455,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Escrita e estilo",
+        "hint": "A IA responde no estilo escolhido. Com “Respostas habituais”, a interface continua em chinês clássico e as respostas seguem seu idioma.",
+        "scriptAriaLabel": "Escrita do chinês clássico",
+        "styleAriaLabel": "Estilo de resposta da IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prosa clássica (padrão)",
+          "tang-poetry": "Poesia Tang",
+          "song-ci": "Ci dos Song",
+          "yuan-qu": "Qu dos Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prosa paralela",
+          "pre-qin": "Mestres pré-Qin",
+          "historian": "Estilo do Grande Historiador",
+          "ming-qing-essay": "Ensaios Ming–Qing",
+          "plain": "Respostas habituais"
+        }
       }
     },
     "userProfile": {
@@ -3195,49 +3220,111 @@
       }
     },
     "sessionImport": {
-      "title": "Importação de sessões locais",
-      "description": "Verificação somente leitura do histórico local do Claude Code e do Codex. Apenas as sessões marcadas na lista serão importadas; sessões internas ignoradas ficam ocultas e não podem ser importadas.",
-      "scan": "Escanear",
-      "scanning": "Verificando",
-      "emptyTitle": "Verifique o histórico local primeiro",
-      "emptyDescription": "A verificação não grava no banco de dados nem altera a barra lateral.",
-      "noCandidates": "Nenhuma sessão importável para o filtro atual.",
-      "collapse": "Recolher grupo",
-      "expand": "Expandir grupo",
-      "selectGroup": "Selecionar grupo",
-      "sessions": "sessões",
-      "selected": "{{count}} selecionadas",
-      "importSelected": "Importar selecionadas",
-      "importing": "Importando",
-      "archived": "Arquivadas",
+      "title": "Importar sessões",
+      "description": "Traga sessões de outras ferramentas de programação com IA para o Cindy e continue trabalhando. O Cindy apenas lê os originais e nunca os altera.",
+      "rescan": "Buscar novamente",
+      "allSources": "Todas as origens",
+      "search": "Buscar sessões ou pastas",
+      "projectFilter": "Somente {{name}}",
+      "clearProjectFilter": "Mostrar todos os projetos",
+      "hiddenCount_one": "{{count}} oculta",
+      "hiddenCount_other": "{{count}} ocultas",
+      "hidden": {
+        "head": "Ocultas",
+        "hint": "Os itens selecionados aparecem na lista",
+        "cindy": "Sessões executadas pelo Cindy",
+        "temp": "Sessões em pastas temporárias",
+        "internal": "Sessões internas (revisões, Subagent)",
+        "imported": "Já importadas",
+        "sourceError": "Não foi possível ler o histórico de {{name}}"
+      },
+      "missingDir": "Pasta não encontrada",
+      "groupTasks_one": "{{count}} sessão",
+      "groupTasks_other": "{{count}} sessões",
+      "dialogue": "Conversa",
+      "archived": "Arquivada",
+      "unsupported": "Formato ainda não compatível",
       "untitled": "Sessão sem título",
-      "noWorkingDir": "Sem diretório de trabalho",
-      "summary": {
-        "total": "Visível",
-        "totalHint": "Selecionável para importação",
-        "projects": "Sessões de projetos",
-        "projectsHint": "Sessões que aparecerão nos grupos de projetos",
-        "dialogue": "Conversa",
-        "dialogueHint": "Sessões do Codex sem projeto",
-        "filtered": "Ignorada",
-        "filteredHint": "Internas ou já no app"
+      "selectAll": "Selecionar tudo",
+      "selectGroup": "Selecionar o grupo",
+      "expand": "Expandir",
+      "collapse": "Recolher",
+      "selectedSummary_one": "{{count}} selecionada · {{size}}",
+      "selectedSummary_other": "{{count}} selecionadas · {{size}}",
+      "pickHint": "Selecione as sessões que deseja trazer para o Cindy",
+      "importCount_one": "Importar {{count}} sessão",
+      "importCount_other": "Importar {{count}} sessões",
+      "import": "Importar",
+      "scanning": "Buscando sessões neste computador…",
+      "scanFailed": "A busca não foi concluída. Tente novamente.",
+      "emptyTitle": "Não há sessões para importar neste computador",
+      "emptyDescription": "O Cindy pode importar sessões destas ferramentas. Depois de usar uma delas, volte e busque novamente.",
+      "noMatch": "Nenhuma sessão correspondente",
+      "allHidden": "Todas as sessões estão ocultas. Exiba-as em “Ocultas”, no canto superior direito.",
+      "confirm": {
+        "title_one": "Importar {{count}} sessão?",
+        "title_other": "Importar {{count}} sessões?",
+        "body": "Isso leva cerca de {{minutes}} minutos e usa até {{size}} de espaço em disco. A importação ocorre em segundo plano; você pode pará-la a qualquer momento e manter o que já foi importado.",
+        "cancel": "Cancelar",
+        "title_many": "Importar {{count}} sessões?"
       },
-      "filters": {
-        "source": "Fonte",
-        "placement": "Destino",
-        "all": "Todas",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "Projetos existentes",
-        "dialogue": "Conversa"
+      "progress": {
+        "title_one": "Importando {{count}} sessão",
+        "title_other": "Importando {{count}} sessões",
+        "background": "Você pode sair desta página. A importação continua em segundo plano.",
+        "stop": "Parar",
+        "queued": "Aguardando",
+        "copy": "Copiando o histórico original",
+        "messages_one": "Salvando {{count}} mensagem",
+        "messages_other": "Salvando {{count}} mensagens",
+        "verify": "Verificando se é possível continuar",
+        "title_many": "Importando {{count}} sessões",
+        "messages_many": "Salvando {{count}} mensagens"
       },
-      "toast": {
-        "scanFailed": "Falha na verificação",
-        "importFailed": "Falha na importação",
-        "imported": "Importação concluída: {{inserted}} inseridas, {{updated}} atualizadas"
+      "result": {
+        "title_one": "{{count}} sessão importada",
+        "title_other": "{{count}} sessões importadas",
+        "stoppedTitle": "Importação interrompida",
+        "ready_one": "{{count}} pronta para continuar",
+        "ready_other": "{{count}} prontas para continuar",
+        "action_one": "{{count}} precisa da sua atenção",
+        "action_other": "{{count}} precisam da sua atenção",
+        "failed_one": "{{count}} falhou",
+        "failed_other": "{{count}} falharam",
+        "readyGroup": "Prontas para continuar ({{count}})",
+        "readyNative": "Pronta para continuar em {{harness}}",
+        "readyHandoff": "Pronta — {{harness}} continua; você pode mudar a qualquer momento",
+        "missingDir": "A pasta original não existe mais. Escolha uma pasta para continuar.",
+        "chooseFolder": "Escolher pasta",
+        "relocateFailed": "Não foi possível mudar para essa pasta. Tente novamente.",
+        "cancelled": "Interrompida antes da importação",
+        "retry": "Tentar novamente",
+        "open": "Abrir",
+        "done": "Concluído",
+        "title_many": "{{count}} sessões importadas",
+        "ready_many": "{{count}} prontas para continuar",
+        "action_many": "{{count}} precisam da sua atenção",
+        "failed_many": "{{count}} falharam"
       },
-      "selectAll": "Selecionar todas no filtro atual ({{count}})",
-      "selectedOutsideFilter": "({{count}} delas fora do filtro atual)"
+      "failure": {
+        "read-failed": "Não foi possível importar: o histórico original não pode ser lido",
+        "unsupported-version": "Não foi possível importar: o formato do histórico desta versão ainda não é compatível",
+        "empty": "Não foi possível importar: o histórico original não tem mensagens",
+        "not-found": "Não foi possível importar: o histórico original não existe mais",
+        "disk-full": "Não foi possível importar: espaço em disco insuficiente",
+        "native-unloadable": "Não foi possível importar: o histórico original não pode ser carregado"
+      },
+      "marker": {
+        "from": "Importada de {{source}} · {{date}}",
+        "folder": "Pasta original {{path}}",
+        "end": "Tudo acima foi importado de {{source}}",
+        "endHandoff": "Tudo acima foi importado de {{source}}. {{harness}} continua daqui."
+      },
+      "projectMenu": "Importar sessões deste projeto de outras ferramentas…",
+      "hiddenCount_many": "{{count}} ocultas",
+      "groupTasks_many": "{{count}} sessões",
+      "selectedSummary_many": "{{count}} selecionadas · {{size}}",
+      "importCount_many": "Importar {{count}} sessões"
     },
     "connections": {
       "codex": {
@@ -5757,7 +5844,7 @@
         "current": "Em uso",
         "ownerName": "Este computador",
         "unavailable": "Para usar seu próprio retransmissor, entre no Cindy e verifique se o chaveiro do sistema está disponível.",
-        "limits": "Enquanto você usa seu próprio retransmissor, notificações push no celular, compartilhamento de provedores e tarefas compartilhadas ficam indisponíveis.",
+        "limits": "Enquanto você usa seu próprio retransmissor, as notificações push no celular ficam indisponíveis. O compartilhamento de provedores e as tarefas compartilhadas continuam passando pelo Retransmissor Cindy.",
         "actions": {
           "join": "Conectar-se a outro retransmissor",
           "useOfficial": "Voltar ao retransmissor Cindy",
@@ -5973,7 +6060,7 @@
           "switchFromHost": "O retransmissor neste computador será interrompido, e os dispositivos conectados a ele serão desconectados.",
           "switchFromMember": "Este computador sai de {{name}}. Para se conectar novamente mais tarde, o proprietário precisará criar um novo link de conexão.",
           "switchConfirm": "Trocar",
-          "switchFromOfficial": "O controle remoto entre seus dispositivos passará por {{name}}. Notificações push no celular, compartilhamento de provedores e tarefas compartilhadas não ficam disponíveis enquanto você usa seu próprio retransmissor."
+          "switchFromOfficial": "O controle remoto entre seus dispositivos passará por {{name}}. Notificações push no celular não ficam disponíveis enquanto você usa seu próprio retransmissor. O compartilhamento de provedores e as tarefas compartilhadas continuam passando pelo Retransmissor Cindy."
         },
         "dialog": {
           "steps": {
@@ -10556,6 +10643,7 @@
       "header": {
         "stepRunning": "{{name}} está na etapa {{step}}",
         "speaking": "{{name}} está respondendo…",
+        "queued": "{{name}} na fila",
         "planning": "{{name}} está dividindo o trabalho…"
       },
       "memberCount_one": "{{count}} membro",
@@ -14574,11 +14662,6 @@
         "openInExplorer": "Abrir no gerenciador de arquivos",
         "newInDirectory": "Nova sessão neste diretório",
         "copyDeepLink": "Copiar link do projeto",
-        "syncCodex": "Sincronizar sessões do Codex para este projeto",
-        "syncCodexDone": "Sincronização do Codex concluída: {{inserted}} vinculadas, {{updated}} atualizadas",
-        "syncCodexAlreadyLinked": "As sessões do Codex deste projeto já estão vinculadas",
-        "syncCodexNone": "Nenhuma sessão do Codex encontrada para este projeto",
-        "syncCodexFailed": "Falha na sincronização do Codex: {{error}}",
         "search": "Pesquisar sessões neste projeto"
       },
       "deepLink": {
@@ -17707,9 +17790,8 @@
       "name": "Acompanhar sessões atribuídas (integrado)",
       "hint": "Acompanhe as sessões atribuídas quando travarem, precisarem de você, falharem, atingirem um limite de uso ou terminarem."
     },
-    "builtinTodoCheck": {
-      "name": "Verificação diária de pendências (integrada)",
-      "hint": "Procura novas pendências nas fontes conectadas nos dias úteis às 9:00 e fica em silêncio quando não há novidades. Ativada ou desativada pela visão rápida; só pode ser pausada ou retomada."
+    "todoCheck": {
+      "name": "Verificação diária de pendências"
     },
     "builtinNightlyLearning": {
       "name": "Aprendizado noturno (integrado)",

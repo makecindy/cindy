@@ -1,6 +1,7 @@
 import { fastModeFromStorage, fastModeToStorage } from '@cindy/maker-shared';
 import { extractToolResultDiagnostics } from '@cindy/maker-shared/tool-result-compaction';
 import { runPluginUsageTransaction } from './pluginUsageTx.js';
+import { runSessionImportTransaction } from './sessionImportTx.js';
 import { runTaskTagsTransaction } from './taskTagsTx.js';
 import { recordMediaSpend } from './mediaSpendTx.js';
 import { batchAutoReviewProjection, readAutoReviewProjectionTransaction } from '../../autoReviewProjection.js';
@@ -19,7 +20,6 @@ import type { DbTxName, SessionsSetTerminalStatusResult } from '../../client/tx/
 import { runChatCacheTransaction, type ChatCacheTransaction } from './chatCacheTx.js';
 import { computeForkSourceMessagesDigest, type ForkSourceMessage } from '../../forkRecoverySnapshot.js';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir.js';
-import { capImportedToolResultContent } from '../../../../shared/toolResultPersistCap.js';
 import {
   wechatActivateBindingEpoch,
   wechatCancelForCommand,
@@ -57,7 +57,6 @@ import type {
   BotsCreateThreadLaneArgs,
 } from '../../client/tx/types.js';
 
-const LOCAL_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = [1_000, 5_000, 30_000, 5 * 60_000, 30 * 60_000];
 
@@ -78,10 +77,6 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
       return recordMediaSpend(db, txArgs as import('../../client/tx/types.js').MediaSpendArgs);
     case 'authorization.readProjection':
       return readAutoReviewProjectionTransaction(db, txArgs);
-    case 'codex.importMessages':
-      return codexImportMessages(db, txArgs);
-    case 'claude.importMessages':
-      return claudeImportMessages(db, txArgs);
     case 'rewind.commit':
       return rewindCommit(db, txArgs);
     case 'session.treeRehydrate':
@@ -125,6 +120,7 @@ function dispatchTransaction(db: Database.Database, args: unknown): unknown {
     case 'recentWorkdirs.removeWindowsIdentity':
       return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
     case 'pluginUsage.execute': return runPluginUsageTransaction(db, txArgs);
+    case 'sessionImport.execute': return runSessionImportTransaction(db, txArgs);
     case 'taskTags.execute':
       return runTaskTagsTransaction(db, txArgs);
     case 'projectAliases.replaceIdentity':
@@ -2373,12 +2369,6 @@ function sessionsSetTerminalStatus(db: Database.Database, args: unknown): Sessio
   return transaction();
 }
 
-function invalidateSessionListProjection(db: Database.Database, sessionId: string): void {
-  db.prepare(
-    'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
-  ).run(sessionId);
-}
-
 function compactSessionToolResults(
   db: Database.Database,
   args: unknown,
@@ -2534,188 +2524,6 @@ function imRotateSession(
       status === 'active' || status === 'archived' || status === 'deleted' ? status : null;
     return { previousStatus };
   })();
-}
-
-function codexImportMessages(db: Database.Database, args: unknown): { changed: number; hiddenClientIds?: string[]; updatedLocalIds?: string[] } {
-  const payload = asRecord(args, 'codex.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const model = expectString(payload.model, 'model');
-  const rows = expectArray(payload.rows, 'rows');
-  const upsert = db.prepare(`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, NULL, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  `);
-  const transaction = db.transaction(() => {
-    const existing = readExistingMessageFingerprints(db, sessionId, importClientIdPrefix);
-    const importedRows = new Map((db.prepare(`
-      SELECT client_id AS clientId, role, content, created_at AS createdAt, rewind_at AS rewindAt
-      FROM messages WHERE session_id = ? AND client_id LIKE ?
-    `).all(sessionId, `${importClientIdPrefix}%`) as Array<{
-      clientId: string; role: string; content: string; createdAt: number; rewindAt: number | null;
-    }>).map((row) => [row.clientId, row]));
-    const consumed = new Set<string>();
-    const hiddenClientIds: string[] = [];
-    const updatedLocalIds: string[] = [];
-    // Text fallback must not match an earlier turn that happened to say the
-    // same thing. Include external user turns as well as Cindy's local rows.
-    const userTimes = existing.filter((row) => row.role === 'user').map((row) => row.createdAt);
-    for (const row of importedRows.values()) {
-      if (row.role !== 'user') continue;
-      const lineNo = Number(row.clientId.slice(importClientIdPrefix.length));
-      if (Number.isInteger(lineNo) && lineNo >= 0) userTimes.push(row.createdAt - lineNo);
-    }
-    for (const value of rows) {
-      const row = asRecord(value, 'codex row');
-      if (row.role === 'user') userTimes.push(expectNumber(row.sourceCreatedAt ?? row.createdAt, 'row.createdAt'));
-    }
-    const hideDuplicate = db.prepare(`UPDATE messages SET rewind_at = ?
-      WHERE session_id = ? AND client_id = ? AND role = 'assistant' AND rewind_at IS NULL`);
-    const enrichLocal = db.prepare(`UPDATE messages SET content = ?, agent_meta = ?
-      WHERE session_id = ? AND id = ? AND role = 'assistant' AND rewind_at IS NULL
-      AND (content IS NOT ? OR agent_meta IS NOT ?)`);
-    let changed = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'codex row');
-      const lineNo = expectNumber(row.lineNo, 'row.lineNo');
-      const role = expectString(row.role, 'row.role') as 'user' | 'assistant';
-      const text = expectString(row.text, 'row.text');
-      const createdAt = expectNumber(row.createdAt, 'row.createdAt');
-      const sourceCreatedAt = row.sourceCreatedAt == null ? createdAt : expectNumber(row.sourceCreatedAt, 'row.sourceCreatedAt');
-      const clientId = `${importClientIdPrefix}${lineNo}`;
-      const phase = row.phase === 'commentary' || row.phase === 'final_answer' ? row.phase : undefined;
-      const agentMessageId = typeof row.agentMessageId === 'string' && row.agentMessageId ? row.agentMessageId : undefined;
-      const previous = importedRows.get(clientId);
-      // Deleted/rewound rows never become visible again. Their local match is
-      // still consumed so a second, legitimate identical item is not swallowed.
-      const duplicate = findLocalDuplicate(existing, { role, text, createdAt: sourceCreatedAt, phase, agentMessageId, sdkSessionId }, consumed, userTimes);
-      if (duplicate) consumed.add(duplicate.id);
-      if (previous && (previous.role === 'message_tombstone' || previous.rewindAt !== null)) continue;
-      if (duplicate && (!previous || role === 'assistant' && normalizeStoredMessageText(previous.content) === text)) {
-        if (role === 'assistant') {
-          // Keep the stable live row and its usage/fork metadata. Only append a
-          // recognized citation tail; never replace ordinary prose with rollout.
-          const tail = !duplicate.memoryTail ? memoryCitationTail(text) : '';
-          if (tail || phase && !duplicate.meta.assistantPhase || agentMessageId && !duplicate.meta.agentMessageId) {
-            const content = JSON.stringify(duplicate.text + tail);
-            const meta = JSON.stringify({ ...duplicate.meta,
-              ...(phase && !duplicate.meta.assistantPhase ? { assistantPhase: phase } : {}),
-              ...(agentMessageId && !duplicate.meta.agentMessageId ? { agentMessageId, sdkSessionId } : {}),
-            });
-            const updated = enrichLocal.run(content, meta, sessionId, duplicate.id, content, meta).changes;
-            changed += updated;
-            if (updated > 0) updatedLocalIds.push(duplicate.id);
-          }
-          // Soft-hide only verified import copies; preserve their original data.
-          if (previous) {
-            const hidden = hideDuplicate.run(Date.now(), sessionId, clientId).changes;
-            changed += hidden;
-            if (hidden > 0) hiddenClientIds.push(clientId);
-          }
-        }
-        continue;
-      }
-      changed += upsert.run({
-        id: `codex-import-${sdkSessionId}-${lineNo}`,
-        clientId,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        agentMeta: JSON.stringify({ sdkSessionId, model,
-          ...(phase ? { assistantPhase: phase } : {}),
-          ...(agentMessageId ? { agentMessageId } : {}),
-        }),
-        createdAt,
-      }).changes;
-    }
-    if (changed > 0) invalidateSessionListProjection(db, sessionId);
-    return { changed, ...(hiddenClientIds.length > 0 ? { hiddenClientIds } : {}),
-      ...(updatedLocalIds.length > 0 ? { updatedLocalIds } : {}) };
-  });
-  return transaction();
-}
-
-function claudeImportMessages(db: Database.Database, args: unknown): { changed: number } {
-  const payload = asRecord(args, 'claude.importMessages args');
-  const sessionId = expectString(payload.sessionId, 'sessionId');
-  const importClientIdPrefix = expectString(payload.importClientIdPrefix, 'importClientIdPrefix');
-  const sdkSessionId = expectString(payload.sdkSessionId, 'sdkSessionId');
-  const rows = expectArray(payload.rows, 'rows');
-  const upsert = db.prepare(`
-    INSERT INTO messages
-      (id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at)
-    VALUES
-      (@id, @clientId, @sessionId, @role, @content, @toolUseId, @agentMeta, @createdAt, NULL)
-    ON CONFLICT(session_id, client_id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      tool_use_id = excluded.tool_use_id,
-      agent_meta = excluded.agent_meta,
-      created_at = excluded.created_at
-    WHERE
-      messages.role != 'message_tombstone' AND
-      messages.rewind_at IS NULL AND
-      (
-        messages.role != 'tool_result' OR
-        CASE
-          WHEN messages.content NOT GLOB '{"type":"tool_result_compacted","version":1,*' THEN 1
-          WHEN json_valid(messages.content) = 0 THEN 1
-          WHEN json_type(messages.content) = 'object'
-           AND json_extract(messages.content, '$.type') = 'tool_result_compacted'
-           AND json_extract(messages.content, '$.version') = 1
-           AND json_type(messages.content, '$.originalBytes') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.originalBytes') >= 0
-           AND json_type(messages.content, '$.compactedAt') IN ('integer', 'real')
-           AND json_extract(messages.content, '$.compactedAt') >= 0 THEN 0
-          ELSE 1
-        END = 1
-      ) AND
-      (
-        messages.role IS NOT excluded.role OR
-        messages.content IS NOT excluded.content OR
-        messages.tool_use_id IS NOT excluded.tool_use_id OR
-        messages.agent_meta IS NOT excluded.agent_meta OR
-        messages.created_at IS NOT excluded.created_at
-      )
-  `);
-  const transaction = db.transaction(() => {
-    let changed = 0;
-    for (const rawRow of rows) {
-      const row = asRecord(rawRow, 'claude row');
-      const key = `${expectNumber(row.lineNo, 'row.lineNo')}-${expectNumber(row.partIndex, 'row.partIndex')}`;
-      const role = expectString(row.role, 'row.role');
-      changed += upsert.run({
-        id: `claude-import-${sdkSessionId}-${key}`,
-        clientId: `${importClientIdPrefix}${key}`,
-        sessionId,
-        role,
-        content: stringifyImportedContent(role, row.content),
-        toolUseId: nullableString(row.toolUseId),
-        agentMeta: row.agentMeta ? stringifyContent(row.agentMeta) : null,
-        createdAt: expectNumber(row.createdAt, 'row.createdAt'),
-      }).changes;
-    }
-    if (changed > 0) invalidateSessionListProjection(db, sessionId);
-    return changed;
-  });
-  return { changed: transaction() as number };
 }
 
 function rewindCommit(db: Database.Database, args: unknown): void {
@@ -3900,228 +3708,6 @@ function orcaReleaseWorkerCreationReservation(db: Database.Database, args: unkno
   );
 }
 
-interface MessageFingerprint {
-  role: 'user' | 'assistant';
-  /** 原文指纹(仅换行归一 + trim),普通消息只用它精确比较。 */
-  plain: string;
-  /**
-   * citation 规范形指纹(有损:标记→路径、去反引号、折叠空白)。只在 canon 比较
-   * 门放行时参与(见 findLocalDuplicate),避免「仅 Markdown 格式不同」的两条
-   * 正常回复被误判成重复(review 反馈)。
-   */
-  canonical?: string;
-  /** 原文是否含原始标记字面量——canon 比较的门:至少一侧为真才启用有损比较。 */
-  hasMarker: boolean;
-  createdAt: number;
-  memoryTail: string;
-}
-
-interface LocalMessageFingerprint extends MessageFingerprint {
-  id: string;
-  text: string;
-  meta: Record<string, unknown>;
-}
-
-function readExistingMessageFingerprints(
-  db: Database.Database,
-  sessionId: string,
-  importClientIdPrefix: string,
-): LocalMessageFingerprint[] {
-  // Rewound local rows still suppress their retained rollout copies. Enrichment
-  // below only writes visible rows, so matching never changes a rewind record.
-  const rows = db.prepare(`
-    SELECT id, role, content, agent_meta AS agentMeta, created_at AS createdAt
-    FROM messages
-    WHERE session_id = ?
-      AND role IN ('user', 'assistant')
-      AND client_id NOT LIKE ?
-  `).all(sessionId, `${importClientIdPrefix}%`) as Array<{
-    role: string;
-    id: string;
-    content: string;
-    agentMeta: string | null;
-    createdAt: number;
-  }>;
-  const out: LocalMessageFingerprint[] = [];
-  for (const row of rows) {
-    if (row.role !== 'user' && row.role !== 'assistant') continue;
-    const text = normalizeStoredMessageText(row.content);
-    if (!text) continue;
-    let meta: Record<string, unknown> = {};
-    try {
-      const parsed: unknown = JSON.parse(row.agentMeta ?? '{}');
-      if (isRecord(parsed)) meta = parsed;
-    } catch { /* Legacy rows may have no usable metadata. */ }
-    out.push({ ...messageFingerprint(row.role, text, row.createdAt), id: row.id, text, meta });
-  }
-  return out;
-}
-
-function findLocalDuplicate(
-  existing: LocalMessageFingerprint[],
-  row: { role: 'user' | 'assistant'; text: string; createdAt: number; phase?: string; agentMessageId?: string; sdkSessionId: string },
-  consumed: Set<string>,
-  userTimes: number[],
-): LocalMessageFingerprint | undefined {
-  const next = messageFingerprint(row.role, row.text, row.createdAt);
-  const candidates = existing.filter(
-    (prev) =>
-      !consumed.has(prev.id) &&
-      prev.role === next.role &&
-      (!row.phase || !prev.meta.assistantPhase || row.phase === prev.meta.assistantPhase) &&
-      (!prev.meta.sdkSessionId || prev.meta.sdkSessionId === row.sdkSessionId) &&
-      (!row.agentMessageId || !prev.meta.agentMessageId || row.agentMessageId === prev.meta.agentMessageId) &&
-      ((row.agentMessageId && row.agentMessageId === prev.meta.agentMessageId)
-        || Math.abs(prev.createdAt - next.createdAt) <= LOCAL_DUPLICATE_WINDOW_MS
-          && (row.role !== 'assistant' || !userTimes.some((time) => time > Math.min(prev.createdAt, next.createdAt)
-            && time <= Math.max(prev.createdAt, next.createdAt)))) &&
-      (!prev.memoryTail || !next.memoryTail || prev.memoryTail === next.memoryTail) &&
-      // 普通消息:原文精确比较。canon 有损比较只在「至少一侧含原始标记字面量」时
-      // 启用——即升级前的旧标记行 vs 已归一化的导入行;两条都不含标记的正常回复
-      // (如 `Use \`foo\`` vs `Use foo`)绝不走有损比较(review 反馈)。
-      (prev.plain === next.plain ||
-        (prev.canonical !== undefined &&
-          next.canonical !== undefined &&
-          (prev.hasMarker || next.hasMarker) &&
-          prev.canonical === next.canonical)),
-  );
-  // Ambiguous repeated prose is not proof of identity. Exact native item IDs
-  // take precedence; legacy fallback must have one unclaimed local candidate.
-  const exact = candidates.filter((candidate) => row.agentMessageId && candidate.meta.agentMessageId === row.agentMessageId);
-  return exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined;
-}
-
-/** Only a complete terminal memory citation is metadata, never a prose substring or code example. */
-function memoryCitationTail(text: string): string {
-  const open = text.lastIndexOf('<oai-mem-citation>');
-  if (open <= 0) return '';
-  const body = text.slice(0, open);
-  if (!body.trim()) return '';
-  let fence: { char: string; length: number } | undefined;
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (!match) continue;
-    const marker = match[1]!;
-    if (fence) {
-      if (marker[0] === fence.char && marker.length >= fence.length && !match[2]!.trim()) fence = undefined;
-    } else if (marker[0] !== '`' || !match[2]!.includes('`')) {
-      fence = { char: marker[0]!, length: marker.length };
-    }
-  }
-  if (fence) return '';
-  const tail = text.slice(open);
-  if (!/^<oai-mem-citation>\s*<citation_entries>[\s\S]+?<\/citation_entries>\s*(?:<rollout_ids>[\s\S]*?<\/rollout_ids>\s*)?<\/oai-mem-citation>\s*$/.test(tail)) return '';
-  return text.slice(body.trimEnd().length);
-}
-
-function messageFingerprint(
-  role: 'user' | 'assistant',
-  text: string,
-  createdAt: number,
-): MessageFingerprint {
-  // 升级前落库的旧行仍带原始 `:codex-file-citation{...}` 标记,导入侧新文本已
-  // 归一化(标记换成 code span,截断残尾则被整段剥掉——此时是**不含任何标记/
-  // 反引号的纯文本**)。因此 assistant 一律算出规范形候选指纹,是否参与比较由
-  // findLocalDuplicate 的标记门决定(review 反馈:残尾行的规范形是纯文本,
-  // 导入侧若不给纯文本算规范形就永远配不上)。只影响比较,不改落库内容。
-  const memoryTail = role === 'assistant' ? memoryCitationTail(text) : '';
-  const body = memoryTail ? text.slice(0, -memoryTail.length) : text;
-  const plain = normalizeFingerprintText(body);
-  const hasMarker = role === 'assistant' && text.includes(CODEX_CITATION_OPEN);
-  const canonical =
-    role === 'assistant' ? normalizeFingerprintText(canonicalizeCodexCitations(body)) : undefined;
-  return { role, plain, ...(canonical !== undefined ? { canonical } : {}), hasMarker, createdAt, memoryTail };
-}
-
-// 指纹专用规范形——与展示形(maker-core finalizeCodexCitationText)**刻意不同**:
-// 标记替换为解码路径本体(无 code span 围栏/空格垫),循环到不动点,再去掉全部
-// 反引号并折叠空白。这样「升级前的原始标记行」与「已归一化的展示形文本」两侧
-// 都收敛到同一规范形——路径本身解码出完整标记字面量的极端文件名也一致(review
-// 反馈:展示形二次处理不幂等,不能拿来当指纹)。只用于去重比较,不落库。
-// eval-fallback worker(WorkerThreadTransport WORKER_CODE)无法 import,两份 worker
-// 各内联一份,口径变更需同步(tx.test 用真实标记 fixture 钉行为)。
-const CODEX_CITATION_RE = /:codex-file-citation\{((?:[^"{}]|"(?:[^"\\]|\\.)*")*)\}/g;
-const CODEX_CITATION_OPEN = ':codex-file-citation{';
-
-function codexCitationClose(text: string, attrsStart: number): number {
-  let inQuote = false;
-  for (let i = attrsStart; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inQuote && ch === '\\') i += 1;
-    else if (ch === '"') inQuote = !inQuote;
-    else if (!inQuote && ch === '}') return i;
-    else if (!inQuote && ch === '{') return -2; // 裸 { = 畸形标记,原样透出
-  }
-  return -1; // 扫描到末尾未闭合 = 截断残尾
-}
-
-// path 属性解码(与 translator extractCitationPath 同口径:完整属性名边界、
-// \"/\\ 转义、开头恰好两个反斜杠 = 原生 UNC 整体保留)。
-function decodeCitationPathForFingerprint(attrs: string): string {
-  const raw = /(?:^|\s)path="((?:[^"\\]|\\.)*)"/.exec(attrs)?.[1];
-  if (raw === undefined) return '';
-  const nativeUnc = raw.startsWith('\\\\') && raw[2] !== '\\';
-  const head = nativeUnc ? '\\\\' : '';
-  return head + (nativeUnc ? raw.slice(2) : raw).replace(/\\([\\"])/g, '$1');
-}
-
-function canonicalizeCodexCitations(text: string): string {
-  // 无早退:纯文本也要走末尾的空白折叠,否则「残尾行规范形(折叠过)」与「导入侧
-  // 纯文本规范形(未折叠)」会因内部空白差异配不上。
-  // 截断残尾剥除(与展示口径一致:只剥「扫描到文本末尾仍未闭合」的标记)。
-  let out = text;
-  let from = 0;
-  for (;;) {
-    const open = out.indexOf(CODEX_CITATION_OPEN, from);
-    if (open === -1) break;
-    const close = codexCitationClose(out, open + CODEX_CITATION_OPEN.length);
-    if (close === -1) {
-      out = out.slice(0, open);
-      break;
-    }
-    from = close === -2 ? open + CODEX_CITATION_OPEN.length : close + 1;
-  }
-  // 标记 → 解码路径,循环到不动点(路径解码可能暴露新的完整标记字面量;有界防御)。
-  for (let i = 0; i < 5; i += 1) {
-    const next = out.replace(CODEX_CITATION_RE, (_all, attrs: string) =>
-      decodeCitationPathForFingerprint(attrs),
-    );
-    if (next === out) break;
-    out = next;
-  }
-  // 展示形的围栏/空格垫与换行渲染差异不参与指纹比较。
-  return out.replace(/`+/g, '').replace(/\s+/g, ' ');
-}
-
-function normalizeStoredMessageText(raw: string): string {
-  let value: unknown = raw;
-  try {
-    value = JSON.parse(raw) as unknown;
-  } catch {
-    value = raw;
-  }
-  return extractContentText(value);
-}
-
-function normalizeFingerprintText(text: string): string {
-  return text.replace(/\r\n/g, '\n').trim();
-}
-
-function extractContentText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = typeof block.type === 'string' ? block.type : '';
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join('\n\n');
-}
-
 function remapForkedAgentMeta(
   raw: string | null,
   map: Map<string, string>,
@@ -4253,20 +3839,6 @@ function assertIdentifier(value: string): void {
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}...`;
-}
-
-function stringifyContent(value: unknown): string {
-  const json = JSON.stringify(value);
-  return json === undefined ? 'null' : json;
-}
-
-/**
- * 外部 CLI 历史导入与 live 落库同口径:tool_result 正文截到 8KB。
- * 不截会让 rollout / transcript 重导入"复活"全文。媒体挂账在 main 导入层
- * 对原文执行(本函数跑在 DB worker,碰不到 cindy-media ledger)。
- */
-function stringifyImportedContent(role: string, content: unknown): string {
-  return stringifyContent(capImportedToolResultContent(role, content));
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {

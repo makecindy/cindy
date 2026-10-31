@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "プロジェクトのファイルが {{limit, number}} 個を超えているため、コピーできません。ファイル数の少ないプロジェクトをコピーしてください。"
   },
   "sharedTask": {
+    "officialRelayNote": "自分のリレーを使用中です。共有タスクの内容は引き続き Cindy 公式リレーを経由します。",
     "selfJoin": "これは自分が開始した共有タスクのため、参加する必要はありません。「自分が共有中」から開いてください。",
     "manageSharing": "共有管理",
     "manageMembers": "メンバーを管理…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "すべてのゲストがアクセスできなくなります。タスクの履歴は保持されます。"
   },
   "providerShare": {
+    "officialRelayNote": "自分のリレーを使用中です。プロバイダー共有の内容は引き続き Cindy 公式リレーを経由します。",
     "owned": {
       "title": "自分が共有したプロバイダー"
     },
@@ -1088,7 +1090,8 @@
     "allow": "リモートデスクトップを許可",
     "allowHint": "同じアカウントのデバイスから、このコンピューターの全アプリの表示と操作を許可します。上のデバイス操作も有効にしてください。",
     "permissionHint": "コンピューターのシステム設定で画面収録とアクセシビリティを許可し、再接続してください。",
-    "controlUnavailable": "リモートコンピューターで操作を受け付けられません。操作権限と接続を確認して再接続してください。",
+    "inputUnsupported": "このパソコンの現在のデスクトップ環境では、Cindy によるキーボードとマウスの遠隔操作に対応していません。",
+    "controlUnavailable": "キーボードとマウスの遠隔操作を現在利用できません。再接続してください。",
     "beingControlled": "デスクトップが操作されています",
     "beingViewed": "デスクトップが表示されています",
     "controlledByDevice": "{{name}} がデスクトップを操作しています",
@@ -2388,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "字体と文体",
+        "hint": "AI は選んだ文体で回答します。「通常の回答」では画面は文言のまま、回答はあなたの言語に合わせます。",
+        "scriptAriaLabel": "文言の字体",
+        "styleAriaLabel": "AI の回答文体",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "文言文（既定）",
+          "tang-poetry": "唐詩",
+          "song-ci": "宋詞",
+          "yuan-qu": "元曲",
+          "chu-ci": "楚辞",
+          "parallel-prose": "駢文",
+          "pre-qin": "先秦諸子",
+          "historian": "史伝",
+          "ming-qing-essay": "明清小品",
+          "plain": "通常の回答"
+        }
       }
     },
     "userProfile": {
@@ -3130,49 +3156,89 @@
       }
     },
     "sessionImport": {
-      "title": "ローカルセッションのインポート",
-      "description": "ローカルの Claude Code / Codex 履歴を読み取り専用でスキャンします。リストでチェックしたセッションのみインポートされ、スキップされた内部セッションは表示されず、インポートもされません。",
-      "scan": "スキャン",
-      "scanning": "スキャン中",
-      "emptyTitle": "まずローカル履歴をスキャン",
-      "emptyDescription": "スキャンはデータベースに書き込まず、サイドバーも変更しません。",
-      "noCandidates": "現在のフィルタではインポート可能なセッションがありません。",
-      "collapse": "グループを折りたたむ",
-      "expand": "グループを展開",
-      "selectGroup": "グループ全体を選択",
-      "sessions": "件のセッション",
-      "selected": "{{count}} 件選択中",
-      "importSelected": "選択をインポート",
-      "importing": "インポート中",
+      "title": "セッションのインポート",
+      "description": "ほかの AI コーディングツールのセッションを Cindy に取り込んで、そのまま続けられます。元の記録は読み取るだけで、変更しません。",
+      "rescan": "再スキャン",
+      "allSources": "すべてのソース",
+      "search": "セッションまたはフォルダを検索",
+      "projectFilter": "{{name}} のみ",
+      "clearProjectFilter": "すべてのプロジェクトを表示",
+      "hiddenCount_other": "{{count}} 件を非表示",
+      "hidden": {
+        "head": "一覧にないもの",
+        "hint": "チェックしたものは一覧に表示されます",
+        "cindy": "Cindy 自身が実行したセッション",
+        "temp": "一時フォルダ内のセッション",
+        "internal": "Agent の内部セッション（自動レビュー、サブ Agent）",
+        "imported": "インポート済み",
+        "sourceError": "{{name}} の記録を読み取れません"
+      },
+      "missingDir": "元のフォルダなし",
+      "groupTasks_other": "{{count}} 件",
+      "dialogue": "会話",
       "archived": "アーカイブ済み",
+      "unsupported": "未対応の形式",
       "untitled": "無題のセッション",
-      "noWorkingDir": "作業ディレクトリなし",
-      "summary": {
-        "total": "表示中",
-        "totalHint": "インポート対象として選択可能",
-        "projects": "既存プロジェクトのセッション",
-        "projectsHint": "現在のサイドバーのプロジェクトに属するセッション",
-        "dialogue": "新規フォルダーのセッション",
-        "dialogueHint": "プロジェクトグループを作成するセッション",
-        "filtered": "スキップ済み",
-        "filteredHint": "内部セッション、または既にアプリ内に存在"
+      "selectAll": "すべて選択",
+      "selectGroup": "グループ全体を選択",
+      "expand": "展開",
+      "collapse": "折りたたむ",
+      "selectedSummary_other": "{{count}} 件を選択中 · {{size}}",
+      "pickHint": "Cindy に取り込むセッションを選んでください",
+      "importCount_other": "{{count}} 件をインポート",
+      "import": "インポート",
+      "scanning": "このコンピューターのセッションを探しています…",
+      "scanFailed": "スキャンが完了しませんでした。もう一度お試しください。",
+      "emptyTitle": "このコンピューターにインポートできるセッションはありません",
+      "emptyDescription": "Cindy は以下のツールのセッションをインポートできます。ツールを使ったあとで、もう一度スキャンしてください。",
+      "noMatch": "条件に合うセッションはありません",
+      "allHidden": "すべて非表示になっています。右上の「非表示」から表示できます。",
+      "confirm": {
+        "title_other": "{{count}} 件のセッションをインポートしますか？",
+        "body": "およそ {{minutes}} 分かかり、最大 {{size}} のディスク容量を使います。バックグラウンドで進み、いつでも停止できます。インポート済みのものは残ります。",
+        "cancel": "キャンセル"
       },
-      "filters": {
-        "source": "ソース",
-        "placement": "配置",
-        "all": "すべて",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "既存プロジェクト",
-        "dialogue": "新規フォルダー"
+      "progress": {
+        "title_other": "{{count}} 件のセッションをインポート中",
+        "background": "このページを離れても、インポートはバックグラウンドで続きます。",
+        "stop": "停止",
+        "queued": "待機中",
+        "copy": "元の記録をコピー中",
+        "messages_other": "{{count}} 件のメッセージを保存中",
+        "verify": "続けられるか確認中"
       },
-      "toast": {
-        "scanFailed": "スキャンに失敗しました",
-        "importFailed": "インポートに失敗しました",
-        "imported": "インポート完了:新規 {{inserted}} 件、更新 {{updated}} 件"
+      "result": {
+        "title_other": "{{count}} 件のセッションをインポートしました",
+        "stoppedTitle": "インポートを停止しました",
+        "ready_other": "{{count}} 件はすぐ続けられます",
+        "action_other": "{{count}} 件は対応が必要です",
+        "failed_other": "{{count}} 件は失敗しました",
+        "readyGroup": "すぐ続けられる（{{count}}）",
+        "readyNative": "続けられます。{{harness}} でそのまま続行",
+        "readyHandoff": "続けられます。{{harness}} が引き継ぎ、いつでも切り替え可能",
+        "missingDir": "元のフォルダがありません。フォルダを選ぶと続けられます。",
+        "chooseFolder": "フォルダを選択",
+        "relocateFailed": "このフォルダに切り替えられませんでした。もう一度お試しください。",
+        "cancelled": "インポート前に停止しました",
+        "retry": "再試行",
+        "open": "開く",
+        "done": "完了"
       },
-      "selectAll": "現在の絞り込み結果をすべて選択（{{count}}件）",
-      "selectedOutsideFilter": "（うち{{count}}件は現在の絞り込み対象外）"
+      "failure": {
+        "read-failed": "インポートできませんでした：元の記録を読み取れません",
+        "unsupported-version": "インポートできませんでした：このバージョンの記録形式にはまだ対応していません",
+        "empty": "インポートできませんでした：元の記録にメッセージがありません",
+        "not-found": "インポートできませんでした：元の記録が見つかりません",
+        "disk-full": "インポートできませんでした：ディスクの空き容量が足りません",
+        "native-unloadable": "インポートできませんでした：元の記録を読み込めません"
+      },
+      "marker": {
+        "from": "{{source}} からインポート · {{date}}",
+        "folder": "元のフォルダ {{path}}",
+        "end": "ここまでは {{source}} からインポートした記録です",
+        "endHandoff": "ここまでは {{source}} からインポートした記録です。ここから {{harness}} が続けます。"
+      },
+      "projectMenu": "このプロジェクトのほかのツールのセッションをインポート…"
     },
     "connections": {
       "codex": {
@@ -5681,7 +5747,7 @@
         "current": "使用中",
         "ownerName": "このコンピュータ",
         "unavailable": "自分のリレーを使うには、Cindy にサインインし、システムのキーチェーンが使える必要があります。",
-        "limits": "自分のリレーを使っている間は、スマホのプッシュ通知、プロバイダー共有、共有タスクは使えません。",
+        "limits": "自分のリレーを使っている間は、スマホのプッシュ通知は使えません。プロバイダー共有と共有タスクは引き続き Cindy 公式リレーを経由します。",
         "actions": {
           "join": "別のリレーに参加",
           "useOfficial": "公式リレーに戻す",
@@ -5897,7 +5963,7 @@
           "switchFromHost": "このコンピュータのリレーは停止し、参加しているデバイスは切断されます。",
           "switchFromMember": "このコンピュータは「{{name}}」から退出します。再参加するには、相手に新しい参加リンクを作ってもらう必要があります。",
           "switchConfirm": "切り替える",
-          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知、プロバイダーの共有、共有タスクは使えません。"
+          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知は使えません。プロバイダーの共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
         },
         "dialog": {
           "steps": {
@@ -10449,6 +10515,7 @@
       "header": {
         "stepRunning": "{{name}} がステップ {{step}} を作業中",
         "speaking": "{{name}} が返信中…",
+        "queued": "{{name}} は待機中",
         "planning": "{{name}} が役割分担を考え中…"
       },
       "memberCount_one": "メンバー {{count}} 人",
@@ -14350,11 +14417,6 @@
         "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
         "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
-        "syncCodex": "このプロジェクトの Codex セッションを同期",
-        "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
-        "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",
-        "syncCodexNone": "このプロジェクトの Codex セッションが見つかりません",
-        "syncCodexFailed": "Codex 同期に失敗しました:{{error}}",
         "showFiles": "ファイルを表示",
         "archivedAll": "すべてアーカイブ",
         "unarchiveAll": "すべてアーカイブ解除",
@@ -17466,9 +17528,8 @@
       "name": "担当セッションのフォロー（標準）",
       "hint": "担当セッションの停滞、返答待ち、エラー、利用上限、完了を受けてフォローします。"
     },
-    "builtinTodoCheck": {
-      "name": "毎日の Todo 確認（組み込み）",
-      "hint": "平日 9:00 に接続済みのソースから新しい Todo を探し、なければ通知しません。近況からオン・オフでき、一時停止と再開のみできます。"
+    "todoCheck": {
+      "name": "毎日の Todo 確認"
     },
     "builtinNightlyLearning": {
       "name": "夜間の学習（組み込み）",

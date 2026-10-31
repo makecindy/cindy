@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "Das Projekt enthält mehr als {{limit, number}} Dateien und kann nicht kopiert werden. Kopiere stattdessen ein Projekt mit weniger Dateien."
   },
   "sharedTask": {
+    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte geteilter Aufgaben laufen weiterhin über das Cindy-Relay.",
     "selfJoin": "Du hast diese geteilte Aufgabe gestartet und musst daher nicht beitreten. Öffne sie unter „Von mir geteilt“.",
     "manageSharing": "Freigabe verwalten",
     "manageMembers": "Mitglieder verwalten…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "Gäste verlieren den Zugriff. Der Aufgabenverlauf bleibt erhalten."
   },
   "providerShare": {
+    "officialRelayNote": "Du nutzt dein eigenes Relay. Inhalte von Anbieterfreigaben laufen weiterhin über das Cindy-Relay.",
     "owned": {
       "title": "Von mir geteilte Anbieter"
     },
@@ -2418,7 +2420,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Schrift und Stil",
+        "hint": "Die KI antwortet im gewählten Stil. Mit „Übliche Antworten“ bleibt die Oberfläche in klassischem Chinesisch und die Antworten folgen deiner Sprache.",
+        "scriptAriaLabel": "Schrift des klassischen Chinesisch",
+        "styleAriaLabel": "Antwortstil der KI",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Klassische Prosa (Standard)",
+          "tang-poetry": "Tang-Lyrik",
+          "song-ci": "Song-Ci",
+          "yuan-qu": "Yuan-Qu",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Parallelprosa",
+          "pre-qin": "Vor-Qin-Meister",
+          "historian": "Stil des Großen Historikers",
+          "ming-qing-essay": "Ming-Qing-Essays",
+          "plain": "Übliche Antworten"
+        }
       }
     },
     "userProfile": {
@@ -3160,49 +3185,100 @@
       }
     },
     "sessionImport": {
-      "title": "Lokale Sitzungen importieren",
-      "description": "Nur-Lese-Scan des lokalen Claude Code- und Codex-Verlaufs. Nur markierte Sitzungen in der Liste werden importiert; Übersprungene interne Sitzungen werden ausgeblendet und können nicht importiert werden.",
-      "scan": "Scannen",
-      "scanning": "Wird durchsucht",
-      "emptyTitle": "Zuerst lokalen Verlauf durchsuchen",
-      "emptyDescription": "Beim Durchsuchen wird weder in die Datenbank geschrieben noch die Seitenleiste geändert.",
-      "noCandidates": "Keine importierbaren Sitzungen für den aktuellen Filter.",
-      "collapse": "Gruppe einklappen",
-      "expand": "Gruppe ausklappen",
-      "selectGroup": "Gruppe auswählen",
-      "sessions": "Sitzungen",
-      "selected": "{{count}} ausgewählt",
-      "importSelected": "Auswahl importieren",
-      "importing": "Wird importiert",
+      "title": "Sitzungen importieren",
+      "description": "Sitzungen aus anderen KI-Programmierwerkzeugen in Cindy übernehmen und weiterarbeiten. Cindy liest die Originale nur und verändert sie nicht.",
+      "rescan": "Erneut suchen",
+      "allSources": "Alle Quellen",
+      "search": "Sitzungen oder Ordner suchen",
+      "projectFilter": "Nur {{name}}",
+      "clearProjectFilter": "Alle Projekte anzeigen",
+      "hiddenCount_one": "{{count}} ausgeblendet",
+      "hiddenCount_other": "{{count}} ausgeblendet",
+      "hidden": {
+        "head": "Ausgeblendet",
+        "hint": "Ausgewählte Einträge erscheinen in der Liste",
+        "cindy": "Von Cindy ausgeführte Sitzungen",
+        "temp": "Sitzungen in temporären Ordnern",
+        "internal": "Interne Sitzungen (Reviews, Subagent)",
+        "imported": "Bereits importiert",
+        "sourceError": "Verlauf von {{name}} konnte nicht gelesen werden"
+      },
+      "missingDir": "Ordner fehlt",
+      "groupTasks_one": "{{count}} Sitzung",
+      "groupTasks_other": "{{count}} Sitzungen",
+      "dialogue": "Chat",
       "archived": "Archiviert",
+      "unsupported": "Format noch nicht unterstützt",
       "untitled": "Unbenannte Sitzung",
-      "noWorkingDir": "Kein Arbeitsverzeichnis",
-      "summary": {
-        "total": "Angezeigt",
-        "totalHint": "Für den Import auswählbar",
-        "projects": "Projektsitzungen",
-        "projectsHint": "Sitzungen, die unter Projektgruppen angezeigt werden",
-        "dialogue": "Chat",
-        "dialogueHint": "Codex-Sitzungen ohne Projekt",
-        "filtered": "Übersprungen",
-        "filteredHint": "Intern oder bereits in der App"
+      "selectAll": "Alle auswählen",
+      "selectGroup": "Ganze Gruppe auswählen",
+      "expand": "Aufklappen",
+      "collapse": "Einklappen",
+      "selectedSummary_one": "{{count}} ausgewählt · {{size}}",
+      "selectedSummary_other": "{{count}} ausgewählt · {{size}}",
+      "pickHint": "Sitzungen zum Importieren in Cindy auswählen",
+      "importCount_one": "{{count}} Sitzung importieren",
+      "importCount_other": "{{count}} Sitzungen importieren",
+      "import": "Importieren",
+      "scanning": "Sitzungen auf diesem Computer werden gesucht…",
+      "scanFailed": "Die Suche wurde nicht abgeschlossen. Erneut versuchen.",
+      "emptyTitle": "Keine Sitzungen zum Importieren auf diesem Computer",
+      "emptyDescription": "Cindy kann Sitzungen aus diesen Werkzeugen importieren. Nach der Nutzung eines Werkzeugs hier erneut suchen.",
+      "noMatch": "Keine passenden Sitzungen",
+      "allHidden": "Alle Sitzungen sind ausgeblendet. Oben rechts unter „Ausgeblendet“ einblenden.",
+      "confirm": {
+        "title_one": "{{count}} Sitzung importieren?",
+        "title_other": "{{count}} Sitzungen importieren?",
+        "body": "Dauert etwa {{minutes}} Minuten und benötigt bis zu {{size}} Speicherplatz. Der Import läuft im Hintergrund. Er kann jederzeit gestoppt werden; bereits importierte Sitzungen bleiben erhalten.",
+        "cancel": "Abbrechen"
       },
-      "filters": {
-        "source": "Quelle",
-        "placement": "Zuordnung",
-        "all": "Alle",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "Vorhandene Projekte",
-        "dialogue": "Chat"
+      "progress": {
+        "title_one": "{{count}} Sitzung wird importiert",
+        "title_other": "{{count}} Sitzungen werden importiert",
+        "background": "Diese Seite kann geschlossen werden. Der Import läuft im Hintergrund weiter.",
+        "stop": "Stoppen",
+        "queued": "Wartet",
+        "copy": "Originalverlauf wird kopiert",
+        "messages_one": "{{count}} Nachricht wird gespeichert",
+        "messages_other": "{{count}} Nachrichten werden gespeichert",
+        "verify": "Fortsetzung wird geprüft"
       },
-      "toast": {
-        "scanFailed": "Scan fehlgeschlagen",
-        "importFailed": "Import fehlgeschlagen",
-        "imported": "Import abgeschlossen: {{inserted}} eingefügt, {{updated}} aktualisiert"
+      "result": {
+        "title_one": "{{count}} Sitzung importiert",
+        "title_other": "{{count}} Sitzungen importiert",
+        "stoppedTitle": "Import gestoppt",
+        "ready_one": "{{count}} bereit zum Fortsetzen",
+        "ready_other": "{{count}} bereit zum Fortsetzen",
+        "action_one": "{{count}} benötigt Aufmerksamkeit",
+        "action_other": "{{count}} benötigen Aufmerksamkeit",
+        "failed_one": "{{count}} fehlgeschlagen",
+        "failed_other": "{{count}} fehlgeschlagen",
+        "readyGroup": "Bereit zum Fortsetzen ({{count}})",
+        "readyNative": "Bereit zum Fortsetzen mit {{harness}}",
+        "readyHandoff": "Bereit – {{harness}} übernimmt; Wechsel jederzeit möglich",
+        "missingDir": "Der ursprüngliche Ordner existiert nicht mehr. Zum Fortsetzen einen Ordner auswählen.",
+        "chooseFolder": "Ordner auswählen",
+        "relocateFailed": "Ordnerwechsel fehlgeschlagen. Erneut versuchen.",
+        "cancelled": "Vor dem Import gestoppt",
+        "retry": "Erneut versuchen",
+        "open": "Öffnen",
+        "done": "Fertig"
       },
-      "selectAll": "Alle im aktuellen Filter auswählen ({{count}})",
-      "selectedOutsideFilter": "({{count}} davon außerhalb des aktuellen Filters)"
+      "failure": {
+        "read-failed": "Import fehlgeschlagen: Originalverlauf nicht lesbar",
+        "unsupported-version": "Import fehlgeschlagen: Verlaufsformat dieser Version noch nicht unterstützt",
+        "empty": "Import fehlgeschlagen: Originalverlauf enthält keine Nachrichten",
+        "not-found": "Import fehlgeschlagen: Originalverlauf nicht mehr vorhanden",
+        "disk-full": "Import fehlgeschlagen: nicht genug Speicherplatz",
+        "native-unloadable": "Import fehlgeschlagen: Originalverlauf kann nicht geladen werden"
+      },
+      "marker": {
+        "from": "Aus {{source}} importiert · {{date}}",
+        "folder": "Ursprünglicher Ordner {{path}}",
+        "end": "Alles darüber wurde aus {{source}} importiert",
+        "endHandoff": "Alles darüber wurde aus {{source}} importiert. {{harness}} setzt hier fort."
+      },
+      "projectMenu": "Sitzungen dieses Projekts aus anderen Werkzeugen importieren…"
     },
     "connections": {
       "codex": {
@@ -5713,7 +5789,7 @@
         "current": "In Verwendung",
         "ownerName": "Dieser Computer",
         "unavailable": "Um dein eigenes Relay zu nutzen, melde dich bei Cindy an und stelle sicher, dass der Systemschlüsselbund verfügbar ist.",
-        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone, Anbieterfreigaben und geteilte Aufgaben nicht verfügbar.",
+        "limits": "Solange du dein eigenes Relay nutzt, sind Push-Mitteilungen auf dem Smartphone nicht verfügbar. Anbieterfreigaben und geteilte Aufgaben laufen weiterhin über das Cindy-Relay.",
         "actions": {
           "join": "Anderem Relay beitreten",
           "useOfficial": "Zurück zum Cindy-Relay wechseln",
@@ -5929,7 +6005,7 @@
           "switchFromHost": "Das Relay auf diesem Computer wird gestoppt und die Verbindung zu den beigetretenen Geräten getrennt.",
           "switchFromMember": "Dieser Computer verlässt {{name}}. Um später erneut beizutreten, muss der Eigentümer einen neuen Beitrittslink erstellen.",
           "switchConfirm": "Wechseln",
-          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone, das Teilen von Anbietern und gemeinsame Aufgaben sind nicht verfügbar, solange du dein eigenes Relay nutzt."
+          "switchFromOfficial": "Die Fernsteuerung zwischen deinen Geräten läuft über {{name}}. Push-Benachrichtigungen auf dem Smartphone sind nicht verfügbar, solange du dein eigenes Relay nutzt. Das Teilen von Anbietern und gemeinsame Aufgaben laufen weiterhin über das Cindy-Relay."
         },
         "dialog": {
           "steps": {
@@ -10484,6 +10560,7 @@
       "header": {
         "stepRunning": "{{name}} ist bei Schritt {{step}}",
         "speaking": "{{name}} antwortet…",
+        "queued": "{{name}} wartet",
         "planning": "{{name}} teilt die Arbeit auf…"
       },
       "memberCount_one": "{{count}} Mitglied",
@@ -14445,11 +14522,6 @@
         "openInExplorer": "Im Dateimanager öffnen",
         "newInDirectory": "Neue Sitzung in diesem Verzeichnis",
         "copyDeepLink": "Projektlink kopieren",
-        "syncCodex": "Codex-Sitzungen für dieses Projekt synchronisieren",
-        "syncCodexDone": "Codex-Synchronisierung abgeschlossen: {{inserted}} verknüpft, {{updated}} aktualisiert",
-        "syncCodexAlreadyLinked": "Codex-Sitzungen für dieses Projekt sind bereits verknüpft",
-        "syncCodexNone": "Keine Codex-Sitzungen für dieses Projekt gefunden",
-        "syncCodexFailed": "Codex-Synchronisierung fehlgeschlagen: {{error}}",
         "search": "Sitzungen in diesem Projekt durchsuchen"
       },
       "deepLink": {
@@ -17557,9 +17629,8 @@
       "name": "Zugewiesene Sitzungen verfolgen (integriert)",
       "hint": "Verfolge zugewiesene Sitzungen, wenn sie stocken, dich brauchen, fehlschlagen, ein Nutzungslimit erreichen oder fertig sind."
     },
-    "builtinTodoCheck": {
-      "name": "Tägliche To-do-Prüfung (integriert)",
-      "hint": "Sucht werktags um 9:00 Uhr in verbundenen Quellen nach neuen To-dos und bleibt still, wenn es nichts Neues gibt. Wird in der Übersicht ein- oder ausgeschaltet; kann nur pausiert oder fortgesetzt werden."
+    "todoCheck": {
+      "name": "Tägliche To-do-Prüfung"
     },
     "builtinNightlyLearning": {
       "name": "Nächtliches Lernen (integriert)",

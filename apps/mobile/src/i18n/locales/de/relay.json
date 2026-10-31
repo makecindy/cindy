@@ -5,7 +5,7 @@
     "official": "Offizielles {{appName}}-Relay",
     "switchToOfficial": "Zum offiziellen Relay zurückwechseln",
     "officialHint": "Deine Geräte verbinden sich über das offizielle {{appName}}-Relay. Um dein eigenes Relay zu nutzen, zeige dessen Beitritts-QR-Code auf dem Computer an, auf dem es läuft, und scanne den Code mit der Kamera deines Handys.",
-    "selfHostedHint": "Deine Geräte verbinden sich über dein eigenes Relay unter {{address}}. Anmeldung, Modelle und andere Dienste nutzen weiterhin {{appName}}.",
+    "selfHostedHint": "Deine Geräte verbinden sich über dein eigenes Relay unter {{address}}. Anmeldung, Modelle, geteilte Aufgaben und andere Dienste nutzen weiterhin {{appName}}.",
     "removedHint": "Dieses Handy wurde aus dem Relay entfernt oder das Relay wurde ausgeschaltet. Wechsle zum offiziellen Relay zurück oder tritt über deinen Computer erneut bei.",
     "credentialMissingHint": "Die Relay-Zugangsdaten sind nicht mehr auf diesem Handy vorhanden. Tritt über deinen Computer erneut bei oder wechsle zum offiziellen Relay zurück.",
     "confirmTitle": "Zum offiziellen Relay zurückwechseln?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Relay beitreten",
     "checking": "Verbindung zum Relay wird hergestellt…",
-    "body": "Nach dem Beitritt verbindet sich dieses Handy über dieses Relay mit deinen Computern. Anmeldung, Modelle und andere Dienste nutzen weiterhin {{appName}}. Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet.",
+    "body": "Nach dem Beitritt verbindet sich dieses Handy über dieses Relay mit deinen Computern. Anmeldung, Modelle, geteilte Aufgaben und andere Dienste nutzen weiterhin {{appName}}. Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet.",
     "switchNote": "Durch den Beitritt wechselt dieses Handy von „{{current}}“ zu diesem Relay.",
     "action": "Beitreten",
     "pairingCodeLabel": "Kopplungscode",

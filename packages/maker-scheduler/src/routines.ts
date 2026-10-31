@@ -36,8 +36,14 @@ export type RoutineTrigger =
       }>;
     };
 
-/** Host-owned rules: per-teammate follow-up, the owner-enabled daily todo check, and nightly learning. */
-export type RoutineBuiltin = "follow-up" | "todo-check" | "nightly-learning";
+/** Host-owned rules: per-teammate follow-up and nightly learning. */
+export type RoutineBuiltin = "follow-up" | "nightly-learning";
+
+/**
+ * Earlier releases stored the daily todo check as a host-owned rule. It is now an ordinary,
+ * editable routine; loading drops the flag and keeps the rule, its choices and history.
+ */
+export const LEGACY_TODO_CHECK_BUILTIN = "todo-check";
 
 /** Stable error prefix for attempts to delete or rewrite a host-owned routine. */
 export const BUILTIN_ROUTINE_ERROR = "BUILTIN_ROUTINE";
@@ -90,7 +96,7 @@ export interface Routine {
   /** Omission preserves saved choices; ordinary routines default to their initiating companion. */
   delivery?: RoutineDelivery;
   /**
-   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」，以及主人在近况里打开的「每天查待办」）。由宿主模板生成，不接受用户/模型
+   * 宿主内置规则（每个伙伴一条的「跟进」与「夜间学习」）。由宿主模板生成，不接受用户/模型
    * 改写指令与触发条件、不能删除；可暂停（enabled），普通 Agent 规则可单独选模型。可选字段：旧数据与旧客户端缺省即普通规则，
    * state 版本不变。
    */

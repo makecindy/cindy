@@ -34,6 +34,7 @@ import {
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
 import type { NightlyLearningView } from '../../../shared/botNightlyLearning';
+import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
 import { BotNightlyLearning, useNightlyLearningView } from './BotNightlyLearning';
 
 const menuClass = 'p-2';
@@ -338,13 +339,7 @@ export function BotRoutines({
                 ? <NightlyLearningStatus routine={routine} view={nightly.view} onOpen={() => setNightlyOpen(true)} />
                 : null}
               onEnabledChange={(enabled) =>
-                void act(() =>
-                  // 每天查待办与近况开关同一个入口：恢复时按当前模板重建，并通知近况。
-                  // 远程伙伴还没有这个入口，按普通例行任务在伙伴所在的电脑上切换。
-                  routine.builtin === 'todo-check' && settingsTarget.kind === 'local'
-                    ? window.electronAPI.localDb.bots.todos.dailyCheck(botId, enabled)
-                    : routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
-                )
+                void act(() => routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id))
               }
             />
           ) : (
@@ -369,7 +364,11 @@ export function BotRoutines({
                   checked={routine.enabled}
                   disabled={busy}
                   onCheckedChange={(enabled) => void act(() =>
-                    routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
+                    // 每天查待办与近况开关走同一个入口，切换后近况跟着刷新。
+                    // 远程伙伴没有这个入口，按普通例行任务在伙伴所在的电脑上切换。
+                    routine.id.startsWith(TODO_CHECK_ROUTINE_PREFIX) && settingsTarget.kind === 'local'
+                      ? window.electronAPI.localDb.bots.todos.dailyCheck(botId, enabled)
+                      : routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
                   )}
                 />
               </div>
@@ -1009,12 +1008,11 @@ function routineInput(routine: Routine): RoutineInput {
 /**
  * 宿主内置规则保留指令与触发条件；普通 Agent 规则允许暂停或单独配置模型。
  */
-/** 内置例行任务（跟进、每天查待办、夜间学习）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
-const BUILTIN_COPY = {
+/** 内置例行任务（跟进、夜间学习）的文案键；名称与说明随界面语言，不用宿主存的名字。 */
+const BUILTIN_COPY: Record<string, string | undefined> = {
   'follow-up': 'routines.builtinFollowUp',
-  'todo-check': 'routines.builtinTodoCheck',
   'nightly-learning': 'routines.builtinNightlyLearning',
-} as const;
+};
 
 /** 夜间学习行下方的两行状态（待整理、上次结果）与进入学习记录的入口。 */
 function NightlyLearningStatus({
@@ -1087,8 +1085,9 @@ function BuiltinRoutineRow({
   extra?: ReactNode;
 }) {
   const { t } = useTranslation();
+  // 旧版电脑上的「每天查待办」仍是内置规则，远程查看时没有对应说明，只显示名称。
   const copy = BUILTIN_COPY[routine.builtin ?? 'follow-up'];
-  const name = t(`${copy}.name`);
+  const name = copy ? t(`${copy}.name`) : t('routines.todoCheck.name');
   return (
     <div className="flex w-full items-start gap-3 border-b border-[var(--border-default)] py-4 last:border-b-0">
       <div className="min-w-0 flex-1">
@@ -1097,7 +1096,7 @@ function BuiltinRoutineRow({
           <span className="break-words">{name}</span><ChevronRight size={14} className="mt-1 shrink-0" aria-hidden="true" />
         </button> : <p className="break-words text-13 font-medium leading-5">{name}</p>}
         <RoutineState routine={routine} />
-        <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{hint ?? t(`${copy}.hint`)}</p>
+        {hint || copy ? <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">{hint ?? t(`${copy}.hint`)}</p> : null}
         {extra}
       </div>
       <Switch

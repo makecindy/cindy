@@ -1,4 +1,5 @@
 {
+  "officialRelayNote": "Estás usando tu propio relé. El contenido de las tareas compartidas sigue pasando por el relé de {{appName}}.",
   "selfJoin": "Usted inició esta tarea compartida, por lo que no necesita unirse. Ábrelo desde “Compartido por mí”.",
   "waitingHost": "Esperando que el anfitrión responda. Puedes seguir enviando mensajes.",
   "join": "Unirse a una tarea compartida",

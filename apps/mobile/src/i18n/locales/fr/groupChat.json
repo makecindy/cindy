@@ -522,7 +522,7 @@
     "accessChatTitle": "Conversation de groupe uniquement",
     "accessChatHint": "Répond uniquement à partir des messages du groupe. Aucun accès à votre mémoire ni à vos informations privées, et aucun outil.",
     "accessToolsTitle": "Outils et informations",
-    "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les approbations restent nécessaires ; les actions terminées ne peuvent pas être annulées après la révocation de l’accès.",
+    "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les règles d’approbation restent applicables ; révoquer l’accès n’annule pas les actions déjà effectuées.",
     "capabilitiesRow": "Outils et accès de {{name}}",
     "capabilityScope": "Il s’agit des outils et accès propres à {{name}}, et non de paramètres spécifiques à ce groupe.",
     "accessMenu": "Autorisations ici",

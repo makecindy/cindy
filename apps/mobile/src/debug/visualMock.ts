@@ -1,5 +1,6 @@
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
+import { sessionImportVisualFixture } from './sessionImportVisualFixture';
 import { SHARED_REMOTE_CONTROL_FIXTURE } from '@cindy/maker-shared/fixtures';
 import { buildUiMockRows, UI_MOCK_SHOWCASE_PROJECTS, type UiMockSessionRow } from '@cindy/maker-shared/ui-mock';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
@@ -224,6 +225,8 @@ async function visualMockInvoke<T = unknown>(
   if (mask !== undefined) return mask as T;
   const groupSettings = groupSettingsVisualFixture(channel, args[0]);
   if (groupSettings !== undefined) return groupSettings as T;
+  const sessionImport = sessionImportVisualFixture(channel, args[0]);
+  if (sessionImport !== undefined) return sessionImport as T;
   // #6713 native regression: open /companions/groups/table-qa?deviceId=cindy-visual-mock-mac.
   // Only reachable through the existing __DEV__ visual-mock provider; no real account or server.
   if (process.env.EXPO_PUBLIC_CINDY_GROUP_TABLE_DEMO === '1'

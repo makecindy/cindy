@@ -340,3 +340,56 @@ describe('Main-bound remote MCP App Views', () => {
     expect(state.mounts.size).toBe(0);
   });
 });
+
+// Unit: real remote open must preserve the optional executor SDK. Old hosts omit it.
+it.each([undefined, { source: 'export class App {}' }])('forwards optional executor SDK %j', async sdk => {
+  const f = fixture();
+  f.invoke.mockResolvedValueOnce({ ...document, ...(sdk ? { sdk } : {}) });
+  const local = await f.open();
+  expect(state.mounts.get(local.viewId)!.document.sdk).toEqual(sdk);
+  await f.views.releaseCaller('renderer:1');
+});
+
+// Lead R6: an optional extension cannot make a valid historical document unloadable.
+it.each([null, 4, {}, { source: 4 }])('drops malformed SDK metadata while opening the document: %j', async sdk => {
+  const f = fixture();
+  f.invoke.mockResolvedValueOnce({ ...document, sdk });
+  const local = await f.open();
+  expect(state.mounts.get(local.viewId)!.document.html).toBe(document.html);
+  expect(state.mounts.get(local.viewId)!.document.sdk).toBeUndefined();
+});
+it('accepts SDK source without version metadata', async () => {
+  const f = fixture();
+  f.invoke.mockResolvedValueOnce({ ...document, sdk: { source: 'export class App {}' } });
+  const local = await f.open();
+  expect(state.mounts.get(local.viewId)!.document.sdk).toEqual({ source: 'export class App {}' });
+});
+
+// 4429469516: a real mounted frame replaces its document while Host link
+// authorization is in flight. Unit: closing-View tests did not cover same-View replacement.
+it('revokes pending remote link authorization on a replacement handshake', async () => {
+  const f = fixture();
+  const local = await f.open();
+  const frame = state.mounts.get(local.viewId)!.frame;
+  const initialize = { jsonrpc: '2.0', id: 1, method: 'ui/initialize', params: {} };
+  await frame({ op: 'message', message: initialize });
+  const link = { id: 'link', url: 'https://example.org/' };
+  f.invoke.mockResolvedValueOnce([{ seq: 1, generation: 0, openLink: link }]);
+  await frame({ op: 'poll' });
+  let authorize!: (result: unknown) => void;
+  f.invoke.mockImplementationOnce(() => new Promise(resolve => { authorize = resolve; }));
+  const late = frame({ op: 'open-link', linkId: link.id, url: link.url });
+  const rejected = expect(late).rejects.toThrow('MCP_APP_DOCUMENT_CHANGED');
+  await frame({ op: 'message', message: { ...initialize, id: 2 } });
+  authorize({ authorized: true, validForMs: 30_000 });
+  await rejected;
+  expect(f.openLink).not.toHaveBeenCalled();
+  // Replacement cancels only the old authorization, not the card/View or later links.
+  const next = { id: 'next', url: 'https://example.org/next' };
+  f.invoke.mockResolvedValueOnce([{ seq: 2, generation: 1, openLink: next }]);
+  await frame({ op: 'poll' });
+  f.invoke.mockResolvedValueOnce({ authorized: true, validForMs: 30_000 });
+  await frame({ op: 'open-link', linkId: next.id, url: next.url });
+  expect(f.openLink).toHaveBeenCalledExactlyOnceWith(next.url);
+  await f.views.releaseCaller('renderer:1');
+});

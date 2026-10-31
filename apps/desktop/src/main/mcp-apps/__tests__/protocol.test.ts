@@ -89,6 +89,7 @@ describe('standard MCP Apps metadata and policy', () => {
   });
   it('uses the standard same-origin base URI default for omitted and empty declarations', () => {
     expect(appCsp().header).toContain("base-uri 'self'");
+    expect(appCsp().header).toContain("form-action 'none'");
     expect(appCsp({ csp: { baseUriDomains: [] } }).header).toContain("base-uri 'self'");
     expect(appCsp({ csp: { baseUriDomains: ['https://assets.example.org'] } }).header).toContain(
       'base-uri https://assets.example.org',

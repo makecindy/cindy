@@ -369,32 +369,24 @@ maxConnections 收紧到 1–8);token ≤4096 字符。新连接添加成功时�
 白名单;不支持流式/WebSocket。长任务用"提交 + 轮询"两个工具拆开做;在一次
 tool-call 内轮询时记得定期发 tool-progress 心跳续命(见 §4"长任务续命")。
 
-### Library 下载与上传（交互页面能力版本起）
+### Library 下载与上传
+
+下载到本插件 Library 用 as:'library' 和库内 path；上传用 upload.library 相对路径数组。
+两者需要 library:true，域名和凭证按本章声明；检查 ok、HTTP status 和 truncated。
 
 ```js
 const downloaded = await cindy.fetch({
   url: 'https://api.example.com/report', as: 'library', path: 'downloads/report.pdf',
-  callId: msg.callId,
+  callId: msg.callId
 });
-// {ok:true,status,headers,library:{path,bytes,sha256,ref:'library:downloads/report.pdf',...}}
 const uploaded = await cindy.fetch({
   url: 'https://api.example.com/upload', method: 'POST',
-  upload: { library: ['exports/result.pdf'], field: 'file', fields: { size: '{bytes}' } },
-  callId: msg.callId,
+  upload: { library: ['exports/result.pdf'], field: 'file' }, callId: msg.callId
 });
 ```
 
-两者都需 `library:true`，域名、凭证注入和 401 处理**完全沿用现有 fetch**。
-`as:'library'` 边接收边写 Library 的暂存文件，成功后原子提交；失败不发布半个文件。
-长度未知也可流式接收，单件上限沿用 Library 的 8 GiB，并保留磁盘水位检查。
-`upload.library` 与 `upload.hashes` 二选一，最多 4 个文件，字段及 multipart 规则相同。
-
-**一期上传到后端的单件上限为 64 MiB，总量 128 MiB**，媒体和 Library 均如此。
-超限返回 `{ok:false,errorCode:'TOO_LARGE',limitBytes,...}`；更大文件需要流式上传，
-本期未提供。`uploadDir` 保持原限额。上传体仍由宿主在受限内存内组装，没有改动原
-HTTP 请求的 401 重试或重放行为；不要在工具层自行重复有副作用的调用。
-
-绑定 `callId` 时自动报告读取/组包的实际字节进度；网络发送阶段只报告“正在上传”，
-没有 total，不把已读取当成已上传。下载进度是实际接收字节。终态由工具结果给出，
-成功和错误都应收起进度条。新响应模式在旧宿主上返回 `{ok:false,...}`，请检查并
-提示升级；最低版本同页面能力的打包下限。
+下载成功时从 downloaded.library 取 path、bytes、sha256 和 ref，失败不提供半个文件。
+upload.library 与 upload.hashes 二选一，最多 4 个文件，单件 64 MiB、总量 128 MiB。
+超限返回 TOO_LARGE；下载到 Library 单件上限 8 GiB，仍受磁盘空间约束。
+401 时的令牌重试按本章各凭证规则（exchange / OAuth 对写请求也会重试一次）；插件代码不要再自行重试
+有副作用的调用，后端仍按请求编号去重。页面调用及文件预览见[§4.23](plugin-interactive-pages.md)。

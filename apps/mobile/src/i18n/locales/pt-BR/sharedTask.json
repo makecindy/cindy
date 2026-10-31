@@ -1,4 +1,5 @@
 {
+  "officialRelayNote": "Você está usando seu próprio relay. O conteúdo das tarefas compartilhadas continua passando pelo relay do {{appName}}.",
   "selfJoin": "Você iniciou esta tarefa compartilhada, então não precisa entrar. Abra-a em “Compartilhadas por mim”.",
   "waitingHost": "Aguardando a resposta do anfitrião. Você pode continuar enviando mensagens.",
   "join": "Entrar na tarefa compartilhada",

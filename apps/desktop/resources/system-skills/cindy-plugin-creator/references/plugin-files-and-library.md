@@ -214,24 +214,8 @@ await cindy.library({
 
 ### 在交互页面里使用文件
 
-插件返回标准内容块 `{type:'resource_link',uri:'library:exports/a.pdf',name:'a.pdf'}`，
-宿主只对本卡已获准、本插件名下的文件附加 `_meta['cindy/file']={url,mimeType,size}`。
-媒体 URI 为 `cindy-media://blobs/<hash>.<ext>`。页面用 `url` 放进 img/video/audio 或
-fetch，支持 Range；不要自己拼地址。地址属于本卡，卡关闭、插件停用或版本变化、
-文件删除后不能继续读取。Library 引用只是本插件内的相对键，不是本机路径。
-
-永久保存的是 `ref`（或媒体指纹/Library 相对路径）；页面 URL 及过户票据不是永久
-引用，票据消费一次即失效。对保存好的文件仍可用 `library.saveAs` / `reveal`。
-
-拖入、粘贴和 `<input type=file>` 不需要新增 View 方法。页面把原始字节按**每片不超过
-2 MiB**编码成 base64，调用本插件的 app-only 工具，由 main.js 转给
-`library.writeBegin/Chunk/Commit`；小图片也可用已有 `deposit_media`。View 单消息
-上限 4 MiB（包括 JSON），2 MiB 原始字节的 base64 约 2.67 MiB，给协议字段留空间。
-失败时插件应 `writeAbort`。沙箱的 file input 已在独立 Electron 用 CDP 选文件验证；
-DOM 拖放事件可用，但原生系统拖放和系统选择框的人手实机操作尚未验证。大文件
-优先用 `cindy.pick({mode:'file',...})`，避免页面与 main.js 搬运字节。
-
-草案标准 `ui/download-file` 支持 text/blob EmbeddedResource 和本卡已授权的
-ResourceLink；先查 `hostCapabilities.downloadFile`。每个文件弹系统另存为窗口作为
-确认，取消即停止，一次最多 16 个文件；不代页面下载任意网址，文件名会净化。
-EmbeddedResource 仍受单消息 4 MiB 上限。手机或远程查看端本期不声明此能力。
+工具返回 resource_link，uri 使用 Library 相对引用或本插件媒体引用；页面从该内容块的
+_meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路径或长期保存页面 URL。
+大文件优先由 cindy.pick 写入 Library，再由工具上传；页面不搬运完整文件字节。
+参数、限额、拖放和下载写法统一见[§4.23 文件参考](examples/interactive-pages/REFERENCE.md#文件)，
+完整代码见[files 示例](examples/interactive-pages/files/)。

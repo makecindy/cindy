@@ -82,6 +82,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
+| 任务导入 | 扫描其他 AI 编程工具的任务、开始导入、查进度与结果（与设置 → 任务导入同一实现） | 有（2026-10-30） | 无 |
 | 伙伴     | 发现伙伴、伙伴间消息                                       | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
 | 伙伴     | 资料、能力、待办、后台任务                                 | 有（已准入的后台任务补充排队后可跨发起轮投递，仍复核撤权；见 [伙伴代表谁](teammate-authority.md)） | 无 |
@@ -187,7 +188,7 @@ Host 不因当前输入缺少主人标记再追加行动同意判定。只认运
 实现见 `maker-ipc/taskActionAuthorization.ts`、`taskActionHost.ts` 与
 `mcp-integrations/codexHttpBridge.ts`；回归见各自授权及 HTTP 桥接测试。
 
-伙伴例行任务（2026-10-26）：桌面与 `routine_save` 共用每条规则的 `modelOverride`，可选引擎、来源、型号、执行位置、推理强度与 Fast；null 恢复跟随伙伴，省略保留选择。执行记录返回独立 `sessionId`。内置跟进／每天查待办也可选模型，指令与触发条件仍由宿主维护。`sessionMode`（`persistent` 复用同一任务／`fresh` 每次触发新建任务）同样经桌面与 `routine_save` 设置，省略保留原值。跨电脑桌面设置通过 `routines.saveWithModel` 与 `routines.saveWithSessionMode` 能力声明协商；手机仍按现有合同不提供例行任务管理。
+伙伴例行任务（2026-10-26）：桌面与 `routine_save` 共用每条规则的 `modelOverride`，可选引擎、来源、型号、执行位置、推理强度与 Fast；null 恢复跟随伙伴，省略保留选择。执行记录返回独立 `sessionId`。内置跟进也可选模型，指令与触发条件仍由宿主维护；每天查待办已是普通例行任务，指令与触发条件可改（2026-10-31）。`sessionMode`（`persistent` 复用同一任务／`fresh` 每次触发新建任务）同样经桌面与 `routine_save` 设置，省略保留原值。跨电脑桌面设置通过 `routines.saveWithModel` 与 `routines.saveWithSessionMode` 能力声明协商；手机仍按现有合同不提供例行任务管理。
 
 执行任务的模型可用 `cindy_helper` 的 cindy 类 `report_task_delivery` 报告本轮是否新交付最终结果；只限当前任务执行者，子 Agent 不可代报。三个 Harness 共用此入口；它不结束任务或授予操作权限。跟进通知门控见 `cindy-bots-runtime.md` §6.3。伙伴创建任务时，宿主同时固定原私聊／群聊／话题；最终结果由宿主投递至该位置，与后续跟进者无关。投递失败在原任务中可见，不改投私聊。
 

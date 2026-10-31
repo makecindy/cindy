@@ -13,6 +13,88 @@ export const DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL = 'device-link:voice:dicti
 /** 桌面主动推给手机的只读词典快照；push 不受 remoteControlEnabled 控制门禁。 */
 export const DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL =
   'device-link:voice:dictionary:snapshot';
+/** iPhone 桌面小组件读取被控端菜单栏同源的余量与每日用量快照（只读）。 */
+export const DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL = 'device-link:usage-widget:snapshot:v1';
+
+/** One measured quota source, as the macOS menu bar panel draws it. */
+export interface MobileUsageWidgetSource {
+  id: string;
+  kind: 'subscription' | 'balance';
+  /** Account or brand label, already masked when the desktop hides personal information. */
+  name: string;
+  /** Bundled monochrome mark; null draws `monogram`. */
+  logo: 'claude' | 'codex' | 'grok' | 'kimi' | 'cindy' | null;
+  monogram: string;
+  /** Number above the tube; null shows `label` instead (credits). */
+  value: string | null;
+  unit: string | null;
+  label: string | null;
+  level: 'normal' | 'warn' | 'error';
+  /** Liquid height 0...1. */
+  fill: number;
+  reserve: boolean;
+  emphasized: boolean;
+  /** Text under the tube at build time ("5天9时", "约20天"). */
+  when: string;
+  /** Reset of the window the tube shows, so the widget can keep the countdown current. */
+  resetsAtMs: number | null;
+  /** Last reading of a computer that is offline now; `when` says how old it is. */
+  stale?: boolean;
+  /** Will reset with quota unused at the current pace: the widget colors the reset time by how
+   * soon that is (a day or less yellow, six hours or less red). */
+  unusedAtReset?: boolean;
+  /** The panel's detail ring, drawn when the widget has a single source. */
+  detail?: MobileUsageWidgetDetail;
+}
+
+export interface MobileUsageWidgetDetail {
+  title: string;
+  plan: string;
+  /** 0...1 remaining per window, outermost first; colors are panel color names. */
+  rings: { fraction: number; color: string }[];
+  bigValue: string;
+  bigUnit: string | null;
+  bigColor: string | null;
+  bigCompact: boolean;
+  bigCaption: string;
+  legend: { label: string; color: string }[];
+}
+
+export interface MobileUsageWidgetDay {
+  /** Subscription-equivalent value by harness: claude-code, codex, pi. */
+  money: [number, number, number];
+  paid: number;
+  tokens: [number, number, number];
+  /** Value per `usage.models` entry, then everything else (one more than the model count). */
+  models?: number[];
+  /** Tokens per `usage.models` entry, then everything else. */
+  modelTokens?: number[];
+}
+
+export interface MobileUsageWidgetSnapshot {
+  version: 1;
+  generatedAtMs: number;
+  /** When the quota readings were taken; null before the first read. */
+  updatedAtMs: number | null;
+  locale: string;
+  moneySymbol: string;
+  sources: MobileUsageWidgetSource[];
+  usage: {
+    scope: 'local' | 'all';
+    /** ISO dates, oldest first, ending today (desktop local date); at most 30. */
+    days: string[];
+    daily: MobileUsageWidgetDay[];
+    /** Models with the most tokens in the window, in color order; absent from older desktops. */
+    models?: { name: string; harness: 'claude-code' | 'codex' | 'pi' }[];
+  };
+  /** Localized labels and templates from the desktop's menu bar strings. */
+  strings: Record<string, string>;
+}
+
+export type MobileUsageWidgetSnapshotResult =
+  | { ok: true; snapshot: MobileUsageWidgetSnapshot }
+  /** `unavailable`: the desktop has no menu bar data yet (signed out, panel off, or not macOS). */
+  | { ok: false; reason: 'unavailable' };
 
 export type MobileVoiceCredentialSyncAsr = {
   provider: string;
@@ -355,6 +437,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:usage:claude-subscription',
   'maker:usage:xai-subscription',
   'maker:claude-session-route:get',
+  // iPhone 桌面小组件：余量与每日用量快照（只读；老被控端 CHANNEL_NOT_ALLOWED → 组件提示更新电脑）。
+  DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL,
   // 网关 API key presence-only 探测(只回 boolean;拉不到 → unknown,折扣版不置灰)。
   'maker:api-key:present',
   'maker:list-agent-commands',

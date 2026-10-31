@@ -245,6 +245,7 @@
     "completeWithSkipped_many": "Copié, {{count}} éléments ignorés"
   },
   "sharedTask": {
+    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu des tâches partagées continue de passer par le relais Cindy.",
     "selfJoin": "Vous avez lancé cette tâche partagée, vous n'avez donc pas besoin de la rejoindre. Ouvrez-la depuis « Partagées par moi ».",
     "manageSharing": "Gérer le partage",
     "manageMembers": "Gérer les membres…",
@@ -346,6 +347,7 @@
     "closeAllDescription": "Les invités perdront l'accès. L'historique des tâches est conservé."
   },
   "providerShare": {
+    "officialRelayNote": "Vous utilisez votre propre relais. Le contenu du partage de fournisseurs continue de passer par le relais Cindy.",
     "owned": {
       "title": "Fournisseurs que je partage"
     },
@@ -2453,7 +2455,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Écriture et style",
+        "hint": "L’IA répond dans le style choisi. Avec « Réponses habituelles », l’interface reste en chinois classique et les réponses suivent votre langue.",
+        "scriptAriaLabel": "Écriture du chinois classique",
+        "styleAriaLabel": "Style de réponse de l’IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prose classique (par défaut)",
+          "tang-poetry": "Poésie Tang",
+          "song-ci": "Ci des Song",
+          "yuan-qu": "Qu des Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prose parallèle",
+          "pre-qin": "Maîtres pré-Qin",
+          "historian": "Style du Grand Historien",
+          "ming-qing-essay": "Essais Ming–Qing",
+          "plain": "Réponses habituelles"
+        }
       }
     },
     "userProfile": {
@@ -3195,49 +3220,111 @@
       }
     },
     "sessionImport": {
-      "title": "Importation des sessions locales",
-      "description": "Analyse en lecture seule de l'historique local de Claude Code et Codex. Seules les sessions cochées dans la liste seront importées ; les sessions internes ignorées sont masquées et ne peuvent pas être importées.",
-      "scan": "Analyser",
-      "scanning": "Analyse en cours",
-      "emptyTitle": "Analysez d'abord l'historique local",
-      "emptyDescription": "L'analyse n'écrit rien dans la base de données et ne modifie pas la barre latérale.",
-      "noCandidates": "Aucune session importable pour le filtre actuel.",
-      "collapse": "Réduire le groupe",
-      "expand": "Développer le groupe",
-      "selectGroup": "Sélectionner le groupe",
-      "sessions": "sessions",
-      "selected": "{{count}} sélectionnée(s)",
-      "importSelected": "Importer la sélection",
-      "importing": "Importation en cours",
+      "title": "Importer des sessions",
+      "description": "Importez dans Cindy des sessions provenant d’autres outils de programmation avec IA et poursuivez votre travail. Cindy lit les originaux sans jamais les modifier.",
+      "rescan": "Rechercher à nouveau",
+      "allSources": "Toutes les sources",
+      "search": "Rechercher des sessions ou des dossiers",
+      "projectFilter": "{{name}} uniquement",
+      "clearProjectFilter": "Afficher tous les projets",
+      "hiddenCount_one": "{{count}} masquée",
+      "hiddenCount_other": "{{count}} masquées",
+      "hidden": {
+        "head": "Masquées",
+        "hint": "Les éléments cochés apparaissent dans la liste",
+        "cindy": "Sessions exécutées par Cindy",
+        "temp": "Sessions dans des dossiers temporaires",
+        "internal": "Sessions internes (revues, sous-Agent)",
+        "imported": "Déjà importées",
+        "sourceError": "Impossible de lire l’historique de {{name}}"
+      },
+      "missingDir": "Dossier introuvable",
+      "groupTasks_one": "{{count}} session",
+      "groupTasks_other": "{{count}} sessions",
+      "dialogue": "Conversation",
       "archived": "Archivée",
+      "unsupported": "Format pas encore pris en charge",
       "untitled": "Session sans titre",
-      "noWorkingDir": "Aucun répertoire de travail",
-      "summary": {
-        "total": "Affichées",
-        "totalHint": "Sélectionnables pour l'importation",
-        "projects": "Sessions de projet",
-        "projectsHint": "Sessions qui apparaîtront dans les groupes de projets",
-        "dialogue": "Conversation",
-        "dialogueHint": "Sessions Codex sans projet",
-        "filtered": "Ignorées",
-        "filteredHint": "Internes ou déjà dans l'application"
+      "selectAll": "Tout sélectionner",
+      "selectGroup": "Sélectionner le groupe",
+      "expand": "Développer",
+      "collapse": "Réduire",
+      "selectedSummary_one": "{{count}} sélectionnée · {{size}}",
+      "selectedSummary_other": "{{count}} sélectionnées · {{size}}",
+      "pickHint": "Sélectionnez les sessions à importer dans Cindy",
+      "importCount_one": "Importer {{count}} session",
+      "importCount_other": "Importer {{count}} sessions",
+      "import": "Importer",
+      "scanning": "Recherche de sessions sur cet ordinateur…",
+      "scanFailed": "La recherche n’a pas abouti. Réessayez.",
+      "emptyTitle": "Aucune session à importer sur cet ordinateur",
+      "emptyDescription": "Cindy peut importer des sessions de ces outils. Après avoir utilisé l’un d’eux, revenez lancer une recherche.",
+      "noMatch": "Aucune session correspondante",
+      "allHidden": "Toutes les sessions sont masquées. Affichez-les depuis « Masquées », en haut à droite.",
+      "confirm": {
+        "title_one": "Importer {{count}} session ?",
+        "title_other": "Importer {{count}} sessions ?",
+        "body": "Cela prendra environ {{minutes}} minutes et utilisera jusqu’à {{size}} d’espace disque. L’importation s’effectue en arrière-plan. Vous pouvez l’arrêter à tout moment et conserver les sessions déjà importées.",
+        "cancel": "Annuler",
+        "title_many": "Importer {{count}} sessions ?"
       },
-      "filters": {
-        "source": "Source",
-        "placement": "Emplacement",
-        "all": "Toutes",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "Projets existants",
-        "dialogue": "Conversation"
+      "progress": {
+        "title_one": "Importation de {{count}} session",
+        "title_other": "Importation de {{count}} sessions",
+        "background": "Vous pouvez quitter cette page. L’importation continue en arrière-plan.",
+        "stop": "Arrêter",
+        "queued": "En attente",
+        "copy": "Copie de l’historique original",
+        "messages_one": "Enregistrement de {{count}} message",
+        "messages_other": "Enregistrement de {{count}} messages",
+        "verify": "Vérification de la reprise",
+        "title_many": "Importation de {{count}} sessions",
+        "messages_many": "Enregistrement de {{count}} messages"
       },
-      "toast": {
-        "scanFailed": "Échec de l'analyse",
-        "importFailed": "Échec de l'importation",
-        "imported": "Importation terminée : {{inserted}} ajoutée(s), {{updated}} mise(s) à jour"
+      "result": {
+        "title_one": "{{count}} session importée",
+        "title_other": "{{count}} sessions importées",
+        "stoppedTitle": "Importation arrêtée",
+        "ready_one": "{{count}} prête à reprendre",
+        "ready_other": "{{count}} prêtes à reprendre",
+        "action_one": "{{count}} nécessite votre attention",
+        "action_other": "{{count}} nécessitent votre attention",
+        "failed_one": "{{count}} échec",
+        "failed_other": "{{count}} échecs",
+        "readyGroup": "Prêtes à reprendre ({{count}})",
+        "readyNative": "Prête à reprendre avec {{harness}}",
+        "readyHandoff": "Prête : {{harness}} prend le relais ; changez à tout moment",
+        "missingDir": "Le dossier original n’existe plus. Choisissez un dossier pour reprendre.",
+        "chooseFolder": "Choisir un dossier",
+        "relocateFailed": "Impossible de passer à ce dossier. Réessayez.",
+        "cancelled": "Arrêtée avant l’importation",
+        "retry": "Réessayer",
+        "open": "Ouvrir",
+        "done": "Terminé",
+        "title_many": "{{count}} sessions importées",
+        "ready_many": "{{count}} prêtes à reprendre",
+        "action_many": "{{count}} nécessitent votre attention",
+        "failed_many": "{{count}} échecs"
       },
-      "selectAll": "Tout sélectionner dans le filtre actuel ({{count}})",
-      "selectedOutsideFilter": "(dont {{count}} hors du filtre actuel)"
+      "failure": {
+        "read-failed": "Importation impossible : historique original illisible",
+        "unsupported-version": "Importation impossible : format de cette version pas encore pris en charge",
+        "empty": "Importation impossible : aucun message dans l’historique original",
+        "not-found": "Importation impossible : historique original introuvable",
+        "disk-full": "Importation impossible : espace disque insuffisant",
+        "native-unloadable": "Importation impossible : chargement de l’historique original impossible"
+      },
+      "marker": {
+        "from": "Importée depuis {{source}} · {{date}}",
+        "folder": "Dossier original {{path}}",
+        "end": "Tout ce qui précède a été importé depuis {{source}}",
+        "endHandoff": "Tout ce qui précède a été importé depuis {{source}}. {{harness}} poursuit ici."
+      },
+      "projectMenu": "Importer les sessions de ce projet depuis d’autres outils…",
+      "hiddenCount_many": "{{count}} masquées",
+      "groupTasks_many": "{{count}} sessions",
+      "selectedSummary_many": "{{count}} sélectionnées · {{size}}",
+      "importCount_many": "Importer {{count}} sessions"
     },
     "connections": {
       "codex": {
@@ -4997,7 +5084,7 @@
     },
     "auxiliaryModels": {
       "title": "Modèles auxiliaires",
-      "description": "Utilisés pour le nommage automatique des tâches et le renommage par IA, les suggestions de prompt dans la zone de saisie, l'Aide, les résumés des tâches épinglées, les titres IM / Feishu et les vérifications de contexte de groupe, les scripts des tâches planifiées, l'option « suivre le défaut » des questions-réponses rapides des plugins, et l'affinage vocal BYOK.",
+      "description": "Utilisés pour le nommage automatique des tâches et le renommage par IA, les suggestions de prompt dans la zone de saisie, l’Aide, les résumés des tâches épinglées, les titres IM / Feishu et les vérifications de contexte de groupe, les scripts des tâches planifiées, l’option « utiliser le modèle par défaut » des questions-réponses rapides des plugins, et l’amélioration du texte dicté via BYOK.",
       "automatic": "Recommandation automatique",
       "customize": "Personnalisé",
       "preferred": {
@@ -5757,7 +5844,7 @@
         "current": "Utilisé",
         "ownerName": "Cet ordinateur",
         "unavailable": "Pour utiliser votre propre relais, connectez-vous à Cindy et vérifiez que le trousseau du système est disponible.",
-        "limits": "Tant que vous utilisez votre propre relais, les notifications push sur téléphone, le partage de fournisseurs et les tâches partagées ne sont pas disponibles.",
+        "limits": "Tant que vous utilisez votre propre relais, les notifications push sur téléphone ne sont pas disponibles. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy.",
         "actions": {
           "join": "Rejoindre un autre relais",
           "useOfficial": "Revenir au relais Cindy",
@@ -5973,7 +6060,7 @@
           "switchFromHost": "Le relais de cet ordinateur s'arrête, et les appareils qui l'ont rejoint sont déconnectés.",
           "switchFromMember": "Cet ordinateur quitte {{name}}. Pour le rejoindre plus tard, son propriétaire devra créer un nouveau lien d'invitation.",
           "switchConfirm": "Basculer",
-          "switchFromOfficial": "Le contrôle à distance entre vos appareils passera par {{name}}. Les notifications push sur téléphone, le partage de fournisseurs et les tâches partagées ne sont pas disponibles tant que vous utilisez votre propre relais."
+          "switchFromOfficial": "Le contrôle à distance entre vos appareils passera par {{name}}. Les notifications push sur téléphone ne sont pas disponibles tant que vous utilisez votre propre relais. Le partage de fournisseurs et les tâches partagées continuent de passer par le relais Cindy."
         },
         "dialog": {
           "steps": {
@@ -7608,7 +7695,7 @@
         "unchanged": "{{count}} autres autorisations inchangées",
         "noChange": "Aucune modification des autorisations.",
         "pick": "Peut vous demander de choisir des fichiers ou un dossier",
-        "pickDetail": "Cindy ouvre un sélecteur de système lorsque le plugin le demande. Vous décidez quoi partager ; l'annulation ne donne rien au plugin.",
+        "pickDetail": "Cindy ouvre le sélecteur de fichiers du système à la demande du plugin. Vous choisissez ce que vous partagez ; si vous annulez, le plugin ne reçoit rien.",
         "workspace": "Peut demander à créer une entrée de session pour un dossier de projet dans la barre latérale",
         "workspaceDetail": "Lorsqu'il le demande, soit vous choisissez le dossier vous-même, soit vous voyez le chemin complet sur une carte de confirmation avant de décider ; pendant qu'il traite un appel que vous avez lancé, les sous-dossiers du répertoire de travail de la session en cours sont utilisés directement, sans demande supplémentaire. Les dossiers qui ont déjà une session sont réutilisés, et ce qui est créé est une session vide : rien ne démarre tout seul.",
         "sessionContext": "Peut savoir dans quel dossier de projet travaille la session en cours",
@@ -7624,7 +7711,7 @@
         "skillDetail": "Une skill est un fichier d'instructions que l'IA charge et suit comme les siennes, avec toutes vos autorisations, dans Claude Code et Codex, dans tous les projets. Elle n'est pas confinée au bac à sable de ce plugin. Elle reste disponible tant que le plugin est activé et est retirée lorsque le plugin est désactivé ou désinstallé ; désactiver le plugin pour un seul dossier ne la masque pas. Le texte complet de la skill ne peut pas être prévisualisé ici : n'installez que des plugins de confiance.",
         "routineEvents": "Événements de routine",
         "mcpUi": "Afficher des pages interactives dans la conversation",
-        "mcpUiDomains": "Domaines du réseau de pages : {{domains}}",
+        "mcpUiDomains": "Domaines accessibles aux pages : {{domains}}",
         "mcpAppOnly": "Page uniquement",
         "uiPageAccess": "Pages : {{pages}} ; domaines : {{domains}} ; outils disponibles aux pages : {{tools}}"
       },
@@ -10556,6 +10643,7 @@
       "header": {
         "stepRunning": "{{name}} en est à l'étape {{step}}",
         "speaking": "{{name}} répond…",
+        "queued": "{{name}} est en attente",
         "planning": "{{name}} répartit le travail…"
       },
       "memberCount_one": "{{count}} membre",
@@ -11025,7 +11113,7 @@
           "accessChatTitle": "Conversation de groupe uniquement",
           "accessChatHint": "Répond uniquement à partir des messages du groupe. Aucun accès à votre mémoire ni à vos informations privées, et aucun outil.",
           "accessToolsTitle": "Outils et informations",
-          "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les approbations restent nécessaires ; les actions terminées ne peuvent pas être annulées après la révocation de l’accès.",
+          "accessToolsHint": "Peut utiliser les outils existants de {{name}} et vos informations privées. Les résultats sont visibles par tous. Les règles d’approbation restent applicables ; révoquer l’accès n’annule pas les actions déjà effectuées.",
           "capabilitiesRow": "Outils et accès de {{name}}",
           "accessMenu": "Autorisations ici"
         },
@@ -14574,11 +14662,6 @@
         "openInExplorer": "Ouvrir dans le gestionnaire de fichiers",
         "newInDirectory": "Nouvelle session dans ce répertoire",
         "copyDeepLink": "Copier le lien du projet",
-        "syncCodex": "Synchroniser les sessions Codex de ce projet",
-        "syncCodexDone": "Synchronisation Codex terminée : {{inserted}} liées, {{updated}} mises à jour",
-        "syncCodexAlreadyLinked": "Les sessions Codex de ce projet sont déjà liées",
-        "syncCodexNone": "Aucune session Codex trouvée pour ce projet",
-        "syncCodexFailed": "Échec de la synchronisation Codex : {{error}}",
         "search": "Rechercher des sessions dans ce projet"
       },
       "deepLink": {
@@ -17707,9 +17790,8 @@
       "name": "Suivre les sessions assignées (intégrée)",
       "hint": "Suit les sessions assignées lorsqu'elles stagnent, ont besoin de vous, échouent, atteignent une limite de consommation ou se terminent."
     },
-    "builtinTodoCheck": {
-      "name": "Vérification quotidienne des tâches à faire (intégrée)",
-      "hint": "Recherche de nouvelles tâches à faire dans les sources connectées les jours ouvrés à 9:00 et reste silencieuse s'il n'y a rien de nouveau. S'active ou se désactive depuis l'aperçu ; elle peut uniquement être mise en pause ou reprise."
+    "todoCheck": {
+      "name": "Vérification quotidienne des tâches à faire"
     },
     "builtinNightlyLearning": {
       "name": "Apprentissage nocturne (intégré)",
@@ -18889,7 +18971,7 @@
     "title": "Suivi des performances",
     "start": "Commencer l'enregistrement",
     "stop": "Arrêter l'enregistrement",
-    "description": "Enregistrez l'action lente, puis arrêtez-vous. L'enregistrement se termine après 60 secondes. Les traces locales peuvent contenir des chemins et d'autres informations sensibles.",
+    "description": "Lancez l’enregistrement, effectuez l’action lente, puis arrêtez l’enregistrement. Il se termine automatiquement après 60 secondes. Les traces locales peuvent contenir des chemins et d’autres informations sensibles.",
     "localScope": "Cet ordinateur uniquement. Les autres ordinateurs et téléphones ne sont pas enregistrés.",
     "recording": "Enregistrement · {{seconds}} s",
     "saving": "Sauvegarde de l'enregistrement…",
@@ -18897,7 +18979,7 @@
     "previous": "Voir le rapport précédent",
     "previousResult": "Rapport de performance précédent",
     "previousSummary": "Dernier enregistrement : {{time}}, {{seconds}} secondes.",
-    "resultDescription": "Envoyez le rapport de performances complet, les profils CPU, la trace Chromium et votre description pour vous aider à diagnostiquer les ralentissements. Les informations d'identification reconnaissables, les adresses e-mail et autres données sensibles sont supprimées avant le téléchargement. Les fichiers peuvent toujours contenir des chemins locaux et des marqueurs de performances. Les originaux locaux sont conservés pendant 7 jours.",
+    "resultDescription": "Envoyez le rapport de performances complet, les profils CPU, la trace Chromium et votre description pour aider à diagnostiquer les ralentissements. Les identifiants reconnaissables, les adresses e-mail et les autres données sensibles sont masqués avant l’envoi. Les fichiers peuvent encore contenir des chemins locaux et des marqueurs de performances. Les originaux locaux sont conservés pendant 7 jours.",
     "summary": "{{seconds}} secondes enregistrées.",
     "partial": "Certaines données n'ont pas pu être capturées ou étaient limitées. Les preuves disponibles ont été conservées.",
     "note": "Que faisiez-vous ? (facultatif)",

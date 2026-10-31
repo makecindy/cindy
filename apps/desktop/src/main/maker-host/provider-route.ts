@@ -1,4 +1,5 @@
 import { resolveCopilotAccountUrl } from './copilot-account-url.js';
+import { withProviderAppAttribution } from './provider-app-attribution.js';
 /**
  * provider-route —— 把 catalog 的 `RoutingDescriptor` 翻译成 loopback proxy 的 `RoutingDecision`,
  * 并据 per-session 选定的供应商解析本会话的路由。
@@ -341,6 +342,11 @@ function hasHeader(headers: Record<string, string> | undefined, expectedName: st
  */
 export function buildRouteDecision(...args: Parameters<typeof buildRouteDecisionBase>): RoutingDecision | null {
   const decision = buildRouteDecisionBase(...args);
+  if (decision && !decision.localHandler) {
+    const headers = withProviderAppAttribution(decision.upstreamOverride ?? args[0].upstream,
+      decision.headerOverride, {}, decision.headerDelete);
+    if (Object.keys(headers).length > 0) decision.headerOverride = headers;
+  }
   const selected = args[0].modelInterface;
   if (!decision || !selected || decision.localHandler) return decision;
   return { ...decision, compatibilityProfiles: selected.compatibility,
@@ -770,9 +776,9 @@ export function buildLocalHandlerHeaders(
     route.routing.authStrategy === 'api-key-header' ||
     route.routing.authStrategy === 'oauth-token' ||
     route.routing.authStrategy === 'provider-oauth-header';
-  const headers: Record<string, string> = hostManagedAuth
+  const headers: Record<string, string> = withProviderAppAttribution(route.routing.upstream, hostManagedAuth
     ? withoutClientAuthHeaders(route.routing.headerOverride)
-    : { ...(route.routing.headerOverride ?? {}) };
+    : { ...(route.routing.headerOverride ?? {}) }, {}, route.routing.headerDelete);
   const headerDelete = new Set(route.routing.headerDelete ?? []);
   switch (route.routing.authStrategy) {
     case 'none':
@@ -1392,7 +1398,7 @@ export function resolveVisionBackendRoute(
   }
   // 路由额外头（headerOverride 去掉客户端凭证头）：anthropic-version / x-api-key /
   // 自定义 provider 头等。视觉桥直连不发 proxy，需自己带上，否则后端可能 400/拒绝。
-  const headers = withoutClientAuthHeaders(routing.headerOverride);
+  const headers = withProviderAppAttribution(upstream, withoutClientAuthHeaders(routing.headerOverride), {}, routing.headerDelete);
   // 对齐 buildRouteDecision 的凭证头形状（claude-code/pi 面 = Anthropic Messages 风格，
   // 后端按 x-api-key 鉴权，只带 Authorization: Bearer 会被拒；codex 面 = OpenAI 式按
   // Bearer 鉴权）。x-api-key 不是「客户端凭证头」，是路由要求的鉴权形状，须补进额外头。

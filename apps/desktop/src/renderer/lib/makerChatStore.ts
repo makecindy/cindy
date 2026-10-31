@@ -625,6 +625,8 @@ export interface ChatMessage {
     /** 代输入结束留痕:由隐藏续接行派生,只有步数、设备与域名,没有任何输入值。 */
     | 'input-handoff'
     | 'context-rebuild'
+    /** 任务导入的时间线标记：开头的来源说明与结尾的分隔。 */
+    | 'session-import'
     | 'mcp-app';
   mcpAppClientId?: string;
   systemCardData?: Record<string, unknown>;
@@ -19511,6 +19513,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       return {
         clientId: m.clientId, role: 'assistant' as const, content: '', isStreaming: false,
         systemCardType: 'agent-switch' as const, systemCardData: { ...m.agentMeta.modelChange },
+      };
+    }
+    const sessionImport =
+      m.role === 'assistant' && m.agentMeta && typeof m.agentMeta === 'object'
+        ? (m.agentMeta as { sessionImport?: unknown }).sessionImport
+        : undefined;
+    if (sessionImport && typeof sessionImport === 'object') {
+      return {
+        clientId: m.clientId,
+        role: 'assistant' as const,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'session-import' as const,
+        systemCardData: { ...(sessionImport as Record<string, unknown>) },
       };
     }
     // 同一引擎换干净原生会话：可见交接记录，展开看发给新窗口的摘要。

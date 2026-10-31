@@ -135,6 +135,246 @@ const messages = {
     retry: "重試",
     configIssueAuthBaseUrl: "登入服務地址必須是 http(s) URL。",
   },
+  "zh-Hant-x-lzh": {
+    title: "登 Cindy 之門",
+    phonePlaceholder: "書手機號",
+    emailPlaceholder: "書電子郵件地址",
+    invalidEmail: "電子郵件地址有誤，請正書之",
+    invalidPhone: "手機號有誤，請正書之",
+    continue: "續",
+    apple: "以 Apple 續之",
+    google: "以 Google 續之",
+    wechat: "以微信續之",
+    chooseMethod: "擇登門之法",
+    orgDetected: "{email} 隸屬企業「{org}」",
+    enterpriseLogin: "以企業身分登門",
+    personalLogin: "以個人身分登門",
+    emailCode: "遣電子郵件驗證碼",
+    ssoRequired: "此組織須以企業 SSO 登門。",
+    ssoEntry: "以企業 SSO 登門",
+    consentStatement:
+      "余已閱畢並同意 <terms>服務條款</terms> 及 <privacy>隱私政策</privacy>",
+    consentDialogTitle: "服務條款及隱私政策",
+    consentDialogBody:
+      "請閱 Cindy 下列協議並同意，方可續行：<terms>服務條款</terms>、<privacy>隱私政策</privacy>",
+    consentAgree: "同意",
+    consentDisagree: "暫不同意",
+    ssoOrgTitle: "企業 SSO 登門",
+    ssoOrgSubtitle: "書企業 ID、組織 slug 或已驗證之域名，以轉至企業單點登入。",
+    ssoOrgPlaceholder: "企業 ID、slug 或域名",
+    ssoOrgHint: "不知企業登門標識？請詢企業管理員。",
+    ssoOrgDetected: "擇企業「{org}」之單點登入方式",
+    realmConsentTitle: "連企業所在之區域",
+    realmConsentPersonalTitle: "察有企業登門",
+    realmConsentPersonalBodyCn: "此信箱所屬企業位於中國大陸區。\n可用企業 SSO，或續以個人登門。",
+    realmConsentPersonalBodyGlobal: "此信箱所屬企業位於國際區。\n可用企業 SSO，或續以個人登門。",
+    realmConsentEnterpriseLogin: "企業 SSO",
+    realmConsentContinuePersonal: "續以個人登門",
+    realmConsentBodyCn:
+      "君之企業位於中國大陸區。\n續之，則 Cindy 將連該區域。",
+    realmConsentBodyGlobal:
+      "君之企業位於國際區。\n續之，則 Cindy 將連該區域。",
+    realmConsentAgree: "續登門",
+    realmConsentDisagree: "罷",
+    ssoVerificationTitle: "驗企業聯絡方式",
+    ssoVerificationSubtitle:
+      "初次登門，須驗身分提供方所返之聯絡方式 {target}。",
+    enterCode: "書驗證碼",
+    codeSentTo: "驗證碼已遣至",
+    codePlaceholder: "6 位驗證碼",
+    signIn: "登門",
+    resendCode: "再遣驗證碼",
+    captchaTitle: "安全驗證",
+    captchaFailed: "安全驗證載入未成，請察網路後再試。",
+    captchaRetry: "再試",
+    captchaCancel: "罷",
+    resendCountdown: "{n} 秒後可再遣",
+    chooseAccount: "擇身分",
+    chooseAccountSubtitle: "擇此番所入之個人或組織身分。",
+    personalAccount: "個人身分",
+    bindPhoneTitle: "綁手機號碼",
+    bindPhoneSubtitle: "須驗手機號，方能登門。",
+    bindEmailTitle: "綁真實電子郵件",
+    bindEmailSubtitle: "須驗真實電子郵件，方能登門。",
+    sendCode: "遣驗證碼",
+    back: "歸",
+    cancel: "罷",
+    browserTitle: "請於瀏覽器中完成登門",
+    browserSubtitle: "畢則自歸 Cindy。",
+    working: "方理…",
+    configTitle: "登門之設未全",
+    accountDeletionPendingTitle: "名籍待刪",
+    accountDeletionProcessingTitle: "名籍刪除中",
+    accountDeletionCompletedTitle: "名籍已刪",
+    accountDeletionPendingCopy:
+      "預定 {date} 永久刪除。今重新登門，即可撤銷刪除。",
+    accountDeletionProcessingCopy:
+      "Cindy 登門名籍正在刪除，事畢則永久刪除。",
+    accountDeletionCompletedCopy: "Cindy 登門名籍已刪。",
+    accountDeletionDismiss: "知之矣",
+    accountDeletionSettingsAction: "刪除名籍",
+    accountDeletionScreenTitle: "刪除名籍",
+    accountDeletionLoading: "方核名籍狀態…",
+    accountDeletionUnavailableTitle: "今不可行此舉",
+    accountDeletionUnavailableCopy: "請歸規制頁，稍後再試。",
+    accountDeletionVerifyTitle: "驗名籍所屬",
+    accountDeletionCodeSent: "驗證碼已遣至 {target}，10 分鐘內有效。",
+    accountDeletionAcknowledgeA11y: "確認已知刪除名籍之後果",
+    accountDeletionAcknowledgeCopy:
+      "余已知悉：此手機將即刻辭出；他處客戶端待登門狀態失效後辭出；30 天內重新登門可撤銷刪除；逾期則 Cindy 登門名籍永久刪除，不可復原。",
+    accountDeletionConfirmingA11y: "方確認刪除名籍",
+    accountDeletionConfirmA11y: "確認刪除名籍",
+    accountDeletionConfirming: "確認中",
+    accountDeletionConfirm: "確認刪除名籍",
+    accountDeletionBeforeTitle: "刪除之前，請確認",
+    accountDeletionImpactCurrentClient:
+      "確認之後，此手機即刻辭出；他處客戶端待登門狀態失效後辭出。",
+    accountDeletionImpactGrace:
+      "名籍入 30 天等待期；期內重新登門，即可撤銷刪除。",
+    accountDeletionImpactPermanent:
+      "等待期滿，Cindy 登門名籍將永久刪除。",
+    accountDeletionAppleNotice:
+      "以 Apple 登門之授權，或須君於 Apple ID 設定中手動停用 Cindy。",
+    accountDeletionCodeWillSend: "驗證碼將遣至 {target}。",
+    accountDeletionSendingCode: "方遣",
+    accountDeletionErrorChallenge: "驗證碼有誤或已過期，請察之再試。",
+    accountDeletionErrorAttempts: "驗證次數過多，請再遣驗證碼。",
+    accountDeletionErrorRate: "操作過頻，請稍後再試。",
+    accountDeletionErrorPending: "名籍已入刪除等待期。",
+    accountDeletionErrorProcessing: "名籍正在刪除之中。",
+    accountDeletionErrorUnavailable: "今不可行此舉。",
+    accountDeletionErrorNetwork: "網路連線有異，請稍後再試。",
+    accountDeletionErrorFallback: "操作未成，請稍後再試。",
+    accountDeletionRestoredTitle: "名籍已復",
+    accountDeletionRestoredCopy:
+      "此番登門已撤銷刪除，Cindy 登門名籍仍予保留。",
+    errorFallback: "登入未成，請再試。",
+    endpointGateTitle: "無從取得伺服器設定",
+    endpointGateSubtitle: "請察網路連線後再試({reason})",
+    endpointGateResetToDev: "歸 Dev",
+    retry: "再試",
+    configIssueAuthBaseUrl: "登入服務地址須為 http(s) URL。",
+  },
+  "zh-Hans-x-lzh": {
+    title: "登 Cindy 之门",
+    phonePlaceholder: "书手机号",
+    emailPlaceholder: "书电子邮件地址",
+    invalidEmail: "电子邮件地址有误，请正书之",
+    invalidPhone: "手机号有误，请正书之",
+    continue: "续",
+    apple: "以 Apple 续之",
+    google: "以 Google 续之",
+    wechat: "以微信续之",
+    chooseMethod: "择登门之法",
+    orgDetected: "{email} 隶属企业「{org}」",
+    enterpriseLogin: "以企业身份登门",
+    personalLogin: "以个人身份登门",
+    emailCode: "遣电子邮件验证码",
+    ssoRequired: "此组织须以企业 SSO 登门。",
+    ssoEntry: "以企业 SSO 登门",
+    consentStatement:
+      "余已阅毕并同意 <terms>服务条款</terms> 及 <privacy>隐私政策</privacy>",
+    consentDialogTitle: "服务条款及隐私政策",
+    consentDialogBody:
+      "请阅 Cindy 下列协议并同意，方可续行：<terms>服务条款</terms>、<privacy>隐私政策</privacy>",
+    consentAgree: "同意",
+    consentDisagree: "暂不同意",
+    ssoOrgTitle: "企业 SSO 登门",
+    ssoOrgSubtitle: "书企业 ID、组织 slug 或已验证之域名，以转至企业单点登录。",
+    ssoOrgPlaceholder: "企业 ID、slug 或域名",
+    ssoOrgHint: "不知企业登门标识？请询企业管理员。",
+    ssoOrgDetected: "择企业「{org}」之单点登录方式",
+    realmConsentTitle: "连企业所在之区域",
+    realmConsentPersonalTitle: "察有企业登门",
+    realmConsentPersonalBodyCn: "此邮箱所属企业位于中国大陆区。\n可用企业 SSO，或续以个人登门。",
+    realmConsentPersonalBodyGlobal: "此邮箱所属企业位于国际区。\n可用企业 SSO，或续以个人登门。",
+    realmConsentEnterpriseLogin: "企业 SSO",
+    realmConsentContinuePersonal: "续以个人登门",
+    realmConsentBodyCn:
+      "君之企业位于中国大陆区。\n续之，则 Cindy 将连该区域。",
+    realmConsentBodyGlobal:
+      "君之企业位于国际区。\n续之，则 Cindy 将连该区域。",
+    realmConsentAgree: "续登门",
+    realmConsentDisagree: "罢",
+    ssoVerificationTitle: "验企业联系方式",
+    ssoVerificationSubtitle:
+      "初次登门，须验身份提供方所返之联系方式 {target}。",
+    enterCode: "书验证码",
+    codeSentTo: "验证码已遣至",
+    codePlaceholder: "6 位验证码",
+    signIn: "登门",
+    resendCode: "再遣验证码",
+    captchaTitle: "安全验证",
+    captchaFailed: "安全验证加载未成，请察网络后再试。",
+    captchaRetry: "再试",
+    captchaCancel: "罢",
+    resendCountdown: "{n} 秒后可再遣",
+    chooseAccount: "择身份",
+    chooseAccountSubtitle: "择此番所入之个人或组织身份。",
+    personalAccount: "个人身份",
+    bindPhoneTitle: "绑手机号码",
+    bindPhoneSubtitle: "须验手机号，方能登门。",
+    bindEmailTitle: "绑真实电子邮件",
+    bindEmailSubtitle: "须验真实电子邮件，方能登门。",
+    sendCode: "遣验证码",
+    back: "归",
+    cancel: "罢",
+    browserTitle: "请于浏览器中完成登门",
+    browserSubtitle: "毕则自归 Cindy。",
+    working: "方理…",
+    configTitle: "登门之设未全",
+    accountDeletionPendingTitle: "名籍待删",
+    accountDeletionProcessingTitle: "名籍删除中",
+    accountDeletionCompletedTitle: "名籍已删",
+    accountDeletionPendingCopy:
+      "预定 {date} 永久删除。今重新登门，即可撤销删除。",
+    accountDeletionProcessingCopy:
+      "Cindy 登门名籍正在删除，事毕则永久删除。",
+    accountDeletionCompletedCopy: "Cindy 登门名籍已删。",
+    accountDeletionDismiss: "知之矣",
+    accountDeletionSettingsAction: "删除名籍",
+    accountDeletionScreenTitle: "删除名籍",
+    accountDeletionLoading: "方核名籍状态…",
+    accountDeletionUnavailableTitle: "今不可行此举",
+    accountDeletionUnavailableCopy: "请归规制页，稍后再试。",
+    accountDeletionVerifyTitle: "验名籍所属",
+    accountDeletionCodeSent: "验证码已遣至 {target}，10 分钟内有效。",
+    accountDeletionAcknowledgeA11y: "确认已知删除名籍之后果",
+    accountDeletionAcknowledgeCopy:
+      "余已知悉：此手机将即刻辞出；他处客户端待登门状态失效后辞出；30 天内重新登门可撤销删除；逾期则 Cindy 登门名籍永久删除，不可复原。",
+    accountDeletionConfirmingA11y: "方确认删除名籍",
+    accountDeletionConfirmA11y: "确认删除名籍",
+    accountDeletionConfirming: "确认中",
+    accountDeletionConfirm: "确认删除名籍",
+    accountDeletionBeforeTitle: "删除之前，请确认",
+    accountDeletionImpactCurrentClient:
+      "确认之后，此手机即刻辞出；他处客户端待登门状态失效后辞出。",
+    accountDeletionImpactGrace:
+      "名籍入 30 天等待期；期内重新登门，即可撤销删除。",
+    accountDeletionImpactPermanent:
+      "等待期满，Cindy 登门名籍将永久删除。",
+    accountDeletionAppleNotice:
+      "以 Apple 登门之授权，或须君于 Apple ID 设置中手动禁用 Cindy。",
+    accountDeletionCodeWillSend: "验证码将遣至 {target}。",
+    accountDeletionSendingCode: "方遣",
+    accountDeletionErrorChallenge: "验证码有误或已过期，请察之再试。",
+    accountDeletionErrorAttempts: "验证次数过多，请再遣验证码。",
+    accountDeletionErrorRate: "操作过频，请稍后再试。",
+    accountDeletionErrorPending: "名籍已入删除等待期。",
+    accountDeletionErrorProcessing: "名籍正在删除之中。",
+    accountDeletionErrorUnavailable: "今不可行此举。",
+    accountDeletionErrorNetwork: "网络连接有异，请稍后再试。",
+    accountDeletionErrorFallback: "操作未成，请稍后再试。",
+    accountDeletionRestoredTitle: "名籍已复",
+    accountDeletionRestoredCopy:
+      "此番登门已撤销删除，Cindy 登门名籍仍予保留。",
+    errorFallback: "登录未成，请再试。",
+    endpointGateTitle: "无从取得服务器设置",
+    endpointGateSubtitle: "请察网络连接后再试({reason})",
+    endpointGateResetToDev: "归 Dev",
+    retry: "再试",
+    configIssueAuthBaseUrl: "登录服务地址须为 http(s) URL。",
+  },
   "zh-CN": {
     title: "登录 Cindy",
     phonePlaceholder: "输入手机号",
@@ -1202,6 +1442,8 @@ export const loginMessages: Record<
  * 纯函数:BCP 47 languageTag → 登录 locale。
  * 中文按脚本/区域选择 zh-TW 或 zh-CN；zh-TW 仅影响客户端文案，不改变 auth wire locale;
  * ja / ko 前缀直取;其余兜底 en。大小写不敏感。
+ * 文言(zh-Hant-x-lzh / zh-Hans-x-lzh)只能在设置里手动选择,系统语言永不解析到它
+ * (zh-Hant → zh-TW,zh-Hans → zh-CN)。
  */
 export function resolveLoginLocale(
   languageTag: string | null | undefined,
@@ -1225,7 +1467,12 @@ export function getLoginLanguage(): LoginLocale {
  */
 export function getAuthLocale(): "zh-CN" | "en" {
   const locale = getLoginLanguage();
-  return locale === "zh-CN" || locale === "zh-TW" ? "zh-CN" : "en";
+  return locale === "zh-CN" ||
+    locale === "zh-TW" ||
+    locale === "zh-Hant-x-lzh" ||
+    locale === "zh-Hans-x-lzh"
+    ? "zh-CN"
+    : "en";
 }
 
 export function loginText(key: LoginMessageKey): string {
@@ -1237,6 +1484,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_CODE: {
     "zh-CN": "验证码无效或已过期。",
     "zh-TW": "驗證碼無效或已過期。",
+    "zh-Hant-x-lzh": "驗證碼無效或已逾期。",
+    "zh-Hans-x-lzh": "验证码无效或已逾期。",
     en: "The verification code is invalid or expired.",
     ja: "認証コードが無効か、有効期限が切れています。",
     ko: "인증 코드가 유효하지 않거나 만료되었습니다.",
@@ -1250,6 +1499,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_PARAMS: {
     "zh-CN": "输入内容格式不正确。",
     "zh-TW": "輸入內容格式不正確。",
+    "zh-Hant-x-lzh": "所書之格式有誤。",
+    "zh-Hans-x-lzh": "所书之格式有误。",
     en: "Please check the information you entered.",
     ja: "入力内容の形式が正しくありません。",
     ko: "입력한 내용의 형식이 올바르지 않습니다.",
@@ -1263,6 +1514,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   RATE_LIMITED: {
     "zh-CN": "操作过于频繁，请稍后再试。",
     "zh-TW": "操作過於頻繁，請稍後再試。",
+    "zh-Hant-x-lzh": "操作過頻，請稍後再試。",
+    "zh-Hans-x-lzh": "操作过频，请稍后再试。",
     en: "Too many attempts. Please wait and try again.",
     ja: "操作が多すぎます。しばらく待ってから再試行してください。",
     ko: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
@@ -1276,6 +1529,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   SSO_LOGIN_REQUIRED: {
     "zh-CN": "该邮箱所属企业要求通过 SSO 登录。",
     "zh-TW": "該電子郵件所屬企業要求透過 SSO 登入。",
+    "zh-Hant-x-lzh": "此電子郵件所屬企業，須以 SSO 登門。",
+    "zh-Hans-x-lzh": "此电子邮件所属企业，须以 SSO 登门。",
     en: "This organization requires SSO sign-in.",
     ja: "この組織は SSO ログインが必要です。",
     ko: "이 조직은 SSO 로그인이 필요합니다.",
@@ -1289,6 +1544,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_RESPONSE: {
     "zh-CN": "登录服务返回了无法识别的结果，请稍后重试。",
     "zh-TW": "登入服務返回了無法識別的結果，請稍後再試。",
+    "zh-Hant-x-lzh": "登入服務所返之結果無從辨識，請稍後再試。",
+    "zh-Hans-x-lzh": "登录服务所返之结果无从辨识，请稍后再试。",
     en: "The sign-in service returned an unrecognized result. Try again later.",
     ja: "ログインサービスから認識できない結果が返されました。しばらくしてから再試行してください。",
     ko: "로그인 서비스에서 알 수 없는 결과를 반환했습니다. 잠시 후 다시 시도해 주세요.",
@@ -1302,6 +1559,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   AUTH_SERVICE_UNAVAILABLE: {
     "zh-CN": "登录服务暂不可用，请稍后重试。",
     "zh-TW": "登入服務暫不可用，請稍後再試。",
+    "zh-Hant-x-lzh": "登入服務暫不可用，請稍後再試。",
+    "zh-Hans-x-lzh": "登录服务暂不可用，请稍后重试。",
     en: "The sign-in service is temporarily unavailable. Try again later.",
     ja: "ログインサービスは一時的に利用できません。しばらくしてからお試しください。",
     ko: "로그인 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
@@ -1315,6 +1574,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   CAPTCHA_REQUIRED: {
     "zh-CN": "请先完成安全验证。",
     "zh-TW": "請先完成安全驗證。",
+    "zh-Hant-x-lzh": "請先完成安全驗證。",
+    "zh-Hans-x-lzh": "请先完成安全验证。",
     en: "Please complete the security check first.",
     ja: "先にセキュリティチェックを完了してください。",
     ko: "먼저 보안 확인을 완료해 주세요.",
@@ -1328,6 +1589,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   CAPTCHA_INVALID: {
     "zh-CN": "安全验证未通过，请重试。",
     "zh-TW": "安全驗證未通過，請重試。",
+    "zh-Hant-x-lzh": "安全驗證未通過，請再試。",
+    "zh-Hans-x-lzh": "安全验证未通过，请再试。",
     en: "Security check failed. Please try again.",
     ja: "セキュリティチェックに失敗しました。もう一度お試しください。",
     ko: "보안 확인에 실패했습니다. 다시 시도해 주세요.",
@@ -1341,6 +1604,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   CAPTCHA_UNAVAILABLE: {
     "zh-CN": "安全验证服务暂不可用，请稍后再试。",
     "zh-TW": "安全驗證服務暫時無法使用，請稍後再試。",
+    "zh-Hant-x-lzh": "安全驗證服務暫不可用，請稍後再試。",
+    "zh-Hans-x-lzh": "安全验证服务暂不可用，请稍后再试。",
     en: "The security check is temporarily unavailable. Please try again later.",
     ja: "セキュリティチェックは一時的に利用できません。しばらくしてから再試行してください。",
     ko: "보안 확인 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
@@ -1354,6 +1619,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_AUTH_CODE: {
     "zh-CN": "登录授权已过期，请重新发起。",
     "zh-TW": "登入授權已過期，請重新發起。",
+    "zh-Hant-x-lzh": "登入授權已過期，請重新發起。",
+    "zh-Hans-x-lzh": "登录授权已过期，请重新发起。",
     en: "The authorization expired. Please start again.",
     ja: "ログインの認可の有効期限が切れました。もう一度やり直してください。",
     ko: "로그인 인증이 만료되었습니다. 다시 시도해 주세요.",
@@ -1367,6 +1634,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_LOGIN_TICKET: {
     "zh-CN": "身份选择已过期，请重新登录。",
     "zh-TW": "身分選擇已過期，請重新登入。",
+    "zh-Hant-x-lzh": "身分之擇已過期，請重新登門。",
+    "zh-Hans-x-lzh": "身份之择已过期，请重新登门。",
     en: "Account selection expired. Please sign in again.",
     ja: "アカウント選択の有効期限が切れました。再度ログインしてください。",
     ko: "계정 선택이 만료되었습니다. 다시 로그인해 주세요.",
@@ -1380,6 +1649,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_BIND_TICKET: {
     "zh-CN": "绑定流程已过期，请重新登录。",
     "zh-TW": "綁定流程已過期，請重新登入。",
+    "zh-Hant-x-lzh": "綁定流程已過期，請重新登門。",
+    "zh-Hans-x-lzh": "绑定流程已过期，请重新登门。",
     en: "Verification expired. Please sign in again.",
     ja: "認証手続きの有効期限が切れました。再度ログインしてください。",
     ko: "인증 절차가 만료되었습니다. 다시 로그인해 주세요.",
@@ -1393,6 +1664,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   STATE_MISMATCH: {
     "zh-CN": "登录状态校验失败，请重新登录。",
     "zh-TW": "登入狀態校驗失敗，請重新登入。",
+    "zh-Hant-x-lzh": "登入狀態校驗未成，請重新登門。",
+    "zh-Hans-x-lzh": "登录状态校验未成，请重新登门。",
     en: "Sign-in state validation failed. Please try again.",
     ja: "ログイン状態の検証に失敗しました。もう一度お試しください。",
     ko: "로그인 상태 검증에 실패했습니다. 다시 시도해 주세요.",
@@ -1406,6 +1679,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   REGION_MISMATCH: {
     "zh-CN": "客户端区域与登录服务不匹配。",
     "zh-TW": "客戶端區域與登入服務不匹配。",
+    "zh-Hant-x-lzh": "客戶端區域與登入服務不符。",
+    "zh-Hans-x-lzh": "客户端区域与登录服务不符。",
     en: "This app does not match the authentication region.",
     ja: "このアプリはログインサービスのリージョンと一致しません。",
     ko: "이 앱은 로그인 서비스 지역과 일치하지 않습니다.",
@@ -1419,6 +1694,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   NETWORK_ERROR: {
     "zh-CN": "网络连接失败，请检查网络后重试。",
     "zh-TW": "網路連線失敗，請檢查網路後重試。",
+    "zh-Hant-x-lzh": "網路連線未成，請察網路後再試。",
+    "zh-Hans-x-lzh": "网络连接未成，请察网络后再试。",
     en: "Could not connect. Check your network and try again.",
     ja: "ネットワークに接続できません。接続を確認してから再試行してください。",
     ko: "네트워크에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도해 주세요.",
@@ -1432,6 +1709,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   REQUEST_TIMEOUT: {
     "zh-CN": "登录请求超时，请重试。",
     "zh-TW": "登入請求超時，請重試。",
+    "zh-Hant-x-lzh": "登入請求逾時，請再試。",
+    "zh-Hans-x-lzh": "登录请求逾时，请再试。",
     en: "The sign-in request timed out. Please try again.",
     ja: "ログイン要求がタイムアウトしました。もう一度お試しください。",
     ko: "로그인 요청 시간이 초과되었습니다. 다시 시도해 주세요.",
@@ -1445,6 +1724,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   USER_CANCELLED: {
     "zh-CN": "已取消登录。",
     "zh-TW": "已取消登入。",
+    "zh-Hant-x-lzh": "登門已取消。",
+    "zh-Hans-x-lzh": "登门已取消。",
     en: "Sign-in was cancelled.",
     ja: "ログインをキャンセルしました。",
     ko: "로그인이 취소되었습니다.",
@@ -1458,6 +1739,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   SOCIAL_PROVIDER_NOT_CONFIGURED: {
     "zh-CN": "该登录方式尚未完成配置。",
     "zh-TW": "該登入方式尚未完成設定。",
+    "zh-Hant-x-lzh": "此登門之法尚未設妥。",
+    "zh-Hans-x-lzh": "此登门之法尚未设妥。",
     en: "This sign-in method is not configured yet.",
     ja: "このログイン方法はまだ設定されていません。",
     ko: "이 로그인 방법은 아직 설정되지 않았습니다.",
@@ -1471,6 +1754,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   SOCIAL_PROVIDER_UNAVAILABLE: {
     "zh-CN": "当前设备无法使用该登录方式。",
     "zh-TW": "當前裝置無法使用該登入方式。",
+    "zh-Hant-x-lzh": "此裝置不可用此登門之法。",
+    "zh-Hans-x-lzh": "此设备不可用此登门之法。",
     en: "This sign-in method is unavailable on this device.",
     ja: "このデバイスではこのログイン方法を利用できません。",
     ko: "이 기기에서는 이 로그인 방법을 사용할 수 없습니다.",
@@ -1484,6 +1769,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   AUTH_REQUEST_FAILED: {
     "zh-CN": "登录服务暂时不可用，请稍后重试。",
     "zh-TW": "登入服務暫時不可用，請稍後重試。",
+    "zh-Hant-x-lzh": "登入服務一時不可用，請稍後再試。",
+    "zh-Hans-x-lzh": "登录服务一时不可用，请稍后再试。",
     en: "The sign-in service is temporarily unavailable.",
     ja: "ログインサービスは一時的に利用できません。しばらくしてからお試しください。",
     ko: "로그인 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
@@ -1497,6 +1784,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   ACCOUNT_UNAVAILABLE: {
     "zh-CN": "当前账号不可用，已退出登录。",
     "zh-TW": "目前帳號不可用，已登出。",
+    "zh-Hant-x-lzh": "此名籍不可用，已辭出。",
+    "zh-Hans-x-lzh": "此名籍不可用，已辞出。",
     en: "This account is unavailable. You have been signed out.",
     ja: "このアカウントは利用できません。ログアウトしました。",
     ko: "이 계정을 사용할 수 없습니다. 로그아웃되었습니다.",
@@ -1510,6 +1799,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   ORG_SSO_NOT_FOUND: {
     "zh-CN": "未找到该企业，或该企业未启用 SSO 登录。",
     "zh-TW": "未找到該企業，或該企業未啟用 SSO 登入。",
+    "zh-Hant-x-lzh": "未尋得此企業，或此企業未啟 SSO 登入。",
+    "zh-Hans-x-lzh": "未寻得此企业，或此企业未启 SSO 登录。",
     en: "Company not found, or it has no SSO connection enabled.",
     ja: "会社が見つからないか、SSO ログインが有効になっていません。",
     ko: "회사를 찾을 수 없거나 SSO 로그인이 활성화되어 있지 않습니다.",
@@ -1523,6 +1814,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   ORG_REALM_AMBIGUOUS: {
     "zh-CN": "该企业标识同时存在于两个区域，请联系企业管理员处理。",
     "zh-TW": "該企業標識同時存在於兩個區域，請聯絡企業管理員處理。",
+    "zh-Hant-x-lzh": "此企業標識並存於兩區域，請詢企業管理員處置。",
+    "zh-Hans-x-lzh": "此企业标识并存于两区域，请询企业管理员处置。",
     en: "This enterprise identifier exists in both regions. Contact your administrator.",
     ja: "この企業識別子は両方の地域に存在します。管理者にお問い合わせください。",
     ko: "이 기업 식별자가 두 지역에 모두 존재합니다. 관리자에게 문의하세요.",
@@ -1536,6 +1829,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   ORG_REALM_UNAVAILABLE: {
     "zh-CN": "暂时无法确认企业所在区域，请检查网络后重试。",
     "zh-TW": "暫時無法確認企業所在區域，請檢查網路後重試。",
+    "zh-Hant-x-lzh": "一時無從確認企業所在區域，請察網路後再試。",
+    "zh-Hans-x-lzh": "一时无从确认企业所在区域，请察网络后再试。",
     en: "Cindy cannot verify the enterprise region right now. Check your connection and retry.",
     ja: "企業の地域を現在確認できません。ネットワークを確認して再試行してください。",
     ko: "현재 기업 지역을 확인할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
@@ -1549,6 +1844,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   SSO_EMAIL_REQUIRED: {
     "zh-CN": "该企业身份未提供有效邮箱，请联系企业管理员检查 IdP 配置。",
     "zh-TW": "該企業身分未提供有效電子郵件，請聯絡企業管理員檢查 IdP 設定。",
+    "zh-Hant-x-lzh": "此企業身分未提供有效電子郵件，請詢企業管理員察其 IdP 設定。",
+    "zh-Hans-x-lzh": "此企业身份未提供有效电子邮件，请询企业管理员察其 IdP 设置。",
     en: "Your work identity did not provide a valid email. Ask your admin to check the IdP configuration.",
     ja: "企業 ID に有効なメールアドレスが提供されていません。管理者に IdP 設定の確認をご依頼ください。",
     ko: "기업 신원에 유효한 이메일이 제공되지 않았습니다. 관리자에게 IdP 설정 확인을 요청하세요.",
@@ -1562,6 +1859,8 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   INVALID_SSO_VERIFICATION_TICKET: {
     "zh-CN": "企业身份验证已过期，请重新发起 SSO 登录。",
     "zh-TW": "企業身分驗證已過期，請重新發起 SSO 登入。",
+    "zh-Hant-x-lzh": "企業身分驗證已過期，請重新發起 SSO 登入。",
+    "zh-Hans-x-lzh": "企业身份验证已过期，请重新发起 SSO 登录。",
     en: "Work identity verification expired. Start SSO sign-in again.",
     ja: "企業 ID の確認期限が切れました。再度 SSO ログインを開始してください。",
     ko: "기업 신원 확인이 만료되었습니다. SSO 로그인을 다시 시작하세요.",

@@ -68,7 +68,30 @@
       "fr": "Français",
       "de": "Deutsch",
       "pt-PT": "Português (Portugal)",
-      "pt-BR": "Português (Brasil)"
+      "pt-BR": "Português (Brasil)",
+      "classical": "文言"
+    },
+    "classical": {
+      "label": "Schrift und Stil",
+      "hint": "Die KI antwortet im gewählten Stil. Mit „Übliche Antworten“ bleibt die Oberfläche in klassischem Chinesisch und die Antworten folgen deiner Sprache.",
+      "scriptAriaLabel": "Schrift des klassischen Chinesisch",
+      "styleAriaLabel": "Antwortstil der KI",
+      "script": {
+        "hans": "简体",
+        "hant": "繁體"
+      },
+      "styles": {
+        "prose": "Klassische Prosa (Standard)",
+        "tang-poetry": "Tang-Lyrik",
+        "song-ci": "Song-Ci",
+        "yuan-qu": "Yuan-Qu",
+        "chu-ci": "Chuci",
+        "parallel-prose": "Parallelprosa",
+        "pre-qin": "Vor-Qin-Meister",
+        "historian": "Stil des Großen Historikers",
+        "ming-qing-essay": "Ming-Qing-Essays",
+        "plain": "Übliche Antworten"
+      }
     }
   },
   "version": {

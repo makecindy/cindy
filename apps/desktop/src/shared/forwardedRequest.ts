@@ -9,9 +9,11 @@ import zhCN from '../renderer/i18n/locales/zh-CN/common.json';
 import zhTW from '../renderer/i18n/locales/zh-TW/common.json';
 import ja from '../renderer/i18n/locales/ja/common.json';
 import ko from '../renderer/i18n/locales/ko/common.json';
+import zhHantLzh from '../renderer/i18n/locales/zh-Hant-x-lzh/common.json';
+import zhHansLzh from '../renderer/i18n/locales/zh-Hans-x-lzh/common.json';
 export { verifiedOwnerRequestText } from '@cindy/maker-shared/auto-review-intent';
 
-// The same locale resources serve persisted text and host task context.
+// Keep every historical dialect readable: persisted receipts are verified byte-for-byte.
 const FORWARDED_REQUEST_COPY = {
   'es': es.forwardedRequest,
   'fr': fr.forwardedRequest,
@@ -23,6 +25,8 @@ const FORWARDED_REQUEST_COPY = {
   'zh-TW': zhTW.forwardedRequest,
   ja: ja.forwardedRequest,
   ko: ko.forwardedRequest,
+  'zh-Hant-x-lzh': zhHantLzh.forwardedRequest,
+  'zh-Hans-x-lzh': zhHansLzh.forwardedRequest,
 } satisfies Record<SupportedLocale, typeof en.forwardedRequest>;
 
 /** Host-owned source evidence. It describes authorship, never execution permission. */
@@ -56,6 +60,14 @@ export function readForwardedRequestSource(value: unknown): ForwardedRequestSour
 
 /** JSON string quoting keeps an agent-written label inside the supplement. No trimming or summarizing. */
 export function formatForwardedRequest(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale = DEFAULT_LOCALE): string {
+  // New UI languages must also reach receivers released before those catalogs.
+  // Until the wire negotiates dialect support, emit an existing English envelope.
+  const wireLocale = locale === 'es' || locale === 'fr' || locale === 'de' || locale === 'pt-PT' || locale === 'pt-BR'
+    ? 'en' : locale;
+  return formatReceiptDialect(source, supplement, wireLocale);
+}
+
+function formatReceiptDialect(source: ForwardedRequestSource, supplement: string, locale: SupportedLocale): string {
   const copy = FORWARDED_REQUEST_COPY[locale];
   return [
     source.userText === null ? copy.sourceMissing : copy.sourcePresent,
@@ -78,7 +90,7 @@ export function matchesForwardedRequest(source: ForwardedRequestSource, body: st
     try {
       const supplement: unknown = JSON.parse(lines[2].slice(matchedPrefix.length));
       if (typeof supplement !== 'string') return false;
-      const expected = formatForwardedRequest(source, supplement, locale);
+      const expected = formatReceiptDialect(source, supplement, locale);
       if (expected === body) return true;
       if (locale !== 'zh-CN' || matchedPrefix !== legacyPrefix) return false;
       // Original Chinese hosts predate the localized source wording as well as the capitalized label.

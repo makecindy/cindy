@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "프로젝트 파일이 {{limit, number}}개를 넘어 복사할 수 없습니다. 파일이 더 적은 프로젝트를 복사하세요."
   },
   "sharedTask": {
+    "officialRelayNote": "내 중계를 사용 중입니다. 공유 작업 내용은 계속 Cindy 공식 중계를 거칩니다.",
     "selfJoin": "내가 시작한 공유 작업이므로 참여할 필요가 없습니다. “내가 공유한 항목”에서 여세요.",
     "manageSharing": "공유 관리",
     "manageMembers": "멤버 관리…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "모든 게스트의 접근이 차단됩니다. 작업 기록은 유지됩니다."
   },
   "providerShare": {
+    "officialRelayNote": "내 중계를 사용 중입니다. 제공자 공유 내용은 계속 Cindy 공식 중계를 거칩니다.",
     "owned": {
       "title": "내가 공유한 제공자"
     },
@@ -1088,7 +1090,8 @@
     "allow": "원격 데스크톱 허용",
     "allowHint": "같은 계정의 기기에서 이 컴퓨터의 모든 앱을 보고 조작하도록 허용합니다. 위의 기기 제어도 켜주세요.",
     "permissionHint": "컴퓨터 시스템 설정에서 화면 기록과 손쉬운 사용을 허용한 후 다시 연결하세요.",
-    "controlUnavailable": "원격 컴퓨터에서 입력을 받을 수 없습니다. 제어 권한과 연결을 확인한 다음 다시 연결하세요.",
+    "inputUnsupported": "이 컴퓨터의 현재 데스크톱 환경에서는 Cindy를 통한 원격 키보드 및 마우스 제어가 지원되지 않습니다.",
+    "controlUnavailable": "원격 키보드 및 마우스 제어를 일시적으로 사용할 수 없습니다. 다시 연결해 주세요.",
     "beingControlled": "데스크톱을 원격으로 제어 중",
     "beingViewed": "데스크톱을 원격으로 보는 중",
     "controlledByDevice": "{{name}}에서 데스크톱을 원격으로 제어 중",
@@ -2388,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "간체·번체와 문체",
+        "hint": "AI가 선택한 문체로 답합니다. ‘일반 답변’을 고르면 화면은 문언문 그대로 두고 답변은 사용자의 언어를 따릅니다.",
+        "scriptAriaLabel": "문언문 간체·번체",
+        "styleAriaLabel": "AI 답변 문체",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "문언문(기본)",
+          "tang-poetry": "당시",
+          "song-ci": "송사",
+          "yuan-qu": "원곡",
+          "chu-ci": "초사",
+          "parallel-prose": "변문",
+          "pre-qin": "선진 제자",
+          "historian": "사기 문체",
+          "ming-qing-essay": "명청 소품",
+          "plain": "일반 답변"
+        }
       }
     },
     "userProfile": {
@@ -3130,49 +3156,89 @@
       }
     },
     "sessionImport": {
-      "title": "로컬 세션 가져오기",
-      "description": "로컬 Claude Code / Codex 기록을 읽기 전용으로 스캔합니다. 목록에서 선택한 세션만 가져오며, 건너뛴 내부 세션은 표시되지 않고 가져올 수 없습니다.",
-      "scan": "스캔",
-      "scanning": "스캔 중",
-      "emptyTitle": "먼저 로컬 기록을 스캔하세요",
-      "emptyDescription": "스캔은 데이터베이스에 기록하거나 사이드바를 변경하지 않습니다.",
-      "noCandidates": "현재 필터에서 가져올 수 있는 세션이 없습니다.",
-      "collapse": "그룹 접기",
-      "expand": "그룹 펼치기",
-      "selectGroup": "그룹 전체 선택",
-      "sessions": "개 세션",
-      "selected": "{{count}}개 선택됨",
-      "importSelected": "선택 항목 가져오기",
-      "importing": "가져오는 중",
+      "title": "세션 가져오기",
+      "description": "다른 AI 코딩 도구의 세션을 Cindy로 가져와 이어서 작업하세요. 원본 기록은 읽기만 하고 변경하지 않습니다.",
+      "rescan": "다시 검색",
+      "allSources": "모든 출처",
+      "search": "세션 또는 폴더 검색",
+      "projectFilter": "{{name}}만 보기",
+      "clearProjectFilter": "모든 프로젝트 보기",
+      "hiddenCount_other": "{{count}}개 숨김",
+      "hidden": {
+        "head": "목록에 없는 항목",
+        "hint": "선택한 항목은 목록에 표시됩니다",
+        "cindy": "Cindy가 직접 실행한 세션",
+        "temp": "임시 폴더의 세션",
+        "internal": "Agent 내부 세션(자동 검토, 하위 Agent)",
+        "imported": "이미 가져온 세션",
+        "sourceError": "{{name}} 기록을 읽을 수 없습니다"
+      },
+      "missingDir": "원래 폴더 없음",
+      "groupTasks_other": "세션 {{count}}개",
+      "dialogue": "대화",
       "archived": "보관됨",
+      "unsupported": "지원하지 않는 형식",
       "untitled": "제목 없는 세션",
-      "noWorkingDir": "작업 디렉터리 없음",
-      "summary": {
-        "total": "표시됨",
-        "totalHint": "가져오기로 선택 가능",
-        "projects": "기존 프로젝트 세션",
-        "projectsHint": "현재 사이드바 프로젝트에 속한 세션",
-        "dialogue": "새 폴더 세션",
-        "dialogueHint": "프로젝트 그룹을 생성할 세션",
-        "filtered": "건너뜀",
-        "filteredHint": "내부 세션이거나 이미 앱에 있음"
+      "selectAll": "모두 선택",
+      "selectGroup": "그룹 전체 선택",
+      "expand": "펼치기",
+      "collapse": "접기",
+      "selectedSummary_other": "{{count}}개 선택됨 · {{size}}",
+      "pickHint": "Cindy로 가져올 세션을 선택하세요",
+      "importCount_other": "세션 {{count}}개 가져오기",
+      "import": "가져오기",
+      "scanning": "이 컴퓨터에서 세션을 찾는 중…",
+      "scanFailed": "검색을 완료하지 못했습니다. 다시 시도하세요.",
+      "emptyTitle": "이 컴퓨터에 가져올 세션이 없습니다",
+      "emptyDescription": "Cindy는 아래 도구의 세션을 가져올 수 있습니다. 도구를 사용한 뒤 다시 검색하세요.",
+      "noMatch": "조건에 맞는 세션이 없습니다",
+      "allHidden": "모두 숨겨져 있습니다. 오른쪽 위 「숨김」에서 표시할 수 있습니다.",
+      "confirm": {
+        "title_other": "세션 {{count}}개를 가져올까요?",
+        "body": "약 {{minutes}}분 걸리며 디스크 공간을 최대 {{size}} 사용합니다. 백그라운드에서 진행되며 언제든 중지할 수 있고, 이미 가져온 세션은 유지됩니다.",
+        "cancel": "취소"
       },
-      "filters": {
-        "source": "소스",
-        "placement": "위치",
-        "all": "전체",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "기존 프로젝트",
-        "dialogue": "새 폴더"
+      "progress": {
+        "title_other": "세션 {{count}}개 가져오는 중",
+        "background": "이 페이지를 떠나도 가져오기는 백그라운드에서 계속됩니다.",
+        "stop": "중지",
+        "queued": "대기 중",
+        "copy": "원본 기록 복사 중",
+        "messages_other": "메시지 {{count}}개 저장 중",
+        "verify": "이어서 작업할 수 있는지 확인 중"
       },
-      "toast": {
-        "scanFailed": "스캔 실패",
-        "importFailed": "가져오기 실패",
-        "imported": "가져오기 완료: 신규 {{inserted}}개, 업데이트 {{updated}}개"
+      "result": {
+        "title_other": "세션 {{count}}개를 가져왔습니다",
+        "stoppedTitle": "가져오기를 중지했습니다",
+        "ready_other": "{{count}}개 바로 이어서 작업 가능",
+        "action_other": "{{count}}개 확인 필요",
+        "failed_other": "{{count}}개 실패",
+        "readyGroup": "바로 이어서 작업 가능 ({{count}})",
+        "readyNative": "이어서 작업 가능 · {{harness}}에서 그대로 계속",
+        "readyHandoff": "이어서 작업 가능 · {{harness}}(으)로 이어받음, 언제든 변경 가능",
+        "missingDir": "원래 폴더가 없습니다. 폴더를 선택하면 이어서 작업할 수 있습니다.",
+        "chooseFolder": "폴더 선택",
+        "relocateFailed": "이 폴더로 바꾸지 못했습니다. 다시 시도하세요.",
+        "cancelled": "가져오기 전에 중지됨",
+        "retry": "다시 시도",
+        "open": "열기",
+        "done": "완료"
       },
-      "selectAll": "현재 필터 결과 모두 선택({{count}}개)",
-      "selectedOutsideFilter": "(그중 {{count}}개는 현재 필터 밖)"
+      "failure": {
+        "read-failed": "가져오지 못함: 원본 기록을 읽을 수 없습니다",
+        "unsupported-version": "가져오지 못함: 이 버전의 기록 형식은 아직 지원하지 않습니다",
+        "empty": "가져오지 못함: 원본 기록에 메시지가 없습니다",
+        "not-found": "가져오지 못함: 원본 기록이 없습니다",
+        "disk-full": "가져오지 못함: 디스크 공간이 부족합니다",
+        "native-unloadable": "가져오지 못함: 원본 기록을 불러올 수 없습니다"
+      },
+      "marker": {
+        "from": "{{source}}에서 가져옴 · {{date}}",
+        "folder": "원래 폴더 {{path}}",
+        "end": "위 내용은 {{source}}에서 가져온 기록입니다",
+        "endHandoff": "위 내용은 {{source}}에서 가져온 기록입니다. 여기부터 {{harness}}(으)로 이어서 작업합니다."
+      },
+      "projectMenu": "이 프로젝트의 다른 도구 세션 가져오기…"
     },
     "connections": {
       "codex": {
@@ -5681,7 +5747,7 @@
         "current": "사용 중",
         "ownerName": "이 컴퓨터",
         "unavailable": "내 중계를 사용하려면 Cindy에 로그인하고 시스템 키체인을 사용할 수 있어야 합니다.",
-        "limits": "내 중계를 사용하는 동안에는 휴대폰 푸시 알림, 제공자 공유, 공유 작업을 사용할 수 없습니다.",
+        "limits": "내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다.",
         "actions": {
           "join": "다른 중계에 참여",
           "useOfficial": "공식 중계로 돌아가기",
@@ -5897,7 +5963,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림, 제공자 공유, 공유 작업을 사용할 수 없습니다."
+          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
         },
         "dialog": {
           "steps": {
@@ -10449,6 +10515,7 @@
       "header": {
         "stepRunning": "{{name}} 님이 {{step}}단계 작업 중",
         "speaking": "{{name}} 님이 답하는 중…",
+        "queued": "{{name}} 대기 중",
         "planning": "{{name}} 님이 역할을 나누는 중…"
       },
       "memberCount_one": "멤버 {{count}}명",
@@ -14350,11 +14417,6 @@
         "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
         "removeFromSidebarConfirmAction": "프로젝트 제거",
         "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
-        "syncCodex": "이 프로젝트의 Codex 세션 동기화",
-        "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
-        "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",
-        "syncCodexNone": "이 프로젝트의 Codex 세션을 찾을 수 없습니다",
-        "syncCodexFailed": "Codex 동기화 실패: {{error}}",
         "showFiles": "파일 보기",
         "archivedAll": "모두 보관",
         "unarchiveAll": "모두 보관 해제",
@@ -17466,9 +17528,8 @@
       "name": "담당 세션 후속 확인 (기본)",
       "hint": "담당 세션이 멈추거나 응답을 기다릴 때, 오류·사용량 한도·완료 시 후속 확인합니다."
     },
-    "builtinTodoCheck": {
-      "name": "매일 할 일 확인(기본 제공)",
-      "hint": "평일 9:00에 연결된 소스에서 새 할 일을 찾고, 없으면 알리지 않습니다. 근황에서 켜고 끌 수 있으며 일시 중지와 재개만 할 수 있습니다."
+    "todoCheck": {
+      "name": "매일 할 일 확인"
     },
     "builtinNightlyLearning": {
       "name": "야간 학습(기본 제공)",

@@ -1,4 +1,5 @@
 {
+  "officialRelayNote": "Vous utilisez votre propre relais. Le contenu des tâches partagées continue de passer par le relais {{appName}}.",
   "selfJoin": "Vous avez lancé cette tâche partagée, vous n'avez donc pas besoin de la rejoindre. Ouvrez-la depuis « Partagées par moi ».",
   "waitingHost": "En attente de la réponse de l'hôte. Vous pouvez continuer à envoyer des messages.",
   "join": "Rejoindre la tâche",

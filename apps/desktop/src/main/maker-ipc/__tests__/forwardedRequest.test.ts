@@ -41,6 +41,33 @@ describe('host-owned forwarded request', () => {
     expect(result.autoReviewUserText).toEqual({ kind: 'agent-request', request: { userText: original, sessionId: 'caller', clientId: 'accepted' } });
   });
 
+  // Unit, protocol compatibility: old receivers only recognize the original five
+  // envelope dialects. Freeze the English wire text from 050886c543; comparing
+  // against today's English formatter would miss catalog drift on both sides.
+  // Minimal failure: change an English prefix, then send from a French host to an old host.
+  // Windows run: 4.93s wall time (Vitest reports 3.61s), 2026-10-31.
+  it.each(['fr', 'es', 'de', 'pt-PT', 'pt-BR'] as const)('sends %s receipts in the legacy English dialect', locale => {
+    const source = { userText: 'Review only; do not publish.' };
+    const supplement = 'Inspect the changes.';
+    expect(formatForwardedRequest(source, supplement, locale)).toBe([
+      '[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.',
+      'User’s original words:"Review only; do not publish."',
+      'Agent supplement:"Inspect the changes."',
+    ].join('\n'));
+    expect(formatForwardedRequest({ userText: null }, supplement, locale)).toBe([
+      '[Source] No verifiable original user text was found.',
+      'User’s original words:""',
+      'Agent supplement:"Inspect the changes."',
+    ].join('\n'));
+  });
+
+  it('still verifies a persisted French receipt without accepting edited owner text', () => {
+    // Frozen wire fixture emitted before the compatibility fix, not a model-authored label.
+    const body = `[Source] L'hôte a conservé les mots d'origine de l'utilisateur, sans modification, comme contexte de la demande. La demande actuelle figure dans le complément de l'Agent.\nMots d'origine de l'utilisateur :"Review only; do not publish."\nComplément de l'Agent :"Inspect the changes."`;
+    expect(matchesForwardedRequest({ userText: 'Review only; do not publish.' }, body)).toBe(true);
+    expect(matchesForwardedRequest({ userText: 'Publish now.' }, body)).toBe(false);
+  });
+
   // #6514 applied owner-quotation formatting to scheduled notifications and
   // ordinary task messages. Unit: the production capture must leave both raw.
   it.each([undefined, 'scheduler'])('keeps non-companion messages plain (%s)', async originKind => {

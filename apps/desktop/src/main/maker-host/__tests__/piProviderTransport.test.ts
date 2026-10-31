@@ -13,6 +13,30 @@ const reply = [
 ].map(value => `data: ${JSON.stringify(value)}\n\n`).join('') + 'data: [DONE]\n\n';
 
 describe('Pi-owned transport for Cindy harnesses', () => {
+  // Unit protocol regression: official Pi SDK defaults must not override Cindy
+  // or an explicit legacy title at the final fetch boundary.
+  it.each([undefined, { 'x-title': 'Custom app', 'http-referer': 'https://custom.example' }])
+  ('retains application attribution through native serialization (%j)', async headers => {
+    const upstream = 'https://openrouter.ai/api/v1';
+    const row = { id: 'fixture-model', name: 'Fixture', upstream,
+      execution: { pi: { api: 'openai-completions' as const,
+        headers: { 'HTTP-Referer': 'https://pi.example', 'X-Title': 'pi' } } } };
+    let sent = new Headers();
+    const send = createPiProviderFetch({ row, providerId: 'router', apiKey: 'fixture-key', headers,
+      fetchImpl: async (_url, init) => {
+        sent = new Headers(init?.headers);
+        return new Response(reply, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    const output = await (await send('https://unused.invalid', {
+      body: JSON.stringify({ model: row.id, input: 'Hello', stream: true }),
+    })).text();
+    expect(output).toContain('response.completed');
+    expect(sent.get('http-referer')).toBe(headers?.['http-referer'] ?? 'https://cindy.app');
+    expect(sent.get('x-openrouter-title') ?? sent.get('x-title')).toBe(headers?.['x-title'] ?? 'Cindy');
+    expect(sent.get('x-title')).not.toBe('pi');
+    expect(sent.get('authorization')).toBe('Bearer fixture-key');
+  });
   // PR server#1096 P1: route-label checks missed the SDK appending /v1/messages
   // to a versioned base. Exercise the production default and official serializer.
   it.each(['claude-code', 'pi', 'codex'] as const)('sends Agnes %s defaults to a single version prefix', async agent => {

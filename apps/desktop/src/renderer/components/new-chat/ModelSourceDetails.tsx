@@ -24,6 +24,7 @@ import {
   type ProviderUsageScope,
   type ProviderUsageSnapshots,
 } from './useProviderWeeklyQuota';
+import { QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
 
 type SourceUsage = ProviderUsageSnapshots & {
   source: NonNullable<ProviderUsageSnapshots['source']>;
@@ -256,13 +257,7 @@ export function ModelSourceDetails({
               <>
                 {' '}
                 <span
-                  className={
-                    tightest.used >= 90
-                      ? 'text-[var(--quota-bar-crit)]'
-                      : tightest.used > 70
-                        ? 'text-[var(--quota-bar-warn)]'
-                        : undefined
-                  }
+                  className={QUOTA_TEXT_COLOR_CLASSES[quotaSeverity(tightest.used)]}
                 >
                   {tightest.percentage}
                 </span>

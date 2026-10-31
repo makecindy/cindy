@@ -23,41 +23,41 @@
 
 这些术语的译法已定，**违反会阻断 CI**。
 
-| 英文 | zh-CN | zh-TW | ja | ko | fr | es | de | pt-PT | pt-BR | 禁用译法 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **Active** | 活跃 | 活躍 | アクティブ | 활성 | actif | Activo | Aktiv | Ativo | Ativo | zh-CN: 活动（仅当英文含 Active）；zh-TW: 活動（仅当英文含 Active） |
-| **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent）；zh-TW: 智能體；zh-TW: 代理（仅当英文含 Agent） |
-| **Agent session** | Agent 会话 | Agent 會話 | Agent セッション | Agent 세션 | session Agent | Sesión de Agent | Agent-Sitzung | Sessão do Agent | Sessão do Agent | zh-CN: 任务（仅当英文含 agent session）；zh-TW: 任務（仅当英文含 agent session） |
-| **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
-| **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | ja: オートメーション；ko: 오토메이션 |
-| **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
-| **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | zh-CN: 聊天；zh-TW: 聊天 |
-| **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
-| **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
-| **Credits** | 点数 | 點數 | クレジット | 크레딧 | crédits | Créditos | `Credits`（保留英文） | Créditos | Créditos | zh-CN: 额度（仅当英文含 Credit）；zh-TW: 額度（仅当英文含 Credit） |
-| **Directory** | 目录 | 目錄 | ディレクトリ | 디렉터리 | répertoire | Directorio | Verzeichnis | Diretório | Diretório | — |
-| **Dismiss** | 关闭 | 關閉 | 閉じる | 닫기 | Fermer | Cerrar | Schließen | Fechar | Fechar | zh-CN: 忽略（仅当英文含 Dismiss）；zh-CN: 知道了（仅当英文含 Dismiss）；zh-TW: 忽略（仅当英文含 Dismiss）；zh-TW: 知道了（仅当英文含 Dismiss） |
-| **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | effort de raisonnement | Intensidad de razonamiento | Denkintensität | Esforço de raciocínio | Esforço de raciocínio | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
-| **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | issue | Incidencia | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；ja: 課題（仅当英文含 Issue） |
-| **Message** | 消息 | 訊息 | メッセージ | 메시지 | message | Mensaje | Nachricht | Mensagem | Mensagem | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
-| **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | plugin | Complemento | `Plugin`（保留英文） | plugin | plugin | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛 |
-| **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | Politique de confidentialité | Política de privacidad | Datenschutzerklärung | Política de Privacidade | Política de Privacidade | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
-| **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | projet | Proyecto | Projekt | Projeto | Projeto | zh-CN: Project；zh-TW: Project |
-| **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | fournisseur | Proveedor | Anbieter | Fornecedor | Provedor | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
-| **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | proxy | proxy | `Proxy`（保留英文） | proxy | proxy | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy） |
-| **Quota** | 配额 | 配額 | クォータ | 할당량 | quota | Cuota | Kontingent | `Quota`（保留英文） | Cota | ja: 残量；zh-CN: 额度（仅当英文含 Quota）；zh-TW: 額度（仅当英文含 Quota） |
-| **Running** | 运行中 | 執行中 | 実行中 | 실행 중 | en cours d'exécution | En ejecución | Wird ausgeführt | Em execução | Em execução | zh-CN: 执行中（仅当英文含 Running）；zh-CN: 进行中（仅当英文含 Running）；zh-TW: 進行中（仅当英文含 Running） |
-| **Session** | 任务 | 任務 | セッション | 세션 | session | Sesión | Sitzung | Sessão | Sessão | zh-CN: 会话；zh-TW: 會話 |
-| **Skill** | 技能 | 技能 | スキル | 스킬 | skill | Habilidad | `Skill`（保留英文） | `Skill`（保留英文） | `Skill`（保留英文） | ja: 技能；ko: 기술 |
-| **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
-| **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent） |
-| **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | — |
-| **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | zh-CN: 线程；zh-TW: 執行緒 |
-| **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | — |
-| **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
-| **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
-| **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | répertoire de travail | Directorio de trabajo | Arbeitsverzeichnis | Diretório de trabalho | Diretório de trabalho | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
-| **Worktree** | worktree | worktree | worktree | worktree | worktree | worktree | `Worktree`（保留英文） | `Worktree`（保留英文） | `Worktree`（保留英文） | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree） |
+| 英文 | zh-CN | zh-TW | ja | ko | fr | es | de | pt-PT | pt-BR | zh-Hant-x-lzh | zh-Hans-x-lzh | 禁用译法 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Active** | 活跃 | 活躍 | アクティブ | 활성 | actif | Activo | Aktiv | Ativo | Ativo | 活躍 | 活跃 | zh-CN: 活动（仅当英文含 Active）；zh-TW: 活動（仅当英文含 Active） |
+| **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent）；zh-TW: 智能體；zh-TW: 代理（仅当英文含 Agent）；zh-Hant-x-lzh: 智能體；zh-Hant-x-lzh: 代理（仅当英文含 Agent）；zh-Hans-x-lzh: 智能体；zh-Hans-x-lzh: 代理（仅当英文含 Agent） |
+| **Agent session** | Agent 会话 | Agent 會話 | Agent セッション | Agent 세션 | session Agent | Sesión de Agent | Agent-Sitzung | Sessão do Agent | Sessão do Agent | Agent 會話 | Agent 会话 | zh-CN: 任务（仅当英文含 agent session）；zh-TW: 任務（仅当英文含 agent session） |
+| **Author** | 作者 | 作者 | 作成者 | 작성자 | auteur | Autor | Autor | Autor | Autor | 作者 | 作者 | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author）；zh-TW: 提交者（仅当英文含 Author）；zh-TW: 提出者（仅当英文含 Author） |
+| **Automation** | 自动化 | 自動化 | 自動化 | 자동화 | automatisation | Automatización | Automatisierung | Automatização | Automação | 自運 | 自运 | ja: オートメーション；ko: 오토메이션 |
+| **Balance** | 余额 | 餘額 | 残高 | 잔액 | solde | Saldo | Guthaben | Saldo | Saldo | 餘資 | 余资 | zh-CN: 额度（仅当英文含 Balance）；zh-TW: 額度（仅当英文含 Balance） |
+| **Chat** | 对话 | 對話 | チャット | 채팅 | conversation | Conversación | `Chat`（保留英文） | Conversa | Conversa | 言談 | 言谈 | zh-CN: 聊天；zh-TW: 聊天；zh-Hant-x-lzh: 聊天；zh-Hans-x-lzh: 聊天 |
+| **Collaboration** | 协同 | 協同 | 協同 | 협업 | collaboration | Colaboración | Zusammenarbeit | Colaboração | Colaboração | 協同 | 协同 | zh-CN: 协作（仅当英文含 Collaboration）；zh-TW: 協作（仅当英文含 Collaboration） |
+| **Collapse** | 收起 | 收起 | 折りたたむ | 접기 | Réduire | Contraer | Einklappen | Recolher | Recolher | 收 | 收 | zh-CN: 折叠（仅当英文含 Collapse）；zh-TW: 折疊（仅当英文含 Collapse） |
+| **Credits** | 点数 | 點數 | クレジット | 크레딧 | crédits | Créditos | `Credits`（保留英文） | Créditos | Créditos | 籌 | 筹 | zh-CN: 额度（仅当英文含 Credit）；zh-TW: 額度（仅当英文含 Credit） |
+| **Directory** | 目录 | 目錄 | ディレクトリ | 디렉터리 | répertoire | Directorio | Verzeichnis | Diretório | Diretório | 目錄 | 目录 | — |
+| **Dismiss** | 关闭 | 關閉 | 閉じる | 닫기 | Fermer | Cerrar | Schließen | Fechar | Fechar | 闔 | 阖 | zh-CN: 忽略（仅当英文含 Dismiss）；zh-CN: 知道了（仅当英文含 Dismiss）；zh-TW: 忽略（仅当英文含 Dismiss）；zh-TW: 知道了（仅当英文含 Dismiss） |
+| **Effort** | 推理强度 | 推理強度 | 推論強度 | 추론 강도 | effort de raisonnement | Intensidad de razonamiento | Denkintensität | Esforço de raciocínio | Esforço de raciocínio | 思之深淺 | 思之深浅 | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；zh-TW: 思考強度；zh-TW: 思考深度；zh-TW: 推理深度；zh-TW: 努力程度；zh-TW: 推理力度；ja: 推論レベル；ja: 推論の強度 |
+| **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | issue | Incidencia | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | `Issue`（保留英文） | zh-CN: 工单；zh-CN: 议题；zh-TW: 工單；zh-TW: 議題；zh-Hant-x-lzh: 工單；zh-Hant-x-lzh: 議題；zh-Hans-x-lzh: 工单；zh-Hans-x-lzh: 议题；ja: 課題（仅当英文含 Issue） |
+| **Message** | 消息 | 訊息 | メッセージ | 메시지 | message | Mensaje | Nachricht | Mensagem | Mensagem | 訊 | 讯 | zh-CN: 条对话（仅当英文含 Message）；zh-TW: 條對話（仅当英文含 Message） |
+| **Plugin** | 插件 | 插件 | プラグイン | 플러그인 | plugin | Complemento | `Plugin`（保留英文） | plugin | plugin | 法器 | 法器 | zh-CN: Plugin；zh-CN: plugin；zh-TW: Plugin；zh-TW: plugin；zh-TW: 外掛；zh-Hant-x-lzh: 外掛；zh-Hans-x-lzh: 插件 |
+| **Privacy Policy** | 隐私政策 | 隱私政策 | プライバシーポリシー | 개인정보 처리방침 | Politique de confidentialité | Política de privacidad | Datenschutzerklärung | Política de Privacidade | Política de Privacidade | 隱私政策 | 隐私政策 | zh-TW: 隱私協議（仅当英文含 Privacy Policy） |
+| **Project** | 项目 | 專案 | プロジェクト | 프로젝트 | projet | Proyecto | Projekt | Projeto | Projeto | 案 | 案 | zh-CN: Project；zh-TW: Project |
+| **Provider** | 供应商 | 供應商 | プロバイダー | 제공자 | fournisseur | Proveedor | Anbieter | Fornecedor | Provedor | 供方 | 供方 | zh-CN: 提供方；zh-CN: 提供商；zh-TW: 提供方；zh-TW: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
+| **Proxy** | `Proxy`（保留英文） | `Proxy`（保留英文） | プロキシ | 프록시 | proxy | proxy | `Proxy`（保留英文） | proxy | proxy | `Proxy`（保留英文） | `Proxy`（保留英文） | zh-CN: 代理（仅当英文含 Proxy）；zh-TW: 代理（仅当英文含 Proxy）；zh-Hant-x-lzh: 代理（仅当英文含 Proxy）；zh-Hans-x-lzh: 代理（仅当英文含 Proxy） |
+| **Quota** | 配额 | 配額 | クォータ | 할당량 | quota | Cuota | Kontingent | `Quota`（保留英文） | Cota | 限額 | 限额 | ja: 残量；zh-CN: 额度（仅当英文含 Quota）；zh-TW: 額度（仅当英文含 Quota） |
+| **Running** | 运行中 | 執行中 | 実行中 | 실행 중 | en cours d'exécution | En ejecución | Wird ausgeführt | Em execução | Em execução | 方行 | 方行 | zh-CN: 执行中（仅当英文含 Running）；zh-CN: 进行中（仅当英文含 Running）；zh-TW: 進行中（仅当英文含 Running） |
+| **Session** | 任务 | 任務 | セッション | 세션 | session | Sesión | Sitzung | Sessão | Sessão | 差事 | 差事 | zh-CN: 会话；zh-TW: 會話；zh-Hant-x-lzh: 會話；zh-Hans-x-lzh: 会话 |
+| **Skill** | 技能 | 技能 | スキル | 스킬 | skill | Habilidad | `Skill`（保留英文） | `Skill`（保留英文） | `Skill`（保留英文） | 技藝 | 技艺 | ja: 技能；ko: 기술 |
+| **SkillHub** | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | `SkillHub`（保留英文） | ja: スキルハブ；ko: 스킬 허브 |
+| **Subagent** | `Subagent`（保留英文） | `Subagent`（保留英文） | サブエージェント | 하위 에이전트 | sous-Agent | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | `Subagent`（保留英文） | zh-CN: 代理（仅当英文含 Subagent）；zh-TW: 代理（仅当英文含 Subagent）；zh-Hant-x-lzh: 代理（仅当英文含 Subagent）；zh-Hans-x-lzh: 代理（仅当英文含 Subagent） |
+| **Task** | 任务 | 任務 | タスク | 작업 | tâche | Tarea | Aufgabe | Tarefa | Tarefa | 差事 | 差事 | — |
+| **Thread** | 任务 | 任務 | スレッド | 스레드 | fil | Hilo | `Thread`（保留英文） | Tópico | Tópico | 話題 | 话题 | zh-CN: 线程；zh-TW: 執行緒 |
+| **Turn** | 轮 | 輪 | ターン | 턴 | tour | Turno | Runde | Turno | Turno | 輪 | 轮 | — |
+| **Usage** | 用量 | 用量 | 使用量 | 사용량 | consommation | Uso | Nutzung | Utilização | Uso | 耗用 | 耗用 | zh-CN: 使用情况；zh-CN: 使用表现；zh-TW: 使用情況；zh-TW: 使用表現；ja: 使用状況；ja: 利用状況；ko: 사용 현황 |
+| **Worker** | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | `Worker`（保留英文） | — |
+| **Working directory** | 工作目录 | 工作目錄 | 作業ディレクトリ | 작업 디렉터리 | répertoire de travail | Directorio de trabajo | Arbeitsverzeichnis | Diretório de trabalho | Diretório de trabalho | 工作目錄 | 工作目录 | zh-CN: 任务空间；zh-CN: 工作空间；zh-TW: 任務空間；zh-TW: 工作空間 |
+| **Worktree** | worktree | worktree | worktree | worktree | worktree | worktree | `Worktree`（保留英文） | `Worktree`（保留英文） | `Worktree`（保留英文） | worktree | worktree | zh-CN: 工作树（仅当英文含 Worktree）；zh-CN: 工作区（仅当英文含 Worktree）；zh-TW: 工作樹（仅当英文含 Worktree）；zh-TW: 工作區（仅当英文含 Worktree）；zh-Hant-x-lzh: 工作樹（仅当英文含 Worktree）；zh-Hans-x-lzh: 工作树（仅当英文含 Worktree） |
 
 ### 分场合译法
 

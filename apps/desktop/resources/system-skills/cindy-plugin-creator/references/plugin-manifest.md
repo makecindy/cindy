@@ -24,11 +24,11 @@
   // 一键启用/唤起插件,也不能用 $command 显式点名;但 AI 的工具发现与调用不受影响
   // (仅检查插件启用状态与 tools 声明)。除非你的插件完全靠 panel 或 subscribe 驱动,
   // 否则请始终声明一个 command。
-  "tools": [ /* 见 §3；下方 open_planner 必须在此声明 */ ],
+  "tools": [ /* 见 §3；下方 open_view 必须在此声明 */ ],
   // 可选交互页面，完整示例见 §4.23；需要 minCindyVersion >= 0.1.122-beta
   "mcpApps": { "ui": {
-    "resources": [{ "uri": "ui://planner/v1", "file": "ui/page.html" }],
-    "tools": { "open_planner": { "resourceUri": "ui://planner/v1" } }
+    "resources": [{ "uri": "ui://records/v1", "file": "ui/page.html" }],
+    "tools": { "open_view": { "resourceUri": "ui://records/v1" } }
   } },
   "cindy": { "image": ["generate", "edit"] },   // 直接声明能力及详单,见下
   // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
@@ -67,9 +67,7 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 用户主动导入的本地包、以及用户添加的自定义市场也遵循同一安装策略。这个字段仍必须
 准确填写：它供发布服务选择兼容 release，也记录插件真实依赖的首个 Host 版本。
 
-| 可选字段 | 用途 |
-| --- | --- |
-| `mcpApps.ui` | 为原工具声明交互页面资源与 visibility，见[§4.23](plugin-interactive-pages.md) |
+`mcpApps.ui` 声明页面资源与工具可见性，完整写法见[§4.23](plugin-interactive-pages.md)。
 
 ### whenToUse:只写发现线索,不写使用规则
 

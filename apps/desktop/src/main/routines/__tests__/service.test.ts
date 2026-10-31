@@ -69,6 +69,7 @@ import { handleRoutineRequest } from '../../cindy-brain/routineSlot.js';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import { companionHomes } from '../../companion-cloud/homes.js';
 import { admitTaskAction, assertTaskActionCurrent, hasTaskActionAuthorization } from '../../maker-ipc/taskActionAuthorization.js';
+import { setMainLocale } from '../../i18n.js';
 beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profiles); });
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
@@ -222,17 +223,51 @@ it('deletes a fresh lane deferred before dispatch', async () => {
   expect(mock.deleteRoutineSession).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^lane-${routine.id}:`)));
 });
 
-it('turns the teammate\'s weekday todo check on and off as one built-in routine', async () => {
-  // 近况里的「每天帮我查一次」：打开建内置例行任务，关掉只暂停，再打开复用同一条，不重复建。
+it('keeps the owner\'s edits when the daily todo check is turned off and on again', async () => {
+  // 近况「每天帮我查一次」：打开按默认内容建一条普通例行任务；改过的指令在关掉再打开后保留，删掉后再打开才重建。
   expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
   expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
   const [routine] = await routineTools.list('bot');
-  expect(routine).toMatchObject({ builtin: 'todo-check', enabled: true, silentWhenIdle: true,
-    triggers: [{ kind: 'cron', expression: '0 9 * * 1-5' }] });
+  expect(routine).toMatchObject({ enabled: true, silentWhenIdle: true, triggers: [{ kind: 'cron', expression: '0 9 * * 1-5' }] });
+  expect(routine!.builtin).toBeUndefined();
+  await routineTools.save('bot', { ...routine!, prompt: 'Only check Feishu for release blockers' }, routine!.id);
   expect(await routineTools.setTodoCheck('bot', false)).toBe(false);
+  expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
+  expect((await routineTools.list('bot')).map(row => [row.id, row.enabled, row.prompt]))
+    .toEqual([[routine!.id, true, 'Only check Feishu for release blockers']]);
+  await routineTools.remove('bot', routine!.id);
   expect(await routineTools.todoCheckEnabled('bot')).toBe(false);
   expect(await routineTools.setTodoCheck('bot', true)).toBe(true);
-  expect((await routineTools.list('bot')).map(row => [row.id, row.enabled])).toEqual([[routine.id, true]]);
+  expect((await routineTools.list('bot'))[0]?.prompt).toBe(routine!.prompt);
+});
+
+it('turns a legacy built-in todo check into an editable routine, keeping its choices and history', async () => {
+  setMainLocale('en');
+  const legacyPrompt = '看看我已连接的邮箱、飞书等来源里，上次检查之后有没有需要我以后处理的新事项，有就按待办规则记下来。只用已经授权的来源，没连接的不要说查过；没有新待办就不用提醒我。';
+  const modelOverride = { agentKind: 'codex' as const, model: 'gpt-5.5', providerId: 'openai' };
+  const routine = await routineTools.createOnce('bot', { name: '每天查待办', prompt: legacyPrompt, enabled: true, silentWhenIdle: true,
+    modelOverride, triggers: [{ id: 'weekday-morning', kind: 'cron', expression: '0 9 * * 1-5', timezone: 'Asia/Shanghai' }] }, 'builtin-todo-check-bot');
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  const saved = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  Object.assign(saved.routines[0]!, { builtin: 'todo-check', builtinVersion: 1 });
+  await stopRoutines();
+  mock.load.mockResolvedValue(saved);
+  mock.profiles = [{ id: 'bot', status: 'active' }];
+  await vi.waitFor(async () => expect((await routineTools.list('bot'))[0]?.name).toBe('Daily todo check'));
+  const [migrated] = await routineTools.list('bot');
+  // 迁移不是编辑：revision 不变，升级前排队的批次仍然有效。
+  expect(migrated).toMatchObject({ id: routine.id, enabled: true, modelOverride, revision: saved.routines[0]!.revision,
+    prompt: expect.stringContaining('connected sources') });
+  expect(migrated!.builtin).toBeUndefined();
+  expect(migrated!.builtinVersion).toBeUndefined();
+  expect(await routineTools.history('bot', routine.id)).toHaveLength(1);
+  // 迁移只做一次：之后主人保存的名称即使与旧默认值相同，重启也不再改写。
+  await routineTools.save('bot', { ...migrated!, name: '每天查待办', prompt: 'Edited after upgrade' }, routine.id);
+  const edited = structuredClone(mock.save.mock.calls.at(-1)![0]) as RoutineState;
+  await stopRoutines();
+  mock.load.mockResolvedValue(edited);
+  expect((await routineTools.list('bot'))[0]).toMatchObject({ name: '每天查待办', prompt: 'Edited after upgrade' });
 });
 
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {

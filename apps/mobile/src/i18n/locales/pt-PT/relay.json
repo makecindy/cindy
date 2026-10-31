@@ -5,7 +5,7 @@
     "official": "Retransmissão oficial de {{appName}}",
     "switchToOfficial": "Voltar à retransmissão oficial",
     "officialHint": "Os seus dispositivos ligam-se através da retransmissão oficial de {{appName}}. Para usar a sua própria retransmissão, apresente o respetivo código QR de adesão no computador onde é executada e leia-o com a câmara do telemóvel.",
-    "selfHostedHint": "Os seus dispositivos ligam-se através da sua própria retransmissão em {{address}}. O início de sessão, os modelos e outros serviços continuam a usar {{appName}}.",
+    "selfHostedHint": "Os seus dispositivos ligam-se através da sua própria retransmissão em {{address}}. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
     "removedHint": "Este telemóvel foi removido da retransmissão ou a retransmissão foi desativada. Volte à retransmissão oficial ou adira novamente a partir do computador.",
     "credentialMissingHint": "A credencial de retransmissão já não está neste telemóvel. Adira novamente a partir do computador ou volte à retransmissão oficial.",
     "confirmTitle": "Voltar à retransmissão oficial?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Aderir ao relay",
     "checking": "A ligar ao relay…",
-    "body": "Após aderir, este telemóvel liga-se aos seus computadores através deste relay. O início de sessão, os modelos e outros serviços continuam a usar {{appName}}. Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
+    "body": "Após aderir, este telemóvel liga-se aos seus computadores através deste relay. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}. Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
     "switchNote": "Ao aderir, este telemóvel muda de “{{current}}” para este relay.",
     "action": "Aderir",
     "pairingCodeLabel": "Código de emparelhamento",

@@ -6,19 +6,15 @@
  * "prepare this thread before resume" hook.
  */
 
-import { projectNativeSessionMetadata, type NativeSessionScope } from './native-session-metadata.js';
 import { historyHomeForRollout } from './codex-thread-locations.js';
 import { app } from 'electron';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import type Database from 'better-sqlite3';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
-import { createReadStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import os from 'node:os';
 import path from 'node:path';
-import readline from 'node:readline';
 import { parse as parseToml } from 'smol-toml';
 
 import {
@@ -29,38 +25,21 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 
 import {
   CodexResumePreparationBlockedError,
-  finalizeCodexCitationText,
   isOversizedLiveTailStats,
   measureRolloutLiveTailStats,
 } from '@cindy/maker-core';
 
-import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
-import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
-import { broadcastMessageDeleted, broadcastMessageRow } from '../localDb/ipc/messages.js';
-import { messages } from '../localDb/schema.js';
-import { messageToCamel } from '../localDb/mapper.js';
+import { getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import { createLogger } from '../logger.js';
-import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
-import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
-import {
-  cacheImportedBase64Image,
-  importedUserContent,
-  parseImageDataUrl,
-  stripCompleteIdeOpenedFileBlocks,
-  type ImportedImageRef,
-} from './imported-user-content.js';
 
 const log = createLogger('codex-local-sessions');
 
-const LOCAL_SESSION_ID_PREFIX = 'codex-';
-const MAX_THREADS_PER_HOME = 1000;
 const SQLITE_BUSY_TIMEOUT_MS = 3000;
 // Codex can create a rollout before writing session_meta and keep that file at
 // zero bytes for several minutes. Recovery must not fork a still-live writer.
 const EMPTY_ROLLOUT_RECOVERY_GRACE_MS = 15 * 60_000;
 const MAX_RECOVERY_PATH_ATTEMPTS = 8;
-const codexMessageImportFileCache = new Map<string, ExternalImportFileCacheEntry>();
 
 function isNonEmptyRolloutFile(filePath: string, threadId: string): boolean {
   const state = readRegularRolloutPathState(filePath);
@@ -309,10 +288,10 @@ function readPrivateExactRolloutSnapshot(
   }
 }
 
-type SqlScalar = string | number | bigint | Buffer | null;
-type SqlRow = Record<string, SqlScalar | undefined>;
+export type SqlScalar = string | number | bigint | Buffer | null;
+export type SqlRow = Record<string, SqlScalar | undefined>;
 
-interface CodexThreadSummary {
+export interface CodexThreadSummary {
   threadId: string;
   sourceHome: string;
   sourceDbPath: string | null;
@@ -336,103 +315,11 @@ interface CodexSessionIndexEntry {
   updatedAt: number | null;
 }
 
-interface ExternalImportFileCacheEntry {
-  scope: string;
-  path: string;
-  mtimeMs: number;
-  size: number;
-}
 
-type ExternalImportFileStat = Pick<ExternalImportFileCacheEntry, 'mtimeMs' | 'size'>;
 
-export interface CodexExternalImportResult {
-  homes: number;
-  scanned: number;
-  inserted: number;
-  updated: number;
-}
 
-export interface CodexExternalSessionCandidate extends NativeSessionScope {
-  source: 'codex';
-  id: string;
-  title: string;
-  cwd: string;
-  workspaceKind: 'project' | 'dialogue';
-  updatedAt: number;
-  archived: boolean;
-  sourceHome: string;
-}
 
-export interface CodexExternalScanResult {
-  homes: string[];
-  candidates: CodexExternalSessionCandidate[];
-  rejectedCount: number;
-}
 
-/** 设置导入页使用的只读扫描，不写入 xdt-maker DB。 */
-export async function scanExternalCodexSessions(): Promise<CodexExternalScanResult> {
-  const homes = await discoverExternalCodexHomes();
-  const candidatesById = new Map<string, CodexExternalSessionCandidate>();
-  let rejectedCount = 0;
-  for (const home of homes) {
-    const dbPath = findLatestStateDb(home);
-    const projectlessThreadIds = readProjectlessThreadIds(home);
-    const dbResult = dbPath ? readThreads(home, dbPath, projectlessThreadIds) : null;
-    const knownDbArchivedByThreadId = dbResult
-      ? new Map(dbResult.threads.map((thread) => [thread.threadId, thread.archived]))
-      : undefined;
-    const readResults = [
-      ...(dbResult ? [dbResult] : []),
-      await readThreadsFromRollouts(home, projectlessThreadIds, knownDbArchivedByThreadId),
-    ];
-    for (const readResult of readResults) {
-      rejectedCount += readResult.rejectedThreadIds.length;
-      for (const thread of readResult.threads) {
-        const candidate: CodexExternalSessionCandidate = {
-          source: 'codex',
-          id: thread.threadId,
-          title: thread.title,
-          cwd: thread.cwd,
-          workspaceKind: thread.workspaceKind,
-          updatedAt: thread.updatedAt,
-          archived: thread.archived,
-          sourceHome: thread.sourceHome,
-        };
-        const existing = candidatesById.get(candidate.id);
-        if (!existing) {
-          candidatesById.set(candidate.id, candidate);
-        } else {
-          // 选 updatedAt 更新的那份做"主体"，但 archived 标志 sticky：
-          // 同一 thread 同时出现在 sessions/ 和 archived_sessions/ 里，
-          // 只要任一份是 archived 就视为 archived（避免按 mtime 判断时
-          // 较新的 sessions/ 拷贝把 archived 状态盖掉）。
-          const winner = existing.updatedAt < candidate.updatedAt ? candidate : existing;
-          const archived = existing.archived || candidate.archived;
-          if (winner !== existing || archived !== existing.archived) {
-            candidatesById.set(candidate.id, { ...winner, archived });
-          }
-        }
-      }
-    }
-  }
-  return { homes, candidates: await projectNativeSessionMetadata('codex', [...candidatesById.values()]), rejectedCount };
-}
-
-/** Import the selected external Codex sessions into xdt-maker's session table. */
-export async function importExternalCodexSessions(threadIds: string[]): Promise<CodexExternalImportResult> {
-  const out: CodexExternalImportResult = { homes: 0, scanned: 0, inserted: 0, updated: 0 };
-  const uniqueIds = [...new Set(threadIds)].filter(isLikelyThreadId);
-  out.homes = discoverExternalCodexHomesSync().length;
-  out.scanned = uniqueIds.length;
-  for (const threadId of uniqueIds) {
-    const thread = findExternalThreadById(threadId);
-    if (!thread) continue;
-    const action = await upsertLocalSession(thread);
-    if (action === 'inserted') out.inserted += 1;
-    else if (action === 'updated') out.updated += 1;
-  }
-  return out;
-}
 
 /** Locate existing history without adopting, copying or reconstructing it. */
 export function readCodexThreadStorageForArchive(threadId: string): {
@@ -3838,7 +3725,7 @@ async function writeFileAtomicallyIfAbsent(
 }
 
 /** 读 state DB threads 表的原始整行(用于重建 session_meta)。 */
-function readRawThreadRow(dbPath: string, threadId: string): SqlRow | null {
+export function readRawThreadRow(dbPath: string, threadId: string): SqlRow | null {
   let db: Database.Database | null = null;
   try {
     db = openReadonlyDb(dbPath);
@@ -3980,183 +3867,12 @@ export async function classifyCodexHistoryOversized(
   }
 }
 
-/**
- * 为外部 Codex thread 创建的本地会话按需导入可读消息。
- * 文件未变化时短路；实时消息落库后只核对已导入的数据库副本，不重读 rollout。
- */
-export async function importExternalCodexMessagesForSession(sessionId: string, opts?: { localWrite?: readonly string[] }): Promise<void> {
-  const db = getDbClient();
-  const cacheScope = getCurrentDbClientUserId();
-  const ownerScope = captureDataOwnerBroadcastScope();
-  const session = await db.queryOne<{
-    id: string;
-    agentKind: string;
-    sdkSessionId: string | null;
-    model: string;
-  }>(`
-    SELECT id, agent_kind AS agentKind, sdk_session_id AS sdkSessionId, model
-    FROM sessions
-    WHERE id = ?
-    LIMIT 1
-  `, [sessionId]);
-  if (session?.agentKind !== 'codex') return;
-  if (!session.sdkSessionId) return;
-  if (!session.id.startsWith(LOCAL_SESSION_ID_PREFIX)) return;
 
-  const importClientIdPrefix = `codex-import:${session.sdkSessionId}:`;
-  let imported: ImportedCodexMessage[];
-  let cacheEntry: ExternalImportFileCacheEntry | undefined;
-  if (opts?.localWrite) {
-    imported = await readImportedRepliesForLocalWrites(db, sessionId, importClientIdPrefix, opts.localWrite);
-  } else {
-    const cachedImportFile = codexMessageImportFileCache.get(sessionId);
-    if (cacheScope && cachedImportFile?.scope === cacheScope) {
-      const cachedStat = await statImportFile(cachedImportFile.path);
-      if (cachedStat && isCachedImportFileUnchanged(cachedImportFile, cachedStat)) return;
-      codexMessageImportFileCache.delete(sessionId);
-    } else if (cachedImportFile) {
-      codexMessageImportFileCache.delete(sessionId);
-    }
-    const rolloutPath = resolveRolloutPath(session.sdkSessionId);
-    const rolloutStat = rolloutPath ? await statImportFile(rolloutPath) : null;
-    if (!rolloutPath || !rolloutStat) return;
-    imported = await readCodexRolloutMessages(rolloutPath, session.id);
-    if (cacheScope) cacheEntry = { scope: cacheScope, path: rolloutPath, ...rolloutStat };
-  }
-  if (imported.length === 0) {
-    if (cacheEntry) codexMessageImportFileCache.set(sessionId, cacheEntry);
-    return;
-  }
-  const { changed, hiddenClientIds, updatedLocalIds } = await db.tx('codex.importMessages', {
-    sessionId,
-    importClientIdPrefix,
-    sdkSessionId: session.sdkSessionId,
-    model: session.model,
-    rows: imported.map((row) => ({
-      lineNo: row.lineNo,
-      role: row.role,
-      text: row.text,
-      content: row.content,
-      createdAt: row.createdAt,
-      sourceCreatedAt: row.sourceCreatedAt,
-      phase: row.phase,
-      agentMessageId: row.agentMessageId,
-    })),
-  });
-  if (hiddenClientIds?.length) {
-    // Older viewers only read clientId. Publish every committed removal using
-    // the existing singleton payload, with the owner captured before any await.
-    for (const clientId of hiddenClientIds) {
-      broadcastMessageDeleted({ sessionId, clientId, clientIds: [clientId] }, ownerScope);
-    }
-  }
-  if (updatedLocalIds?.length) {
-    const updated = await db.drizzle.select().from(messages).where(and(
-      eq(messages.sessionId, sessionId), inArray(messages.id, updatedLocalIds), isNull(messages.rewindAt),
-      sql`${messages.createdAt} > COALESCE((SELECT cleared_at FROM sessions WHERE id = ${sessionId}), -1)`,
-    ));
-    for (const row of updated) broadcastMessageRow(sessionId, messageToCamel(row), ownerScope);
-  }
-  if (cacheEntry) codexMessageImportFileCache.set(sessionId, cacheEntry);
-  if (changed === 0) return;
-  log.info('imported external Codex messages', {
-    sessionId,
-    threadId: session.sdkSessionId,
-    count: changed,
-  });
-  if (opts?.localWrite) return; // These import rows already contributed their PR references.
-  // session-git-pr-context:导入消息不经 createMessage,在这里补 PR 链接提取
-  // (fire-and-forget;upsert 幂等,重复导入刷新无副作用)。
-  void recordPrRefsForImportedMessages(
-    sessionId,
-    imported.map((row) => ({
-      role: row.role,
-      content: row.content ?? row.text,
-      createdAt: row.createdAt,
-    })),
-  ).catch(() => undefined);
-}
 
-/** Only return persisted import candidates near the new live rows or sharing a
- * native item ID. Native ID candidates may be outside the legacy time window.
- * File parsing/media hydration remains exclusive to history import reads. */
-async function readImportedRepliesForLocalWrites(
-  db: ReturnType<typeof getDbClient>, sessionId: string, prefix: string, clientIds: readonly string[],
-): Promise<ImportedCodexMessage[]> {
-  if (clientIds.length === 0) return [];
-  const rows = await db.query<{ clientId: string; content: string; createdAt: number; agentMeta: string | null }>(`
-    WITH local AS (
-      SELECT created_at, CASE WHEN json_valid(agent_meta) THEN json_extract(agent_meta, '$.agentMessageId') END AS itemId
-      FROM messages WHERE session_id = ? AND client_id IN (${clientIds.map(() => '?').join(',')})
-        AND role = 'assistant' AND rewind_at IS NULL
-        AND created_at > COALESCE((SELECT cleared_at FROM sessions WHERE id = ?), -1)
-    )
-    SELECT i.client_id AS clientId, i.content, i.created_at AS createdAt, i.agent_meta AS agentMeta
-    FROM messages i WHERE i.session_id = ? AND i.client_id LIKE ? AND i.role = 'assistant' AND i.rewind_at IS NULL
-      AND EXISTS (SELECT 1 FROM local l WHERE
-        ABS(i.created_at - CAST(SUBSTR(i.client_id, ?) AS INTEGER) - l.created_at) <= 300000
-        OR (l.itemId IS NOT NULL AND l.itemId != '' AND l.itemId =
-          CASE WHEN json_valid(i.agent_meta) THEN json_extract(i.agent_meta, '$.agentMessageId') END))
-    ORDER BY i.created_at, i.rowid
-  `, [sessionId, ...clientIds, sessionId, sessionId, `${prefix}%`, prefix.length + 1]);
-  const result: ImportedCodexMessage[] = [];
-  for (const row of rows) {
-    const lineNo = Number(row.clientId.slice(prefix.length));
-    if (!Number.isInteger(lineNo) || lineNo < 0) continue;
-    let content: unknown = row.content;
-    try { content = JSON.parse(row.content); } catch { /* Legacy plain text. */ }
-    if (typeof content !== 'string') continue;
-    let meta: Record<string, unknown> = {};
-    try { const value: unknown = JSON.parse(row.agentMeta ?? '{}'); if (isRecord(value)) meta = value; } catch { /* Legacy metadata. */ }
-    result.push({ lineNo, role: 'assistant', text: content, content, createdAt: row.createdAt,
-      sourceCreatedAt: row.createdAt - lineNo,
-      ...(meta.assistantPhase === 'commentary' || meta.assistantPhase === 'final_answer' ? { phase: meta.assistantPhase } : {}),
-      ...(typeof meta.agentMessageId === 'string' && meta.agentMessageId ? { agentMessageId: meta.agentMessageId } : {}),
-    });
-  }
-  return result;
-}
 
-async function discoverExternalCodexHomes(): Promise<string[]> {
-  const targetHome = getDesktopCodexHome();
-  const candidates = externalCodexHomeCandidates(targetHome);
 
-  const targetReal = await realpathOrNull(targetHome);
-  const out: string[] = [];
-  const seenReal = new Set<string>();
-  for (const candidate of candidates) {
-    const real = await realpathOrNull(candidate);
-    if (!real) continue;
-    if (targetReal && real === targetReal) continue;
-    if (seenReal.has(real)) continue;
-    if (!hasCodexSessionArtifactsSync(real)) continue;
-    seenReal.add(real);
-    out.push(real);
-  }
-  return out;
-}
 
-async function realpathOrNull(p: string): Promise<string | null> {
-  try {
-    return await fsp.realpath(p);
-  } catch {
-    return null;
-  }
-}
-
-async function statImportFile(file: string): Promise<ExternalImportFileStat | null> {
-  const stat = await fsp.stat(file).catch(() => null);
-  return stat ? { mtimeMs: stat.mtimeMs, size: stat.size } : null;
-}
-
-function isCachedImportFileUnchanged(
-  cached: ExternalImportFileCacheEntry,
-  stat: ExternalImportFileStat,
-): boolean {
-  return cached.mtimeMs === stat.mtimeMs && cached.size === stat.size;
-}
-
-function findLatestStateDb(home: string): string | null {
+export function findLatestStateDb(home: string): string | null {
   try {
     const entries = fs.readdirSync(home, { withFileTypes: true });
     const matches = entries
@@ -4181,7 +3897,7 @@ function hasCodexSessionArtifactsSync(home: string): boolean {
   return false;
 }
 
-function getDesktopCodexHome(): string {
+export function getDesktopCodexHome(): string {
   try {
     const userData = app?.getPath?.('userData');
     if (userData) return path.join(userData, 'codex-home');
@@ -4200,80 +3916,8 @@ function getDesktopCodexHome(): string {
   return path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'), dirName, 'codex-home');
 }
 
-interface CodexThreadReadResult {
-  threads: CodexThreadSummary[];
-  rejectedThreadIds: string[];
-}
 
-function readThreads(
-  home: string,
-  dbPath: string,
-  projectlessThreadIds: ReadonlySet<string>,
-): CodexThreadReadResult | null {
-  let db: Database.Database | null = null;
-  try {
-    db = openReadonlyDb(dbPath);
-    if (!tableExists(db, 'threads')) return null;
-    const index = readSessionIndex(home);
-    const orderSql = buildThreadOrderSql(db);
-    const rows = db.prepare(`
-      SELECT *
-      FROM threads
-      ${orderSql}
-    `).all() as SqlRow[];
-    const threads: CodexThreadSummary[] = [];
-    const rejectedThreadIds = new Set<string>();
-    for (const row of rows) {
-      if (!isTopLevelThreadRow(row)) {
-        addRejectedThreadId(row, rejectedThreadIds);
-        continue;
-      }
-      if (threads.length >= MAX_THREADS_PER_HOME) continue;
-      const thread = normalizeThreadRow(home, dbPath, row, projectlessThreadIds, index);
-      if (thread) threads.push(thread);
-    }
-    return { threads, rejectedThreadIds: [...rejectedThreadIds] };
-  } catch (err) {
-    log.warn('failed to read external Codex threads', {
-      dbPath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  } finally {
-    closeDbQuietly(db);
-  }
-}
 
-// 扫描路径专用:异步枚举 + 异步首行读取,避免在 main 事件循环里做同步 IO
-// (设置页「会话导入」扫描直接跑在 main 进程,冷缓存下同步版会卡死窗口)。
-// 导入路径的同步 helper(collectRolloutFiles / readFirstLineSync)保留给
-// findExternalThreadById 等同步调用链。
-async function readThreadsFromRollouts(
-  home: string,
-  projectlessThreadIds: ReadonlySet<string>,
-  knownDbArchivedByThreadId?: ReadonlyMap<string, boolean>,
-): Promise<CodexThreadReadResult> {
-  const index = readSessionIndex(home);
-  const files = await collectRolloutFilesAsync(home);
-  const out: CodexThreadSummary[] = [];
-  const rejectedThreadIds = new Set<string>();
-  for (const { file, mtime } of files) {
-    const fileThreadId = threadIdFromRolloutPath(file);
-    const knownDbArchived = fileThreadId ? knownDbArchivedByThreadId?.get(fileThreadId) : undefined;
-    if (knownDbArchived === true || (knownDbArchived === false && !isArchivedRolloutPath(file))) continue;
-
-    const row = rolloutThreadRowFromFirstLine(file, await readFirstLineAsync(file), index, mtime);
-    if (!row) continue;
-    if (!isTopLevelThreadRow(row)) {
-      addRejectedThreadId(row, rejectedThreadIds);
-      continue;
-    }
-    if (out.length >= MAX_THREADS_PER_HOME) continue;
-    const thread = normalizeThreadRow(home, null, row, projectlessThreadIds, index);
-    if (thread) out.push(thread);
-  }
-  return { threads: out, rejectedThreadIds: [...rejectedThreadIds] };
-}
 
 /**
  * session_index.jsonl 解析缓存(review #3673 P2):按 ID 导入路径对每个所选
@@ -4288,7 +3932,7 @@ const sessionIndexCache = new Map<
   { mtimeMs: number; size: number; entries: Map<string, CodexSessionIndexEntry> }
 >();
 
-function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
+export function readSessionIndex(home: string): Map<string, CodexSessionIndexEntry> {
   const indexPath = path.join(home, 'session_index.jsonl');
   let stat: fs.Stats;
   try {
@@ -4342,7 +3986,7 @@ function parseSessionIndexFile(
   return out;
 }
 
-function readProjectlessThreadIds(home: string): Set<string> {
+export function readProjectlessThreadIds(home: string): Set<string> {
   // Codex Desktop does not model projectless threads as `cwd = null`.
   // Every thread still has an execution cwd, while the product-level
   // "not a project" decision lives in this global state list.
@@ -4423,40 +4067,6 @@ function collectRolloutFiles(home: string, includeCindyArtifacts = false): strin
   return files.sort((a, b) => b.mtime - a.mtime).map((x) => x.file);
 }
 
-// collectRolloutFiles 的异步版(扫描路径用),额外带回 mtime 供 updated_at
-// 兜底,免去每文件二次 stat。
-async function collectRolloutFilesAsync(home: string): Promise<Array<{ file: string; mtime: number }>> {
-  const roots = [path.join(home, 'sessions'), path.join(home, 'archived_sessions')];
-  const files: Array<{ file: string; mtime: number }> = [];
-  const visit = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 6) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(full, depth + 1);
-      } else if (
-        entry.isFile()
-        && entry.name.endsWith('.jsonl')
-        && entry.name.includes('rollout-')
-        && !isCindyRolloutArtifactFileName(entry.name)
-      ) {
-        try {
-          files.push({ file: full, mtime: (await fsp.stat(full)).mtimeMs });
-        } catch {
-          /* ignore unreadable rollout */
-        }
-      }
-    }
-  };
-  for (const root of roots) await visit(root, 0);
-  return files.sort((a, b) => b.mtime - a.mtime);
-}
 
 function normalizeRolloutFile(
   home: string,
@@ -4542,34 +4152,6 @@ function readFirstLineSync(file: string): string | null {
   }
 }
 
-// readFirstLineSync 的异步版(扫描路径用):同样最多读 2MB 找首行。
-async function readFirstLineAsync(file: string): Promise<string | null> {
-  let fh: Awaited<ReturnType<typeof fsp.open>> | null = null;
-  try {
-    fh = await fsp.open(file, 'r');
-    const chunks: Buffer[] = [];
-    const buf = Buffer.allocUnsafe(64 * 1024);
-    let total = 0;
-    let position = 0;
-    while (total < 2 * 1024 * 1024) {
-      const { bytesRead } = await fh.read(buf, 0, buf.length, position);
-      if (bytesRead <= 0) break;
-      position += bytesRead;
-      const newline = buf.subarray(0, bytesRead).indexOf(10);
-      if (newline >= 0) {
-        chunks.push(Buffer.from(buf.subarray(0, newline)));
-        return Buffer.concat(chunks).toString('utf-8');
-      }
-      chunks.push(Buffer.from(buf.subarray(0, bytesRead)));
-      total += bytesRead;
-    }
-    return chunks.length > 0 ? Buffer.concat(chunks).toString('utf-8') : null;
-  } catch {
-    return null;
-  } finally {
-    await fh?.close().catch(() => undefined);
-  }
-}
 
 function threadIdFromRolloutPath(file: string): string {
   const m = path.basename(file).match(/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$/);
@@ -5122,7 +4704,7 @@ function findExternalThreadByIdFromRollouts(home: string, threadId: string): Cod
   return normalizeRolloutFile(home, file, index, projectlessThreadIds);
 }
 
-function discoverExternalCodexHomesSync(): string[] {
+export function discoverExternalCodexHomesSync(): string[] {
   const targetHome = getDesktopCodexHome();
   const candidates = externalCodexHomeCandidates(targetHome);
 
@@ -5179,17 +4761,13 @@ function isTopLevelThreadRow(row: SqlRow): boolean {
   return threadRejectionReason(row) === null;
 }
 
-function threadRejectionReason(row: SqlRow): 'thread-source' | 'internal-source' | null {
+export function threadRejectionReason(row: SqlRow): 'thread-source' | 'internal-source' | null {
   const threadSource = stringValue(row.thread_source).trim();
   if (threadSource && threadSource !== 'user') return 'thread-source';
   if (isInternalCodexSource(row)) return 'internal-source';
   return null;
 }
 
-function addRejectedThreadId(row: SqlRow, out: Set<string>): void {
-  const id = stringValue(row.id);
-  if (isLikelyThreadId(id) && threadRejectionReason(row) !== null) out.add(id);
-}
 
 function isInternalCodexSource(row: SqlRow): boolean {
   const source = stringValue(row.source).trim();
@@ -5222,7 +4800,7 @@ function unknownContainsInternalSource(value: unknown): boolean {
   ));
 }
 
-function normalizeThreadRow(
+export function normalizeThreadRow(
   home: string,
   dbPath: string | null,
   row: SqlRow,
@@ -5271,80 +4849,6 @@ function normalizeThreadRow(
   };
 }
 
-async function upsertLocalSession(thread: CodexThreadSummary): Promise<'inserted' | 'updated' | 'skipped'> {
-  const existingBySdkRows = await getDbClient().query<{ id: string; updatedAt: number; status: string }>(`
-    SELECT id, updated_at AS updatedAt, status
-    FROM sessions
-    WHERE agent_kind = 'codex' AND sdk_session_id = ?
-  `, [thread.threadId]);
-  // skip 只认「存活」的非本地行(与 claude 侧 upsertLocalSession 同一口径,
-  // 理由见彼处注释):软删残留不该挡 CLI 导入。
-  if (existingBySdkRows.some((row) => row.status !== 'deleted' && !row.id.startsWith(LOCAL_SESSION_ID_PREFIX))) {
-    return 'skipped';
-  }
-  const existingBySdk = existingBySdkRows.find((row) => row.id.startsWith(LOCAL_SESSION_ID_PREFIX));
-
-  const localId = existingBySdk?.id ?? `${LOCAL_SESSION_ID_PREFIX}${thread.threadId}`;
-  const existingById = await getDbClient().queryOne<{ id: string }>(
-    'SELECT id FROM sessions WHERE id = ? LIMIT 1',
-    [localId],
-  );
-  const existed = !!existingBySdk || !!existingById;
-  const result = await getDbClient().exec(`
-    INSERT INTO sessions (
-      id, title, working_dir, model, effort, permission_mode, status, sdk_session_id,
-      total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-      cleared_at, pinned_at, user_send_at, agent_kind, parent_session_id,
-      forked_at_message_id, worktree_path, source, feishu_open_id, feishu_bot_app_id,
-      used_project_context, extra_dirs, workspace_kind, created_at, updated_at
-    )
-    VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, 0, 0, 0, 0,
-      NULL, NULL, ?, 'codex', NULL,
-      NULL, NULL, 'desktop', NULL, NULL,
-      0, '[]', ?, ?, ?
-    )
-    ON CONFLICT(id) DO UPDATE SET
-      -- 复活语义(#3548,与 claude 侧同口径):旧行已软删时按全新导入对待,
-      -- 元数据与 updated_at 一并收敛回源值,不残留删除时刻的旧快照。
-      title = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.title ELSE sessions.title END,
-      working_dir = CASE WHEN sessions.status = 'archived' THEN sessions.working_dir WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.working_dir ELSE sessions.working_dir END,
-      -- Active imports follow native classification; archived tasks retain the
-      -- project and directory scope they must restore with.
-      workspace_kind = CASE WHEN sessions.status = 'archived' THEN sessions.workspace_kind ELSE excluded.workspace_kind END,
-      model = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.model ELSE sessions.model END,
-      effort = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.effort ELSE sessions.effort END,
-      permission_mode = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.permission_mode ELSE sessions.permission_mode END,
-      status = CASE
-        WHEN sessions.status = 'deleted' THEN excluded.status
-        ELSE sessions.status
-      END,
-      sdk_session_id = excluded.sdk_session_id,
-      total_token_usage = CASE WHEN sessions.status = 'deleted' OR sessions.updated_at <= excluded.updated_at THEN excluded.total_token_usage ELSE sessions.total_token_usage END,
-      user_send_at = COALESCE(sessions.user_send_at, excluded.user_send_at),
-      updated_at = CASE WHEN sessions.status = 'deleted' THEN excluded.updated_at ELSE MAX(sessions.updated_at, excluded.updated_at) END
-  `, [
-    localId,
-    thread.title,
-    // 存储级归一(#537):Codex rollout 里的 cwd 在 Windows 上是反斜杠,直接入库会与
-    // sessions:create 归一后的正斜杠写法并存,同一物理目录裂成两种 workingDir。
-    normalizeWorkingDirForStorage(thread.cwd) ?? thread.cwd,
-    thread.model,
-    thread.effort,
-    thread.permissionMode,
-    thread.archived ? 'archived' : 'active',
-    thread.threadId,
-    thread.tokensUsed,
-    thread.updatedAt,
-    thread.workspaceKind,
-    thread.createdAt,
-    thread.updatedAt,
-  ]);
-  if (!existed && result.changes > 0) return 'inserted';
-  if (existed && result.changes > 0) return 'updated';
-  return 'skipped';
-}
 
 interface CopyThreadStateOptions {
   replaceExisting?: boolean;
@@ -5498,158 +5002,11 @@ function resolveRolloutPath(threadId: string): string | null {
   return findExternalThreadById(threadId)?.rolloutPath ?? null;
 }
 
-interface ImportedCodexMessage {
-  lineNo: number;
-  role: 'user' | 'assistant';
-  text: string;
-  content: unknown;
-  createdAt: number;
-  sourceCreatedAt?: number;
-  phase?: 'commentary' | 'final_answer';
-  agentMessageId?: string;
-}
 
-async function readCodexRolloutMessages(
-  rolloutPath: string,
-  sessionId: string,
-): Promise<ImportedCodexMessage[]> {
-  const input = createReadStream(rolloutPath, { encoding: 'utf-8' });
-  const rl = readline.createInterface({ input, crlfDelay: Infinity });
-  const out: ImportedCodexMessage[] = [];
-  let lineNo = 0;
-  for await (const line of rl) {
-    lineNo += 1;
-    const msg = await parseCodexRolloutMessageLineForImport(line, lineNo, sessionId);
-    if (msg) out.push(msg);
-  }
-  return out;
-}
 
-export function parseCodexRolloutMessageLine(
-  line: string,
-  lineNo: number,
-): ImportedCodexMessage | null {
-  if (!line.trim()) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(obj)) return null;
-  if (obj.type !== 'response_item' || !isRecord(obj.payload)) return null;
-  const payload = obj.payload;
-  if (payload.type !== 'message') return null;
-  const role = payload.role === 'assistant' ? 'assistant' : payload.role === 'user' ? 'user' : null;
-  if (!role) return null;
-  const rawText = extractContentText(payload.content);
-  // assistant 正文与流式 completed 同口径:剥截断残尾 + citation 归一化——rollout
-  // 存的是含 `:codex-file-citation{...}` 内部语法的原文(生成被打断时还带未闭合
-  // 残尾),直接入库会把它漏给用户(#785)。
-  const text = (
-    role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
-      : finalizeCodexCitationText(rawText)
-  ).trim();
-  if (!text) return null;
-  return {
-    lineNo,
-    role,
-    text,
-    content: text,
-    createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
-    sourceCreatedAt: timestampFromIso(stringValue(obj.timestamp)),
-    ...(payload.phase === 'commentary' || payload.phase === 'final_answer' ? { phase: payload.phase } : {}),
-    ...(typeof payload.id === 'string' && payload.id ? { agentMessageId: payload.id } : {}),
-  };
-}
 
-async function parseCodexRolloutMessageLineForImport(
-  line: string,
-  lineNo: number,
-  sessionId: string,
-): Promise<ImportedCodexMessage | null> {
-  if (!line.trim()) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return null;
-  }
-  if (!isRecord(obj)) return null;
-  if (obj.type !== 'response_item' || !isRecord(obj.payload)) return null;
-  const payload = obj.payload;
-  if (payload.type !== 'message') return null;
-  const role = payload.role === 'assistant' ? 'assistant' : payload.role === 'user' ? 'user' : null;
-  if (!role) return null;
 
-  const rawText = extractContentText(payload.content);
-  // assistant 正文与流式 completed 同口径:剥截断残尾 + citation 归一化——rollout
-  // 存的是含 `:codex-file-citation{...}` 内部语法的原文(生成被打断时还带未闭合
-  // 残尾),直接入库会把它漏给用户(#785)。
-  const text = (
-    role === 'user'
-      ? stripCompleteIdeOpenedFileBlocks(rawText)
-      : finalizeCodexCitationText(rawText)
-  ).trim();
-  const images = role === 'user'
-    ? await extractCodexUserImages(payload.content, sessionId, lineNo)
-    : [];
-  if (!text && images.length === 0) return null;
-  return {
-    lineNo,
-    role,
-    text,
-    content: role === 'user' ? importedUserContent(text, images) : text,
-    createdAt: timestampFromIso(stringValue(obj.timestamp)) + lineNo,
-    sourceCreatedAt: timestampFromIso(stringValue(obj.timestamp)),
-    ...(payload.phase === 'commentary' || payload.phase === 'final_answer' ? { phase: payload.phase } : {}),
-    ...(typeof payload.id === 'string' && payload.id ? { agentMessageId: payload.id } : {}),
-  };
-}
 
-function extractContentText(content: unknown): string {
-  if (typeof content === 'string') return content;
-  if (isRecord(content) && typeof content.text === 'string') return content.text;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!isRecord(block)) continue;
-    const type = stringValue(block.type);
-    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join('\n\n');
-}
-
-async function extractCodexUserImages(
-  content: unknown,
-  sessionId: string,
-  lineNo: number,
-): Promise<ImportedImageRef[]> {
-  if (!Array.isArray(content)) return [];
-  const out: ImportedImageRef[] = [];
-  let imageIndex = 0;
-  for (const block of content) {
-    if (!isRecord(block) || stringValue(block.type) !== 'input_image') continue;
-    const imageUrl = stringValue(block.image_url);
-    const payload = imageUrl ? parseImageDataUrl(imageUrl) : null;
-    if (!payload) continue;
-    const ref = await cacheImportedBase64Image({
-      sessionId,
-      source: 'codex',
-      lineNo,
-      partIndex: 0,
-      imageIndex,
-      mimeType: payload.mimeType,
-      base64Data: payload.base64Data,
-    });
-    imageIndex += 1;
-    if (ref) out.push(ref);
-  }
-  return out;
-}
 
 function openReadonlyDb(file: string): Database.Database {
   const db = createBetterSqliteDatabase(file, { readonly: true, fileMustExist: true });
@@ -5676,17 +5033,6 @@ function getTableColumns(db: Database.Database, table: string): string[] {
   return rows.map((row) => row.name);
 }
 
-function buildThreadOrderSql(db: Database.Database): string {
-  const cols = new Set(getTableColumns(db, 'threads'));
-  if (cols.has('updated_at_ms') && cols.has('updated_at')) {
-    return 'ORDER BY COALESCE("updated_at_ms", "updated_at" * 1000) DESC';
-  }
-  if (cols.has('updated_at_ms')) return 'ORDER BY "updated_at_ms" DESC';
-  if (cols.has('updated_at')) return 'ORDER BY "updated_at" DESC';
-  if (cols.has('created_at_ms')) return 'ORDER BY "created_at_ms" DESC';
-  if (cols.has('created_at')) return 'ORDER BY "created_at" DESC';
-  return '';
-}
 
 function intersectColumns(source: string[], target: string[]): string[] {
   const targetSet = new Set(target);

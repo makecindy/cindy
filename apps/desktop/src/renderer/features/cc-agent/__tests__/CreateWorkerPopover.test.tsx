@@ -4,6 +4,7 @@ import { WorkerProjectField, useWorkerProjectSelection } from '../WorkerProjectF
 import type { WorkerProjectContext } from '../../../../shared/orca-worker-project';
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
 
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
@@ -1951,6 +1952,29 @@ describe('CreateWorkerPopover remote providers', () => {
   });
 
   afterEach(() => cleanup());
+
+  // #8010 / unit: create through the real Worker form, then return to the task host.
+  // Existing cases lacked catalogHostDeviceId, so a cache key could accidentally
+  // become agentDeviceId or move the Worker's work computer without being caught.
+  it.each(['agent-pc', 'share:s1'])('keeps %s as the execution identity while reading its catalog through B', async source => {
+    mocks.capabilitiesByAgent['claude-code'] = {
+      availableModels: [], supportsOrcaWorkerAgentDevice: true,
+    } as typeof mocks.capabilitiesByAgent['claude-code'];
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open deviceId="host-b" catalogHostDeviceId="host-b"
+      leadAgentDeviceId={source} remoteAgentDevices={devices} onClose={vi.fn()} onCreate={onCreate} />);
+    expect(mocks.deviceProvidersFor).toBe(modelCatalogKey(source, 'host-b'));
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0][0]).toMatchObject({ agentDeviceId: source, model: 'codex/gpt-5.5' });
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty('executionDeviceId');
+    fireEvent.click(screen.getByTestId('pick-home-codex'));
+    expect(mocks.deviceProvidersFor).toBe('host-b');
+    submit();
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(2));
+    expect(onCreate.mock.calls[1][0]).toMatchObject({ agentDeviceId: null, model: 'codex/gpt-5.5' });
+    expect(onCreate.mock.calls[1][0]).not.toHaveProperty('executionDeviceId');
+  });
 
   // 模型面板底部「配置模型」：Worker 的 Agent 已选在分享上时也要能跳设置(由面板决定显示)；
   // 只有任务在远程控制的电脑上时不接线。

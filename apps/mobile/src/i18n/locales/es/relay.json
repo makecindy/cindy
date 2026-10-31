@@ -5,7 +5,7 @@
     "official": "Relevo oficial {{appName}}",
     "switchToOfficial": "Volver al relevo oficial",
     "officialHint": "Tus dispositivos se conectan a través del relé oficial {{appName}}. Para usar su propio relé, muestre su código QR de unión en la computadora que lo ejecuta y escanee el código con la cámara de su teléfono.",
-    "selfHostedHint": "Tus dispositivos se conectan a través de tu propio relé en {{address}}. El inicio de sesión, los modelos y otros servicios todavía usan {{appName}}.",
+    "selfHostedHint": "Tus dispositivos se conectan a través de tu propio relé en {{address}}. El inicio de sesión, los modelos, las tareas compartidas y otros servicios todavía usan {{appName}}.",
     "removedHint": "Este teléfono fue eliminado del relé o el relé fue desactivado. Vuelva al relevo oficial o únase nuevamente desde su computadora.",
     "credentialMissingHint": "La credencial de retransmisión ya no está en este teléfono. Únase nuevamente desde su computadora o vuelva al relevo oficial.",
     "confirmTitle": "¿Volver al relevo oficial?",
@@ -21,7 +21,7 @@
   "join": {
     "title": "Unirse al relevo",
     "checking": "Conectando al relé…",
-    "body": "Después de unirse, este teléfono se conecta a sus computadoras a través de este relé. El inicio de sesión, los modelos y otros servicios todavía usan {{appName}}. Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono.",
+    "body": "Después de unirse, este teléfono se conecta a sus computadoras a través de este relé. El inicio de sesión, los modelos, las tareas compartidas y otros servicios todavía usan {{appName}}. Mientras usa su propio relé, las notificaciones de tareas de sus computadoras no se envían a este teléfono.",
     "switchNote": "Al unirse se cambia este teléfono de “{{current}}” a este relé.",
     "action": "Unirse",
     "pairingCodeLabel": "Código de emparejamiento",

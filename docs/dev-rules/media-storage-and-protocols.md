@@ -144,6 +144,17 @@
   `node scripts/prepare-wallpaper-previews.mjs` 从原始图片重建，该组三张图的总预算为 300 KiB。
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+- 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
+  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
+  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
+  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
+  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
+  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
+  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
+  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
+  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按

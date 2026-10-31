@@ -245,6 +245,7 @@
     "completeWithSkipped_many": "Copiado, elementos {{count}} omitidos"
   },
   "sharedTask": {
+    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido de las tareas compartidas sigue pasando por el retransmisor de Cindy.",
     "selfJoin": "Usted inició esta tarea compartida, por lo que no necesita unirse. Ábrelo desde “Compartido por mí”.",
     "manageSharing": "Gestionar el uso compartido",
     "manageMembers": "Administrar miembros…",
@@ -346,6 +347,7 @@
     "closeAllDescription": "Los invitados perderán el acceso. Se mantiene el historial de tareas."
   },
   "providerShare": {
+    "officialRelayNote": "Estás usando tu propio retransmisor. El contenido del uso compartido de proveedores sigue pasando por el retransmisor de Cindy.",
     "owned": {
       "title": "Proveedores que comparto"
     },
@@ -2440,7 +2442,7 @@
     "language": {
       "title": "Idioma",
       "label": "Idioma de visualización",
-      "hint": "Se utiliza para la interfaz y los informes de errores de IA. Otras respuestas siguen a su mensaje o solicitud de idioma.",
+      "hint": "Se usa en la interfaz y en los informes de errores de IA. Las demás respuestas siguen el idioma de tu mensaje o el que solicites.",
       "ariaLabel": "Selección de idioma de visualización",
       "options": {
         "system": "Automático (según el sistema)",
@@ -2453,7 +2455,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "Escritura y estilo",
+        "hint": "La IA responde en el estilo elegido. Con «Respuestas habituales», la interfaz sigue en chino clásico y las respuestas siguen tu idioma.",
+        "scriptAriaLabel": "Escritura del chino clásico",
+        "styleAriaLabel": "Estilo de respuesta de la IA",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "Prosa clásica (predeterminado)",
+          "tang-poetry": "Poesía Tang",
+          "song-ci": "Ci de los Song",
+          "yuan-qu": "Qu de los Yuan",
+          "chu-ci": "Chuci",
+          "parallel-prose": "Prosa paralela",
+          "pre-qin": "Maestros pre-Qin",
+          "historian": "Estilo del Gran Historiador",
+          "ming-qing-essay": "Ensayos Ming–Qing",
+          "plain": "Respuestas habituales"
+        }
       }
     },
     "userProfile": {
@@ -2982,9 +3007,9 @@
         "ariaLabel": "Alternar activación rápida por voz"
       },
       "composerLongPress": {
-        "label": "Mantenga presionado al compositor para la entrada de voz",
-        "hint": "Mantenga presionado el botón izquierdo del mouse en el compositor por un momento para iniciar la entrada de voz. Suelte para detener e insertar el texto.",
-        "ariaLabel": "Alternar mantener compositor para entrada de voz"
+        "label": "Mantener pulsado el cuadro de texto para dictar",
+        "hint": "Mantén pulsado el botón izquierdo del ratón en el cuadro de texto un momento para comenzar a dictar. Suéltalo para detener el dictado e insertar el texto.",
+        "ariaLabel": "Activar o desactivar el dictado al mantener pulsado el cuadro de texto"
       },
       "refinement": {
         "enabled": {
@@ -3195,49 +3220,111 @@
       }
     },
     "sessionImport": {
-      "title": "Importación de sesión local",
-      "description": "Escaneo de solo lectura del historial local de Claude Code y Codex. Sólo se importarán las sesiones marcadas en la lista; Las sesiones internas omitidas están ocultas y no se pueden importar.",
-      "scan": "Escanear",
-      "scanning": "Escaneo",
-      "emptyTitle": "Escanea primero el historial local",
-      "emptyDescription": "El escaneo no escribe la base de datos ni cambia la barra lateral.",
-      "noCandidates": "No hay sesiones importables para el filtro actual.",
-      "collapse": "Contraer grupo",
-      "expand": "Expandir grupo",
-      "selectGroup": "Seleccionar grupo",
-      "sessions": "sesiones",
-      "selected": "Seleccionadas: {{count}}",
-      "importSelected": "Importar sesiones seleccionadas",
-      "importing": "Importando",
-      "archived": "Archivado",
+      "title": "Importar sesiones",
+      "description": "Trae sesiones de otras herramientas de programación con IA a Cindy y sigue trabajando. Cindy solo lee los originales y nunca los modifica.",
+      "rescan": "Buscar de nuevo",
+      "allSources": "Todos los orígenes",
+      "search": "Buscar sesiones o carpetas",
+      "projectFilter": "Solo {{name}}",
+      "clearProjectFilter": "Mostrar todos los proyectos",
+      "hiddenCount_one": "{{count}} oculta",
+      "hiddenCount_other": "{{count}} ocultas",
+      "hidden": {
+        "head": "Ocultas",
+        "hint": "Los elementos marcados aparecen en la lista",
+        "cindy": "Sesiones ejecutadas por Cindy",
+        "temp": "Sesiones en carpetas temporales",
+        "internal": "Sesiones internas (revisiones, Subagent)",
+        "imported": "Ya importadas",
+        "sourceError": "No se pudo leer el historial de {{name}}"
+      },
+      "missingDir": "Falta la carpeta",
+      "groupTasks_one": "{{count}} sesión",
+      "groupTasks_other": "{{count}} sesiones",
+      "dialogue": "Conversación",
+      "archived": "Archivada",
+      "unsupported": "Formato aún no compatible",
       "untitled": "Sesión sin título",
-      "noWorkingDir": "Sin directorio de trabajo",
-      "summary": {
-        "total": "Mostrado",
-        "totalHint": "Seleccionable para importar",
-        "projects": "Sesiones de proyecto",
-        "projectsHint": "Sesiones que aparecerán en grupos de proyectos.",
-        "dialogue": "Conversación",
-        "dialogueHint": "Codex sesiones sin proyecto",
-        "filtered": "Saltado",
-        "filteredHint": "Interno o ya en la aplicación"
+      "selectAll": "Seleccionar todo",
+      "selectGroup": "Seleccionar el grupo",
+      "expand": "Expandir",
+      "collapse": "Contraer",
+      "selectedSummary_one": "{{count}} seleccionada · {{size}}",
+      "selectedSummary_other": "{{count}} seleccionadas · {{size}}",
+      "pickHint": "Selecciona las sesiones que quieres traer a Cindy",
+      "importCount_one": "Importar {{count}} sesión",
+      "importCount_other": "Importar {{count}} sesiones",
+      "import": "Importar",
+      "scanning": "Buscando sesiones en este ordenador…",
+      "scanFailed": "La búsqueda no terminó. Inténtalo de nuevo.",
+      "emptyTitle": "No hay sesiones que importar en este ordenador",
+      "emptyDescription": "Cindy puede importar sesiones de estas herramientas. Cuando hayas utilizado alguna, vuelve a buscar aquí.",
+      "noMatch": "No hay sesiones coincidentes",
+      "allHidden": "Todas las sesiones están ocultas. Muéstralas desde «Ocultas», arriba a la derecha.",
+      "confirm": {
+        "title_one": "¿Importar {{count}} sesión?",
+        "title_other": "¿Importar {{count}} sesiones?",
+        "body": "Tardará unos {{minutes}} minutos y ocupará hasta {{size}} de espacio en disco. La importación se ejecuta en segundo plano; puedes detenerla cuando quieras y conservar lo ya importado.",
+        "cancel": "Cancelar",
+        "title_many": "¿Importar {{count}} sesiones?"
       },
-      "filters": {
-        "source": "Fuente",
-        "placement": "Colocación",
-        "all": "Todo",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "Proyectos existentes",
-        "dialogue": "Conversación"
+      "progress": {
+        "title_one": "Importando {{count}} sesión",
+        "title_other": "Importando {{count}} sesiones",
+        "background": "Puedes salir de esta página. La importación continúa en segundo plano.",
+        "stop": "Detener",
+        "queued": "En espera",
+        "copy": "Copiando el historial original",
+        "messages_one": "Guardando {{count}} mensaje",
+        "messages_other": "Guardando {{count}} mensajes",
+        "verify": "Comprobando que se pueda continuar",
+        "title_many": "Importando {{count}} sesiones",
+        "messages_many": "Guardando {{count}} mensajes"
       },
-      "toast": {
-        "scanFailed": "Error de escaneo",
-        "importFailed": "Importación fallida",
-        "imported": "Importación completa: {{inserted}} insertado, {{updated}} actualizado"
+      "result": {
+        "title_one": "{{count}} sesión importada",
+        "title_other": "{{count}} sesiones importadas",
+        "stoppedTitle": "Importación detenida",
+        "ready_one": "{{count}} lista para continuar",
+        "ready_other": "{{count}} listas para continuar",
+        "action_one": "{{count}} requiere tu atención",
+        "action_other": "{{count}} requieren tu atención",
+        "failed_one": "{{count}} fallida",
+        "failed_other": "{{count}} fallidas",
+        "readyGroup": "Listas para continuar ({{count}})",
+        "readyNative": "Lista para continuar en {{harness}}",
+        "readyHandoff": "Lista: {{harness}} continúa; puedes cambiar cuando quieras",
+        "missingDir": "La carpeta original ya no existe. Elige una carpeta para continuar.",
+        "chooseFolder": "Elegir carpeta",
+        "relocateFailed": "No se pudo cambiar a esa carpeta. Inténtalo de nuevo.",
+        "cancelled": "Se detuvo antes de importar",
+        "retry": "Reintentar",
+        "open": "Abrir",
+        "done": "Listo",
+        "title_many": "{{count}} sesiones importadas",
+        "ready_many": "{{count}} listas para continuar",
+        "action_many": "{{count}} requieren tu atención",
+        "failed_many": "{{count}} fallidas"
       },
-      "selectAll": "Seleccionar todo en el filtro actual ({{count}})",
-      "selectedOutsideFilter": "({{count}} de ellos fuera del filtro actual)"
+      "failure": {
+        "read-failed": "No se pudo importar: el historial original no se puede leer",
+        "unsupported-version": "No se pudo importar: el formato del historial de esta versión aún no es compatible",
+        "empty": "No se pudo importar: el historial original no contiene mensajes",
+        "not-found": "No se pudo importar: el historial original ya no existe",
+        "disk-full": "No se pudo importar: no hay suficiente espacio en disco",
+        "native-unloadable": "No se pudo importar: el historial original no se puede cargar"
+      },
+      "marker": {
+        "from": "Importada de {{source}} · {{date}}",
+        "folder": "Carpeta original {{path}}",
+        "end": "Todo lo anterior se importó de {{source}}",
+        "endHandoff": "Todo lo anterior se importó de {{source}}. {{harness}} continúa desde aquí."
+      },
+      "projectMenu": "Importar sesiones de este proyecto desde otras herramientas…",
+      "hiddenCount_many": "{{count}} ocultas",
+      "groupTasks_many": "{{count}} sesiones",
+      "selectedSummary_many": "{{count}} seleccionadas · {{size}}",
+      "importCount_many": "Importar {{count}} sesiones"
     },
     "connections": {
       "codex": {
@@ -3391,10 +3478,10 @@
         "close": "Cerrar importación de proveedores",
         "fromFile": "Importar desde archivo",
         "fileTooLarge": "El archivo supera los 4 MiB. Reduce su tamaño y vuelve a intentarlo.",
-        "fileInvalid": "Este archivo no es una configuración de importación de proveedor válida. Verifique el formato JSON y los campos de configuración.",
-        "fileReadFailed": "No se pudo importar el archivo. Selecciónelo nuevamente y vuelva a intentarlo.",
-        "loadFailed": "Esta importación de proveedor ya no es válida. Abra el enlace o seleccione el archivo nuevamente.",
-        "confirmFailed": "No se pudo importar el proveedor. Verifique la configuración o el punto final y vuelva a intentarlo.",
+        "fileInvalid": "Este archivo no es una configuración válida para importar proveedores. Revisa el formato JSON y los campos de configuración.",
+        "fileReadFailed": "No se pudo importar el archivo. Selecciónalo de nuevo y vuelve a intentarlo.",
+        "loadFailed": "Esta importación de proveedor ya no es válida. Abre el enlace o selecciona de nuevo el archivo.",
+        "confirmFailed": "No se pudo importar el proveedor. Revisa la configuración o la dirección del servicio y vuelve a intentarlo.",
         "oauthFailed": "Se agregó el proveedor, pero la autorización no finalizó. Intente la autorización nuevamente.",
         "done": "{{name}} fue importado",
         "oauthDone": "{{name}} fue agregado y autorizado",
@@ -3419,33 +3506,33 @@
           "update": "Se actualizará el proveedor existente {{name}}.",
           "replace-key": "Se reemplazará la clave API almacenada localmente para {{name}}."
         },
-        "fileGuideDescription": "Archivos Cindy en formato UTF-8 JSON, hasta 4 MiB.",
-        "fileGuideSteps": "Utilice el ejemplo para completar el nombre del proveedor, el punto final URL, la clave API y los detalles del modelo.",
-        "fileGuidePrivacy": "El ejemplo no contiene ninguna clave real. Mantenga privados los archivos con su clave.",
-        "selectJsonFile": "Elija el archivo JSON",
+        "fileGuideDescription": "Archivos JSON UTF-8 en formato Cindy, de hasta 4 MiB.",
+        "fileGuideSteps": "Usa el ejemplo para completar el nombre del proveedor, la URL del servicio, la clave de API y los datos de los modelos.",
+        "fileGuidePrivacy": "El ejemplo no contiene una clave real. Mantén privados los archivos que contengan tu clave.",
+        "selectJsonFile": "Elegir archivo JSON",
         "downloadExample": "Descargar ejemplo",
         "showFormat": "Ver guía de formato",
         "hideFormat": "Contraer guía de formato",
         "formatStructure": "El archivo contiene un objeto JSON, sin Base64, un enlace de importación o un contenedor adicional. Los campos siguientes describen un proveedor de claves API personalizado. Los nombres de los campos distinguen entre mayúsculas y minúsculas; JSON no permite comentarios.",
-        "formatIdentity": "Requerido. Establezca el tipo en \"personalizado\" y el nombre en el nombre del proveedor que desea mostrar.",
-        "formatAuth": "Requerido. En este ejemplo, establezca el método en \"apiKey\" y reemplace apiKey con la clave de su proveedor.",
-        "formatEndpoint": "Requerido para cada punto final. El protocolo acepta \"openai-chat\", \"openai-responses\", \"anthropic-messages\" y \"google-generative-ai\". Establezca baseUrl en el punto final HTTP(S) completo URL; Se recomienda HTTPS.",
+        "formatIdentity": "Obligatorio. Establece kind en \"custom\" y name en el nombre del proveedor que quieres mostrar.",
+        "formatAuth": "Obligatorio. En este ejemplo, establece method en \"apiKey\" y sustituye apiKey por la clave de tu proveedor.",
+        "formatEndpoint": "Obligatorio para cada endpoint. protocol admite \"openai-chat\", \"openai-responses\", \"anthropic-messages\" y \"google-generative-ai\". Establece baseUrl en la URL HTTP(S) completa del servicio; se recomienda HTTPS.",
         "formatTargets": "Matriz de motor opcional: \"claude-code\", \"codex\" o \"pi\". Omítalo para hacer coincidir los motores por protocolo o especifique los motores explícitamente. Claude Code también admite los protocolos OpenAI y Google. El ejemplo solo habilita Pi.",
-        "formatModels": "Opcional. Utilice cadenas de ID de modelo u objetos con ID (el nombre es opcional). Omita la lista o déjela vacía para recuperar modelos después de la confirmación. Una lista no vacía omite la búsqueda automática.",
+        "formatModels": "Opcional. Usa cadenas con el ID del modelo u objetos con id (name es opcional). Omite la lista o déjala vacía para obtener los modelos tras la confirmación. Una lista no vacía omite la búsqueda automática.",
         "formatMetadata": "Campos opcionales del modelo: group es el grupo del modelo, contextWindow es la longitud del contexto y maxOutputTokens es el límite de salida; ambos se expresan en tokens. Los valores de ejemplo son ilustrativos. Usa las capacidades reales del modelo.",
-        "formatEffort": "Campos de modelo opcionales: los esfuerzos enumeran los niveles de esfuerzo admitidos; defaultEffort selecciona uno de ellos como predeterminado. Elimine ambos campos si no está seguro.",
-        "formatLimits": "Hasta 8 terminales por proveedor y 10 000 modelos por terminal, dentro del límite de archivos de 4 MiB.",
+        "formatEffort": "Campos opcionales del modelo: efforts enumera los niveles de intensidad de razonamiento compatibles; defaultEffort selecciona uno como predeterminado. Si tienes dudas, elimina ambos campos.",
+        "formatLimits": "Hasta 8 endpoints por proveedor y 10 000 modelos por endpoint, dentro del límite de 4 MiB por archivo.",
         "exampleTitle": "Ejemplo de JSON (igual que la descarga)",
-        "fileGuidePrepare": "Prepare su archivo",
+        "fileGuidePrepare": "Preparar el archivo",
         "fileGuideReview": "Vista previa y confirmación",
-        "fileGuideReviewHint": "Importe uno o más proveedores. Revise el archivo primero; No se guarda nada hasta que lo confirmes.",
+        "fileGuideReviewHint": "Importa uno o más proveedores. Revisa primero el archivo; no se guarda nada hasta que confirmes.",
         "formatConversion": "Primero convierta las exportaciones de otros clientes a este formato.",
         "downloadBatchExample": "Descargar ejemplo por lotes",
         "formatBatch": "Para un lote, utilice { \"providers\": [config1, config2] } con la estructura de proveedor único que aparece a continuación para cada entrada. Máximo 50 entradas y 4 MiB en total. Las ranuras para claves integradas y los identificadores explícitos no deben repetirse. Si alguna entrada tiene una estructura no válida, no se crean borradores de importación para el archivo.",
-        "batchTitle": "Proveedores de importación ({{count}})",
+        "batchTitle": "Importar proveedores ({{count}})",
         "batchNote": "Seleccione proveedores para importar juntos. Revise individualmente para actualizar una conexión existente o autorizar. Las entradas guardadas se conservan si falla otra entrada.",
-        "batchImport": "Importar seleccionado ({{count}})",
-        "batchProgress": "{{count}} de {{total}} agregado o actualizado",
+        "batchImport": "Importar seleccionados ({{count}})",
+        "batchProgress": "Agregados o actualizados: {{count}} de {{total}}",
         "batchItem": "Configuración {{index}}",
         "batchReviewOne": "Revisar individualmente",
         "batchStatus": {
@@ -3453,12 +3540,12 @@
           "ready": "Listo para importar",
           "saving": "Importando…",
           "saved": "Importado",
-          "modelsPending": "Importado; reintentar el descubrimiento del modelo en la configuración del proveedor",
+          "modelsPending": "Importado; vuelve a buscar los modelos en la configuración del proveedor",
           "failed": "La importación falló; reintentar o revisar individualmente",
           "manual": "Se requiere confirmación o autorización individual",
           "invalid": "Vista previa no disponible; verifique la configuración o seleccione el archivo nuevamente",
           "skipped": "Saltado; seleccione el archivo nuevamente para importar esta entrada",
-          "authorizationPending": "Conexión agregada; autorización completa en la configuración del proveedor"
+          "authorizationPending": "Conexión agregada; completa la autorización en la configuración del proveedor"
         }
       },
       "order": {
@@ -4997,7 +5084,7 @@
     },
     "auxiliaryModels": {
       "title": "Modelos auxiliares",
-      "description": "Se utiliza para la denominación automática de tareas y el cambio de nombre de IA, sugerencias de mensajes del compositor, ayuda, resúmenes de tareas fijadas, títulos de IM/Feishu y comprobaciones de contexto de grupo, secuencias de comandos de tareas programadas, preguntas y respuestas rápidas del complemento \"seguir el valor predeterminado\" y refinamiento de voz BYOK.",
+      "description": "Se usan para nombrar tareas automáticamente y renombrarlas con IA, sugerir instrucciones en el cuadro de texto, ofrecer ayuda, resumir tareas fijadas, generar títulos de IM / Feishu y comprobar el contexto de grupos, crear scripts de tareas programadas, responder preguntas rápidas de complementos con la opción «usar el modelo predeterminado» y mejorar el texto dictado mediante BYOK.",
       "automatic": "Recomendación automática",
       "customize": "Personalizado",
       "preferred": {
@@ -5006,17 +5093,17 @@
         "ariaLabel": "Elige el modelo auxiliar preferido"
       },
       "fallback1": {
-        "label": "Repliegue 1",
+        "label": "Alternativa 1",
         "description": "Se utiliza si el modelo preferido no está disponible. Opcional.",
-        "ariaLabel": "Elija el primer modelo auxiliar alternativo"
+        "ariaLabel": "Elegir el primer modelo auxiliar alternativo"
       },
       "fallback2": {
-        "label": "Repliegue 2",
+        "label": "Alternativa 2",
         "description": "Se utiliza si los dos primeros modelos no están disponibles. Opcional.",
-        "ariaLabel": "Elija el segundo modelo auxiliar alternativo"
+        "ariaLabel": "Elegir el segundo modelo auxiliar alternativo"
       },
       "emptySlot": "No seleccionado",
-      "customHint": "Los modelos se prueban en el orden elegido y también se realiza una copia de seguridad de la revisión automática cuando los modelos integrados no están disponibles. Los proveedores seleccionados reciben contexto de revisión: mensajes y referencias, detalles de tareas y acciones (incluidas acciones bloqueadas), identidad y permisos, rutas de archivos y sistema operativo.",
+      "customHint": "Los modelos se prueban en el orden elegido y también sirven como alternativa para la revisión automática cuando sus modelos integrados no están disponibles. Los proveedores seleccionados reciben el contexto de revisión: mensajes y referencias, detalles de tareas y acciones (incluidas las bloqueadas), identidad y permisos, rutas de archivos y sistema operativo.",
       "signInHint": "Inicie sesión en Cindy para utilizar las recomendaciones automáticas. Mientras no haya iniciado sesión, elija un modelo configurado de otro proveedor en Personalizado.",
       "chooseAgent": "Elija un Agent",
       "backToAgents": "Volver a la selección Agent",
@@ -5028,8 +5115,8 @@
       "saveFailed": "No se pudo guardar la configuración del modelo auxiliar",
       "chain": {
         "cindyHy3": "Hy3",
-        "cindyDeepseekV4Flash": "Flash DeepSeek v4",
-        "cindyQwen38Flash": "Flash Qwen 3.8"
+        "cindyDeepseekV4Flash": "DeepSeek v4 flash",
+        "cindyQwen38Flash": "Qwen 3.8 Flash"
       }
     },
     "compaction": {
@@ -5108,12 +5195,12 @@
       },
       "backends": {
         "label": "Modelos de backend de visión",
-        "hint": "Elija hasta dos modelos multimodales que conviertan imágenes en texto. El segundo (copia de seguridad) es opcional.",
+        "hint": "Elige hasta dos modelos multimodales para convertir imágenes en texto. El segundo, que se usa como alternativa, es opcional.",
         "primary": "Primaria",
-        "fallback": "Copia de seguridad",
+        "fallback": "Alternativo",
         "unset": "Ninguno seleccionado",
-        "noBackup": "Sin respaldo",
-        "hintSecondary": "El backend principal se utiliza primero. Si falla y se establece una copia de seguridad, se utiliza la copia de seguridad. Si ambos fallan, la imagen no se puede describir y se reemplaza con un aviso de texto."
+        "noBackup": "Sin modelo alternativo",
+        "hintSecondary": "Se usa primero el modelo principal. Si falla y hay un modelo alternativo configurado, se usa este último. Si ambos fallan, la imagen no se puede describir y se sustituye por un aviso de texto."
       }
     },
     "terminalShell": {
@@ -5757,7 +5844,7 @@
         "current": "En uso",
         "ownerName": "esta computadora",
         "unavailable": "Para usar tu propio retransmisor, inicia sesión en Cindy y asegúrate de que el llavero del sistema esté disponible.",
-        "limits": "Mientras uses tu propio retransmisor, no estarán disponibles las notificaciones push en el teléfono, el uso compartido de proveedores ni las tareas compartidas.",
+        "limits": "Mientras uses tu propio retransmisor, las notificaciones push en el teléfono no estarán disponibles. El uso compartido de proveedores y las tareas compartidas seguirán pasando por el retransmisor de Cindy.",
         "actions": {
           "join": "Unirse a otro retransmisor",
           "useOfficial": "Volver al retransmisor de Cindy",
@@ -5973,7 +6060,7 @@
           "switchFromHost": "El relé de esta computadora se detiene y los dispositivos que se unieron a él se desconectan.",
           "switchFromMember": "Esta computadora sale de {{name}}. Para volver a unirse después, su propietario debe crear un nuevo enlace de unión.",
           "switchConfirm": "Cambiar",
-          "switchFromOfficial": "El control remoto entre tus dispositivos pasará por {{name}}. Las notificaciones push al teléfono, el uso compartido de proveedores y las tareas compartidas no están disponibles mientras uses tu propio relé."
+          "switchFromOfficial": "El control remoto entre tus dispositivos pasará por {{name}}. Las notificaciones push al teléfono no están disponibles mientras uses tu propio relé. El uso compartido de proveedores y las tareas compartidas siguen pasando por el retransmisor de Cindy."
         },
         "dialog": {
           "steps": {
@@ -10258,7 +10345,7 @@
       "description": "Elige los modelos que usa este compañero.",
       "primary": "Modelo principal",
       "task": "Modelo de tarea",
-      "inheritPrimary": "Heredar modelo primario",
+      "inheritPrimary": "Heredar modelo principal",
       "inheritingPrimary": "Hereda el modelo principal para las nuevas tareas en segundo plano",
       "restoreDefault": "Restaurar modelo predeterminado"
     },
@@ -10556,6 +10643,7 @@
       "header": {
         "stepRunning": "{{name}} está en el paso {{step}}",
         "speaking": "{{name}} está respondiendo…",
+        "queued": "{{name}} está en cola",
         "planning": "{{name}} está dividiendo el trabajo…"
       },
       "memberCount_one": "Miembro de {{count}}",
@@ -13025,7 +13113,7 @@
       "piTransportClosed": "Se interrumpió la conexión con Pi remoto (se cerró el canal SSH). La tarea remota sigue en ejecución: vuelve a conectarte para continuar.",
       "piManagerUnavailable": "El administrador de Pi remoto no está listo. Reintenta en un momento; si sigue fallando, reinstala Pi en Configuración → Equipos remotos.",
       "piBundledNodeMissing": "Falta el entorno de ejecución (Node.js) en el equipo remoto. Expande el equipo en Configuración → Equipos remotos y primero haz clic en Instalar en Claude Code o Codex (incluyen Node.js); luego inicia una tarea de Pi.",
-      "remoteCompactEncryptedContent": "La compactación del contexto falló porque el modelo no pudo leer el historial cifrado. La continuación automática no se completó. Vuelva a intentar intentar la recuperación.",
+      "remoteCompactEncryptedContent": "No se pudo compactar el contexto porque el modelo no pudo leer el historial cifrado. La continuación automática no se completó. Vuelve a intentarlo para tratar de recuperar la sesión.",
       "contextOverflow": "Este mensaje por sí solo supera la ventana de contexto del modelo, por lo que Cindy no puede continuarlo en una sesión nueva de Agent. Acorta el texto de entrada o quita un archivo adjunto grande y vuelve a intentarlo.",
       "attachmentAccessDeniedTitle": "Cindy no puede leer el archivo adjunto original; el mensaje no se envió.",
       "attachmentAccessDeniedRecovery": "Guarda una copia en Descargas o en otra carpeta accesible, quita el archivo adjunto original y agrega la copia con el botón de adjuntar antes de volver a enviar."
@@ -14574,11 +14662,6 @@
         "openInExplorer": "Abrir en el administrador de archivos",
         "newInDirectory": "Nueva sesión en este directorio",
         "copyDeepLink": "Copiar enlace del proyecto",
-        "syncCodex": "Sincronizar sesiones de Codex para este proyecto",
-        "syncCodexDone": "Sincronización de Codex completada: {{inserted}} vinculadas, {{updated}} actualizadas",
-        "syncCodexAlreadyLinked": "Las sesiones de Codex de este proyecto ya están vinculadas",
-        "syncCodexNone": "No se encontraron sesiones de Codex para este proyecto",
-        "syncCodexFailed": "Error de sincronización de Codex: {{error}}",
         "search": "Buscar sesiones en este proyecto"
       },
       "deepLink": {
@@ -14636,7 +14719,7 @@
       "branchTooltip": "Rama actual: {{branch}}",
       "pr": {
         "status": {
-          "open": "Abrir",
+          "open": "Abierto",
           "draft": "Borrador",
           "merged": "Fusionado",
           "closed": "Cerrado"
@@ -15582,7 +15665,7 @@
       "newIssueAria": "Crear nueva incidencia",
       "statusFilterAria": "Filtro de estado",
       "statusFilter": {
-        "open": "Abrir",
+        "open": "Abiertas",
         "inProgress": "En curso"
       },
       "filterAuthor": "Autor",
@@ -15655,12 +15738,12 @@
       "imageUploadFailed": "Error al subir la imagen"
     },
     "status": {
-      "open": "Abrir",
+      "open": "Abierta",
       "inProgress": "En curso",
-      "closed": "Cerrado",
+      "closed": "Cerrada",
       "openDesc": "Por hacer",
       "inProgressDesc": "En progreso",
-      "closedDesc": "Cerrado",
+      "closedDesc": "Cerrada",
       "badgeAria": "Estado: {{label}}",
       "dropdownAria": "Estado actual: {{label}}, haz clic para cambiarlo",
       "updateFailed": "Error al actualizar el estado"
@@ -17707,9 +17790,8 @@
       "name": "Seguimiento de sesiones asignadas (integrado)",
       "hint": "Da seguimiento a las sesiones asignadas cuando se estancan, te necesitan, fallan, alcanzan un límite de uso o terminan."
     },
-    "builtinTodoCheck": {
-      "name": "Revisión diaria de pendientes (integrada)",
-      "hint": "Busca nuevos pendientes en las fuentes conectadas de lunes a viernes a las 9:00 y permanece en silencio cuando no hay novedades. Se activa o desactiva desde la vista rápida; solo se puede pausar o reanudar."
+    "todoCheck": {
+      "name": "Revisión diaria de pendientes"
     },
     "builtinNightlyLearning": {
       "name": "Aprendizaje nocturno (integrado)",
@@ -17905,7 +17987,7 @@
         "pr": "PR"
       },
       "state": {
-        "open": "Abrir",
+        "open": "Abierto",
         "closed": "Cerrado",
         "merged": "Fusionado",
         "unknown": "Cerrado · estado de fusión sin verificar"

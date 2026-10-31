@@ -88,7 +88,7 @@ export async function recordPrRefsForMessage(msg: {
 }
 
 /**
- * 外部会话懒导入路径的批量提取钩子(codex/claude-local-sessions 在导入事务
+ * 任务导入的批量提取钩子(session-import 在导入消息
  * 落库后 fire-and-forget 调用)。导入消息不经 createMessage(它们走专用 tx
  * 批量 upsert),没有这个钩子的话导入会话的 PR 永远不会被绑定,且全局回填
  * 可能在懒导入发生前就已写完成标记(review 反馈)。永不抛错。

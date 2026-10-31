@@ -240,6 +240,7 @@
     "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
   },
   "sharedTask": {
+    "officialRelayNote": "你正在使用自己的中繼，共享任務的內容仍經 Cindy 官方中繼。",
     "selfJoin": "這是你發起的共享任務，無需加入。請從「我發起的」開啟",
     "manageSharing": "共享管理",
     "manageMembers": "管理成員…",
@@ -341,6 +342,7 @@
     "closeAllDescription": "所有訪客將無法繼續存取，任務記錄保留。"
   },
   "providerShare": {
+    "officialRelayNote": "你正在使用自己的中繼，供應商分享的內容仍經 Cindy 官方中繼。",
     "owned": {
       "title": "我分享的供應商"
     },
@@ -1088,7 +1090,8 @@
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
     "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
-    "controlUnavailable": "遠端電腦暫時無法接受操作，請檢查遠端控制權限和連線，然後重新連線。",
+    "inputUnsupported": "Cindy 暫不支援這台電腦目前桌面環境的遠端鍵鼠控制。",
+    "controlUnavailable": "遠端鍵鼠控制暫時無法使用，請重新連線。",
     "beingControlled": "桌面正在被遠端控制",
     "beingViewed": "桌面正在被遠端檢視",
     "controlledByDevice": "{{name}} 正在遠端控制桌面",
@@ -2388,7 +2391,30 @@
         "fr": "Français",
         "de": "Deutsch",
         "pt-PT": "Português (Portugal)",
-        "pt-BR": "Português (Brasil)"
+        "pt-BR": "Português (Brasil)",
+        "classical": "文言"
+      },
+      "classical": {
+        "label": "簡繁與文風",
+        "hint": "AI 依所選文風作答；選「照常作答」時介面仍為文言，回答隨你的語言",
+        "scriptAriaLabel": "文言簡繁",
+        "styleAriaLabel": "AI 作答文風",
+        "script": {
+          "hans": "简体",
+          "hant": "繁體"
+        },
+        "styles": {
+          "prose": "文言（預設）",
+          "tang-poetry": "唐詩",
+          "song-ci": "宋詞",
+          "yuan-qu": "元曲",
+          "chu-ci": "楚辭",
+          "parallel-prose": "駢文",
+          "pre-qin": "先秦諸子",
+          "historian": "史傳",
+          "ming-qing-essay": "明清小品",
+          "plain": "照常作答"
+        }
       }
     },
     "userProfile": {
@@ -3130,49 +3156,89 @@
       }
     },
     "sessionImport": {
-      "title": "本地任務匯入",
-      "description": "只讀掃描本機 Claude Code 與 Codex 歷史。只有列表裡勾選的任務會被匯入；已跳過的內部 Agent 會話不會展示，也不會匯入。",
-      "scan": "掃描",
-      "scanning": "掃描中",
-      "emptyTitle": "先掃描本地歷史",
-      "emptyDescription": "掃描不會寫入資料庫，也不會改變側邊欄。",
-      "noCandidates": "當前篩選下沒有可匯入的任務。",
-      "collapse": "收起分組",
-      "expand": "展開分組",
-      "selectGroup": "選擇整個分組",
-      "sessions": "條任務",
-      "selected": "已選擇 {{count}} 條",
-      "importSelected": "匯入選中",
-      "importing": "匯入中",
+      "title": "任務匯入",
+      "description": "把其他 AI 程式設計工具裡的任務接到 Cindy 接著做。只讀取原始記錄，不會改動它們。",
+      "rescan": "重新掃描",
+      "allSources": "全部來源",
+      "search": "搜尋任務或資料夾",
+      "projectFilter": "只看 {{name}}",
+      "clearProjectFilter": "顯示全部專案",
+      "hiddenCount_other": "已隱藏 {{count}} 個",
+      "hidden": {
+        "head": "這些沒有列出",
+        "hint": "勾選的會顯示在列表裡",
+        "cindy": "Cindy 自己執行過的任務",
+        "temp": "暫存資料夾裡的任務",
+        "internal": "工具內部任務（自動審查、子 Agent）",
+        "imported": "已經匯入過的任務",
+        "sourceError": "{{name}} 的記錄讀不出來"
+      },
+      "missingDir": "原資料夾已不存在",
+      "groupTasks_other": "{{count}} 個任務",
+      "dialogue": "對話",
       "archived": "已歸檔",
+      "unsupported": "格式暫不支援",
       "untitled": "未命名任務",
-      "noWorkingDir": "無工作目錄",
-      "summary": {
-        "total": "列表中",
-        "totalHint": "可以勾選匯入",
-        "projects": "專案任務",
-        "projectsHint": "匯入後進入專案分組的任務",
-        "dialogue": "對話",
-        "dialogueHint": "Codex 標記為不屬於專案的任務",
-        "filtered": "已跳過",
-        "filteredHint": "內部 Agent 會話或已在應用內"
+      "selectAll": "全選",
+      "selectGroup": "選擇整個分組",
+      "expand": "展開",
+      "collapse": "收起",
+      "selectedSummary_other": "已選 {{count}} 個任務 · {{size}}",
+      "pickHint": "勾選要接到 Cindy 的任務",
+      "importCount_other": "匯入 {{count}} 個任務",
+      "import": "匯入",
+      "scanning": "正在尋找這台電腦上的任務…",
+      "scanFailed": "掃描沒有完成，請重試",
+      "emptyTitle": "這台電腦上沒有找到可以匯入的任務",
+      "emptyDescription": "Cindy 可以匯入以下工具裡的任務。用過這些工具後，回來重新掃描即可。",
+      "noMatch": "沒有符合條件的任務",
+      "allHidden": "這裡的任務都被隱藏了，可在右上角「已隱藏」裡打開顯示。",
+      "confirm": {
+        "title_other": "匯入 {{count}} 個任務？",
+        "body": "大約需要 {{minutes}} 分鐘，最多佔用 {{size}} 磁碟空間。匯入在背景進行，可以隨時停止，已經匯入的會保留。",
+        "cancel": "取消"
       },
-      "filters": {
-        "source": "來源",
-        "placement": "位置",
-        "all": "全部",
-        "codex": "Codex",
-        "claude": "Claude",
-        "project": "已有專案",
-        "dialogue": "對話"
+      "progress": {
+        "title_other": "正在匯入 {{count}} 個任務",
+        "background": "可以離開這個頁面，匯入會在背景繼續。",
+        "stop": "停止",
+        "queued": "等待中",
+        "copy": "正在複製原始記錄",
+        "messages_other": "正在寫入 {{count}} 則訊息",
+        "verify": "正在確認能接著做"
       },
-      "toast": {
-        "scanFailed": "掃描失敗",
-        "importFailed": "匯入失敗",
-        "imported": "匯入完成：新增 {{inserted}} 條，更新 {{updated}} 條"
+      "result": {
+        "title_other": "已匯入 {{count}} 個任務",
+        "stoppedTitle": "匯入已停止",
+        "ready_other": "{{count}} 個可以繼續",
+        "action_other": "{{count}} 個需要你處理",
+        "failed_other": "{{count}} 個沒匯入成功",
+        "readyGroup": "可以繼續（{{count}}）",
+        "readyNative": "可以繼續，用 {{harness}} 原樣接著做",
+        "readyHandoff": "可以繼續，由 {{harness}} 接著做，可隨時更換",
+        "missingDir": "原資料夾已不存在，選一個資料夾就能繼續",
+        "chooseFolder": "選擇資料夾",
+        "relocateFailed": "沒能換到這個資料夾，請重試",
+        "cancelled": "已停止，沒有匯入",
+        "retry": "重試",
+        "open": "開啟",
+        "done": "完成"
       },
-      "selectAll": "全選當前篩選結果（{{count}} 條）",
-      "selectedOutsideFilter": "（其中 {{count}} 條在當前篩選之外）"
+      "failure": {
+        "read-failed": "沒匯入成功：原始記錄檔讀不出來",
+        "unsupported-version": "沒匯入成功：這個版本的記錄格式暫不支援",
+        "empty": "沒匯入成功：原始記錄裡沒有訊息",
+        "not-found": "沒匯入成功：原始記錄已經不在了",
+        "disk-full": "沒匯入成功：磁碟空間不足",
+        "native-unloadable": "沒匯入成功：原始記錄無法載入"
+      },
+      "marker": {
+        "from": "從 {{source}} 匯入 · {{date}}",
+        "folder": "原資料夾 {{path}}",
+        "end": "以上是從 {{source}} 匯入的記錄",
+        "endHandoff": "以上是從 {{source}} 匯入的記錄，接下來由 {{harness}} 接著做"
+      },
+      "projectMenu": "匯入此專案在其他工具裡的任務…"
     },
     "connections": {
       "codex": {
@@ -5681,7 +5747,7 @@
         "current": "目前使用",
         "ownerName": "這台電腦",
         "unavailable": "登入 Cindy 帳號，並且系統鑰匙圈可用時，才能使用自己的中繼。",
-        "limits": "使用自己的中繼時，手機系統推播、供應商分享和共享任務暫不可用。",
+        "limits": "使用自己的中繼時，手機系統推播暫不可用；供應商分享和共享任務仍經 Cindy 官方中繼。",
         "actions": {
           "join": "加入別的中繼",
           "useOfficial": "切回官方中繼",
@@ -5897,7 +5963,7 @@
           "switchFromHost": "這台電腦上的中繼會停用，已加入它的裝置會斷線。",
           "switchFromMember": "這台電腦會退出「{{name}}」，之後要再加入，需要對方重新產生加入連結。",
           "switchConfirm": "切換",
-          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播、供應商分享和共享任務暫時無法使用。"
+          "switchFromOfficial": "裝置之間的遠端控制會改經「{{name}}」轉送。使用自己的中繼時，手機系統推播暫時無法使用；供應商分享和共享任務仍經 Cindy 官方中繼。"
         },
         "dialog": {
           "steps": {
@@ -10449,6 +10515,7 @@
       "header": {
         "stepRunning": "{{name}} 正在做第 {{step}} 步",
         "speaking": "{{name}} 正在說…",
+        "queued": "{{name}} 排隊中",
         "planning": "{{name}} 正在安排…"
       },
       "memberCount_one": "{{count}} 位成員",
@@ -14356,11 +14423,6 @@
         "openInExplorer": "在檔案管理器中開啟",
         "newInDirectory": "在此目錄新建任務",
         "copyDeepLink": "複製專案連結",
-        "syncCodex": "同步此專案的 Codex 任務",
-        "syncCodexDone": "Codex 同步完成：連結 {{inserted}} 條，更新 {{updated}} 條",
-        "syncCodexAlreadyLinked": "此專案的 Codex 任務已經連結過了",
-        "syncCodexNone": "沒有找到此專案的 Codex 任務",
-        "syncCodexFailed": "Codex 同步失敗：{{error}}",
         "search": "在專案內搜尋任務"
       },
       "deepLink": {
@@ -17466,9 +17528,8 @@
       "name": "跟進已接手的任務（內建）",
       "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
     },
-    "builtinTodoCheck": {
-      "name": "每天查待辦（內建）",
-      "hint": "工作日 9:00 在已連接的來源裡找新待辦，沒有就不打擾；在近況裡開關，只能暫停或恢復。"
+    "todoCheck": {
+      "name": "每天查待辦"
     },
     "builtinNightlyLearning": {
       "name": "夜間學習（內建）",

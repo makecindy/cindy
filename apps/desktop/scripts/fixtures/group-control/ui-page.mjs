@@ -31,7 +31,7 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar is an empty frame',
+    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
   cases: {
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
@@ -46,6 +46,8 @@ export default {
       viewport: { width: 720, height: 700 },
       data: { ...base, sidebar: false, remoteLimits: true },
     },
+    'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
+    'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
@@ -231,9 +233,27 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      if (definition.data.workQueuedStep) {
+        const header = await page.getByTestId('bot-group-content-header').innerText();
+        const sidebar = await page.getByTestId('bot-group-running').innerText();
+        assert.ok(header.includes(await ui.t('bots.groupChat.header.speaking', { name: 'Nova' })));
+        assert.ok(sidebar.includes('Nova') && !sidebar.includes('Aster'));
+        const progress = await page.getByTestId('bot-group-progress').allTextContents();
+        assert.equal(progress.length, 2);
+        assert.ok(progress[0].includes(await ui.t('bots.groupChat.progress.queued')));
+      } else if (state === 'queued') {
+        const header = await page.getByTestId('bot-group-content-header').innerText();
+        const progress = await page.getByTestId('bot-group-progress').innerText();
+        assert.ok(header.includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.ok((await page.getByTestId('bot-group-running').innerText()).includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.ok(progress.includes(await ui.t('bots.groupChat.progress.queued')));
+        const elapsedLabel = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
+        assert.ok(!progress.includes(elapsedLabel));
+        assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).isEnabled(), true);
+      }
       if (definition.data.workNoStart) {
         const strip = page.getByTestId('bot-group-progress');
-        const elapsed = (await ui.t('bots.groupChat.progress.elapsed')).split('{{')[0];
+        const elapsed = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();
