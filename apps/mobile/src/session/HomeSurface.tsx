@@ -313,6 +313,8 @@ import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 
 const LIST_LIMIT = 200;
+const HOME_HYDRATE_MAX_TRAILING_RERUNS = 2;
+const HOME_HYDRATE_RERUN_BACKOFF_MS = 100;
 // Keep the device-link channel responsive while All Sessions hydrates several
 // computers. This does not change the 200-row server limit; it only bounds the
 // number of device snapshots processed at once.
@@ -414,13 +416,15 @@ type HomeHydrateInFlightEntry = {
   device: DeviceView;
   homeSyncGeneration: number;
   promise: Promise<HydrateDeviceSessionsResult>;
+  rerunCount: number;
   rerunRequested: boolean;
+  rerunScheduled: boolean;
 };
 
 type HydrateDeviceSessions = (
   device: DeviceView,
   expectedAccountGeneration?: number,
-  options?: { trailingIfInFlight?: boolean },
+  options?: { trailingIfInFlight?: boolean; rerunCount?: number },
 ) => Promise<HydrateDeviceSessionsResult>;
 
 class HomeSyncScopeSupersededError extends Error {
@@ -1118,7 +1122,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const hydrateDeviceSessions = useCallback((
     device: DeviceView,
     expectedAccountGeneration = accountGeneration,
-    options: { trailingIfInFlight?: boolean } = {},
+    options: { trailingIfInFlight?: boolean; rerunCount?: number } = {},
   ): Promise<HydrateDeviceSessionsResult> => {
     const expectedHomeSyncGeneration = homeSyncGenerationByDeviceRef.current.get(device.deviceId);
     if (
@@ -1153,21 +1157,41 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       device,
       homeSyncGeneration: expectedHomeSyncGeneration,
       promise,
+      rerunCount: options.rerunCount ?? 0,
       rerunRequested: false,
+      rerunScheduled: false,
     };
     homeHydrateInFlightByDeviceRef.current.set(device.deviceId, entry);
     const settle = (needsRerun: boolean) => {
       if (homeHydrateInFlightByDeviceRef.current.get(device.deviceId) !== entry) return;
-      homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
-      if (
-        !needsRerun
-        && !entry.rerunRequested
-      ) return;
+      if (!needsRerun && !entry.rerunRequested) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        return;
+      }
+      // A live sessions push can invalidate a whole-list snapshot. Coalesce it into a small,
+      // bounded trailing pull instead of allowing an unbounded invalidation/rerun loop to starve
+      // the JS thread while the desktop is actively streaming messages.
+      if (entry.rerunScheduled || entry.rerunCount >= HOME_HYDRATE_MAX_TRAILING_RERUNS) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        updateDeviceConnectionState(device.deviceId, 'idle');
+        return;
+      }
+      entry.rerunScheduled = true;
       if (
         homeAccountGenerationRef.current !== entry.accountGeneration
         || !isCurrentHomeSyncTarget(device.deviceId, entry.homeSyncGeneration)
-      ) return;
-      void hydrateDeviceSessionsRef.current(entry.device, entry.accountGeneration);
+      ) {
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        return;
+      }
+      const delayMs = HOME_HYDRATE_RERUN_BACKOFF_MS * (2 ** entry.rerunCount);
+      setTimeout(() => {
+        if (homeHydrateInFlightByDeviceRef.current.get(device.deviceId) !== entry) return;
+        homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+        void hydrateDeviceSessionsRef.current(entry.device, entry.accountGeneration, {
+          rerunCount: entry.rerunCount + 1,
+        });
+      }, delayMs);
     };
     void promise.then(
       (result) => settle(result.needsRerun === true),
