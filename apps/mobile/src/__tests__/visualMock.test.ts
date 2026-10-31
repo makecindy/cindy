@@ -320,4 +320,7 @@ it('replays companion context snapshots and compaction without erasing the conve
   expect(await read('local-db:sessions:get', [id])).toMatchObject({ contextTokens: 30_000 });
   expect(await read('local-db:messages:list', [id])).toEqual(before);
   expect(await read('maker:compact-session', [id])).toEqual({ noop: true });
+  const unstarted = 'visual-teammate-session:visual-bot-dash';
+  expect(await read('maker:compact-session', [unstarted])).toBeNull();
+  expect(await read('local-db:sessions:get', [unstarted])).toMatchObject({ agentKind: 'pi', contextTokens: 120_000 });
 });

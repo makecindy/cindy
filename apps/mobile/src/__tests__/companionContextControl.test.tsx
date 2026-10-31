@@ -64,11 +64,12 @@ it('shows a rejected request and leaves the previous snapshot intact', async () 
   await x.render(); await x.click('companion.context.open'); await x.click('companion.context.compact'); await x.accept();
   expect(host.textContent).toContain('host rejected'); expect(host.textContent).toContain('120.0k'); expect(x.refresh).not.toHaveBeenCalled();
 });
-it.each([[{ noop: true }, 'nothing'], [null, 'requested']] as const)('does not label %o as completed compaction', async (result, status) => {
+it.each([[{ noop: true }, 'nothing'], [null, 'notExecuted']] as const)('does not label %o as completed compaction', async (result, status) => {
   const x = harness(); x.reader.compactSession.mockResolvedValue(result);
   await x.render(); await x.click('companion.context.open'); await x.click('companion.context.compact'); await x.accept();
   expect(host.textContent).toContain(`session.contextControl.${status}`);
   expect(host.textContent).not.toContain('session.contextControl.success');
+  expect(host.textContent).not.toContain('session.contextControl.requested');
 });
 it('keeps one request in flight and displays compaction until it settles', async () => {
   const x = harness(); let finish!: (result: unknown) => void;

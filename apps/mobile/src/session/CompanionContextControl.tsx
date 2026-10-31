@@ -57,7 +57,7 @@ export function CompanionContextControl({ session, capabilities, reader, availab
       } else {
         const result = await request.reader.compactSession(session.id);
         if (mounted.current) setMessage(t(result?.noop ? 'session.contextControl.nothing'
-          : result ? 'session.contextControl.success' : 'session.contextControl.requested'));
+          : result ? 'session.contextControl.success' : 'session.contextControl.notExecuted'));
       }
       if (mounted.current) request.onRefresh();
     } catch (error) {

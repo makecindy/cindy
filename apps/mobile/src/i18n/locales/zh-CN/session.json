@@ -9,6 +9,7 @@
     "compactHelp": "概括较早内容，腾出空间。部分细节可能省略。",
     "autoHelp": "Codex 会在接近压缩阈值时自动整理上下文。",
     "requested": "压缩请求已提交，完成后占用会更新。",
+    "notExecuted": "未执行压缩，当前会话尚未就绪。",
     "success": "上下文已压缩",
     "nothing": "暂无可压缩内容"
   },

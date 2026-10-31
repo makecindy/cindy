@@ -9,6 +9,7 @@
     "compactHelp": "Frühere Inhalte zusammenfassen, um Platz zu schaffen. Einige Details können entfallen.",
     "autoHelp": "Codex komprimiert den Kontext automatisch, wenn die Komprimierungsschwelle fast erreicht ist.",
     "requested": "Komprimierung angefordert. Die Nutzung wird nach Abschluss aktualisiert.",
+    "notExecuted": "Die Komprimierung wurde nicht ausgeführt. Diese Sitzung ist noch nicht bereit.",
     "success": "Kontext komprimiert",
     "nothing": "Noch nichts zu komprimieren"
   },

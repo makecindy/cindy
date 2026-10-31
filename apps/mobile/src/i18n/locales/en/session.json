@@ -9,6 +9,7 @@
     "compactHelp": "Summarize earlier content to free space. Some details may be omitted.",
     "autoHelp": "Codex automatically compacts context near its compaction threshold.",
     "requested": "Compaction requested. Usage will update when it finishes.",
+    "notExecuted": "Compaction was not performed. This session is not ready.",
     "success": "Context compacted",
     "nothing": "Nothing to compact yet"
   },

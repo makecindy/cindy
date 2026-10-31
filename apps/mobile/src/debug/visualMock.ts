@@ -73,7 +73,7 @@ export const visualMockUser: MobileUser = {
   passportId: 'visual-mock-passport',
 };
 
-// Companion context examples are in-memory only: Tuantuan unknown, LiZi Pi, Xiaoman Codex.
+// Context examples: Tuantuan unknown, LiZi live Pi, Dash unstarted Pi, Xiaoman Codex.
 const visualCompanionContextTokens = new Map<string, number>();
 let realDataSnapshot: VisualRealDataSnapshot | null = null;
 let realDataLoadPromise: Promise<VisualRealDataSnapshot | null> | null = null;
@@ -349,6 +349,7 @@ async function visualMockInvoke<T = unknown>(
     case 'maker:compact-session': {
       const id = String(args[0] ?? '');
       if (!id.startsWith(VISUAL_TEAMMATE_SESSION_ID)) return {} as T;
+      if (channel === 'maker:compact-session' && id.endsWith(':visual-bot-dash')) return null as T;
       const before = visualMockSession(id).contextTokens ?? 0;
       if (before <= 30_000) return { noop: true } as T;
       visualCompanionContextTokens.set(id, 30_000);
@@ -582,7 +583,7 @@ function visualMockSession(id: string): RemoteSession {
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
     || [...visualTeammateThreads.values()].some(thread => thread.sessionId === id)) return {
     ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 演示群任务',
-    agentKind: id.endsWith(':visual-bot-lizi') ? 'pi' : id.endsWith(':visual-bot-xiaoman') ? 'codex' : 'cc',
+    agentKind: id.endsWith(':visual-bot-lizi') || id.endsWith(':visual-bot-dash') ? 'pi' : id.endsWith(':visual-bot-xiaoman') ? 'codex' : 'cc',
     contextTokens: id.endsWith(':visual-bot-tuantuan') ? undefined : visualCompanionContextTokens.get(id) ?? 120_000,
     contextWindow: id.endsWith(':visual-bot-tuantuan') ? undefined : 1_000_000,
   };

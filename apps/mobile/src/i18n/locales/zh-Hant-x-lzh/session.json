@@ -9,6 +9,7 @@
     "compactHelp": "概括較早之內容，以騰餘地。或略去若干細節。",
     "autoHelp": "Codex 將於近壓縮門檻時自理上下文。",
     "requested": "已請縮上下文，事畢當更新耗用。",
+    "notExecuted": "此會未備，未行壓縮。",
     "success": "上下文已壓縮",
     "nothing": "無可壓縮者"
   },

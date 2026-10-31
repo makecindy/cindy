@@ -9,6 +9,7 @@
     "compactHelp": "Résumer le contenu précédent pour libérer de l'espace. Certains détails peuvent être omis.",
     "autoHelp": "Codex compacte automatiquement le contexte à l'approche de son seuil de compaction.",
     "requested": "Compactage demandé. L’utilisation sera actualisée à la fin.",
+    "notExecuted": "La compression n’a pas été effectuée. Cette session n’est pas prête.",
     "success": "Contexte compacté",
     "nothing": "Rien à compacter pour l'instant"
   },
