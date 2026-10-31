@@ -3,3 +3,7 @@
 "Computer" = "컴퓨터";
 "Automatic" = "자동";
 "The computer that answered last" = "마지막으로 응답한 컴퓨터 우선";
+"Account" = "계정";
+"Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order." = "이 위젯에 표시할 컴퓨터, 앞에 둘 계정, 숨길 계정을 선택해요. 나머지 계정(나중에 추가한 계정 포함)은 그 컴퓨터의 순서대로 뒤에 표시돼요.";
+"Accounts first" = "앞에 둘 계정";
+"Hidden accounts" = "숨긴 계정";

@@ -30,7 +30,10 @@ struct TubeView: View {
       }
       VStack(spacing: 0) {
         Spacer(minLength: 0)
-        Rectangle()
+        // The surface's corners are softly rounded rather than a hard flat edge; the well's
+        // rounded bottom still shapes low levels.
+        let surface = min(4, liquid / 2)
+        UnevenRoundedRectangle(topLeadingRadius: surface, topTrailingRadius: surface, style: .circular)
           .fill(accented ? WidgetPalette.liquid : (tint ?? WidgetPalette.plenty))
           .frame(height: liquid)
           .widgetAccentable()
@@ -194,6 +197,8 @@ struct EmptyStateView: View {
 struct QuotaWidgetView: View {
   let state: WidgetState
   let now: Date
+  /// Leading sources the edit sheet placed first; the small size keeps them as placed.
+  var pinnedCount = 0
   @Environment(\.widgetFamily) private var family
 
   var body: some View {
@@ -223,9 +228,10 @@ struct QuotaWidgetView: View {
   private func content(_ sources: [WidgetSource], format: WidgetFormat) -> some View {
     switch family {
     case .systemSmall:
-      // Subscriptions first; the Cindy balance is not a subscription.
-      let subscriptions = sources.filter { $0.kind == "subscription" }
-      let list = Array((subscriptions.isEmpty ? sources : subscriptions).prefix(4))
+      // Accounts placed first, then subscriptions; the Cindy balance is not a subscription.
+      let rest = Array(sources.dropFirst(pinnedCount))
+      let subscriptions = rest.filter { $0.kind == "subscription" }
+      let list = Array((sources.prefix(pinnedCount) + (subscriptions.isEmpty ? rest : subscriptions)).prefix(4))
       let stale = format.staleLabel(minimumHours: 6)
       VStack(spacing: 0) {
         if let stale { StaleLine(text: stale).padding(.bottom, 4) }
