@@ -109,6 +109,12 @@ custom-tool traversal to protocol containers. Schemas, defaults, metadata and to
 may contain objects shaped like tool declarations; those literal values must remain unchanged.
 Other deltas remove unused runtime/configuration imports from the vendored dependency closure.
 
+The legacy Gemini function-schema sanitizer removes `items` from non-array output nodes,
+including after composition and object-root normalization (#7843). Its existing union type
+selection is unchanged. This local fix does not activate the sanitizer in native Pi transports;
+the Desktop native Gemini bridge uses Pi's `parametersJsonSchema` serializer, which retains
+the full JSON Schema union. The outbound contract is covered by `piProviderTransport.test.ts`.
+
 This migration does not establish the root cause of the installed Grok incident. That still needs
 the exact packaged route and redacted final outbound request; existing first-party xAI cleanup
 already existed before this work.

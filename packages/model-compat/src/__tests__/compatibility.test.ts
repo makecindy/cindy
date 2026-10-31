@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
-import { createCodexResponsesCompatibilityAdapter, normalizeProviderRequest, prepareResponsesCompatibility, resolveProviderCompatibilityProfile, sanitizeXaiTools, hasCacheOnlySearchProhibition } from '../index';
+import { createCodexResponsesCompatibilityAdapter, normalizeProviderRequest, prepareResponsesCompatibility, resolveProviderCompatibilityProfile, sanitizeGeminiToolParameters, sanitizeXaiTools, hasCacheOnlySearchProhibition } from '../index';
 
 async function responseText(transform: NodeJS.ReadWriteStream, text: string) {
   const output: Buffer[] = [];
@@ -79,5 +79,58 @@ describe('provider policy boundaries across harnesses', () => {
   });
   it('does not inherit compatibility by a familiar model name on an unknown gateway', () => {
     expect(resolveProviderCompatibilityProfile({ harness: 'codex', protocol: 'openai-responses', model: 'deepseek-v4-pro', upstreamBase: 'https://gateway.example/v1' })).toBeNull();
+  });
+});
+
+describe('Gemini legacy function schema container types (#7843)', () => {
+  it('removes the generic JSON union items without losing the enclosing array', () => {
+    const jsonValue = { type: ['null', 'boolean', 'object', 'array', 'number', 'string'], items: {} };
+    const input = { type: 'object', properties: { values: { type: 'array', items: jsonValue } } };
+    expect(sanitizeGeminiToolParameters(input)).toEqual({
+      type: 'object', properties: { values: { type: 'array', items: { type: 'boolean', nullable: true } } },
+    });
+    expect(input.properties.values.items).toEqual(jsonValue);
+    expect(jsonValue.items).toEqual({});
+  });
+
+  it.each(['string', 'number', 'integer', 'boolean', 'object', 'null', undefined])(
+    'does not emit array items for type %s', type => {
+      const out = sanitizeGeminiToolParameters({ properties: { value: { type, items: { type: 'string' } } } });
+      expect((out.properties as Record<string, Record<string, unknown>>).value).not.toHaveProperty('items');
+    },
+  );
+
+  it('preserves nested arrays, nullable array unions, and referenced array items', () => {
+    expect(sanitizeGeminiToolParameters({
+      type: 'object',
+      $defs: { Value: { type: ['null', 'boolean', 'array'], items: {} } },
+      properties: {
+        values: { type: ['null', 'array'], items: { $ref: '#/$defs/Value' } },
+        composed: { items: { type: 'string' }, anyOf: [{ type: 'array' }, { type: 'null' }] },
+        matrix: { anyOf: [{ type: 'array', items: { type: 'array', items: { type: 'string' } } }, { type: 'null' }] },
+      },
+    })).toEqual({ type: 'object', properties: {
+      values: { type: 'array', nullable: true, items: { type: 'boolean', nullable: true } },
+      composed: { type: 'array', nullable: true, items: { type: 'string' } },
+      matrix: { type: 'array', nullable: true, items: { type: 'array', items: { type: 'string' } } },
+    } });
+  });
+
+  it('drops stale items after composition changes the emitted type', () => {
+    const out = sanitizeGeminiToolParameters({ properties: { value: {
+      type: 'array', items: { type: 'string' }, anyOf: [{ type: 'string' }, { type: 'null' }],
+    } } });
+    expect(out).toEqual({ type: 'object', properties: { value: { type: 'string', nullable: true } } });
+  });
+
+  it('still removes non-array items when their subtree exhausts the schema budget', () => {
+    const properties = Object.fromEntries(Array.from({ length: 1024 }, (_, i) => [String(i), { type: 'string' }]));
+    expect(sanitizeGeminiToolParameters({ properties: { value: { type: 'boolean', items: { type: 'object', properties } } } }))
+      .toEqual({ type: 'object', properties: { value: { type: 'boolean' } } });
+  });
+
+  it('drops root array items when enforcing object function arguments', () => {
+    expect(sanitizeGeminiToolParameters({ type: 'array', items: { type: 'string' } }))
+      .toEqual({ type: 'object', properties: {} });
   });
 });
