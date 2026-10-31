@@ -1090,6 +1090,7 @@
     "allow": "许远程桌面",
     "allowHint": "许已登门之同名籍设备，览并操作此机之一切应用程序。须并启上方之设备控制。",
     "permissionHint": "请于此机之系统设置中许屏幕录制与辅助使用，而后重连。",
+    "inputUnsupported": "此机桌面之境，Cindy 尚难遥控其键鼠。",
     "controlUnavailable": "远方之机暂不能受操作，请察远程控制权限与连接，而后重连。",
     "beingControlled": "桌面方受远程控制",
     "beingViewed": "桌面方受远程查看",
