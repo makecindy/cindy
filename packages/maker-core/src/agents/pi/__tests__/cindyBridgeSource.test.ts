@@ -2656,6 +2656,10 @@ it('intercepts a double-wrapped envelope and an entry-tool name before they reac
   const requests: Array<{ method: string; params: any }> = [];
   const client = { request: async (method: string, params: unknown) => {
     requests.push({ method, params });
+    // 双包裁决代拉内层 list_tools: 返回真实 Cindy 形状 — 不传 category 只有类目概览, 无工具 schema。
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, categories: [{ name: 'read', tool_count: 4 }, { name: 'write', tool_count: 3 }] }) }] };
+    }
     return { content: [{ type: 'text', text: 'ok' }] };
   } };
   const gateway = new context.Gateway();
@@ -2684,14 +2688,16 @@ it('intercepts a double-wrapped envelope and an entry-tool name before they reac
     server: 'cindy_memory', tool: 'call_tool',
     args: { name: 'call_tool', args: { type: 'project' } },
   })).rejects.toThrow(/must be the INNER tool/);
-  expect(requests).toHaveLength(0);
+  // 形状二触发过一次内层 list_tools 代拉(schemaless → 两入口启发式), 之后不再发请求。
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
   // 正确信封原样放行。
   await gateway.executeCall({
     server: 'cindy_memory', tool: 'call_tool',
     args: { name: 'memory_write', args: { type: 'project' } },
   });
-  expect(requests).toHaveLength(1);
-  expect(requests[0].params).toEqual({
+  expect(requests).toHaveLength(2);
+  expect(requests[1].params).toEqual({
     name: 'call_tool',
     arguments: { name: 'memory_write', args: { type: 'project' } },
   });
@@ -2733,9 +2739,55 @@ it('passes through inner tools that legitimately declare an args parameter, repe
     name: 'call_tool',
     arguments: { name: 'run', args: { args: ['--version'] } },
   });
-  // 信封 name 查无此工具: 本地不断言双包, 放行给服务端报 UNKNOWN_TOOL。
+  // 信封 name 查无此工具: 先代拉内层 list_tools(本 fixture 无内层列表 → 解析失败回退启发式),
+  // acme 暴露了 run(非两入口) → 放行给服务端报 UNKNOWN_TOOL。
   await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
-  expect(requests).toHaveLength(3);
+  expect(requests).toHaveLength(4);
+});
+
+it('probes the inner list_tools of a third-party two-entry gateway and passes legal args params', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  // 第三方两入口 mimics: MCP 层只有 call_tool/list_tools, 内层工具藏在自家 registry,
+  // 但 list_tools 返回带 schema 的工具列表(greptile P1 场景: 内层合法声明对象型 args 参数)。
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    if (method === 'tools/call' && (params as any)?.name === 'list_tools') {
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, tools: [
+        { name: 'run', description: 'd', inputSchema: { type: 'object', properties: { args: { type: 'object' } }, required: ['args'] } },
+      ] }) }] };
+    }
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('stealth_tools', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'stealth_tools', tool: 'call_tool' });
+  // 内层 run 声明了 args 参数 → 代拉 list_tools 后放行, 不永久拒绝。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work' } } } });
+  expect(requests).toHaveLength(2);
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  expect(requests[1].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work' } } },
+  });
+  // 内层列表里没有的工具 → 放行, 服务端报 UNKNOWN_TOOL。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(4);
 });
 
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {

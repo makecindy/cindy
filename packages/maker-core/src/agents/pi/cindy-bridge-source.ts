@@ -3551,6 +3551,49 @@ class CindyMcpGateway {
       && properties?.args?.type === 'object';
   }
 
+  /**
+   * 内层工具不在本地工具表时, 代拉一次服务端的内层 list_tools 拿内层 schema 再判
+   * (zqchris 2026-10-31 复审给出的升级路径)。只读操作, 直接走 client 不经披露/审批门。
+   * 返回:
+   * - 'missing'          内层列表里没有这个工具 → 放行, 服务端会报 UNKNOWN_TOOL
+   * - {declaresArgs}     拿到了内层 schema → 按 args 参数判定
+   * - 'schemaless'       找到工具但没带 schema (Cindy registry 的 list_tools 只给名字+简介),
+   *                      或返回的是类目概览 → 调用方回退两入口形状启发式
+   * - null               拉取/解析失败 → 同上回退
+   */
+  private async probeInnerToolSchema(entry: ConnectedMcpTool, innerName: string, signal?: AbortSignal):
+    Promise<'missing' | 'schemaless' | { declaresArgs: boolean } | null> {
+    try {
+      const result = await entry.client.request('tools/call', {
+        name: 'list_tools',
+        arguments: {},
+      }, signal) as { structuredContent?: unknown; content?: Array<Record<string, unknown>> } | undefined;
+      let parsed: unknown = result?.structuredContent;
+      if (parsed == null || typeof parsed === 'string') {
+        const text = typeof parsed === 'string'
+          ? parsed
+          : (result?.content ?? []).find((item) => item?.type === 'text')?.text;
+        parsed = typeof text === 'string' ? JSON.parse(text) : undefined;
+      }
+      const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+      if (!record) return null;
+      const tools = Array.isArray(record.tools) ? record.tools : null;
+      if (!tools) return Array.isArray(record.categories) ? 'schemaless' : null;
+      const match = tools.find((tool) => (tool as Record<string, unknown>)?.name === innerName) as
+        Record<string, unknown> | undefined;
+      if (!match) return 'missing';
+      const schema = (match.inputSchema ?? match.parameters ?? match.schema) as
+        { properties?: Record<string, unknown> } | undefined;
+      if (!schema || typeof schema !== 'object') return 'schemaless';
+      return {
+        declaresArgs: schema.properties != null
+          && Object.prototype.hasOwnProperty.call(schema.properties, 'args'),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
     return [...this.tools.values()]
       .filter((tool) => !this.botMemoryFacadeEnabled || tool.serverName !== 'cindy_memory')
@@ -3730,10 +3773,9 @@ class CindyMcpGateway {
       // 信封的 args 里又是一个 {name, args} 或只含 args 的对象。服务端只回 schema 不回显
       // 收到的结构, 模型无法自愈; 宿主转发前看穿并一次说清。
       // 此检查是确定性的: 原样重发会被同一条规则再拦一次, 误拦即永久拒绝 — 所以放行条件
-      // 必须从宽: 内层工具的真实 schema 声明了 args 参数时放行(含数组参数, typeof 拦不住)。
-      // 内层工具查不到 ≠ 不存在: lizi-mcps 七个 Cindy 服务只向 MCP 暴露 list_tools/call_tool
-      // 两个入口, 内层工具藏在自家 registry 不进 tools/list — 这类服务查不到仍按双包拦;
-      // 暴露了其他工具的第三方服务, 查不到就交给服务端报 UNKNOWN_TOOL, 保持宽松放行。
+      // 必须从宽, 裁决链: 本地表查到内层 → 按真实 schema 判; 查不到 → 代拉一次服务端内层
+      // list_tools 拿 schema (zqchris 2026-10-31 给出的升级路径); 还拿不到 → 两入口形状
+      // 启发式兜底。probe 只在 args.args 形状可疑时才发, 合法调用零额外往返。
       const envelope = recordInput(resolved.args);
       const nested = recordInput(envelope.args);
       const innerName = typeof envelope.name === 'string' ? envelope.name : '';
@@ -3742,14 +3784,27 @@ class CindyMcpGateway {
         ? null
         : (this.tools.get(mcpGatewayKey(resolved.tool.serverName, innerName)) ?? null);
       const innerSchema = innerTool?.inputSchema as { properties?: Record<string, unknown> } | null;
-      const innerDeclaresArgs = innerSchema?.properties != null
-        && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args');
-      const hidesInnerRegistry = innerTool === null && !entrySelf
+      const nestedArgsPlain = typeof nested.args === 'object' && nested.args !== null
+        && !Array.isArray(nested.args);
+      // 双包裁决: true=拦, false=放行, null=无可靠判据 → 两入口形状启发式兑底。
+      let verdict: boolean | null;
+      if (entrySelf) {
+        verdict = true; // name 缺失/填了入口名: 不存在合法形状
+      } else if (innerTool !== null) {
+        verdict = !(innerSchema?.properties != null
+          && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args'));
+      } else if (nestedArgsPlain) {
+        const probed = await this.probeInnerToolSchema(resolved.tool, innerName, signal);
+        if (probed === 'missing') verdict = false; // 内层列表里没有 → 服务端 UNKNOWN_TOOL
+        else if (probed && typeof probed === 'object') verdict = !probed.declaresArgs;
+        else verdict = null; // schemaless/拉取失败 → 启发式
+      } else {
+        verdict = null;
+      }
+      const hidesInnerRegistry = verdict === null && nestedArgsPlain
         && ![...this.tools.values()].some((tool) => tool.serverName === resolved.tool.serverName
           && tool.name !== 'call_tool' && tool.name !== 'list_tools');
-      const doubleWrap = typeof nested.args === 'object' && nested.args !== null
-        && !Array.isArray(nested.args)
-        && (entrySelf || (innerTool !== null && !innerDeclaresArgs) || hidesInnerRegistry);
+      const doubleWrap = nestedArgsPlain && (verdict ?? hidesInnerRegistry);
       if (doubleWrap) {
         throw new Error(
           resolved.tool.serverName + '/' + resolved.tool.name
