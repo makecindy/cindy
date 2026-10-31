@@ -1,7 +1,7 @@
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
-import { PROVIDER_MEDIA_FIELDS, presetDisplayName, providerPresetOAuth, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
+import { PROVIDER_MEDIA_FIELDS, presetDisplayName, providerPresetOAuth, isMimoTokenPlanPreset, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
-import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
+import { LOCAL_CONNECT_PRESET_IDS, LOCAL_ADVANCED_PRESET_IDS, MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
 
 export type ProviderSearchTarget =
   | { kind: 'builtin'; providerId: string }
@@ -28,7 +28,17 @@ export interface ProviderSearchResult {
   name: string;
   names: string[];
   metaKey: string;
+  metaValues?: { product: string };
   target: ProviderSearchTarget;
+}
+/** The catalog and name search describe the same setup route. */
+export function presetChoiceMeta(preset: ProviderPreset): Pick<ProviderSearchResult, 'metaKey' | 'metaValues'> {
+  if (isMimoTokenPlanPreset(preset)) {
+    return { metaKey: 'models.subscriptionProduct', metaValues: { product: 'MiMo Token Plan' } };
+  }
+  if ((LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(preset.id)) return { metaKey: 'wizard.metaLocalConnect' };
+  if ((LOCAL_ADVANCED_PRESET_IDS as readonly string[]).includes(preset.id)) return { metaKey: 'wizard.metaNoAuth' };
+  return { metaKey: providerPresetOAuth(preset.id) ? 'wizard.metaLoginOrApi' : preset.authMethod === 'none' ? 'wizard.metaNoAuth' : 'wizard.metaApiKey' };
 }
 export function providerSearchChoices(providers: ProviderView[], presets: ProviderPreset[], locale: string, ollamaName: string, llamaCppName = 'llama.cpp'): ProviderSearchResult[] {
   const results: ProviderSearchResult[] = [];
@@ -40,7 +50,7 @@ export function providerSearchChoices(providers: ProviderView[], presets: Provid
   for (const p of presets) {
     results.push({ key: `preset:${p.id}`, id: p.id, name: presetDisplayName(p, locale),
       names: [p.name, p.nameEn, p.nameZhTW].filter((n): n is string => !!n),
-      metaKey: providerPresetOAuth(p.id) ? 'wizard.metaLoginOrApi' : p.authMethod === 'none' ? 'wizard.metaNoAuth' : 'wizard.metaApiKey',
+      ...presetChoiceMeta(p),
       target: { kind: 'preset', presetId: p.id } });
   }
   if (!providers.some(p => p.id === MANAGED_OLLAMA_PROVIDER_ID)) {

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ProviderNameSearch } from '../ProviderNameSearch';
 import type { ProviderSearchResult } from '../providerSearch';
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { product?: string }) => values?.product ? `${key}: ${values.product}` : key }) }));
 afterEach(cleanup);
 const a: ProviderSearchResult = { key: 'preset:a', id: 'a', name: 'Supplier A', names: [], metaKey: 'wizard.metaApiKey', target: { kind: 'preset', presetId: 'a' } };
 const b: ProviderSearchResult = { ...a, key: 'preset:b', id: 'b', name: 'Supplier B', target: { kind: 'preset', presetId: 'b' } };
@@ -40,4 +40,11 @@ it.each([{ isComposing: true }, { keyCode: 229 }])('keeps search open for IME Es
   expect(screen.getByRole('combobox').getAttribute('aria-expanded')).toBe('true');
   fireEvent.keyDown(document, { key: 'Escape' });
   expect(screen.getByRole('combobox').getAttribute('aria-expanded')).toBe('false');
+});
+
+// The visible row must interpolate the existing product name, not leak {{product}}.
+it('renders preset-specific summary values in the search result', () => {
+  const choice = { ...a, metaKey: 'models.subscriptionProduct', metaValues: { product: 'MiMo Token Plan' } };
+  render(<Harness choices={[choice]} onSelect={vi.fn()} />);
+  expect(screen.getByText('settings.providers.models.subscriptionProduct: MiMo Token Plan')).toBeTruthy();
 });

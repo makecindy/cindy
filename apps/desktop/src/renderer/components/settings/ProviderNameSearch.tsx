@@ -55,7 +55,7 @@ export function ProviderNameSearch({ choices, open, onOpenChange, onSelect, ...i
           {hits.map((result, index) => (
             <ProviderRow key={result.key} id={`${id}-${index}`} role="option" tabIndex={-1}
               icon={cardIcon({ providerId: result.id, name: result.name })}
-              name={result.name} meta={t(`settings.providers.${result.metaKey}`)}
+              name={result.name} meta={t(`settings.providers.${result.metaKey}`, result.metaValues)}
               beta={isLocalRuntimeBetaProviderId(result.id)}
               aria-selected={active === index} onPointerMove={() => setActiveKey(result.key)}
               onMouseDown={event => event.preventDefault()} onClick={() => select(result)}

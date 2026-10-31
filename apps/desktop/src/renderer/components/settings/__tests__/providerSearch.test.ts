@@ -52,3 +52,23 @@ it.each([
   expect(managed.metaKey).toBe(metaKey);
   expect(choices.find(choice => choice.key === `preset:${id}`)!.metaKey).not.toBe(managed.metaKey);
 });
+
+// #8065 r4431159002: search must retain the wizard's subscription/local-service
+// summaries; a generic API-key label hides the Token Plan credential distinction.
+it.each([
+  ['xiaomi-mimo-token-plan-cn', 'models.subscriptionProduct', { product: 'MiMo Token Plan' }],
+  ['xiaomi-token-plan-ams', 'models.subscriptionProduct', { product: 'MiMo Token Plan' }],
+  ['xiaomi-token-plan-sgp', 'models.subscriptionProduct', { product: 'MiMo Token Plan' }],
+  ['lmstudio', 'wizard.metaLocalConnect', undefined],
+  ['llamacpp', 'wizard.metaNoAuth', undefined],
+  ['vllm', 'wizard.metaNoAuth', undefined],
+  ['litellm', 'wizard.metaNoAuth', undefined],
+  ['deepseek', 'wizard.metaApiKey', undefined],
+  ['github-copilot', 'wizard.metaLoginOrApi', undefined],
+])('preserves the existing preset summary for %s', (id, metaKey, metaValues) => {
+  const preset = presets.find(p => p.id === id)!;
+  expect(preset).toBeDefined();
+  const result = providerSearchChoices([], [preset], 'en', 'Ollama').find(p => p.key === `preset:${id}`)!;
+  expect(result.metaKey).toBe(metaKey);
+  expect(result.metaValues).toEqual(metaValues);
+});

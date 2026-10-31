@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
-import { isWizardOAuthChoice, isWizardApiKeyChoice, type ProviderSearchTarget } from './providerSearch';
+import { isWizardOAuthChoice, isWizardApiKeyChoice, presetChoiceMeta, type ProviderSearchTarget } from './providerSearch';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
@@ -1742,53 +1742,43 @@ export function AddProviderWizard({
                           onClick={() => pickBuiltinApiKey(p)}
                         />
                       ))}
-                    {filteredPresets.map((p) => (
-                      <ProviderRow
-                        key={p.id}
-                        icon={cardIcon({
-                          providerId: p.id,
-                          name: presetDisplayName(p, i18n.language),
-                        })}
-                        name={presetDisplayName(p, i18n.language)}
-                        meta={
-                          isMimoTokenPlanPreset(p)
-                            ? t('settings.providers.models.subscriptionProduct', {
-                                product: 'MiMo Token Plan',
-                              })
-                            : t(
-                                providerPresetOAuth(p.id)
-                                  ? 'settings.providers.wizard.metaLoginOrApi'
-                                  : p.authMethod === 'none'
-                                    ? 'settings.providers.wizard.metaNoAuth'
-                                    : 'settings.providers.wizard.metaApiKey',
-                              )
-                        }
-                        beta={isLocalRuntimeBetaProviderId(p.id)}
-                        onClick={() => pickPreset(p)}
-                      />
-                    ))}
+                    {filteredPresets.map((p) => {
+                      const meta = presetChoiceMeta(p);
+                      return (
+                        <ProviderRow
+                          key={p.id}
+                          icon={cardIcon({
+                            providerId: p.id,
+                            name: presetDisplayName(p, i18n.language),
+                          })}
+                          name={presetDisplayName(p, i18n.language)}
+                          meta={t(`settings.providers.${meta.metaKey}`, meta.metaValues)}
+                          beta={isLocalRuntimeBetaProviderId(p.id)}
+                          onClick={() => pickPreset(p)}
+                        />
+                      );
+                    })}
                   </>
                 )}
                 {listedLocalPresets.length > 0 && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.moreLocal')}</GroupLabel>
-                    {listedLocalPresets.map((p) => (
-                      <ProviderRow
-                        key={p.id}
-                        icon={cardIcon({
-                          providerId: p.id,
-                          name: presetDisplayName(p, i18n.language),
-                        })}
-                        name={presetDisplayName(p, i18n.language)}
-                        meta={t(
-                          (LOCAL_CONNECT_PRESET_IDS as readonly string[]).includes(p.id)
-                            ? 'settings.providers.wizard.metaLocalConnect'
-                            : 'settings.providers.wizard.metaNoAuth',
-                        )}
-                        beta={isLocalRuntimeBetaProviderId(p.id)}
-                        onClick={() => pickPreset(p)}
-                      />
-                    ))}
+                    {listedLocalPresets.map((p) => {
+                      const meta = presetChoiceMeta(p);
+                      return (
+                        <ProviderRow
+                          key={p.id}
+                          icon={cardIcon({
+                            providerId: p.id,
+                            name: presetDisplayName(p, i18n.language),
+                          })}
+                          name={presetDisplayName(p, i18n.language)}
+                          meta={t(`settings.providers.${meta.metaKey}`, meta.metaValues)}
+                          beta={isLocalRuntimeBetaProviderId(p.id)}
+                          onClick={() => pickPreset(p)}
+                        />
+                      );
+                    })}
                   </>
                 )}
               </div>
