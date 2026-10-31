@@ -89,8 +89,9 @@ Use `cindy_scheduler` (`list_tools` with category `scheduler`, then `call_tool`)
 
 - Add a line to the prompt only for facts specific to this PR that cannot be derived (for example a reviewer the user named), and `PR card: <card_id>.` when there is one. General procedure lives in this Skill, not in the prompt.
 - The hook is a check that ships with Cindy: mount it directly, never generate one with `schedule_set_pre_run_hook` or copy the script. Do not pass `workingDir`, `model` or `effort`.
+- The hook path must be the resolved stable `<skill-dir>` (it contains `/.active/`). Never use a path under the system temp directory (for example one containing `cindy-claude-skills-`) or a path remembered from earlier in the conversation: it disappears when Cindy restarts and every check then fails. Resolve it again right before creating the schedule.
 - `notify` values are JSON booleans. On `INVALID_ARGS`, fix the arguments once from the returned schema; if it fails again, report it.
-- A returned id is not proof. Read it back with `schedule_get` and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following", or the card's Stop button), and update the card with `following: true`.
+- A returned id is not proof. Read it back with `schedule_get`, confirm its `preRunHook.command` points at the stable path, and confirm it appears in `schedule_list`. Tell the user in one line that following started and how to stop it ("say stop following", or the card's Stop button), and update the card with `following: true`.
 - Leave `cronExpr` and `intervalMs` alone afterwards. The check paces itself: it looks at GitHub less often the longer the PR stays quiet and returns to every 10 minutes as soon as anything changes. How the check decides is described in `references/follow-up.md`.
 
 ## 5. Background round
