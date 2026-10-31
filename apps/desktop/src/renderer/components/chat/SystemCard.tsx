@@ -374,6 +374,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       )}
     >
       <button
+        data-chat-copy-content
         type="button"
         className="flex w-full items-center gap-2 text-left"
         onClick={() => setExpanded((prev) => !prev)}

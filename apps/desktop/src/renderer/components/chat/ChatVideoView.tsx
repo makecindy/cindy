@@ -146,6 +146,7 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
   return (
     <>
       <div
+        data-chat-video-preview
         className="relative inline-block self-start min-w-0 rounded-xl"
         style={{ maxWidth: style.maxWidth, maxHeight: style.maxHeight }}
         onContextMenu={(e) => {

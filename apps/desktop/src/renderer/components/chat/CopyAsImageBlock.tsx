@@ -93,6 +93,7 @@ export function CopyAsImageBlock({
         {children}
       </div>
       <div
+        data-chat-copy-exclude
         className={cn(
           'absolute right-2 top-2 flex gap-1 select-none',
           'opacity-0 transition-opacity duration-150',
