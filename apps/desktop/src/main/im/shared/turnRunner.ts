@@ -3090,7 +3090,10 @@ export function createTurnRunner(
       state.scheduledTranspond = {
         silentStopSettleUnsub: null,
         header: origin?.kind === 'scheduler'
-          ? ui.agent.scheduledTaskHeader(origin.scheduleName ?? null)
+          // 后台命令完成回注（`bgcmd:<runId>`）不是定时任务，不带定时任务卡头。
+          ? (typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('bgcmd:')
+            ? null
+            : ui.agent.scheduledTaskHeader(origin.scheduleName ?? null))
           : null,
         origin,
         held: isSilencedSchedulerTurn(origin),

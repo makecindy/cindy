@@ -70,6 +70,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
+| 任务     | 后台运行长命令（测试 / 门禁 / CI 等待），完成时宿主回注本任务（`run_command_background`，仅本机，SSH 远端不可用；命令不要自行后台化） | 有   | 无               |
 | 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
 | 协同 / Worker | 单个 / 批量创建、指定已有目录、查询实际目录与自有 worktree | 有 | 有（运行设备；新建 worktree 仅本机） |
 | 协同 / Worker | Lead 使用远程供应商时派发跨设备 Worker；独立选择工作电脑与模型电脑 | 有 | 有（`execution_device_id` + `agent_device_id`；目录查询支持同一工作电脑范围） |

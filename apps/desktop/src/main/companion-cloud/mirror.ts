@@ -79,7 +79,11 @@ export function mirrorSourceLabel(meta: Record<string, unknown>): string | null 
   if (sender?.kind === 'session') return sender.botId ? `来自伙伴${quote(sender.botName)}` : `来自任务${quote(sender.title)}`;
   if (sender?.kind === 'shared-member') return `来自共享任务成员${quote(sender.name)}`;
   const origin = meta.origin && typeof meta.origin === 'object' ? meta.origin as Record<string, unknown> : null;
-  if (origin?.kind === 'scheduler') return `来自${SCHEDULER_LABEL}`;
+  if (origin?.kind === 'scheduler') {
+    // 后台命令完成回注（`bgcmd:<runId>`）不是定时任务；正文自述，房间不另加来源前缀。
+    if (typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith('bgcmd:')) return null;
+    return `来自${SCHEDULER_LABEL}`;
+  }
   if (origin?.kind === 'orca') return '来自协同任务';
   for (const key of ['imSource', 'hookSource'] as const) {
     const source = meta[key] && typeof meta[key] === 'object' ? meta[key] as Record<string, unknown> : null;
