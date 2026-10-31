@@ -2785,9 +2785,18 @@ it('probes the inner list_tools of a third-party two-entry gateway and passes le
     name: 'call_tool',
     arguments: { name: 'run', args: { args: { cwd: '/work' } } },
   });
-  // 内层列表里没有的工具 → 放行, 服务端报 UNKNOWN_TOOL。
+  // 代拉结果按 server 缓存: 第二次合法调用与查无此工具都不再发 list_tools。
+  await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'run', args: { args: { cwd: '/work2' } } } });
   await gateway.executeCall({ server: 'stealth_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
   expect(requests).toHaveLength(4);
+  expect(requests[2].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'run', args: { args: { cwd: '/work2' } } },
+  });
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'nope', args: { args: { x: 1 } } },
+  });
 });
 
 it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {

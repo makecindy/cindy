@@ -3168,6 +3168,11 @@ class CindyMcpGateway {
   // Weak identities keep the status private without retaining completed calls.
   private readonly failedResults = new WeakMap<object, { content: object; details: unknown }>();
   private readonly tools = new Map<string, ConnectedMcpTool>();
+  // 内层 registry 代拉结果, 按 server 缓存(服务端工具表刷新时失效) — 同一 server 不重复代拉。
+  private readonly innerListingCache = new Map<
+    string,
+    { kind: 'listing'; tools: Array<Record<string, unknown>> } | { kind: 'schemaless' }
+  >();
   private readonly unavailableServers = new Map<string, string>();
   private readonly clients = new Map<string, McpHttpClient>();
   private readonly reconnectors = new Map<string, () => Promise<{ client: McpHttpClient; tools: any[] }>>();
@@ -3269,6 +3274,7 @@ class CindyMcpGateway {
     for (const [key, tool] of this.tools) {
       if (tool.serverName === serverName) this.tools.delete(key);
     }
+    this.innerListingCache.delete(serverName); // 工具表刷新 → 内层代拉缓存一并失效
     this.clients.set(serverName, client);
     this.unavailableServers.delete(serverName);
     for (const rawTool of tools) {
@@ -3552,17 +3558,20 @@ class CindyMcpGateway {
   }
 
   /**
-   * 内层工具不在本地工具表时, 代拉一次服务端的内层 list_tools 拿内层 schema 再判
+   * 内层工具不在本地工具表时, 代拉服务端的内层 list_tools 拿内层 schema 再判
    * (zqchris 2026-10-31 复审给出的升级路径)。只读操作, 直接走 client 不经披露/审批门。
+   * 结果按 server 缓存, 同一 server 不重复代拉; 服务端工具表刷新(add)时缓存失效。
    * 返回:
    * - 'missing'          内层列表里没有这个工具 → 放行, 服务端会报 UNKNOWN_TOOL
    * - {declaresArgs}     拿到了内层 schema → 按 args 参数判定
    * - 'schemaless'       找到工具但没带 schema (Cindy registry 的 list_tools 只给名字+简介),
    *                      或返回的是类目概览 → 调用方回退两入口形状启发式
-   * - null               拉取/解析失败 → 同上回退
+   * - null               拉取/解析失败(不缓存, 下次重试) → 同上回退
    */
   private async probeInnerToolSchema(entry: ConnectedMcpTool, innerName: string, signal?: AbortSignal):
     Promise<'missing' | 'schemaless' | { declaresArgs: boolean } | null> {
+    const cached = this.innerListingCache.get(entry.serverName);
+    if (cached) return this.judgeInnerToolFromListing(cached, innerName);
     try {
       const result = await entry.client.request('tools/call', {
         name: 'list_tools',
@@ -3577,21 +3586,31 @@ class CindyMcpGateway {
       }
       const record = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
       if (!record) return null;
-      const tools = Array.isArray(record.tools) ? record.tools : null;
-      if (!tools) return Array.isArray(record.categories) ? 'schemaless' : null;
-      const match = tools.find((tool) => (tool as Record<string, unknown>)?.name === innerName) as
-        Record<string, unknown> | undefined;
-      if (!match) return 'missing';
-      const schema = (match.inputSchema ?? match.parameters ?? match.schema) as
-        { properties?: Record<string, unknown> } | undefined;
-      if (!schema || typeof schema !== 'object') return 'schemaless';
-      return {
-        declaresArgs: schema.properties != null
-          && Object.prototype.hasOwnProperty.call(schema.properties, 'args'),
-      };
+      const listing = Array.isArray(record.tools)
+        ? { kind: 'listing' as const, tools: record.tools as Array<Record<string, unknown>> }
+        : (Array.isArray(record.categories) ? { kind: 'schemaless' as const } : null);
+      if (!listing) return null;
+      this.innerListingCache.set(entry.serverName, listing);
+      return this.judgeInnerToolFromListing(listing, innerName);
     } catch {
       return null;
     }
+  }
+
+  private judgeInnerToolFromListing(
+    listing: { kind: 'listing'; tools: Array<Record<string, unknown>> } | { kind: 'schemaless' },
+    innerName: string,
+  ): 'missing' | 'schemaless' | { declaresArgs: boolean } {
+    if (listing.kind === 'schemaless') return 'schemaless';
+    const match = listing.tools.find((tool) => tool?.name === innerName);
+    if (!match) return 'missing';
+    const schema = (match.inputSchema ?? match.parameters ?? match.schema) as
+      { properties?: Record<string, unknown> } | undefined;
+    if (!schema || typeof schema !== 'object') return 'schemaless';
+    return {
+      declaresArgs: schema.properties != null
+        && Object.prototype.hasOwnProperty.call(schema.properties, 'args'),
+    };
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
@@ -3775,7 +3794,7 @@ class CindyMcpGateway {
       // 此检查是确定性的: 原样重发会被同一条规则再拦一次, 误拦即永久拒绝 — 所以放行条件
       // 必须从宽, 裁决链: 本地表查到内层 → 按真实 schema 判; 查不到 → 代拉一次服务端内层
       // list_tools 拿 schema (zqchris 2026-10-31 给出的升级路径); 还拿不到 → 两入口形状
-      // 启发式兜底。probe 只在 args.args 形状可疑时才发, 合法调用零额外往返。
+      // 启发式兜底。probe 只在 args.args 形状可疑时才发, 结果按 server 缓存, 合法调用最多代拉一次。
       const envelope = recordInput(resolved.args);
       const nested = recordInput(envelope.args);
       const innerName = typeof envelope.name === 'string' ? envelope.name : '';
