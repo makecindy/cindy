@@ -397,11 +397,12 @@ describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
   });
 });
 
-// 宿主按归一后的字面量判断卡片是否排到本轮末尾,净化器只能放出这一种写法。
-describe('sanitizeGhostCardHtml · 位置声明(data-ghost-placement)', () => {
-  it('只在 div 上放行 turn-end,其它值和标签只丢属性', () => {
-    expect(ok('<div data-ghost-placement=" turn-end ">x</div>')).toBe('<div data-ghost-placement="turn-end">x</div>');
-    expect(ok('<div data-ghost-placement="top">x</div><span data-ghost-placement="turn-end">y</span>'))
+// 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。
+describe('sanitizeGhostCardHtml · 位置与宽度声明(data-ghost-placement / data-ghost-width)', () => {
+  it('只在 div 上放行 turn-end / full,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-placement=" turn-end " data-ghost-width="full">x</div>'))
+      .toBe('<div data-ghost-placement="turn-end" data-ghost-width="full">x</div>');
+    expect(ok('<div data-ghost-placement="top" data-ghost-width="100%">x</div><span data-ghost-placement="turn-end" data-ghost-width="full">y</span>'))
       .toBe('<div>x</div><span>y</span>');
   });
 });

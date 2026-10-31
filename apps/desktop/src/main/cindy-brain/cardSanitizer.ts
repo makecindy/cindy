@@ -287,6 +287,8 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 位置声明(data-ghost-placement):只挂 div、只认 turn-end,宿主据此把卡排到本轮末尾
   // (isTurnEndGhostCardHtml)。其它值只丢属性。
   if (tag === 'div' && attrs['data-ghost-placement']?.trim() === 'turn-end') parts.push(' data-ghost-placement="turn-end"');
+  // 宽度声明(data-ghost-width):只挂 div、只认 full,宿主据此让卡铺满消息列(isFullWidthGhostCardHtml)。
+  if (tag === 'div' && attrs['data-ghost-width']?.trim() === 'full') parts.push(' data-ghost-width="full"');
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。

@@ -7592,6 +7592,14 @@ export function isTurnEndGhostCardHtml(html: string): boolean {
   return html.includes(' data-ghost-placement="turn-end"');
 }
 
+/**
+ * 卡片铺满消息列:插件在卡内 div 上标 `data-ghost-width="full"`,宿主取消默认的 460px 上限,
+ * 与「已更改 N 个文件」等宿主卡同宽。同样只读净化后的 html。
+ */
+export function isFullWidthGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-width="full"');
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
