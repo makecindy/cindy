@@ -118,6 +118,9 @@
     "unavailable": "暂不可接收分享",
     "noCompanions": "还没有伙伴",
     "noTasks": "还没有任务",
-    "retry": "部分内容未能读取，点此重试。"
+    "retry": "部分内容未能读取，点此重试。",
+    "noMatches": "没有匹配的去向",
+    "clearSearch": "清除搜索",
+    "loadingDevices": "正在读取电脑…"
   }
 }
