@@ -207,6 +207,8 @@ const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])
   ['dashscope.aliyuncs.com', 'alibaba'],
   ['maas.aliyuncs.com', 'alibaba'],
   ['generativelanguage.googleapis.com', 'google'],
+  ['daily-cloudcode-pa.googleapis.com', 'google'],
+  ['cloudcode-pa.googleapis.com', 'google'],
   ['longcat.chat', 'longcat'],
   ['xiaomimimo.com', 'xiaomimimo'],
   ['volces.com', 'volcengine'],
