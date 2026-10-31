@@ -2172,7 +2172,7 @@ it.each(['oauth', 'oauth-api', 'builtin-key', 'ollama', 'failed-directory'] as c
 it('returns the untouched search draft once when its directory fails', async () => {
   vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
   const onUnavailable = vi.fn();
-  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'missing-remote-only' }}
     onEntryUnavailable={onUnavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
   await waitFor(() => expect(onUnavailable).toHaveBeenCalledOnce());
 });
@@ -2193,4 +2193,25 @@ it.each([
   expect(await screen.findByDisplayValue(name)).toBeTruthy();
   expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
   expect(unavailable).not.toHaveBeenCalled();
+});
+
+// #8065 r4431297879: name search retains bundled targets when IPC fails.
+// Cover both search and ordinary deep links, plus an explicit ready-empty result
+// so an actual target removal is not silently resurrected by the offline copy.
+it.each([true, false])('opens bundled DeepSeek when directory IPC fails (search=%s)', async search => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockRejectedValueOnce(new Error('directory unavailable'));
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={search ? unavailable : undefined} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(await screen.findByDisplayValue('DeepSeek')).toBeTruthy();
+  expect(screen.getByPlaceholderText('sk-…')).toBeTruthy();
+  expect(unavailable).not.toHaveBeenCalled();
+});
+it('respects an explicitly empty live directory for a bundled search target', async () => {
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [] });
+  const unavailable = vi.fn();
+  render(<AddProviderWizard providers={[]} entry={{ kind: 'preset', presetId: 'deepseek' }}
+    onEntryUnavailable={unavailable} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  await waitFor(() => expect(unavailable).toHaveBeenCalledOnce());
+  expect(screen.queryByDisplayValue('DeepSeek')).toBeNull();
 });

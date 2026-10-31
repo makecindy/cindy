@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { cardIcon, ProviderRow } from './ProviderRow';
@@ -21,6 +21,14 @@ export function ProviderNameSearch({ choices, open, onOpenChange, onSelect, ...i
   const active = hits.findIndex(result => result.key === activeKey);
   const expanded = open && !!input.value.trim();
   const select = (result: ProviderSearchResult) => { onOpenChange(false); onSelect(result.target); };
+  useEffect(() => {
+    if (!expanded || active < 0) return;
+    // A closed popover has no option DOM until its portal is mounted again.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`${id}-${active}`)?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expanded, activeKey, active, id]);
   return (
     <Popover open={expanded} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>
@@ -36,7 +44,6 @@ export function ProviderNameSearch({ choices, open, onOpenChange, onSelect, ...i
                 event.preventDefault(); onOpenChange(true);
                 const next = event.key === 'ArrowDown' ? (active + 1) % hits.length : (active <= 0 ? hits.length - 1 : active - 1);
                 setActiveKey(hits[next].key);
-                document.getElementById(`${id}-${next}`)?.scrollIntoView({ block: 'nearest' });
               } else if (event.key === 'Enter' && expanded && hits[active]) {
                 event.preventDefault(); select(hits[active]);
               } else if (event.key === 'Tab') onOpenChange(false);

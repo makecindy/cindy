@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import React, { useState } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ProviderNameSearch } from '../ProviderNameSearch';
 import type { ProviderSearchResult } from '../providerSearch';
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string, values?: { product?: string }) => values?.product ? `${key}: ${values.product}` : key }) }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const a: ProviderSearchResult = { key: 'preset:a', id: 'a', name: 'Supplier A', names: [], metaKey: 'wizard.metaApiKey', target: { kind: 'preset', presetId: 'a' } };
 const b: ProviderSearchResult = { ...a, key: 'preset:b', id: 'b', name: 'Supplier B', target: { kind: 'preset', presetId: 'b' } };
 function Harness({ choices, onSelect }: { choices: ProviderSearchResult[]; onSelect: ReturnType<typeof vi.fn> }) {
@@ -47,4 +47,27 @@ it('renders preset-specific summary values in the search result', () => {
   const choice = { ...a, metaKey: 'models.subscriptionProduct', metaValues: { product: 'MiMo Token Plan' } };
   render(<Harness choices={[choice]} onSelect={vi.fn()} />);
   expect(screen.getByText('settings.providers.models.subscriptionProduct: MiMo Token Plan')).toBeTruthy();
+});
+
+// #8065 r4431297882: reopening remounts the options after keydown; checking
+// the committed DOM catches the previous synchronous scroll of a missing row.
+it.each([false, true])('scrolls a remounted keyboard option (retained=%s)', retained => {
+  let frameId = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+  const flush = () => act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); });
+  const scrolled: string[] = [];
+  Element.prototype.scrollIntoView = vi.fn(function(this: Element) { if (this.isConnected) scrolled.push(this.id); });
+  const choices = Array.from({ length: 40 }, (_, index) => ({ ...a, key: `preset:${index}`, id: `${index}`, name: `Supplier ${index}`, target: { kind: 'preset' as const, presetId: `${index}` } }));
+  render(<Harness choices={choices} onSelect={vi.fn()} />);
+  if (retained) { fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowUp' }); flush(); }
+  scrolled.length = 0;
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.queryAllByRole('option')).toHaveLength(0);
+  fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowUp' });
+  const activeId = screen.getByRole('combobox').getAttribute('aria-activedescendant')!;
+  flush();
+  expect(scrolled).toContain(activeId);
+  expect(document.getElementById(activeId)?.textContent).toContain(retained ? 'Supplier 38' : 'Supplier 39');
 });

@@ -9,15 +9,49 @@ export default {
     scroll: { about: 'Real mouse-wheel input scrolls to a bottom supplier that can be selected' },
     custom: { about: 'Unmatched names remain valid custom endpoint names' },
     jump: { about: 'Selecting DeepSeek opens its existing configuration form' },
+    'keyboard-reopen': { about: 'Reopening with ArrowUp keeps the active result visible, including a retained bottom selection' },
+    'offline-jump': { about: 'Bundled DeepSeek still opens when both catalog reads fail; cancel retains the original draft' },
     ollama: { about: 'Managed Ollama describes installation and opens its existing install guide' },
   },
   async check(page, ui) {
     const input = page.getByRole('combobox');
-    const query = ui.case === 'ollama' ? 'Ollama' : ui.case === 'custom' ? 'My private gateway' : ['many', 'scroll'].includes(ui.case) ? 'de' : 'dee';
+    const query = ui.case === 'keyboard-reopen' ? 'a' : ui.case === 'ollama' ? 'Ollama' : ui.case === 'custom' ? 'My private gateway' : ['many', 'scroll', 'keyboard-reopen'].includes(ui.case) ? 'de' : 'dee';
     await input.fill(query);
     await page.getByText(await ui.t('settings.providers.custom.nameSearchHint'), { exact: true }).waitFor();
     assert.equal(await page.getByText('匹配的供应商', { exact: true }).count(), 0);
-    if (ui.case === 'ollama') {
+    if (ui.case === 'keyboard-reopen') {
+      assert.ok(await page.getByRole('option').count() >= 8);
+      const list = page.getByRole('listbox');
+      for (const retained of [false, true]) {
+        await input.fill('');
+        await input.fill(query);
+        if (retained) await input.press('ArrowUp');
+        await input.press('Escape');
+        await list.waitFor({ state: 'hidden' });
+        await input.press('ArrowUp');
+        await page.waitForFunction(() => {
+          const input = document.querySelector('[role="combobox"]');
+          const row = document.getElementById(input?.getAttribute('aria-activedescendant') ?? '');
+          const list = document.querySelector('[role="listbox"]');
+          if (!row || !list) return false;
+          const r = row.getBoundingClientRect(), b = list.getBoundingClientRect();
+          return r.top >= b.top - 1 && r.bottom <= b.bottom + 1 && list.scrollTop > 0;
+        }, undefined, { timeout: 2500 }).catch(async error => {
+          await ui.capture('keyboard-failure');
+          const state = await page.evaluate(() => {
+            const input = document.querySelector('[role="combobox"]');
+            const row = document.getElementById(input?.getAttribute('aria-activedescendant') ?? '');
+            const list = document.querySelector('[role="listbox"]');
+            return { active: input?.getAttribute('aria-activedescendant'), expanded: input?.getAttribute('aria-expanded'), row: row?.getBoundingClientRect().toJSON(), list: list?.getBoundingClientRect().toJSON(), scroll: list?.scrollTop, options: list?.childElementCount };
+          });
+          throw new Error(`${error.message} ${JSON.stringify(state)}`);
+        });
+        await ui.capture(`keyboard-reopen-${retained ? 'retained' : 'initial'}`);
+      }
+      await input.press('Enter');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).waitFor();
+      assert.equal(await page.getByRole('combobox').count(), 0);
+    } else if (ui.case === 'ollama') {
       const managed = page.getByRole('option').filter({ has: page.getByText(await ui.t('settings.providers.local.subtitle'), { exact: true }) });
       assert.equal(await managed.count(), 1);
       await ui.capture('ollama-search-result');
@@ -55,10 +89,16 @@ export default {
     } else {
       const option = page.getByRole('option', { name: /DeepSeek/ }).first();
       await option.waitFor();
-      if (ui.case === 'jump') {
+      if (ui.case === 'jump' || ui.case === 'offline-jump') {
         await option.click();
         await page.getByRole('button', { name: await ui.t('settings.providers.wizard.next'), exact: true }).waitFor();
         assert.equal(await page.getByRole('combobox').count(), 0);
+        if (ui.case === 'offline-jump') {
+          assert.equal(await page.locator('input').evaluateAll(inputs => inputs.some(input => input.value === 'DeepSeek')), true);
+          await page.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).click();
+          await input.waitFor();
+          assert.equal(await input.inputValue(), query);
+        }
       }
     }
   },

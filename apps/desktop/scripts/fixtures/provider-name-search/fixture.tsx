@@ -13,8 +13,11 @@ function Page() {
   </>;
 }
 mountPage({
-  host: () => ({ maker: {
-    listProviderPresets: async () => ({ presets: BUNDLED_CATALOG.presets ?? [] }),
+  host: ctx => ({ maker: {
+    listProviderPresets: async () => {
+      if (ctx.case === 'offline-jump') throw new Error('Fixture catalog unavailable');
+      return { presets: BUNDLED_CATALOG.presets ?? [] };
+    },
     localModelList: async () => ({ status: { kind: 'absent', appInstalled: false }, models: [], memoryGb: 0 }),
     scanLocalCli: async () => ({ detections: [] }),
     onProviderOAuthProgress: subscription('providerOAuthProgress'),

@@ -1,5 +1,5 @@
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
-import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider, isMimoTokenPlanPreset } from '@cindy/model-providers';
 import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
@@ -419,7 +419,7 @@ export function AddProviderWizard({
       .then((r) => {
         if (!cancelled) { setPresets(withSpeechApiPresets(r.presets)); setPresetsLoadState('ready'); }
       })
-      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets([])); setPresetsLoadState('failed'); } });
+      .catch(() => { if (!cancelled) { setPresets(withSpeechApiPresets(BUNDLED_CATALOG.presets ?? [])); setPresetsLoadState('failed'); } });
     return () => {
       cancelled = true;
     };
