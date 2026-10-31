@@ -260,7 +260,11 @@ export function BotSettings({
     if (!autosave.isDirty()) return;
     const settled = autosave.abandon();
     restoreSavedSettings();
-    void settled.then(() => restoreSavedSettings());
+    // The settings page stays mounted when switching pages. A late save must
+    // not restore over keystrokes typed after this discard.
+    void settled.then((unchanged) => {
+      if (unchanged) restoreSavedSettings();
+    });
   }, [autosave, restoreSavedSettings]);
   const canLeave = useCallback(async () => {
     if (avatarInFlight.current) return false;

@@ -220,7 +220,7 @@ export interface BotSettingsAutosaveHandle {
    * 以及随后的卸载补交都不得再把丢弃的旧草稿提交回去。
    * 之后的编辑会重新允许保存。
    */
-  abandon(): Promise<void>;
+  abandon(): Promise<boolean>;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
 }
@@ -240,6 +240,8 @@ export function createBotSettingsAutosave(
   let epoch = 0;
   /** 丢弃后、下一次编辑前，禁止把恢复出来的旧值再提交。 */
   let suppressTrailing = false;
+  /** 用户编辑次数。丢弃后的迟到回调用它判断能不能再整表恢复。 */
+  let revision = 0;
 
   const emit = (status: BotAutosaveStatus): void => {
     if (detached) return;
@@ -297,6 +299,7 @@ export function createBotSettingsAutosave(
   return {
     schedule(trigger) {
       if (detached) return;
+      revision += 1;
       suppressTrailing = false;
       if (trigger === 'instant') {
         if (timer !== null) clearTimeout(timer);
@@ -349,8 +352,10 @@ export function createBotSettingsAutosave(
     abandon() {
       epoch += 1;
       suppressTrailing = true;
+      const revisionAtDiscard = revision;
       clearTimer();
-      return inFlight?.then(() => undefined, () => undefined) ?? Promise.resolve();
+      const pending = inFlight?.then(() => undefined, () => undefined) ?? Promise.resolve();
+      return pending.then(() => revision === revisionAtDiscard);
     },
     isDirty,
   };

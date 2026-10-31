@@ -613,6 +613,30 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
+  it.each(['ok', 'fail'] as const)('keeps a draft typed after leaving when the hung save %s late', async (result) => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (outcome: 'ok' | 'fail') => void;
+      mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+        const outcome = await new Promise<'ok' | 'fail'>((resolve) => { finish = resolve; });
+        if (outcome === 'fail') throw new Error('late failure');
+        return { id: 'bot-1', currentVersion: 2, ...patch };
+      });
+      renderSettings();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Hung name' } });
+      fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+      expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Fresh name' } });
+      await act(async () => { finish(result); });
+      expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Fresh name');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns home and restores the saved name when saving before navigation fails', async () => {
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };

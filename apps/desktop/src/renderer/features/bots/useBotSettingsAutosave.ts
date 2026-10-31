@@ -52,7 +52,7 @@ export interface BotSettingsAutosaveController {
   /** Drop a pending save without submitting. */
   cancel: () => void;
   /** Stop a discarded draft from being submitted after an in-flight save. */
-  abandon: () => Promise<void>;
+  abandon: () => Promise<boolean>;
   /** 是否有已改但未落库的内容。 */
   isDirty: () => boolean;
   /** 挂到文本框上:输入法组合中的拼音不是已完成的编辑,上屏后再进入防抖。 */
