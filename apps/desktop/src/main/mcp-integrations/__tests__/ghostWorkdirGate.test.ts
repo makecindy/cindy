@@ -195,7 +195,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   acquireGhostMutationLeaseForMcp: acquireMutationLeaseMock,
   installOrUpdateLocalGhostPackageFromForge: forgeInstallPackageMock,
   getGhostPipeDispatcher: () => ({ callGhostTool: dispatchMock }),
-  getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null }),
+  getGhostCardService: () => ({ registerCall: () => {}, finalizeCall: () => null, isTurnEnd: () => false }),
   getGhostSetupAssessment: setupAssessmentMock,
   isGhostAvailableForActiveSession: activeSessionAvailableMock,
 }));
