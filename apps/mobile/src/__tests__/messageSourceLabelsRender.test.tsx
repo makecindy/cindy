@@ -714,8 +714,11 @@ describe('private group reply source', () => {
 describe("companion text selection and actions", () => {
   // The short-message case never enters the iOS long-message fallback. Removing
   // the separate selection sheet must keep partial selection after expansion too.
-  it("keeps expanded long companion text in bounded native selection views", () => {
-    const text = "可以直接选择这段长消息中的文字。".repeat(180);
+  it.each([
+    ['plain', '可以直接选择这段长消息中的文字。', '可以直接选择这段长消息中的文字。'],
+    ['formatted', '**粗体** 和 `value` 与 _斜体_。', '粗体 和 value 与 斜体。'],
+  ])("keeps expanded long %s companion text in bounded native selection views", (_kind, source, visible) => {
+    const text = source.repeat(180);
     const h = mount([msg("long", text, null)], { companion: true });
     try {
       const toggle = h.host.querySelector('[data-testid="message.collapseToggle"]')!;
@@ -724,7 +727,7 @@ describe("companion text selection and actions", () => {
       const body = h.host.querySelector('[data-testid="message.markdownBody"]')!;
       const selectable = [...body.querySelectorAll('[data-native-text-view] [data-testid="message.markdownTextRun"]')];
       expect(selectable.length).toBeGreaterThan(1);
-      expect(selectable.map(node => node.textContent).join('')).toBe(text);
+      expect(selectable.map(node => node.textContent).join('')).toBe(visible.repeat(180));
       expect(selectable.every(node => node.getAttribute('data-selectable') === 'true')).toBe(true);
       expect(selectable.every(node => node.textContent!.length <= 1800)).toBe(true);
     } finally { h.unmount(); }
