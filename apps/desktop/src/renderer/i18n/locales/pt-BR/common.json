@@ -5876,9 +5876,12 @@
           "create": "Adicionar dispositivo",
           "hint": "Escaneie com a câmera do celular ou envie o link para outro computador e cole em Conectar-se a outro retransmissor. O link só pode ser usado uma vez e expira em 10 minutos.",
           "qrAlt": "Código QR para se conectar ao retransmissor",
+          "qrTitle": "Código QR para se conectar ao retransmissor",
           "copy": "Copiar link",
           "copied": "Link de conexão copiado",
           "newLink": "Novo link",
+          "enlarge": "Ampliar código QR",
+          "close": "Fechar código QR",
           "waiting": "Aguardando solicitação de um dispositivo…"
         },
         "requests": {

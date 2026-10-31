@@ -5778,9 +5778,12 @@
           "create": "增设备",
           "hint": "以手机相机扫之，或将链接遣至另一机，于「入他处中继」中粘贴。链接十分钟内有效，仅可用一次。",
           "qrAlt": "入中继之 QR 码",
+          "qrTitle": "入中继之 QR 码",
           "copy": "录链接",
           "copied": "加入链接已录",
           "newLink": "重生",
+          "enlarge": "放大 QR 码",
+          "close": "阖 QR 码",
           "waiting": "倚门候设备来请…"
         },
         "requests": {

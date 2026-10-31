@@ -5821,9 +5821,12 @@
           "create": "Gerät hinzufügen",
           "hint": "Scanne ihn mit der Kamera deines Smartphones oder sende den Link an einen anderen Computer und füge ihn unter „Anderem Relay beitreten“ ein. Der Link ist einmal verwendbar und läuft nach 10 Minuten ab.",
           "qrAlt": "QR-Code zum Beitreten zum Relay",
+          "qrTitle": "QR-Code zum Beitreten zum Relay",
           "copy": "Link kopieren",
           "copied": "Beitrittslink kopiert",
           "newLink": "Neuer Link",
+          "enlarge": "QR-Code vergrößern",
+          "close": "QR-Code schließen",
           "waiting": "Warten auf eine Geräteanfrage…"
         },
         "requests": {

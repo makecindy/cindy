@@ -5876,9 +5876,12 @@
           "create": "Ajouter un appareil",
           "hint": "Scannez-le avec l'appareil photo de votre téléphone, ou envoyez le lien à un autre ordinateur et collez-le dans « Rejoindre un autre relais ». Le lien ne sert qu'une fois et expire au bout de 10 minutes.",
           "qrAlt": "QR code pour rejoindre le relais",
+          "qrTitle": "QR code pour rejoindre le relais",
           "copy": "Copier le lien",
           "copied": "Lien d'invitation copié",
           "newLink": "Nouveau lien",
+          "enlarge": "Agrandir le QR code",
+          "close": "Fermer le QR code",
           "waiting": "En attente d'une demande d'un appareil…"
         },
         "requests": {

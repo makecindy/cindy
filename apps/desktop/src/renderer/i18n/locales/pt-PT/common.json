@@ -5876,9 +5876,12 @@
           "create": "Adicionar dispositivo",
           "hint": "Leia com a câmara do telemóvel ou envie a ligação para outro computador e cole-a em Aderir a outro relay. A ligação só pode ser utilizada uma vez e expira em 10 minutos.",
           "qrAlt": "Código QR para aderir ao relay",
+          "qrTitle": "Código QR para aderir ao relay",
           "copy": "Copiar ligação",
           "copied": "Ligação de adesão copiada",
           "newLink": "Nova ligação",
+          "enlarge": "Ampliar código QR",
+          "close": "Fechar código QR",
           "waiting": "A aguardar um pedido de dispositivo…"
         },
         "requests": {
