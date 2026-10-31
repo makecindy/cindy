@@ -34,6 +34,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
+import { MessageListRevealContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -1840,6 +1841,19 @@ export function MessageRenderer({
   shareSelectionActiveRef.current = shareSelectionActive;
   const topOverlayHeightRef = useRef(topOverlayHeight);
   topOverlayHeightRef.current = topOverlayHeight;
+  const bottomOverlayHeightRef = useRef(bottomOverlayHeight);
+  bottomOverlayHeightRef.current = bottomOverlayHeight;
+  const revealWindowRect = useCallback(async (rect: { top: number; bottom: number }) => {
+    const list = listRef.current;
+    const frame = list ? await measureInWindow(list.getNativeScrollRef()) : null;
+    if (!frame || !listRef.current) return;
+    const top = frame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
+    const bottom = frame.y + frame.height - (bottomOverlayHeightRef.current ?? 0) - spacing.sm;
+    const delta = rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : rect.top < top ? rect.top - top : 0;
+    if (Math.abs(delta) < 1) return;
+    scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
+  }, [scrollToOffsetProgrammatically]);
+  const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2757,6 +2771,7 @@ export function MessageRenderer({
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
+    <MessageListRevealContext.Provider value={revealContextValue}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2889,6 +2904,7 @@ export function MessageRenderer({
         />
       )}
     </View>
+    </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>

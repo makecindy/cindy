@@ -31,6 +31,7 @@ import { visibleAskOptions } from '@cindy/maker-shared';
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
 import { ChatSessionFileProvider, useChatSessionFile, useChatSessionFileValue } from '@/components/chat/ChatSessionFileContext';
 import { QuestionReferenceText } from '@/components/chat/MarkdownRenderer';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
 import { useAutoResize } from '@/hooks/useAutoResize';
@@ -653,6 +654,7 @@ function AskUserQuestionForm({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return;
+      if (event.key === 'Escape' && getTextPreviewSearchHost()) return;
       if (event.key === 'Escape' && dictationRef.current.isBusy && shortcutCard.owns(event.target)) {
         event.preventDefault();
         event.stopPropagation();

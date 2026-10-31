@@ -16,7 +16,24 @@
     "bcc": "Cci",
     "subject": "Objet",
     "choosePlugin": "Choisissez un plugin pour ouvrir cet e-mail.",
-    "personalPlugin": "Plugin personnel"
+    "personalPlugin": "Plugin personnel",
+    "reply": "Répondre",
+    "replyAll": "Répondre à tous",
+    "forward": "Transférer",
+    "quote": {
+      "reply": "Répondre à cet e-mail",
+      "replyAll": "Répondre à tous pour cet e-mail",
+      "forward": "Transférer cet e-mail"
+    },
+    "messageCount_one": "{{count}} e-mail",
+    "messageCount_other": "{{count}} e-mails",
+    "showMessages_one": "Afficher {{count}} e-mail",
+    "showMessages_other": "Afficher {{count}} e-mails",
+    "conversationFailed": "Impossible de charger les autres e-mails de cette conversation.",
+    "expandMessage": "Développer l'e-mail de {{from}}",
+    "collapseMessage": "Réduire l'e-mail de {{from}}",
+    "messageCount_many": "{{count}} e-mails",
+    "showMessages_many": "Afficher {{count}} e-mails"
   },
   "title": "Plugins",
   "all": "Tous",
@@ -148,8 +165,6 @@
   "demo": {
     "hint": "Données de démonstration · Aucune configuration réelle n'est modifiée"
   },
-  "mailPreview": "Aperçu de l'e-mail",
-  "mailEnlarge": "Agrandir l'aperçu",
   "mailInsertImage": "Insérer dans le message",
   "mailAttach": "Ajouter une pièce jointe",
   "mailUpdated": "Brouillon mis à jour (lecture seule)",

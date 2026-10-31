@@ -1,6 +1,6 @@
 # Cindy MCP Apps 页面生成手册
 
-给生成页面的模型或开发者：Cindy 对话里的 AI，或业务后端里的模型。页面在 Cindy 里叫「交互页面」，即 Cindy 作宿主的标准 MCP Apps 页面。需要 Cindy **0.1.122-beta** 及以上（执行端和查看端）。
+给生成页面的模型（对话 AI 或业务后端的模型）和开发者。页面在 Cindy 里叫「交互页面」，即 Cindy 作宿主的标准 MCP Apps 页面。需要 Cindy **0.1.122-beta** 及以上（执行端和查看端）。
 
 ## 1. 你要输出什么
 
@@ -83,12 +83,12 @@
 | --- | --- | --- | --- |
 | `open_view` | AI | `{intent}` → `_meta.view.html` 完整文档 | 按意图打开页面 |
 | `show_page` | AI | `{title, html}` → 同上 | 对话 AI 自己写页面并显示 |
-| `import_file` | AI | 文件经 `dir` 交接 → 完整预览页 | 导入用户交来的单个文件 |
+| `import_file` | AI | 对话交来的文件 → 完整页面 | 导入用户交来的文件 |
 | `load_view` | 页面 | `{intent, fields?}` → `_meta.view.html` **容器片段**，无 html/head/body 和脚本 | 换页面里的一块内容 |
 | `api_read` | 页面 | `{path, query?}` → `structuredContent` | 读数据 |
 | `api_write` | 页面 | `{path, body, idempotencyKey}` → `structuredContent` | 写数据，单独审批 |
 | `pick_files` | 页面 | `{accept?, multiple?}`（如 `accept:['.csv']`）→ `structuredContent.files` `[{name, ref, size}]`；取消或失败为 `isError` | 系统文件选择框 |
-| `upload_files` | 页面 | `{files:[ref], path, fields?}` → `structuredContent` | 把选中的文件交给插件保存或上传 |
+| `upload_files` | 页面 | `{files:[ref], path, fields?}` → `structuredContent` | 把文件引用交给插件保存或上传 |
 | `fetch_file` | 页面 | `{path, name}` → `content` 里的 `resource_link` | 取回文件用于显示或导出 |
 
 - `path` 是插件允许前缀内的相对路径（如 `/api/items`）；不能写完整网址、`../` 或编码字符，查询条件放 `query`。
@@ -96,14 +96,14 @@
 
 ## 5. 规则
 
-- **凭证**：页面拿不到任何凭证。需要用户身份的请求走工具，由插件代发、Cindy 注入凭证。页面直接 `fetch` 只能访问插件声明的 `connectDomains`，不带凭证，对方需返回 `Access-Control-Allow-Origin: *`；外部图片、样式要在 `resourceDomains` 声明。
+- **凭证**：页面拿不到凭证：需要用户身份的请求走工具，由插件代发、Cindy 注入。页面直接 `fetch` 只能访问插件声明的 `connectDomains`，不带凭证，对方需返回 `Access-Control-Allow-Origin: *`；外部图片、样式要在 `resourceDomains` 声明。
 - **局部更新**：换内容用 `load_view` 片段 + 容器 `innerHTML`（只接可信、已转义的片段），或用 `api_read` 拿 JSON 后改 DOM。片段里的脚本不执行，事件用常驻脚本绑定。不重连，输入和状态保留。
-- **整页替换的边界**：整份文档只在加载器首屏，以及 AI 调用的整页工具（`open_view`、`import_file`、`show_page`）打开新卡片时替换。标准工具里没有向页面返回完整文档的工具；**不要把 `load_view` 片段 `document.write` 进页面**。整页替换后新文档重连，旧请求和审批作废、迟到回复丢弃，已被 Cindy 接收的 `sendMessage` 照常发送。
+- **整页替换的边界**：整份文档只在加载器首屏，以及 AI 调用的整页工具（`open_view`、`import_file`、`show_page`）打开新卡片时替换。页面调用的工具都不返回完整文档；**不要把 `load_view` 片段 `document.write` 进页面**。整页替换后新文档重连，旧请求和审批作废、迟到回复丢弃，已被 Cindy 接收的 `sendMessage` 照常发送。
 - **表单**：用 `<form>`，在 `submit` 里先 `preventDefault()` 再调工具；点按钮和回车都会触发 submit。原生 `action` 提交不可用；宿主会兜底拦下没处理的提交和 `form.submit()`（`method="dialog"` 保留原生关闭），但仍必须写 `preventDefault()`。等待时禁用按钮，失败保留输入。
 - **写操作**：带 `idempotencyKey`。同一内容重试沿用原编号，内容变了换新编号；写入方按「当前用户 + 编号」去重，同编号不同内容应拒绝。**不自动重试**：超时不等于没写入，取消等待也不等于已撤销，按编号核对。
 - **生命周期**：用 `AbortController` 取消等待，`onteardown` 里停止更新 DOM。卡片离屏可能被卸载，重开回到最初的结果；要保留的状态通过工具存取。
-- **文件**：页面拿不到本机路径，只能读取本卡已授权文件的只读地址。显示用 `resource_link` 的 `_meta['cindy/file'].url`（只读、临时、仅本卡有效，不自己拼、不持久保存）；需要身份的图片先 `fetch_file`。`upload_files` 一次最多 4 个，单个 64 MiB、合计 128 MiB。拖放不推荐，用 `pick_files`。手机和远程查看时文件选择、导出可能不可用，提示回执行电脑操作。
-- **从对话交来的文件**：图片、音视频媒体走附件，宿主放进 `app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachments']`，每项是 `resource_link`，地址取 `_meta['cindy/file'].url`。CSV、XLSX 表格用 `dir` 交接（一次性、10 分钟、单个 50 MiB），插件在那次调用里立刻暂存，再把批次号和预览数据写进首屏 HTML。
+- **文件**：页面拿不到本机路径，只能读取本卡已授权文件的只读地址。显示用 `resource_link` 的 `_meta['cindy/file'].url`（临时、仅本卡有效，不自己拼、不持久保存）；需要身份的图片先 `fetch_file`。`upload_files` 一次最多 4 个，单个 64 MiB、合计 128 MiB。拖放不推荐，用 `pick_files`。手机和远程查看时文件选择、导出可能不可用，提示回执行电脑操作。
+- **从对话交来的文件**：在 hostContext 的 `cindy/attachments`（见下例），每项是 `resource_link`（`name`、`uri`、`size`，地址同上）。媒体直接显示；`uri` 以 `handoff:` 开头的是交接的 CSV、XLSX（需要 0.1.123-beta 及以上）：首屏只显示名称和大小，不读不解析；生成页面时把引用写进按钮（如 `data-file-ref`），点击时用插件自己的参数名交给工具（如 `files`），不用 `cindy_handoff_files`。要预览才读 `url`；没有 `url` 是文件已失效（7 天未用或已删除），提示重新发送。未声明交接时表格走 `dir`（一次性、10 分钟、单个 50 MiB）：插件立即暂存，批次号和预览写进首屏。
 
   ```js
   const links = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachments'] ?? [];
@@ -113,9 +113,9 @@
       .append(Object.assign(document.createElement('img'), { src: file.url, alt: link.name }));
   }
   ```
-- **导入（CSV / XLSX）**：先暂存 → 预览（总行数、前几行、出错的行、「确认导入」「取消」）→ 用户确认后 `api_write({path:'/api/imports/confirm', body:{batchId}, idempotencyKey})`。解析和校验放在工具背后，预览和导入用同一套规则。页面里选文件时：`pick_files` → `upload_files` 返回批次和预览 → 渲染进容器 → 确认，不换文档。
-- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，卡片保存的结果尽量 ≤ 1 MiB。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面自身上限约 3.94 MB；页面没超、加上 SDK 才超时会不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
-- **不能做**：拿凭证或本机路径；原生提交表单；弹新窗口或让整个窗口跳转；访问未声明的域名；调用其他插件或 Cindy 内置工具。用户文档里的内容不能当脚本执行。
+- **导入（CSV / XLSX）**：显示文件 → 用户点按钮上传，暂存后返回批次和预览（总行数、前几行、出错的行、「确认导入」「取消」）→ 确认后 `api_write({path:'/api/imports/confirm', body:{batchId}, idempotencyKey})`。解析和校验在工具背后，预览和导入用同一套规则。交接的和 `pick_files` 选的文件都交给 `upload_files`；预览渲染进容器，不换文档。
+- **大小**：页面与 Cindy 单条消息 ≤ 4 MiB，卡片保存的结果尽量 ≤ 1 MiB。远程和手机打开时 SDK（约 337 KB，gzip 约 78 KB）随页面传输，页面上限约 3.94 MB，加上 SDK 才超限时不带 SDK 打开，`import` 失败。插件可能对 `html` 长度另有限制（如示例 show_page 限 200,000 字符）。首屏只放必要数据，其余按需读取。
+- **不能做**：弹新窗口或让整个窗口跳转。用户文档里的内容不能当脚本执行。
 
 ## 6. 常见错误
 
@@ -123,7 +123,5 @@
 | --- | --- |
 | `import` SDK 失败 | 确认执行端和查看端 ≥ 0.1.122-beta；远程打开时缩小页面。不要改用 CDN |
 | 页面一直显示加载中 | 别等 `ontoolresult`，首屏数据写进 HTML |
-| 直接请求接口返回 401 | 页面请求不带凭证，改用 `api_read` / `api_write` |
-| 直接请求被拦截或跨域报错 | 声明域名；对方服务返回 `Access-Control-Allow-Origin: *` |
-| 点提交没反应 | 在 `submit` 里 `preventDefault()` 后调工具，不依赖原生 `action` |
+| 直接请求返回 401、被拦截或跨域报错 | 见「凭证」：需要身份走 `api_read` / `api_write`，否则声明域名、对方开 CORS |
 | 换内容后页面空白、按钮失灵 | 把片段 `document.write` 进了整个文档；改用 `innerHTML` 替换容器 |

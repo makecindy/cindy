@@ -409,6 +409,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -3580,12 +3581,14 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
-      // 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
+      // 文档预览 / 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        event.target instanceof Element &&
-        event.target.closest('[role="alertdialog"], [data-morph-side]')
+        (getTextPreviewSearchHost() || (
+          event.target instanceof Element &&
+          event.target.closest('[role="alertdialog"], [data-morph-side]')
+        ))
       ) {
         return;
       }

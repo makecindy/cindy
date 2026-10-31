@@ -1,6 +1,6 @@
 # 跨端协议兼容
 
-## iPhone 桌面小组件快照（新增接口，尚未发布）
+## iPhone / Android 桌面小组件快照（新增接口，尚未发布）
 
 新增只读 invoke `device-link:usage-widget:snapshot:v1`（无参数），列入 Desktop
 `REMOTE_INVOKE_ALLOWLIST` 与 Mobile `MOBILE_REMOTE_INVOKE_CHANNELS`，由被控端 dispatch 在三道门之后拦截。
@@ -24,6 +24,18 @@ schema 不变；`GoalStatusPayload` additive 追加 `waitingSince: number|null`�
 手机端 `MobileGoalStatus` 不变，`MobileGoalStatusPayload` 追加可选 `waitingSince?`：旧手机端
 忽略未知字段按 active 显示，旧 Host 不发该字段时新手机端按 undefined 处理）。无新 channel、
 无 allowlist 变化、无 SQLite migration。
+
+## 插件与伙伴包的十语资源（2026-10-31）
+
+客户端接受 `zh-CN / zh-TW / en / ja / ko / es / fr / de / pt-PT / pt-BR` 的
+插件 manifest 资源与推荐词条。旧清单无需补字段，英文回退、权限判据和批准记录不变。
+`app-context` 与 `host-context-changed` 可选新增 `uiLocale`；旧字段 `locale`
+仍仅返回 zh-CN / en / ja / ko，其他语言固定返回 en。新插件读取
+`uiLocale ?? locale`，旧插件无需重装或重新授权；缺少资源仍回退英文。
+伙伴包新增的五种拉丁语系译文同样可选，旧五语包仍可导入；切换语言只影响展示与新导入快照，
+不会重写用户已有伙伴资料、例行任务授权或回执指纹。
+官方插件仓发布门禁、官方 Telegram 菜单和 SkillHub 内容语言属于独立仓库，未在本次修改或验证。
+没有 Device Link channel、relay、allowlist 或自建中转协议变更。
 
 ## Desktop 群聊消息的即时投影（2026-10-31）
 
@@ -269,6 +281,10 @@ Renderer 均保留它。导航先与本机设备 ID 比较；远端链接先登�
 该字段时不提供此 fallback；原有 retry token 与历史错误卡仍沿用旧路径。
 旧控制端忽略新增字段。标记仅随当前错误存在，清错、下一轮输入和控制操作失败都会清除，
 不落盘、不保留旧 run，不新增 channel、权限、服务端或原生指纹变更。
+
+产品语义（2026-10-30 裁决）：Cindy 退出或重启中断的定时任务运行，由用户点击现有「继续任务」
+入口手动续跑，不在启动或定时扫描时自动续跑；续跑接回原来的定时运行记录，完成后更新同一条
+记录的结果，不另起一条。这只针对应用退出后的恢复，运行中的临时网络故障仍按既有方式自动恢复。
 
 ## 手机经电脑确认群消息已读
 
@@ -1180,6 +1196,17 @@ SSH 主机不自动成为设备目录成员。实现与回归见 `mcp-integratio
 ## 插件 Agent 模型目录的运行位置（2026-10-27）
 
 插件同源 `GET /agent-models` 新增可选查询参数 `agent_device_id`（Agent 在哪台同账号电脑或分享来的供应商上；省略 = 本机清单）。无参响应在原 `models` 上追加 `locations: [{agentDeviceId, name}]`，与 Lead `list_available_models` 的 `locations` 同源（同账号在线且开了远程控制的电脑 + 生效中的供应商分享，不含本机）；位置列表读失败时仍返回 200，只省略 `locations`。带参时只投影那台允许远程调用的来源，响应回显 `agentDeviceId`，不附 `locations`。旧 Host 仍拒绝任何查询字符串，带参返回 400；新 Host 其它参数、重复参数、空或超过 128 字符的 id 同样 400。格式合法但那台离线、未知或没开远程控制时返回 503 且 `errorCode` 为 `NOT_AVAILABLE`，响应里没有本机条目，旧客户端应退回无参本机清单。不覆盖 SSH 远程主机目录，不改变 `create_worker` / `agent_device_id` 派工校验。实现与回归见 `electronSandboxAdapter.ts`、`ghostAgentModels.ts`、`workerAgentLocations.ts`。
+
+## 定时任务与例行任务的插件前置检查（2026-10-31）
+
+`maker:schedule:*` 读回的定时任务与写入参数、伙伴例行任务定义（含随伙伴上云的 routine 值）新增可选
+`preRunPlugin: { pluginId, onFailure: 'allow' | 'skip' | 'block' }`，与 `preRunHook` 并列。旧端忽略该字段；
+旧端写入不带该字段时 host 保留已存值，`null` 才清除。新 host 只在换了插件时校验插件可选（已启用、
+声明了对应 `will-` 节点且用户已批准），并把插件 id 归一成实例 id。定时任务存两列
+`pre_run_plugin_id` / `pre_run_plugin_on_failure`（0140，companion 幂等加列）；未知的出错处理按 `block` 读。
+插件 id 只对插件所在的电脑有意义：`cindy_scheduler` 跨电脑修改拒绝设置该字段，伙伴搬家时带插件检查的
+例行任务先关闭再到达；Mobile 与项目自动化配置不编辑、不保存它。不新增 device-link channel：插件下拉用
+本机专用的 `ghosts:control-points:candidates`，不进 allowlist。
 
 ## 定时任务的 Agent 运行位置（2026-10-22）
 
@@ -2970,6 +2997,13 @@ bot 同一份过程载体与渲染（见 `docs/product-rules/telegram-bot-parity
 新增拒绝码 `TURN_UNAVAILABLE`（终稿 / 卡片 op 时这一轮已收口或不属于该设备）。`msg.op`
 各 purpose 允许的动作与附属字段由 parse 强制联动，放错位置一律拒收。
 
+### X 删除指令保持正文 @ 提及（2026-10-08）
+
+官方 X 服务只消费 `post.mention.create`；普通回帖属于 `post.reply.create`，接入回复事件
+会增加 X 侧投递费用。用户选择保持费用不变：删除机器人回帖继续要求原提问者在目标回帖下
+发送正文含 `@askmycindy` 的 `/delete` 指令，产品只改多语言使用说明把这一点讲清楚。后续不要
+把「自动订阅所有回复事件」当作已授权的修复。
+
 ### X 回复链的结构化输入
 
 服务端负责 X 事件、账号绑定、真实回复链读取与预算、可靠派发和回传；Desktop 的
@@ -4369,6 +4403,14 @@ UNSUPPORTED_CAPABILITY；不得降级为普通消息或另建任务。旧 Host �
 Node 私有上传只接受 POST + uploadDir，短期 Bearer 不进入页面管道。旧 Host 无入口则不上传；不保存新凭据，不新增设置页授权协议。
 targets.get 按本插件 requestKey 查询原收据；settled 自然终态由原 inputClientId 的运行事件持久记录，取消另须确认原队列/执行结束。不开放伙伴历史。
 
+## 插件只读查看项目任务（未发布）
+
+agent.observe 为可选独立能力，不依赖 tasks/targets，只有 Host 确认的 observeCapabilityApproved 才授予；
+历史未知字段、旧 tasks/targets 批准不推断新授权。旧 receipt 缺少新可选字段照常读取，无需 schema migration。
+新包严格校验布尔值；已安装快照中的非布尔历史值原样保留但不授予，不因新校验停用。
+逻辑页管道新增 `observe-request`（`project-tasks` / `open-task`），只在本机 Desktop Main 消费，不进入 device-link 白名单。
+旧 Host 忽略声明且没有 `cindy.observe`，插件须探测入口后降级。作者契约见 plugin-agent-tasks.md §4.11.8。
+
 ## 伙伴列表的可选活动摘要
 
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。
@@ -4406,3 +4448,18 @@ Chat Server `/me` 新增可选能力 `groupMentionAudiences: 1`，群快照新�
 Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`，不新增服务端字段或消息类型。
 无数据库迁移、权限扩大或服务端改动；回退客户端只收起电脑话题的附件输入，已有媒体消息仍可读取。
 回归入口：`ChatServerControls.test.tsx`、`chatServer.test.ts`。
+
+## 插件对话文件交接（`handoff:`）
+
+工具参数表把 `cindy_handoff_files` 声明为数组（`{"type":"array"}`）才启用，同名的其它形态参数不受影响；未声明的工具与旧插件行为逐字不变（非媒体仍报改用 dir）。
+插件收到 `args.cindy_handoff_files`，`upload` 增加三选一的 `handoff` 来源，失败码 `HANDOFF_UNAVAILABLE`；
+用到它的插件需声明 `minCindyVersion: 0.1.123-beta`（版本号待确认），旧宿主不认识该参数。
+卡片记录的 `cindy/attachments` 新增 `handoff:<uuid>` 资源链接，字段沿用标准 `resource_link`，不新增
+device-link 操作、字段或白名单。远程打开在执行端判定：新执行端把 `handoff:` 视为执行电脑文件，
+新旧查看端都收到既有的 `MCP_APP_FILES_LOCAL_ONLY` 提示；Mobile 自带的同名检查同步认 `handoff:`。
+执行端回退到旧版时不认识该前缀，不签发地址也不读字节，页面只看到名称与大小。
+不可用的 `handoff:` 链接（附件列表、入参或结果中）只去掉地址、View 照常打开；Library／媒体链接仍严格拒绝，行为不变。
+确认卡新增 lane `handoff`；旧版 Desktop 远程控制端不认识该 lane 不显示卡片，执行端按超时拒绝，
+不放行。设置页列表与删除只走本机 IPC（`ghosts:handoff-list` / `ghosts:handoff-delete`）。
+回归入口：`handoffStore.test.ts`、`ghostWorkdirGate.test.ts`、`networkSlot.test.ts`、`pluginServer.test.ts`、
+`viewAuthorization.test.ts`、Mobile `mcpAppCard.test.tsx`，以及 `mcp-apps-sandbox.verify.mjs --handoff`。

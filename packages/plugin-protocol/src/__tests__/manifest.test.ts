@@ -690,7 +690,7 @@ describe('Ghost manifest contract', () => {
         ...validManifest,
         locales: {
           en: 'locales/en.json',
-          fr: 'locales/fr.json',
+          it: 'locales/it.json',
         },
       }),
     ).toMatchObject({
@@ -1958,6 +1958,15 @@ it('validates independent target access without dropping the tasks dependency', 
   expect(validateGhostManifest({ ...base, agent: { tasks: true, targets: 'yes' } }).ok).toBe(false);
   const disabled = validateGhostManifest({ ...base, agent: { tasks: true, targets: false } });
   expect(disabled.ok && disabled.manifest.agent).toEqual({ tasks: true });
+});
+
+// Read-only observation is standalone; a non-boolean value must not install.
+it('validates read-only observe access without a tasks dependency', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'observe-test', name: 'Observe', version: '1.0.0', entry: 'main.js' };
+  const approved = validateGhostManifest({ ...base, agent: { observe: true } });
+  expect(approved.ok && approved.manifest.agent).toEqual({ observe: true });
+  expect(validateGhostManifest({ ...base, agent: { observe: 'yes' } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { observe: false } }).ok).toBe(false);
 });
 
 describe('package release notes', () => {

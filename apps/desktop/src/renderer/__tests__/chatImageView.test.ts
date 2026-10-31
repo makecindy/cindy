@@ -24,13 +24,20 @@ vi.mock('../components/chat/ModelLightbox', () => ({
   ModelLightbox: () => React.createElement('div', { 'data-testid': 'model-lightbox' }),
 }));
 
-vi.mock('../components/chat/ImageMissingPlaceholder', () => ({
-  ImageMissingPlaceholder: ({ filename, status = 'unavailable' }: { filename: string; status?: string }) =>
-    React.createElement('div', { 'data-testid': 'image-failure', 'data-status': status }, filename),
-}));
+vi.mock('../components/chat/ImageMissingPlaceholder', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../components/chat/ImageMissingPlaceholder')>();
+  const { Tooltip } = await import('../components/ui/tooltip');
+  return {
+    ImageMissingPlaceholder: (props: React.ComponentProps<typeof actual.ImageMissingPlaceholder>) =>
+      React.createElement(Tooltip.Provider, null,
+        React.createElement('div', { 'data-testid': 'image-failure', 'data-status': props.status ?? 'unavailable' },
+          React.createElement(actual.ImageMissingPlaceholder, props))),
+  };
+});
 
 import { ChatImageView } from '../components/chat/ChatImageView';
 import { prepareShareMessageClone } from '../lib/shareConversationImage';
+import { activateInlineLinkFromKeyboard } from '../components/chat/linkInteraction';
 
 afterEach(() => {
   cleanup();
@@ -92,7 +99,72 @@ describe('ChatImageView', () => {
     expect(screen.queryByText('chat.media.longImagePreview')).toBeNull();
   });
 
+  // #8214 review, unit: an image may be wrapped by a Markdown target link.
+  // Retry must cancel both the anchor's default action and bubbling activation.
+  it('keeps a linked image retry from opening its target', async () => {
+    vi.stubGlobal('electronAPI', {
+      readCachedImageAsBase64: vi.fn().mockResolvedValue({ base64: 'aW1hZ2U=', mimeType: 'image/png' }),
+    });
+    const openTarget = vi.fn((event: React.MouseEvent) => event.preventDefault());
+    render(React.createElement('a', {
+      href: 'https://example.com', onClick: openTarget, onAuxClick: openTarget,
+      onKeyDown: activateInlineLinkFromKeyboard,
+    },
+      React.createElement(ChatImageView, {
+        src: 'cindy-media://blobs/a.png', filename: 'a.png', variant: 'tool-output',
+      })));
+    fireEvent.error(screen.getByAltText('a.png'));
+    const retry = await screen.findByRole('button', { name: 'commonUi.retry: a.png' });
+    fireEvent.keyDown(retry, { key: 'Enter' });
+    fireEvent.keyDown(retry, { key: ' ' });
+    const middleClick = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true });
+    fireEvent(retry, middleClick);
+    expect(middleClick.defaultPrevented).toBe(true);
+    expect(openTarget).not.toHaveBeenCalled();
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    fireEvent(retry, click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(openTarget).not.toHaveBeenCalled();
+    expect(screen.getByAltText('a.png')).toBeTruthy();
+  });
+
+  // #8214 review, unit: export uses the production clone path and must keep
+  // the error/filename while removing only the live retry action.
+  it('omits the image retry control from its share clone', async () => {
+    vi.stubGlobal('electronAPI', {
+      readCachedImageAsBase64: vi.fn().mockResolvedValue({ base64: 'aW1hZ2U=', mimeType: 'image/png' }),
+    });
+    const { container } = render(React.createElement(ChatImageView, {
+      src: 'cindy-media://blobs/a.png', filename: 'a.png', variant: 'tool-output',
+    }));
+    fireEvent.error(screen.getByAltText('a.png'));
+    await screen.findByRole('button', { name: 'commonUi.retry: a.png' });
+    const clone = prepareShareMessageClone(container);
+    expect(clone?.querySelector('button')).toBeNull();
+    expect(clone?.textContent).toContain('chat.imageMissing.unavailable');
+    expect(clone?.textContent).toContain('a.png');
+    expect(screen.getByRole('button', { name: 'commonUi.retry: a.png' })).toBeTruthy();
+  });
+
   describe.each(['user-attached', 'tool-output'] as const)('%s diagnostics', (variant) => {
+    // #8208, unit: exercise the real failure card's action, not only the hook.
+    // Existing tests recovered on window focus but had no user-triggered retry.
+    it('retries a readable image through its failure card without requesting new bytes itself', async () => {
+      const read = vi.fn().mockResolvedValue({ base64: 'aW1hZ2U=', mimeType: 'image/png' });
+      vi.stubGlobal('electronAPI', { readCachedImageAsBase64: read });
+      render(React.createElement(ChatImageView, {
+        src: 'cindy-media://blobs/a.png', filename: 'a.png', variant,
+      }));
+      fireEvent.error(screen.getByAltText('a.png'));
+      const retry = await screen.findByRole('button', { name: 'commonUi.retry: a.png' });
+      expect(screen.queryByAltText('a.png')).toBeNull();
+      fireEvent.click(retry);
+      expect(screen.queryByTestId('image-failure')).toBeNull();
+      fireEvent.load(screen.getByAltText('a.png'));
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps a loading frame until decode and resets it for a different source', async () => {
       const props = { filename: 'a.png', variant };
       const { rerender } = render(React.createElement(ChatImageView, {

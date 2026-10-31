@@ -58,6 +58,18 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     ].join(' '),
   },
   {
+    key: 'computer-use',
+    title: 'Computer Use(操作本机桌面:窗口、点击、输入、截图)',
+    oneLiner:
+      '桌面操作只走 cindy_computer;工具列表里没有它就是 Computer Use 没开,引导用户到「设置 → 内置工具」开启并授权,不用 shell 模拟键鼠。',
+    detail: [
+      `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
+      '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。给用户这条链接可直接跳到那一页:cindy://settings/builtin-tools(桌面端点击即打开;手机或 IM 里收到时回到电脑上点)。开关和权限都要用户本人操作,agent 不能代为开启。',
+      '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
+      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
+    ].join(' '),
+  },
+  {
     key: 'self-management',
     title: '自我管理(Agent 管理用户自己的任务 / 定时任务 / 项目 / 伙伴)',
     oneLiner:

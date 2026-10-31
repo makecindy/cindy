@@ -20,6 +20,9 @@ import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { SegmentedControl } from '@/components/ui/segmented-control';
+import { PreRunPluginFields } from '@/features/scheduler/components/PreRunPluginFields';
+import { GHOST_CONTROL_POINTS } from '../../../shared/ghost';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
@@ -78,6 +81,10 @@ export function BotRoutines({
   const [sources, setSources] = useState<RoutineSource[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [draft, setDraft] = useState<RoutineInput | null>(null);
+  // 前置检查用脚本还是插件；插件只能在本机伙伴上选(插件装在各自的电脑上)。
+  const [checkSource, setCheckSource] = useState<'script' | 'plugin'>('script');
+  // 打开时脚本与插件都已配置(Agent 设的)：界面显示插件，保存时脚本原样保留。
+  const [keepScript, setKeepScript] = useState(false);
   const [history, setHistory] = useState<RoutineRun[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -158,6 +165,21 @@ export function BotRoutines({
     }).catch(() => { if (alive) setError(true); });
     return () => { alive = false; };
   }, [botId, selected, supportsDelivery, routinesApi]);
+  const localTarget = settingsTarget.kind === 'local';
+  useEffect(() => {
+    setCheckSource(draft?.preRunPlugin ? 'plugin' : 'script');
+    setKeepScript(!!draft?.preRunPlugin && !!draft?.preRunHook?.command);
+    // 只在切换编辑对象时按已保存内容重置。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+  const pluginCheck = localTarget && checkSource === 'plugin';
+  const missingCheckPlugin = pluginCheck && !draft?.preRunPlugin?.pluginId;
+  /** 保存时只保留选中的检查方式；远程伙伴不改插件设置(省略 = 保留)。 */
+  const draftForSave = (value: RoutineInput): RoutineInput => {
+    if (!localTarget) return value;
+    if (pluginCheck) return keepScript ? value : { ...value, preRunHook: null };
+    return { ...value, preRunPlugin: null };
+  };
   const editable = (value: RoutineInput) =>
     JSON.stringify({
       name: value.name,
@@ -166,6 +188,7 @@ export function BotRoutines({
       triggers: value.triggers,
       silentWhenIdle: value.silentWhenIdle ?? true,
       preRunHook: value.preRunHook ?? null,
+      preRunPlugin: value.preRunPlugin ?? null,
       modelOverride: value.modelOverride ?? null,
       sessionMode: value.sessionMode ?? 'persistent',
       delivery: value.delivery ?? { kind: 'companion', mode: 'direct' },
@@ -395,6 +418,7 @@ export function BotRoutines({
                   busy ||
                   running ||
                   missingRecipient ||
+                  missingCheckPlugin ||
                   !draft.name.trim() ||
                   !draft.prompt.trim() ||
                   !draft.triggers.length
@@ -402,7 +426,7 @@ export function BotRoutines({
                 onClick={() => {
                   if (revealInvalidField()) return;
                   void act(async () => {
-                    const saved = await routinesApi.save(botId, draft, selected!);
+                    const saved = await routinesApi.save(botId, draftForSave(draft), selected!);
                     setDraft(structuredClone(saved));
                     await routinesApi.runNow(botId, saved.id);
                   });
@@ -495,15 +519,46 @@ export function BotRoutines({
               {t('routines.quiet')}
             </label>
             <p className="text-12 text-[var(--text-secondary)]">{t('routines.quietHint')}</p>
-            <label className="block space-y-2">
-              <span className="text-[var(--text-secondary)]">{t('routines.checkCommand')}</span>
-              <Textarea rows={3} value={draft.preRunHook?.command ?? ''} onChange={(command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null })} />
-            </label>
-            <p className="text-12 text-[var(--text-secondary)]">{t('routines.checkHint')}</p>
-            {draft.preRunHook && <label className="block space-y-2">
-              <span className="text-[var(--text-secondary)]">{t('routines.timeoutMs')}</span>
-              <IntegerInput optional min={1} value={draft.preRunHook.timeoutMs} onChange={(timeoutMs) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs } })} />
-            </label>}
+            {localTarget && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-[var(--text-secondary)]">{t('routines.checkSource')}</span>
+                <SegmentedControl
+                  aria-label={t('routines.checkSource')}
+                  value={checkSource}
+                  height={32}
+                  options={(['script', 'plugin'] as const).map((source) => ({
+                    value: source,
+                    label: t(`scheduler.editor.preRunPlugin.source.${source}`),
+                  }))}
+                  onValueChange={setCheckSource}
+                />
+              </div>
+            )}
+            {pluginCheck ? (
+              <PreRunPluginFields
+                point="will-routine-run"
+                pluginId={draft.preRunPlugin?.pluginId ?? ''}
+                onFailure={draft.preRunPlugin?.onFailure ?? GHOST_CONTROL_POINTS['will-routine-run'].defaultOnFailure}
+                onPluginChange={(pluginId) => setDraft((value) => value && ({ ...value, preRunPlugin: {
+                  pluginId, onFailure: value.preRunPlugin?.onFailure ?? GHOST_CONTROL_POINTS['will-routine-run'].defaultOnFailure,
+                } }))}
+                onFailureChange={(onFailure) => setDraft((value) => value && ({ ...value, preRunPlugin: {
+                  pluginId: value.preRunPlugin?.pluginId ?? '', onFailure,
+                } }))}
+              />
+            ) : (
+              <>
+                <label className="block space-y-2">
+                  <span className="text-[var(--text-secondary)]">{t('routines.checkCommand')}</span>
+                  <Textarea rows={3} value={draft.preRunHook?.command ?? ''} onChange={(command) => setDraft({ ...draft, preRunHook: command ? { ...draft.preRunHook, command } : null })} />
+                </label>
+                <p className="text-12 text-[var(--text-secondary)]">{t('routines.checkHint')}</p>
+                {draft.preRunHook && <label className="block space-y-2">
+                  <span className="text-[var(--text-secondary)]">{t('routines.timeoutMs')}</span>
+                  <IntegerInput optional min={1} value={draft.preRunHook.timeoutMs} onChange={(timeoutMs) => setDraft({ ...draft, preRunHook: { ...draft.preRunHook!, timeoutMs } })} />
+                </label>}
+              </>
+            )}
           </details>
           <div className="space-y-2">
             <h3 className="text-[var(--text-secondary)]">{t('routines.when')}</h3>
@@ -627,14 +682,14 @@ export function BotRoutines({
             <Button
               variant="cta"
               disabled={
-                busy || missingRecipient || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
+                busy || missingRecipient || missingCheckPlugin || !draft.name.trim() || !draft.prompt.trim() || !draft.triggers.length
               }
               onClick={() => {
                 if (revealInvalidField()) return;
                 void act(async () => {
                   const saved = await routinesApi.save(
                     botId,
-                    draft,
+                    draftForSave(draft),
                     selected === 'new' ? undefined : selected!,
                   );
                   setSelected(saved.id);
@@ -999,6 +1054,7 @@ function routineInput(routine: Routine): RoutineInput {
     triggers: routine.triggers,
     ...(routine.silentWhenIdle !== undefined ? { silentWhenIdle: routine.silentWhenIdle } : {}),
     ...(routine.preRunHook !== undefined ? { preRunHook: routine.preRunHook } : {}),
+    ...(routine.preRunPlugin !== undefined ? { preRunPlugin: routine.preRunPlugin } : {}),
     ...(routine.modelOverride !== undefined ? { modelOverride: routine.modelOverride } : {}),
     ...(routine.delivery !== undefined ? { delivery: routine.delivery } : {}),
     ...(routine.sessionMode !== undefined ? { sessionMode: routine.sessionMode } : {}),

@@ -111,6 +111,7 @@ import {
   capabilitySelectionAddedByPlanEdit,
   findClaudeMcpCapabilityRoute,
   isCapabilityRouteInvocationAllowed,
+  withoutUserMcpRoutes,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController, isDeterministicHostCompactFailure } from '../shared/auto-compact-controller.js';
@@ -1387,6 +1388,11 @@ export class ClaudeCodeAgent extends BaseAgent {
     const sid = opts.sessionId ?? '';
     const log = this.deps.logger.child(sid ? `s:${sid}/claude-code` : 'claude-code');
     const reviewMode = opts.reviewMode === true;
+    // The routing policy this session actually runs under: user-registered MCP denials
+    // (cua-driver → cindy_computer) apply to local runtimes only; see withoutUserMcpRoutes.
+    const capabilityRouting = opts.remoteHostId
+      ? withoutUserMcpRoutes(this.deps.capabilityRouting)
+      : this.deps.capabilityRouting;
     if (reviewMode && opts.remoteHostId) {
       throw new Error('Cindy Review currently supports local Claude Code sessions only');
     }
@@ -1835,7 +1841,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 加上设备托管时交给 cindy_exec 顶替的本机工具。启动时快照, 整条会话不变。
     const claudeDisallowedTools = [...new Set([
       ...(hosted ? DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS : []),
-      ...buildClaudeDisallowedTools(reviewMode ? undefined : this.deps.capabilityRouting),
+      ...buildClaudeDisallowedTools(reviewMode ? undefined : capabilityRouting),
     ])];
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
@@ -2248,7 +2254,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         )
       : mergeClaudeHookSets(
           buildClaudeLocalToolGuardHooks(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             () => activeCapabilitySelectionText,
             (toolName, route) => {
               log.warn('downstream MCP source denied by host PreToolUse route', {
@@ -2286,7 +2292,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         );
     const deniedCapabilityRoute = (toolName: string) => {
       const route = findClaudeMcpCapabilityRoute(
-        this.deps.capabilityRouting,
+        capabilityRouting,
         toolName,
         nonHarnessMcpServerNames,
       );
@@ -2550,7 +2556,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         appendActiveCapabilitySelectionText(
           capabilitySelectionAddedByPlanEdit(
-            this.deps.capabilityRouting,
+            capabilityRouting,
             'claude-code',
             plan,
             decision.editedPlan,
@@ -2931,7 +2937,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         fastMode: opts.fastModePolicy?.isAllowed() === false ? false : mutableFastMode,
         fastModeAllowed: opts.fastModePolicy?.isRequestAllowed?.() ?? opts.fastModePolicy?.isAllowed(),
         botSkillPolicy: reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
-        capabilityRouting: reviewMode ? undefined : this.deps.capabilityRouting,
+        capabilityRouting: reviewMode ? undefined : capabilityRouting,
       });
       if (Object.keys(disabledSkillOverrides).length > 0) {
         settings.skillOverrides = { ...settings.skillOverrides, ...disabledSkillOverrides };
@@ -3846,7 +3852,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             : requestedRemotePermissionMode;
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = [
-          ...buildClaudeRemoteToolGuards(this.deps.capabilityRouting),
+          ...buildClaudeRemoteToolGuards(capabilityRouting),
           ...buildClaudeRemoteRootOnlyToolGuards(),
           ...buildClaudeRemoteOrcaCallerGuards(vo.orcaRole === 'worker'),
         ];
@@ -4022,7 +4028,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 sdkInPlanMode = false;
                 appendActiveCapabilitySelectionText(
                   capabilitySelectionAddedByPlanEdit(
-                    this.deps.capabilityRouting,
+                    capabilityRouting,
                     'claude-code',
                     plan,
                     decision.editedPlan,

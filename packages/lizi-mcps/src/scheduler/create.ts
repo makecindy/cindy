@@ -146,6 +146,14 @@ export function registerScheduleCreateTool(
         .boolean()
         .optional()
         .describe('静默运行:true → 成功 run 默认不通知、不产生未读红点;任务 prompt 可自行说明哪些条件需要提醒,agent 满足条件时调用 schedule_notify_current_run 主动上报。失败轮仍会通知。确定的检查任务显式设 true；提醒/定时发送设 false。省略时默认 false，避免吞掉旧调用方的提醒。'),
+      preRunPlugin: z
+        .object({
+          pluginId: z.string().min(1).max(512),
+          onFailure: z.enum(['allow', 'skip', 'block']),
+        })
+        .nullable()
+        .optional()
+        .describe('插件前置检查：每次触发先问用户选定的插件要不要运行（插件只能放行、跳过本次或停止，不能替用户批准）。pluginId 用 ghost_list 返回的插件 id；插件必须已启用、声明了「自动化运行前检查」且用户已在安装/更新确认里允许。onFailure = 插件没回应、出错或不可用时：allow 照常运行 / skip 跳过本次 / block 停止并记为失败。可与 preRunHook 并存（先问插件再跑脚本）。'),
       preRunHook: z
         .object({
           command: z

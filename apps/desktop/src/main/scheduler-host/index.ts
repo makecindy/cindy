@@ -18,7 +18,8 @@ import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
 import { Scheduler } from '@cindy/maker-scheduler';
-import type { Logger, ScheduleRunner } from '@cindy/maker-scheduler';
+import type { FireContext, Logger, PreRunPluginConfig, Schedule, ScheduleRunner } from '@cindy/maker-scheduler';
+import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
@@ -65,6 +66,7 @@ import { buildForcedFailureRun } from './forcedFailureRun';
 import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
+import { screenScheduleRun } from '../cindy-brain/scheduleControlPointGate.js';
 import { sendFeishuSessionNotification } from '../im/feishu/notificationOrigin';
 import { withScheduleLock } from './scheduleLock';
 import { wecomGroupNotificationService } from '../wecomGroupNotification';
@@ -79,6 +81,14 @@ export interface StartSchedulerDeps {
   logger: Logger;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** 插件控制节点 will-schedule-run：任务选了插件前置检查时，每次执行前(不含恢复中断的续跑)询问它。 */
+  screenControlPoint?: (
+    point: 'will-schedule-run',
+    data: GhostScheduleRunPointData,
+    target: PreRunPluginConfig,
+  ) => Promise<GhostControlPointResult>;
+  /** 保存插件前置检查时把插件解析为实例 id;插件不可选时抛错。 */
+  resolvePreRunPlugin?: (pluginId: string) => string;
 }
 
 let _scheduler: Scheduler | null = null;
@@ -181,13 +191,26 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     notifier,
     getDb: deps.getDb,
   });
+  // 与检查脚本拦下时同一条失败通知：先认领，避免卡死守卫再投第二条。
+  const notifyPluginStop = async (schedule: Schedule, ctx: FireContext, errorMsg: string) => {
+    if (_scheduler?.isRunAbandoned(ctx.runId)) return;
+    ctx.onRunnerNotified?.('failure');
+    await notifier.notify(schedule, {
+      id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
+    }).catch(() => {});
+  };
   const runner: ScheduleRunner = {
     fire: (schedule, ctx) =>
-      withScheduleLock(schedule.id, ctx.signal, () =>
-        schedule.executionMode === 'script'
+      withScheduleLock(schedule.id, ctx.signal, async () => {
+        // 所有定时任务(Agent / 脚本)的唯一入口：插件前置检查放在检查脚本、建任务之前。
+        const stopped = deps.screenControlPoint
+          ? await screenScheduleRun(deps.screenControlPoint, schedule, ctx, (errorMsg) => notifyPluginStop(schedule, ctx, errorMsg))
+          : null;
+        if (stopped) return stopped;
+        return schedule.executionMode === 'script'
           ? scriptRunner.fire(schedule, ctx)
-          : promptRunner.fire(schedule, ctx),
-      ),
+          : promptRunner.fire(schedule, ctx);
+      }),
   };
 
   // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
@@ -211,6 +234,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // 对话工作区根目录(userData/dialogues)下的路径都是 app 内部分配的会话 cwd。
     // agent 在对话里建任务时常把自己的 cwd 当 workingDir 传入 —— 引擎据此归一成
     // 对话任务,避免任务/会话错误归入项目分组。path.relative 同时兼容两端分隔符。
+    resolvePreRunPlugin: deps.resolvePreRunPlugin,
     isManagedWorkspaceDir: (dir) => {
       return dialogueWorkspaceRoots().some((root) => {
         const rel = path.relative(root, dir);

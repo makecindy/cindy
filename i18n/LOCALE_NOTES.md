@@ -1,4 +1,75 @@
-﻿# 法语、西班牙语复核
+# 十语覆盖补齐（2026-10-31）
+
+初次验证基线：`43c2ee1af34e`；提交时已 rebase 到 `40b0f5278caa`。本次补齐的十语为简中、繁中、英语、日语、韩语、西语、法语、德语、
+葡语（葡萄牙）与葡语（巴西）。本次补齐的是主词库之外的原生／独立界面及附带内容：
+
+- 远程密码输入与生物识别说明、iOS 分享扩展反馈、iOS／macOS 系统权限用途说明。
+  macOS 在签名前写入主应用与 Electron Helper 的本地化资源，不新增权限声明。
+- 独立更新器的标题、阶段、进度、操作与错误提示；原始错误保留在可展开的技术详情中。
+  不改变安装、提权、替换、重试和回滚流程。
+- 插件资源、推荐词条及可选 `uiLocale` 上下文；旧 `locale` 四语协议继续保留。
+- 10 个内置伙伴包的介绍、欢迎语、开场建议、能力、资源摘要、记忆和例行任务名称，
+  以及新邀请时的本地化快照。旧包仍可导入，已导入资料不自动覆盖。
+- 远程例行任务表单复用主词库；本地模型推荐说明通过客户端附带译文补齐。
+  模型翻译仅匹配已校对的英文原文；服务端明确提供的译文优先，原文变化时回退英文，避免套用过期译文。
+
+按用户要求不跨仓修改：官方 Telegram 菜单、SkillHub 内容语言和官方插件仓发布门禁仍需各自仓库跟进。
+第三方插件和动态新增模型的作者内容也不能据此视为已翻译。伙伴内部 Skill／知识正文与身份提示词未改。
+
+原生指纹对比（初次验证基线，本机相同环境）：
+
+| 平台 | 修改前 | 修改后 |
+| --- | --- | --- |
+| iOS | `a3be591353889404aedc5cc2270599e8351018a0` | `cd6594e81bcad130d5d0915c85590fd2475c0e00` |
+| Android | `8bcc0279be029731e235386895b83bfc765ace6a` | `acc83f186c1cac5d1e504127404b46bce515be21` |
+
+两端均需新原生安装包，不能只发 OTA。合并仍须遵守 Mobile 冷更确认与插件基座的维护者批准门槛。
+用户在获知上述冷更影响后，明确要求提交新 PR。rebase 后保留 main 新增的小组件原生配置，
+重新计算当前指纹为 iOS `91e945b87822832b226e40c6a89bd3f612674f09`、Android `aea6302559f7fec88a09cf05fa59f5e368c302e7`；
+上表不是与更新后 main 的指纹对比，最终以 CI 同环境对照与发版检查为准。
+本机 Windows 无 Swift／Apple frameworks，分享扩展的 2 项原生执行测试跳过；未进行 iOS／Android／macOS 真机验收。
+macOS 资源测试实测 UTF-16 文本保留、地区目录和重复打包；编译资源的系统解码器使用替身，未执行 macOS 签名打包。
+
+本次验证记录：
+
+- Desktop 定向 395 项、Mobile 38 项、插件协议 229 项、本地模型目录 19 项通过。
+  另有 2 项既有插件测试跳过。新增 macOS 资源打包测试单文件耗时 0.37 秒。
+- Desktop／Mobile 类型检查、plugin-protocol／model-providers 的 TypeScript 构建检查通过。
+- 主词库 14,737 个 key 十语一致；原有 4,143 条空值／同英文等提示保留，未通过弱化检查消除。
+  术语门禁、原生影子词库术语检查、测试规范门禁和开发文档检查通过。
+- llama.cpp／Ollama 页面五种新增语言 × 两种主题 × 两个页面，共 20 组检查通过并查看截图。
+  更新器十语 × 两种主题 × 320／480 宽度 × 启动／失败状态，共 80 组浏览器检查通过；
+  已查看日语、法语、德语的浅色／深色截图。更新器仍按系统语言选择文案。
+- `pnpm ui:check --changed --theme all` 覆盖 79 页、1,306 组，首轮 1,286 组通过，
+  20 组失败；单独复跑邮件相关 16 组全部通过。剩余 4 组在 `--compare HEAD`
+  的修改前代码上也出现相同失败：分支对话工具栏元素为空、供应商配置按钮等待超时，均涉及两种主题。
+  未修改无关场景或弱化断言。完整结果见本地 `artifacts/ui-check/changed-PXJrXF/summary.json`，
+  基线对照见 `artifacts/locale-baseline-{chat,mail,plugin,provider}/`；未覆盖文件列表为空。
+- `cargo fmt --check` 未通过：未改动的 installation_version.rs、main.rs、pid_wait.rs 等已有格式差异；
+  未对无关 Rust 文件做全量格式化，也未执行真实安装或完整原生发布构建。
+- 提交时 main 已新增繁简文言界面：保留其重试文案，独立更新器其他阶段与伙伴原生资源按现代中文回退；
+  本次新增的例行任务字段同步补入两个文言词库，并补齐 main 新增的远控不支持／排队状态缺失文案。
+  rebase 后词库检查为 12 个目录、14,755 个 key 一致，4,833 条既有提示；术语门禁通过。
+  重跑受影响 Desktop 85 项（含内置 Skill 更新 44 项）与 Mobile 38 项通过，原生执行仍跳过 2 项。
+  rebase 后两端类型检查、文档检查和测试规范门禁通过。
+  插件编写手册更新同步递增内置 Skill bundle 版本，确保已安装副本收到新版说明。
+
+### 已修复上述既有检查问题（2026-10-31，用户要求）
+
+- 分支话题检查改为通过朗读按钮定位实际的气泡下操作栏，保留列宽断言，并检查操作栏在气泡下方、
+  列内和可见视口内；仍实际点击朗读／停止，没有删除交互断言。
+- Z.AI Coding Plan 地址在 Registry interfaceProfiles 中同时属于两个产品的输入地址。
+  UI 检查补充这一明确的歧义预期，继续验证不自动跳转；没有调用被测匹配器生成预期，也未修改供应商识别逻辑。
+- `cargo fmt --manifest-path apps/desktop/cindy-updater/src-tauri/Cargo.toml --check` 已通过。
+  仅格式化 installation_version.rs、installer.rs、pid_wait.rs，并将易触发异常缩进的尾部注释移到独立行。
+- `pnpm ui:check --page chat-fork --case all --theme all` 10/10 通过；
+  provider-template-catalog 的 default、两产品直接向导和各自两个地址、两种主题共 14/14 通过，
+  包含原先失败的 4 组。已查看话题浅色／深色及地址歧义页面截图。
+- `pnpm --filter @cindy/model-providers exec vitest run src/__tests__/providerDetection.test.ts src/__tests__/providerDetectionBinding.test.ts`
+  共 162 项通过；Desktop 类型检查和文档检查通过。话题 UI 检查总耗时 16.1 秒，供应商 UI 检查总耗时 34.9 秒。
+  未重跑全部 1,306 组 UI 检查，也未执行真实更新安装。
+
+## 之前的法语、西班牙语复核（PR #8166）
 
 本分支已对齐 main `f283ccebd3`。main 已通过 #8157 和 #8163 接入并补齐
 `es`、`fr`、`de`、`pt-PT`、`pt-BR`，Desktop 和 Mobile 共支持 10 种界面语言。

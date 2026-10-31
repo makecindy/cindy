@@ -7527,6 +7527,16 @@
         "unknownPublisher": "Unknown publisher",
         "unknownReviewerDetail": "The package claims a review, but this Cindy version does not recognize the reviewer key, so it is not shown as reviewed."
       },
+      "controlPoints": {
+        "title": "Pre-run checks",
+        "description": "This plugin can check automations or routines before they run. It can skip or stop a run, never approve one for you.",
+        "usage": "To use it, choose it under Pre-run check when editing an automation or routine.",
+        "points": {
+          "will-schedule-run": "Before an automation runs",
+          "will-routine-run": "Before a teammate routine runs"
+        },
+        "inactive": "Not available yet. Allow it when you update or reinstall this plugin."
+      },
       "perm": {
         "mail": "Use mail drafts and send cards",
         "mailDetail": "Edit and sync drafts in a card, with confirmation and an undo countdown before sending.",
@@ -7561,6 +7571,9 @@
         "agentDelegationDetail": "Companions may perform the delegated task under Auto review. Does not impersonate the owner or change companion permissions.",
         "agentTargets": "Can send messages to projects, existing tasks and companions",
         "agentTargetsDetail": "Can view local project directories and task and companion names and IDs, create tasks in projects, and send text and images to existing tasks and companions. May trigger AI execution and model charges. This delivery API itself cannot read other tasks’ history, change their settings, or stop them.",
+        "agentObserve": "Can view task lists and status in local projects",
+        "agentObserveDetail": "Can view the titles, agent type, archive state and status (running, needs attention, last activity) of tasks in registered local projects, and open a task in the main window. Cannot read messages, plans or files, send messages, or change tasks.",
+        "agentObserveRequest": "Review task viewing permission",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -7593,6 +7606,10 @@
         "subscribeHooksDetail": "Reviews each message before sending: it may block it or rewrite the text before it goes out; blocked messages can be edited and resent.",
         "subscribeAssistantReply": "Can read and rewrite the AI's replies",
         "subscribeAssistantReplyDetail": "Processes each AI reply after it completes: it may polish or rewrite the text (replacing it directly, without keeping the original), or replace the reply bubble with its own rendered card (in that case the original text is kept and can be viewed with one tap).",
+        "subscribeScheduleRun": "Can check chosen automations before they run",
+        "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
+        "subscribeRoutineRun": "Can check chosen teammate routines before they run",
+        "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
         "card": "Renders message cards",
         "cardExternalLink": "Cards may declare external links that open your browser after confirmation",
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
@@ -7783,6 +7800,22 @@
         "reveal": "Show in Task List",
         "revealed": "Task shown in the task list",
         "revealFailed": "Could not show the task in the task list"
+      },
+      "handoff": {
+        "title": "Files handed to this plugin in chats",
+        "description": "Copies of files you handed to this plugin in chats. Each copy is deleted automatically after 7 days without use.",
+        "empty": "No files have been handed to this plugin in chats yet.",
+        "loadFailed": "Couldn't load the file list. Try again later.",
+        "refresh": "Refresh",
+        "openInFinder": "Open in Finder",
+        "openInExplorer": "Open in File Explorer",
+        "meta": "{{size}} · Handed over {{handedAt}} · Deleted automatically {{expiresAt}}",
+        "delete": "Delete",
+        "deleteNamed": "Delete {{name}}",
+        "deleteTitle": "Delete this file?",
+        "deleteDescription": "After deletion, the plugin and any open pages can no longer use “{{name}}”. This can't be undone.",
+        "deleteFailed": "Couldn't delete the file. Try again later.",
+        "cancel": "Cancel"
       },
       "library": {
         "title": "Durable library",
@@ -15269,6 +15302,25 @@
         },
         "browse": "Choose a script file (or drag one onto the input)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Check with",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Before each run, Cindy asks the plugin you choose. It can let the run go ahead, skip this run, or stop it. It can never approve anything that needs your confirmation.",
+        "choose": "Choose a plugin",
+        "unavailable": "Unavailable plugin",
+        "unavailableHint": "This plugin is no longer available. Until you choose another one, runs follow “If the plugin fails”.",
+        "hint": "The plugin can let the run go ahead, skip this run, or stop it. It can never approve anything for you.",
+        "empty": "No plugin can check runs yet. Install a plugin that supports pre-run checks and allow it when you install or update it.",
+        "onFailureLabel": "If the plugin fails",
+        "onFailure": {
+          "allow": "Run as usual",
+          "skip": "Skip this run",
+          "block": "Stop and mark as failed"
+        }
+      },
       "validation": {
         "nameRequired": "Name is required",
         "promptRequired": "Prompt is required",
@@ -15281,6 +15333,7 @@
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
+        "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
       }
@@ -15767,6 +15820,7 @@
       "titleRevealPath": "Allow the Agent to receive this media file's local path?",
       "count": "{{count}} files",
       "descriptionAttachments": "The files below are outside this session's working directory. If you allow, they will be handed to this plugin (it only receives content fingerprints, never paths).",
+      "descriptionHandoff": "The files below are outside this session's working directory. If you allow, the plugin receives copies of them (never their paths); the copies are deleted automatically after 7 days without use.",
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
@@ -17591,6 +17645,7 @@
     "sessionModeFresh": "New session each trigger (isolate context)",
     "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
     "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+    "checkSource": "Check with",
     "checkCommand": "Pre-run check command",
     "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
     "timeoutMs": "Check timeout (ms, blank for no limit)",
@@ -17656,6 +17711,14 @@
         "skillDisabled": "Disabled skill “{{title}}”",
         "skillMerged": "Merged skill “{{title}}” into “{{into}}” and disabled it"
       }
+    },
+    "remote": {
+      "pause": "Pause Routine",
+      "resume": "Resume Routine",
+      "addSchedule": "Add Schedule",
+      "addInterval": "Add Interval",
+      "addEvent": "Add Event Trigger",
+      "filterField": "Filter Field"
     }
   },
   "cindyMakeDoctor": {

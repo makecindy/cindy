@@ -42,7 +42,7 @@ vi.mock('../GhostPagePanelHost', () => ({
   ),
 }));
 
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => auth, useOptionalDataOwnerGeneration: () => 0 }));
 vi.mock('@/cindy-brain/installFlow', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/cindy-brain/installFlow')>()),
   pickAndUpdateGhost,

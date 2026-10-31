@@ -31,7 +31,7 @@
 - 用户磁盘上的原始文件如果只需就地读取，可以继续走已有受控本地文件通道；不要仅为
   预览就复制一份。远程设备或 SSH 文件必须保留真实来源，不能把远程绝对路径当成本机路径。
 - docx、PDF、zip 等非媒体文件不进入媒体字节仓，继续使用已有 `xdt-file` 等受控文件
-  通道。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
+  通道。交给插件的非媒体文件同样不入仓，由插件交接副本（`ghost-handoff`，7 天未使用即删除）承接。`xdt-audio` 只保留播放用户本地散文件的直读职责，不作为新的托管媒体写入口。
 - 飞书、Discord、Telegram、企业微信四个个人 IM 渠道的入站附件，去处只由 `@cindy/im` 的
   `classifyInboundAttachment` 判定（MIME 或扩展名任一命中即可）：
   - 图片与音视频经 `IMHost.media` 进总仓（`cacheImage` 一律带 `staging: true`，另有
@@ -145,16 +145,26 @@
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
 - 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
-  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
-  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
-  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
-  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
-  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
-  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
-  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
-  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
-  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
-  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
+  按「版本号 + 内容」寻址发布：对象名为 `mcp-apps/manual/<版本号>/<sha256>.md`，客户端用 `app.getVersion()`
+  与内置手册的 sha256 拼 `{cdnBaseUrl}/mcp-apps/manual/<版本号>/<sha256>.md` 交给业务后端。版本号便于排查
+  对应哪个客户端；sha256 保证同一版本号打出不同手册（重新出包、各区域从不同提交出包）时不会悄悄对错文件。
+  路径约定只在 `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台
+  打包出同一份字节、同一个 sha256。仓库 `apps/desktop/package.json` 的版本是占位的 0.0.0，打包时才临时写入真实
+  版本，所以脚本三种模式都从 `package-desktop.mjs` 产出的 `build-info.json`（`--build-info=<路径>`，必填）读取版本号、
+  区域与发版提交：版本无关包（version 为 null）、0.0.0 及带路径字符的版本号直接报错，开发版（0.0.0）没有发布的手册；
+  `commitSha` 必须等于当前检出的 HEAD 且手册没有未提交改动，否则报错，由此自动保证在这个包的发版提交上执行。
+  打包侧（`package-desktop.mjs`）在有版本打包时拒绝带未提交改动的手册，并把安装包里实际打进去的手册写入
+  `build-info.json` 的 `mcpAppsManual: { sha256, size }`（版本无关包或没有内置手册时为 `null`）；发布脚本要求
+  检出里手册的 sha256 与 size 与它一致，缺这个字段（旧打包脚本产出）也拒绝，需重新打包。
+  对应客户端上线前，对每个区域的 `build-info.json`（`apps/desktop/release/artifacts/<region>/<version>/<platform-arch>/`）
+  各执行一次 `node --env-file=<发布配置> scripts/publish-page-manual.mjs --build-info=<路径>`（发版提交里没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：global 与 cn 两份
+  `build-info.json` 的 `node scripts/publish-page-manual.mjs --build-info=<路径> --check-cdn` 都通过，即本版本的手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时
+  不再上传，上传仍带 `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。客户端开始在 `cindy.fetch` 中自动
+  带手册地址（`Cindy-MCP-Apps-Manual` / `-Sha256` 请求头，`apps/desktop/src/main/cindy-brain/mcpAppsManualHeaders.ts`）
+  后，**每个发版版本、每个区域都必须发布手册**，否则该版本带出去的地址会 404；因此带地址的客户端上线前，必须先把
+  这一步接进发版流程。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按

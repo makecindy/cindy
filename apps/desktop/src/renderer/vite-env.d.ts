@@ -1391,7 +1391,9 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string) => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe') => Promise<{ granted: boolean }>;
+    getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
+    listControlPointCandidates: (point: 'will-schedule-run' | 'will-routine-run') => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     /** 详情页「后台任务」:本插件转入后台(hidden)且未删除的任务。 */
     listBackgroundTasks: (id: string) => Promise<{
       items: Array<{ taskId: string; title: string; status: 'active' | 'archived'; updatedAt: number; running: boolean }>;
@@ -1644,6 +1646,9 @@ interface ElectronAPI {
     usageHistorySummary: (subjectId: string) => Promise<import('../shared/pluginUsage').PluginUsageSummary | null>;
     clearUsage: (subjectId: string | null) => Promise<void>;
     libraryOverview: (id: string) => Promise<import('../shared/ghost').GhostLibraryOverview>;
+    handoffList: (id: string) => Promise<import('../shared/ghost').GhostHandoffFile[]>;
+    handoffFolder: (id: string) => Promise<string | null>;
+    handoffDelete: (id: string, ref: string) => Promise<{ existed: boolean }>;
     libraryPickLocation: (id: string) => Promise<{
       ok: boolean;
       cancelled?: boolean;
@@ -3103,7 +3108,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' },
     ) => void,
   ) => () => void;
 
@@ -3127,7 +3132,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control'; connect?: string; intent?: 'topup' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' }
     | null
   >;
 

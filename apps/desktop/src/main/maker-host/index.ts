@@ -200,6 +200,7 @@ import {
   mergeClaudeHooks,
 } from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
+import { createDesktopInputShellGuardHooks } from './claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
@@ -1498,6 +1499,9 @@ export function getMaker(): Maker {
       //   (slack-empty-cursor-hook 已随 slack-official MCP 集成退役 2026-07-15:
       //    它只认老集成的 mcp__slack__* 工具名;空 cursor 清洗移入 cindy-slack
       //    意识的 slack_call_tool。)
+      //   - desktop-input-shell-guard-hook: Bash 里模拟桌面键鼠(osascript keystroke /
+      //     cliclick / CGEvent / cua-driver CLI)在 Computer Use 开启时一律拒绝,理由指向
+      //     cindy_computer;完全访问档同样生效(与能力路由守卫同一机制)。
       claudeHooks: mergeClaudeHooks(
         {
           PreToolUse: [
@@ -1508,6 +1512,10 @@ export function getMaker(): Maker {
           ],
         },
         createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+        createDesktopInputShellGuardHooks(
+          () => getPluginRegistry().isEnabled('computer'),
+          desktopMakerLogger,
+        ),
       ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),

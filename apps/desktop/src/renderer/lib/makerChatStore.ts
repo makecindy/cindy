@@ -982,10 +982,11 @@ export interface PendingGhostGrantConfirm {
    * 逐条确认档时逐次弹,同目录本会话批一次);workspace = 意识申请以该目录
    * 为工作区在侧边栏创建/复用会话入口(不过户字节);
    * forge_source = Forge 打包/骨架/安装的源码目录在工作目录外;
+   * handoff = 非媒体文件交给插件一份 7 天后自动删除的副本;
    * outside_workdir = 文档/电脑等内置工具读写工作目录外的路径。
    */
   lane:
-    | 'attachments' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
+    | 'attachments' | 'handoff' | 'dir' | 'save_dir' | 'reveal_path' | 'fs_write' | 'workspace' | 'forge_source' | 'outside_workdir';
   sourceTool?: string;
   operation?: 'read' | 'write';
   items: Array<{
@@ -17592,6 +17593,7 @@ function parseGhostGrantConfirmRequest(request: {
   const lane = request.lane;
   if (
     lane !== 'attachments' &&
+    lane !== 'handoff' &&
     lane !== 'dir' &&
     lane !== 'save_dir' &&
     lane !== 'reveal_path' &&

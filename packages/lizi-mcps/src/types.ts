@@ -835,6 +835,11 @@ export interface ComputerMcpDeps {
    * screen point of this app, or its focused element. Roles only, never values.
    */
   isSecureTarget?(target: { pid: number; point?: { x: number; y: number } }): Promise<boolean>;
+  /**
+   * Host-side desktop facts the driver cannot report: whether the screen is
+   * locked. Used to name the reason when an observation produces nothing.
+   */
+  describeDesktop?(): Promise<{ screen_locked?: boolean }>;
   logger?: LiziMcpLogger;
 }
 

@@ -7594,6 +7594,16 @@
         "unknownPublisher": "Editor desconocido",
         "unknownReviewerDetail": "El paquete declara tener una revisión, pero esta versión de Cindy no reconoce la clave del revisor, por lo que no se muestra como revisado."
       },
+      "controlPoints": {
+        "title": "Comprobaciones previas",
+        "description": "Este complemento puede comprobar automatizaciones o rutinas antes de que se ejecuten. Puede omitir o detener una ejecución, nunca aprobarla por ti.",
+        "usage": "Para usarlo, elígelo en Comprobación previa a la ejecución al editar una automatización o rutina.",
+        "points": {
+          "will-schedule-run": "Antes de ejecutar una automatización",
+          "will-routine-run": "Antes de ejecutar una rutina de un compañero"
+        },
+        "inactive": "Aún no disponible. Permítelo al actualizar o reinstalar este complemento."
+      },
       "perm": {
         "mail": "Utilice borradores de correo y envíe tarjetas.",
         "mailDetail": "Edite y sincronice borradores en una tarjeta, con confirmación y una cuenta atrás para deshacer antes de enviarlos.",
@@ -7628,6 +7638,9 @@
         "agentDelegationDetail": "Los compañeros pueden realizar la tarea delegada con revisión automática. No suplanta al propietario ni cambia los permisos de los compañeros.",
         "agentTargets": "Puede enviar mensajes a proyectos, tareas existentes y compañeros",
         "agentTargetsDetail": "Puede ver directorios de proyectos locales y nombres e ID de tareas y compañeros, crear tareas en proyectos y enviar texto e imágenes a tareas existentes y compañeros. Puede iniciar ejecuciones de IA y generar cargos por uso del modelo. Esta API de entrega por sí sola no puede leer el historial de otras tareas, cambiar su configuración ni detenerlas.",
+        "agentObserve": "Puede ver la lista y el estado de las sesiones de proyectos locales",
+        "agentObserveDetail": "Puede ver el título, el tipo de agente, si está archivada y el estado (en ejecución, requiere atención, última actividad) de las sesiones de los proyectos locales registrados, y abrir una sesión en la ventana principal. No puede leer mensajes, planes ni archivos, ni enviar mensajes o modificar sesiones.",
+        "agentObserveRequest": "Revisar el permiso para ver sesiones",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlos, abrirlos o mostrarlos en la lista de tareas desde Tareas en segundo plano en la página de este complemento; desinstalar el complemento los muestra nuevamente.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",
@@ -7660,6 +7673,10 @@
         "subscribeHooksDetail": "Revisa cada mensaje antes de enviarlo: puede bloquearlo o reescribir el texto antes de que se envíe; Los mensajes bloqueados se pueden editar y reenviar.",
         "subscribeAssistantReply": "Puede leer y reescribir las respuestas de la IA.",
         "subscribeAssistantReplyDetail": "Procesa cada respuesta de IA una vez completada: puede pulir o reescribir el texto (reemplazándolo directamente, sin conservar el original), o reemplazar la burbuja de respuesta con su propia tarjeta renderizada (en ese caso, el texto original se conserva y se puede ver con un toque).",
+        "subscribeScheduleRun": "Puede comprobar automatizaciones elegidas antes de ejecutarse",
+        "subscribeScheduleRunDetail": "Las automatizaciones en las que lo elijas en Comprobación previa a la ejecución le consultan primero. Ve su nombre e instrucciones y puede omitir o detener esa ejecución, pero no aprobar nada por ti.",
+        "subscribeRoutineRun": "Puede comprobar rutinas de compañeros elegidas antes de ejecutarse",
+        "subscribeRoutineRunDetail": "Las rutinas en las que lo elijas en Comprobación previa a la ejecución le consultan primero. Ve sus instrucciones y los eventos que las activaron, y puede omitir o detener esa ejecución, pero no aprobar nada por ti.",
         "card": "Representa tarjetas de mensajes",
         "cardExternalLink": "Las tarjetas pueden declarar enlaces externos que abren su navegador después de la confirmación.",
         "cardExternalLinkDetail": "Al hacer clic en el enlace de una tarjeta se muestra un cuadro de diálogo de confirmación; El URL se abre en el navegador de su sistema solo después de su aprobación. Sólo se permiten direcciones http/https.",
@@ -7850,6 +7867,22 @@
         "reveal": "Mostrar en la lista de tareas",
         "revealed": "Tarea mostrada en la lista de tareas",
         "revealFailed": "No se pudo mostrar la tarea en la lista de tareas"
+      },
+      "handoff": {
+        "title": "Archivos entregados a este complemento en conversaciones",
+        "description": "Copias de los archivos que entregaste a este complemento en conversaciones. Cada copia se elimina automáticamente tras 7 días sin usarse.",
+        "empty": "Aún no se ha entregado ningún archivo a este complemento en una conversación.",
+        "loadFailed": "No se pudo cargar la lista de archivos. Inténtalo más tarde.",
+        "refresh": "Actualizar",
+        "openInFinder": "Abrir en Finder",
+        "openInExplorer": "Abrir en el Explorador de archivos",
+        "meta": "{{size}} · Entregado el {{handedAt}} · Se elimina automáticamente el {{expiresAt}}",
+        "delete": "Eliminar",
+        "deleteNamed": "Eliminar {{name}}",
+        "deleteTitle": "¿Eliminar este archivo?",
+        "deleteDescription": "Tras eliminarlo, el complemento y las páginas abiertas ya no podrán usar «{{name}}». No se puede deshacer.",
+        "deleteFailed": "No se pudo eliminar el archivo. Inténtalo más tarde.",
+        "cancel": "Cancelar"
       },
       "library": {
         "title": "Biblioteca persistente",
@@ -15446,6 +15479,25 @@
         },
         "browse": "Elige un archivo de script (o arrastra uno al campo)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Comprobar con",
+        "source": {
+          "script": "Script",
+          "plugin": "Complemento"
+        },
+        "tooltip": "Antes de cada ejecución, Cindy consulta al complemento que elijas. Puede dejar que siga, omitir esta ejecución o detenerla. Nunca puede aprobar nada que necesite tu confirmación.",
+        "choose": "Elige un complemento",
+        "unavailable": "Complemento no disponible",
+        "unavailableHint": "Este complemento ya no está disponible. Hasta que elijas otro, se aplica «Si el complemento falla».",
+        "hint": "El complemento puede dejar que siga, omitir esta ejecución o detenerla. Nunca puede aprobar nada por ti.",
+        "empty": "Aún no hay complementos que puedan comprobar ejecuciones. Instala uno compatible con comprobaciones previas y permítelo al instalarlo o actualizarlo.",
+        "onFailureLabel": "Si el complemento falla",
+        "onFailure": {
+          "allow": "Ejecutar como siempre",
+          "skip": "Omitir esta ejecución",
+          "block": "Detener y marcar como fallida"
+        }
+      },
       "validation": {
         "nameRequired": "El nombre es obligatorio",
         "promptRequired": "El prompt es obligatorio",
@@ -15458,6 +15510,7 @@
         "modelUnavailable": "El modelo {{model}} ya no está disponible. Selecciona otro modelo.",
         "reasoningInvalid": "La intensidad de razonamiento debe ser uno de estos valores: {{values}}",
         "preRunHookCommandRequired": "Ingresa el comando de comprobación previa",
+        "preRunPluginRequired": "Elige un complemento para la comprobación previa",
         "templateParamRequired": "Ingresa {{label}}",
         "templateApplyFailed": "No se pudo aplicar la plantilla. Revisa los parámetros y vuelve a intentarlo."
       }
@@ -15945,6 +15998,7 @@
       "titleRevealPath": "¿Permitir que el Agent reciba la ruta local de este archivo multimedia?",
       "count": "{{count}} archivos",
       "descriptionAttachments": "Los siguientes archivos están fuera del directorio de trabajo de esta sesión. Si lo permites, se entregarán a este complemento (solo recibe huellas digitales del contenido, nunca rutas).",
+      "descriptionHandoff": "Los archivos siguientes están fuera del directorio de trabajo de esta sesión. Si lo permites, el complemento recibirá copias de ellos (nunca sus rutas); las copias se eliminan automáticamente tras 7 días sin usarse.",
       "descriptionDir": "El siguiente directorio o archivo está fuera del directorio de trabajo de esta sesión. Si lo permites, sus archivos se entregarán a este complemento para subirlos (solo recibe un ticket de un solo uso, nunca rutas).",
       "descriptionSaveDir": "El siguiente directorio está fuera del directorio de trabajo de esta sesión. Si lo permites, este complemento podrá guardar en él los archivos descargados (nunca se sobrescriben los archivos existentes).",
       "descriptionRevealPath": "La ruta se devuelve al Agent actual solo después de que lo permitas y se incluirá en el historial de la conversación; los dispositivos vinculados podrían sincronizar ese historial. Esto no otorga a ningún complemento acceso al archivo.",
@@ -17786,6 +17840,7 @@
     "sessionModeFresh": "Nueva sesión con cada activador (aislar contexto)",
     "sessionModeHint": "La sesión persistente mantiene una sola conversación de la rutina. La nueva sesión crea y cierra una conversación aislada con cada activador.",
     "quietHint": "Informa solo sobre cambios o problemas. Desactiva esta opción para recordatorios y mensajes programados.",
+    "checkSource": "Comprobar con",
     "checkCommand": "Comando de comprobación previa a la ejecución",
     "checkHint": "Opcional. Realiza comprobaciones en la computadora antes de cada ejecución: el código de salida 2 omite la ejecución, el código 0 continúa y los errores permanecen visibles. Déjalo vacío para quitarlo.",
     "timeoutMs": "Tiempo límite de comprobación (ms, vacío para no limitar)",
@@ -17854,6 +17909,14 @@
       "pendingTurns_many": "{{count}} intercambios",
       "lastLearned_many": "{{count}} cambios",
       "readTurns_many": "Se leyeron {{count}} intercambios"
+    },
+    "remote": {
+      "pause": "Pausar rutina",
+      "resume": "Reanudar rutina",
+      "addSchedule": "Añadir horario",
+      "addInterval": "Añadir intervalo",
+      "addEvent": "Añadir desencadenante de evento",
+      "filterField": "Campo de filtro"
     }
   },
   "cindyMakeDoctor": {

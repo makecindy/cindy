@@ -16,7 +16,22 @@
     "bcc": "密件副本",
     "subject": "主旨",
     "choosePlugin": "選擇用哪個插件開啟這封郵件。",
-    "personalPlugin": "個人插件"
+    "personalPlugin": "個人插件",
+    "reply": "回覆",
+    "replyAll": "全部回覆",
+    "forward": "轉寄",
+    "quote": {
+      "reply": "回覆這封郵件",
+      "replyAll": "回覆全部收件人",
+      "forward": "轉寄這封郵件"
+    },
+    "messageCount_one": "共 {{count}} 封郵件",
+    "messageCount_other": "共 {{count}} 封郵件",
+    "showMessages_one": "展開 {{count}} 封郵件",
+    "showMessages_other": "展開 {{count}} 封郵件",
+    "conversationFailed": "暫時無法讀取前後郵件。",
+    "expandMessage": "展開來自 {{from}} 的郵件",
+    "collapseMessage": "收起來自 {{from}} 的郵件"
   },
   "title": "插件",
   "all": "全部",
@@ -148,8 +163,6 @@
   "demo": {
     "hint": "示範資料 · 不會修改真實設定"
   },
-  "mailPreview": "郵件預覽",
-  "mailEnlarge": "放大檢視",
   "mailInsertImage": "插入內文",
   "mailAttach": "新增附件",
   "mailUpdated": "草稿已更新（唯讀）",

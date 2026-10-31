@@ -213,8 +213,9 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt).toContain('…[truncated]…');
     expect(prompt).toContain('/root-10-');
     expect(prompt).not.toContain('/root-11-');
-    // Fixed instructions are ~10k; unbounded intent/roots would add 20k+.
-    expect(prompt.length).toBeLessThan(13_000);
+    // Fixed instructions are ~10k (plus the shared continuation policy); unbounded
+    // intent/roots would add 20k+, so the bound only has to sit well below that.
+    expect(prompt.length).toBeLessThan(13_500);
   });
 
   it('rejects oversized actions instead of hiding their middle from the reviewer', () => {

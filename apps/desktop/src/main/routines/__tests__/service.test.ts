@@ -270,6 +270,52 @@ it('turns a legacy built-in todo check into an editable routine, keeping its cho
   expect((await routineTools.list('bot'))[0]).toMatchObject({ name: '每天查待办', prompt: 'Edited after upgrade' });
 });
 
+// Rule (control points, 2026-10-31): only a routine that chose a plugin asks it, with the routine's
+// failure setting, and a skip/stop happens before the lane task is created or the model is called.
+// Existing cases cover only shell pre-run hooks.
+it('asks the routine\'s chosen plugin before any lane or model dispatch', async () => {
+  const screenControlPoint = vi.fn()
+    .mockResolvedValueOnce({ action: 'skip', ghostId: 'jev', ghostName: 'Jev', reason: 'nothing new', failure: false })
+    .mockResolvedValueOnce({ action: 'block', ghostId: 'jev', ghostName: 'Jev', reason: 'off hours', failure: false });
+  let laterInstalled = false;
+  const resolvePreRunPlugin = vi.fn((_point: string, id: string) => {
+    if (id === 'later' && !laterInstalled) throw new Error('The pre-run check plugin is not installed');
+    return id.endsWith('@instance') ? id : `${id}@instance`;
+  });
+  configureRoutineHost({
+    getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession, getScheduler: () => mock.scheduler,
+    getScheduleStorage: () => mock.storage, screenControlPoint, resolvePreRunPlugin,
+  });
+  const plain = await routineTools.save('bot', { name: 'Plain', prompt: 'Check', enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] });
+  // Saved paused before the plugin is installed, then enabled after: the id becomes the instance id.
+  const paused = await routineTools.save('bot', { name: 'Paused', prompt: 'Check', enabled: false,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }], preRunPlugin: { pluginId: 'later', onFailure: 'skip' } });
+  expect(paused.preRunPlugin?.pluginId).toBe('later');
+  laterInstalled = true;
+  const enabled = await routineTools.save('bot', { name: 'Paused', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }], preRunPlugin: paused.preRunPlugin }, paused.id);
+  expect(enabled.preRunPlugin?.pluginId).toBe('later@instance');
+  await routineTools.remove('bot', paused.id);
+  const routine = await routineTools.save('bot', { name: 'Review', prompt: 'Check', enabled: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+    preRunPlugin: { pluginId: 'jev', onFailure: 'skip' } });
+  expect(routine.preRunPlugin).toEqual({ pluginId: 'jev@instance', onFailure: 'skip' });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('skipped'));
+  expect(screenControlPoint).toHaveBeenCalledWith('will-routine-run', expect.objectContaining({
+    routineId: routine.id, botId: 'bot', name: 'Review', prompt: 'Check', builtin: null, events: [],
+  }), { pluginId: 'jev@instance', onFailure: 'skip' });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    status: 'failed', error: expect.stringContaining('off hours'),
+  }));
+  expect(mock.ensureRoutineSession).not.toHaveBeenCalled();
+  expect(mock.scheduler.runNow).not.toHaveBeenCalled();
+  expect(screenControlPoint).toHaveBeenCalledTimes(2);
+  expect(plain.preRunPlugin).toBeUndefined();
+});
+
 it('skips a demoted teammate\'s routine while its home is another computer, keeping the rule', async () => {
   companionHomes.update({ enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['bot'],
     actors: [{ id: 'actor', externalId: 'bot', name: 'Bot', avatar: null, homeDeviceId: 'laptop' }] });
