@@ -169,6 +169,23 @@ iOS 的系统选图器在确认后立即把选中项交给现有附件队列。�
 独立交付；旧原生包缺模块时继续使用 Expo 选图入口。首次发布应随下一次 iOS 原生包交付，
 指纹与存量装机影响仍须按下文冷更门确认。Android 保持系统选图器和既有附件队列。
 
+### 相册照片与视频附件
+
+新建任务、已有任务及群聊的「+」面板使用单个「照片与视频」入口，支持同批混选。
+iOS 的 `CindyPhotoPicker.pickMedia` 在选择后立即把图片占位与视频文件交给现有附件队列；
+原图／视频字节在 resolve 阶段读取，沿用 iCloud 下载、取消、重试和发件箱交接。
+视频按文件上传，不经过图片转换或压缩；Live Photo 维持静态图片路径。仅使用选择器的访问授权，
+不为混选扩大相册权限；最近照片条的既有授权流程保持不变。数量与传输体积规则沿用普通附件。
+
+旧原生包缺 `pickMedia`（包括只有 `pick` 的包）时，回退 Expo 混合选择器，避免统一入口只能选照片。
+此回退在选择器内等原件就绪；新原生包保留延迟读取体验。原有 `pick` 方法继续提供照片选择合同，
+拍照仍仅拍照片，「文件」继续接收视频，不新增录像或专用视频编辑器。
+扩展原生模块会改变 iOS fingerprint，需随原生包发布，不能作为旧安装包的独立 OTA 交付；
+合并前遵守冷更确认门。Android 使用现有 Expo 系统混合选择器，无原生改动。
+
+实现：`modules/cindy-photo-picker/`、`deferredPhotoLibrary.ts`、`useMobileLocalAttachments.ts`；
+回归：`deferredPhotoLibrary.test.ts`、`useMobileLocalAttachmentsAbandon.test.tsx`。
+
 ### 已发送图片的离线读取
 
 相册、粘贴及后台发件箱共用 `uploadMobileAttachmentFromFile`：上传成功后、删除上传快照前，

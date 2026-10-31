@@ -6,7 +6,7 @@
  * 文字、同一批点名目标、同一个「分工」标签、同一批附件重发沿用同一个 clientId。一轮进行中输入框为空且没有
  * 附件时，发送按钮变成停止；否则照常发送（插话本身就会作废当前一轮）。
  *
- * 附件与一对一聊天同一套（照片、拍照、文件、iOS 最近照片、粘贴图片，见
+ * 附件与一对一聊天同一套（照片与视频、拍照、文件、iOS 最近照片、粘贴图片，见
  * useBotGroupComposerAttachments）：电脑声明 `supportsAttachments` 且在线时，「+」打开与任务
  * 输入框相同的面板；旧电脑会丢掉附件，「+」保持原来的小菜单。附件托盘在输入框聚焦时显示在
  * 卡片里，收起时是一枚小徽标（与会话页一致）。附件只在发出成功后离开托盘。
@@ -425,7 +425,7 @@ export function BotGroupComposer({
       {attachmentsEnabled ? <ContextSheetGroup label={Platform.OS === 'ios' && mediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
         <ContextSheetRow dismissBeforePress
           icon={<ImageIcon color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-          label={t('session.common.photo')} onPress={() => void tray.addImages('library')} testID="botGroup.contextSheetPhotoRow" />
+          label={t('session.common.photosAndVideos')} onPress={() => void tray.addImages('library')} testID="botGroup.contextSheetPhotoRow" />
         <ContextSheetRow dismissBeforePress
           icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('session.common.takePhoto')} onPress={() => void tray.addImages('camera')} testID="botGroup.contextSheetCameraRow" />

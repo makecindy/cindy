@@ -5734,7 +5734,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <ContextSheetRow
                 disabled={creating}
                 icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.photo')}
+                label={t('session.common.photosAndVideos')}
                 onPress={() => void addLocalImageAttachments('library')}
                 dismissBeforePress
                   testID="newSession.contextSheetPhotoRow"

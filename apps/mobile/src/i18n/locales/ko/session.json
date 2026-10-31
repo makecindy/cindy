@@ -61,6 +61,7 @@
     "context": "컨텍스트",
     "screenshot": "스크린샷",
     "photo": "사진",
+    "photosAndVideos": "사진 및 동영상",
     "takePhoto": "사진 촬영",
     "file": "파일",
     "joinConversation": "대화에 추가 ({{num}}장)",

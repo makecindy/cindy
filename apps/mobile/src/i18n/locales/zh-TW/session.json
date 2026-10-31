@@ -61,6 +61,7 @@
     "context": "上下文",
     "screenshot": "截圖",
     "photo": "照片",
+    "photosAndVideos": "照片與影片",
     "takePhoto": "拍照",
     "file": "檔案",
     "joinConversation": "加入對話（{{num}} 張）",
