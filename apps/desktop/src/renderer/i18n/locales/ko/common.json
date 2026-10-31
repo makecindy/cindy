@@ -4101,6 +4101,7 @@
         "authorizeFailed": "{{name}}에 로그인하지 못했습니다. 다시 시도하세요.",
         "nameLabel": "표시 이름",
         "onlyAgentNote": "이 제공자는 {{agent}}만 지원합니다",
+        "unconfirmedAgents": "연결 정보 확인 필요: {{agents}}",
         "endpointLabel": "{{agent}} 기본 URL",
         "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
         "signIn": "로그인",

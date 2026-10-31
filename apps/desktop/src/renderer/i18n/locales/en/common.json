@@ -4144,6 +4144,7 @@
         "authorizeFailed": "Could not sign in to {{name}}. Try again.",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
+        "unconfirmedAgents": "Connection details not yet confirmed: {{agents}}",
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "signIn": "Sign in",

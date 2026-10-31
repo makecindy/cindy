@@ -4101,6 +4101,7 @@
         "authorizeFailed": "{{name}} 登入失敗，請重試",
         "nameLabel": "顯示名稱",
         "onlyAgentNote": "此供應商僅支援 {{agent}}",
+        "unconfirmedAgents": "接入資料待確認：{{agents}}",
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需客戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",
         "signIn": "登入",

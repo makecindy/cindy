@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type CustomProviderConfig, type ProviderView } from '@cindy/model-providers';
 
 const testI18n = vi.hoisted(() => ({ language: 'zh-CN' }));
 vi.mock('react-i18next', () => ({
@@ -1227,6 +1227,164 @@ it('preserves each runtime preset media type when discovery is unavailable', asy
   const config = vi.mocked(createCustomProvider).mock.calls[0][0];
   expect(config.runtimes['claude-code']?.models[0]).toMatchObject(image);
   expect(config.runtimes.codex?.models[0]).toMatchObject(video);
+});
+
+it('keeps supplemental DeepSeek candidates in every declared engine before discovery and after saving', async () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  for (const runtime of Object.values(preset.runtimes)) {
+    runtime!.models = runtime!.models.filter(model => ['deepseek-flash', 'deepseek-v4-pro'].includes(model.id));
+  }
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({
+    presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry,
+  }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: false }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  const supplemental = await screen.findByText('DeepSeek V4 Flash Vision Exp');
+  fireEvent.click(supplemental);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]?.models.some(model => model.id === 'deepseek-v4-flash-vision-exp')).toBe(true);
+    expect(provider.models[agent]?.some(model => model.id === 'deepseek-v4-flash-vision-exp')).toBe(true);
+  }
+});
+
+it('keeps an explicit tenant path through online discovery, saving and runtime projection', async () => {
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({
+    presets: [liteLlmPreset], modelRegistry: BUNDLED_CATALOG.modelRegistry,
+  }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
+    models: [{ id: 'tenant-only-model', name: 'Tenant-only model' }] }));
+  renderWizard('litellm');
+  await screen.findByDisplayValue('LiteLLM Proxy');
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  fireEvent.click(await screen.findByText('Tenant-only model'));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const provider = buildUserProvider(saved, { presets: [liteLlmPreset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
+  expect(provider.routing.codex).toMatchObject({ upstream: 'http://127.0.0.1:4000/v1', requestPath: '/tenant/acme/infer' });
+  expect(provider.models.codex?.find(model => model.id === 'tenant-only-model')).toMatchObject({ id: 'tenant-only-model' });
+  expect(provider.models.codex?.find(model => model.id === 'tenant-only-model')?.route).toBeUndefined();
+  expect(saved.runtimes.codex?.models[0].interfaceId).toBeUndefined();
+});
+
+it.each([[false, false], [true, false], [true, true]])('preserves discovery route priority, offline=%s mainHit=%s', async (offline, mainHit) => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: offline ? 'deepseek-v4-flash-vision-exp' : 'discovery-tenant-chat-only', name: 'Discovery tenant Chat-only' };
+  preset.runtimes['claude-code']!.models = [];
+  delete preset.runtimes.codex;
+  delete preset.runtimes.pi;
+  const source = { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' as const,
+    modelsUrl: 'https://api.deepseek.com/tenant/acme/models', requestPath: '/tenant/acme/infer' };
+  preset.runtimes['claude-code']!.modelDiscovery = [source];
+  registry.models.push({ id: 'review/discovery-chat-only', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { modelsUrl?: string | null }) => ({ ok: true,
+    models: input.modelsUrl === source.modelsUrl || mainHit ? [model] : [] }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(await screen.findByText(model.name));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  const route = { baseUrl: source.baseUrl, wireProtocol: source.wireProtocol, ...(!mainHit ? { requestPath: source.requestPath } : {}) };
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)).toMatchObject({ route });
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBe(mainHit ? 'deepseek-openai-completions' : undefined);
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({ id: model.id, route });
+});
+
+it.each([false, true])('follows an exact preferred interface through discovery and saving, additional=%s', async additional => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: 'discovery-dual-preferred-chat', name: 'Discovery preferred Chat' };
+  delete preset.runtimes.codex;
+  delete preset.runtimes.pi;
+  const source = { baseUrl: 'https://api.deepseek.com/anthropic', wireProtocol: 'anthropic-messages' as const,
+    modelsUrl: 'https://api.deepseek.com/anthropic/extra/models' };
+  if (additional) preset.runtimes['claude-code']!.modelDiscovery = [source];
+  registry.models.push({ id: 'review/dual-preferred', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [
+      { profileId: 'deepseek-anthropic-messages' }, { profileId: 'deepseek-openai-completions' },
+    ], preferredInterfaces: { 'claude-code': ['deepseek-openai-completions'] } }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async (input: { modelsUrl?: string | null }) => ({
+    ok: true, models: !additional || input.modelsUrl === source.modelsUrl ? [model] : [],
+  }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  fireEvent.click(await screen.findByText(model.name));
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)?.interfaceId).toBeUndefined();
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({
+    api: 'openai-completions', selectedInterface: { profileId: 'deepseek-openai-completions' },
+  });
+});
+
+it.each([false, true])('honors exact online declarations with different preset memberships, existing row=%s', async existingRow => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'deepseek')!);
+  const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+  const model = { id: 'account-new-chat-only', name: 'Account new Chat-only' };
+  preset.runtimes['claude-code']!.models = [{ id: 'cc-known', name: 'CC known' }];
+  preset.runtimes.codex!.models = [existingRow ? model : { id: 'codex-known', name: 'Codex known' }];
+  delete preset.runtimes.pi;
+  registry.models.push({ id: 'review/online-chat-only', name: model.name, routes: [{ providerId: preset.id,
+    modelId: model.id, agents: ['claude-code'], interfaces: [{ profileId: 'deepseek-openai-completions' }] }] });
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset], modelRegistry: registry }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [model] }));
+  renderWizard('deepseek');
+  await screen.findByDisplayValue('DeepSeek');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  const row = await screen.findByText(model.name);
+  if (!existingRow) fireEvent.click(row);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved: CustomProviderConfig = JSON.parse(JSON.stringify(vi.mocked(createCustomProvider).mock.calls[0][0]));
+  expect(saved.runtimes['claude-code']?.models.find(candidate => candidate.id === model.id)).toMatchObject({ interfaceId: 'deepseek-openai-completions' });
+  const provider = buildUserProvider(saved, { presets: [preset], modelRegistry: registry });
+  expect(provider.models['claude-code']?.find(candidate => candidate.id === model.id)).toMatchObject({ api: 'openai-completions',
+    route: { baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } });
+});
+
+it('does not infer a second protocol from identical preset membership at a shared models URL', async () => {
+  const preset = structuredClone(openCodePreset);
+  for (const runtime of Object.values(preset.runtimes)) runtime.models = [{ id: 'known', name: 'Known model' }];
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset] }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true,
+    models: [{ id: 'known', name: 'Known model' }, { id: 'unknown', name: 'Unknown protocol model' }] }));
+  renderWizard('opencode-go');
+  await screen.findByDisplayValue('OpenCode Go');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await waitFor(() => expect(screen.queryByText('settings.providers.wizard.fetching')).toBeNull());
+  expect(screen.queryByText('Unknown protocol model')).toBeNull();
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
+  for (const agent of ['claude-code', 'codex'] as const) {
+    expect(saved.runtimes[agent]?.models.some(model => model.id === 'known')).toBe(true);
+    expect(saved.runtimes[agent]?.models.some(model => model.id === 'unknown')).toBe(false);
+  }
 });
 
 it('imports the same discovered OpenRouter identity, capabilities and prices into all three engines', async () => {

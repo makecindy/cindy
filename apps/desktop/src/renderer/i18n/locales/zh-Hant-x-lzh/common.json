@@ -1058,6 +1058,7 @@
     "attentionCount": "待察之差事：{{count}}"
   },
   "remoteDesktop": {
+    "inputUnsupported": "Cindy 暫不能於此電腦今用之桌面遙控鍵鼠。",
     "windowsTitle": "鎖屏操控",
     "windowsready": "已為此番執行之 Cindy 啟用。重啟 Cindy 後，須再由管理員授權。",
     "windowsmissing": "許操作鎖定畫面與管理員提示，須管理員授權。",
@@ -4063,6 +4064,7 @@
         "hintInstalled": "察得此機已裝 {{cli}}"
       },
       "wizard": {
+        "unconfirmedAgents": "接入之據待明：{{agents}}",
         "title": "增供方",
         "titleWith": "增 · {{name}}",
         "closeAria": "闔",
@@ -10514,6 +10516,7 @@
       "header": {
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
+        "queued": "{{name}} 待次",
         "planning": "{{name}} 方籌畫…"
       },
       "memberCount_one": "{{count}} 人",

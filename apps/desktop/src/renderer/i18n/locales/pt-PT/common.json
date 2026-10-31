@@ -1087,6 +1087,7 @@
     "attentionCount": "Tarefas que precisam de atenção: {{count}}"
   },
   "remoteDesktop": {
+    "inputUnsupported": "O ambiente de trabalho atual deste computador não suporta o controlo remoto do teclado e do rato no Cindy.",
     "windowsTitle": "Controlo do ecrã de bloqueio",
     "windowsready": "Ativado para este processo de Cindy. Reiniciar Cindy requer novamente autorização de administrador.",
     "windowsmissing": "Permitir o controlo do ecrã de bloqueio e dos pedidos de administrador. É necessária autorização de administrador.",
@@ -4159,6 +4160,7 @@
         "hintInstalled": "{{cli}} está instalado neste dispositivo"
       },
       "wizard": {
+        "unconfirmedAgents": "Detalhes de ligação ainda não confirmados: {{agents}}",
         "title": "Adicionar fornecedor",
         "titleWith": "Adicionar · {{name}}",
         "closeAria": "Fechar",

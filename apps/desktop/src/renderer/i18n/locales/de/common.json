@@ -1070,6 +1070,7 @@
     "attentionCount": "Aufgaben, die Aufmerksamkeit benötigen: {{count}}"
   },
   "remoteDesktop": {
+    "inputUnsupported": "Die aktuelle Desktop-Umgebung dieses Computers unterstützt keine Fernsteuerung von Tastatur und Maus in Cindy.",
     "windowsTitle": "Steuerung des Sperrbildschirms",
     "windowsready": "Für diesen Cindy-Prozess aktiviert. Für den Neustart von Cindy ist erneut eine Administratorberechtigung erforderlich.",
     "windowsmissing": "Steuerung des Sperrbildschirms und von Administratorabfragen erlauben. Eine Administratorautorisierung ist erforderlich.",
@@ -4106,6 +4107,7 @@
         "hintInstalled": "{{cli}} ist auf diesem Gerät installiert"
       },
       "wizard": {
+        "unconfirmedAgents": "Verbindungsdetails noch nicht bestätigt: {{agents}}",
         "title": "Anbieter hinzufügen",
         "titleWith": "Hinzufügen · {{name}}",
         "closeAria": "Schließen",

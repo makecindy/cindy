@@ -1087,6 +1087,7 @@
     "attentionCount": "Tâches nécessitant votre attention : {{count}}"
   },
   "remoteDesktop": {
+    "inputUnsupported": "L’environnement de bureau actuel de cet ordinateur ne prend pas en charge le contrôle à distance du clavier et de la souris dans Cindy.",
     "windowsTitle": "Contrôle de l'écran de verrouillage",
     "windowsready": "Activé pour ce processus Cindy. Un redémarrage de Cindy nécessitera à nouveau l'autorisation administrateur.",
     "windowsmissing": "Autoriser le contrôle de l'écran de verrouillage et des invites administrateur. L'autorisation administrateur est requise.",
@@ -4159,6 +4160,7 @@
         "hintInstalled": "{{cli}} est installé sur cet appareil"
       },
       "wizard": {
+        "unconfirmedAgents": "Détails de connexion pas encore confirmés : {{agents}}",
         "title": "Ajouter un fournisseur",
         "titleWith": "Ajouter · {{name}}",
         "closeAria": "Fermer",
