@@ -204,7 +204,10 @@ Telegram 设为全响应的群；设置页的人格与行为配置不带。移�
 「自上次以来群里的消息」前缀。企业微信 / 钉钉机器人在群里只收得到 @ 它的消息，所以没有全响应与前置判定；飞书群
 上下文仍由平台历史接口现拉，Discord 只接私聊。
 主人认定按渠道：Telegram / Discord 填主人 id；企业微信 / 钉钉沿用传输层的 TOFU（首个私聊者即主人）；企业微信与
-Discord 传输层只放行主人，钉钉群里被 @ 时成员也能触发（成员轮次按上面的破坏性动作确认口径）。
+Discord 传输层只放行主人。钉钉伙伴自有连接同时接收其他人的私聊，按真实发送人进入各自的 `guest-dm` 专线，
+保留非主人身份及成员轮次的破坏性动作确认；主人绑定不因访客私聊改变。设置页的个人钉钉连接仍默认只接收主人私聊。
+钉钉群里被 @ 时成员也能触发。实现及回归见 `packages/lizi-im/src/dingtalk/index.ts`、
+`packages/lizi-im/src/dingtalk/__tests__/dingtalkIM.test.ts` 与 `apps/desktop/src/main/im/dingtalk/__tests__/adapter.test.ts`。
 命令菜单去掉交给伙伴后在渠道里会被拒的 `/project` `/model`
 `/permission` 三条，单源见 `im/shared/botCommands.ts` 的 `isCompanionManagedCommand`。
 别人说的不冒充主人：专线里主人与群成员 / 外部用户的消息落在同一条任务，每条消息的 `imSource.origin` 存谁、在哪说的

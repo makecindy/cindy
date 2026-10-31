@@ -136,6 +136,24 @@ describe('dingtalk teammate-owned connection', () => {
     expect(personal.turnPermissionPolicyFor?.(ownerEvent)).toBeDefined();
     expect(adapter.turnPermissionPolicyFor?.({ messageId: 'dm' } as IMMessageEvent)).toBeUndefined();
   });
+
+  // Unit regression: the transport now supplies speaker for guest DMs. The generic
+  // source helper treats any speaker as a group; the adapter must use lane identity
+  // instead, or both UI and model receive the wrong conversation kind.
+  it('keeps guest DMs labeled private and subject to the non-owner policy', () => {
+    const adapter = buildDingTalkAdapter(im, CONFIG, { companionBotId: 'bot-mia' });
+    const event = {
+      channelName: 'dingtalk', senderId: 'guest-1', chatId: 'private-1',
+      contextId: 'app', messageId: 'guest-message', text: 'hello',
+      speaker: { id: 'guest-1', name: 'Guest', isOwner: false },
+      attachments: [], unsupported: [],
+    } satisfies IMMessageEvent;
+    expect(adapter.channelNoteSourceFor?.(event)).toMatchObject({
+      chatKind: 'direct', chatId: 'private-1', senderId: 'guest-1', senderIsOwner: false,
+    });
+    expect(adapter.turnPermissionPolicyFor?.(event)?.forceConfirmToolCall('file_change', {})).toBe(true);
+    expect(adapter.companionLane?.(event.senderId)).toEqual({ kind: 'guest-dm', userId: 'guest-1' });
+  });
 });
 
 describe('dingtalk group window', () => {
