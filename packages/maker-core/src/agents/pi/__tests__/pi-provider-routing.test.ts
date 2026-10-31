@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
 import {
+  promises as fs,
   mkdirSync,
   existsSync,
   mkdtempSync,
@@ -19,6 +20,7 @@ vi.setConfig({ testTimeout: 30_000 });
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
 import { piCacheRouteKey } from '../cache-compatibility.js';
+import * as piSubagentRuns from '../pi-subagent-runs.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
@@ -1366,25 +1368,78 @@ describe("Pi provider-aware model routing", () => {
           supportsStore: false,
           supportsDeveloperRole: false,
           maxTokensField: "max_tokens",
-          supportsLongCacheRetention: false,
         }),
       }),
       // The learned wire model is distinct from the public model alias.
       expect.objectContaining({
         id: "glm-5.3-wire",
-        compat: { supportsLongCacheRetention: false },
       }),
     ]);
     // BYOM 命名空间 provider 用 sourceProviderId 命中同一条学习结果。
     expect(models.providers["cindy-byom-opencode-go"]?.models).toEqual([
       expect.objectContaining({
         id: "glm-5.3-flash",
-        compat: { supportsLongCacheRetention: false },
       }),
     ]);
     const rules = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'pi-cache-compatibility.json'), 'utf8'));
-    expect(rules).toContainEqual({ provider: 'opencode-go', id: 'glm-5.3-wire', baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : 'https://opencode.ai/zen/go/v1' });
+    expect(rules).toContainEqual(expect.objectContaining({ provider: 'opencode-go', id: 'glm-5.3-wire', api: 'openai-completions', providerId: 'opencode-go', routeKey: piCacheRouteKey('https://opencode.ai/zen/go/v1', 'openai-completions'), baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : 'https://opencode.ai/zen/go/v1' }));
+    for (const model of models.providers['opencode-go']!.models!) expect(model.compat ?? {}).not.toHaveProperty('supportsLongCacheRetention', false);
     await handle.close();
+  });
+
+  it.each(['send', 'native', 'queued'])('freezes per-input cache learning across expiry and relearning: %s', async (mode) => {
+    let active = true;
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'https://cache.example/v1', api: 'openai-completions',
+      models: [{ id: 'local-model' }],
+    }], env: {} }));
+    deps.resolvePiNativeCompatOverride = vi.fn(() => active ? { supportsLongCacheRetention: false } : undefined);
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'cache-expiry-receipt', workingDir: cwd, model: 'local-model', providerId: 'native-a',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      expect(deps.resolvePiNativeCompatOverride).not.toHaveBeenCalled();
+      for (const expected of [true, false, true]) {
+        active = expected;
+        if (mode === 'send') await handle.send({ type: 'user', content: 'try cache' });
+        if (mode !== 'queued') captured.onEvent!({ type: 'agent_start' });
+        if (mode === 'queued') {
+          captured.onEvent!({ type: 'queue_update', steering: [], followUp: ['try cache'] });
+          captured.onEvent!({ type: 'queue_update', steering: [], followUp: [] });
+        }
+        const message = { role: 'user', content: [{ type: 'text', text: 'try cache' }] };
+        captured.onEvent!({ type: 'message_start', message });
+        const key = createHash('sha256').update(JSON.stringify(message)).digest('hex');
+        // Older registries still acknowledge the exact direct-input snapshot.
+        captured.onEvent!({ type: 'extension_ui_request', method: 'input', title: 'cindy:cache-input',
+          id: 'cache-input', placeholder: JSON.stringify({ key, direct: mode !== 'queued' }) });
+        // Expiry or another session's learning during the request must not
+        // change whether this input actually started with the override.
+        active = !expected;
+        captured.onEvent!({ type: 'agent_start' }); // Pi's native retry, no new user.
+        captured.onEvent!({ type: 'message_start', message: { role: 'assistant', content: [] } });
+        // Consumed steer is another user message in the same execution. It
+        // must neither refresh the receipt nor treat an auto-retry as input.
+        captured.onEvent!({ type: 'agent_start' }); // continue() may flush steering as its first message.
+        captured.onEvent!({ type: 'queue_update', steering: ['steer'], followUp: [] });
+        captured.onEvent!({ type: 'queue_update', steering: [], followUp: [] });
+        const steer = { role: 'user', content: [{ type: 'text', text: 'steer' }] };
+        captured.onEvent!({ type: 'message_start', message: steer });
+        captured.onEvent!({ type: 'extension_ui_request', method: 'input', title: 'cindy:cache-input',
+          id: 'cache-steer', placeholder: JSON.stringify({ key: createHash('sha256').update(JSON.stringify(steer)).digest('hex'), direct: false }) });
+        captured.onEvent!({ type: 'agent_start' });
+        captured.onEvent!({ type: 'message_start', message: { role: 'toolResult', content: [] } });
+        captured.onEvent!({ type: 'auto_retry_end', success: false,
+          finalError: '400: unsupported parameter: prompt_cache_retention' });
+        let event;
+        do { event = await events.next(); } while (!event.done && event.value.type !== 'error');
+        expect(event.value?.data).toMatchObject({ piCacheCompatibility: { applied: expected,
+          providerId: 'native-a', wireModelId: 'local-model',
+          routeKey: piCacheRouteKey('https://cache.example/v1', 'openai-completions') } });
+        captured.onEvent!({ type: 'agent_end', messages: [] });
+      }
+    } finally { await handle.close(); }
   });
 
   it("routes a persisted BYOM id through its namespaced PI runtime provider", async () => {
@@ -2634,7 +2689,7 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it("does not live-refresh xAI when the caller pins the gateway with providerId null", async () => {
-    let resolves = 0;
+    const resolvedProviders: Array<string | null | undefined> = [];
     captured.requestHandler = async (command) =>
       command.type === "get_state"
         ? {
@@ -2682,8 +2737,8 @@ describe("Pi provider-aware model routing", () => {
       },
       resolvePiGatewayModelApi: () => "openai-responses",
       resolvePiAgentHome: () => agentHome,
-      resolvePiNativeProviders: async () => {
-        resolves += 1;
+      resolvePiNativeProviders: async (selection) => {
+        resolvedProviders.push(selection?.providerId);
         return {
           providers: [
             {
@@ -2704,10 +2759,11 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
-    expect(resolves).toBe(1);
+    expect(resolvedProviders).toEqual(["native-a"]);
     captured.requests.length = 0;
     await handle.setModel!("xai/grok-4.6", { providerId: null });
-    expect(resolves).toBe(2);
+    // Changing the gateway connection identity may refresh its cache route rules.
+    expect(resolvedProviders.slice(1).every(id => id === null)).toBe(true);
     expect(captured.requests).toContainEqual({
       type: "set_model",
       provider: "cindy",
@@ -3362,7 +3418,7 @@ describe("Pi provider-aware model routing", () => {
         runtimeConfig: {
           endpoint: "http://127.0.0.1:9988/",
           get remoteEndpoint() {
-            if (api !== 'openai-completions') throw new Error('Unrelated protocol must not read cache identity');
+            if (api !== 'openai-completions' && api !== 'openai-responses') throw new Error('Unrelated protocol must not read cache identity');
             return 'https://gateway.example.test/v1';
           },
         },
@@ -3565,7 +3621,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it('merges a learned compat override into the gateway models.json block', async () => {
+  it('keeps gateway caching native and emits exact dynamic recovery rules', async () => {
     const deps: AgentDeps = {
       auth: {
         getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
@@ -3613,10 +3669,12 @@ describe("Pi provider-aware model routing", () => {
         id: 'z-ai/glm-5.3-flash',
         compat: expect.objectContaining({
           supportsStore: false,
-          supportsLongCacheRetention: false,
         }),
       }),
     ]);
+    expect(models.providers.cindy?.models?.[0].compat).not.toHaveProperty('supportsLongCacheRetention', false);
+    const rules = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'pi-cache-compatibility.json'), 'utf8'));
+    expect(rules).toContainEqual(expect.objectContaining({ provider: 'cindy', id: 'z-ai/glm-5.3-flash', providerId: 'xd', api: 'openai-completions' }));
     await handle.close();
   });
 
@@ -5604,6 +5662,76 @@ describe("Pi provider-aware model routing", () => {
     expect(captured.requests.filter((request) => request.type === 'get_available_models')).toHaveLength(1);
     expect(captured.requests.some((request) => request.type === 'switch_session')).toBe(false);
     await handle.close();
+  });
+
+  it.each(['ok', 'invalid'] as const)('captures a coherent resume snapshot after a concurrent model refresh: %s', async (ack) => {
+    let endpoint = 'http://a.test';
+    const deps = byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', adapterProvider: 'openai',
+      baseUrl: endpoint, api: 'openai-completions',
+      models: [{ id: 'local-model', contextWindow: 200_000 }],
+    }], env: {} }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'resume-during-refresh', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a',
+    });
+    const config = captured.env.PI_CODING_AGENT_DIR!;
+    const rulesFile = path.join(config, 'pi-cache-compatibility.json');
+    const modelsFile = path.join(config, 'models.json');
+    const write = fs.writeFile.bind(fs);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const writingRules = new Promise<void>(resolve => { entered = resolve; });
+    let blocked = false;
+    const writer = vi.spyOn(fs, 'writeFile').mockImplementation(async (file, ...args) => {
+      if (String(file) === rulesFile && !blocked) {
+        blocked = true;
+        entered();
+        await gate;
+      }
+      return write(file, ...args);
+    });
+    const reader = vi.spyOn(fs, 'readFile');
+    const resumeSpy = vi.spyOn(piSubagentRuns, 'resumePiSubagentRun')
+      .mockResolvedValue('123e4567-e89b-42d3-a456-426614174098');
+    let switching: Promise<unknown> | undefined;
+    let resuming: Promise<unknown> | undefined;
+    try {
+      endpoint = 'http://b.test';
+      captured.refreshAckMode = ack;
+      switching = handle.setModel!('local-model', { providerId: 'native-a' })
+        .then(() => undefined, error => error);
+      await writingRules;
+      expect(readFileSync(modelsFile, 'utf8')).toContain('http://b.test');
+      expect(readFileSync(rulesFile, 'utf8')).toContain('http://a.test');
+      reader.mockClear();
+      resuming = handle.resumeBackgroundTask!('terminal-task', 'continue')
+        .then(runId => runId, error => error);
+      // Let the resume reach its read boundary while refresh is held mid-write.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(reader.mock.calls.some(([file]) => String(file) === modelsFile)).toBe(false);
+      expect(resumeSpy).not.toHaveBeenCalled();
+      release();
+      const result = await switching;
+      if (ack === 'invalid') expect(result).toBeInstanceOf(Error);
+      else expect(result).toBeUndefined();
+      expect(await resuming).toBeUndefined();
+      expect(resumeSpy).toHaveBeenCalledOnce();
+      const snapshot = resumeSpy.mock.calls[0][3]!.runtimeSnapshot!;
+      const expected = ack === 'ok' ? 'http://b.test' : 'http://a.test';
+      expect(JSON.parse(snapshot.modelsJson.toString()).providers['native-a'].baseUrl).toBe(expected);
+      expect(JSON.parse(snapshot.cacheRulesJson!.toString())).toContainEqual(expect.objectContaining({
+        provider: 'native-a', baseUrl: expected,
+      }));
+    } finally {
+      release();
+      await Promise.allSettled([switching, resuming]);
+      await handle.close();
+      writer.mockRestore();
+      reader.mockRestore();
+      resumeSpy.mockRestore();
+    }
   });
 
   it.each(['provider', 'model'] as const)('retains only the running credential when its %s disappears during catalog refresh', async (removed) => {
@@ -8318,6 +8446,10 @@ describe("Pi provider-aware model routing", () => {
     )?.[1];
     expect(modelsJson).toBeTruthy();
     expect(settingsJson).toBeTruthy();
+    const cacheRules = [...written.entries()].find(([filePath]) =>
+      filePath.endsWith("pi-cache-compatibility.json"),
+    )?.[1];
+    expect(cacheRules).toBeTruthy();
     const modelsOnlyHash = createHash("sha256")
       .update(modelsJson!)
       .digest("hex");
@@ -8325,6 +8457,8 @@ describe("Pi provider-aware model routing", () => {
       .update(modelsJson!)
       .update("\n")
       .update(settingsJson!)
+      .update("\n")
+      .update(cacheRules!)
       .digest("hex");
     expect(launchHash).not.toBe(modelsOnlyHash);
     expect(capturedRemoteEnvs).toHaveLength(1);

@@ -136,6 +136,8 @@ const PEER_REFRESH_INTERVAL_MS = 60_000;
 const PRICING_RETRY_DELAY_MS = 6000;
 /** main 返回 stale 磁盘快照时的补拉延迟: 让后台聚合先完成, 同时保持更新感知。 */
 const STALE_RETRY_DELAY_MS = 800;
+/** 持续读不到(库故障而非启动期)时按 2 倍退避, 封顶, 避免反复重跑失败的聚合。 */
+const STALE_RETRY_MAX_DELAY_MS = 30_000;
 // v2 后缀:币种语义改为跟随来源(默认 USD)后,旧构建快照里的金额可能带错标
 // CNY——直接换 key 让旧快照失效,首帧宁可空态也不闪现错单位;旧 key 顺手清理。
 const SNAPSHOT_STORAGE_KEY = 'homeUsageDashboard.lastPayload.v2';
@@ -399,6 +401,7 @@ interface UsageHistoryScopeState {
   loadSeq: number;
   pricingRetryDone: boolean;
   staleRetryTimer: ReturnType<typeof setTimeout> | null;
+  staleRetryCount: number;
   pricingRetryTimer: ReturnType<typeof setTimeout> | null;
   listeners: Set<(p: UsageHistoryPayload | null) => void>;
   statusListeners: Set<(refreshing: boolean) => void>;
@@ -442,6 +445,7 @@ function getScope(
       loadSeq: 0,
       pricingRetryDone: false,
       staleRetryTimer: null,
+      staleRetryCount: 0,
       pricingRetryTimer: null,
       listeners: new Set<(p: UsageHistoryPayload | null) => void>(),
       statusListeners: new Set<(refreshing: boolean) => void>(),
@@ -499,6 +503,7 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
       if (seq !== scope.loadSeq) return scope.cache;
       const next = res as UsageHistoryPayload;
       const nextForCache = { ...next, stale: false };
+      if (!next.stale) scope.staleRetryCount = 0;
       if (next.stale) {
         const nextSerialized = serializeForCompare(nextForCache);
         if (nextSerialized !== scope.cacheSerialized) {
@@ -508,11 +513,13 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
           for (const fn of scope.listeners) fn(scope.cache);
         }
         if (!scope.staleRetryTimer) {
+          const delay = Math.min(STALE_RETRY_DELAY_MS * 2 ** scope.staleRetryCount, STALE_RETRY_MAX_DELAY_MS);
+          scope.staleRetryCount += 1;
           scope.staleRetryTimer = setTimeout(() => {
             scope.staleRetryTimer = null;
             if (scope.listeners.size === 0 && scope.statusListeners.size === 0) return;
             void load(scopeKey);
-          }, STALE_RETRY_DELAY_MS);
+          }, delay);
         }
         return scope.cache;
       }

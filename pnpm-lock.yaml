@@ -663,6 +663,9 @@ importers:
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
+      '@cindy/plugin-protocol':
+        specifier: workspace:*
+        version: link:../../packages/plugin-protocol
       '@cindy/voice-input-core':
         specifier: workspace:*
         version: link:../../packages/voice-input-core

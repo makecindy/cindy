@@ -3,7 +3,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient } from '../client/DbClient.js';
-import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
+import { clearCurrentDbClient, setCurrentDbClient, getCurrentDbClientSnapshot } from '../client/current.js';
 import { tx as runInprocTx } from '../worker/opHandlers/tx.js';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock.js';
 import { setSessionRuntimeCleanup } from '../sessionRuntimeCleanup.js';
@@ -51,6 +51,43 @@ describe('orcaTeamStore', () => {
     }
     rawDb?.close();
     rawDb = null;
+  });
+
+  // F6-B, integration: real SQLite role writes stay in their captured owner.
+  it.each(['owner', 'cancel'] as const)('rejects a stale %s before role mutation', async reason => {
+    const { setSessionOrcaRole } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient(); setCurrentDbClient(client, 'owner-a');
+    await seedOrcaWorkers(client);
+    const owner = getCurrentDbClientSnapshot()!;
+    if (reason === 'owner') setCurrentDbClient(client, 'owner-b');
+    const assertCurrent = () => { if (reason === 'cancel') throw new Error('cancelled attempt'); };
+    const before = await client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1']);
+    await expect(setSessionOrcaRole('lead-session-1', 'worker', { owner, assertCurrent })).rejects.toThrow();
+    expect(await client.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual(before);
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps an issued write in its original DB and suppresses its late broadcast', async () => {
+    const { setSessionOrcaRole } = await import('../orcaTeamStore.js');
+    const first = createTestDbClient(); setCurrentDbClient(first, 'owner-a');
+    await seedOrcaWorkers(first);
+    const firstRaw = rawDb!;
+    const owner = getCurrentDbClientSnapshot()!;
+    const second = createTestDbClient();
+    await seedOrcaWorkers(second);
+    try {
+      const before = await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1']);
+      const writing = setSessionOrcaRole('lead-session-1', 'worker', { owner });
+      setCurrentDbClient(second, 'owner-b');
+      await expect(writing).rejects.toThrow('REMOTE_AGENT_EXPIRED');
+      expect(await first.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual({ orca_role: 'worker' });
+      expect(await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual(before);
+      expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.notifyAgentIslandSessionPatch).not.toHaveBeenCalled();
+      await setSessionOrcaRole('lead-session-1', 'lead');
+      expect(await second.queryOne('SELECT orca_role FROM sessions WHERE id = ?', ['lead-session-1'])).toEqual({ orca_role: 'lead' });
+      expect(h.tapWindowBroadcast).toHaveBeenCalledTimes(1);
+    } finally { firstRaw.close(); }
   });
 
   it.each(['team', 'stranded', 'single'])('rechecks %s archive authority after the existing route lock wait', async action => {

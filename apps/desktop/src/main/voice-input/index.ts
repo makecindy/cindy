@@ -1925,6 +1925,10 @@ export function registerVoiceInputIpc(): void {
     app.once('before-quit', () => {
       void systemAudioMuteGuard.restoreAll();
     });
+    // 用户去系统设置里授权或撤销后回到应用:缓存跟着刷新,长按语音按最新授权状态生效。
+    app.on('browser-window-focus', () => {
+      refreshMicrophonePermissionCache();
+    });
   }
   const modelSelection = readActiveVoiceInputModelSelection('register');
   log.info('voice input model selection active', {

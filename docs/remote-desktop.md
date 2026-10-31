@@ -6,7 +6,7 @@ Desktop and Mobile expose **Disconnect and lock when idle** in the remote deskto
 Security panel. Each controller remembers its setting per computer: 1, 5 (default),
 10, 15, 30 minutes, or Never. The host must advertise `idleLock`; older hosts and
 platforms without native screen locking show this setting as unsupported.
-This is separate from default-off lock-on-exit and privacy-screen preferences.
+This is separate from the default-on lock-on-exit and privacy-screen preferences.
 
 The host counts elapsed time since actual remote input or manual clipboard actions.
 Heartbeats, video frames, automatic clipboard sync and release-key cleanup do not
@@ -143,6 +143,15 @@ policy at start and on heartbeats, then locks locally on stop, signaling loss or
 lease expiry. Live-lease resume/takeover and display changes do not lock; recovery
 after expiry waits for the already-triggered lock to finish.
 See [native credential behavior](remote-desktop-credentials.md) for password storage.
+Desktop and Mobile default privacy screen and lock-on-exit to enabled when no
+saved override exists; stored explicit choices remain unchanged. Desktop now
+retains explicit privacy-screen and lock-on-exit choices even when they match the
+current default; choosing the default idle duration still clears that override.
+Older desktop versions removed such values, so a historical manual opt-out that was not stored
+cannot be distinguished from an untouched default and follows the new default.
+Mobile already stores explicit `false` and preserves it. These defaults do not
+enable automatic unlock, clipboard sync or host mute, or bypass host capability
+checks; a privacy request is not shown as active until the host confirms it.
 Video quality changes are coalesced while negotiation is pending. The toolbar
 shows receive rate and clears stale network samples, while resolution discovery
 shows loading/failure and offers retry and native-resolution labels.
@@ -532,6 +541,46 @@ does not guarantee focus isolation: the driver may temporarily change applicatio
 or window focus. Cindy does not currently verify restoration of the original
 focused window or text field, and does not force focus back after an action.
 
+## X11 keyboard and mouse control
+
+X11 hosts retain Electron's existing screen-capture path and use the bundled
+Linux input helper's XTest backend. The native `--x11 --check` probe opens the
+current desktop's authenticated X connection and checks XTest without injecting
+input. No root service, `xhost` change or remote X listener is installed. A
+Wayland session with `DISPLAY` set is still Wayland; XWayland never enables this
+backend. Missing display credentials or XTest support does not advertise control.
+
+The existing host opt-ins, peer revocation, expiring control lease, serialized
+batch acknowledgements and input ownership apply unchanged. Pointer coordinates
+are normalized within the selected monitor, then mapped to X root pixels. Uniform
+DPI scaling and negative monitor origins are supported; mixed scaling is rejected
+rather than guessed. Changed monitor geometry releases control before further
+input. Keys follow the Linux Xorg evdev keycode layout. Mouse buttons and both
+wheel axes are supported, with accumulated small wheel deltas.
+
+Unicode text uses an unused, unpressed X keycode with a temporary symbol mapping;
+the exact mapping is restored before acknowledgement. It does not overwrite the
+clipboard. Text batches contain at most 64 code points to bound the paced native
+input within the heartbeat deadline. This sends input to the focused X client;
+application/IME handling is separate from native event delivery. EOF, SIGTERM
+and the six-second heartbeat deadline release held keys and buttons. X11 capture,
+lock-screen support and other optional features are not broadened by this backend.
+
+Unsupported keyboard/mouse control has a distinct localized error on desktop
+and mobile; it no longer suggests toggling permissions or fixing the network.
+Wire operations and payloads are unchanged: official and self-hosted relays keep
+forwarding the same opaque input requests. Older viewers can use the X11 host
+without a new capability field; only the host needs the native backend update.
+
+Explicit native integration (requires `Xvfb` and the built input helper):
+`python3 apps/desktop/native/remote-desktop/linux-input/x11-test.py <helper>`.
+It creates its own authenticated X server and tests pointer coordinates, mouse
+buttons, wheel, Unicode symbols, mapping restoration, malformed-batch atomicity,
+and key/button release on EOF, SIGTERM and heartbeat loss. It never injects into
+the user's desktop. Host/unit tests separately cover geometry, opt-in, ownership,
+and the unsupported-input message. Full Air-to-GX102 UI validation remains a
+separate acceptance step after installing a build containing this change.
+
 ## Wayland capture lifetime
 
 On Hyprland with the system `/usr/bin/grim` executable, Cindy uses native screencopy
@@ -573,7 +622,7 @@ be truncated by Chromium’s Wayland text handling even with a correct keysym. O
 compositors keep their existing view-only portal path.
 
 Linux native builds require `cc`, `pkg-config`, `wayland-scanner`, and development
-headers for `wayland-client`, `xkbcommon`, `json-c`, `libturbojpeg`, and `libpng`; packaged builds include
+headers for `wayland-client`, `xkbcommon`, `json-c`, `x11`, `xtst`, `libturbojpeg`, and `libpng`; packaged builds include
 the helpers and require the corresponding shared libraries. In development it is
 compiled into the existing userData native cache. Missing support keeps viewing
 available and does not advertise control. Native parser checks (no compositor or
@@ -639,7 +688,7 @@ video without another picker, then stop sharing and verify capture terminates.
 
 macOS uses a signed Swift helper; Windows uses a Rust helper with Win32 SendInput.
 Forge builds and packages them through the existing tools signing paths. Linux
-Hyprland uses the Wayland virtual input helper described above; other Linux
+Hyprland uses the Wayland virtual input helper described above; X11 uses its XTest backend. Other Linux
 paths remain view-only. No helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.

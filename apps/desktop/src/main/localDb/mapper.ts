@@ -13,7 +13,7 @@ import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activ
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 import {
   parseOrcaRemoteLead,
@@ -140,6 +140,10 @@ export type SessionRowWithCount = SessionRow & {
 const PREVIEW_MAX_CHARS = 140;
 /** Bound serialized content before JSON.parse so oversized rows stay valid JSON. */
 const PREVIEW_CONTENT_BOUND_CHARS = 4096;
+// Cache only this pure projection, never a session row. Exact text/role keys
+// keep edits visible; both entry count and input size bound retained memory.
+const PREVIEW_CACHE_ENTRIES = 1024;
+const plainPreviewCache = new Map<string, string | null>();
 
 /**
  * 从消息 content（DB 存的 JSON string）提炼 sidebar 卡片预览纯文本。
@@ -153,6 +157,26 @@ export function finalizePlainPreview(
   role: string | null | undefined,
 ): string | null {
   if (!text) return null;
+  const key = text.length <= PREVIEW_CONTENT_BOUND_CHARS
+    ? `${role === 'assistant' ? 'assistant' : 'plain'}:${text}`
+    : null;
+  if (key !== null && plainPreviewCache.has(key)) {
+    const cached = plainPreviewCache.get(key)!;
+    plainPreviewCache.delete(key);
+    plainPreviewCache.set(key, cached);
+    return cached;
+  }
+  const preview = computePlainPreview(text, role);
+  if (key !== null) {
+    plainPreviewCache.set(key, preview);
+    if (plainPreviewCache.size > PREVIEW_CACHE_ENTRIES) {
+      plainPreviewCache.delete(plainPreviewCache.keys().next().value!);
+    }
+  }
+  return preview;
+}
+
+function computePlainPreview(text: string, role: string | null | undefined): string | null {
   let next = text;
   // 合成 UI 指令行(隐藏续跑 / 图片按钮)不进 sidebar 预览(review P2):它是
   // role='user' 的正常落库行,但对用户不可见 —— 预览显示隐藏英文指令会暴露
@@ -251,6 +275,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     model: row.model,
     effort: row.effort as Effort,
@@ -359,7 +384,7 @@ export function messageToCamel(row: MessageRow): Message {
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppContent(content, agentMeta?.mcpApp === true),
+    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -390,6 +415,7 @@ export function sessionCreateToRow(
         id?: string;
         title?: string;
         workingDir?: string;
+        projectDir?: string | null;
         workspaceKind?: WorkspaceKind;
         model?: string;
         effort?: string;
@@ -427,6 +453,7 @@ export function sessionCreateToRow(
         ? body.title.trim()
         : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
+    projectDir: normalizeWorkingDirForStorage(body?.projectDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
@@ -504,6 +531,10 @@ export function sessionPatchToRow(
   if (patch.workingDir !== undefined)
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
+  // Move controls explicitly set workspaceKind; an execution-only cwd update
+  // (e.g. attaching a worktree) must preserve the chosen project.
+  if (patch.workspaceKind === 'dialogue'
+    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;

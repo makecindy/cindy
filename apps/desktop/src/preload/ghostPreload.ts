@@ -73,7 +73,7 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'device-sync-request' }),
   library: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'library-request' }),
-  targets: Object.fromEntries(['list', 'resolve', 'send', 'cancel'].map(kind => [kind,
+  targets: Object.fromEntries(['capabilities', 'list', 'resolve', 'send', 'get', 'cancel'].map(kind => [kind,
     async (req: Record<string, unknown> = {}): Promise<unknown> => {
       const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'targets-request', kind });
       if (result?.ok === true) return result.data;
@@ -81,7 +81,7 @@ contextBridge.exposeInMainWorld('cindy', {
     },
   ])),
   tasks: Object.fromEntries(
-    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden'].map(kind => [
+    ['capabilities', 'models', 'setModel', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'create', 'list', 'get', 'send', 'getRun', 'listRuns', 'cancel', 'readMessages', 'setHidden', 'archive'].map(kind => [
       kind, async (req: Record<string, unknown> = {}): Promise<unknown> => {
         const result = await ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'tasks-request', kind });
         if (result?.ok === true) return result.data;

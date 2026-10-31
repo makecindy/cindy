@@ -1219,16 +1219,17 @@ describe("cindy · media MCP 边界", () => {
     expect(parsePayload(result)).toMatchObject({ ok: true, status: "prepared" });
   });
 
-  it("把受管媒体地址交给 Host 按需解析本地路径", async () => {
-    const url = `cindy-media://blobs/${"a".repeat(64)}.png`;
-    const callMedia = vi.fn(async () => ({ ok: true, local_path: "/media/a.png" }));
+  it.each(['png', 'mp4', 'webm'])("把受管 %s 地址交给 Host 按需解析本地路径", async (ext) => {
+    const url = `cindy-media://blobs/${"a".repeat(64)}.${ext}`;
+    const localPath = `/media/a.${ext}`;
+    const callMedia = vi.fn(async () => ({ ok: true, local_path: localPath }));
     const result = await handleMedia(fakeDeps({ callMedia }), {
       action: "resolve_local_path",
       url,
     });
 
     expect(callMedia).toHaveBeenCalledWith({ action: "resolve_local_path", url });
-    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: "/media/a.png" });
+    expect(parsePayload(result)).toMatchObject({ ok: true, local_path: localPath });
   });
 
   it("在进入 Host 前拒绝缺失字段和未知 capability", async () => {

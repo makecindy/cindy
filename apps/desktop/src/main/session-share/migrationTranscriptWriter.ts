@@ -9,7 +9,8 @@ import type { migrationNativeContext } from './migrationNativeContext.js';
 export type TranscriptRewrite = {
   context: ReturnType<typeof migrationNativeContext>;
   agent: 'cc' | 'codex';
-} | { agent: 'pi'; sessionId: string; cwd: string };
+} | { agent: 'pi'; sessionId: string; cwd: string }
+  | { agent: 'codex-provider'; modelProvider: string };
 
 const NEWLINE = Buffer.from('\n');
 
@@ -59,6 +60,20 @@ class TranscriptLines extends Transform {
         const header = JSON.parse(bytes.toString('utf8'));
         if (header?.type === 'session') {
           return Buffer.from(JSON.stringify({ ...header, id: this.rewrite.sessionId, cwd: this.rewrite.cwd }));
+        }
+      } catch { /* Preserve malformed native history for the native reader to diagnose. */ }
+      return bytes;
+    }
+    if (this.rewrite.agent === 'codex-provider') {
+      // Codex resumes a thread only under the provider identity recorded in its header.
+      if (!firstLine) return bytes;
+      try {
+        const meta = JSON.parse(bytes.toString('utf8'));
+        if (meta?.type === 'session_meta' && meta.payload && typeof meta.payload === 'object') {
+          return Buffer.from(JSON.stringify({
+            ...meta,
+            payload: { ...meta.payload, model_provider: this.rewrite.modelProvider },
+          }));
         }
       } catch { /* Preserve malformed native history for the native reader to diagnose. */ }
       return bytes;

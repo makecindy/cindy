@@ -144,6 +144,17 @@
   `node scripts/prepare-wallpaper-previews.mjs` 从原始图片重建，该组三张图的总预算为 300 KiB。
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+- 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
+  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
+  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
+  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
+  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
+  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
+  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
+  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
+  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
@@ -170,6 +181,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 读取、协议与边界
 
+- 宿主选择的 `userData` 根目录允许通过符号链接或 Windows Junction 重定向。
+  `blobStore` 仅解析这一可信根的真实路径，入仓与受检读取使用相同的物理路径基线；
+  `cindy-media`、作用域、分桶和目标文件内部的链接仍然拒绝，不得对完整 blob 路径
+  直接 `realpath` 后跳过这些检查。回归见 `clientWallpaperMedia.test.ts` 的普通目录／
+  重定向根对照与内部链接拒绝矩阵。
 - 持久地址统一使用 `cindy-media://blobs/<sha256>.<ext>`。路径解析必须走
   `blobStore.resolveSafe` 或现有上层适配器，不根据 URL 字符串手工拼磁盘路径。
 - 客户端壁纸地址为 `cindy-media://client-wallpaper/<sha256>.webp` 或 `.mp4`，
@@ -183,15 +199,27 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   路径校验和 Renderer 暴露面。
 - 默认不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、
   受控 grant／deposit／ledger，或已有上传与远程媒体服务。
-- 唯一的路径揭示例外是：用户明确询问某个受管媒体地址在本机的存储位置时，Host 先用
-  安全解析器核验为现存普通文件。Auto 档沿用实时审批负责人：原生审批已审核受管 URL
+- Core 媒体生成的同步结果与异步 poll 结果只返回受管地址和元数据，不自动附图给模型，
+  也不提供独立的 `inspect` 动作。图片和视频均由 Agent 按任务需要决定是否查看：通过
+  下述路径解析能力取得文件，再使用已有的文件查看、抽帧或分析工具，不在 Core 重做
+  查看机制。用户端继续使用受管地址展示成果；生成成功不代表 Agent 已经看过内容。
+  不引入 ffmpeg 依赖、隐藏解码窗或并发调度机制；只查看视频帧不代表声音、对白或
+  音画同步已经验收。实现与回归见 `mcp-integrations/ghost.ts`、
+  `mcp-integrations/__tests__/ghostWorkdirGate.test.ts` 与
+  `packages/cindy-tools/src/__tests__/ghostMcp.test.ts`。
+- Agent 为完成当前任务而查看、抽帧或分析已有媒体，或回答用户的存储位置查询时，可主动
+  调用 `media(action: "resolve_local_path", url)`；不要求用户先问本地路径或另行口头同意检查。
+  Host 用安全解析器核验为现存普通文件，沿用已有路径揭示权限，不因分析用途绕过审批。
+  Auto 档沿用实时审批负责人：原生审批已审核受管 URL
   及“向 Agent 返回该媒体的本机绝对路径并写入任务记录”这一效果时，不因安全解析而再调
   Cindy 复审；这里仍是同一受管资源，不是符号链接暴露出的新文件目标。由 Cindy 负责时，
   对精确单文件路径和用户请求进行 AI 审阅。工具说明必须写明真实效果和当前权限流程，
   不得以“之后一定弹确认卡”误导审批。Cindy 审阅 allow 可返回当前 Agent，block 返回原因，
   ask 或服务故障才使用 Host-owned 确认卡。本地活跃 Full Access 自动允许，
   其它档位仍须用户点击允许；远程任务不能借此自动取得控制端文件路径。
-  路径进入会话记录，因此也可能同步到用户的配对设备。
+  路径进入会话记录，因此也可能同步到用户的配对设备。返回的是 Cindy Host 所在电脑的
+  路径，不保证在 SSH 工作区可用；不新增跨主机复制或文件读取授权。手机与桌面远控仍
+  通过任务所在电脑执行。向用户展示或交给插件时继续使用受管地址，不以本机路径替代。
   Agent 自报“用户已同意”不是授权证据，也不能借路径揭示给插件或远端开放文件读取。
 - `xdt-image://`、`xdt-video://`、`xdt-model://` 和 `userData/cc-agent/` 是冻结的历史兼容层。
   可以读取已有地址，不得新增写入路径、扩展生命周期或把新功能接回旧仓。
@@ -223,6 +251,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不因原内存大小上限拒绝下载或追加大小审批；完成、失败、取消后尽力清理临时文件。
   文件源仍走 `ingestMedia` 和现有字节仓的原子发布、去重与记账，不另建媒体存储。
   base64 响应沿用原大小限制。
+- 下载等待响应与重试共用 120 秒预算；响应到达后以字节为进度，只有断流 30 秒或累计 9 分钟才
+  结束，避免慢线路截断已付费成片。累计上限须低于 Agent 工具调用的 10 分钟超时。失败日志只记
+  错误名、已收字节和耗时，不记错误正文或签名地址。
 - 下载失败保留原调用的成功响应。异步签名地址失效时只查询原上游任务刷新地址，不重新
   付费生成；刷新结果成功入库前不覆盖原成功响应。本地入库失败由客户端对同一份已下载
   字节最多尝试三次，期间复核账号和任务，不再次下载、生成或审批。

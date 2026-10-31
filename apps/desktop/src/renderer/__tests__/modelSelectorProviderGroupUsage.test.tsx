@@ -12,7 +12,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
-vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null, useOptionalAuthDeviceId: () => catalogs.selfDeviceId }));
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -81,6 +81,7 @@ const catalogs = vi.hoisted(() => {
     key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
   });
   return {
+    selfDeviceId: 'desk',
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
       'a-local': {
@@ -173,6 +174,7 @@ vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
 }));
 
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { __resetForTest as resetEnginePrefs } from '@/state/modelEnginePrefs';
 import { __resetForTest as resetFavorites } from '@/state/modelFavorites';
 
@@ -215,9 +217,26 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  catalogs.selfDeviceId = 'desk';
 });
 
 describe('模型列表里供应商组那一项的用量', () => {
+  // #8010 review / component: a real routed picker must read controller-owned
+  // quota locally. Earlier fixtures never made a remote source equal to self.
+  it('经 B 读取 A 的目录时，A 自身来源的用量仍取本机账号', async () => {
+    catalogs.selfDeviceId = 'device-d';
+    const key = modelCatalogKey('device-d', 'device-c')!;
+    catalogs.byDevice[key] = catalogs.byDevice['device-d'];
+    try {
+      render(<ModelSelectorContent modelId="opus" effort="high" onModelChange={vi.fn()}
+        onEffortChange={vi.fn()} currentProviderId="d-solo" onProviderChange={vi.fn()} vendorKey="cc"
+        remoteAgent={{ devices: [{ deviceId: 'device-d', name: 'A' }], selectedDeviceId: 'device-d',
+          homeDeviceId: 'device-c', catalogHostDeviceId: 'device-c', selfDeviceId: 'device-d',
+          onRelocate: vi.fn(async () => true) }} />);
+      await act(async () => {});
+      expect(remaining(railButton('D Solo · A · solo@x'))).toBe('70');
+    } finally { delete catalogs.byDevice[key]; }
+  });
   it('远控任务的普通供应商读任务所在电脑，浏览其它电脑后仍保持归属', async () => {
     render(
       <ModelSelectorContent

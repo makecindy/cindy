@@ -20,6 +20,7 @@ import type { DbSlimmingStartupProgress } from '../../../../shared/localDbMainte
 const mocks = vi.hoisted(() => ({
   splash: {
     phase: 'splash_checking' as string,
+    isReturningSession: false,
     isDownloading: false,
     downloadProgress: 0,
     downloadInfo: { progress: 0 } as {
@@ -176,6 +177,7 @@ beforeEach(() => {
   mocks.splash.downloadProgress = 0;
   mocks.splash.downloadInfo = { progress: 0 };
   mocks.splash.resetSignal = 0;
+  mocks.splash.isReturningSession = false;
   mocks.coverHeld = false;
   setPhase('splash_checking');
   document.documentElement.removeAttribute('data-splash-active');
@@ -412,6 +414,14 @@ describe('SplashScreen wave4 统一面板', () => {
     expect(root.getAttribute('style') ?? '').not.toContain('background');
     expect(root.getAttribute('style')).toContain('--splash-fade-duration');
     expect(root.className).toContain('opacity-100');
+  });
+
+  it('已有会话返回启动用标准较短过渡，首启仍保留 splash 淡出时长', () => {
+    mocks.splash.isReturningSession = true;
+    const { container } = renderSplash('splash_checking');
+    expect((container.firstElementChild as HTMLElement).style.transition).toContain(
+      'var(--motion-enter)',
+    );
   });
 
   it('marks the document as splash-active only before fade out', () => {

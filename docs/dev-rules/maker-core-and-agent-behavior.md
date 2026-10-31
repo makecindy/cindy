@@ -164,12 +164,20 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 明确 `context-overflow` 且本轮没有助手输出或
 工具副作用时，host 才会对失败的 user 消息做一次 wire-only replay；有副作用或分类不确定时必须
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
+模型切换产生的空 assistant 分隔记录不属于助手产出：自动换窗、手动重试与恢复检查点的
+进展统计均排除它。有效标记必须符合 `turnModelChange.ts` 的生产者合同：`fromModel` / `toModel`
+均为字符串且 `modelOnly: true`；有正文的记录、无有效切模标记的空记录和工具操作仍保留原保护。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
 自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
 `invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
 确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
-推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
+推理密文范围）不得当成换窗。此类 compact 失败使用 `remote-compact-encrypted-content`
+原因，桌面与手机展示加密历史无法读取、自动接续未完成，不解释为单条输入超长；
+旧 Host 留下的 `context-overflow` 加无详情的裸包装消息 `Error running remote compact task`
+也按压缩错误显示，兼容密文错误码只在已丢失的 `additionalDetails` 中的记录；含具体窗口超限、
+超时或其他详情的消息不走此兜底。原始错误未带此持久化原因时仍须有密文证据。
+手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
 
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
@@ -320,6 +328,11 @@ Desktop 回包还须核对浏览器当前路由，覆盖地址已切换但 React
 `/clear` 之后的新消息。实现见 Desktop `maker-orchestration/rewind.ts` 与 maker-core
 `agents/codex/index.ts` 的 `commitRewindFiles`，回归见 `rewind.test.ts`、`fork.test.ts`、
 `rewindNativeBoundarySqlite.test.ts`、`tx.test.ts` 与 `index.test.ts`。
+Claude 回退／编辑重发的目标之前没有可续接的 assistant（首条消息，或之前的轮次都在回复前被
+停掉）时不报错：宿主传 `rewindsToNativeThreadStart` 只借原生检查点回滚文件（另一台电脑上的
+Claude 用本机保存点），再关闭会话；`rewind.commit` 在同一事务里软删目标、清掉
+`sdk_session_id` 并写入隐藏 `context_rebuild`（reason `message-rewind`），把目标之前仍保留的
+可见历史作为交接，下次任意入口发送时注入全新原生会话，没有 user 历史时交接为空。
 查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
 HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
 确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
@@ -423,9 +436,16 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   只对**本账号的本机任务**调用：SSH 远程、Review、设备托管访客任务一律不注入。Claude Code 与 Pi 写进
   Agent 进程 env；Codex 的 app-server 共享，按线程经 `shell_environment_policy.set.<名>` 设置。
   返回值必须按 sessionId 确定，重启进程得到字节相同的 env（否则破坏缓存与重建一致性）。
-- `request_input_handoff`（`packages/lizi-mcps/src/xdt-helper/input_handoff.ts`）的使用时机只写在工具
-  说明里，**不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
-  何时该发起靠工具返回提示（如 `cindy_computer` 拒绝直接操作保密输入框），不靠提示词。
+- 找主人统一走 `cindy_helper` 的顶层工具 `ask_owner`（`packages/lizi-mcps/src/xdt-helper/ask_owner.ts`，
+  2026-10-30）：kind = choose（选择）／fill（亲自输入，原 `request_input_handoff`）／scan（扫码，窗口或
+  Agent 截图）／connect（连接账号，目前为 Grok）。它一直在模型的工具列表里（Pi 经网关检索），不藏在
+  `list_tools` 类目后面；列表按请求时的 harness 与能力面只给可用的 kind（Codex 无 choose，SSH 工作区
+  无 fill／scan）。旧名 `request_input_handoff`、`start_grok_device_login` 仍可经 `call_tool` 调用但不再
+  列出，`ask_user_question_async` 由 `ask_owner` kind=choose 原样接替。使用时机只写在工具说明里，
+  **不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
+  目标窗口不可用（Cindy 自身、找不到）在调用当下返回 `TARGET_IS_CINDY`／`TARGET_NOT_FOUND` 并说明
+  下一步，不再先回 pending。何时该发起靠工具说明与工具返回提示（如 `cindy_computer` 拒绝直接操作
+  保密输入框、浏览器读到登录墙时指向 `ask_owner`），不靠提示词。
 - 续接是隐藏的 `[Input handoff ended]` 合成消息，只有事实；产品规则见
   [`../product-rules/input-handoff.md`](../product-rules/input-handoff.md)。
 
@@ -473,8 +493,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   提示错误且不自动重发。Stop、失败、关闭及被替换问题的迟到回答不得续跑。
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
   卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
-  Claude Code／Pi 通过 `cindy_helper.ask_user_question_async` 复用现有卡片；工具立即返回
-  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏并拒绝这条工具；
+  Claude Code／Pi 通过 `cindy_helper.ask_owner`（kind=choose，2026-10-30 起接替
+  `ask_user_question_async`）复用现有卡片；工具立即返回
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏 choose 并拒绝这类调用；
   `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
   Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
   不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，
@@ -490,7 +511,7 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   入口只接受宿主标明 `mcpCallerKind=root` 且 `mcpCallerAttested=true` 的请求，身份未知、
   缺失或未证实均拒绝；不提供通用 call_tool 别名，避免绕过该判据。
   SSH、手机沿用既有 MCP／交互传输通道。
-  回归见 `session.async-user-questions.test.ts`、MCP `asyncUserQuestionTool.test.ts`；
+  回归见 `session.async-user-questions.test.ts`、MCP `askOwnerTool.test.ts`；
   两种真实 harness 配本地假模型的投递与稳定前缀实测见
   `agents/shared/async-user-questions.native.test.ts`。
   宿主的同步与异步问题共用卡片时，同步问题优先：已有同步问题等待时不再显示异步卡片，

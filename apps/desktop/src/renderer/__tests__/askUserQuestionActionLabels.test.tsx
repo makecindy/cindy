@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -98,7 +99,9 @@ describe('AskUserQuestionPrompt action labels', () => {
         ? { status: 'unique', candidates: ['/group-project/sidebar-layout-v1.html'], kind: 'file' }
         : { status: 'none', candidates: [] }])));
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { localDb: { sessions: { get } }, resolvePathBatch } });
-    const view = render(createElement(BotGroupPendingInteraction, { sessionId: 'lane', bot: { id: 'bot', name: 'Bot', avatar: '', avatarColor: 'red' } }));
+    // #8033: the real group surface has a router for the original-task entry.
+    // Keep the evidence/answer assertions below on that same production component.
+    const view = render(createElement(BotGroupPendingInteraction, { sessionId: 'lane', bot: { id: 'bot', name: 'Bot', avatar: '', avatarColor: 'red' } }), { wrapper: MemoryRouter });
     fireEvent.click(await view.findByRole('link', { name: 'sidebar-layout-v1.html' }));
     expect(links.html).toHaveBeenCalledWith('lane', '/group-project/sidebar-layout-v1.html', expect.any(Function),
       expect.objectContaining({ workingDir: '/group-project' }));

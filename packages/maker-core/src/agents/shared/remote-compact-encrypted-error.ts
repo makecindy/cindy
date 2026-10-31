@@ -6,16 +6,10 @@
  * 且压缩块密文不能剥；原样重试必再撞同一个 400。恢复动作与满窗 / host compact 确定性
  * 失败相同：host-controlled rollover（换窗），不要求用户开新任务或 Fork。
  *
- * 必须同时命中 compact 入口文案和密文错误码，避免把供应商切换时的推理密文 400 误当成换窗。
+ * 原始错误分类不传 reason，必须同时命中 compact 入口文案和密文错误码，避免把供应商切换时的
+ * 推理密文 400 误当成换窗。UI 可传持久化 reason 兼容旧 Host 丢失 additionalDetails 的记录。
  */
-export function isRemoteCompactEncryptedContentError(message: string): boolean {
-  if (!message) return false;
-  // Proxy evidence: upstream rejected a body whose only opaque payload is the
-  // retained compaction block, after reasoning cleanup. A provider change alone
-  // (or a bare invalid_encrypted_content) is insufficient to infer this failure.
-  if (/\bCINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE\b/.test(message)) return true;
-  return (
-    /invalid_encrypted_content/i.test(message) &&
-    /remote compact/i.test(message)
-  );
-}
+export {
+  REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON,
+  isRemoteCompactEncryptedContentError,
+} from '@cindy/maker-shared/error-redaction';

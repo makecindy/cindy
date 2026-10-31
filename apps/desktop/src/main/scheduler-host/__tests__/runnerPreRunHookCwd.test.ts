@@ -262,6 +262,20 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     );
   });
 
+  it('批准快照中的执行目录变化时，在运行前拒绝前置命令', async () => {
+    const getSessionMeta = vi.fn(async () => ({ workDir: '/changed/project' }) as never);
+    const { runner } = createRunner(getSessionMeta as never);
+
+    await expect(
+      runner.fire(
+        baseSchedule({ targetSessionId: 'sess-bound', workingDir: undefined }),
+        { ...createFireContext(), expectedPreRunWorkingDir: '/approved/project' },
+      ),
+    ).rejects.toThrow(/execution directory changed/i);
+
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+  });
+
   it('heartbeat meta 读取失败 → 回落原值(undefined),hook 仍按结果协议执行', async () => {
     const getSessionMeta = vi.fn(async () => {
       throw new Error('session missing');

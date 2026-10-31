@@ -57,7 +57,7 @@ import {
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
-import { MakerScheduleRunner } from './runner';
+import { MakerScheduleRunner, type SchedulerQueueDeps } from './runner';
 import { setSilencedRunProbe } from './silent-output';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
@@ -82,6 +82,7 @@ export interface StartSchedulerDeps {
 }
 
 let _scheduler: Scheduler | null = null;
+let _promptRunner: MakerScheduleRunner | null = null;
 let _storage: DrizzleScheduleStorage | null = null;
 let _loader: ProjectAutomationLoader | null = null;
 // Reset increments this before awaiting stop(). A start that was already
@@ -274,6 +275,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     },
   });
   _scheduler = scheduler;
+  _promptRunner = promptRunner;
   setSilencedRunProbe((runId) => scheduler.isRunSilenced(runId));
   void getRoutineEngine().catch((error) => deps.logger.warn?.('routine startup failed', { error: String(error) }));
   _loader = loader;
@@ -284,6 +286,18 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     );
   });
   return scheduler;
+}
+
+/** Called only by the host's validated, explicit Continue input path. */
+export async function resumeInterruptedScheduleRun(
+  sessionId: string,
+  enqueuePrompt: SchedulerQueueDeps['enqueuePrompt'],
+) {
+  const runner = _promptRunner;
+  if (!_scheduler || !runner) return null;
+  return _scheduler.resumeInterruptedRun(sessionId, {
+    fire: (schedule, ctx) => runner.fireManualContinuation(schedule, ctx, enqueuePrompt),
+  });
 }
 
 /** Cold-start probe for callers that own a durable deferred queue. */
@@ -341,6 +355,7 @@ export async function resetScheduler(): Promise<void> {
     await _scheduler.stop();
   }
   _scheduler = null;
+  _promptRunner = null;
   _storage = null;
   _loader = null;
 }

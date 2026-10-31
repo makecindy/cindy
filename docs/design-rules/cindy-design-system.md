@@ -53,6 +53,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 
 ## 版本记录
 
+- **2026-10-29（规范内部矛盾与过时说法清理，纯文档）**：`DESIGN.md` 主文字色改为 `--text-primary`（纯黑不再是普通文字层级，只留给已登记的 CTA 底与反相前景）；§7 / §9 的「零阴影 / 零渐变」改为指向 §6 与 §2 已登记例外；§9 设置页、Tabs、代码块示例对齐 §4 现行规则；Focus Blue 写明文本输入框例外；品牌红不再列「运行中」（§15.10 / §15.14）；Button 规格块补齐 28 / 24 / 22px；颜色审计、Toast 警告色、ConfirmDialog 危险色、motion token 位置、半透明 token、数值权威与 §13 待决指向按现状改写；§10 生成表 `--text-tertiary` 用途改源重生成。手机指南的圆角、颜色与交叉引用自相矛盾处一并修正；token 决策表与治理合同补取代 / 合并状态。不改任何界面数值。
 - **2026-10-27（登录页面板、控件与主按钮并入墨水口径）**：`DESIGN.md §16.1 / §16.5` 改写——登录面板、控件、描边、主按钮与 hover / pressed 取 CINDY 主界面对应角色（`loginInkLadder.test.ts` 逐项守护），2026-07-24 Figma 按钮状态矩阵与禁用叠层退役（ID 保留）；新增 `pnpm ui:check --page login-skin` 截图场景。详见 `design-decision-log.md` 10-27。
 - **2026-10-23（登录页文字并入墨水阶梯；移除 Figma 组件读取记录）**：`DESIGN.md §16` 改为登录域唯一现行规则来源，登录文字 token 与主界面墨水档同值（`loginInkLadder.test.ts` 守护）；`figma-component-spec.md` 移除，按钮族状态矩阵迁入 §16.5。详见 `design-decision-log.md` 10-23。
 

@@ -66,7 +66,7 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
   // 的 effect 不会因连接恢复重跑(maker.invoke 跨重连稳定,codex review P2)——把
   // connectionEpoch 纳入 effect 依赖,连接恢复即重跑 effect、经 cache-miss 重新
   // 拉取,不再永久停在 ready=false 的空目录。
-  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink();
+  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink(deviceId);
   const recovering = !!deviceId && recoveringDeviceIds.has(deviceId);
   const [payload, setPayload] = useState<DeviceProvidersPayload>(
     deviceId ? getCachedDeviceProviders(deviceId) ?? EMPTY_PAYLOAD : EMPTY_PAYLOAD,

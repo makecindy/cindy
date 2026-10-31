@@ -235,3 +235,12 @@ describe('挂起注册表', () => {
     expect(fallback).toHaveBeenCalledWith('任务已结束');
   });
 });
+
+// unit: old generic channel cards offered always even for once-only page requests.
+// Minimum input is the existing permission envelope with Main's page scope metadata.
+it.each(['once', 'session'])('page scope %s controls the existing Hook answer choices', scope => {
+  const result = composeInteractionCard({ kind: 'permission', requestId: 'page', toolName: 'MCP App: edit', input: {},
+    metadata: { mcpApp: { scope } }, suggestions: scope === 'session' ? [{ destination: 'session' }] : undefined })!;
+  expect(result.card.buttons.some(button => button.id === 'perm:always')).toBe(scope === 'session');
+  expect(result.decisions.has('perm:always')).toBe(scope === 'session');
+});

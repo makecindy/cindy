@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  sheet: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
+  sheet: null as any, model: null as any, choices: [] as any[], portrait: null as any, read: vi.fn(), openLink: vi.fn(), invoke: vi.fn(), alert: vi.fn(),
   close: vi.fn(), closed: vi.fn(), search: vi.fn(), created: vi.fn(),
 }));
 vi.mock('react-native', () => ({
@@ -32,14 +32,14 @@ vi.mock('@/components/RemoteCompanionAvatar', () => ({ RemoteCompanionAvatar: (p
 vi.mock('@/session/CompanionSettingsRow', () => ({ CompanionSettingsRow: ({ label, icon, onPress, disabled, busy, destructive, testID }: any) =>
   <button data-testid={testID} data-icon={icon?.type?.displayName ?? ''} data-destructive={destructive ? 'true' : 'false'} disabled={disabled || busy} onClick={onPress}>{label}</button> }));
 vi.mock('@/session/CompanionChoice', () => ({ CompanionChoice: (p: any) => { h.choices.push(p); return <span data-choice={p.label} />; } }));
-vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => { h.sheet = p; return p.visible ? <div data-testid="sheet">{p.children}</div> : null; } }));
+vi.mock('@/session/CompanionSheet', () => ({ CompanionSheet: (p: any) => { h.sheet = p; return p.visible ? <div data-testid="sheet">{p.trailingAction ? <header><button data-testid={p.trailingAction.testID} disabled={p.trailingAction.disabled || p.trailingAction.busy} onClick={p.trailingAction.onPress}>{p.trailingAction.label}</button></header> : null}<div data-testid="sheet-body">{p.children}</div></div> : null; } }));
 vi.mock('@/session/CompanionProfileArtifacts', () => ({ CompanionProfileArtifacts: () => null }));
 vi.mock('@/session/CompanionPortraitPicker', async original => ({ ...await original<object>(), CompanionPortraitPicker: (p: any) => { h.portrait = p; return <span data-testid="portraits" />; } }));
 vi.mock('@/session/CompanionMemoryPage', () => ({ CompanionMemoryPage: () => <div data-testid="memoryPage" /> }));
 vi.mock('@/session/useCompanionMemory', () => ({ useCompanionMemory: () => ({ busy: false, dirty: false, flush: async () => true, back: async () => false }) }));
 vi.mock('@/session/CompanionProfileNativeView', () => ({ CompanionProfileNativeView: () => { throw new Error('iOS view on Android'); } }));
 vi.mock('@/session/CompanionCreateNativeView', () => ({ CompanionCreateNativeView: () => { throw new Error('iOS view on Android'); } }));
-vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: () => null, CompanionModelPicker: () => null }));
+vi.mock('@/session/CompanionModelChain', () => ({ readCompanionModelChain: (v: string) => JSON.parse(v || '[]'), CompanionModelChain: (p: any) => { h.model = p; return null; }, CompanionModelPicker: () => null }));
 vi.mock('@/theme', async () => ({ ...await import('@/theme/tokens'), useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
 vi.mock('@/session/companionProfileData', async original => ({ ...await original<object>(), loadCompanionProfile: (...args: unknown[]) => h.read(...args) }));
 import { CompanionCreateSheet, CompanionProfileSheet } from '@/session/CompanionProfileSheet';
@@ -67,8 +67,8 @@ async function type(label: string, value: string) {
   const field = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); if (!field) throw new Error(`Missing ${label}`);
   await act(async () => { field.value = value; field.dispatchEvent(new Event('input', { bubbles: true })); });
 }
-async function render() {
-  await act(async () => root.render(createElement(CompanionProfileSheet, { visible: true, resource: resource as any, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online: true,
+async function render(online = true) {
+  await act(async () => root.render(createElement(CompanionProfileSheet, { visible: true, resource: resource as any, collectionId: 'teammates', deviceId: 'host', deviceName: 'Mac', online,
     onClose: h.close, onClosed: h.closed, onOpenSearch: h.search })));
   await settle();
 }
@@ -227,4 +227,67 @@ it('keeps Create disabled for a disabled host action and cancels a clean form di
   await type('Name', '');
   await press(byText('devices.common.cancel'));
   expect(h.alert).not.toHaveBeenCalled(); expect(h.close).toHaveBeenCalledOnce();
+});
+
+async function renderModels() {
+  const data = home();
+  data.panels.push(form('models', [{ id: 'modelChain', kind: 'multiline' }, { id: 'followsDefault', kind: 'toggle' }], { modelChain: '[]', followsDefault: false }));
+  h.read.mockResolvedValue(data);
+  await render();
+  expect(h.sheet.trailingAction).toBeUndefined();
+  await press(byTest('companionProfile.models'));
+}
+// Model-page Save placement and controller guards were not covered together on Android.
+it('keeps Android model Save in the header and submits the same draft action', async () => {
+  await renderModels();
+  expect(h.sheet.onBack).toBeTypeOf('function');
+  expect(h.sheet.trailingAction).toMatchObject({ label: 'devices.common.save', disabled: true });
+  expect(container.querySelectorAll('[data-testid="companionProfile.models.save"]')).toHaveLength(1);
+  expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'devices.companionProfile.save')).toHaveLength(0);
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  expect(h.sheet.trailingAction.disabled).toBe(false);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
+  expect(h.invoke.mock.calls[0][2]).toMatchObject({ actionId: 'models-grant', input: { followsDefault: true } });
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await act(async () => h.sheet.onBack());
+  expect(h.sheet.trailingAction).toBeUndefined();
+  await press(byTest('companionProfile.profile'));
+  expect(h.sheet.trailingAction).toBeUndefined();
+  expect([...container.querySelectorAll('button')].filter(button => button.textContent === 'devices.companionProfile.save')).toHaveLength(1);
+});
+
+it('keeps Android header Save disabled offline and while a save is in flight', async () => {
+  await renderModels();
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  await render(false);
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await render();
+  let finish!: (value: any) => void;
+  h.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.sheet.trailingAction.busy).toBe(true);
+  expect(byTest('companionProfile.models.save')!.disabled).toBe(true);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
+  await act(async () => finish({ effects: [] }));
+  expect(h.sheet.trailingAction.busy).toBe(false);
+});
+
+it('keeps the Android model draft on save failure and blocks a conflicting header save', async () => {
+  await renderModels();
+  await act(async () => h.model.onChange({ ...h.model.values, followsDefault: true }));
+  h.invoke.mockRejectedValueOnce(new Error('offline'));
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.model.values.followsDefault).toBe(true);
+  expect(h.sheet.trailingAction.disabled).toBe(false);
+  const latest = await h.read();
+  h.read.mockResolvedValue({ ...latest, resource: { ...resource, revision: 'v2' } });
+  // The real Retry action re-reads the host and preserves the local conflicting draft.
+  const retry = byText('devices.resources.retry')!;
+  await act(async () => retry.click());
+  expect(h.model.values.followsDefault).toBe(true);
+  expect(h.sheet.trailingAction.disabled).toBe(true);
+  await act(async () => h.sheet.trailingAction.onPress());
+  expect(h.invoke).toHaveBeenCalledOnce();
 });

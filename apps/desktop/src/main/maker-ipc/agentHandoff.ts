@@ -70,7 +70,8 @@ export interface BuildHandoffOptions {
   includeToolResults?: boolean;
   /**
    * 交接触发原因。message-deletion 表示同一引擎因本地消息被删除而重建原生
-   * 上下文；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
+   * 上下文；message-rewind 表示回退/编辑的目标之前没有可续接的 Claude 回复，
+   * 只能换全新原生会话并带上保留下来的历史；context-overflow 表示同一引擎因窗口超限而换干净原生会话；
    * model-window-switch 表示切到更小模型前主动换窗；pi-prompt-timeout 表示原生会话
    * 对 prompt 无响应后用户重试换窗;idle-gap 表示伙伴对话空闲足够久之后的下一条消息
    * 主动换干净原生会话,免得老话题带偏新话题。
@@ -78,6 +79,7 @@ export interface BuildHandoffOptions {
   reason?:
     | 'agent-switch'
     | 'message-deletion'
+    | 'message-rewind'
     | 'context-overflow'
     | 'model-window-switch'
     | 'pi-prompt-timeout'
@@ -627,6 +629,7 @@ const FORK_TERMINATOR = "== End of fork note; the user's new message follows =="
 function isRebuildReason(reason: BuildHandoffOptions['reason']): boolean {
   return (
     reason === 'message-deletion' ||
+    reason === 'message-rewind' ||
     reason === 'context-overflow' ||
     reason === 'model-window-switch' ||
     reason === 'pi-prompt-timeout' ||
@@ -771,6 +774,10 @@ function assembleHandoffText(
         : opts.reason === 'native-session-recovery'
           ? `The previous native session history could not be safely transferred, so Cindy started a fresh native session in the same task. ` +
             `The original conversation remains available through the history retrieval tools. Use the handoff below to continue; do not repeat completed actions. `
+        : opts.reason === 'message-rewind'
+          ? `The user rewound or edited a message in this conversation, so Cindy started a fresh native session in the same task. ` +
+            `Below is the conversation before that point; user messages without a reply there were stopped by the user before any answer. ` +
+            `Treat only these records as the prior conversation. `
         : opts.reason === 'pi-prompt-timeout'
           ? `The previous native agent session stopped responding to prompts, so Cindy started a fresh native session in the same task. ` +
             `Below is the valid conversation history before the unresponsive turn; treat only these records as the prior conversation, ` +

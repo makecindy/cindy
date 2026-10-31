@@ -66,6 +66,45 @@ Cindy Make 的设置入口和指令前置弹窗共用源码准备流程：切到
 准备阶段填充的 pnpm store 缓存，并执行必要的安装脚本；各 worktree 仍保留独立的 `node_modules`，不复制或
 链接个人分支的依赖目录。安装失败或取消可在现有 checkout 上重试，不重置个人分支。
 
+## macOS：iOS 模拟器构建工具链
+
+首次安装开发包不等于首次完整编译。先按 [Mobile 模拟器流程](../../apps/mobile/docs/simulator-debugging.md#截图与当前版本测试)
+检查已安装包；需要安装或更新原生包时，`mobile:sim:rebuild` 会先检查跨 worktree 的
+fingerprint 缓存。命中兼容产物就直接安装，不要求 CocoaPods；只有缓存不可复用时才编译。
+
+完整编译需要选中的完整 Xcode、iOS Simulator SDK、目标设备所需的已安装 runtime，
+以及当前 Agent 的 `PATH` 中可运行的 CocoaPods。仅安装 Command Line Tools 不够。
+在实际运行任务的终端核对（终端 App 可用不代表 Agent 子进程也可用）：
+
+```bash
+xcode-select -p
+xcodebuild -version
+xcrun --sdk iphonesimulator --show-sdk-path
+xcrun simctl list runtimes
+pod --version
+```
+
+Xcode 选择由本机 `xcode-select` 或本次进程的 `DEVELOPER_DIR` 决定；首次启动设置、许可和
+runtime 下载在 Xcode 完成。机器上的实际安装位置、选中的设备和工具是否可用应现场检测，
+不写成仓库默认值。模拟器的 SDK/runtime 不等于 CocoaPods，也不等于可复用 App。
+
+CocoaPods 使用开发者已有的工具管理方式：
+
+- 已安装 Homebrew：`brew install cocoapods`，随后确认当前 Agent 的 `PATH` 能找到它。
+- 已有独立 Ruby（例如 rbenv/RVM 管理）：先核对 `ruby --version` 和 `gem --version`，
+  然后 `gem install cocoapods --user-install`；将 `ruby -r rubygems -e 'puts Gem.user_dir'`
+  输出目录下的 `bin` 加到该工具环境的 `PATH`，再验证 `pod --version`。
+- 两者都没有：先按开发者选定的方式准备独立 Ruby 或 Homebrew，再安装 CocoaPods。
+  不因系统带有 Ruby 2.6 就假定当前 CocoaPods 及其依赖可安装，也不自动替换系统 Ruby。
+
+这遵循 [CocoaPods 官方安装说明](https://guides.cocoapods.org/using/getting-started.html)
+推荐的独立 Ruby 与用户目录安装方式；安装命令成功仍须通过上面的本机检查。工具链安装、
+系统路径调整与许可证接受遵循当前用户授权，不由仓库脚本静默执行。
+
+缓存未命中时，`rebuild` 在生成 `ios/` 前运行只读工具检查，输出 `SIM_BUILD_PREFLIGHT`；
+缺失、执行失败或超时以 `IOS_BUILD_TOOLS_UNAVAILABLE` 结束。先修复回执中失败的工具，
+用原来的 region / UDID / `--mock` 参数重试，不通过换区域、清缓存或换真机掩盖环境故障。
+
 ## Linux：Electron SUID sandbox 权限
 
 较新的 Ubuntu（23.10+ 默认用 AppArmor 限制非特权 user namespace）上，Electron 会退回

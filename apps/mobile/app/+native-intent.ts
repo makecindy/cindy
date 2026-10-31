@@ -23,6 +23,7 @@ import {
 import { isRelayJoinPath, RELAY_JOIN_ROUTE, receiveRelayJoinIntent } from '@/device-link/relayJoinIntent';
 import { WECHAT_APP_ID, WECHAT_UNIVERSAL_LINK } from '@/config/env';
 import { isWechatSdkCallback } from '@/auth/wechatCallback';
+import { isChatInviteLinkPath, receiveChatInviteLink } from '@/chat/chatInviteIntent';
 
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
   try {
@@ -33,6 +34,9 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
       appId: WECHAT_APP_ID,
       universalLink: WECHAT_UNIVERSAL_LINK,
     })) return '/';
+    // Group invitations stay in memory across login. A warm link preserves the
+    // current page; the single root Host presents the invitation after auth.
+    if (receiveChatInviteLink(path)) return initial ? '/' : null;
     // 供应商分享链接只能在电脑上申请:手机只显示「请在电脑上打开」的提示页。口令不进路由
     // 状态与诊断(提示页从内存取走可复制的链接),不合法的链接同样落到提示页、什么都不留。
     if (receiveProviderShareLinkIntent(path)) return PROVIDER_SHARE_LINK_ROUTE;
@@ -58,6 +62,7 @@ export function redirectSystemPath({ path, initial }: { path: string; initial: b
     }
     return path;
   } catch {
+    if (isChatInviteLinkPath(path)) return initial ? '/' : null;
     // 分享口令与中转加入码绝不随原始链接进路由状态。
     if (isProviderShareLinkPath(path)) return PROVIDER_SHARE_LINK_ROUTE;
     return isRelayJoinPath(path) ? RELAY_JOIN_ROUTE : path;

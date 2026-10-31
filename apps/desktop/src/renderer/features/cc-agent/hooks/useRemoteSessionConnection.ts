@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { isSharedTaskPeer } from '@cindy/device-link';
 
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
@@ -49,11 +50,12 @@ export function deriveRemoteConnectionStatus(
  */
 export function useDeviceLinkConnectionIssue(
   enabled: boolean,
+  deviceId?: string,
 ): DeviceLinkConnectionIssuePayload | null {
   const [issue, setIssue] = useState<DeviceLinkConnectionIssuePayload | null>(null);
 
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || (deviceId && isSharedTaskPeer(deviceId))) {
       setIssue(null);
       return;
     }
@@ -79,9 +81,9 @@ export function useDeviceLinkConnectionIssue(
       cancelled = true;
       offIssue();
     };
-  }, [enabled]);
+  }, [enabled, deviceId]);
 
-  return enabled ? issue : null;
+  return enabled && !(deviceId && isSharedTaskPeer(deviceId)) ? issue : null;
 }
 
 export function useRemoteSessionConnection(deviceId: string | undefined): RemoteConnectionStatus {
@@ -89,6 +91,9 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
 
   useEffect(() => {
     if (!deviceId) return;
+    // Shared tasks follow their own peer mirror and recovery. Primary relay
+    // status/issue belongs to same-account devices, including in getState.
+    if (isSharedTaskPeer(deviceId)) return;
     let cancelled = false;
     // push 一旦到达即权威:迟到的 getState 快照不得覆盖更新的 onStatusChanged 值。
     let pushSeen = false;
@@ -129,5 +134,5 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
   );
 
   if (!deviceId) return 'local';
-  return deriveRemoteConnectionStatus(linkStatus, hostOnline, hostUnresponsive);
+  return deriveRemoteConnectionStatus(isSharedTaskPeer(deviceId) ? 'online' : linkStatus, hostOnline, hostUnresponsive);
 }

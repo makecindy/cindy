@@ -5,17 +5,6 @@ const MAX_FILE_COUNT = 20;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
 
-const BLOCKED_FILE_NAMES = new Set([
-  '.env',
-  '.npmrc',
-  '.netrc',
-  '.pypirc',
-  'id_dsa',
-  'id_ecdsa',
-  'id_ed25519',
-  'id_rsa',
-]);
-
 function isInside(parent: string, child: string): boolean {
   const fold = (value: string) =>
     process.platform === 'win32' ? value.toLowerCase() : value;
@@ -23,21 +12,12 @@ function isInside(parent: string, child: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function isBlockedFile(filePath: string): boolean {
-  const name = path.basename(filePath).toLowerCase();
-  const sensitiveDirectory = filePath
-    .split(/[\\/]+/)
-    .some((segment) => ['.git', '.ssh'].includes(segment.toLowerCase()));
-  return BLOCKED_FILE_NAMES.has(name)
-    || name.startsWith('.env.')
-    || name.endsWith('.key')
-    || sensitiveDirectory;
-}
-
 /**
  * Resolves upload candidates to their filesystem identity and confines every
  * file to a host-provided root. Realpath checks prevent a workdir symlink or
- * junction from granting access to a file outside that workdir.
+ * junction from granting access to a file outside that workdir. Files inside
+ * the roots are not filtered by name (2026-10-30: no capability limits of our
+ * own); every browser upload goes through the task's approval instead.
  */
 export async function resolveUploadFiles(
   candidates: unknown,
@@ -138,9 +118,6 @@ export function resolveUploadFilesSync(candidates: unknown, allowedRoots: string
     }
     if (!roots.some((root) => isInside(root, resolved))) {
       throw new Error('upload files must stay inside the current session directory');
-    }
-    if (isBlockedFile(resolved)) {
-      throw new Error(`upload blocked for sensitive file: ${path.basename(resolved)}`);
     }
     if (stat.size > MAX_FILE_BYTES) {
       throw new Error(`upload file exceeds ${MAX_FILE_BYTES} bytes: ${path.basename(resolved)}`);

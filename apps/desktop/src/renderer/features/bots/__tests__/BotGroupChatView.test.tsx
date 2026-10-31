@@ -8,7 +8,7 @@ import { MarkdownMermaidBlock } from '@/components/chat/MarkdownMermaidBlock';
 import { prepareShareMessageClone, queryShareableMessageIds } from '@/lib/shareConversationImage';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { clearDraft, getDraft } from '@/lib/composerDraftStore';
+import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
 import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
@@ -17,6 +17,7 @@ import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTes
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
 import { botGroupWorkPreview } from '../BotGroupLivePreview';
 import { BotGroupChatView } from '../BotGroupChatView';
+import { BotGroupProcess } from '../BotGroupProcess';
 import { ControlledBanner, __resetControlledBannerForTests } from '../../remote-device/ControlledBanner';
 import type {
   BotGroupChangedPayload,
@@ -31,6 +32,8 @@ const mocks = vi.hoisted(() => ({
     options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
+  locationState: null as { createdGroupInvite?: string | null } | null,
+  createInvite: vi.fn(),
   navigate: vi.fn(),
   getBotGroup: vi.fn(),
   cachedGroup: null as BotGroupDetail | null,
@@ -71,8 +74,9 @@ vi.mock('react-i18next', async (original) => ({
     i18n: { language: 'en-US', resolvedLanguage: 'en' },
   }),
 }));
+vi.mock('@/features/cc-agent/hooks/useRemoteSessionSync', () => ({ useRemoteSessionSync: () => {} }));
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({ pathname: '/bots/groups/g1', search: '' }),
+  useLocation: () => ({ pathname: `/bots/groups/${mocks.groupId}`, search: '', state: mocks.locationState }),
   useNavigate: () => mocks.navigate,
   useParams: () => ({ groupId: mocks.groupId }),
 }));
@@ -284,6 +288,8 @@ beforeEach(() => {
   resetBotReadStateForTests();
   resetBotGroupOutboxForTests();
   mocks.groupId = 'g1';
+  mocks.locationState = null;
+  mocks.createInvite.mockReset().mockResolvedValue({ ok: true, link: 'cindy://chat-invite/preview', expiresAt: null, reusable: true });
   __resetControlledBannerForTests();
   mocks.controlledPush = null;
   mocks.getControlledState.mockReset().mockResolvedValue({ controlledBy: [] });
@@ -332,7 +338,7 @@ beforeEach(() => {
       cleanupCachedImages: vi.fn(async () => undefined),
       getFileThumbnail: vi.fn(async () => null),
       maker: {
-        chatServer: { thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
+        chatServer: { createInvite: mocks.createInvite, thread: mocks.thread, reply: mocks.reply, shareToMain: mocks.shareToMain, reactors: vi.fn(async () => ({ ok: true, reactors: [] })) },
         listBotGroups: vi.fn(async () => ({ ok: true, groups: [] })),
         getBotGroup: (...args: unknown[]) => (args[1] as { cacheOnly?: boolean } | undefined)?.cacheOnly
           ? Promise.resolve(mocks.cachedGroup ? { ok: true, group: mocks.cachedGroup } : { ok: false, errorCode: 'NOT_FOUND' })
@@ -359,6 +365,70 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  // Renderer integration: isolated confirmed deltas must not conceal a missing page after reconnect.
+  it('keeps a skipped message reachable by pagination after multiple deltas overtake a full page', async () => {
+    const page = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) =>
+      msg({ id: `gap-${from + index}`, sequence: from + index, content: `Gap sample ${from + index}` }));
+    const initial = detail({ historyRevision: 'live', messages: page(1, 3), hasMoreBefore: false });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Gap sample 1');
+    let finish!: (value: unknown) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ ok: true, group: detail({ ...initial, messages: page(5, 7), hasMoreBefore: true }) });
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: page(6, 6) }); });
+    await screen.findByText('Gap sample 6');
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: page(7, 7) }); });
+    await screen.findByText('Gap sample 7');
+    await act(async () => finish({ ok: true, group: initial }));
+    await screen.findByText('Gap sample 5');
+    mocks.getBotGroup.mockResolvedValueOnce({ ok: true, group: detail({ ...initial, messages: page(2, 4), hasMoreBefore: true }) });
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await screen.findByText('Gap sample 4');
+    expect(mocks.getBotGroup.mock.lastCall?.[1]).toMatchObject({ beforeSequence: 5 });
+    expect(screen.getAllByText('Gap sample 7')).toHaveLength(1);
+  });
+
+  // Unit: an authenticated main-chat delta used to wait for the full room IPC
+  // (read state, plans and executions). A late full read must not erase that delta.
+  it.each([false, true])('renders committed messages during a full refresh and preserves revocation (revoked: %s)', async revoked => {
+    const initial = detail({ serverBacked: true, historyRevision: 'live', messages: [msg({ content: 'Already visible' })] });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    renderView(); await screen.findByText('Already visible');
+    let finish!: (value: unknown) => void;
+    mocks.getBotGroup.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages' }); });
+    await waitFor(() => expect(finish).toBeTypeOf('function'));
+    const fresh = msg({ id: 'fresh-share', sequence: 200, content: 'Server confirmed delta' });
+    mocks.getBotGroup.mockImplementation(() => new Promise(() => {}));
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages', historyRevision: 'live', messages: [fresh] }); });
+    expect(await screen.findByText('Server confirmed delta')).toBeTruthy();
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages', historyRevision: 'revoked',
+      messages: [msg({ id: 'wrong-generation', sequence: 201, content: 'Stale account content' })] }); });
+    expect(screen.queryByText('Stale account content')).toBeNull();
+    await act(async () => finish(revoked ? { ok: false, errorCode: 'PERMISSION_DENIED' } : { ok: true, group: initial }));
+    if (revoked) expect(screen.queryByText('Server confirmed delta')).toBeNull();
+    else expect(screen.getAllByText('Server confirmed delta')).toHaveLength(1);
+  });
+
+  // Regression: returning to a group must not replay its consumed creation intent.
+  it('does not reopen a created invitation or regenerate its link after leaving and returning', async () => {
+    mocks.locationState = { createdGroupInvite: 'g1' };
+    const tree = () => <Tooltip.Provider><FeatureSidebarSlotProvider isCollapsed={false}>
+      <HeaderSlot /><BotGroupChatView />
+    </FeatureSidebarSlotProvider></Tooltip.Provider>;
+    const view = render(tree());
+    await screen.findByRole('button', { name: 'bots.groupChat.server.copyLink' });
+    expect(mocks.createInvite).toHaveBeenCalledTimes(1);
+    mocks.locationState = { createdGroupInvite: null };
+    mocks.groupId = 'g2';
+    view.rerender(tree());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    mocks.groupId = 'g1';
+    view.rerender(tree());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mocks.createInvite).toHaveBeenCalledTimes(1);
+  });
+
   it('clears the selected route when an authoritative personal hide unmounts settings', async () => {
     renderView();
     await screen.findByRole('textbox');
@@ -811,7 +881,8 @@ describe('BotGroupChatView', () => {
       const panel = screen.getByRole('complementary');
       button.focus();
       expect(panel.parentElement?.contains(button)).toBe(false);
-      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open') await screen.findByRole('tooltip');
+      // Header icon buttons with a tooltip: its Escape closes the tooltip first.
+      if (button.getAttribute('aria-label') === 'bots.groupChat.settings.open' || button.dataset.testid === 'chat-group-invite') await screen.findByRole('tooltip');
       fireEvent.keyDown(button, { key: 'Escape', isComposing: true, keyCode: 229 });
       const consumed = createEvent.keyDown(button, { key: 'Escape', bubbles: true, cancelable: true });
       consumed.preventDefault();
@@ -1257,15 +1328,15 @@ describe('BotGroupChatView', () => {
         speakingBotIds: ['mimi'],
         round: {
           status: 'running',
-          speakers: [{ botId: 'mimi', sessionId: 'lane-mimi', activity: 'reply' }],
+          speakers: [{ botId: 'mimi', sessionId: 'lane-mimi', activity: 'reply', startedAt: Date.now() - 125_000 }],
           canContinue: false,
         },
       }),
     });
     renderView();
-    const speaking = await screen.findByTestId('bot-group-speaking');
+    const speaking = await screen.findByTestId('bot-group-progress');
     expect(speaking.textContent).toContain('咪咪');
-    expect(speaking.textContent).toContain('phase:processing');
+    expect(speaking.textContent).toContain('chat.teammateProcess.elapsed');
     expect(screen.getByTestId('pending-interaction').textContent).toBe('lane-mimi');
     expect(screen.queryByRole('button', { name: 'bots.groupChat.timeline.continue' })).toBeNull();
 
@@ -1275,6 +1346,21 @@ describe('BotGroupChatView', () => {
     // Typing turns the button back into send: interrupting starts a new round.
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '换个方案' } });
     expect(screen.getByRole('button', { name: 'bots.send' })).toBeTruthy();
+  });
+
+  it.each([
+    ['STOP_OWNERSHIP_UNKNOWN', 'stopOwnershipUnknown'],
+    ['NOTHING_TO_STOP', 'nothingToStop'],
+    ['REVISION_CONFLICT', 'revisionConflict'],
+    ['PERMISSION_DENIED', 'permissionDenied'],
+  ])('shows the reason when stopping is refused with %s', async (errorCode, variant) => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      speakingBotIds: ['mimi'], round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: null, activity: 'reply' }], canContinue: false },
+    }) });
+    mocks.stopBotGroupRound.mockResolvedValue({ ok: false, errorCode, message: errorCode });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.composer.stop' }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith(`bots.groupChat.errors.${variant}`));
   });
 
   it('shows every teammate thinking at once in a parallel circle', async () => {
@@ -1293,8 +1379,8 @@ describe('BotGroupChatView', () => {
       }),
     });
     renderView();
-    await screen.findAllByTestId('bot-group-speaking');
-    const rows = screen.getAllByTestId('bot-group-speaking');
+    await screen.findAllByTestId('bot-group-progress');
+    const rows = screen.getAllByTestId('bot-group-progress');
     expect(rows.map((row) => row.textContent?.includes('咪咪') ? 'mimi' : row.textContent?.includes('小满') ? 'xiaoman' : '?'))
       .toEqual(['mimi', 'xiaoman']);
     expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent))
@@ -1559,6 +1645,32 @@ describe('BotGroupChatView', () => {
     await waitFor(() => expect(mocks.getBotGroup).toHaveBeenCalledTimes(2));
     act(() => mocks.pushes.forEach((push) => push({ groupId: 'g1', change: 'deleted' })));
     expect(await screen.findByText('bots.groupChat.unavailableTitle')).toBeTruthy();
+  });
+
+  // #8084 review: deleted rooms left their new thread trays in the media live set.
+  // Unit: real group view, one saved thread image, authoritative deletion/access loss.
+  it.each(['deleted', 'hidden', 'NOT_FOUND', 'PERMISSION_DENIED'] as const)('discards thread attachment drafts after %s', async boundary => {
+    const scope = botGroupThreadDraftKey('g1', 'u1');
+    const url = 'cindy-media://blobs/deleted-thread.png';
+    saveDraft(scope, { text: null, attachments: [{ id: 'deleted-thread', name: 'photo.png', ext: '.png',
+      category: 'image', mimeType: 'image/png', size: 12, path: '', url }] });
+    const token = captureDraftDiscardToken(scope);
+    const view = renderView();
+    await screen.findByText('周六 8:10 有票');
+    if (boundary === 'NOT_FOUND' || boundary === 'PERMISSION_DENIED') {
+      mocks.getBotGroup.mockResolvedValue({ ok: false, errorCode: boundary, message: '' });
+      act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    } else {
+      act(() => mocks.pushes.forEach(push => push(boundary === 'deleted'
+        ? { groupId: 'g1', change: 'deleted' }
+        : { groupId: 'g1', change: 'list', listState: { hidden: true, revision: 1 } })));
+    }
+    await screen.findByText('bots.groupChat.unavailableTitle');
+    expect(getDraft(scope)).toBeUndefined();
+    expect(isDraftDiscardTokenCurrent(token)).toBe(false);
+    expect(getAllDraftAttachmentUrls()).not.toContain(url);
+    view.unmount();
+    expect(getDraft(scope)).toBeUndefined();
   });
 
   describe('failed timeline read recovery', () => {
@@ -2719,11 +2831,13 @@ describe('BotGroupChatView', () => {
       });
       renderView();
       const rows = await screen.findAllByTestId('bot-group-speaking');
-      expect(rows.map((row) => row.getAttribute('data-activity'))).toEqual(['planning', 'step']);
+      expect(rows.map((row) => row.getAttribute('data-activity'))).toEqual(['planning']);
+      const step = await screen.findByTestId('bot-group-progress');
+      expect(step.textContent).toContain('小满');
       // The row already names the Bot; planning has no Session phase, a step shows its live phase.
       expect(rows[0]!.textContent).toContain('bots.groupChat.speaking.planning');
       expect(rows[0]!.textContent).not.toContain('bots.groupChat.speaking.planning:');
-      expect(rows[1]!.textContent).not.toContain('bots.groupChat.speaking.planning');
+      expect(step.textContent).not.toContain('bots.groupChat.speaking.planning');
       expect(screen.getAllByTestId('pending-interaction').map((node) => node.textContent)).toEqual(['plan-xiaoman']);
     });
 
@@ -3307,11 +3421,13 @@ describe('Telegram / Slack-grade timeline', () => {
     }) });
     renderView();
     const strip = await screen.findByTestId('bot-group-progress');
-    expect(strip.textContent).toContain('phase:processing');
+    // A plan edit is not an execution start (#7583); keep unknown time unknown.
+    expect(strip.textContent).toContain('chat.teammateProcess.processing');
+    expect(strip.textContent).not.toContain('chat.teammateProcess.elapsed');
     expect(strip.textContent).not.toContain('bots.groupChat.progress.step');
   });
 
-  it('pins a progress strip above the composer while a plan step runs', async () => {
+  it('keeps the running step and its confirmations in the timeline', async () => {
     const running = plan({
       status: 'running',
       currentStep: 0,
@@ -3320,13 +3436,12 @@ describe('Telegram / Slack-grade timeline', () => {
     });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: withPlan(running, [], {
       speakingBotIds: ['mimi'],
-      round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 'plan-mimi', activity: 'step' }], canContinue: false },
+      round: { status: 'running', speakers: [{ botId: 'mimi', sessionId: 'plan-mimi', activity: 'step', startedAt: Date.now() - 125_000 }], canContinue: false },
     }) });
     renderView();
     const strip = await screen.findByTestId('bot-group-progress');
-    expect(strip.textContent).toContain('bots.groupChat.progress.step');
+    expect(strip.textContent).toContain('chat.teammateProcess.elapsed');
     expect(strip.textContent).toContain('想清楚这页讲什么');
-    expect(strip.textContent).toContain('bots.groupChat.progress.elapsed');
     // The strip stands in for the step's speaking line; its confirmations stay in the timeline.
     expect(screen.queryByTestId('bot-group-speaking')).toBeNull();
     expect(screen.getByTestId('pending-interaction').textContent).toBe('plan-mimi');
@@ -3630,6 +3745,66 @@ describe('thread previews and posting to the main chat', () => {
     expect(mocks.reply.mock.calls[1][0]).toMatchObject({ rootId: 'u1', text: '@咪咪 both' });
     // Each send starts from the default again.
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
+  });
+
+  // Unit, topic latency reproduction: the HTTP receipt arrived seconds before
+  // the history echo, but the real bubble still announced "sending" during that gap.
+  // Existing optimistic tests only settled after the next history read completed.
+  it('ends the topic sending state on its receipt while the history echo is still loading', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: group([msg({ id: 'u1', content: 'Root' })]) });
+    let confirm!: (result: unknown) => void;
+    mocks.reply.mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+    const user = userEvent.setup(); renderView();
+    await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    await within(panel).findByText('Thread root u1');
+    mocks.thread.mockImplementation(() => new Promise(() => {}));
+    mocks.shareToMain.mockImplementationOnce(() => new Promise(() => {}));
+    await user.click(within(panel).getByRole('checkbox', { name: t('alsoSend') }));
+    const input = within(panel).getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'Receipt before echo' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const article = (await within(panel).findByText('Receipt before echo')).closest('article')!;
+    expect(article.getAttribute('aria-busy')).toBe('true');
+    await act(async () => confirm({ ok: true, messageId: 'confirmed-topic-reply' }));
+    expect(article.getAttribute('aria-busy')).not.toBe('true');
+    expect(mocks.shareToMain).toHaveBeenCalledWith({ groupId: 'g1', messageId: 'confirmed-topic-reply' });
+    expect(input.hasAttribute('disabled')).toBe(false);
+    expect(within(panel).getAllByText('Receipt before echo')).toHaveLength(1);
+    // An acknowledged local row still waits for the authorized server projection
+    // before exposing message actions or borrowing server identity metadata.
+    expect(within(article).queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
+  });
+
+  // Unit: a slow share request previously left the main chat empty. The local
+  // row must appear before the receipt, settle only on success, roll back on failure,
+  // and adopt the real server row without duplicating it or losing its DOM identity.
+  it.each([false, true])('shows a pending main-chat copy immediately (failed: %s)', async failed => {
+    const initial = group([msg({ id: 'u1', content: 'Root' })]);
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: initial });
+    let settle!: (result: unknown) => void;
+    mocks.shareToMain.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+    const user = userEvent.setup(); renderView();
+    await user.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const reply = (await within(panel).findByText('Reply to u1')).closest('article')!;
+    fireEvent.pointerDown(within(reply).getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    await user.click(await screen.findByRole('menuitem', { name: t('postToMain') }));
+    const timeline = screen.getByTestId('bot-group-timeline');
+    const row = (await within(timeline).findByText('Reply to u1')).closest('article')!;
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    expect(within(row).getByText('bots.groupChat.timeline.sending')).toBeTruthy();
+    await act(async () => settle(failed ? { ok: false, errorCode: 'SERVICE_ERROR' }
+      : { ok: true, messageId: 'real-main-copy', alreadyShared: false }));
+    if (failed) { expect(within(timeline).queryByText('Reply to u1')).toBeNull(); return; }
+    expect(row.getAttribute('aria-busy')).not.toBe('true');
+    const real = msg({ id: 'real-main-copy', sequence: 20, content: '', isSelf: true, threadShare: {
+      messageId: 'reply-u1', threadRootId: 'u1', status: 'available', authorKind: 'user', authorBotId: null,
+      authorName: '', sharedByAuthor: true, content: 'Reply to u1', attachments: [], createdAt: 1, edited: false } });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...initial, messages: [...initial.messages, real] } });
+    act(() => { for (const push of mocks.pushes) push({ groupId: 'g1', change: 'messages' }); });
+    await waitFor(() => expect(within(timeline).getAllByText('Reply to u1')).toHaveLength(1));
+    expect(within(timeline).getByText('Reply to u1').closest('article')).toBe(row);
   });
 
   it('retries only the main-chat copy after the reply already reached the thread', async () => {
@@ -4170,6 +4345,23 @@ it('keeps only the current public progress note between tool calls', () => {
   expect(botGroupWorkPreview({ ...state, streamingText: 'NO_REPLY' }, 2)).toBe('');
 });
 
+// #7583, unit: missing start timestamps must not turn a stale waiting execution
+// into a newly started timer. Existing progress cases all supplied a timestamp.
+it('keeps waiting work inspectable without inventing an elapsed time', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'], round: {
+    status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', activity: 'reply', executionId: 'waiting', sessionId: 'lane-mimi', executionStatus: 'needs_input' },
+    ],
+  } }) });
+  renderView();
+  const strip = await screen.findByTestId('bot-group-progress');
+  expect(strip.textContent).toContain('bots.groupChat.waitingConfirm');
+  expect(strip.textContent).not.toContain('bots.groupChat.progress.elapsed');
+  expect(screen.queryByTestId('bot-group-speaking')).toBeNull();
+  fireEvent.click(within(strip).getByRole('button', { name: 'bots.groupChat.progress.viewProcess' }));
+  expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/lane-mimi');
+});
+
 // Group work identity: the source computer returns two concurrent executions of the
 // same companion. Open only the requested execution on its original host (unit tier).
 it('opens the exact remote execution and leaves other members’ private tasks unavailable', async () => {
@@ -4217,4 +4409,99 @@ it.each([false, true])('keeps the group stop control enabled for another running
     fireEvent.click(buttons[0]!);
     await waitFor(() => expect(mocks.stopBotGroupRound).toHaveBeenCalledWith('g1'));
   }
+});
+
+// #8047: queued is busy, but creation/mount/plan-edit time does not prove work began.
+it.each(['reply', 'step'] as const)('shows a queued %s without generation or work elapsed', async activity => {
+  const queuedPlan = plan({ status: 'running', currentStep: 0,
+    steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!] });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+    ...(activity === 'step' ? withPlan(queuedPlan, []) : {}),
+    speakingBotIds: ['mimi'],
+    round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity,
+      executionId: 'queued-execution', executionStatus: 'queued', sessionId: null, startedAt: Date.now() - 120_000 }] },
+  }) });
+  renderView();
+  const strip = await screen.findByTestId('bot-group-progress');
+  expect(screen.getByTestId('content-header').textContent).toContain('bots.groupChat.header.queued:咪咪');
+  expect(strip.textContent).toContain('bots.groupChat.progress.queued');
+  expect(strip.textContent).not.toContain('chat.teammateProcess.elapsed');
+  expect(strip.textContent).not.toContain('phase:processing');
+  expect(screen.getByRole('button', { name: 'bots.groupChat.progress.stop' })).not.toHaveProperty('disabled', true);
+});
+
+it('shows newly queued work immediately in the timeline', async () => {
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'],
+    round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply',
+      executionId: 'just-queued', executionStatus: 'queued', sessionId: null, startedAt: Date.now() }] },
+  }) });
+  renderView();
+  const row = await screen.findByTestId('bot-group-progress');
+  expect(row.textContent).toContain('bots.groupChat.progress.queued');
+  expect(row.textContent).not.toContain('phase:processing');
+});
+
+it.each([null, 'live'] as const)('only shows server work elapsed with a live start (%s)', async source => {
+  if (source) mocks.activity = { compactDetail: '', startedAtMs: Date.now() - 10_000, phase: 'running' };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi'],
+    round: { status: 'running', canContinue: false, speakers: [{ botId: 'mimi', activity: 'reply',
+      executionId: 'claimed', executionStatus: 'running', sessionId: 'lane-mimi', startedAt: Date.now() - 120_000 }] },
+  }) });
+  renderView();
+  const strip = await screen.findByTestId('bot-group-progress');
+  expect(strip.textContent?.includes('chat.teammateProcess.elapsed')).toBe(!!source);
+  expect(screen.getByTestId('content-header').textContent).toContain('bots.groupChat.header.speaking:咪咪');
+});
+
+it.each(['none', 'work', 'talk'] as const)('prioritizes a running speaker over a queued speaker in the header (plan: %s)', async kind => {
+  const queuedPlan = plan({ kind: kind === 'talk' ? 'talk' : 'work', status: 'running', currentStep: 0,
+    steps: [{ ...plan().steps[0]!, status: 'running' }, plan().steps[1]!] });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ speakingBotIds: ['mimi', 'xiaoman'],
+    ...(kind !== 'none' ? withPlan(queuedPlan, []) : {}),
+    round: { status: 'running', canContinue: false, speakers: [
+      { botId: 'mimi', activity: kind === 'none' ? 'reply' : 'step', executionStatus: 'queued', sessionId: null },
+      { botId: 'xiaoman', activity: 'reply', executionStatus: 'running', sessionId: null },
+    ] },
+  }) });
+  renderView();
+  await waitFor(() => expect(screen.getByTestId('content-header').textContent).toContain('bots.groupChat.header.speaking:小满'));
+});
+
+it('replaces queued status with live work when the execution starts', async () => {
+  const execution = { botId: 'mimi', activity: 'reply' as const, executionId: 'reused-lane',
+    sessionId: 'lane-mimi', startedAt: Date.now() - 120_000 };
+  // A reused lane can still hold the previous turn's activity while queued.
+  mocks.activity = { compactDetail: 'Previous turn', startedAtMs: Date.now() - 60_000, phase: 'running' };
+  const group = (executionStatus: 'queued' | 'running') => detail({ speakingBotIds: ['mimi'],
+    round: { status: 'running', canContinue: false, speakers: [{ ...execution, executionStatus }] },
+  });
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: group('queued') });
+  renderView();
+  const strip = await screen.findByTestId('bot-group-progress');
+  expect(strip.textContent).toContain('bots.groupChat.progress.queued');
+  expect(strip.textContent).not.toContain('chat.teammateProcess.elapsed');
+  expect(strip.textContent).not.toContain('Previous turn');
+
+  mocks.activity = { compactDetail: 'Current work', startedAtMs: Date.now() - 10_000, phase: 'running' };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: group('running') });
+  await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'round' })));
+  await waitFor(() => expect(screen.getByTestId('bot-group-progress').textContent).toContain('chat.teammateProcess.elapsed'));
+  expect(screen.getByTestId('bot-group-progress').textContent).not.toContain('bots.groupChat.progress.queued');
+  expect(screen.getByTestId('bot-group-progress').textContent).not.toContain('Previous turn');
+  expect(screen.getByTestId('content-header').textContent).toContain('bots.groupChat.header.speaking:咪咪');
+});
+
+// Unit: a companion home change does not move the group session history.
+// Exercise the actual historical disclosure and its existing device-link reader.
+it('reads historical group process from the execution computer after a home change', async () => {
+  const process = { groupId: 'g1', executionId: 'moved-home', sessionId: 'old-lane', clientId: 'source', deviceId: 'original-mac' };
+  mocks.remoteInvoke.mockResolvedValue([{ clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Original computer progress', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'seal', role: 'assistant', content: 'Final answer', agentMeta: { turnCompleted: true } }]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true, homeDeviceId: 'new-mac' }} /></Tooltip.Provider>);
+  fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
+  await screen.findByText('Original computer progress');
+  expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
+  expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
 });

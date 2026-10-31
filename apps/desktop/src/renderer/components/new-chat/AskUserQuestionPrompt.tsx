@@ -41,7 +41,7 @@ import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
 import { requestRendererMicrophonePermission } from '@/voice-input/startGuards';
 import { formatVoiceInputShortcut, isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
-import { createComposerLongPressVoiceGesture } from '@/voice-input/composerLongPressGesture';
+import { createComposerLongPressVoiceGesture, isComposerLongPressVoiceReady } from '@/voice-input/composerLongPressGesture';
 import { nextAskUserVoiceShortcutOrder, registerAskUserVoiceShortcutCard } from './askUserVoiceShortcutOwner';
 import { useAskUserDictation } from './useAskUserDictation';
 import { parseVoiceQuestionSelection, type VoiceQuestionBridge, type VoiceQuestionTarget } from './voiceQuestionSelection';
@@ -93,7 +93,7 @@ function AutoGrowingAnswerTextarea({
     const press = (event: PointerEvent) => {
       if (!voiceRef.current || field.readOnly || event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       if (event.pointerType && event.pointerType !== 'mouse') return;
-      if (getVoiceInputSettings().composerLongPressEnabled === false) return;
+      if (getVoiceInputSettings().composerLongPressEnabled === false || !isComposerLongPressVoiceReady()) return;
       pointerId = event.pointerId;
       gesture.press({ x: event.clientX, y: event.clientY });
     };

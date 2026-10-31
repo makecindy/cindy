@@ -8,7 +8,8 @@ export default {
     'src/renderer/contexts/AuthContext': `import { useSyncExternalStore } from 'react';
       const subscribe = fn => { window.addEventListener('local-share-demo-change', fn); return () => window.removeEventListener('local-share-demo-change', fn); };
       export function useAuth() { const signedIn = useSyncExternalStore(subscribe, () => window.__localShareDemoSignedIn ?? window.__uiPage.ctx.case !== 'login'); return { isAuthenticated: signedIn, mode: signedIn ? 'cloud' : 'local', dataOwnerId: 'fixture', dataOwnerGeneration: 1, exitLocalMode: async () => { window.__localShareDemoSignedIn = true; window.dispatchEvent(new Event('local-share-demo-change')); } }; }
-      export function useOptionalAuthUser() { return null; }`,
+      export function useOptionalAuthUser() { return null; }
+      export function useOptionalAuthDeviceId() { return 'fixture-self'; }`,
   },
   async ready(page) {
     // The isolated HTTP fixture is not a secure context. Production runs in the

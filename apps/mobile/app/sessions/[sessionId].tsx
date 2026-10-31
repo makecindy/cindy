@@ -1,4 +1,5 @@
 import { snapshotRichAnswerValues } from '@/session/RichAnswer';
+import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { SessionQuickSendProvider } from '@/session/SessionQuickSendContext';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
@@ -12,7 +13,7 @@ import { modelNeedsReselection } from '@/session/modelReselection';
 import { getCachedDeviceProviders } from '@/device-link/deviceProvidersCache';
 import { MountOnFirstOpen } from '@/session/MountOnFirstOpen';
 import { RunningTokenRatePopover } from '@/session/RunningTokenRatePopover';
-import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { companionProcessItems } from '@/session/companionConversationPresentation';
 import { useRunningTokenRateHistory } from '@/session/useRunningTokenRateHistory';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeNewTaskButton } from '@/session/HomeNewTaskButton';
@@ -30,10 +31,11 @@ import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
+import { CompanionThreadRoot, useCompanionThreads } from '@/session/CompanionThreads';
 import { CompanionHeader } from '@/session/CompanionHeader';
 import { CloudHomeUnreachableNotice, useSustained } from '@/session/CloudHomeUnreachableNotice';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
-import { CHAT_HEADER_BLUR_FADE_INSIDE } from '@/session/ChatIdentityHeader';
+import { CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from '@/session/ChatIdentityHeader';
 import { useHiddenHistoryChase } from '@/session/hiddenHistoryChase';
 import { collectCompanionPluginInvocations } from '@/session/pluginInvocations';
 import { COMPANION_STATUS_AVATAR_SIZE, CompanionWorkingStatus, useCompanionDisplayResource, useCompanionWorkingLabel } from '@/session/CompanionWorkingStatus';
@@ -122,7 +124,8 @@ import { PromptRecommendation } from '@/session/PromptRecommendation';
 import { usePromptRecommendationVisibility } from '@/session/usePromptRecommendationVisibility';
 import { useGuardedBack } from '@/utils/useGuardedBack';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
+import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
+import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
 import { hasSessionEntryPreviewMismatch } from '@/session/sessionEntrySyncIndicator';
@@ -1053,6 +1056,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     openSearchRequest?: string;
     visualOpenSearch?: string;
     visualSearchQuery?: string;
+    /** Open the teammate's settings on this page (群设置 → 伙伴在本群 → 工具与授权). */
+    companionSettings?: string;
   }>();
   const sessionId = readRouteParam(params.sessionId) ?? '';
   const notificationResponse = readRouteParam(params.notificationResponse);
@@ -1158,7 +1163,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     status,
     subscribe,
     unsubscribe,
-  } = useDeviceLink();
+  } = useDeviceLink(deviceId);
   const revokedDevices = useRevokedDevices();
   const unresponsiveDevices = useUnresponsiveDevices();
   const maker = useMobileMakerTransport(deviceId);
@@ -1207,6 +1212,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
   const recommendationSession = currentSession;
   const remoteSessionRunStatus = useSessionRunStatus(sessionId);
+  // A terminal event carries the persisted identity; never guess from matching history text.
+  const activeErrorClientId = inputProjection.error
+    && remoteSessionRunStatus.terminalError?.message === inputProjection.error
+    ? remoteSessionRunStatus.terminalError.clientId : null;
   const taskUpdates = useSessionTaskUpdates(sessionId);
   const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);
   const [composerDraftStateKey, setComposerDraftStateKey] = useState(activeComposerDraftScopeKey);
@@ -1949,7 +1958,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (!media.ossKey) return; // 磁盘缓存命中的条目没有在世 OSS 对象
     const doDelete = (): void => {
       void remoteMediaDepsRef.current.auth.apiFetch('/api/device-link/media', {
-        baseUrl: DEVICE_LINK_API_BASE_URL,
+        baseUrl: deviceLinkMediaApiBaseUrl(media.ossKey),
         method: 'DELETE',
         body: { key: media.ossKey },
       }).catch(() => undefined);
@@ -2004,7 +2013,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           } } : {}),
           presignGet: (ossKey) => deps.auth.apiFetch<MobileRemoteMediaPresignResult>(
             '/api/device-link/media/presign-get',
-            { baseUrl: DEVICE_LINK_API_BASE_URL, method: 'POST', body: { key: ossKey } },
+            { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
           ),
         }, { ...opts, ...(media.thumbnail ? { thumbnail: true } : {}) });
         // inline 缩略图:字节已随回包到手(data URI 可直接渲染),落盘后换 file://
@@ -4918,10 +4927,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           streaming: isMessageListStreaming, sessionId, sessionSource: currentSession?.source, taskUpdates,
           pendingHandoff: handoff.pending, staleTail: handoff.tail, localUserClientIds,
         },
-        forkOrigin, errorTailClientId, previousRenderState: previousRenderItemsRef.current,
+        forkOrigin, errorTailClientId, activeErrorClientId, previousRenderState: previousRenderItemsRef.current,
       });
     },
-    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
+    [optimisticUsers, currentSession?.source, localUserClientIds, renderMessageStructureToken, historyView.snapshot, historyView.view, handoff.pending, handoff.tail, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, projectedMessages, projectedMessageStructureChangedIndexes, sessionId, taskUpdates],
   );
   // Search, media and sharing only see durable user rows. Local user boundaries
   // still participate in grouping and in the message list below.
@@ -4930,7 +4939,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   [renderWindow.items, optimisticClientIds]);
   const renderItemsStructureKey = useMemo(
     () => ({}),
-    [optimisticUsers, historyView.snapshot, errorTailClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
+    [optimisticUsers, historyView.snapshot, errorTailClientId, activeErrorClientId, forkOrigin, i18nInstance.language, inputProjection.autoResumePending, isMessageListStreaming, makerTurnRunning, messageStructureToken, sessionId, taskUpdates],
   );
   // Reconciliation must only use committed rows. Unlike the prefix cache above, a speculative
   // render-item baseline could leak rows from an abandoned render and destabilize tail memoization.
@@ -6183,8 +6192,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ],
   );
   const messageListItems = useMemo(
-    () => mergePendingSendItems(companionChat ? companionConversationItems(renderWindow.items) : renderWindow.items, pendingSendItems, optimisticClientIds),
-    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds],
+    () => mergePendingSendItems(companionChat ? companionProcessItems(renderWindow.items, isMessageListStreaming) : renderWindow.items, pendingSendItems, optimisticClientIds),
+    [companionChat, pendingSendItems, renderWindow.items, optimisticClientIds, isMessageListStreaming],
   );
   const canLoadEarlierHistory = (historyView.snapshot.ready ? historyView.snapshot.hasMore : hasOlderMessages && messages.length > 0)
     && !isScheduleDetail;
@@ -6202,6 +6211,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionDisplay = useCompanionDisplayResource(deviceId, sessionId, companionResource, companionChat);
   const [companionSettingsRequest, setCompanionSettingsRequest] = useState<{ sessionId: string; page: 'memory' | 'capabilities'; sequence: number }>();
   const openCompanionSettings = useCallback((page: 'memory' | 'capabilities') => setCompanionSettingsRequest(previous => ({ sessionId, page, sequence: (previous?.sequence ?? 0) + 1 })), [sessionId]);
+  const routeCompanionSettings = readRouteParam(params.companionSettings);
+  const openedCompanionSettings = useRef('');
+  useEffect(() => {
+    // Once per arrival: the param stays on the route while the user moves on.
+    if (routeCompanionSettings !== 'capabilities' || openedCompanionSettings.current === sessionId) return;
+    openedCompanionSettings.current = sessionId;
+    openCompanionSettings('capabilities');
+  }, [routeCompanionSettings, sessionId, openCompanionSettings]);
   const followUpScope = JSON.stringify([auth.accountGeneration, deviceId, sessionId]);
   const [followUpEngaged, setFollowUpEngaged] = useState<string | null>(null);
   useEffect(() => setFollowUpEngaged(null), [followUpScope]);
@@ -6219,6 +6236,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     companionName, companionOnline, deviceId]);
   const companionReplyAvatar = useMemo(() => companionChat ? companionPortrait(COMPANION_AVATAR_SIZE) : undefined,
     [companionChat, companionPortrait]);
+  const companionThreadAvatar = useMemo(() => companionPortrait(iconSize.lg), [companionPortrait]);
+  const companionThreads = useCompanionThreads({ deviceId, deviceName, sessionId,
+    botId: companionDisplay?.ref.id ?? '', avatar: companionThreadAvatar,
+    enabled: companionChat && !companionEntry.readOnly && !companionEntry.threadRootSessionId, controlsReady: companionEntry.ready });
+  const companionThreadRoot = companionEntry.threadRootSessionId ? <CompanionThreadRoot
+    deviceId={deviceId} rootSessionId={companionEntry.threadRootSessionId} rootClientId={companionEntry.threadRootClientId}
+    companionName={companionName} enabled={companionEntry.ready} /> : undefined;
   const showCompanionReplyTargets = useCompanionReplyTargetPreference();
   const pendingCompanionReplyQuote = usePendingCompanionReplyQuote(companionChat ? sessionId : null);
   const companionQuoteNames = useMemo(() => ({ owner: t('message.renderer.you'), companion: companionName }), [companionName, t]);
@@ -9217,11 +9241,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       const name = pathDisplayName(target.relPath ?? target.absPath);
       const presignGet = (ossKey: string) => auth.apiFetch<MobileRemoteMediaPresignResult>(
         '/api/device-link/media/presign-get',
-        { baseUrl: DEVICE_LINK_API_BASE_URL, method: 'POST', body: { key: ossKey } },
+        { baseUrl: deviceLinkMediaApiBaseUrl(ossKey), method: 'POST', body: { key: ossKey } },
       );
       const deleteOssObject = (key: string) => {
         void auth.apiFetch('/api/device-link/media', {
-          baseUrl: DEVICE_LINK_API_BASE_URL, method: 'DELETE', body: { key },
+          baseUrl: deviceLinkMediaApiBaseUrl(key), method: 'DELETE', body: { key },
         }).catch(() => undefined);
       };
       let url: string;
@@ -9842,7 +9866,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted }} />
     {companionHeaderShown ? <>
       {horizontalSystemHeader ? null : <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />}
-      <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
+      {companionEntry.threadRootSessionId ? <ChatIdentityHeader nativeHeader={horizontalSystemHeader}
+        testIDPrefix="companion.thread" mark={companionPortrait(32)} title={t('groupChat.thread.title')}
+        subtitle={companionName} identityLabel={t('groupChat.thread.title')} onBack={goBackToHome} /> : <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         nativeHeader={horizontalSystemHeader}
         resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
         settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
@@ -9852,7 +9878,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         onAskCompanion={askCompanionInComposer}
         askCompanionReady={canUseComposer && composerDraftHydrated}
         onSearch={() => setSearchOpen(true)}
-        onBack={goBackToHome} />
+        onBack={goBackToHome} />}
     </> : <SessionHeaderBar
               horizontalSystemHeader={horizontalSystemHeader}
               systemBarHidden={sessionListDrawerOverlayMounted}
@@ -10468,7 +10494,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <SessionQuickSendProvider value={canUseComposer ? async text => (await send({ independentText: text })) === true : null}>
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
                   <MessageRenderer companion={companionChat} companionQuote={companionQuoteOptions}
+                    companionThreads={companionThreads} conversationHeader={companionThreadRoot}
                     onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
+                    companionAttentionLabel={activePendingKind ? companionWorkGroupLabel ?? undefined : undefined}
                     companionAvatar={companionReplyAvatar}
                     companionPluginInvocations={companionPluginInvocations}
                     remoteDeviceId={deviceId}
@@ -10485,7 +10513,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     busyClientId={messageActionBusy?.clientId ?? null}
                     canLoadEarlier={canLoadEarlierHistory}
                     emptyTestID="session.messageList.empty"
-                    emptyMessage={messageEmptyState.emptyMessage}
+                    emptyMessage={companionEntry.threadRootSessionId ? t('groupChat.thread.empty') : messageEmptyState.emptyMessage}
                     focusedItemKey={focusedMessageItemKey ?? null}
                     focusedRequestKey={focusedMessageRequestKey}
                     followLatestRequestKey={messageListFollowLatestRequestKey}
@@ -10746,6 +10774,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
             </Pressable>
           ) : null}
+          <PluginUiEnablePrompt deviceId={deviceId} deviceName={deviceName} sessionId={sessionId}
+            online={!remoteRealtimeControlsUnavailable} active={creationScreenFocused && !shareSelectionActive} />
           {/*
             手机端终结不了的请求(plugin_setup 等)只贴在输入框上方:能看清电脑端
             在等什么、能取消,但不吃掉 composer —— 否则用户既处理不了这张卡又发不
@@ -10901,7 +10931,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
               ) : null}
               {/* Desktop BotWorkingStatus: a teammate's paced public status stays above the composer,
                   also while the user reads older messages. Interactions carry their own panel. */}
-              {companionChat && companionWorkingLabel && !companionInlineInteraction
+              {companionChat && companionWorkingLabel && !messageListItems.some(item => item.type === 'work_group' && item.teammateJournal && item.isStreaming) && !companionInlineInteraction
                 && !(syncingWhileEmpty && !hasRenderedMessages) ? (
                 <View
                   style={[
@@ -11972,6 +12002,7 @@ function SessionComposerInput({
   const [composerFocused, setComposerFocused] = useState(false);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled && canUseComposer, () => composerInputRef.current?.focus());
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
+  const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
   const voiceDraftCaretRef = useRef<View>(null);
   const voiceDraftMeasuredBlockRef = useRef<View>(null);
@@ -12097,8 +12128,9 @@ function SessionComposerInput({
     const rowChrome = composerCardActive
       ? COMPOSER_CARD_ROW_CHROME_HEIGHT
       : COMPOSER_INPUT_ROW_CHROME_HEIGHT;
-    return COMPOSER_VERTICAL_PADDING_HEIGHT + statusReserve + rowChrome;
-  }, [composerCardActive, voiceStatusVisible]);
+    // 附件托盘与文字同在卡片里:计入 chrome,文字超出时由输入框自己滚、裁掉上方文字。
+    return COMPOSER_VERTICAL_PADDING_HEIGHT + statusReserve + rowChrome + composerAttachmentTrayHeight;
+  }, [composerAttachmentTrayHeight, composerCardActive, voiceStatusVisible]);
   const composerInputMaxContentHeight = useMemo(() => {
     const availableHeight = nativeShellLayout.composerMaxHeight - composerChromeHeight;
     return Math.min(
@@ -12361,6 +12393,7 @@ function SessionComposerInput({
                     accessibilityLabel={t('session.screen.composerPlaceholder')}
                     accessibilityHint={composerLayout.input.disabledReason ?? undefined}
                     accessoryAbove={controls.attachmentTray}
+                    onAccessoryAboveHeightChange={setComposerAttachmentTrayHeight}
                     autoFocus={visualFocusComposer}
                     cardActive={composerCardActive}
                     caretHidden={voiceIsListening}

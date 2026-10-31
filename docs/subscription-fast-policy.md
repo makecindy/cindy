@@ -51,8 +51,10 @@ Codex 只向根线程同步原生设置，子 Agent 的服务档位由原生引�
 2. 组所在电脑发送带修订号的限制，实际执行电脑持久化并建立执行保护后确认；Codex 的可信请求出口与原生设置同步按上述边界处理。
 3. 新分配必须先完成绑定；组禁止 Fast 时，不能把未确认的旧版执行电脑当成成功。
 4. 开启自动换电脑时，按既有策略尝试其他可用成员。
-5. 未确认设置每 5 秒重试，不重建共享的 device-link 连接。
-6. 移出成员或删除组时发送更高修订的解除约束；离线电脑保持待确认，恢复连接后重试。
+5. 每 5 秒检查未确认设置；实际同步失败后，各目标独立按 5、10、20、40、80、160、300 秒退避，之后保持 300 秒上限，到期后由下一次检查发起重试。退避使用进程内单调时钟，成功确认后清除；新策略修订立即尝试，不沿用旧修订或其他账号的退避。策略未变化时跳过写盘与缓存重载，不重建共享的 device-link 连接。
+6. 移出成员或删除组时发送更高修订的解除约束；离线电脑保持待确认，恢复连接本身不跳过退避，在下次到期检查时重试，收到解除确认后才移除目标记录。
+
+实现见 [fastPolicyRuntime.ts](../apps/desktop/src/main/provider-group/fastPolicyRuntime.ts) 与 [fastPolicyStore.ts](../apps/desktop/src/main/provider-group/fastPolicyStore.ts)；回归见 [fastPolicyRuntime.test.ts](../apps/desktop/src/main/provider-group/__tests__/fastPolicyRuntime.test.ts) 与 [fastPolicyStore.test.ts](../apps/desktop/src/main/provider-group/__tests__/fastPolicyStore.test.ts)。
 
 已有请求不会因开关设置被强制中止。未确认的旧电脑上，原有加速任务也不能声称已切成普通模式；需要让那台电脑更新并确认。建议按电脑滚动更新后再把待确认状态作为完成标准。
 

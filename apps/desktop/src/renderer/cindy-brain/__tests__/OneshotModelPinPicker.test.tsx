@@ -112,9 +112,10 @@ describe('OneshotModelPinPicker shared A adapter', () => {
   it('preserves an updated Cindy AI identity in the real picker adapter', () => {
     const view = mount({ options: [{ ...xdOption, group: 'Cindy AI · 个人' }], groupByProvider: true });
     expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 个人');
-    view.rerender(<OneshotModelPinPicker defaultOptionLabel="Automatic" options={[{ ...xdOption, group: 'Cindy AI · 心动' }]}
+    view.rerender(<OneshotModelPinPicker defaultOptionLabel="Automatic" options={[{ ...xdOption, group: 'Cindy AI · 心动', logoKind: 'xd' }]}
       onChange={vi.fn()} ariaLabel="Auxiliary model" groupByProvider />);
     expect(picker.providersOverride?.[0].name).toBe('Cindy AI · 心动');
+    expect(picker.providersOverride?.[0].logoKind).toBe('xd');
   });
 
   it('rejects forged, unavailable, and wrong-Harness routes without saving', async () => {

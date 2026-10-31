@@ -2,6 +2,8 @@ import { ComputerUseSection } from '../../../src/renderer/components/settings/Co
 import { mountPage, subscription } from '../../ui-page/harness';
 
 void mountPage({
+  // The section links to the plugin page, so it renders inside the app router.
+  route: '/settings',
   host: (ctx) => ({
     maker: {
       plugins: {

@@ -21,7 +21,7 @@ import type { NativeGesture, PanGesture } from 'react-native-gesture-handler';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { motionDuration, motionEasing, radius, spacing } from '@/theme/tokens';
@@ -103,6 +103,11 @@ export interface MobileComposerInputRowProps {
    * 仅 cardActive 形态渲染;简洁态的对应物是 leading 插槽的迷你徽标。
    */
   accessoryAbove?: ReactNode;
+  /**
+   * accessoryAbove 的自然高度(未显示时为 0)。页面把它计入输入区高度上限:
+   * 内容超出时由输入框自身滚动裁掉上方文字,附件保持可见。
+   */
+  onAccessoryAboveHeightChange?: (height: number) => void;
   /**
    * 聚焦卡片形态开关。true 时输入区独占整行、底部工具排展开；
    * false 时保持单行简洁态，工具排折叠为 0 高（保持挂载，展开时按钮
@@ -217,6 +222,7 @@ export function MobileComposerInputRow({
   accessibilityHint,
   accessibilityLabel,
   accessoryAbove,
+  onAccessoryAboveHeightChange,
   autoFocus,
   cardActive,
   frameOutside,
@@ -299,6 +305,21 @@ export function MobileComposerInputRow({
       onPasteImagesLoadFailed?.();
     }
   }, [onPasteImages, onPasteImagesLoading, onPasteImagesLoadFailed]);
+  const bodyScrollNodeRef = useRef<ScrollView | null>(null);
+  const setBodyScrollRef = useCallback((node: ScrollView | null) => {
+    bodyScrollNodeRef.current = node;
+    if (typeof bodyScrollRef === 'function') bodyScrollRef(node);
+    else if (bodyScrollRef) (bodyScrollRef as MutableRefObject<ScrollView | null>).current = node;
+  }, [bodyScrollRef]);
+  // 输入区上限已扣除附件高度,正常不会溢出;极端情况(附件多行、屏幕很矮)仍溢出时贴底,
+  // 保证正在输入的文字不被裁掉。
+  const pinBodyScrollToEnd = useCallback(() => {
+    if (cardLayout) bodyScrollNodeRef.current?.scrollToEnd({ animated: false });
+  }, [cardLayout]);
+  const showAccessoryAbove = cardLayout && !!accessoryAbove;
+  useEffect(() => {
+    if (!showAccessoryAbove) onAccessoryAboveHeightChange?.(0);
+  }, [showAccessoryAbove, onAccessoryAboveHeightChange]);
   const textInputElement = (
     <TextInput
       ref={inputRef as never}
@@ -333,7 +354,11 @@ export function MobileComposerInputRow({
   );
   const inputBody = (
     <>
-      {cardLayout && accessoryAbove ? <ComposerFoldingSection progress={collapseProgress}>{accessoryAbove}</ComposerFoldingSection> : null}
+      {showAccessoryAbove ? (
+        <ComposerFoldingSection onNaturalHeight={onAccessoryAboveHeightChange} progress={collapseProgress}>
+          {accessoryAbove}
+        </ComposerFoldingSection>
+      ) : null}
       <View
         style={[
           styles.mainRow,
@@ -398,7 +423,9 @@ export function MobileComposerInputRow({
       {bodyScrollGesture ? (
         <GestureDetector gesture={bodyScrollGesture}>
           <ScrollView
-            ref={bodyScrollRef}
+            ref={setBodyScrollRef}
+            onContentSizeChange={pinBodyScrollToEnd}
+            onLayout={pinBodyScrollToEnd}
             style={[styles.bodyScroll, geometricSingleLine && styles.bodyScrollCollapsed]}
             contentContainerStyle={[styles.bodyScrollContent, geometricSingleLine && styles.bodyScrollCollapsed]}
             keyboardShouldPersistTaps="handled"
@@ -499,7 +526,11 @@ export interface ComposerResizeGrabberProps {
   testID?: string;
 }
 
-function ComposerFoldingSection({ progress, children }: { progress?: SharedValue<number>; children: ReactNode }) {
+function ComposerFoldingSection({ progress, onNaturalHeight, children }: {
+  progress?: SharedValue<number>;
+  onNaturalHeight?: (height: number) => void;
+  children: ReactNode;
+}) {
   const measuredHeight = useSharedValue(0);
   const style = useAnimatedStyle(() => {
     const amount = progress?.value ?? 0;
@@ -516,6 +547,7 @@ function ComposerFoldingSection({ progress, children }: { progress?: SharedValue
       // Keep the natural expanded size until the gesture has fully reversed.
       if ((progress?.value ?? 0) === 0) {
         measuredHeight.value = event.nativeEvent.layout.height;
+        onNaturalHeight?.(event.nativeEvent.layout.height);
       }
     }}>
       {children}

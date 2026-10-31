@@ -1,3 +1,4 @@
+import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
@@ -8,7 +9,9 @@ import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
-import { initMenubarService, refreshMenubarControlState, refreshMenubarLocalization, stopMenubarService } from './menubar/service.js';
+import { initMenubarService, stopMenubarService } from './menubar/service.js';
+import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
+import { getQuotaOverviewService } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -75,7 +78,11 @@ import {
   shell,
   Tray,
 } from 'electron';
-import { resolveVibrancyConfig } from './vibrancyConfig';
+import {
+  resolveVibrancyConfig,
+  resolveWindowVibrancyConfig,
+  setWindowWallpaperCovered,
+} from './vibrancyConfig';
 import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
@@ -605,14 +612,18 @@ import { initHeartbeatService } from './heartbeatService';
 import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
+import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { WindowManualDragController } from './windowManualDrag';
+import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
 import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
   getDeviceLinkStatus,
   isSharedTaskAvailable,
+  isSharedTaskRelayOnline,
+  waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
   getControllerName,
@@ -756,7 +767,9 @@ import {
   setMainWindowAccessorForBackend,
   setEnsureHostForBackend,
   setIsDetachedForBackend,
+  setUserBrowserPageControlProvider,
 } from './mcp-integrations/browser.js';
+import { setPageControlGhostProvider } from './mcp-integrations/ghost.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
@@ -1047,7 +1060,9 @@ import {
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
+  cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  minimizeDesktopWindow,
   requestMainWindowCloseBehavior,
 } from './mainWindowCloseBehavior.js';
 import {
@@ -1146,6 +1161,7 @@ import {
   setGhostNodeRuntimeStartAttemptContextReader,
   suspendAllGhosts,
   waitForGhostMutations,
+  getGhostBrowserExtensionSlot,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { configureMailAttachmentHost } from './cindy-brain/mailAttachmentUpload.js';
@@ -1166,7 +1182,8 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { setMainLocale, t } from './i18n.js';
+import { setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 // Scheduler (Phase 3) — 启动单例需要 maker / localDb / mainWindow 都 ready，但
@@ -1239,11 +1256,16 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
 
 // Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
 configureRoutineHost({
+  deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
   assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   ensureRoutineSession: ensureBotRoutineLaneSession,
   closeRoutineSession: async (sessionId) => {
     await getMakerIfReady()?.closeSession(sessionId);
+  },
+  // fresh 任务未被派发即回收：复用普通任务同一条删除写入（不另起并行写链）。
+  deleteRoutineSession: async (sessionId) => {
+    await patchSessionMetaInDb(sessionId, { status: 'deleted' });
   },
   getScheduler: getSchedulerIfInitialized,
   getScheduleStorage,
@@ -1648,6 +1670,7 @@ const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
+const windowDragLog = createLogger('window-drag');
 const piSubagentLog = createLogger('pi-subagent');
 let rendererBootGuard: RendererBootGuard | null = null;
 
@@ -2499,6 +2522,11 @@ setMainWindowAccessorForBackend((op) => {
 });
 setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomation({ sessionId }));
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
+// 「我的浏览器」后端经 browserExtension 插件槽拿页面控制桥接;槽归 cindy-brain,
+// 这里倒置依赖,browser.ts 不反向 import 插件基座。
+setUserBrowserPageControlProvider(() => getGhostBrowserExtensionSlot().getPageControl());
+// The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
+setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
   try {
     const meta = await getMakerCore().getSessionMeta(sessionId);
@@ -2846,6 +2874,7 @@ function dispatchApplicationMenuCommand(
   if (mainWindow.isDestroyed()) return;
   const activateWindow = options.activateWindow ?? true;
   if (activateWindow) {
+    cancelPendingWindowHide(mainWindow);
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
@@ -3074,6 +3103,10 @@ function installApplicationMenu(
       label: labels.helpMenu,
       submenu: [
         createOpenLogsMenuItem(),
+        {
+          label: labels.performanceTrace,
+          click: () => dispatchApplicationMenuCommand(mainWindow, 'open-performance-trace'),
+        },
         { type: 'separator' },
         {
           label: labels.help,
@@ -3130,6 +3163,12 @@ ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
 // 详见 deepLink.ts 的 pending buffer 段。
 ipcMain.handle('deep-link:take-pending', takePendingDeepLinkFromRenderer);
 
+ipcMain.handle('app-locale:set-classical-style', (_event, style: unknown): { ok: true } => {
+  // Unknown values keep the current style; only catalog ids reach the reply note.
+  if (isClassicalReplyStyle(style)) setMainClassicalStyle(style);
+  return { ok: true };
+});
+
 ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
   const previousLocale = currentApplicationMenuLocale;
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
@@ -3154,7 +3193,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   }
   refreshDesktopTrayMenus();
   getAgentIslandService()?.refreshLocalization();
-  refreshMenubarLocalization();
+  getQuotaOverviewService().rebuildSoon();
   return { ok: true };
 });
 
@@ -3497,6 +3536,22 @@ function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
   return choice === 1 ? 'quit' : 'tray';
 }
 
+function minimizeWindow(window: BrowserWindow): void {
+  minimizeDesktopWindow(window, {
+    platform: process.platform,
+    env: process.env,
+    isMainWindow: window === mainWindowRef,
+    ensureTray: () => linuxTray.ensure(),
+    onTrayError: () => {
+      dialog.showMessageBoxSync(window, {
+        type: 'error',
+        title: t('settings.windowBehavior.trayError.title'),
+        message: t('settings.windowBehavior.trayError.message'),
+      });
+    },
+  });
+}
+
 function showNativeLinuxCloseBehaviorPrompt(): LinuxCloseBehavior {
   const options = {
     type: 'question' as const,
@@ -3562,7 +3617,12 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
     applyBehavior: (behavior) => {
       const mainWindow = mainWindowRef;
       if (mainWindow && !mainWindow.isDestroyed()) {
-        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+        applyLinuxMainWindowCloseBehavior(
+          mainWindow,
+          behavior,
+          () => app.quit(),
+          () => minimizeWindow(mainWindow),
+        );
       } else {
         app.quit();
       }
@@ -3705,6 +3765,7 @@ function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean)
 function focusMainWindow(): boolean {
   const win = mainWindowRef;
   if (!win || win.isDestroyed()) return false;
+  cancelPendingWindowHide(win);
   if (!win.isVisible()) win.show();
   if (win.isMinimized()) win.restore();
   win.focus();
@@ -3732,11 +3793,9 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 }
 
 // ── Custom URL scheme (cindy://... + 历史 xdt-maker://...) ───────────────
-// 必须在 app.whenReady() 之前注册:
-//   - registerDeepLinkProtocol() 调 setAsDefaultProtocolClient (Windows/Linux
-//     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
+//   - registerDeepLinkProtocol() 仅为 packaged client 注册 OS 协议，dev 不改变系统关联
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
-//     提前 attach 才能接住
+//     必须在 app.whenReady() 之前 attach；dev 仍接收显式投递的事件
 watchCindyVersionStartupResult();
 if (!isCindyPersonalRuntime()) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
@@ -4081,7 +4140,7 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
+    // Hyprland has no native minimize surface, so it uses the Linux tray.
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -4098,7 +4157,12 @@ const createWindow = () => {
         linuxClosePromptFallback.request();
         return;
       }
-      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      applyLinuxMainWindowCloseBehavior(
+        mainWindow,
+        behavior,
+        () => app.quit(),
+        () => minimizeWindow(mainWindow),
+      );
       return;
     }
     app.quit();
@@ -4106,8 +4170,7 @@ const createWindow = () => {
   void ensureMainAppPresence('main-window-created', mainWindow);
   // Keep diagnostics reachable from the tray even before login or if the renderer fails.
   if (process.platform === 'win32') ensureWindowsTray();
-  // Tray construction is not proof that a Linux panel hosts the icon. Keep the
-  // existing minimize/quit close choices so an absent tray never strands a hidden window.
+  // Register before the first hide; activation and second-instance both reveal the main window.
   if (process.platform === 'linux') linuxTray.ensure();
 
   installApplicationMenu(
@@ -4713,7 +4776,7 @@ const registerIpcHandlers = () => {
   function applyWindowVibrancy(familyId: string, isDark: boolean): void {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
-    const config = resolveVibrancyConfig(familyId, isDark, process.platform);
+    const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
     if (process.platform === 'darwin') {
       win.setVibrancy(config.vibrancy as 'under-window' | null);
     }
@@ -4730,6 +4793,12 @@ const registerIpcHandlers = () => {
     const payload = parseWindowThemeVibrancyPayload(rawPayload);
     if (!payload) return;
     if (payload.mode === undefined || payload.systemModeFollowsSystem === undefined) return;
+    if (payload.wallpaperCovered !== undefined) {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      if (senderWindow && !senderWindow.isDestroyed()) {
+        setWindowWallpaperCovered(senderWindow, payload.wallpaperCovered);
+      }
+    }
     if (process.platform === 'win32') {
       writeWindowThemeSnapshot(
         payload.mode,
@@ -5526,7 +5595,8 @@ const registerIpcHandlers = () => {
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
   ipcMain.on('window-minimize', (event) => {
-    (BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef)?.minimize();
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
+    if (window) minimizeWindow(window);
   });
   ipcMain.on('window-maximize', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
@@ -5555,7 +5625,25 @@ const registerIpcHandlers = () => {
   // 手动窗口拖拽:no-drag 元素(会话标题文字等,需要同时响应双击)按住移动
   // 时由 renderer 发起,main 用光标位置驱动窗口跟随;pointerup 后 stop。
   // 详见 windowManualDrag.ts 头注释。
-  const windowManualDrag = new WindowManualDragController(screen);
+  let nativeWindowDrag: Awaited<ReturnType<typeof loadWindowsTaskbarNative>> | null = null;
+  if (process.platform === 'win32') {
+    void loadWindowsTaskbarNative().then((native) => {
+      nativeWindowDrag = native;
+    }).catch((error: unknown) => {
+      windowDragLog.warn('Windows native window drag unavailable; using DIP bounds fallback', error);
+    });
+  }
+  const windowManualDrag = new WindowManualDragController(screen, undefined, undefined,
+    process.platform === 'win32' ? (win) => {
+      const native = nativeWindowDrag;
+      const handle = win.getNativeWindowHandle?.();
+      if (!native || !handle) return null;
+      const offset = native.windowDragOffset(handle);
+      return () => native.moveWindowAtCursor(handle, offset.x, offset.y);
+    } : undefined, (error: unknown) => {
+      windowDragLog.warn('Windows native window drag initialization failed; using DIP bounds fallback', error);
+    });
+
   // start / stop 都严格绑定 sender 窗口,解析不到(窗口销毁中)直接忽略,
   // 不 fallback 主窗:多窗口下副窗的延迟消息若落到主窗上,start 会让主窗
   // 意外粘附光标并误停他窗的合法拖拽,stop 会误停主窗拖拽。已销毁窗口的
@@ -9882,6 +9970,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
   // sidebar's synchronous legacy migration reads can consume an exact proof.
@@ -9904,7 +9993,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
-    onControlledStateChanged: refreshMenubarControlState,
+    onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
@@ -9930,7 +10019,7 @@ app.on('ready', async () => {
       drain: drainPersistQueue,
     },
   );
-  registerSharedTaskIpc(isSharedTaskAvailable, () => getDeviceLinkStatus() === 'online');
+  registerSharedTaskIpc(isSharedTaskAvailable, isSharedTaskRelayOnline, waitForSharedTaskRelay);
   registerProviderShareIpc();
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
@@ -10045,11 +10134,18 @@ onQuit(
   },
   'sync',
 );
+let schedulerQuit: Promise<void> | undefined;
 onQuit(
   'session-active-turn-freeze',
   () => {
     suspendUsageLimitWaits();
     freezeSessionActiveTurnMarkers();
+    // Fence scheduler completion before process reapers / Maker close emit
+    // terminal events. Keep the write alive until the async quit phase drains.
+    schedulerQuit = getSchedulerIfInitialized()?.stop({ interrupted: true });
+    void schedulerQuit?.catch((error) => {
+      createSchedulerLogger('scheduler-host').error?.('scheduler quit persistence failed', error);
+    });
   },
   'sync',
 );
@@ -10226,6 +10322,7 @@ onQuit(
 onQuit(
   'shutdown-maker',
   async () => {
+    await schedulerQuit?.catch(() => {});
     // Not try/finally: a rejection here can predate `maker.shutdown` entirely
     // (see `makerShutdownSettled`), so it must not read as "the parent is down".
     const { piSessionFailures } = await shutdownMaker();

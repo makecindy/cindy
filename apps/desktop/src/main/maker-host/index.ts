@@ -1,3 +1,4 @@
+import { refreshInstalledPluginApps } from '../cindy-brain/index.js';
 import { configureSessionModelInterfaceStorage, sessionModelInterface } from './session-model-interface.js';
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
@@ -137,7 +138,8 @@ import { readProviderGroupBinding } from '../provider-group/bindings.js';
 import { createSubscriptionFastPolicy } from './subscription-fast-policy.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { openRemoteLink, remoteBackgroundInvoke, remoteInvoke } from '../device-link/index.js';
+import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } from '../device-link/providerShareCrossRegion.js';
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
@@ -317,6 +319,7 @@ import {
   getActiveCodexBridgeServerNames,
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
@@ -355,6 +358,7 @@ import {
 import {
   buildCodexProxySpawnArgs,
   CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
@@ -1139,7 +1143,6 @@ export function getMaker(): Maker {
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return null;
         const snapshot = resolveGhostFsSessionSnapshot((id) => _maker?.getSession(id), sessionId, sessionInstanceId);
-        const acceptedInput = getSessionInputProvenance(sessionId);
         const accountInput = isActiveInputAccountScoped(sessionId);
         return {
           contributionAccountAllowed: async (acceptedOperation = false) => {
@@ -1148,10 +1151,9 @@ export function getMaker(): Maker {
             if (!current()) return false;
             const db = getCurrentDbClientSnapshot();
             if (!db) return false;
-            // An authorized upload outlives the input that started it. Keep that
-            // input's identity; recheck task, owner, helper surface and permissions.
-            const surface = await resolveHelperSurface(db.client, sessionId,
-              acceptedOperation ? () => acceptedInput : getSessionInputProvenance);
+            // An authorized upload outlives the input that started it. Recheck
+            // task, account, helper surface and permissions before completion.
+            const surface = await resolveHelperSurface(db.client, sessionId);
             return surface !== 'restricted' && db === getCurrentDbClientSnapshot()
               && current();
           },
@@ -2204,6 +2206,7 @@ export function getMaker(): Maker {
             : {}),
           ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
+          codexDefaultModelProviderId: CODEX_GATEWAY_PROVIDER_ID,
           codexOpenAiWebSocketsEnabled: useOAuthBearer && ready,
           codexSubagentRoutingProfile,
           ...(smartSubagentConfig
@@ -2274,6 +2277,7 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
+      prepareCodexMcpToolCancellation,
       prepareCodexResumeSession: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return prepareExternalCodexSessionForResume(threadId);
         return ownerCodexThreadLocations().prepareResume(threadId, prepareExternalCodexSessionForResume);
@@ -2560,7 +2564,7 @@ export function getMaker(): Maker {
     // 在此补一次 refresh，若 DB 尚未就绪则 refreshCustomMcpProviders 内部 catch 后静默跳过。
     // 此后每次 CRUD（mcpHandlers.afterChange）也会原地刷新三份数组；运行中会话保持启动快照。
     registerCustomMcpArrays(claudeMcpProviders, codexMcpProviders, piMcpProviders);
-    _initialCustomMcpRefresh = refreshCustomMcpProviders();
+    _initialCustomMcpRefresh = refreshCustomMcpProviders().then(() => { refreshInstalledPluginApps(); });
 
     // Store mutations are serialized; each settled callback consumes the exact
     // latest-byte-edge runtime snapshot for its durable mutation.
@@ -2932,6 +2936,8 @@ export function getMaker(): Maker {
       startDeviceAgentSession: createDeviceAgentStarter({
         readImageDeliveryEpoch: readGeneratedImageEpoch,
         remoteInvoke: remoteBackgroundInvoke,
+        renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
+          ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),
         rgPath: getRipgrepBinaryPath,
         // 对方的 Codex 把本机当 exec-server 执行环境：用本机随包的同一个 codex。
         codexPath: () => getCachedBinaryStatus('codex').binaryPath ?? undefined,

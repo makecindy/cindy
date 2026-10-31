@@ -697,7 +697,14 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (piGuest && !piRequestStaysOnGuestProvider(piGuest, piProviderId, registeredPiProviderId)) {
       return refuseGuestProviderRoute(403, 'shared_provider_only', 'This request is outside the provider shared with you.');
     }
-    if (piGuest || hasHostedSessionModelAccess(piSessionId)) {
+    // Pi's native ChatGPT transport sends zstd JSON. The generic proxy keeps
+    // those bytes opaque; the native handler decodes and checks the live grant
+    // before forwarding. An unparsed compressed body is not a missing model.
+    const nativeCompressedPiRequest = piSessionId && piProviderId
+      && isOpenAiSubscriptionProviderId(piProviderId)
+      && ctx.headers['content-encoding']?.toLowerCase() === 'zstd'
+      && !isPlainObject(body);
+    if ((piGuest || hasHostedSessionModelAccess(piSessionId)) && !nativeCompressedPiRequest) {
       const providerId = piGuest?.providerId ?? piProviderId ?? selectedPiProviderId;
       // Check the live member grant before native handlers and all other Pi routing branches.
       // Google's native API puts the authoritative model in the URL instead of body.model.

@@ -418,6 +418,8 @@ export interface CodexExtraSpawnConfig {
     session?: CodexSessionMcpConfigInput,
   ) => Record<string, unknown>;
   codexProxyActive?: boolean;
+  /** Default native identity for ordinary models routed through the local proxy. */
+  codexDefaultModelProviderId?: string;
   /**
    * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。
    */
@@ -916,11 +918,10 @@ export interface AgentDeps {
     context?: { remote: boolean; runtimeBinaryPath?: string },
   ) => PiGatewayModelSpec | null | undefined;
 
-  /**
-   * Pi-only：host 已学到（自愈写入）的 per-model compat 覆盖。写 models.json 时
-   * 合并进该原生 provider 模型的 compat；undefined = 无覆盖。不改变路由与凭证，
-   * 只关掉上游已明确拒收的可选字段（如 supportsLongCacheRetention: false）。
-   */
+  /** Execution-local cache compatibility store; never copy local records to SSH. */
+  resolvePiNativeCompatStorePath?: (remoteHostId?: string | null) => string;
+
+  /** Legacy host recovery snapshot; native Pi applies learning at final payload time. */
   resolvePiNativeCompatOverride?: (
     providerId: string,
     modelId: string,
@@ -1190,6 +1191,10 @@ export interface AgentDeps {
   /** Synchronous local policy registration; no RPC or IO on a send. Returns owner-scoped cleanup. */
   registerCodexTextOnlyPolicy?: (threadId: string, disabled: () => boolean) => () => void;
   registerCodexMcpThreadContext?: (args: CodexMcpThreadContextArgs) => void;
+  /** Snapshot App tools before user interrupt; invoke only after upstream ACK. Local, nonblocking. */
+  prepareCodexMcpToolCancellation?: (
+    args: Pick<CodexMcpThreadContextArgs, 'sessionId' | 'threadId'> & { sessionInstanceId: string },
+  ) => () => void;
   unregisterCodexMcpThreadContext?: (
     threadId: string,
     expectedSessionInstanceId?: string,
@@ -1928,6 +1933,8 @@ export interface StartSessionOptions {
    * app-managed cwd, but must stay out of project grouping when persisted.
    */
   workspaceKind?: WorkspaceKind;
+  /** Product project membership; does not change filesystem permissions or cwd. */
+  projectDir?: string | null;
   /**
    * 远端目标 host id (`@cindy/maker-remote-ssh` ConnectionPool 里的 host alias)。
    * 设置后, agent 不在本机 spawn 进程, 改成通过 deps.getRemoteCodexTransport(id) 拿到

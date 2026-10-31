@@ -1,20 +1,20 @@
-import { GIFEncoder, applyPalette, quantize } from 'gifenc';
+import { GifWorker } from './gifWorker';
 import { MAX_RECORDING_BYTES } from '../../../shared/regionCapture';
 import { finalizeWebmDuration } from './webmDuration';
 
 /** Bounded, local-only encoding. Source pixels are supplied by the host's selected region. */
 export class CaptureRecorder {
-  private readonly gif;
+  private readonly gif: GifWorker | null;
+  private inFlight: Promise<void> | null = null;
   private readonly recorder: MediaRecorder | null;
   private readonly stream: MediaStream | null;
   private readonly chunks: Blob[] = [];
   private bytes = 0;
-  private previous: { pixels: Uint8ClampedArray; index: Uint8Array; palette: number[][]; at: number } | null = null;
   private stopped = false;
   private failure: Error | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement, readonly format: 'webm' | 'gif', private readonly onLimit: () => void) {
-    this.gif = format === 'gif' ? GIFEncoder() : null;
+  constructor(private readonly canvas: HTMLCanvasElement, readonly format: 'webm' | 'gif', private readonly onLimit: () => void, createGifWorker?: () => Worker) {
+    this.gif = format === 'gif' ? new GifWorker(canvas.width, canvas.height, createGifWorker) : null;
     this.stream = format === 'webm' ? canvas.captureStream(0) : null;
     if (this.stream) {
       const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type));
@@ -36,33 +36,23 @@ export class CaptureRecorder {
     } else this.recorder = null;
   }
 
-  add(at: number): void {
-    if (this.stopped) return;
+  add(at: number): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.inFlight) return Promise.reject(new Error('Recording frame still in flight'));
     if (this.recorder) {
       (this.stream!.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack).requestFrame();
-    } else if (this.gif) {
-      const pixels = this.canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, this.canvas.width, this.canvas.height);
-      // Hold identical frames until the next change, pause or finish. Exact RGBA
-      // comparison preserves small cursor/text changes and the full hold duration.
-      if (this.previous && samePixels(this.previous.pixels, pixels.data)) return;
-      this.flushGif(at);
-      const palette = quantize(pixels.data, 256, { format: 'rgb444' });
-      this.previous = { pixels: pixels.data, palette, index: applyPalette(pixels.data, palette, 'rgb444'), at };
-      if (this.gif.bytesView().length > MAX_RECORDING_BYTES - 4 * 1024 * 1024) this.onLimit();
+      return Promise.resolve();
     }
-  }
-
-  private flushGif(at: number): void {
-    if (!this.previous || !this.gif) return;
-    this.gif.writeFrame(this.previous.index, this.canvas.width, this.canvas.height, {
-      palette: this.previous.palette, delay: Math.max(20, at - this.previous.at), repeat: 0,
-    });
-    this.previous = null;
+    const pixels = this.canvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    this.inFlight = this.gif!.add(pixels.data, at).then((limit) => {
+      if (limit && !this.stopped) this.onLimit();
+    }).finally(() => { this.inFlight = null; });
+    return this.inFlight;
   }
 
   pause(at: number): void {
     if (this.recorder?.state === 'recording') this.recorder.pause();
-    this.flushGif(at);
+    this.gif?.pause(at);
   }
   resume(): void { if (this.recorder?.state === 'paused') this.recorder.resume(); }
 
@@ -82,11 +72,8 @@ export class CaptureRecorder {
       if (bytes.length > MAX_RECORDING_BYTES) throw new Error('Recording size limit');
       return bytes;
     }
-    this.flushGif(at);
-    this.gif!.finish();
-    const bytes = this.gif!.bytes();
-    if (bytes.length > MAX_RECORDING_BYTES) throw new Error('Recording size limit');
-    return bytes;
+    await this.inFlight;
+    return this.gif!.finish(at);
   }
 
   dispose(): void {
@@ -94,14 +81,6 @@ export class CaptureRecorder {
     if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
     this.stream?.getTracks().forEach((track) => track.stop());
     this.chunks.length = 0;
-    this.previous = null;
+    this.gif?.dispose();
   }
-}
-
-function samePixels(a: Uint8ClampedArray, b: Uint8ClampedArray): boolean {
-  if (a.length !== b.length) return false;
-  const left = new Uint32Array(a.buffer, a.byteOffset, a.length / 4);
-  const right = new Uint32Array(b.buffer, b.byteOffset, b.length / 4);
-  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
-  return true;
 }

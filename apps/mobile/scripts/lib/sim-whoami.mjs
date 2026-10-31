@@ -9,6 +9,7 @@ import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mobileClientBundleEnv } from "../../../../scripts/shared/client-endpoint-build-env.mjs";
 import { withLocalMobileRegionConfig } from "./mobile-dev-region.mjs";
+import { inspectMetroListeners, probeMetroOwnership } from "../sim-metro.mjs";
 
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SIMULATOR_UDID_PATTERN = /^[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}$/;
@@ -240,6 +241,50 @@ export function validateSimMetroIdentity({
 }
 
 /**
+ * Assemble the whoami Metro receipt and its start-hint decision. The CLI and
+ * unit tests use this same entry; only read-only process I/O is injectable.
+ */
+export function inspectSimMetroIdentity({
+  ports, expectedPort, worktreeRoot, expectedSource, region, envFingerprint,
+}, {
+  inspectListeners = inspectMetroListeners,
+  probeOwnership = probeMetroOwnership,
+  timedCheck = (_stage, run) => run(),
+} = {}) {
+  const probeErrors = [];
+  const metros = [];
+  let anyMetro = false;
+  let currentSourceOnExpectedPort = false;
+  const listeners = timedCheck("metro-listeners", () => inspectListeners(ports));
+  if (!listeners.healthy) probeErrors.push({ stage: "metro-listeners", code: listeners.code });
+  for (const port of ports) {
+    if (!listeners.pids[port]) continue;
+    const ownership = timedCheck(`metro-${port}`, () => probeOwnership(port, {
+      listenerPid: () => listeners.pids[port],
+      onProbeError: (error) => probeErrors.push({ port, ...error }),
+    }));
+    if (!ownership) continue;
+    const listener = classifySimMetroListener({
+      cwd: ownership.cwd, source: ownership.source, targetWorktree: worktreeRoot,
+    });
+    const identity = validateSimMetroIdentity({
+      listener, currentSource: expectedSource, runningSource: ownership.source,
+      currentRegion: region, runningRegion: ownership.region,
+      currentEnvFingerprint: envFingerprint, runningEnvFingerprint: ownership.envFingerprint,
+    });
+    anyMetro ||= listener.confirmed;
+    metros.push({ port, ...ownership, pid: Number(ownership.pid), worktree: listener.worktree,
+      isMetro: listener.confirmed, identity });
+    if (port === expectedPort) currentSourceOnExpectedPort = identity.healthy;
+  }
+  return {
+    healthy: currentSourceOnExpectedPort && probeErrors.length === 0,
+    anyMetro, currentSourceOnExpectedPort, metros, probeErrors,
+    canSuggestStart: !anyMetro && probeErrors.length === 0,
+  };
+}
+
+/**
  * Decide whether sim:start should reuse, restart, or refuse the occupant on 8081.
  *
  * `--takeover` may stop a confirmed Cindy Metro (cwd ends with /apps/mobile and
@@ -394,9 +439,14 @@ export function resolveMobileSimulatorBundleId(region, options = {}) {
         env: { ...(options.env ?? process.env), ...buildEnv },
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+        killSignal: "SIGKILL",
       },
     );
   } catch (error) {
+    if (error?.code === "ETIMEDOUT") {
+      throw Object.assign(new Error(`Expo config 解析 ${region} Simulator bundle id 超时（30s）；检查当前 worktree 依赖和 Expo 配置后重试。`), { code: "EXPO_CONFIG_TIMEOUT" });
+    }
     const detail = String(error?.stderr ?? error?.message ?? error).trim();
     throw new Error(
       `无法解析 ${region} Simulator bundle id${detail ? `: ${detail}` : ""}`,

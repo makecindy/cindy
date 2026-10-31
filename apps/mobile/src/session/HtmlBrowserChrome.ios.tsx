@@ -33,6 +33,7 @@ import {
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
 import { ActivityIndicator, Alert, StyleSheet, View } from "react-native";
+import { Stack } from "expo-router";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text } from "@/components/AppText";
@@ -40,6 +41,7 @@ import { MainWindowActionButton } from "@/components/MobilePrimitives";
 import { SystemNavigationBack, useSystemNavigationBack } from "@/platform/chrome/SystemNavigationBack";
 import { iconSize, lineHeight, navigationChrome, radius, spacing, typeScale, useTheme } from "@/theme";
 import { useLiquidGlassAvailable } from "./useLiquidGlassAvailable";
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import {
   HTML_BROWSER_CONTROL_SIZE as size,
   type HtmlBrowserChromeProps,
@@ -51,7 +53,11 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
   const { colors, mode } = useTheme();
   const { t } = useTranslation();
   const glass = useLiquidGlassAvailable();
-  const systemBack = useSystemNavigationBack();
+  // A vertical system bar (Duo landscape) hosts close and the document menu as native items.
+  const systemBack = useSystemNavigationBack() && !p.standalone;
+  const sharedStatusRow = usePreviewChromeFrame().sharedStatusRow && !p.standalone;
+  // Center the document title on screen, except beside a status area sharing its row.
+  const centeredTitle = p.document && !sharedStatusRow;
   const [editing, setEditing] = useState(false);
   const addressText = useNativeState(p.document ? '' : p.address);
   const addressRef = useRef<TextFieldRef>(null);
@@ -150,27 +156,48 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
   );
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      <SystemNavigationBack
+      {p.standalone ? null : <SystemNavigationBack
         close
-        available={p.document === true}
         label={t("files.preview.done")}
         onPress={p.onClose}
-      />
+      />}
+      {systemBack && p.document ? <Stack.Toolbar placement="right">
+        <Stack.Toolbar.Menu icon="ellipsis" disabled={p.pending === true}
+          accessibilityLabel={t("files.preview.browserMore")}>
+          <Stack.Toolbar.MenuAction icon="square.and.arrow.up" disabled={p.busy} onPress={p.onShare}>
+            {t("files.preview.a11yShare")}
+          </Stack.Toolbar.MenuAction>
+          <Stack.Toolbar.Menu inline title={p.title}>
+            <Stack.Toolbar.MenuAction icon="doc" onPress={showFileInfo}>
+              {t("files.preview.browserFileInfo")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+          {p.onToggleSource ? <Stack.Toolbar.MenuAction icon="chevron.left.forwardslash.chevron.right"
+            onPress={p.onToggleSource}>
+            {t(p.source ? "files.preview.browserShowDocument" : "files.preview.browserShowSource")}
+          </Stack.Toolbar.MenuAction> : null}
+          <Stack.Toolbar.Menu inline>
+            <Stack.Toolbar.MenuAction icon="doc.on.doc" disabled={p.busy} onPress={p.onCopyPath}>
+              {t("files.preview.copyPath")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="text.bubble" disabled={p.busy} onPress={p.onAddToTask}>
+              {t("files.preview.browserAddToTask")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar> : null}
       <View
         pointerEvents="box-none"
         style={{
           position: "absolute",
           top: p.top,
-          left: p.document ? Math.max(p.left, p.right) : p.left,
-          right: p.document ? Math.max(p.left, p.right) : p.right,
+          left: centeredTitle ? Math.max(p.left, p.right) : p.left,
+          right: centeredTitle ? Math.max(p.left, p.right) : p.right,
           flexDirection: "row",
           gap: spacing.sm,
         }}
       >
-        {p.document && systemBack ? (
-          // Duo owns close in its native toolbar; keep equal side widths for the title.
-          <View pointerEvents="none" style={{ width: size, height: size }} />
-        ) : <Host {...host} style={{ width: size, height: size }}>
+        {systemBack ? null : <Host {...host} style={{ width: size, height: size }}>
           <Button
             onPress={p.onClose}
             testID="filePreview.done"
@@ -276,7 +303,7 @@ export function HtmlBrowserChrome(p: HtmlBrowserChromeProps | DocumentPreviewChr
             )}
           </HStack>
         </Host>
-        {p.document ? moreMenu : null}
+        {p.document && !systemBack ? moreMenu : null}
       </View>
       {p.notice ? (
         <View

@@ -161,6 +161,14 @@ export interface MakerDeps {
   toolLoopReviewer?: import('./agents/shared/tool-loop-review.js').ToolLoopReviewer;
 }
 
+/** A previous attempt still owns native resources; retry without changing route/history. */
+export class SessionCreationCleanupPendingError extends Error {
+  constructor(options?: ErrorOptions) {
+    super('Previous session startup cleanup is still pending; retry the task.', options);
+    this.name = 'SessionCreationCleanupPendingError';
+  }
+}
+
 export interface CreateSessionOptions extends StartSessionOptions {
   /** Host caller preferences before generated context; retained only by the live Session. */
   hostStartupPreferences?: SessionStartupPreferences;
@@ -497,7 +505,7 @@ export class Maker {
    */
   private readonly inFlightSessionCreations = new Map<
     string,
-    { promise: Promise<Session> }
+    { promise: Promise<Session>; signal?: AbortSignal }
   >();
   /** All create paths, including anonymous ids, that may still publish or quarantine a handle. */
   private readonly pendingSessionCreations = new Set<Promise<Session>>();
@@ -643,11 +651,12 @@ export class Maker {
    * 同 id 已有 active Session 或正在创建时直接复用 —— 适配"用户切回老 session
    * 继续聊"以及多个后台入口同时恢复同一会话的场景。
    */
-  async createSession(opts: CreateSessionOptions): Promise<Session> {
+  async createSession(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (this.shutdownStarted) {
       throw new Error('Maker is shutting down; refusing to create a new session');
     }
-    const creation = this.createSessionWhileRunning(opts);
+    const creation = this.createSessionWhileRunning(opts, signal);
     this.pendingSessionCreations.add(creation);
     try {
       return await creation;
@@ -656,15 +665,48 @@ export class Maker {
     }
   }
 
-  private async createSessionWhileRunning(opts: CreateSessionOptions): Promise<Session> {
+  /** Keep replacement startup bounded without abandoning native cleanup ownership. */
+  private waitForSessionCleanup(cleanup: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let done = false;
+      const finish = (failed: boolean, error?: unknown) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
+        if (failed) reject(error); else resolve();
+      };
+      const timeout = setTimeout(() => finish(true, new SessionCreationCleanupPendingError()), 1000);
+      const abort = () => finish(true, signal?.reason);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      // Cleanup rejection still means native ownership is unresolved. Keep it
+      // distinct from the caller's abort reason so hosts cannot enter fallback.
+      void cleanup.then(() => finish(false), error => finish(true,
+        new SessionCreationCleanupPendingError({ cause: error })));
+    });
+  }
+
+  private async createSessionWhileRunning(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     if (!opts.id) {
-      return this.createSessionOnce(opts);
+      return this.createSessionOnce(opts, signal);
     }
 
     // Any handle that failed cleanup before publication still owns this
     // business id. Confirm its shutdown before checking/starting live state.
     if (this.failedHandleCleanups.has(opts.id)) {
-      await this.retryFailedHandleCleanup(opts.id);
+      await this.waitForSessionCleanup(this.retryFailedHandleCleanup(opts.id), signal);
+      signal?.throwIfAborted();
+    }
+
+    // A cancelled creation still owns its native startup until cleanup settles.
+    // Never hand that promise to a replacement. Bound this wait so a hung
+    // adapter cannot indefinitely hold a new caller; retries retain the barrier.
+    const cancelled = this.inFlightSessionCreations.get(opts.id);
+    if (cancelled?.signal?.aborted) {
+      await this.waitForSessionCleanup(cancelled.promise.then(() => undefined, () => undefined), signal);
+      return this.createSessionWhileRunning(opts, signal);
     }
 
     // 进程内已经活着或正在启动的 session, 直接复用 (避免 spawn 第二个 SDK)。
@@ -672,8 +714,13 @@ export class Maker {
     // 摘掉并与可能仍存活的底层 transport 并存。先重试同一个 close；只有真实
     // 关闭成功、status listener 将其移除后，才允许创建新的 handle。
     const existing = this.activeSessions.get(opts.id);
+    if (existing?.hasStartedClosing()) {
+      await this.waitForSessionCleanup(existing.close(), signal);
+      return this.createSessionWhileRunning(opts, signal);
+    }
     if (existing?.getStatus() === 'error') {
       await existing.close();
+      signal?.throwIfAborted();
     }
     const reusable = this.activeSessions.get(opts.id);
     if (reusable) return reusable;
@@ -681,7 +728,7 @@ export class Maker {
     const inFlight = this.inFlightSessionCreations.get(opts.id);
     if (inFlight) return inFlight.promise;
 
-    const creation = { promise: this.createSessionOnce(opts) };
+    const creation = { promise: this.createSessionOnce(opts, signal), signal };
     this.inFlightSessionCreations.set(opts.id, creation);
     try {
       return await creation.promise;
@@ -694,7 +741,8 @@ export class Maker {
   }
 
   /** 执行一次真实 session startup；带 id 的并发去重由 createSession 统一负责。 */
-  private async createSessionOnce(opts: CreateSessionOptions): Promise<Session> {
+  private async createSessionOnce(opts: CreateSessionOptions, signal?: AbortSignal): Promise<Session> {
+    signal?.throwIfAborted();
     // Visible application tasks use the ordinary persistence path, but their
     // remote engine need not be installed on this controller either.
     const agent = opts[LOCAL_AGENT_CLIENT] && opts.agentDeviceId
@@ -757,6 +805,7 @@ export class Maker {
     if (this.lifecycleHooks.prepareStartOptions) {
       try {
         await this.lifecycleHooks.prepareStartOptions(id, startOpts);
+        signal?.throwIfAborted();
       } catch (error) {
         await notifyStartFailed('prepare', error);
         throw error;
@@ -814,6 +863,7 @@ export class Maker {
           ? (expectedSdkSessionId) => this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
           : undefined;
     try {
+      signal?.throwIfAborted();
       if (opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)) {
         codexThreadClaim = this.claimCodexThread({
           sessionId: id,
@@ -881,6 +931,26 @@ export class Maker {
       }
       throw startupError;
     }
+    const rejectCancelledStartup = async (): Promise<never> => {
+      let cleanupFailed = false;
+      try {
+        await handle.close({ reason: 'navigation' });
+      } catch (closeError) {
+        cleanupFailed = true;
+        this.failedHandleCleanups.set(id, {
+          handle, promise: null,
+          onCleaned: () => { codexThreadClaim?.release(); notifyStartCleanupSucceeded(); },
+        });
+        this.logger.warn('failed to close cancelled startup', { sessionId: id, error: String(closeError) });
+      }
+      if (!cleanupFailed) codexThreadClaim?.release();
+      // Keep already-assigned native history. This unpublished handle must not
+      // run ordinary Session.onClose or release durable task/worktree ownership.
+      const error = signal?.reason ?? new Error('Session startup cancelled');
+      await notifyStartFailed('agent-start', error, cleanupFailed);
+      throw error;
+    };
+    if (signal?.aborted) return rejectCancelledStartup();
     if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
       try {
         if (codexThreadClaim) {
@@ -952,6 +1022,7 @@ export class Maker {
     let updatedSdkSessionId = false;
     try {
       existingRowBeforePersistence = opts.id ? await this.storage.get(opts.id) : null;
+      signal?.throwIfAborted();
       if (existingRowBeforePersistence) {
         updatedSdkSessionId = handle.id !== '<pending>'
           && existingRowBeforePersistence.sdkSessionId !== handle.id;
@@ -966,6 +1037,7 @@ export class Maker {
           title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
           model: opts.model,
           workspaceKind: opts.workspaceKind,
+          projectDir: opts.projectDir,
           effort: opts.effort,
           permissionMode: opts.permissionMode,
           fastMode: opts.fastMode,
@@ -1009,6 +1081,8 @@ export class Maker {
       await notifyStartFailed('storage', error, cleanupFailed);
       throw error;
     }
+
+    if (signal?.aborted) return rejectCancelledStartup();
 
     const rollbackStaleLocalPiMetadata = async (): Promise<void> => {
       const current = await this.storage.get(id);
@@ -1088,6 +1162,7 @@ export class Maker {
       }
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     if (this.lifecycleHooks.onStartSucceeded) {
       try {
         await this.lifecycleHooks.onStartSucceeded(id, startOpts);
@@ -1106,6 +1181,7 @@ export class Maker {
       return rejectStaleLocalPiAfterPersistence();
     }
 
+    if (signal?.aborted) return rejectCancelledStartup();
     const session = new Session({
       id: meta.id,
       sessionInstanceId,

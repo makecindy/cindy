@@ -25,6 +25,7 @@ import {
 import { gatewayReferenceSpeechVoices, referenceSpeechVoices } from '../../shared/speechVoices.js';
 import type { SpeechConnection } from './speech.js';
 import { openRouterSpeechBaseUrl } from './openrouter.js';
+import { withProviderAppAttribution } from '../maker-host/provider-app-attribution.js';
 
 export type SpeechCatalogDeps = {
   catalog: Catalog;
@@ -193,7 +194,7 @@ function bindings(deps: SpeechCatalogDeps, selection?: SpeechModelSelection): Bi
       else if (fixedProtocol && fixedProtocol !== 'openai') base.pathname = nativeBase;
       else if (!base.pathname || base.pathname === '/') base.pathname = nativeBase;
       const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(route.headerOverride ?? {})) {
+      for (const [name, value] of Object.entries(withProviderAppAttribution(base.toString(), route.headerOverride, {}, route.headerDelete))) {
         const lower = name.toLowerCase();
         if (openRouterBase && ['anthropic-version', 'anthropic-beta'].includes(lower)) continue;
         if (

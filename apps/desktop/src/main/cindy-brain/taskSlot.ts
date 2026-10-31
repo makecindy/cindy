@@ -23,6 +23,7 @@ export const PLUGIN_TASK_OPERATIONS = [
   'cancel',
   'readMessages',
   'setHidden',
+  'archive',
 ] as const;
 export type PluginTaskHandler = (pluginId: string, request: PluginTaskRequest) => Promise<unknown>;
 const object = (v: unknown): v is Record<string, unknown> =>
@@ -49,6 +50,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     readMessages: ['taskId', 'after', 'limit'],
     cancel: ['runId', 'requestKey'],
     setHidden: ['taskId', 'hidden'],
+    archive: ['taskId'],
   };
   if (typeof value.kind !== 'string' || !Object.hasOwn(allowed, value.kind)) return false;
   const kind = value.kind;
@@ -58,7 +60,7 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
   if (kind === 'requestWriteAccess' && value.mode !== undefined && !['acceptEdits', 'auto'].includes(String(value.mode))) return false;
   const requires = (key: string) => text(value[key], 128);
   if (['create', 'send', 'cancel'].includes(value.kind) && !requires('requestKey')) return false;
-  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'setHidden'].includes(value.kind) && !requires('taskId'))
+  if (['get', 'setModel', 'send', 'listRuns', 'readMessages', 'requestWriteAccess', 'startTeam', 'getTeam', 'setTeamPlan', 'releaseWorker', 'setHidden', 'archive'].includes(value.kind) && !requires('taskId'))
     return false;
   if (kind === 'setHidden' && typeof value.hidden !== 'boolean') return false;
   if (value.hidden !== undefined && typeof value.hidden !== 'boolean') return false;

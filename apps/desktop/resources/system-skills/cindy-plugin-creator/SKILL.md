@@ -56,6 +56,7 @@ Use when implementing plugin code, calling host APIs or declaring access to reso
 
 Use for the UI surfaces and interactions the plugin actually exposes; mobile pages are optional.
 
+- [插件交互页面：生成首屏、SDK 交互与完整示例（§4.23）](references/plugin-interactive-pages.md)
 - [插件面板与主题适配（§5）](references/plugin-panels.md)
 - [插件一级主视图 mainView（§4.20）](references/plugin-main-view.md)
 - [插件跟对话的任务页 taskView（§4.22）](references/plugin-task-view.md)
@@ -65,6 +66,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件轻提示与未读角标 notify / badge（§4.9）](references/plugin-notifications.md)
 - [插件目录选择 pick（§4.14）](references/plugin-directory-picker.md)
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
+- [插件随包浏览器扩展 browserExtension（§4.23）](references/plugin-browser-extension.md)
 - [插件确认弹窗 confirm（§4.18）](references/plugin-confirm-dialog.md)
 - [插件推荐任务（§4.21）](references/plugin-recommendations.md)
 

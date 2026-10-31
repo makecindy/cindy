@@ -146,6 +146,7 @@ function sameRealPath(a: string, b: string): boolean {
 }
 
 interface VaultEntry {
+  callId?: string;
   ghostId: string;
   /** 出票时目录/单文件根的 canonical 真身；消费时重新核对，防换链。 */
   rootRealPath: string;
@@ -216,6 +217,7 @@ export class DirDepositVault {
    */
   deposit(params: {
     ghostId: string;
+    callId?: string;
     dirAbs: string;
     workdirAbs: string | null;
     userGranted?: boolean;
@@ -283,6 +285,7 @@ export class DirDepositVault {
     const token = randomUUID();
     this.entries.set(token, {
       ghostId,
+      callId: params.callId,
       rootRealPath: realDir,
       files: collected.files,
       totalBytes: collected.totalBytes,
@@ -303,10 +306,10 @@ export class DirDepositVault {
    * 验票取货:本意识 + 未过期 + 未消费,取走即失效(重放无效)。
    * 无效原因不分类(不存在 / 越权 / 过期统一 null),不给探测空间。
    */
-  take(ghostId: string, token: string): TakenDirDeposit | null {
+  take(ghostId: string, token: string, callId?: string): TakenDirDeposit | null {
     this.sweep();
     const entry = this.entries.get(token);
-    if (!entry || entry.ghostId !== ghostId) return null;
+    if (!entry || entry.ghostId !== ghostId || (callId !== undefined && entry.callId !== callId)) return null;
     this.entries.delete(token);
     if (this.now() > entry.expiresAt) return null;
     return {

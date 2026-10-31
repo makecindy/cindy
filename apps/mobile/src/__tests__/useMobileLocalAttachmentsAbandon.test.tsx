@@ -75,8 +75,9 @@ beforeEach(() => {
 });
 afterEach(() => act(() => root.unmount()));
 
-function mount(scopeKey: string) {
+function mount(scopeKey: string, upload?: UseMobileLocalAttachmentsOptions['upload']) {
   const options: UseMobileLocalAttachmentsOptions = {
+    upload,
     attachmentScopeKey: scopeKey,
     getAccessToken: async () => 'token',
     getAttachmentCount: () => 0,
@@ -249,6 +250,19 @@ describe('useMobileLocalAttachments abandonment on scope change', () => {
     expect(runtime.uploads).toHaveLength(0);
   });
 
+  it('uses a supplied direct transport while retaining the same picker queue and delivery', async () => {
+    const attachment = { id: 'server-media', name: 'report.pdf', path: '', ext: 'pdf', size: 1000,
+      category: 'file' as const, mimeType: 'application/pdf' };
+    const upload = vi.fn(async () => attachment);
+    const harness = mount('direct-group', upload);
+    act(() => harness.first.enqueueUploads([{ kind: 'file', uri: 'file:///picked', name: 'report.pdf', size: 1000,
+      mimeType: 'application/pdf' }], { token: 'token' }));
+    await act(async () => { await flush(); });
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ name: 'report.pdf', size: 1000 }),
+      'file:///picked', expect.objectContaining({ token: 'token', signal: expect.any(AbortSignal) }));
+    expect(runtime.uploads).toHaveLength(0);
+    expect(harness.options.onUploaded).toHaveBeenCalledWith(attachment, expect.any(Object), expect.any(String));
+  });
   it('abandons a candidate enqueued from a stale scope without starting an upload', async () => {
     const harness = mount('session-a');
     act(() => harness.first.discardAllPendingUploadsForScopeChange());

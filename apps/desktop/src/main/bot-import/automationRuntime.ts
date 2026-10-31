@@ -128,7 +128,7 @@ export async function prepareImportedAutomation(root: string, routine: Routine, 
 }
 
 /** Commit delivery/counting once; return whether the host should stop future runs. */
-export async function finishImportedAutomation(root: string, routine: Routine, sessionId: string, runId: string, text: string, direct: boolean, signal: AbortSignal, assertOwner: () => void): Promise<boolean> {
+export async function finishImportedAutomation(root: string, routine: Routine, sessionId: string, runId: string, text: string, direct: boolean, signal: AbortSignal, assertOwner: () => void, deliverSelected?: (redactedText: string) => Promise<void>): Promise<boolean> {
   const env = await companionEnvironmentStore.read(root, routine.botId, assertOwner);
   const binding = env?.automations?.[routine.id];
   if (!env || !binding) return false;
@@ -146,19 +146,26 @@ export async function finishImportedAutomation(root: string, routine: Routine, s
     });
   }
   const deliveryRunId = progress.runId;
-  if (progress.direct) {
+  // An explicit new destination replaces the imported output route, after the same redaction.
+  // Without it, preserve both the original route and its pending-delivery recovery contract.
+  if (deliverSelected) {
     assertOwner();
-    // Idempotent DB clientId and the existing message broadcast put script results in the main chat.
-    await createMessage(sessionId, { clientId: `imported-routine:${deliveryRunId}`, role: 'assistant', content: text });
-    assertOwner();
+    await deliverSelected(text);
+  } else {
+    if (progress.direct) {
+      assertOwner();
+      // Idempotent DB clientId and the existing message broadcast put script results in the main chat.
+      await createMessage(sessionId, { clientId: `imported-routine:${deliveryRunId}`, role: 'assistant', content: text });
+      assertOwner();
+    }
+    if (text) await sendImportedDelivery(env, progress.deliveries, text, assertOwner, signal, {
+      next: progress.next,
+      acknowledge: next => companionEnvironmentStore.update(root, routine.botId, assertOwner, environment => {
+        const current = environment.automations?.[routine.id]?.deliveryProgress;
+        if (current?.runId === deliveryRunId) current.next = next;
+      }),
+    });
   }
-  if (text) await sendImportedDelivery(env, progress.deliveries, text, assertOwner, signal, {
-    next: progress.next,
-    acknowledge: next => companionEnvironmentStore.update(root, routine.botId, assertOwner, environment => {
-      const current = environment.automations?.[routine.id]?.deliveryProgress;
-      if (current?.runId === deliveryRunId) current.next = next;
-    }),
-  });
   let exhausted = false;
   await companionEnvironmentStore.update(root, routine.botId, assertOwner, environment => {
     const current = environment.automations?.[routine.id];

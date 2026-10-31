@@ -1,7 +1,8 @@
 /**
  * cross-agent-convert / detector
  *
- * 4 项独立判断（双向）。每一项"对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 配置项独立判断："对面端有内容 ∧ 本端缺失" → 推入 items。
+ * 指令文件仅保留 CLAUDE.md → AGENTS.md；不再提示为 Claude Code 创建 CLAUDE.md。
  *
  * 关键：用 codex 同款 `is_missing_or_empty_text_file` 语义 ——
  *   目标"不存在 OR trim 后为空" 才视为缺失。
@@ -98,7 +99,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
   const items: MigrationItem[] = [];
   const direction: MigrationDirection = input.agentKind === 'claude-code' ? 'to-claude' : 'to-codex';
 
-  // ── 第 1 项：CLAUDE.md ↔ AGENTS.md ────────────────────────────────────
+  // ── 第 1 项：CLAUDE.md → AGENTS.md ────────────────────────────────────
   await detectAgentsMd(wd, direction, items);
 
   // ── 第 2 项：agents/ ─────────────────────────────────────────────────
@@ -116,18 +117,7 @@ export async function detect(input: DetectInput): Promise<DetectResult> {
 async function detectAgentsMd(wd: string, direction: MigrationDirection, items: MigrationItem[]): Promise<void> {
   const claudeMd = path.join(wd, 'CLAUDE.md');
   const agentsMd = path.join(wd, 'AGENTS.md');
-  if (direction === 'to-claude') {
-    if ((await isNonEmptyTextFile(agentsMd)) && (await isMissingOrEmptyTextFile(claudeMd))) {
-      items.push({
-        id: 'agents-md:0',
-        kind: 'agents-md',
-        direction,
-        label: 'AGENTS.md → CLAUDE.md',
-        source: agentsMd,
-        target: claudeMd,
-      });
-    }
-  } else {
+  if (direction === 'to-codex') {
     if ((await isNonEmptyTextFile(claudeMd)) && (await isMissingOrEmptyTextFile(agentsMd))) {
       items.push({
         id: 'agents-md:0',

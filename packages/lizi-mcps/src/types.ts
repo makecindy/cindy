@@ -291,6 +291,7 @@ export interface SlackHookMcpDeps {
 
 /** Native routine service; only caller-bound companion tools expose it to agents. */
 export interface RoutineToolService {
+  deliveryTargets?(botId: string): Promise<import('@cindy/maker-scheduler').RoutineDeliveryTarget[]>;
   list(botId: string): Promise<import('@cindy/maker-scheduler').Routine[]>;
   sources(): Promise<import('@cindy/maker-scheduler').RoutineSource[]>;
   save(botId: string, input: import('@cindy/maker-scheduler').RoutineInput, id?: string): Promise<import('@cindy/maker-scheduler').Routine>;
@@ -315,6 +316,8 @@ export interface SchedulerMcpDeps {
   /** Live per-call check (Bot main tasks may change automations only on their owner's own turn). */
   authorizeCall?: import('./tool-call-authority.js').ToolCallAuthorizer;
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
+  /** Host approval snapshot for the current schedule mutation, if one exists. */
+  getApprovedScheduleGuard?: () => import('@cindy/maker-scheduler').ScheduleMutationGuard | undefined;
   /**
    * 同账号其它电脑上的定时任务(host 注入,desktop 经既有 `maker:schedule:*` 远程控制通道)。
    * 缺省 = host 未接 → 工具的 `device` 只接受 local,其它值返 REMOTE_UNSUPPORTED。
@@ -492,9 +495,24 @@ export interface SshPoolLike {
  *  - 插件启用策略由 host 在 Agent runtime / Codex thread 创建时冻结；这里不得
  *    注入调用时读取设置的门控，否则工具暴露状态与执行权限会在运行中分叉。
  */
+/** 与「设置 → 远程连接」添加表单同一份字段。 */
+export interface SshAddHostInput {
+  id: string;
+  hostname: string;
+  port?: number;
+  user: string;
+  authMethod?: 'agent' | 'key';
+  identityFile?: string;
+  displayName?: string;
+}
+
 export interface SshMcpDeps {
   getPool(): Promise<SshPoolLike>;
   ensureReady(id: string): Promise<void>;
+  /** 设置页同一添加流程：写入本机 SSH 配置并刷新连接池；失败以 `[CODE] message` 抛出。 */
+  addHost(input: SshAddHostInput): Promise<void>;
+  /** 设置页「重新读取 ~/.ssh/config」。读取失败时返回诊断类别，连接池保持上次成功的结果。 */
+  reloadConfig(): Promise<{ diagnostic: string | null; warningCount: number }>;
   /** Host-owned synchronous boundary redactor. It must not retain its inputs. */
   redactSensitiveText(snapshot: SshHostSnapshotLike, text: string): string;
   logger?: LiziMcpLogger;
@@ -647,13 +665,38 @@ export interface ResolvedBrowserScreenshot {
   mimeType: 'image/png' | 'image/jpeg';
 }
 
+/** Host-wide automation targets: managed Chrome, sidebar webview, or the user's own browser via extension. */
+export type BrowserBackendKind = 'external' | 'rsb-webview' | 'user-browser';
+
+/** Per-backend capability flags consulted before dispatch; keys mirror the host's status payload. */
+export interface BrowserBackendCapabilities {
+  evaluate?: boolean;
+  screenshot?: boolean;
+  network?: boolean;
+  upload?: boolean;
+  dialog?: boolean;
+  console?: boolean;
+  pdf?: boolean;
+  focus?: boolean;
+  close?: boolean;
+  trustedInput?: boolean;
+  /** Coordinate clicks, drags and viewport resize (synthetic events are enough). */
+  pointer?: boolean;
+  /** Raw protocol commands that recipe adapters drive (needs a debugger attachment). */
+  rawProtocol?: boolean;
+}
+
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {
   /** Local structural observations only; no URLs, scripts, selectors or input values. */
   experienceStore?: import('./browser/experience.js').BrowserExperienceStore;
   getRuntime(): BrowserControlRuntime;
-  /** Resolve the actual host profile before validation, discovery and execution. */
-  resolveProfile?(profile?: string): string;
+  /**
+   * Resolve the actual host profile before validation, discovery and execution.
+   * undefined keeps the agent's own choice (the user-browser backend picks the
+   * only connected browser, or asks for one when several are connected).
+   */
+  resolveProfile?(profile?: string): string | undefined;
   /** Existing host lifecycle/backend identities; changes invalidate session evidence. */
   getBackendScope?(): { lifecycle: object; backend: object };
   /**
@@ -667,7 +710,12 @@ export interface BrowserMcpDeps {
   /** Shrink the LLM-facing copy to the shared stream-safe byte budget. */
   compressInlineImage?: CompressInlineImageFn;
   /** Switch the host-wide, persisted automation target; returns the actual mode. */
-  setBackend?(backend: 'external' | 'rsb-webview'): Promise<'external' | 'rsb-webview'>;
+  setBackend?(backend: BrowserBackendKind): Promise<BrowserBackendKind>;
+  /**
+   * Capability flags of the active backend (false = the action/kind must be
+   * refused before dispatch with a clear hint). Absent → everything allowed.
+   */
+  backendCapabilities?(): BrowserBackendCapabilities;
   /** Whether the active backend accepts managed resource downloads. */
   supportsResourceDownloads?(): boolean;
   /** Whether the active backend accepts semantic element queries. */

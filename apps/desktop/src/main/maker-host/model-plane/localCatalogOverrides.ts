@@ -457,6 +457,13 @@ function overlayFields(model: CatalogModel, f: ModelCatalogOverrideFields): Cata
       ? { status: f.status === 'preview' ? ('alpha' as const) : f.status }
       : {}),
   };
+  if (f.supportsImageInput !== undefined && next.modalities) {
+    const input = next.modalities.input.filter((modality) => modality !== 'image');
+    next = { ...next, modalities: {
+      ...next.modalities,
+      input: f.supportsImageInput ? [...input, 'image'] : input,
+    } };
+  }
   if (next.efforts.length === 0) next = { ...next, defaultEffort: null };
   else if (next.defaultEffort !== null && !next.efforts.includes(next.defaultEffort)) {
     return 'local patch leaves defaultEffort outside effective efforts';

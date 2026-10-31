@@ -1,4 +1,4 @@
-import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { captureTurnUsageContext, turnBillingSource, type TurnUsageContext } from './turnUsageContext.js';
 import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
@@ -291,6 +291,7 @@ export function recordSessionClaudeTurnUsage(
               : null;
           if (subscriptionEstimate?.amount) {
             subscriptionTurnEstimates.push(subscriptionEstimate);
+            m.money = subscriptionEstimate;
           }
           if (isSubscriptionValueRow)
             hasSubscriptionValueRow = true;
@@ -335,6 +336,7 @@ export function recordSessionClaudeTurnUsage(
             perModel,
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
+            turnBillingSource(turnContext, billingRoute),
           );
           recordTurnSpend(turnMoney);
           recordSessionTurnSpend(session.id, turnMoney);
@@ -369,6 +371,7 @@ export function recordSessionClaudeTurnUsage(
             perModel,
             claudeGenerationDurationMs,
             claudeTurnDurationMs,
+            turnBillingSource(turnContext, billingRoute),
           );
           if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
             const changedScheduleId = await recordSchedulerTurnCost({

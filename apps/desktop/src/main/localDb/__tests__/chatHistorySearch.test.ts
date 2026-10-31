@@ -229,10 +229,7 @@ describe('searchChatHistoryHybrid', () => {
     ]);
   });
 
-  it('keeps the per-hit context window queries when radius is positive', async () => {
-    dbMocks.query.mockResolvedValue([
-      { messageId: 'm2', sessionId: 's1', role: 'assistant', createdAt: 2_000, snippet: 'anchor' },
-    ]);
+  it('hydrates a positive-radius context window through the production batch query', async () => {
     const rows = {
       before: {
         id: 'm1',
@@ -268,27 +265,27 @@ describe('searchChatHistoryHybrid', () => {
         rewindAt: null,
       },
     };
-    let messageSelectCount = 0;
-    dbMocks.select.mockImplementation((selection?: unknown) => {
-      if (selection) {
-        return { from: () => ({ where: () => Promise.resolve([]) }) };
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'm2',
+            sessionId: 's1',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'anchor',
+          },
+        ];
       }
-      messageSelectCount += 1;
-      const resultRows =
-        messageSelectCount === 1
-          ? [rows.anchor]
-          : messageSelectCount === 2
-            ? [rows.before]
-            : [rows.after];
-      return {
-        from: () => ({
-          where: () =>
-            messageSelectCount === 1
-              ? { limit: () => Promise.resolve(resultRows) }
-              : { orderBy: () => ({ limit: () => Promise.resolve(resultRows) }) },
-        }),
-      };
+      return [
+        { ...rows.before, _anchorOrder: 0, _side: 0 },
+        { ...rows.anchor, _anchorOrder: 0, _side: 1 },
+        { ...rows.after, _anchorOrder: 0, _side: 2 },
+      ];
     });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
 
     const result = await searchChatHistoryHybrid({
       query: 'anchor',
@@ -304,8 +301,69 @@ describe('searchChatHistoryHybrid', () => {
       skipVector: true,
     });
 
-    expect(messageSelectCount).toBe(3);
+    expect(dbMocks.query).toHaveBeenCalledTimes(2);
     expect(result.hits[0].context.map((item) => item.id)).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('keeps another batched context intact when an anchor disappears before hydration', async () => {
+    dbMocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('messages_fts')) {
+        return [
+          {
+            messageId: 'missing',
+            sessionId: 's1',
+            role: 'user',
+            createdAt: 1_000,
+            snippet: 'missing',
+          },
+          {
+            messageId: 'present',
+            sessionId: 's2',
+            role: 'assistant',
+            createdAt: 2_000,
+            snippet: 'present',
+          },
+        ];
+      }
+      return [
+        {
+          _anchorOrder: 1,
+          _side: 1,
+          id: 'present',
+          clientId: 'c-present',
+          sessionId: 's2',
+          role: 'assistant',
+          content: JSON.stringify('present'),
+          toolUseId: null,
+          agentMeta: null,
+          agentKind: null,
+          createdAt: 2_000,
+          rewindAt: null,
+        },
+      ];
+    });
+    dbMocks.select.mockImplementation(() => ({
+      from: () => ({ where: () => Promise.resolve([]) }),
+    }));
+
+    const result = await searchChatHistoryHybrid({
+      query: 'anchor',
+      sessionIds: null,
+      workdir: null,
+      fromMs: null,
+      toMs: null,
+      agentKind: null,
+      roles: null,
+      contextRadius: 2,
+      limit: 10,
+      offset: 0,
+      skipVector: true,
+    });
+
+    expect(result.hits.map((hit) => [hit.messageId, hit.context.map((row) => row.id)])).toEqual([
+      ['missing', []],
+      ['present', ['present']],
+    ]);
   });
 
   it('can page beyond the default FTS pool for conversation search', async () => {

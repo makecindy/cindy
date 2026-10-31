@@ -1,3 +1,7 @@
+import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { pluginToolVisible, compareCindyVersions, PLUGIN_UI_MIN_CINDY_VERSION } from '@cindy/plugin-protocol';
+import type { PluginPageCall } from '../mcp-apps/pluginPageCall.js';
+import { publishPluginAppResult, pluginModelResult } from '../mcp-apps/pluginCards.js';
 import * as community from '../plugin-contributions/host.js';
 import { contributionOwnerKey, assertContributionOwner, getPreparedContribution } from '../plugin-contributions/prepared.js';
 import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
@@ -470,7 +474,7 @@ async function packForgeSource(
  * ──────────────────────────────────────────────────────────────────────── */
 
 export interface GhostGrantLiveSessionState {
-  /** Rechecks accepted account input and the existing plugin-managed helper surface. */
+  /** Rechecks account-owned input and the current helper surface. */
   contributionAccountAllowed?: (acceptedOperation?: boolean) => Promise<boolean>;
   permissionMode: PermissionMode | null;
   remoteHostId: string | null;
@@ -1672,6 +1676,24 @@ const ghostVisibilityDeps = {
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
 };
 
+/**
+ * 「我的浏览器」由哪个插件提供(宿主正在经它的扩展承接页面控制)。该插件声明的
+ * pageControlReplaces 工具与手册此时对 Agent 隐藏:操作用户浏览器只留 Browser Use
+ * 一套。未接线或桥接未运行时返回 null,插件工具照常可用。
+ */
+/** 返回承接页面控制的插件实例标识(installedGhostStoragePart)。 */
+let pageControlGhostProvider: () => string | null = () => null;
+export function setPageControlGhostProvider(provider: () => string | null): void {
+  pageControlGhostProvider = provider;
+}
+function pageControlHidden(ghost: InstalledGhost): { tools: Set<string>; manual: Set<string> } | null {
+  const replaces = ghost.manifest.browserExtension?.pageControlReplaces;
+  if (!replaces || pageControlGhostProvider() !== installedGhostStoragePart(ghost)) return null;
+  return { tools: new Set(replaces.tools), manual: new Set(replaces.manual ?? []) };
+}
+const PAGE_CONTROL_TOOL_MESSAGE =
+  '这个插件工具已由 Cindy 的 browser 工具取代:读取或操作用户自己的浏览器,请用 cindy_browser 的 browser 工具,浏览器目标选「我的浏览器」(user-browser)。';
+
 function ghostRecall(ghost: InstalledGhost): string | undefined {
   return ghost.manifest.whenToUse ?? ghost.manifest.description;
 }
@@ -1694,6 +1716,7 @@ export function getGhostRosterPrompt({ workingDir }: { workingDir?: string }): s
 
 function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
   const recall = ghostRecall(ghost);
+  const hidden = pageControlHidden(ghost);
   let setup: CindyGhostInfo['setup'];
   try {
     setup = getGhostSetupAssessment(installedGhostStoragePart(ghost));
@@ -1713,14 +1736,18 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
     ...(recall ? { recall } : {}),
     ...(ghost.manifest.manual
       ? {
-          manual: ghost.manifest.manual.items.map(({ name, description }) => ({
-            name,
-            description,
-          })),
+          manual: ghost.manifest.manual.items
+            .filter(({ name }) => !hidden?.manual.has(name))
+            .map(({ name, description }) => ({
+              name,
+              description,
+            })),
         }
       : {}),
     ...(setup ? { setup } : {}),
-    tools: (ghost.manifest.tools ?? []).map((tool) => ({
+    tools: (ghost.manifest.tools ?? []).filter((tool) =>
+      pluginToolVisible(ghost.manifest, tool.name, 'model') && !hidden?.tools.has(tool.name),
+    ).map((tool) => ({
       name: tool.name,
       description: tool.description,
       ...(tool.parameters ? { parameters: tool.parameters } : {}),
@@ -1736,13 +1763,16 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
  * Codex HTTP bridge 路径下建线期语境是全局空值,tool-call 期经
  * AsyncLocalStorage(getLiziMcpSessionContext)恢复——因此运行时取语境一律
  * "ALS 优先、闭包兜底"(见 resolveSessionContext)。
+ * 页面调用例外：Main 消费一次性票据后显式传 pageCall 和卡片任务语境；
+ * 不建立页面 ALS，避免冷恢复时创建的 Agent/MCP 长期对象继承页面权限。
  */
 export function getCindyGhostsMcpDeps(
   sessionCtx?: LiziMcpSessionContext,
   hostDeps: CindyGhostsHostDeps = {},
+  pageCall?: PluginPageCall,
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
-    getLiziMcpSessionContext() ?? sessionCtx;
+    pageCall ? sessionCtx : getLiziMcpSessionContext() ?? sessionCtx;
   const installConsentPrompt = (): GhostInstallConsentPrompt => {
     const context = resolveSessionContext();
     return createTaskInstallConsentPrompt(
@@ -2087,6 +2117,10 @@ export function getCindyGhostsMcpDeps(
           message: '该插件未声明可供读取的手册;不要重试,改用其它方式完成。',
         };
       }
+      const hiddenManual = pageControlHidden(visibility.ghost)?.manual;
+      if (hiddenManual?.size && hiddenManual.has(String(manualPath ?? '').split('/')[0])) {
+        return { ok: false, manual: [], content: '', errorCode: 'GHOST_NOT_FOUND', message: PAGE_CONTROL_TOOL_MESSAGE };
+      }
       return readInstalledGhostManual(visibility.ghost, manualPath);
     },
     async callGhostTool({
@@ -2102,6 +2136,8 @@ export function getCindyGhostsMcpDeps(
       setupPlan,
       signal,
     }) {
+      if (pageCall) await pageCall.assertCurrent();
+      const audience = pageCall ? 'app' as const : 'model' as const;
       const sessionContext = resolveSessionContext();
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
@@ -2114,7 +2150,16 @@ export function getCindyGhostsMcpDeps(
       );
       if (!initialVisibility.ok) return initialVisibility;
       const target = { ...initialVisibility.ghost };
+      if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
+          target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
+          pageCall.sessionId !== sessionContext?.sessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
       const instanceId = installedGhostStoragePart(target);
+      // Capture result privacy from this approved revision before any async work.
+      // Missing historical HTML disables pages, not the original view-only data boundary.
+      const resultUi = getPluginToolUi(target.manifest) ?? (target.approval?.state === 'approved'
+        ? getPluginToolUi(getGhostManager().readApprovedInstallReceipt(instanceId, target.approval.revision)?.manifest ?? target.manifest)
+        : undefined);
+      const hasViewOnlyResult = Boolean(resultUi?.tools[tool]);
       const approvalToken = ghostInstallApprovalToken(target.approval);
       const grantTarget: GhostGrantTarget = {
         approvalToken,
@@ -2128,6 +2173,7 @@ export function getCindyGhostsMcpDeps(
       // args.attachments 交给意识。任何一张失败整批拒(ATTACHMENT_INVALID),
       // 不做半成品授权。全链路见 grantAttachmentUrls。
       let mergedArgs = args;
+      let pageAttachmentHashes: string[] = [];
       // 文件交接的原授权要贯穿后续目录审批、上下文查询和最终派发。
       const handoffChecks: Array<() => boolean> = [grantTarget.isCurrent];
       const handoffExpired = () => handoffChecks.some((isCurrent) => !isCurrent());
@@ -2136,14 +2182,17 @@ export function getCindyGhostsMcpDeps(
       // Runtime setup gate: the shared visibility check above runs before any
       // durable attachment grant, directory ticket, sandbox, card call, or dispatch.
       // grant_only never dispatches and intentionally ignores its tool field.
+      if (!grantOnly && pageControlHidden(target)?.tools.has(tool)) {
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: PAGE_CONTROL_TOOL_MESSAGE };
+      }
       if (
         !grantOnly &&
-        !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+        !(target.manifest.tools ?? []).some((candidate) => candidate.name === tool && pluginToolVisible(target.manifest, candidate.name, audience))
       ) {
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools),
+          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools?.filter(t => pluginToolVisible(target.manifest, t.name, audience))),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -2188,12 +2237,12 @@ export function getCindyGhostsMcpDeps(
       const refreshed = refreshedVisibility.ghost;
       if (
         !grantOnly &&
-        !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
+        !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool && pluginToolVisible(refreshed.manifest, candidate.name, audience))
       ) {
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools),
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools?.filter(t => pluginToolVisible(refreshed.manifest, t.name, audience))),
         };
       }
       let finalAssessment;
@@ -2295,6 +2344,7 @@ export function getCindyGhostsMcpDeps(
           },
         };
       }
+      const callId = randomUUID();
       const attachmentUrls = [...new Set(attachments ?? [])];
       if (attachmentUrls.length > 0) {
         const grant = await grantAttachmentUrls({
@@ -2313,6 +2363,7 @@ export function getCindyGhostsMcpDeps(
         handoffChecks.push(grant.isCurrent);
         if (handoffExpired()) return handoffDenied;
         mergedArgs = { ...args, attachments: grant.hashes };
+        pageAttachmentHashes = grant.hashes;
       }
       // 目录过户(xd-service 意识化二期):dir 收集文件发一次性票据,元数据
       // 注入 args.dir_deposit——意识拿到的只有票据与相对路径清单;上传时
@@ -2336,6 +2387,7 @@ export function getCindyGhostsMcpDeps(
         if (dirConfirm.isCurrent) handoffChecks.push(dirConfirm.isCurrent);
         if (handoffExpired()) return handoffDenied;
         const deposited = getDirDepositVault().deposit({
+          callId,
           ghostId: installedGhostStoragePart(target),
           dirAbs: dirConfirm.userGranted ? dirConfirm.approvedRealPath : dir,
           workdirAbs: sessionWorkdir,
@@ -2397,11 +2449,11 @@ export function getCindyGhostsMcpDeps(
       );
       if (!preDispatchVisibility.ok) return preDispatchVisibility;
       const preDispatch = preDispatchVisibility.ghost;
-      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
+      if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool && pluginToolVisible(preDispatch.manifest, c.name, audience))) {
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools),
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools?.filter(t => pluginToolVisible(preDispatch.manifest, t.name, audience))),
         };
       }
       try {
@@ -2442,11 +2494,11 @@ export function getCindyGhostsMcpDeps(
       );
       if (!postCtxVisibility.ok) return postCtxVisibility;
       const postCtx = postCtxVisibility.ghost;
-      if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
+      if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool && pluginToolVisible(postCtx.manifest, c.name, audience))) {
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools),
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools?.filter(t => pluginToolVisible(postCtx.manifest, t.name, audience))),
         };
       }
       let postCtxAssessment: GhostSetupAssessment;
@@ -2473,7 +2525,6 @@ export function getCindyGhostsMcpDeps(
       // 中可 card-update)→ finalize(问"这单供过卡吗",开晚到宽限窗)→
       // 真供过卡才把 xdt_card_id 注入 result(mcpServer 提升到顶层,renderer
       // 据此配对取卡;没供过 = 结果零变化,模型永远看不到内部 UUID)。
-      const callId = randomUUID();
       const cardService = getGhostCardService();
       const callSessionContext = resolveSessionContext();
       cardService.registerCall(callId, {
@@ -2490,6 +2541,11 @@ export function getCindyGhostsMcpDeps(
       });
       // GhostToolCallResult 与 CindyGhostCallResult 同构(错误码枚举一致),
       // 原样透传;类型层若有漂移 tsc 会拦。
+      const revokePageCall = () => { cardService.finalizeCall(callId); };
+      if (pageCall) {
+        if (signal?.aborted) { revokePageCall(); signal.throwIfAborted(); }
+        signal?.addEventListener('abort', revokePageCall, { once: true });
+      }
       const result = await getGhostPipeDispatcher().callGhostTool({
         ghostId: instanceId,
         tool,
@@ -2497,7 +2553,9 @@ export function getCindyGhostsMcpDeps(
         callId,
         signal,
         sessionId: callSessionContext?.sessionId,
+        onProgress: pageCall?.onProgress,
       });
+      signal?.removeEventListener('abort', revokePageCall);
       // 收口取账(ghostMediaLedger):本次调用期间主机实际入库的媒体地址。
       // 失败也 drain(清账防泄漏),但只在成功结果上附带——cindy-tools 层
       // 在意识未声明媒体字段时以 xdt_media_produced 注入,兜底 IM/hook 送达。
@@ -2505,6 +2563,21 @@ export function getCindyGhostsMcpDeps(
       // Images the plugin shows the model stay out of the card and media-ledger
       // path (never stored, never sent to IM): fit them into the inline budget
       // and let ghost_call return them as image content (ghostModelImages.ts).
+      if (pageCall) {
+        cardService.finalizeCall(callId);
+        await pageCall.assertCurrent();
+        return result;
+      }
+      if (result.ok && callSessionContext?.sessionId && !callSessionContext.remoteHostId) {
+        await publishPluginAppResult(target, callSessionContext.sessionId, tool, args, result.result, pageAttachmentHashes)
+          .catch(() => log.warn('Plugin App card could not be stored'));
+      }
+      // View-only metadata is independent of card creation (visibility-only tools,
+      // SSH and taskless model calls may not produce a local card). Legacy tools
+      // without a UI declaration retain their ordinary JSON result unchanged.
+      if (result.ok && hasViewOnlyResult) {
+        result.result = pluginModelResult(result.result);
+      }
       const requestedImages = result.ok ? result.images : undefined;
       const plainResult: GhostToolCallResult = result.ok && result.images ? { ok: true, result: result.result } : result;
       const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId);
@@ -2563,12 +2636,14 @@ export function getCindyGhostsMcpDeps(
         if (
           declaredMinCindyVersion &&
           (declaredMinCindyVersion === '0.0.0' ||
-            !stableCindyVersionPattern.test(declaredMinCindyVersion))
+            !(request.withUi
+              ? (compareCindyVersions(declaredMinCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) >= 0
+              : stableCindyVersionPattern.test(declaredMinCindyVersion)))
         ) {
           return {
             ok: false,
             errorCode: 'INVALID_INPUT',
-            message: 'minCindyVersion 必须是插件实际依赖的首个 Cindy 正式版本（major.minor.patch）',
+            message: request.withUi ? `交互页面要求 minCindyVersion >= ${PLUGIN_UI_MIN_CINDY_VERSION}` : 'minCindyVersion 必须是插件实际依赖的首个 Cindy 正式版本（major.minor.patch）',
           };
         }
         const currentCindyVersion = hostDeps.getAppVersion?.().trim();
@@ -2578,7 +2653,10 @@ export function getCindyGhostsMcpDeps(
           stableCindyVersionPattern.test(currentCindyVersion)
             ? currentCindyVersion
             : null;
-        const minCindyVersion = declaredMinCindyVersion || stableCurrentCindyVersion;
+        const defaultMinCindyVersion = request.withUi &&
+          (!stableCurrentCindyVersion || (compareCindyVersions(stableCurrentCindyVersion, PLUGIN_UI_MIN_CINDY_VERSION) ?? -1) < 0)
+            ? PLUGIN_UI_MIN_CINDY_VERSION : stableCurrentCindyVersion;
+        const minCindyVersion = declaredMinCindyVersion || defaultMinCindyVersion;
         if (!minCindyVersion) {
           return {
             ok: false,

@@ -474,6 +474,8 @@ export interface CindyGhostsMcpDeps {
   forgeScaffold(request: {
     dir: string;
     template: CindyForgeScaffoldTemplate;
+    /** Add a standard MCP Apps page bridging the existing main.js runtime. */
+    withUi?: boolean;
     id: string;
     name: string;
     description?: string;

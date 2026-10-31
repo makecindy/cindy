@@ -755,15 +755,46 @@ describe('networkSlot · 响应收敛', () => {
     }
   });
 
-  it('fetch 抛错折叠为结构化失败,不异常穿透', async () => {
-    const { slot } = makeSlot({
-      fetchImpl: async () => {
-        throw new Error('ECONNRESET');
-      },
-    });
+  // 插件协议:网络层失败给稳定 errorCode,原因码进 message。undici 只抛 `fetch failed`,
+  // 真实原因在 cause(可能再套 AggregateError);2026-10-31 证书过期时插件只拿到
+  // 「请求失败:fetch failed」无法定位。识别不出的异常保持原文、不打码,避免误标网络错误。
+  const coded = (code: string, message = '') => Object.assign(new Error(message), { code });
+  const undiciFailure = (cause?: unknown) => new TypeError('fetch failed', cause === undefined ? undefined : { cause });
+  it.each([
+    ['证书过期', undiciFailure(coded('CERT_HAS_EXPIRED', 'certificate has expired')),
+      'TLS_ERROR', '请求失败:HTTPS 证书或加密连接校验失败(CERT_HAS_EXPIRED: certificate has expired)'],
+    ['DNS 失败', undiciFailure(coded('ENOTFOUND', 'getaddrinfo ENOTFOUND api.search.brave.com')),
+      'DNS_FAILED', '请求失败:域名解析失败(getaddrinfo ENOTFOUND api.search.brave.com)'],
+    // 外层 AggregateError 不带 code,只有子错误带:验证会遍历 errors。
+    ['多地址连接全被拒(AggregateError)', undiciFailure(
+      new AggregateError([coded('ECONNREFUSED', 'connect ECONNREFUSED 10.0.0.1:443')], '')),
+    'CONNECTION_REFUSED', '请求失败:连接被拒绝(connect ECONNREFUSED 10.0.0.1:443)'],
+    ['读响应时连接断开', new TypeError('terminated', { cause: coded('UND_ERR_SOCKET', 'other side closed') }),
+      'CONNECTION_RESET', '请求失败:连接被中断(UND_ERR_SOCKET: other side closed)'],
+    ['连接阶段超时', undiciFailure(coded('UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error')),
+      'NETWORK_TIMEOUT', '请求失败:请求超时(UND_ERR_CONNECT_TIMEOUT: Connect Timeout Error)'],
+    ['只有 fetch failed', undiciFailure(), 'NETWORK_ERROR', '请求失败:网络错误(fetch failed)'],
+    ['非网络异常', new Error('installation changed'), undefined, '请求失败:installation changed'],
+  ])('fetch 抛错折叠为结构化失败:%s', async (_name, thrown, errorCode, message) => {
+    const { slot } = makeSlot({ fetchImpl: async () => { throw thrown; } });
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.message).toContain('ECONNRESET');
+    expect(r).toEqual({ ok: false, message, ...(errorCode ? { errorCode } : {}) });
+  });
+
+  it('主机超时中断保留「请求超时(Nms)」文案并标 NETWORK_TIMEOUT', async () => {
+    vi.useFakeTimers();
+    try {
+      const { slot } = makeSlot({
+        fetchImpl: (_url, init) => new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+      });
+      const pending = slot.handleFetchRequest('web-search', { url: BRAVE_URL, timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toEqual({ ok: false, errorCode: 'NETWORK_TIMEOUT', message: '请求失败:请求超时(1000ms)' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1653,16 +1684,19 @@ describe('networkSlot · GitHub CLI 优先凭证(source:gh-cli)', () => {
   });
 
   it('组织同名或尚未确认 root 的 cindy-github 不能借用 gh-cli token', async () => {
-    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }] as const) {
+    for (const identity of [{ namespace: 'acme' }, { namespaceState: 'pending' }, { namespaceState: 'unconfirmed' }] as const) {
       const readGhCliToken = vi.fn(async () => 'gho_should_not_be_read');
+      const readSecret = vi.fn(() => 'github_pat_fallback');
       const { slot, fetchImpl } = makeGithubSlot({
         getGhost: () => ({ ...fakeGhost({ id: 'cindy-github', network: githubNetwork,
           trust: { level: 'cindy-official', publisherSigned: true, publisherVerified: true,
             reviewed: true, publisherName: 'Cindy Plugin Market' } }), ...identity }),
         readGhCliToken,
+        readSecret,
       });
       expect((await slot.handleFetchRequest('web-search', { url: GITHUB_URL })).ok).toBe(false);
       expect(readGhCliToken).not.toHaveBeenCalled();
+      expect(readSecret).not.toHaveBeenCalled();
       expect(fetchImpl).not.toHaveBeenCalled();
     }
   });
@@ -2346,5 +2380,93 @@ describe('networkSlot · 多连接(connections,动态白名单 + 按 host 注入
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('重定向');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// B4/B6 production slot: the missing cases are Library streams and transport reuse.
+// tier: unit; minimum failure inputs are a two-chunk response and an over-limit header.
+describe('Library file transfer', () => {
+  const libraryGhost = () => { const ghost = fakeGhost(); ghost.manifest.library = true; return ghost; };
+  it('uses the normal authenticated POST for Library multipart and reports separate phases', async () => {
+    const progress = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      createTransferProgress: () => progress,
+      readLibraryFile: async () => new Response('abc', { headers: { 'content-length': '3' } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['exports/result.txt'], fields: { size: '{bytes}' } } })).toMatchObject({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const request = (fetchImpl.mock.calls as unknown as [string, { headers: Record<string, string>; body: Uint8Array }][]) [0]![1];
+    expect(request.headers['X-Subscription-Token']).toBe('BSA-secret');
+    expect(new TextDecoder().decode(request.body as Uint8Array)).toContain('filename="result.txt"');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在读取文件');
+    expect(progress).toHaveBeenCalledWith(undefined, undefined, '正在上传');
+    expect(progress).toHaveBeenLastCalledWith(undefined, undefined, '文件处理结束');
+  });
+  it('rejects a Library upload above the cap without reading or dispatching', async () => {
+    const cancel = vi.fn();
+    const { slot, fetchImpl } = makeSlot({ getGhost: libraryGhost,
+      readLibraryFile: async () => new Response(new ReadableStream({ cancel }), { headers: { 'content-length': String(GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE + 1) } }),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/upload', method: 'POST', upload: { library: ['big.bin'] } })).toMatchObject({ ok: false, errorCode: 'TOO_LARGE', limitBytes: GHOST_FETCH_UPLOAD_MAX_BYTES_PER_FILE });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+  it('passes response chunks to Library storage and reports actual received bytes', async () => {
+    const progress = vi.fn();
+    const saveLibraryStream = vi.fn<NonNullable<NetworkSlotDeps['saveLibraryStream']>>(async (_id, input) => {
+      let bytes = 0;
+      for await (const chunk of input.source) { input.assertCurrent(); bytes += chunk.length; input.onProgress?.(bytes, input.totalBytes); }
+      return { ok: true, path: input.path, ref: `library:${input.path}`, bytes, sha256: 'hash' };
+    });
+    const { slot } = makeSlot({ getGhost: libraryGhost, createTransferProgress: () => progress, saveLibraryStream,
+      fetchImpl: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2])); c.enqueue(new Uint8Array([3])); c.close(); } })),
+    });
+    expect(await slot.handleFetchRequest('web-search', { url: 'https://api.search.brave.com/file', as: 'library', path: 'downloads/a.bin' })).toMatchObject({ ok: true, library: { bytes: 3, ref: 'library:downloads/a.bin' } });
+    expect(progress).toHaveBeenCalledWith(2, undefined, '正在保存文件');
+    expect(progress).toHaveBeenCalledWith(3, undefined, '正在保存文件');
+  });
+});
+
+// Regression for Node-held bearer + Host-granted multipart (unit/DI). Existing
+// upload tests use vault headers and do not exercise the private Node boundary.
+describe('private Node authenticated uploads', () => {
+  const url = 'https://api.search.brave.com/upload';
+  const token = '11111111-2222-4333-8444-555555555555';
+  it('uploads granted bytes with the private bearer and strips browser-supplied credentials', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2,
+        files: [{ relPath: 'proof.txt', size: 2, read: async () => new TextEncoder().encode('ok') }] } : null });
+    const request = { url, method: 'POST', uploadDir: { token, fileField: 'file' } };
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', request, 'Bearer synthetic', () => {}, new AbortController().signal);
+    expect(result.ok).toBe(true);
+    const init = h.fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer synthetic');
+    expect(new TextDecoder().decode(init.body as Uint8Array)).toContain('filename="proof.txt"');
+    await h.slot.handleFetchRequest('web-search', { url, headers: { Authorization: 'Bearer injected' }, authorization: 'Bearer forged' });
+    expect((h.fetchImpl.mock.calls[1]![1] as RequestInit).headers).not.toHaveProperty('Authorization');
+  });
+  it('rejects unknown hosts and missing tickets; never forwards the bearer through redirects', async () => {
+    const h = makeSlot({ getGhost: () => fakeGhost({ network: { hosts: ['api.search.brave.com'] } }),
+      takeDirDeposit: (_id, ticket) => ticket === token ? { totalBytes: 2, files: [{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}] } : null });
+    const signal = new AbortController().signal;
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url: 'https://other.example/u', method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect((await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token: '00000000-2222-4333-8444-555555555555' } }, 'Bearer synthetic', () => {}, signal)).ok).toBe(false);
+    expect(h.fetchImpl).not.toHaveBeenCalled();
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok:false, message:'NODE_AUTH_UPLOAD_REQUIRED' });
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({ status: 302, headers: { location: 'https://other.example/u' } }));
+    expect(await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => {}, signal)).toMatchObject({ ok: false, message: 'NODE_AUTH_REDIRECT_BLOCKED' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not replay an authenticated upload after 401', async () => {
+    const h=makeSlot({getGhost:()=>fakeGhost({network:{hosts:['api.search.brave.com']}}),
+      takeDirDeposit:()=>({totalBytes:2,files:[{relPath:'proof.txt',size:2,read:async()=>new TextEncoder().encode('ok')}]})});
+    h.fetchImpl.mockResolvedValueOnce(fakeResponse({status:401}));
+    await h.slot.handleAuthenticatedNodeFetch('web-search',{url,method:'POST',uploadDir:{token}},'Bearer synthetic',()=>{},new AbortController().signal);
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('does not send after the call or installation guard is revoked', async () => {
+    const h = makeSlot();
+    const result = await h.slot.handleAuthenticatedNodeFetch('web-search', { url, method: 'POST', uploadDir: { token } }, 'Bearer synthetic', () => { throw Error('revoked'); }, new AbortController().signal);
+    expect(result.ok).toBe(false); expect(h.fetchImpl).not.toHaveBeenCalled();
   });
 });

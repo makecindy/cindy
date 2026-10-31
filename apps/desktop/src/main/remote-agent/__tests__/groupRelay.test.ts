@@ -7,10 +7,11 @@
  *  - 删掉受邀者时请 M 清掉它留下的东西，M 只清调用方自己的 relay。
  */
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-import { isProviderSharePeer, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
+import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
 import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
@@ -19,7 +20,8 @@ import type { ProviderGroupRouter } from '../../provider-group/router';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
+import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder } from '../host/providerAccess';
 import { guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store';
@@ -57,11 +59,14 @@ function fakeAgentHost(name: string, started: Started[], options: {
   guestRelayCapable?: boolean;
   purge?: (hostSessionIds: readonly string[], nativeIds: readonly string[]) => Promise<void>;
   groupRelay?: RemoteAgentGroupRelayDeps;
+  directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
+  captureOwner?: () => unknown;
   isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
   prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
   imageArtifacts?: Parameters<typeof createRemoteAgentHost>[0]['imageArtifacts'];
   /** 这台的 Agent 启动失败(启动前受邀者目录已经建好)。 */
   failStart?: boolean;
+  beforeStart?: (input: HostedStartInput) => Promise<void>;
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
   onSend?: (record: Started) => void | Promise<void>;
@@ -78,6 +83,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
     isAgentAvailable: options.isAgentAvailable ?? (() => true),
     startHosted: async (input) => {
       if (options.failStart) throw new Error('the agent could not start');
+      await options.beforeStart?.(input);
       const queue: AgentEvent[] = [];
       let wake: (() => void) | null = null;
       let ended = false;
@@ -139,8 +145,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
     }),
     ...(options.purge ? { purgeHostedTranscripts: options.purge } : {}),
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
+    ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
-    captureOwner: () => 'owner',
+    captureOwner: options.captureOwner ?? (() => 'owner'),
     isOwnerCurrent: () => true,
     runsRoot: path.join(root, name),
   });
@@ -168,6 +175,34 @@ async function waitFor(condition: () => boolean, ms = 3_000): Promise<void> {
     if (Date.now() > deadline) throw new Error('timed out waiting');
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+// An open ACK precedes native startup and guest-index persistence. In the
+// forget races, a start-failed event must report its cause instead of becoming
+// a started.length timeout. Keep the existing three-second observation budget.
+async function waitForStarted(host: ReturnType<typeof fakeAgentHost>, peer: string, id: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  const splitter = new LineSplitter(64 * 1024 * 1024);
+  let cursor = 0;
+  let lastEvent = 'none';
+  while (Date.now() < deadline) {
+    const result = parseRemoteAgentPollResult(await host.handle(peer, {
+      op: 'poll', runs: [{ runId: id, cursor }], waitMs: Math.max(0, deadline - Date.now()),
+    }));
+    const run = result.runs.find(item => item.runId === id);
+    if (!run || run.missing) throw new Error(`Run ${id} disappeared before startup`);
+    cursor = run.cursor;
+    for (const line of splitter.push(Buffer.from(run.data ?? '', 'base64'))) {
+      const item = parseRemoteAgentStreamItem(line);
+      if (!item) continue;
+      lastEvent = item.t;
+      if (item.t === 'start-failed') throw new RemoteAgentRemoteError(item.error);
+      if (item.t === 'started') return;
+      if (item.t === 'closed') throw new Error(`Run ${id} closed before startup: ${item.reason}`);
+    }
+    if (run.done) throw new Error(`Run ${id} ended before startup; last event: ${lastEvent}`);
+  }
+  throw new Error(`Run ${id} did not start within 3000ms; cursor: ${cursor}; last event: ${lastEvent}`);
 }
 
 function readOwnerGuestIndex(): Record<string, { controller: string; forgetPending?: string[]; nativeIds: string[] }> {
@@ -219,6 +254,7 @@ function setup(options: {
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
+    directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
@@ -321,6 +357,25 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  // The member owner's deliberate disconnect must survive the intermediary and
+  // must not offer the guest another computer to undo that decision.
+  it('forwards an intentional member disconnect without offering a group switch', async () => {
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'run' }, {}]);
+      await env.members.mini.abortAll('navigation');
+      await waitFor(() => guest.isClosed());
+      expect(guest.closedReason()).toBe('controller-disconnected');
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(env.relay.plan).toHaveBeenCalledTimes(1);
+    } finally {
+      await guest.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
+
   it('does not let a group relay discard external application isolation on an older member', async () => {
     const env = setup({ intercept: async (_device, request, forward) => {
       const result = await forward();
@@ -417,7 +472,6 @@ describe('provider group relay for shared users', () => {
         expect(await allows('claude-opus')).toBe(true);
         executorAllowed = false;
         expect(await allows('claude-opus')).toBe(false);
-        expect(check).toHaveBeenCalledWith('shared-provider', GUEST_A, 'claude-sonnet');
       } finally { await client.close('close', 'navigation'); }
     } finally {
       await ledger.flush();
@@ -664,6 +718,500 @@ describe('provider group relay for shared users', () => {
     void a;
   });
 
+  // Unit / real host.handle: service-only tests cannot prove old O history
+  // bypasses allocation or that accepted fallback reaches the durable handoff.
+  it('locates only for guests, preserves legacy O tasks, and claims a fresh fallback', async () => {
+    const started: Started[] = [];
+    const locate = vi.fn(async () => null);
+    const allocate = vi.fn(async () => ({ deviceId: 'member', generation: runId() }));
+    const acceptRelay = vi.fn(async () => undefined);
+    const direct = {
+      ownerScope: () => 'account', locate, allocate, acceptRelay,
+      status: () => undefined, release: async () => undefined, switch: async () => ({}),
+      sessionAllowed: () => true, sessionDelegated: () => false,
+      usage: () => undefined, delegate: async () => true, forget: () => true,
+    };
+    const makeHost = () => fakeAgentHost('legacy-location', started, {
+      trust: (controller) => controller === OWNER_DEVICE ? 'owner' : 'guest', directGuestExecution: direct,
+    });
+    let host = makeHost();
+    try {
+      await expect(host.handle(OWNER_DEVICE, { op: 'direct-locate', sessionId: SESSION })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      expect(locate).not.toHaveBeenCalled();
+      expect(await host.handle(GUEST_A, { op: 'direct-locate', sessionId: SESSION })).toBeNull();
+      await host.handle(GUEST_A, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload(SESSION) } });
+      await waitFor(() => started.length === 1);
+      expect(acceptRelay).toHaveBeenCalledWith(GUEST_A, SESSION, false);
+      const request = { op: 'allocate', agentKind: 'claude-code', model: 'claude-opus', sessionId: SESSION };
+      expect(await host.handle(GUEST_A, request)).toBeNull();
+      expect(allocate).not.toHaveBeenCalled();
+      await host.abortAll();
+      host.dispose();
+      host = makeHost();
+      expect(await host.handle(GUEST_A, request)).toBeNull();
+      expect(allocate).not.toHaveBeenCalled();
+      // Equal task IDs under a different guest have their own route namespace.
+      expect(await host.handle(GUEST_B, request)).toMatchObject({ deviceId: 'member' });
+      expect(allocate).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.abortAll();
+      host.dispose();
+    }
+  });
+
+  // Direct G→M has no relay key. The production host entry must persist O's
+  // authenticated grant before allowing a later, idempotent deletion (unit tier).
+  it('forgets only the direct guest delegated by this owner, including after the lease is gone', async () => {
+    const started: Started[] = [];
+    const purge = vi.fn(async () => undefined);
+    const peer = providerShareGuestPeer('share-a', 'member-a', 'guest-pc');
+    const other = providerShareGuestPeer('share-b', 'member-b', 'other-pc');
+    let ownerGeneration = 1;
+    const directSessions = new Map<string, Set<string>>();
+    const makeHost = () => fakeAgentHost('direct-member', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      captureOwner: () => ({ ownerScopeKey: `account-one:${ownerGeneration}` }),
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}),
+        sessionAllowed: (controller, sessionId) => directSessions.get(controller)?.has(sessionId) === true,
+        sessionDelegated: (controller, sessionId) => directSessions.get(controller)?.has(sessionId) === true,
+        usage: () => undefined,
+        delegate: async (_owner, request) => {
+          const key = providerShareGuestPeer(request.shareId, request.memberId, request.guestDeviceId);
+          const sessions = directSessions.get(key) ?? new Set<string>();
+          sessions.add(request.sessionId);
+          directSessions.set(key, sessions);
+          return true;
+        },
+        forget: (_owner, controller) => { directSessions.delete(controller); return true; },
+      },
+    });
+    let host = makeHost();
+    const grant = (shareId: string, memberId: string, guestDeviceId: string, cleanupEpoch = 1,
+      sessionId = 'task-direct') => ({
+      op: 'delegate' as const, action: 'grant' as const, shareId, memberId, guestDeviceId,
+      sessionId, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111', cleanupEpoch,
+    });
+    const open = (controller: string, sessionId: string, extra: Record<string, unknown> = {}, id = runId()) =>
+      host.handle(controller, { op: 'open', runId: id, agentKind: 'claude-code',
+        payload: { json: openPayload(sessionId, extra) } });
+    try {
+      const directRunId = runId(), relayRunId = runId();
+      await host.handle(OWNER_DEVICE, grant('share-a', 'member-a', 'guest-pc'));
+      await host.handle(OWNER_DEVICE, grant('share-b', 'member-b', 'other-pc', 1, 'task-other'));
+      await open(peer, 'task-direct', {}, directRunId);
+      await open(other, 'task-other');
+      await open(peer, 'task-relay', { relay: relayKeyFor(peer) }, relayRunId);
+      await waitFor(() => started.length === 3);
+      const directHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'task-direct'))!.input.guestHome!;
+      const otherHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(other, 'task-other'))!.input.guestHome!;
+      const relayScope = `${peer}\0relay:${relayKeyFor(peer)}`;
+      const relayHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(relayScope, 'task-relay'))!.input.guestHome!;
+      const peerHash = createHash('sha256').update(peer).digest('hex').slice(0, 16);
+      const base = path.join(root, 'direct-member');
+      const directWorkspace = path.join(base, 'workspaces', peerHash, hostSessionIdFor(peer, 'task-direct'));
+      const directAttachments = path.join(base, 'attachments', peerHash, directRunId);
+      const relayWorkspace = path.join(base, 'workspaces', peerHash, hostSessionIdFor(relayScope, 'task-relay'));
+      const relayAttachments = path.join(base, 'attachments', peerHash, relayRunId);
+      // A restarted M has no live Run to clean. Recreate failed shutdown
+      // residue under the real on-disk layout, alongside same-peer relay data.
+      host.dispose();
+      await waitFor(() => !fs.existsSync(directWorkspace) && !fs.existsSync(relayWorkspace)
+        && !fs.existsSync(directAttachments) && !fs.existsSync(relayAttachments));
+      directSessions.clear();
+      host = makeHost();
+      for (const dir of [directHome, otherHome, relayHome, directWorkspace, directAttachments,
+        relayWorkspace, relayAttachments]) fs.mkdirSync(dir, { recursive: true });
+      const forget = { op: 'forget', directGuest: { shareId: 'share-a', memberId: 'member-a',
+        guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+      await expect(host.handle('other-owner', forget)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      await expect(host.handle(peer, forget)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      ownerGeneration = 2; // same account, a newer app-session generation
+      await host.handle(OWNER_DEVICE, forget);
+      expect(purge).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(directHome)).toBe(false);
+      expect(fs.existsSync(otherHome)).toBe(true);
+      expect(fs.existsSync(relayHome)).toBe(true);
+      expect(fs.existsSync(directWorkspace)).toBe(false);
+      expect(fs.existsSync(directAttachments)).toBe(false);
+      expect(fs.existsSync(relayWorkspace)).toBe(true);
+      expect(fs.existsSync(relayAttachments)).toBe(true);
+      expect(purge).toHaveBeenCalledWith(expect.arrayContaining([hostSessionIdFor(peer, 'task-direct')]),
+        expect.arrayContaining([expect.stringContaining('sdk-direct-member')]));
+      await host.handle(OWNER_DEVICE, forget); // lost ACK: no second purge
+      expect(purge).toHaveBeenCalledTimes(1);
+      // A delayed old deletion can arrive after the same member rejoins on M.
+      await host.handle(OWNER_DEVICE, grant('share-a', 'member-a', 'guest-pc', 2, 'task-new'));
+      await open(peer, 'task-new');
+      await waitFor(() => started.length === 4);
+      const newHome = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'task-new'))!.input.guestHome!;
+      await host.handle(OWNER_DEVICE, forget);
+      expect(fs.existsSync(newHome)).toBe(true);
+      expect(purge).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.dispose();
+    }
+  });
+
+  // Unit / real host.handle + disk index: transcript-failure tests did not fail
+  // the tombstone's atomic rename. A failed rename followed by the same forget
+  // ID must keep rejecting (O keeps it pending), then survive retry and restart
+  // with no old native IDs (provider-sharing-direct-execution, deletion rules).
+  // CI #41004717568 exhausted the setup poll's 3s deadline before exercising
+  // forget. Await the real index rename instead; keep disk assertions and EIO injection.
+  it('acknowledges a repeated direct forget only after its tombstone is durable', async () => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-durable', 'member-durable', 'guest-pc');
+    const sessions = new Set<string>();
+    const purge = vi.fn(async () => undefined);
+    const makeHost = () => fakeAgentHost('direct-forget-durable', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); return true; },
+      },
+    });
+    let host = makeHost();
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-durable', memberId: 'member-durable', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const open = (sessionId: string, extra = {}) => host.handle(peer, {
+      op: 'open', runId: runId(), agentKind: 'claude-code', payload: { json: openPayload(sessionId, extra) },
+    });
+    const indexFile = path.join(root, 'direct-forget-durable', 'guest-sessions.json');
+    const readRecord = () => Object.values(JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+      { controller: string; nativeIds: string[]; hostSessionIds: string[]; cleanupEpoch: number; lastDirectForgetId?: string }>)
+      .find((record) => record.controller === peer)!;
+    const request = { op: 'forget', directGuest: { shareId: 'share-durable', memberId: 'member-durable',
+      guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    let acknowledgements = 0;
+    const forget = () => host.handle(OWNER_DEVICE, request).then(() => { acknowledgements += 1; });
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    let failRename = false;
+    let failedWrites = 0;
+    let nativeIdWritten: (() => void) | undefined;
+    const nextNativeIdWrite = () => new Promise<void>((resolve) => { nativeIdWritten = resolve; });
+    const rename = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === indexFile && failRename) {
+        failedWrites += 1;
+        throw Object.assign(new Error('injected guest index rename failure'), { code: 'EIO' });
+      }
+      await originalRename(from, to);
+      if (String(to) === indexFile && readRecord()?.nativeIds.length === 1) {
+        nativeIdWritten?.();
+        nativeIdWritten = undefined;
+      }
+    });
+    try {
+      await grant('old-task', 1);
+      const oldNativeIdWritten = nextNativeIdWrite();
+      await open('old-task');
+      await oldNativeIdWritten;
+      expect(started).toHaveLength(1);
+      expect(readRecord().nativeIds).toHaveLength(1);
+      const oldNative = readRecord().nativeIds[0];
+      failRename = true;
+      await expect(forget()).rejects.toThrow('injected guest index rename failure');
+      await expect(forget()).rejects.toThrow('injected guest index rename failure');
+      expect(acknowledgements).toBe(0);
+      expect(failedWrites).toBe(2);
+      expect(readRecord().nativeIds).toEqual([oldNative]);
+      expect(readRecord().lastDirectForgetId).toBeUndefined();
+      failRename = false;
+      await forget();
+      expect(acknowledgements).toBe(1);
+      expect(readRecord()).toMatchObject({ hostSessionIds: [], nativeIds: [], cleanupEpoch: 1,
+        lastDirectForgetId: request.directGuest.forgetId });
+      const purges = purge.mock.calls.length;
+      host.dispose();
+      host = makeHost();
+      await forget();
+      expect(purge).toHaveBeenCalledTimes(purges);
+      expect(readRecord().nativeIds).toEqual([]);
+      await grant('new-task', 2);
+      await expect(open('new-task', { options: { resumeSessionId: oldNative } })).rejects.toThrow('REMOTE_AGENT_INVALID');
+      const newNativeIdWritten = nextNativeIdWrite();
+      await open('new-task');
+      await newNativeIdWritten;
+      expect(started).toHaveLength(2);
+      expect(readRecord().nativeIds).toHaveLength(1);
+      await forget(); // old epoch must not delete the newly granted task
+      expect(readRecord().cleanupEpoch).toBe(2);
+      expect(readRecord().nativeIds).toEqual([`sdk-direct-forget-durable-${started[1].input.hostSessionId}`]);
+      expect(fs.existsSync(started[1].input.guestHome!)).toBe(true);
+    } finally {
+      rename.mockRestore();
+      await host.abortAll();
+      host.dispose();
+    }
+  });
+
+  // Host.handle regression (unit): sequential forget coverage missed F1/F2
+  // sharing an ID while F1 is still deleting transcripts. An early F2 ACK let
+  // a new epoch open before F1 overwrote its native IDs and cleanup epoch.
+  it.each([false, true])('joins duplicate direct forgets until cleanup settles (failure=%s)', async (failFirst) => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-race', 'member-race', 'guest-pc');
+    const sessions = new Set<string>();
+    let releasePurge!: () => void;
+    let enteredPurge!: () => void;
+    const purging = new Promise<void>((resolve) => { enteredPurge = resolve; });
+    const barrier = new Promise<void>((resolve) => { releasePurge = resolve; });
+    const purge = vi.fn(async () => undefined).mockImplementationOnce(async () => {
+      enteredPurge();
+      await barrier;
+      if (failFirst) throw new Error('transcript cleanup failed');
+    });
+    const host = fakeAgentHost('direct-forget-race', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); return true; },
+      },
+    });
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-race', memberId: 'member-race', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const oldRunId = runId();
+    const newRunId = runId();
+    const open = (sessionId: string, id: string) => host.handle(peer, { op: 'open', runId: id, agentKind: 'claude-code',
+      payload: { json: openPayload(sessionId, { projectFiles: [{ path: 'AGENTS.md', data: Buffer.from('new task').toString('base64') }] }) } });
+    const forget = { op: 'forget', directGuest: { shareId: 'share-race', memberId: 'member-race',
+      guestDeviceId: 'guest-pc', forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    const results: string[] = [];
+    const capture = (label: string, work: Promise<unknown>) => work.then(() => { results.push(`${label}:ok`); },
+      () => { results.push(`${label}:failed`); });
+    try {
+      await grant('old-task', 1);
+      await open('old-task', oldRunId);
+      await waitForStarted(host, peer, oldRunId);
+      expect(started).toHaveLength(1);
+      const first = capture('F1', host.handle(OWNER_DEVICE, forget));
+      await purging;
+      const second = host.handle(OWNER_DEVICE, forget);
+      const secondResult = capture('F2', second);
+      const reopened = second.then(async () => {
+        await grant('new-task', 2);
+        await open('new-task', newRunId);
+      }, () => undefined);
+      // Give the duplicate real file I/O a short scheduling window. F1 is held
+      // by an explicit barrier; no wall-clock timeout releases the deletion.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const earlyResults = [...results];
+      releasePurge();
+      await Promise.all([first, secondResult, reopened]);
+      expect(earlyResults).toEqual([]);
+      expect(results.sort()).toEqual(failFirst ? ['F1:failed', 'F2:failed'] : ['F1:ok', 'F2:ok']);
+      expect(purge).toHaveBeenCalledTimes(1);
+      if (failFirst) {
+        // Failed cleanup must release its queue and dedupe entry for retry.
+        await host.handle(OWNER_DEVICE, forget);
+        await grant('new-task', 2);
+        await open('new-task', newRunId);
+      }
+      await waitForStarted(host, peer, newRunId);
+      expect(started).toHaveLength(2);
+      const session = started[1].input;
+      const indexFile = path.join(root, 'direct-forget-race', 'guest-sessions.json');
+      await waitFor(() => fs.readFileSync(indexFile, 'utf8').includes(`sdk-direct-forget-race-${session.hostSessionId}`));
+      // Also reject a delayed older epoch with a different ID, after persistence.
+      await host.handle(OWNER_DEVICE, { ...forget, directGuest: { ...forget.directGuest,
+        forgetId: '33333333-3333-4333-8333-333333333333' } });
+      const records = JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+        { controller: string; cleanupEpoch: number; nativeIds: string[] }>;
+      const record = Object.values(records).find((item) => item.controller === peer)!;
+      expect(record.cleanupEpoch).toBe(2);
+      expect(record.nativeIds).toContain(`sdk-direct-forget-race-${session.hostSessionId}`);
+      expect(fs.existsSync(session.guestHome!)).toBe(true);
+      expect(fs.readFileSync(path.join(session.shadowDir, 'AGENTS.md'), 'utf8')).toContain('new task');
+    } finally {
+      releasePurge();
+      host.dispose();
+    }
+  });
+
+  // Unit, #7783 integration: per-task revocation with an authorized sibling
+  // used to return missing, which restart recovery interpreted as a lost process.
+  it('ends a revoked direct task without exposing its buffer or restarting it', async () => {
+    const started: Started[] = [];
+    const sessions = new Set(['revoked', 'sibling']);
+    const peer = providerShareGuestPeer('share-revoke', 'member-revoke', 'guest-pc');
+    const host = fakeAgentHost('direct-revoke', started, {
+      trust: () => 'guest',
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null, status() {},
+        release: async () => {}, switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: (_peer, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_peer, sessionId) => sessions.has(sessionId),
+      },
+    });
+    const ids = [runId(), runId()];
+    try {
+      for (const [index, sessionId] of ['revoked', 'sibling'].entries()) {
+        await host.handle(peer, { op: 'open', runId: ids[index], agentKind: 'claude-code', payload: { json: openPayload(sessionId) } });
+      }
+      await waitFor(() => started.length === 2);
+      sessions.delete('revoked');
+      const result = await host.handle(peer, { op: 'poll', runs: ids.map(id => ({ runId: id, cursor: 0 })), waitMs: 0 }) as {
+        runs: Array<{ runId: string; missing?: boolean; data?: string; done?: boolean }>;
+      };
+      const denied = result.runs.find(run => run.runId === ids[0])!;
+      expect(denied.missing).not.toBe(true);
+      expect(denied.done).toBe(true);
+      expect(Buffer.from(denied.data!, 'base64').toString()).toBe(JSON.stringify({ t: 'closed', reason: 'access-revoked' }) + '\n');
+      const sibling = result.runs.find(run => run.runId === ids[1]);
+      expect(sibling?.missing).not.toBe(true);
+      expect(sibling?.done).not.toBe(true);
+    } finally { host.dispose(); }
+  });
+
+  // Unit: shutdown must publish a busy boundary before waiting for a direct
+  // native startup; disposal must still drain that startup's late writes.
+  it('drains a direct startup after publishing the shutdown boundary', async () => {
+    const started: Started[] = [];
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const starting = new Promise<void>(resolve => { entered = resolve; });
+    let shadow = '';
+    const host = fakeAgentHost('direct-shutdown', started, {
+      trust: () => 'guest',
+      beforeStart: async input => { shadow = input.shadowDir; entered(); await barrier; },
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null, status() {},
+        release: async () => {}, switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => true,
+      },
+    });
+    const id = runId();
+    try {
+      await host.handle(GUEST_A, { op: 'open', runId: id, agentKind: 'claude-code', payload: { json: openPayload('shutdown-task') } });
+      await starting;
+      await host.abortAll('app-quit');
+      const result = await host.handle(GUEST_A, { op: 'poll', runs: [{ runId: id, cursor: 0 }], waitMs: 0 }) as { runs: Array<{ data: string }> };
+      expect(Buffer.from(result.runs[0].data, 'base64').toString()).toContain('"reason":"provider-restarting"');
+      host.dispose();
+      expect(fs.existsSync(shadow)).toBe(true);
+      release();
+      await waitFor(() => !fs.existsSync(shadow));
+    } finally { release(); host.dispose(); }
+  });
+
+  // Host.handle(open/forget/delegate), unit: forgetting during native startup
+  // must drain its late file writes before a newer grant/open. Sequential tests
+  // miss this; a same-peer relay and poll must still progress while it drains.
+  it('drains direct startup before forgetting and queues a newer grant/open without blocking relay or poll', async () => {
+    const started: Started[] = [];
+    const peer = providerShareGuestPeer('share-start', 'member-start', 'guest-pc');
+    const sessions = new Set<string>();
+    let releaseStart!: () => void;
+    let enteredStart!: () => void;
+    let revoked!: () => void;
+    const starting = new Promise<void>((resolve) => { enteredStart = resolve; });
+    const barrier = new Promise<void>((resolve) => { releaseStart = resolve; });
+    const revoking = new Promise<void>((resolve) => { revoked = resolve; });
+    const oldSessionId = hostSessionIdFor(peer, 'old-task');
+    const purge = vi.fn(async () => undefined);
+    const host = fakeAgentHost('direct-start-race', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner', purge,
+      beforeStart: async (input) => {
+        if (input.hostSessionId !== oldSessionId) return;
+        enteredStart();
+        await barrier;
+        // A native startup already in progress may still create its files
+        // after finishRun has marked the Run closing.
+        fs.mkdirSync(input.guestHome!, { recursive: true });
+        fs.writeFileSync(path.join(input.guestHome!, 'late-native.txt'), 'old history');
+      },
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}), usage: () => undefined,
+        sessionAllowed: (_controller, sessionId) => sessions.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => sessions.has(sessionId),
+        delegate: async (_owner, request) => { sessions.add(request.sessionId); return true; },
+        forget: () => { sessions.clear(); revoked(); return true; },
+      },
+    });
+    const grant = (sessionId: string, cleanupEpoch: number) => host.handle(OWNER_DEVICE, {
+      op: 'delegate', action: 'grant', shareId: 'share-start', memberId: 'member-start', guestDeviceId: 'guest-pc',
+      sessionId, cleanupEpoch, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const oldRunId = runId();
+    const open = (sessionId: string, extra = {}, id = runId()) => host.handle(peer, { op: 'open', runId: id, agentKind: 'claude-code',
+      payload: { json: openPayload(sessionId, extra) } });
+    let pending: Promise<unknown> | undefined;
+    try {
+      await grant('old-task', 1);
+      await open('old-task', {}, oldRunId);
+      await starting;
+      let forgetAcknowledged = false;
+      const forget = host.handle(OWNER_DEVICE, { op: 'forget', directGuest: {
+        shareId: 'share-start', memberId: 'member-start', guestDeviceId: 'guest-pc',
+        forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1,
+      } }).then(() => { forgetAcknowledged = true; });
+      await revoking;
+      const newGrant = grant('new-task', 2);
+      const newRunId = runId();
+      const newOpen = open('new-task', {}, newRunId);
+      pending = Promise.all([forget, newGrant, newOpen]);
+      const relayRunId = runId();
+      await open('relay-task', { relay: relayKeyFor(peer) }, relayRunId);
+      await waitForStarted(host, peer, relayRunId);
+      expect(started.some((item) => item.input.hostSessionId !== oldSessionId)).toBe(true);
+      await host.handle(peer, { op: 'poll', runs: [{ runId: oldRunId, cursor: 0 }], waitMs: 0 });
+      await host.handle(OWNER_DEVICE, { op: 'delegate', action: 'grant',
+        shareId: 'other-share', memberId: 'other-member', guestDeviceId: 'other-pc',
+        sessionId: 'other-task', cleanupEpoch: 1, providerId: 'shared-provider', model: 'claude-opus',
+        generation: '11111111-1111-4111-8111-111111111111' });
+      expect(forgetAcknowledged).toBe(false);
+      expect(purge).not.toHaveBeenCalled();
+      expect(sessions.has('new-task')).toBe(false);
+      expect(sessions.has('other-task')).toBe(true);
+      releaseStart();
+      await pending;
+      await waitForStarted(host, peer, newRunId);
+      expect(started).toHaveLength(3);
+      const newSession = started.find((item) => item.input.hostSessionId === hostSessionIdFor(peer, 'new-task'))!.input;
+      expect(fs.existsSync(newSession.guestHome!)).toBe(true);
+      expect(fs.existsSync(path.join(newSession.guestHome!, 'late-native.txt'))).toBe(false);
+      const relaySession = started.find((item) => item.input.hostSessionId !== oldSessionId && item.input !== newSession)!.input;
+      expect(fs.existsSync(relaySession.guestHome!)).toBe(true);
+      expect(purge).toHaveBeenCalledTimes(1);
+      expect(purge).toHaveBeenCalledWith([oldSessionId], []);
+      const indexFile = path.join(root, 'direct-start-race', 'guest-sessions.json');
+      await waitFor(() => fs.readFileSync(indexFile, 'utf8').includes(`sdk-direct-start-race-${newSession.hostSessionId}`));
+      const records = JSON.parse(fs.readFileSync(indexFile, 'utf8')) as Record<string,
+        { controller: string; relay?: string; cleanupEpoch: number; nativeIds: string[] }>;
+      const record = Object.values(records).find((item) => item.controller === peer && !item.relay)!;
+      expect(record.cleanupEpoch).toBe(2);
+      expect(record.nativeIds).toEqual([`sdk-direct-start-race-${newSession.hostSessionId}`]);
+    } finally {
+      releaseStart();
+      await pending?.catch(() => undefined);
+      host.dispose();
+    }
+  });
+
   it('runs a relayed task from a same-account computer as a shared user, never with owner trust', async () => {
     const started: Started[] = [];
     const member = fakeAgentHost('member', started, { trust: () => 'owner' });
@@ -704,6 +1252,57 @@ describe('provider group relay for shared users', () => {
       expect(env.relay.plan).not.toHaveBeenCalled();
     } finally {
       await host.dispose();
+    }
+  });
+
+  // Direct routing regression (provider-sharing-direct-execution.md): Host.handle(open)
+  // must use M's server-checked task grant. Earlier cases all supplied groupAssigned,
+  // so a G omitting that untrusted hint made M forward to its own group (unit tier).
+  it('runs a delegated guest locally when G omits groupAssigned while ordinary guests still use the group', async () => {
+    const env = setup();
+    const started: Started[] = [];
+    const delegated = new Set<string>();
+    const directPeer = providerShareGuestPeer('share-a', 'member-a', 'guest-pc');
+    const ordinaryPeer = providerShareGuestPeer('share-b', 'member-b', 'guest-pc');
+    const grantKey = (controller: string, sessionId: string) => JSON.stringify([controller, sessionId]);
+    const host = fakeAgentHost('assigned-member', started, {
+      trust: (controller) => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      groupRelay: env.relay,
+      directGuestExecution: {
+        ownerScope: () => 'account-one',
+        allocate: async () => null, status: () => undefined, release: async () => undefined,
+        switch: async () => ({}),
+        // Production sessionAllowed also permits an ordinary guest with no lease.
+        sessionAllowed: () => true,
+        sessionDelegated: (controller, sessionId) => delegated.has(grantKey(controller, sessionId)),
+        usage: () => undefined,
+        delegate: async (_owner, request) => {
+          delegated.add(grantKey(providerShareGuestPeer(request.shareId, request.memberId,
+            request.guestDeviceId), request.sessionId));
+          return false;
+        },
+        forget: () => true,
+      },
+    });
+    try {
+      await host.handle(OWNER_DEVICE, { op: 'delegate', action: 'grant',
+        shareId: 'share-a', memberId: 'member-a', guestDeviceId: 'guest-pc',
+        sessionId: 'direct-task', providerId: 'shared-provider', model: 'claude-opus',
+        generation: '11111111-1111-4111-8111-111111111111', cleanupEpoch: 1 });
+      await host.handle(directPeer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('direct-task') } });
+      expect(env.relay.plan).not.toHaveBeenCalled();
+      await waitFor(() => started.length === 1);
+      expect(started[0].input.guest).toBe(true);
+      await host.handle(ordinaryPeer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('ordinary-task') } });
+      await waitFor(() => env.memberStarted.mini.length === 1);
+      expect(env.relay.plan).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const item of [host, env.owner, ...Object.values(env.members)]) {
+        await item.abortAll();
+        item.dispose();
+      }
     }
   });
 });
@@ -1233,8 +1832,15 @@ describe('provider group "switch to another computer" for shared users', () => {
     }
   });
 
-  it('accepts a token only once, and only from the shared user and task it was sent to', async () => {
+  it('accepts a retried token only from the shared user and task it was sent to', async () => {
+    const switched = vi.fn(async () => undefined);
     const env = setup({
+      owner: { directGuestExecution: {
+        ownerScope: () => 'owner', allocate: async () => null,
+        status: () => undefined, release: async () => undefined, switch: async () => ({}),
+        switched, sessionAllowed: () => true, sessionDelegated: () => false,
+        usage: () => undefined, delegate: async () => false, forget: () => false,
+      } },
       plans: [
         { kind: 'member', ...MEMBER_MINI },
         { kind: 'member', ...MEMBER_STUDIO },
@@ -1255,12 +1861,14 @@ describe('provider group "switch to another computer" for shared users', () => {
     const otherTask = await openAsGuest(env, GUEST_A, openPayload('task-2', { groupSwitchToken: token }));
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
     await otherTask.client.close('close', 'navigation');
+    expect(switched).not.toHaveBeenCalled();
 
     const used = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
     expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    expect(switched).toHaveBeenCalledWith(GUEST_A, SESSION, token);
     await used.client.close('close', 'navigation');
     const again = await openAsGuest(env, GUEST_A, openPayload(SESSION, { groupSwitchToken: token }));
-    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set() }));
+    expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
     await again.client.close('close', 'navigation');
   });
 
@@ -1592,4 +2200,165 @@ describe('provider group reshare consent', () => {
     expect(env.relay.plan).toHaveBeenCalledTimes(1);
     await env.owner.abortAll();
   });
+});
+
+// Unit: real Host.handle and the existing disk/agent boundary fixture. F3 was
+// missed by write-only tombstone tests: one failed initial read, malformed tail,
+// or failed strict rename must not erase ownership or acknowledge cached state.
+describe('guest index failure recovery', () => {
+  const peer = providerShareGuestPeer('share-index', 'member-index', 'guest-pc');
+  const otherPeer = providerShareGuestPeer('share-other', 'member-other', 'other-pc');
+  const digest = (controller: string) => createHash('sha256').update(controller).digest('hex').slice(0, 32);
+  const forgetId = '22222222-2222-4222-8222-222222222222';
+  function setupIndex() {
+    const started: Started[] = [];
+    const leases = new Set<string>();
+    const host = fakeAgentHost('index-recovery', started, {
+      trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+      directGuestExecution: {
+        ownerScope: () => 'account-one', allocate: async () => null,
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+        sessionAllowed: (_controller, sessionId) => leases.has(sessionId),
+        sessionDelegated: (_controller, sessionId) => leases.has(sessionId),
+        delegate: async (_owner, request) => {
+          if (request.action === 'grant') leases.add(request.sessionId);
+          else leases.delete(request.sessionId);
+          return true;
+        },
+        forget: () => true,
+      },
+    });
+    const file = path.join(root, 'index-recovery', 'guest-sessions.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const record = { controller: peer, hostSessionIds: [hostSessionIdFor(peer, 'old')], nativeIds: ['native-old'],
+      directOwnerDeviceId: OWNER_DEVICE, directOwnerScopeKey: 'account-one', cleanupEpoch: 9,
+      lastDirectForgetId: forgetId, attachmentRunIds: [forgetId], forkWorkspaces: { 'native-old': [forgetId] } };
+    const old = { [digest(peer)]: record, [digest(otherPeer)]: { controller: otherPeer, nativeIds: ['native-other'],
+      members: { 'native-other': { memberKey: 'device:old:provider', agentDeviceId: 'old-device', providerId: 'provider' } } } };
+    const grant = (owner = OWNER_DEVICE) => host.handle(owner, {
+      op: 'delegate', action: 'grant', shareId: 'share-index', memberId: 'member-index', guestDeviceId: 'guest-pc',
+      sessionId: 'old', cleanupEpoch: 9, providerId: 'shared-provider', model: 'claude-opus',
+      generation: '11111111-1111-4111-8111-111111111111',
+    });
+    const fork = (controller = peer, nativeId = 'native-old') => host.handle(controller, {
+      op: 'fork', agentKind: 'claude-code', sourceSessionId: 'old', sourceSdkSessionId: nativeId,
+      newSessionId: 'forked', providerId: 'shared-provider', model: 'claude-opus',
+    });
+    return { host, file, record, old, grant, fork, leases };
+  }
+  it.each(['EBUSY', 'EIO'])('retries an initial %s in the same host without replacing old safety records', async (code) => {
+    const env = setupIndex();
+    const original = JSON.stringify(env.old, null, 2);
+    fs.writeFileSync(env.file, original);
+    const read = fs.promises.readFile.bind(fs.promises);
+    let injected = false;
+    const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: Parameters<typeof read>) => {
+      if (String(args[0]) === env.file && !injected) {
+        injected = true;
+        throw Object.assign(new Error(`injected ${code}`), { code });
+      }
+      return read(...args);
+    }) as typeof read);
+    try {
+      await expect(env.grant()).rejects.toThrow(`injected ${code}`);
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe(original);
+      await env.grant();
+      const saved = JSON.parse(fs.readFileSync(env.file, 'utf8'));
+      expect(saved[digest(peer)]).toEqual(env.record);
+      expect(saved[digest(otherPeer)].nativeIds).toEqual(['native-other']);
+      expect(saved[digest(otherPeer)].members['native-other'].sameAccount).toBe(false);
+      await expect(env.fork(otherPeer)).rejects.toThrow('REMOTE_AGENT_INVALID');
+      await expect(env.fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
+      // A same-account caller does not acquire the guest index boundary.
+      await expect(env.host.handle(OWNER_DEVICE, { op: 'caps' })).resolves.toMatchObject({ version: 1 });
+    } finally { spy.mockRestore(); await env.host.dispose(); }
+  });
+  it.each([
+    ['root', []], ['json', '{'], ['record', null], ['controller', 7], ['relay', []],
+    ['nativeIds', ['native', 1]], ['hostSessionIds', ['../unsafe']], ['attachmentRunIds', ['unsafe-path']],
+    ['forkWorkspaces', { native: ['unsafe-path'] }], ['members', { native: { memberKey: 'm', agentDeviceId: 'd' } }],
+    ['relayDevices', ['ok', null]], ['forgetPending', {}], ['directOwnerDeviceId', ''],
+    ['directOwnerScopeKey', false], ['cleanupEpoch', -1], ['lastDirectForgetId', 'bad'],
+    ['identity', 'different-controller'],
+  ])('rejects a corrupt %s without publishing a partial cache, then accepts a repaired file', async (field, value) => {
+    const env = setupIndex();
+    const tail = { ...env.record, controller: otherPeer };
+    const invalid = field === 'root' ? JSON.stringify(value) : field === 'json' ? String(value)
+      : JSON.stringify({ [digest(peer)]: env.record, [digest(otherPeer)]: field === 'record' ? value
+        : { ...tail, [field === 'identity' ? 'controller' : String(field)]: value } });
+    fs.writeFileSync(env.file, invalid);
+    try {
+      await expect(env.grant()).rejects.toThrow();
+      await expect(env.grant()).rejects.toThrow();
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe(invalid);
+      fs.writeFileSync(env.file, JSON.stringify(env.old));
+      await env.grant();
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)]).toEqual(env.record);
+    } finally { await env.host.dispose(); }
+  });
+  it('retains omitted legacy fields and all native ownership entries during migration', async () => {
+    const env = setupIndex();
+    const nativeIds = Array.from({ length: 20_001 }, (_, i) => `native-${i}`);
+    fs.writeFileSync(env.file, JSON.stringify({ [digest(peer)]: { controller: peer, nativeIds } }));
+    try {
+      await env.grant();
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)].nativeIds).toEqual(nativeIds);
+      await expect(env.fork(peer, nativeIds.at(-1))).resolves.toMatchObject({ newSdkSessionId: 'native-20000-fork' });
+    } finally { await env.host.dispose(); }
+  });
+  it('does not cache an owner whose grant failed to persist', async () => {
+    const env = setupIndex();
+    fs.writeFileSync(env.file, JSON.stringify({}));
+    const rename = fs.promises.rename.bind(fs.promises);
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === env.file) throw new Error('injected rename failure');
+      return rename(from, to);
+    });
+    try {
+      await expect(env.grant()).rejects.toThrow('injected rename failure');
+      expect(env.leases.size).toBe(0);
+      expect(fs.readFileSync(env.file, 'utf8')).toBe('{}');
+      spy.mockRestore();
+      await expect(env.grant('replacement-owner')).resolves.toEqual({});
+      expect(JSON.parse(fs.readFileSync(env.file, 'utf8'))[digest(peer)].directOwnerDeviceId).toBe('replacement-owner');
+    } finally { spy.mockRestore(); await env.host.dispose(); }
+  });
+});
+
+// Strict session writes must remain retryable as well as initial owner writes.
+it('does not acknowledge a repeated direct fork whose native index write failed', async () => {
+  const peer = providerShareGuestPeer('share-write', 'member-write', 'guest-pc');
+  const host = fakeAgentHost('index-fork-write', [], {
+    trust: (controller) => isProviderSharePeer(controller) ? 'guest' : 'owner',
+    directGuestExecution: {
+      ownerScope: () => 'account-one', allocate: async () => null,
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      sessionAllowed: () => true, sessionDelegated: () => true,
+      delegate: async () => true, forget: () => true,
+    },
+  });
+  const file = path.join(root, 'index-fork-write', 'guest-sessions.json');
+  const digest = createHash('sha256').update(peer).digest('hex').slice(0, 32);
+  const record = { controller: peer, nativeIds: ['native-old'], hostSessionIds: [],
+    directOwnerDeviceId: OWNER_DEVICE, directOwnerScopeKey: 'account-one', cleanupEpoch: 1 };
+  const original = JSON.stringify({ [digest]: record });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, original);
+  const rename = fs.promises.rename.bind(fs.promises);
+  const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+    if (String(to) === file) throw new Error('injected session index failure');
+    return rename(from, to);
+  });
+  const fork = () => host.handle(peer, { op: 'fork', agentKind: 'claude-code', sourceSessionId: 'old',
+    sourceSdkSessionId: 'native-old', newSessionId: 'forked', providerId: 'shared-provider', model: 'claude-opus' });
+  try {
+    await expect(fork()).rejects.toThrow('injected session index failure');
+    await expect(fork()).rejects.toThrow('injected session index failure');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    spy.mockRestore();
+    await expect(fork()).resolves.toMatchObject({ newSdkSessionId: 'native-old-fork' });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))[digest].nativeIds).toEqual(['native-old', 'native-old-fork']);
+  } finally { spy.mockRestore(); await host.dispose(); }
 });

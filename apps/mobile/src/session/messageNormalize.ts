@@ -404,7 +404,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),

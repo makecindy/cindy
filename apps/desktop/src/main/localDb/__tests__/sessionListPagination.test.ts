@@ -63,8 +63,12 @@ it('lists linked teammate routine/channel tasks, keeping private lanes and hidde
     const link = sqlite.prepare('INSERT INTO bot_session_links(bot_id,session_id,role,route_key) VALUES (?,?,?,?)');
     for (const role of ['routine', 'channel', 'canonical', 'group', 'thread']) {
       insert.run(role, 'bot', role === 'routine' ? 'archived' : 'active');
-      link.run('owner', role, role, role === 'channel' ? 'im:feishu:chat' : null);
+      link.run('owner', role, role, role === 'channel' ? 'im:feishu:chat'
+        // 「每次新建任务」的例行任务专线在规则 id 后追加 `:<uuid>`。
+        : role === 'routine' ? 'routine:daily-1:3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b' : null);
     }
+    insert.run('routine-persistent', 'bot', 'active');
+    link.run('owner', 'routine-persistent', 'routine', 'routine:daily-1');
     for (const id of ['unlinked', 'removed', 'hidden']) insert.run(id, 'bot', 'active');
     link.run('removed', 'removed', 'routine', null);
     link.run('owner', 'hidden', 'channel', null);
@@ -72,10 +76,13 @@ it('lists linked teammate routine/channel tasks, keeping private lanes and hidde
     insert.run('ordinary', 'desktop', 'active');
     const db = drizzle(sqlite) as unknown as DbClient['drizzle'];
     const rows = await selectSessionListRows(db, ordinaryTaskListFilter(), 100);
-    expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'ordinary', 'routine']);
+    expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'ordinary', 'routine', 'routine-persistent']);
     expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
       .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });
-    expect(flattenSessionReadRow(rows.find(row => row.session.id === 'routine')!).companion)
-      .toEqual({ id: 'owner', role: 'routine' });
+    // 两种运行方式都投影出同一条规则 id，侧栏据此把同规则的运行收进一个文件夹。
+    for (const id of ['routine', 'routine-persistent']) {
+      expect(flattenSessionReadRow(rows.find(row => row.session.id === id)!).companion)
+        .toEqual({ id: 'owner', role: 'routine', routineId: 'daily-1' });
+    }
   } finally { sqlite.close(); }
 });
