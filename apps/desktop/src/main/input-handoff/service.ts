@@ -471,10 +471,17 @@ export class InputHandoffService {
     }
   }
 
-  /** The note for the message that closed the card, once. */
-  takeOwnerMessageNote(sessionId: string): string | null {
-    if (!this.ownerMessageNotes.delete(sessionId)) return null;
+  /**
+   * The note for the message that closed the card, until `ownerMessageNoteDelivered`:
+   * a steer that is refused falls back to a normal send, and that send still owes it.
+   */
+  ownerMessageNote(sessionId: string): string | null {
+    if (!this.ownerMessageNotes.has(sessionId)) return null;
     return 'Your input handoff card was closed because the owner sent the message below. Check the screen yourself before relying on it; ask again if a field still needs them.';
+  }
+
+  ownerMessageNoteDelivered(sessionId: string): void {
+    this.ownerMessageNotes.delete(sessionId);
   }
 
   cleanupForSession(sessionId: string): void {

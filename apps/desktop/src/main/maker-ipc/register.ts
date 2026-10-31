@@ -12320,7 +12320,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           )
         : null;
       const inputHandoffNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
-        ? getInputHandoffService()?.takeOwnerMessageNote(session.id)
+        ? getInputHandoffService()?.ownerMessageNote(session.id)
         : null;
       const withInputHandoffNote: UserMessage = inputHandoffNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, inputHandoffNote) as UserMessage)
@@ -12340,6 +12340,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const sendResult = await session.send(outgoingMessage, {
           ...opts,
           onAccepted: async (signal) => {
+            if (inputHandoffNote) getInputHandoffService()?.ownerMessageNoteDelivered(session.id);
             await opts.onAccepted?.(signal);
             await beginTurnChangeSetAtDispatch(session, anchorClientId);
             turnChangeSetStarted = true;
@@ -19344,7 +19345,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         })
       : null;
     if (!so[MCP_APP_MESSAGE_GUARD]) dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message as HandoffWireMessage));
-    const steerHandoffNote = getInputHandoffService()?.takeOwnerMessageNote(sessionId);
+    const steerHandoffNote = getInputHandoffService()?.ownerMessageNote(sessionId);
     const withSteerHandoffNote = steerHandoffNote
       ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerHandoffNote)
       : normalized;
@@ -19429,6 +19430,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       appContext?.consume();
       steerNotePlan?.commit();
+      if (steerHandoffNote) getInputHandoffService()?.ownerMessageNoteDelivered(sessionId);
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
       const messageText = err instanceof Error ? err.message : String(err);

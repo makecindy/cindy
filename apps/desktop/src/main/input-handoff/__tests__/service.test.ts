@@ -155,11 +155,14 @@ describe('代输入 requests the agent makes', () => {
     h.service.dismissForOwnerMessage('task');
     expect(h.latest()).toMatchObject({ phase: 'cancelled', terminal: true });
     expect(h.continued).toEqual([]);
-    expect(h.service.takeOwnerMessageNote('task')).toContain('owner sent the message');
-    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+    // A refused steer falls back to a normal send: the note stays until it is delivered.
+    expect(h.service.ownerMessageNote('task')).toContain('owner sent the message');
+    expect(h.service.ownerMessageNote('task')).toContain('owner sent the message');
+    h.service.ownerMessageNoteDelivered('task');
+    expect(h.service.ownerMessageNote('task')).toBeNull();
     // Nothing was waiting: nothing to say.
     h.service.dismissForOwnerMessage('task');
-    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+    expect(h.service.ownerMessageNote('task')).toBeNull();
   });
 
   it('leaves a terminal prompt to the owner when they write: its command would fail', async () => {
@@ -171,7 +174,7 @@ describe('代输入 requests the agent makes', () => {
     if (!started.ok) throw new Error(started.errorCode);
     h.service.dismissForOwnerMessage('task');
     expect(answers).toEqual([]);
-    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+    expect(h.service.ownerMessageNote('task')).toBeNull();
     started.abandon?.();
   });
 
