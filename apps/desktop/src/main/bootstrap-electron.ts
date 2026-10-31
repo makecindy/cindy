@@ -807,6 +807,7 @@ import {
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
   tryGetBotDelegationService,
+  tryGetUsageLimitFallbackCommands,
   restoreBotRuntimeForCurrentOwner,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
@@ -4524,6 +4525,36 @@ function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefi
   return trimmed;
 }
 
+/** 任务级额度备用路线的 IPC 入参收窄（renderer 只传任务 id 与目标组合）。 */
+function requireUsageLimitFallbackSessionId(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throwIpcError('INVALID_PARAMS', 'usage-limit fallback session id required (non-empty string)');
+  }
+  return value;
+}
+
+function readUsageLimitFallbackTarget(
+  value: unknown,
+): { providerId: string; model: string } | null {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'usage-limit fallback target required (object with providerId and model, or null)',
+    );
+  }
+  const { providerId, model } = value as { providerId?: unknown; model?: unknown };
+  if (
+    typeof providerId !== 'string' ||
+    providerId.trim() === '' ||
+    typeof model !== 'string' ||
+    model.trim() === ''
+  ) {
+    throwIpcError('INVALID_PARAMS', 'usage-limit fallback target needs providerId and model');
+  }
+  return { providerId, model };
+}
+
 const registerIpcHandlers = () => {
   ipcMain.handle('database-size-warning:get-settings', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -5120,6 +5151,56 @@ const registerIpcHandlers = () => {
     resetSessionRuntimeFallbackSettings();
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
   });
+  // 任务级额度备用路线：只作用于本机当前用户的任务，不进 device-link / 手机白名单。
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_GET,
+    async (event, sessionId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireUsageLimitFallbackSessionId(sessionId);
+      const commands = tryGetUsageLimitFallbackCommands();
+      if (!commands) {
+        throwIpcError('PRECONDITION_FAILED', 'usage-limit fallback commands are not ready');
+      }
+      const result = await commands.get(id);
+      if (!result.ok) {
+        throwIpcError('NOT_FOUND', result.message);
+      }
+      return { target: result.target, stale: result.stale };
+    },
+  );
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_SET,
+    async (event, sessionId: unknown, target: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireUsageLimitFallbackSessionId(sessionId);
+      const next = readUsageLimitFallbackTarget(target);
+      const commands = tryGetUsageLimitFallbackCommands();
+      if (!commands) {
+        return {
+          ok: false as const,
+          errorCode: 'HOST_NOT_READY' as const,
+          message: 'usage-limit fallback commands are not ready',
+        };
+      }
+      return commands.set(id, next);
+    },
+  );
+  ipcMain.handle(
+    MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_CLEAR,
+    async (event, sessionId: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireUsageLimitFallbackSessionId(sessionId);
+      const commands = tryGetUsageLimitFallbackCommands();
+      if (!commands) {
+        return {
+          ok: false as const,
+          errorCode: 'HOST_NOT_READY' as const,
+          message: 'usage-limit fallback commands are not ready',
+        };
+      }
+      return commands.set(id, null);
+    },
+  );
 
   ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
     assertTrustedAppRendererEvent(event);

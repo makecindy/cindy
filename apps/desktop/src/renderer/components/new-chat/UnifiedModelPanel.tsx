@@ -30,6 +30,7 @@ import {
 } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
+import type { SessionUsageLimitFallbackState } from '@/hooks/useSessionUsageLimitFallback';
 import { cn } from '@/lib/utils';
 import { modelPriceDiscountLabelValues, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -300,6 +301,11 @@ export interface UnifiedModelPanelProps {
   /** deviceId 目录读取中/失败时取代「没有匹配的模型」。 */
   catalogNotice?: ReactNode;
   /**
+   * 任务级额度备用路线（已建任务才有）。由上层（ChatInput 经 hook）注入；
+   * 草稿、设置类入口不传 = 浮层里不画这一区。
+   */
+  usageLimitFallback?: SessionUsageLimitFallbackState | null;
+  /**
    * 远程 Agent：左侧栏在任务所在电脑的供应商之后列出其他电脑上的供应商。选中那台
    * 电脑上的模型 = Agent 在那台电脑运行，任务和文件仍在原电脑。
    *
@@ -422,6 +428,7 @@ export function UnifiedModelPanel({
   panelWidthFluid = false,
   catalogNotice,
   remoteSources,
+  usageLimitFallback = null,
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
@@ -1697,11 +1704,41 @@ export function UnifiedModelPanel({
               : config.customized
                 ? 'customized'
                 : 'recommended';
+            // 额度备用候选：只用面板已加载的目录，不再发目录请求；候选必须同引擎，且不等于
+            // 「正在配置的这一行」和任务当前生效的路线（主进程拿 effective 比对，选到它必被拒）。
+            // 浏览其他电脑的目录时不画这一区：那里的模型不在本机可路由集合里。
+            const currentWireId = config.wireModelId ?? target.entry.modelId;
+            const usageLimitFallbackProps =
+              usageLimitFallback && !remoteSources?.active
+                ? {
+                    usageLimitFallback,
+                    usageLimitFallbackCandidates: entries
+                      .filter((candidate) => candidate.candidates.includes(config.agent))
+                      .filter((candidate) => {
+                        const wireId = wireModelIdOf(candidate, config.agent);
+                        const sameAsRow =
+                          candidate.providerId === target.entry.providerId &&
+                          (candidate.modelId === target.entry.modelId || wireId === currentWireId);
+                        const sameAsLive =
+                          selected.providerId !== null &&
+                          candidate.providerId === selected.providerId &&
+                          wireId === selected.modelId;
+                        return !sameAsRow && !sameAsLive;
+                      })
+                      .map((candidate) => ({
+                        providerId: candidate.providerId,
+                        modelId: wireModelIdOf(candidate, config.agent),
+                        displayName: candidate.displayName,
+                        sourceLabel: providerLabel(candidate.providerId),
+                      })),
+                  }
+                : {};
             return (
               <ModelConfigFlyout
                 entry={target.entry}
                 config={config}
                 state={state}
+                {...usageLimitFallbackProps}
                 sourceLabel={providerLabel(target.entry.providerId)}
                 price={priceOf(
                   target.entry.providerId,

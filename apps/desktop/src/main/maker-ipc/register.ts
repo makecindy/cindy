@@ -154,7 +154,7 @@ import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, com
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
-import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { clearXaiRateLimitSnapshot, observeUsageChanges } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
@@ -1318,6 +1318,15 @@ import {
 } from '../maker-host/session-effort-store.js';
 import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtime-fallback-store.js';
 import {
+  claimSessionUsageLimitFallbackEpisodeAttempt,
+  clearSessionUsageLimitFallbackEpisode,
+  readAllSessionUsageLimitFallbackEpisodes,
+  readAllSessionUsageLimitFallbacks,
+  readSessionUsageLimitFallback,
+  writeSessionUsageLimitFallback,
+  writeSessionUsageLimitFallbackEpisode,
+} from '../maker-host/session-usage-limit-fallback-store.js';
+import {
   getModelVisibilityMirrorSnapshot,
   syncModelVisibilityMirrorForOwner,
   waitForModelVisibilityMirror,
@@ -1534,6 +1543,16 @@ import {
   shouldPreserveRuntimeFallbackAutoResume,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
+import {
+  matchesUsageLimitFallbackSource,
+  type SessionUsageLimitFallback,
+  type UsageLimitFallbackRoute,
+} from './sessionUsageLimitFallback.js';
+import { createUsageLimitFallbackRecovery } from './usageLimitFallbackRecovery.js';
+import {
+  createUsageLimitFallbackEpisode,
+  createUsageLimitFallbackRevert,
+} from './usageLimitFallbackRevert.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
 import {
   isBotCandidateUnavailable,
@@ -3263,6 +3282,44 @@ export function tryGetBotDelegationService(): BotDelegationService | null {
 
 export function tryGetBotDirectMessageService(): BotDirectMessageService | null {
   return botDirectMessageServiceHolder;
+}
+
+/** 任务级额度备用路线的目标组合；只换来源与模型，Harness 在写入时固定。 */
+export interface UsageLimitFallbackTarget {
+  providerId: string;
+  model: string;
+}
+
+export type UsageLimitFallbackGetResult =
+  | { ok: true; target: UsageLimitFallbackTarget | null; stale: boolean }
+  | { ok: false; errorCode: 'NOT_FOUND'; message: string };
+
+export type UsageLimitFallbackSetResult =
+  | { ok: true; target: UsageLimitFallbackTarget | null }
+  | {
+      ok: false;
+      errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+      message: string;
+    };
+
+/**
+ * renderer 入口只做参数收窄与结果翻译：业务仍住在 registerMakerIpc 里——
+ * 读取走同一个 store + 运行时快照，写入直接交给 sessionControlService.setSessionRuntime，
+ * 与 MCP 控制面（set_session_runtime）同一条校验与门禁，不另立第二套。
+ */
+export interface UsageLimitFallbackCommands {
+  get(sessionId: string): Promise<UsageLimitFallbackGetResult>;
+  set(
+    sessionId: string,
+    target: UsageLimitFallbackTarget | null,
+  ): Promise<UsageLimitFallbackSetResult>;
+}
+
+let usageLimitFallbackCommandsHolder: UsageLimitFallbackCommands | null = null;
+
+/** 取任务级额度备用路线的 renderer 命令, host ready 前返 null(调用方翻成 HOST_NOT_READY)。 */
+export function tryGetUsageLimitFallbackCommands(): UsageLimitFallbackCommands | null {
+  return usageLimitFallbackCommandsHolder;
 }
 
 function createBridgeWorkerLabel(task: string): string {
@@ -11735,6 +11792,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
     onUserRouteSelectionLanded: async (sessionId) => {
+      // 用户选择在发送时落地（含同值重选）也算显式接手：回切 episode 作废。
+      await writeSessionUsageLimitFallbackEpisode(sessionId, null).catch(() => undefined);
       await updateScheduledPreference(sessionId, null);
       await markImSessionManualRouteOverride(sessionId);
     },
@@ -11833,7 +11892,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentInputCoordinatorHolder
         ? agentInputCoordinatorHolder.continueAfterUsageLimitReset(sessionId, token, info)
         : 'superseded',
-    fallback: (sessionId, signals, token) => usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    fallback: (sessionId, signals, token) => usageLimitFallbackRecovery.handBack(sessionId, signals, token),
     // 组内电脑的报错用那台机器的本地时间：不带时区的钟点不按本机时区理解。
     readResetAt: (signals) => readTurnUsageResetAt(signals, Date.now(), { localTimeZoneTrusted: false }),
     // 任务里选过「以后自动换」的换号(provider-groups.md §6.2「任务进行中换号」)。
@@ -17737,6 +17796,40 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
+  /**
+   * 校验任务级额度备用路线的目标仍可用：同一个 Harness、来源已连接、目录里有该模型。
+   * 与完整选择用同一套目录判断，只在写入策略时校验一次；真正启用时仍由原子选模路径复核。
+   */
+  const resolveUsageLimitFallbackRoute = async (
+    source: SessionRuntimeProfile,
+    target: UsageLimitFallbackRoute,
+  ): Promise<{ route: UsageLimitFallbackRoute } | { message: string }> => {
+    // 来源未知（null）时无法证明与原来源不同，按同模型处理，必须换模型。
+    const sameProvider = source.providerId === target.providerId || source.providerId === null;
+    if (sameProvider && source.model === target.model) {
+      return { message: 'the fallback route must differ from the route it replaces' };
+    }
+    const providers = await getDesktopProviderService().listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    });
+    const provider = providers.find((candidate) => candidate.id === target.providerId);
+    if (!provider?.connected) {
+      return { message: `provider "${target.providerId}" is not connected` };
+    }
+    const model = findCatalogModel(provider, target.model, source.agentKind, { exact: true });
+    if (!model) {
+      return { message: `model "${target.model}" is unavailable for harness "${source.agentKind}"` };
+    }
+    return { route: { providerId: target.providerId, model: target.model } };
+  };
+
+  /** 远程 Agent（Agent 在另一台电脑）与 SSH 远程会话都不吃任务级额度备用。 */
+  const sessionRunsOffThisMachine = async (sessionId: string): Promise<boolean> => {
+    const row = await getSessionRowSnapshot(sessionId);
+    return Boolean(row?.agentDeviceId || row?.remoteHostId);
+  };
+
   const sessionControlService = createSessionControlService({
     sessionExists: async (sessionId) => (await maker.getSessionMeta(sessionId)) !== null,
     getLiveSession: (sessionId) => maker.getSession(sessionId) ?? null,
@@ -17758,9 +17851,105 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fallbackEnabled: await hasExplicitSessionTaskModel(sessionId) ? false : botFallback.isBot
           ? botFallback.candidate !== null
           : readSessionRuntimeFallbackSettings().enabled,
+        usageLimitFallback: (() => {
+          const policy = readSessionUsageLimitFallback(sessionId);
+          if (!policy) return null;
+          return {
+            providerId: policy.target.providerId,
+            model: policy.target.model,
+            source: policy.source,
+            // 控制面要能区分“配了”与“配了但当前组合已变”：与触发端同一个谓词。
+            active: matchesUsageLimitFallbackSource(policy, profiles.effective),
+          };
+        })(),
       };
     },
     setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
+      // 额度备用路线只描述“额度用尽时换到哪”，不参与本轮选模：单独写入，不碰 baseline。
+      if (patch.usageLimitFallback !== undefined) {
+        if (patch.harness !== undefined || patch.model !== undefined || patch.providerId !== undefined ||
+            patch.effort !== undefined || patch.fastMode !== undefined) {
+          return { ok: false, errorCode: 'INVALID_ARGS', message: 'usage-limit fallback must be submitted alone' };
+        }
+        const fallbackProfiles = await readSessionRuntimeProfiles(targetSessionId);
+        if (beforeMutation) await beforeMutation();
+        if (!fallbackProfiles) {
+          return { ok: false, errorCode: 'NOT_FOUND', message: `session ${targetSessionId} not found` };
+        }
+        if (expectedGeneration !== undefined && expectedGeneration !== fallbackProfiles.control.generation) {
+          return {
+            ok: false,
+            errorCode: 'CONFLICT',
+            message: 'session runtime generation changed; read it again before retrying',
+          };
+        }
+        if (patch.usageLimitFallback !== null) {
+          // 待生效的选模选择占着下一条消息的路线：此时锚定的原组合马上就会变，
+          // 存下来的策略会静默失效。让调用方等它结算后读新的 generation 再配。
+          if (fallbackProfiles.pendingMutation) {
+            return {
+              ok: false,
+              errorCode: 'CONFLICT',
+              message: 'a pending runtime selection owns the next message; configure again after it settles',
+            };
+          }
+          // 这里能判定的是“当前就不适用于额度自动继续”的任务：伙伴、Orca Worker、
+          // 共享中的任务、执行已暂停、当前由目标模式托管。定时任务只能从入队消息的 origin
+          // 看出来，会话行没这个标记，因此它不在写入门内，而是触发时不命中、照原规则恢复。
+          if (!await isUsageLimitAutoResumeEligible(targetSessionId)) {
+            return {
+              ok: false,
+              errorCode: 'INVALID_ARGS',
+              message: 'usage-limit fallback applies to ordinary local tasks only',
+            };
+          }
+          if (await sessionRunsOffThisMachine(targetSessionId)) {
+            return {
+              ok: false,
+              errorCode: 'INVALID_ARGS',
+              message: 'usage-limit fallback is unavailable for tasks whose agent runs on another computer',
+            };
+          }
+        }
+        if (patch.usageLimitFallback === null) {
+          await writeSessionUsageLimitFallback(targetSessionId, null);
+          return {
+            ok: true as const,
+            status: 'applied' as const,
+            generation: fallbackProfiles.control.generation,
+            effectiveProfile: fallbackProfiles.effective,
+            pendingMutation: fallbackProfiles.pendingMutation,
+            usageLimitFallback: null,
+          };
+        }
+        const resolved = await resolveUsageLimitFallbackRoute(
+          fallbackProfiles.effective,
+          patch.usageLimitFallback,
+        );
+        if (!('route' in resolved)) {
+          return { ok: false, errorCode: 'ROUTE_UNAVAILABLE', message: resolved.message };
+        }
+        const policy: SessionUsageLimitFallback = {
+          source: fallbackProfiles.effective,
+          target: resolved.route,
+        };
+        await writeSessionUsageLimitFallback(targetSessionId, policy);
+        log.info('session usage-limit fallback configured', {
+          sessionId: targetSessionId,
+          fromProviderId: policy.source.providerId,
+          fromModel: policy.source.model,
+          toProviderId: policy.target.providerId,
+          toModel: policy.target.model,
+        });
+        return {
+          ok: true as const,
+          status: 'applied' as const,
+          generation: fallbackProfiles.control.generation,
+          effectiveProfile: fallbackProfiles.effective,
+          pendingMutation: fallbackProfiles.pendingMutation,
+          usageLimitFallback: resolved.route,
+        };
+      }
       if (patch.harness !== undefined) {
         return setSessionRuntimeHarness({
           withSessionLock: withSendToSessionLock,
@@ -18339,6 +18528,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       } catch (err) {
         return orcaModelDiscoveryFailure(err, Boolean(executionDeviceId));
       }
+    },
+  };
+
+  // ─── 任务级额度备用路线的 renderer 入口 ────────────────────────────────
+  // 读取用同一份 store + 运行时快照；写入交给 sessionControlService，与 MCP 控制面
+  // (set_session_runtime.usage_limit_fallback) 完全同一条校验、门禁与错误码。
+  usageLimitFallbackCommandsHolder = {
+    get: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      if (!profiles) {
+        return {
+          ok: false as const,
+          errorCode: 'NOT_FOUND' as const,
+          message: `session ${sessionId} not found`,
+        };
+      }
+      const policy = readSessionUsageLimitFallback(sessionId);
+      return {
+        ok: true as const,
+        target: policy?.target ?? null,
+        // 策略按「配置时那一组来源+模型」锚定；任务被换到别处后不再命中，界面据此提示失效。
+        stale: policy ? !matchesUsageLimitFallbackSource(policy, profiles.effective) : false,
+      };
+    },
+    set: async (sessionId, target) => {
+      const result = await sessionControlService.setSessionRuntime({
+        targetSessionId: sessionId,
+        patch: { usageLimitFallback: target },
+      });
+      if (!result.ok) {
+        return { ok: false as const, errorCode: result.errorCode, message: result.message };
+      }
+      return { ok: true as const, target: result.usageLimitFallback ?? null };
     },
   };
 
@@ -20186,6 +20408,168 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await awaitQueuedSnapshotWrite(sessionId);
   }
 
+  const usageLimitFallbackRecovery = createUsageLimitFallbackRecovery({
+    readPolicy: (sessionId) => readSessionUsageLimitFallback(sessionId),
+    isEligible: (sessionId) => isUsageLimitAutoResumeEligible(sessionId),
+    runsOffThisMachine: (sessionId) => sessionRunsOffThisMachine(sessionId),
+    // 归组判定用 binding：`sessionGroup` 在“仍有绑定、但当前路由不在任何成员上”时返回 null，
+    // 那种任务仍属组，不能吃本策略。
+    isBoundToProviderGroup: (sessionId) => Boolean(readProviderGroupBinding(sessionId)),
+    readProfiles: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      return profiles
+        ? { effective: profiles.effective, generation: profiles.control.generation }
+        : null;
+    },
+    canApplySelection: (sessionId, generation) =>
+      canApplyAutomaticRuntimeSelection(sessionId, generation),
+    withSessionLock: (sessionId, task) => withSendToSessionLock(sessionId, task),
+    applySelection: ({ sessionId, from, target, generation }) =>
+      applySessionRuntimeSelection(
+        sessionId,
+        target.model,
+        target.providerId,
+        { effort: from.effort, fastMode: from.fastMode },
+        {
+          source: 'agent',
+          expectedGeneration: generation,
+          effectiveProfile: from,
+          routeExplicit: true,
+          deferWhileRunning: true,
+        },
+      ),
+    lease: (sessionId, token) => inputCoordinator.leaseUsageLimitRecovery(sessionId, token),
+    isLeaseCurrent: (sessionId, lease) =>
+      inputCoordinator.isUsageLimitRecoveryLeaseCurrent(sessionId, lease),
+    rearm: (sessionId, lease, resumeAt) =>
+      inputCoordinator.rearmUsageLimitWait(sessionId, lease, resumeAt),
+    continueAfterReset: (sessionId, token, info) =>
+      inputCoordinator.continueAfterUsageLimitReset(sessionId, token, info),
+    armResetWait: (sessionId, signals, token) =>
+      usageLimitAutoResume.onTurnError(sessionId, signals, token),
+    // 降级真正成功续跑 → 记一条回切 episode。重置时刻只取那次错误本身能确定的值
+    // （不查快照：快照过了重置点会给出假的 limited:false）；拿不到就留 null 走宽限期。
+    onResumed: async ({ sessionId, policy, signals, now }) => {
+      await writeSessionUsageLimitFallbackEpisode(
+        sessionId,
+        createUsageLimitFallbackEpisode({
+          now,
+          knownResetAtMs: readTurnUsageResetAt(signals, now, { localTimeZoneTrusted: true }),
+          targetRoute: policy.target,
+        }),
+      );
+    },
+    now: () => Date.now(),
+    log,
+  });
+
+  /**
+   * 回切（usage-limit-auto-continue.md § 额度恢复后回切）：只消费 episode，不猜状态。
+   * 快照在这里只做否定条件 —— 过了重置点的旧快照会给出假的 `limited:false`。
+   */
+  const usageLimitFallbackRevert = createUsageLimitFallbackRevert({
+    readEpisodes: () => {
+      const policies = new Map(
+        readAllSessionUsageLimitFallbacks().map(({ sessionId, policy }) => [sessionId, policy]),
+      );
+      return readAllSessionUsageLimitFallbackEpisodes().flatMap(({ sessionId, episode }) => {
+        const policy = policies.get(sessionId);
+        return policy ? [{ sessionId, policy, episode }] : [];
+      });
+    },
+    readProfiles: async (sessionId) => {
+      const profiles = await readSessionRuntimeProfiles(sessionId);
+      return profiles
+        ? {
+            effective: profiles.effective,
+            generation: profiles.control.generation,
+            hasPendingSelection: profiles.pendingMutation !== null,
+          }
+        : null;
+    },
+    isEligible: (sessionId) => isUsageLimitAutoResumeEligible(sessionId),
+    runsOffThisMachine: (sessionId) => sessionRunsOffThisMachine(sessionId),
+    isBoundToProviderGroup: (sessionId) => Boolean(readProviderGroupBinding(sessionId)),
+    isTurnRunning: (sessionId) => maker.getSession(sessionId)?.isTurnRunning() ?? false,
+    hasUsageLimitRecovery: (sessionId) =>
+      agentInputCoordinatorHolder?.hasUsageLimitRecovery(sessionId) === true,
+    canApplySelection: (sessionId, generation) =>
+      canApplyAutomaticRuntimeSelection(sessionId, generation),
+    withSessionLock: (sessionId, task) => withSendToSessionLock(sessionId, task),
+    applySourceSelection: ({ sessionId, from, source, generation }) =>
+      applySessionRuntimeSelection(
+        sessionId,
+        source.model,
+        source.providerId,
+        { effort: source.effort, fastMode: source.fastMode },
+        {
+          source: 'agent',
+          expectedGeneration: generation,
+          effectiveProfile: from,
+          routeExplicit: true,
+          deferWhileRunning: true,
+        },
+      ),
+    isSourceKnownLimited: async (policy) => {
+      const limit = await readAccountUsageLimit(
+        policy.source.agentKind,
+        policy.source.providerId,
+        policy.source.model,
+      );
+      // 只当否定条件用：true = 确定仍受限，这一轮不白试。绝不当「已恢复」的证据。
+      // 没带重置时刻的窗口会被快照永远算作 live（没有到期时间就等于一直有效），
+      // 那种 limited 证明不了「过了已知重置时刻仍受限」，会把 episode 永久卡死在不尝试也不收口；
+      // 真正的安全来自时间门 + 原子认领 + 5 次预算，所以这里要求同时有重置时刻。
+      return limit?.limited === true && limit.resetAtMs !== null;
+    },
+    writeEpisode: (sessionId, episode) =>
+      writeSessionUsageLimitFallbackEpisode(sessionId, episode),
+    clearEpisode: (sessionId, expected) =>
+      clearSessionUsageLimitFallbackEpisode(sessionId, expected),
+    claimAttempt: (sessionId, expected, next) =>
+      claimSessionUsageLimitFallbackEpisodeAttempt(sessionId, expected, next),
+    // 回切成功：只广播一条会话级瞬态提示，让用户知道模型是自己变回去的。
+    // 不写消息表、不插 agent_switch 边界（那会污染交接/fork 的判据）。
+    notifyReverted: ({ sessionId, fromModel, toModel, at }) => {
+      broadcastToAllWindows(
+        MAKER_PUSH.SESSION_USAGE_LIMIT_REVERTED,
+        { sessionId, fromModel, toModel, at },
+        captureDataOwnerBroadcastScope(),
+      );
+    },
+    now: () => Date.now(),
+    log,
+  });
+
+  // 触发：用量快照广播防抖 + 60s 兜底 + 启动补扫。sweep 自己只看 episode 与时间，
+  // 没有到期 episode 时几乎零成本（只读缓存文件，不做 DB 读）。
+  let revertSweepTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleUsageLimitFallbackRevert = (): void => {
+    if (revertSweepTimer) return;
+    revertSweepTimer = setTimeout(() => {
+      revertSweepTimer = null;
+      void usageLimitFallbackRevert.sweep().catch((error: unknown) => {
+        log.warn('usage-limit fallback revert sweep failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 2_000);
+  };
+  const unsubscribeRevertUsageChanges = observeUsageChanges((kind) => {
+    if (kind === 'codex' || kind === 'claude' || kind === 'xai' || kind === 'subscription') {
+      scheduleUsageLimitFallbackRevert();
+    }
+  });
+  const revertSweepInterval = setInterval(scheduleUsageLimitFallbackRevert, 60_000);
+  onQuit('usage-limit-fallback-revert', () => {
+    clearInterval(revertSweepInterval);
+    if (revertSweepTimer) clearTimeout(revertSweepTimer);
+    revertSweepTimer = null;
+    unsubscribeRevertUsageChanges();
+  });
+  // 启动后扫一次：关着应用的那段时间可能已经过了重置点。
+  scheduleUsageLimitFallbackRevert();
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -20231,9 +20615,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         });
         return;
       }
-      // 供应商组分配的任务先试自动换电脑，不换时由它交回额度重置后自动继续。
+      // 供应商组分配的任务先试自动换电脑，不换时由它交回汇合点（同一个 handBack）。
       if (!providerGroupService || signals.providerGroupUsageLimit) {
-        usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
+        usageLimitFallbackRecovery.handBack(sessionId, signals, candidateToken);
         return;
       }
       // 先不呈现的那次错误：换成了丢掉，不换了先放出来再交回原有处理；一直没有结局时到点放出来。
@@ -24777,6 +25161,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         usageLimitAutoResume.noteUserAction(sessionId);
         providerGroupService?.noteUserAction(sessionId);
         agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId);
+        // 用户自己选了模型或来源（含选回同一个值）→ 回切 episode 作废：
+        // 之后不再自动把这条任务改回「原路线」，选择权归用户。
+        void writeSessionUsageLimitFallbackEpisode(sessionId, null).catch(() => undefined);
       }
       return handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' });
     },

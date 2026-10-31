@@ -38,6 +38,21 @@ export interface SessionRuntimeProfile {
   fastMode: boolean | 'ultrafast';
 }
 
+export interface SessionUsageLimitFallback {
+  providerId: string;
+  model: string;
+  /** 锁定时任务跑的组合（与触发匹配用的那一份）。 */
+  source: SessionRuntimeProfile;
+  /** 这条策略现在还会不会触发；false = 配了但当前组合已经变了。 */
+  active: boolean;
+}
+
+/** set 的入参：写的是目标路线，不是一份投影。 */
+export interface SessionUsageLimitFallbackRoute {
+  providerId: string;
+  model: string;
+}
+
 export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
   runtimeGeneration?: number;
   baselineProfile?: SessionRuntimeProfile;
@@ -48,6 +63,7 @@ export interface SessionRuntimeSnapshot extends SessionActivitySnapshot {
     profile: SessionRuntimeProfile;
   } | null;
   fallbackEnabled?: boolean;
+  usageLimitFallback?: SessionUsageLimitFallback | null;
 }
 
 export interface SessionControlDeps {
@@ -116,6 +132,7 @@ export interface SessionControlDeps {
       providerId?: string | null;
       effort?: Effort;
       fastMode?: boolean | 'ultrafast';
+      usageLimitFallback?: SessionUsageLimitFallbackRoute | null;
     };
   }): Promise<
     ControlResult<
@@ -125,6 +142,7 @@ export interface SessionControlDeps {
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
+        usageLimitFallback?: SessionUsageLimitFallbackRoute | null;
       },
       'NOT_FOUND' | 'CONFLICT' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE'
     >
@@ -402,12 +420,25 @@ export function registerGetSessionRuntimeTool(
             }
           : null,
         fallback_enabled: runtime.fallbackEnabled ?? false,
+        ...(runtime.usageLimitFallback !== undefined
+          ? { usage_limit_fallback: usageLimitFallbackPayload(runtime.usageLimitFallback) }
+          : {}),
       });
     },
   });
 }
 
 const EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+
+function usageLimitFallbackPayload(fallback: SessionUsageLimitFallback | null) {
+  if (fallback === null) return null;
+  return {
+    provider_id: fallback.providerId,
+    model: fallback.model,
+    active: fallback.active,
+    source: runtimeProfilePayload(fallback.source),
+  };
+}
 
 function runtimeProfilePayload(profile: SessionRuntimeProfile) {
   return {
@@ -430,7 +461,8 @@ export function registerSetSessionRuntimeTool(
       '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
       '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
       '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
-      '省略 harness 保持临时调整语义。不修改全局默认选择。',
+      '省略 harness 保持临时调整语义。不修改全局默认选择。' +
+      'usage_limit_fallback 单独配置本机任务的额度备用路线：确认账号额度耗尽时自动切到指定来源和模型，保留首选模型；null 清除。不能与选模或速度参数合并提交。',
     inputShape: {
       harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
@@ -443,6 +475,12 @@ export function registerSetSessionRuntimeTool(
       model: z.string().min(1).optional().describe('目标模型 id。'),
       effort: z.enum(EFFORT_VALUES).optional().describe('推理强度。省略表示保持当前值。'),
       fast: z.union([z.boolean(), z.literal('ultrafast')]).optional().describe('false=标准，true=快速，ultrafast=超快（仅支持该档位的 Codex 模型）。'),
+      usage_limit_fallback: z.object({
+        provider_id: z.string().trim().min(1).max(200),
+        model: z.string().trim().min(1).max(300),
+      }).strict().nullable().optional().describe(
+        '仅在确认账号额度耗尽时使用的同引擎备用来源与模型；null 清除。单独提交此字段和 expected_generation。',
+      ),
       expected_generation: z
         .number()
         .int()
@@ -451,7 +489,7 @@ export function registerSetSessionRuntimeTool(
           '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
         ),
     },
-    handler: async ({ session_id, harness, provider_id, model, effort, fast, expected_generation }) => {
+    handler: async ({ session_id, harness, provider_id, model, effort, fast, usage_limit_fallback, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
       if (!targetSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，请显式提供 session_id。');
@@ -459,13 +497,18 @@ export function registerSetSessionRuntimeTool(
       if (harness !== undefined && !model?.trim()) {
         return errorPayload('INVALID_ARGS', '提供 harness 时必须同时指定目标 model。');
       }
+      if (usage_limit_fallback !== undefined &&
+          [harness, provider_id, model, effort, fast].some((value) => value !== undefined)) {
+        return errorPayload('INVALID_ARGS', '额度备用路线必须单独配置，不能与选模、推理强度或 Fast 合并提交。');
+      }
       if (
         provider_id === undefined &&
         model === undefined &&
         effort === undefined &&
-        fast === undefined
+        fast === undefined &&
+        usage_limit_fallback === undefined
       ) {
-        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort 或 fast 之一。');
+        return errorPayload('INVALID_ARGS', '至少提供 provider_id、model、effort、fast 或 usage_limit_fallback 之一。');
       }
       if (expected_generation === undefined) {
         // schema 已必填,此分支为纵深防御:任何绕过 zod 的调用路径仍拿到同一引导。
@@ -480,6 +523,12 @@ export function registerSetSessionRuntimeTool(
           ...(model !== undefined ? { model } : {}),
           ...(effort !== undefined ? { effort } : {}),
           ...(fast !== undefined ? { fastMode: fast } : {}),
+          ...(usage_limit_fallback !== undefined ? {
+            usageLimitFallback: usage_limit_fallback === null ? null : {
+              providerId: usage_limit_fallback.provider_id,
+              model: usage_limit_fallback.model,
+            },
+          } : {}),
         },
       });
       if (!result.ok) return mapControlFailure(result);
@@ -496,6 +545,20 @@ export function registerSetSessionRuntimeTool(
             }
           : null,
         effective_boundary: result.effectiveBoundary ?? (result.status === 'deferred' ? 'next_turn' : 'immediate'),
+        ...(result.usageLimitFallback !== undefined
+          ? {
+              // 刚写完的策略一定锁在当前组合上（写时就取的是 effective），所以 active 为真。
+              usage_limit_fallback:
+                result.usageLimitFallback === null
+                  ? null
+                  : {
+                      provider_id: result.usageLimitFallback.providerId,
+                      model: result.usageLimitFallback.model,
+                      active: true,
+                      source: runtimeProfilePayload(result.effectiveProfile),
+                    },
+            }
+          : {}),
       });
     },
   });

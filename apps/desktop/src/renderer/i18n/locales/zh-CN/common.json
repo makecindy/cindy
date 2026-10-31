@@ -11657,6 +11657,22 @@
     }
   },
   "newChat": {
+    "usageLimitFallback": {
+      "label": "额度用尽时改用",
+      "unset": "不启用",
+      "empty": "同引擎下没有其他可用模型",
+      "staleHint": "已失效：这条备用路线绑定的模型已不是任务当前使用的组合，不会再触发。",
+      "reset": "重设",
+      "error": "没有保存：",
+      "sectionLabel": "额度用尽时的备用模型",
+      "errors": {
+        "INVALID_ARGS": "这个任务不能用额度备用路线，只支持本机普通任务",
+        "ROUTE_UNAVAILABLE": "备用模型现在用不了，换一个来源或模型试试",
+        "CONFLICT": "还有一次模型切换没生效，等它生效后再设置",
+        "NOT_FOUND": "这个任务已经不在了",
+        "HOST_NOT_READY": "后台还没准备好，稍后再试"
+      }
+    },
     "homeSuggestions": {
       "shuffle": "换一批",
       "dismiss": "不再显示",
@@ -13273,6 +13289,9 @@
       }
     },
     "systemCard": {
+      "usageLimitRevert": {
+        "message": "额度已恢复，已自动从 {{from}} 切回 {{to}}"
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "内置命令",

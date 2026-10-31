@@ -686,6 +686,9 @@ const fanOutUsageMessageTurnCost = createIpcFanOut('usage:message-turn-cost');
 // per-message 维度: turn 结束检测到模型被上游降级 / 替换时推标记(AssistantMessage
 // 渲染降级提示行)。payload: { sessionId, clientId, modelMismatch: { selected, actual } }。
 const fanOutUsageMessageModelMismatch = createIpcFanOut('usage:message-model-mismatch');
+// 会话级:额度恢复后自动切回原路线时推一条瞬态提示(不落库)。
+// payload: { sessionId, fromModel, toModel, at }。
+const fanOutSessionUsageLimitReverted = createIpcFanOut('maker:session-usage-limit-reverted');
 // FeiShu Bot：状态变化 + 冲突检测 + 注册流程 push channel。
 const fanOutFeishuBotStatusChange = createIpcFanOut('feishuBot:status-change');
 const fanOutFeishuBotConflict = createIpcFanOut('feishuBot:conflict');
@@ -5792,6 +5795,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUsageMessageTurnCost: fanOutUsageMessageTurnCost,
   /** 订阅单条消息的模型降级标记推送。payload: { sessionId, clientId, modelMismatch }。 */
   onUsageMessageModelMismatch: fanOutUsageMessageModelMismatch,
+  /** 订阅「额度恢复后已自动切回原路线」的会话级瞬态提示。payload: { sessionId, fromModel, toModel, at }。 */
+  onSessionUsageLimitReverted: fanOutSessionUsageLimitReverted,
 
   // ── 首登轻量数据迁移(mToc):老 userData → Cindy 的一次性复制迁移 ──
   // main 在 ensureReady 前推送弹窗阶段;renderer 全局弹窗组件消费。
@@ -7768,6 +7773,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
       defaultEnabled: boolean;
       effective: 'immediate';
     }> => ipcRenderer.invoke('maker:session-runtime-fallback:reset'),
+
+    // 任务级额度备用路线（per task）。设置类写操作：仅本机主页面可调，不进 device-link。
+    sessionUsageLimitFallbackGet: (
+      sessionId: string,
+    ): Promise<{
+      target: { providerId: string; model: string } | null;
+      stale: boolean;
+    }> => ipcRenderer.invoke('maker:session-usage-limit-fallback:get', sessionId),
+    sessionUsageLimitFallbackSet: (
+      sessionId: string,
+      target: { providerId: string; model: string } | null,
+    ): Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    > => ipcRenderer.invoke('maker:session-usage-limit-fallback:set', sessionId, target),
+    sessionUsageLimitFallbackClear: (
+      sessionId: string,
+    ): Promise<
+      | { ok: true; target: { providerId: string; model: string } | null }
+      | {
+          ok: false;
+          errorCode: 'NOT_FOUND' | 'INVALID_ARGS' | 'ROUTE_UNAVAILABLE' | 'CONFLICT' | 'HOST_NOT_READY';
+          message: string;
+        }
+    > => ipcRenderer.invoke('maker:session-usage-limit-fallback:clear', sessionId),
 
     // Claude Code 自动上下文压缩阈值。仅对新建会话生效。
     compactionGetPct: (): Promise<number> => ipcRenderer.invoke('maker:compaction:get-pct'),

@@ -611,6 +611,11 @@ export interface ChatMessage {
      */
     | 'auto-resume-pending'
     | 'agent-switch'
+    /**
+     * 额度恢复后自动切回原模型的瞬态提示。由 main 的 SESSION_USAGE_LIMIT_REVERTED
+     * 推送在内存里插一条，固定 clientId、不落库、重开会话即消失。
+     */
+    | 'usage-limit-revert'
     /** 对进行中后台任务的补充消息留痕。 */
     | 'bot-session-task-message'
     /** 伙伴发起的可追踪后台任务。 */
@@ -4590,6 +4595,11 @@ const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 /** Codex app-server 自带的 Reconnecting N/M 进行态行。与 Cindy 接管行分开，避免
  * 无关的 input projection 把仍在进行中的原生重连误删。 */
 const CODEX_RECONNECT_PENDING_CLIENT_ID = '__codex_reconnect_pending__';
+/**
+ * 「额度恢复后已自动切回原路线」的瞬态提示。固定 clientId → 同一任务只保留一条，
+ * 后来的回切原地替换；只活在内存里，不落库、不进历史。
+ */
+const USAGE_LIMIT_REVERTED_CLIENT_ID = '__usage_limit_reverted__';
 
 function removeCodexReconnectPendingCard(messages: ChatMessage[]): ChatMessage[] {
   if (!messages.some((message) => message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID)) {
@@ -9151,6 +9161,61 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     });
   }
 
+  /**
+   * 额度恢复后自动切回原路线：往该会话的消息流末尾插一条**瞬态**提示。
+   *
+   * 固定 clientId → 同一任务只留一条，后来的回切原地替换（幂等，重复推送不会叠卡）；
+   * 它只活在内存里，不落库、不进历史，重开会话自然消失。会话没在内存里时直接跳过 ——
+   * 瞬态提示不值得为它创建/加载一个会话。
+   */
+  function handleSessionUsageLimitRevertedRaw(
+    raw: unknown,
+    ingress: LiveIngressContext = {},
+  ): void {
+    if (!isCurrentLiveIngress(ingress)) return;
+    const p = raw as {
+      sessionId?: unknown;
+      fromModel?: unknown;
+      toModel?: unknown;
+      at?: unknown;
+    } | null;
+    if (!p || typeof p.sessionId !== 'string' || !p.sessionId) return;
+    if (typeof p.fromModel !== 'string' || !p.fromModel) return;
+    if (typeof p.toModel !== 'string' || !p.toModel) return;
+    const { sessionId } = p;
+    if (!sessions.has(sessionId)) return;
+    const data = {
+      fromModel: p.fromModel,
+      toModel: p.toModel,
+      at: typeof p.at === 'number' ? p.at : Date.now(),
+    };
+    setState(sessionId, (s) => {
+      const index = s.messages.findIndex((m) => m.clientId === USAGE_LIMIT_REVERTED_CLIENT_ID);
+      if (index >= 0) {
+        const existing = s.messages[index];
+        if (existing && shallowEqualRecord(existing.systemCardData, data)) return s;
+        const messages = s.messages.slice();
+        messages[index] = { ...existing, systemCardData: data };
+        return { ...s, messages };
+      }
+      return {
+        ...s,
+        messages: [
+          ...s.messages,
+          {
+            clientId: USAGE_LIMIT_REVERTED_CLIENT_ID,
+            role: 'assistant',
+            content: '',
+            isStreaming: false,
+            systemCardType: 'usage-limit-revert',
+            systemCardData: data,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      };
+    });
+  }
+
   // ── device-link:被控端转发回来的 renderer 广播事件,喂进上面同一套 handler ──
   // payload = { deviceId, channel, payload };按原 channel 路由到对应 handler,
   // 按 sessionId 命中既有 reducer —— 远程会话因此和本地会话共用一套流式 / 审批 / 消息渲染。
@@ -9633,6 +9698,18 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         ownerStampPresent: ownerStamp !== undefined,
       }),
     'usage-message-model-mismatch',
+  );
+  // 额度恢复后自动切回原路线：会话级瞬态提示（不落库）。
+  // 与 onUsageMessageTurnCost / onUsageMessageModelMismatch 同层（都在 electronAPI 顶层）。
+  bindOptionalIpc(
+    window.electronAPI.onSessionUsageLimitReverted,
+    window.electronAPI,
+    (raw, ownerStamp) =>
+      handleSessionUsageLimitRevertedRaw(raw, {
+        ownerStamp,
+        ownerStampPresent: ownerStamp !== undefined,
+      }),
+    'session-usage-limit-reverted',
   );
 
   // ── 意识拦截(订阅槽①):用户消息被钩子拦下 ──

@@ -81,6 +81,7 @@ interface SystemCardProps {
     | 'review'
     | 'auto-resume'
     | 'auto-resume-pending'
+    | 'usage-limit-revert'
     | 'agent-switch'
     | 'bot-session-task-message'
     | 'bot-session-task'
@@ -900,6 +901,36 @@ function summarizeInterruption(detail?: string): string | undefined {
  * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
  * 组件层搬到了 i18n 层（copilot review）。
  */
+/**
+ * 「额度恢复后已自动切回原路线」的瞬态提示。
+ *
+ * 不是系统公告、也不是错误：模型自己变回去了，用户需要一句解释，所以做成一行低调的
+ * 活动记录（不抢红色、不占整卡）。数据来自 main 的 SESSION_USAGE_LIMIT_REVERTED 推送，
+ * 只活在内存里（固定 clientId，见 makerChatStore），重开会话即消失。
+ */
+function UsageLimitRevertRow({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
+  const fromModel = typeof data?.fromModel === 'string' ? data.fromModel : null;
+  const toModel = typeof data?.toModel === 'string' ? data.toModel : null;
+  // 主进程总会带两个模型名；缺字段就不画这行，不渲染半截句子。
+  if (!fromModel || !toModel) return null;
+  const label = t('chat.systemCard.usageLimitRevert.message', {
+    from: fromModel,
+    to: toModel,
+  });
+  return (
+    <div
+      className="flex w-full items-center gap-2 py-2 text-11 text-muted-foreground select-none"
+      role="status"
+    >
+      <ArrowLeftRight size={12} className="shrink-0" />
+      <span className="min-w-0 truncate" title={label}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
 function AutoResumeSeparator() {
   const { t } = useTranslation();
   const label = t('chat.systemCard.autoResumeSeparator.label');
@@ -1512,6 +1543,8 @@ export function SystemCard({
     }
     case 'auto-resume-pending':
       return <AutoResumeActionRow state="live" info={readAutoResumeInfo(data)} />;
+    case 'usage-limit-revert':
+      return <UsageLimitRevertRow data={data} />;
     case 'agent-switch':
       return <AgentSwitchCard data={data} sessionId={sessionId} />;
     case 'context-rebuild':

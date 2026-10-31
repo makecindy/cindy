@@ -71,6 +71,7 @@ const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
 let inputProjectionCb: ((projection: unknown) => void) | null = null;
 let makerEventCb: ((payload: unknown) => void) | null = null;
 let makerStatusCb: ((payload: unknown) => void) | null = null;
+let usageLimitRevertedCb: ((payload: unknown) => void) | null = null;
 
 function makeElectronApiStub() {
   const fanOut = () => () => () => {};
@@ -104,6 +105,12 @@ function makeElectronApiStub() {
     localDb: { messages: { onCreated: fanOut() } },
     deviceLink: { onRemotePush: fanOut() },
     onUsageMessageTurnCost: fanOut(),
+    onSessionUsageLimitReverted: (cb: (payload: unknown) => void) => {
+      usageLimitRevertedCb = cb;
+      return () => {
+        usageLimitRevertedCb = null;
+      };
+    },
   };
 }
 
@@ -1244,5 +1251,72 @@ describe('供应商组换电脑期间不报错(provider-groups.md §6.1)', () =>
     expect(info?.groupSwitchPending).toEqual({ cause: 'usage-limit' });
     // 不是重连：没有次数。
     expect(info?.attempt).toBeUndefined();
+  });
+});
+
+describe('额度恢复后自动切回原路线：会话内瞬态提示', () => {
+  const REVERT_SID = 'usage-limit-revert-session';
+  const REVERT_CARD_ID = '__usage_limit_reverted__';
+  const payload = (over: Record<string, unknown> = {}) => ({
+    sessionId: REVERT_SID,
+    fromModel: 'deepseek-v4-flash',
+    toModel: 'gpt-6.1-sol',
+    at: 1_700_000_000_000,
+    ...over,
+  });
+
+  beforeEach(() => {
+    (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
+    makerChatStore.initGlobalListeners();
+    // 消息流要先存在（正常是打开任务时加载的）；瞬态提示不为它创建会话。
+    makerChatStore.getSnapshot(REVERT_SID);
+  });
+
+  afterEach(() => {
+    makerChatStore.purgeSession(REVERT_SID);
+    makerChatStore.__teardownGlobalListeners();
+    delete (globalThis as { window?: unknown }).window;
+    vi.clearAllMocks();
+  });
+
+  const revertCards = () =>
+    makerChatStore
+      .getSnapshot(REVERT_SID)
+      .messages.filter((m) => m.clientId === REVERT_CARD_ID);
+
+  it('收到推送后在消息流末尾插一条 usage-limit-revert 卡，带上两个模型名', () => {
+    usageLimitRevertedCb?.(payload());
+
+    const cards = revertCards();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.systemCardType).toBe('usage-limit-revert');
+    expect(cards[0]?.systemCardData).toMatchObject({
+      fromModel: 'deepseek-v4-flash',
+      toModel: 'gpt-6.1-sol',
+    });
+    // 只活在内存里：不写消息表。
+    expect(messageService.create).not.toHaveBeenCalled();
+  });
+
+  it('重复推送（例如又一次降级后回切）原地替换，不叠卡', () => {
+    usageLimitRevertedCb?.(payload());
+    usageLimitRevertedCb?.(
+      payload({ fromModel: 'glm-4.6', toModel: 'gpt-6.1-sol', at: 1_700_000_900_000 }),
+    );
+
+    const cards = revertCards();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.systemCardData).toMatchObject({
+      fromModel: 'glm-4.6',
+      toModel: 'gpt-6.1-sol',
+      at: 1_700_000_900_000,
+    });
+  });
+
+  it('同一份内容重复到达不产生新引用', () => {
+    usageLimitRevertedCb?.(payload());
+    const before = makerChatStore.getSnapshot(REVERT_SID);
+    usageLimitRevertedCb?.(payload());
+    expect(makerChatStore.getSnapshot(REVERT_SID)).toBe(before);
   });
 });

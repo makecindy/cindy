@@ -410,6 +410,55 @@ describe('session runtime control wiring', () => {
     }
   });
 
+  it('guards every per-task usage-limit fallback IPC before reading or mutating it', () => {
+    for (const [channel, nextChannel] of [
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_GET',
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_SET',
+      ],
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_SET',
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_CLEAR',
+      ],
+      [
+        'MAKER_IPC_INVOKE.SESSION_USAGE_LIMIT_FALLBACK_CLEAR',
+        'MAKER_IPC_INVOKE.COMPACTION_GET_PCT',
+      ],
+    ] as const) {
+      const body = handlerBody(bootstrapSource, channel, nextChannel);
+      const guard = body.indexOf('assertTrustedAppRendererEvent(event);');
+      expect(guard).toBeGreaterThan(-1);
+      const storeAccess = Math.min(
+        ...[
+          'requireUsageLimitFallbackSessionId(',
+          'readUsageLimitFallbackTarget(',
+          'tryGetUsageLimitFallbackCommands()',
+          'commands.get(',
+          'commands.set(',
+        ]
+          .map((needle) => body.indexOf(needle))
+          .filter((index) => index >= 0),
+      );
+      expect(guard).toBeLessThan(storeAccess);
+    }
+  });
+
+  it('routes per-task usage-limit fallback writes through the MCP control-plane path', () => {
+    const start = registerSource.indexOf('usageLimitFallbackCommandsHolder = {');
+    expect(start).toBeGreaterThan(-1);
+    const holder = registerSource.slice(
+      start,
+      registerSource.indexOf('const createUserMessageDurably', start),
+    );
+    // 写入必须是同一条路径（sessionControlService → setSessionRuntime 的 usageLimitFallback 分支），
+    // 否则 renderer 与 Agent 会各有一套校验、门禁与错误码。
+    expect(holder).toContain('sessionControlService.setSessionRuntime(');
+    expect(holder).toContain('patch: { usageLimitFallback: target }');
+    // 读取用同一份 store 与运行时快照；失效判定复用触发端的同一谓词。
+    expect(holder).toContain('readSessionUsageLimitFallback(sessionId)');
+    expect(holder).toContain('matchesUsageLimitFallbackSource(policy, profiles.effective)');
+  });
+
   it('binds compaction writes to the initiating owner stamp', () => {
     for (const [channel, nextChannel] of [
       ['MAKER_IPC_INVOKE.COMPACTION_RESET_PCT', 'MAKER_IPC_INVOKE.COMPACTION_SET_PCT'],
@@ -1779,5 +1828,30 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain(
       'if (!internalOptions.applyingPiCredentialPending && (rebuildLiveOrcaWorker || modelWindowRebuilt || atomicSelection ||',
     );
+  });
+
+  it('schedules the quota-fallback revert and tears it down on quit', () => {
+    // “逻辑对但没接线”是这个特性已经发生过两次的失败模式，这里只盯接线本身。
+    const revert = registerSource.slice(
+      registerSource.indexOf('  const usageLimitFallbackRevert = createUsageLimitFallbackRevert({'),
+      registerSource.indexOf('  const inputCoordinator: AgentInputCoordinator'),
+    );
+    expect(revert).toContain('observeUsageChanges((kind)');
+    expect(revert).toContain('setInterval(scheduleUsageLimitFallbackRevert, 60_000)');
+    expect(revert).toContain("onQuit('usage-limit-fallback-revert'");
+    expect(revert).toContain('unsubscribeRevertUsageChanges()');
+  });
+
+  it('drops the quota-fallback episode on any explicit model selection', () => {
+    // 回切只消费 episode；用户一旦自己选了模型（包括选回同一个），那条 episode 必须消失，
+    // 否则“用户就想用备用模型”会被自动改回去。两处入口：发送时落地的选择、SET_MODEL 的 apply。
+    const clears = registerSource.match(/writeSessionUsageLimitFallbackEpisode\(sessionId, null\)/g) ?? [];
+    expect(clears.length).toBeGreaterThanOrEqual(2);
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+    expect(setModel).toContain('writeSessionUsageLimitFallbackEpisode(sessionId, null)');
   });
 });
