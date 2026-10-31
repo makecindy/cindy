@@ -5,6 +5,9 @@
 #undef main
 #import <objc/runtime.h>
 #include <assert.h>
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
 
 static NSCursor *unavailableCursor(id receiver, SEL selector) { return nil; }
 static NSCursor *testHand;
@@ -117,7 +120,40 @@ static void testCaptureLifetime(void) {
   puts("PASS capture lifetime: pending start, late setup, stop completion/error, bounded exit");
 }
 
-int main(void) {
+// Regression for the SkyLight first-call deadlock: on some macOS 13 systems
+// (seen on dual-GPU MacBookPro14,3) the first display API call in a process
+// can hang forever inside SkyLight's initDisplayState() — CGDisplayIsOnline()
+// resolves to SLSDisplayStatusQuery, which deadlocks on an internal lock.
+// main() warms up with CGMainDisplayID() first to avoid it. The deadlock is
+// per-process initialization state, so the check must run in a fresh child.
+static void testFirstDisplayQueryDoesNotHang(const char *self) {
+  pid_t pid = 0;
+  const char *args[] = {self, "--display-probe", NULL};
+  assert(posix_spawn(&pid, self, NULL, NULL, (char *const *)args, environ) == 0);
+  int status = 0, ticks = 0;
+  for (;;) {
+    pid_t r = waitpid(pid, &status, WNOHANG);
+    if (r == pid) break;
+    if (ticks++ >= 50) { // 5s budget: a hung display query fails here.
+      kill(pid, SIGKILL);
+      waitpid(pid, &status, 0);
+      fprintf(stderr, "FAIL first display query: fresh process hung\n");
+      exit(1);
+    }
+    usleep(100000);
+  }
+  assert(WIFEXITED(status) && WEXITSTATUS(status) == 2);
+  puts("PASS first display query: fresh process exits promptly (no SkyLight hang)");
+}
+
+int main(int argc, const char *argv[]) {
+  if (argc == 2 && strcmp(argv[1], "--display-probe") == 0) {
+    // Unknown display id: must return 2 through CGDisplayIsOnline without
+    // hanging, exactly as a failed connection attempt in production does.
+    const char *probe[] = {"macos-capture", "123456789", NULL};
+    return captureHelperMain(2, probe);
+  }
+  testFirstDisplayQueryDoesNotHang(argv[0]);
   @autoreleasepool {
     testCaptureLifetime();
     testHand = [[NSCursor alloc] initWithImage:[[NSImage alloc] initWithSize:NSMakeSize(16, 16)]
