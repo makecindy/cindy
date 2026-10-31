@@ -922,6 +922,14 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
       baseUrl: codexBaseUrl,
       models: expected,
     });
+    expect(preset?.runtimes.pi?.models.find((model) => model.id === 'MiniMax-M3.1-Flash')).toMatchObject({
+      reasoning: true,
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      reasoningDefaultEffort: 'max',
+    });
+    expect(BUNDLED_CATALOG.modelRegistry?.baseModels
+      ?.find((model) => model.id === 'minimax/minimax-m3.1-flash')
+      ?.defaults.defaultEffort).toBe('max');
   });
 });
 
