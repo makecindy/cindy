@@ -14,6 +14,92 @@ vi.stubGlobal(
   },
 );
 const line = (seq: number, op: Record<string, unknown>) => JSON.stringify({ seq, ...op }) + '\n';
+// Tier 1: the parser's depth/node limits must also bound renderer work. Previously
+// each tabs ancestor rendered its descendants twice, making this tiny answer
+// invoke the leaf renderer 2^depth times on every streamed update.
+it('renders each nested tab descendant once through streaming and finalization', () => {
+  let source = '';
+  for (let index = 0; index < 10; index++) {
+    source += line(index + 1, {
+      op: 'create',
+      id: `tabs-${index}`,
+      kind: 'tabs',
+      ...(index > 0 ? { parent: `tabs-${index - 1}` } : {}),
+    });
+  }
+  source += line(11, {
+    op: 'create',
+    id: 'leaf',
+    kind: 'markdown',
+    parent: 'tabs-9',
+    props: { text: 'Before' },
+  });
+  const renderMarkdown = vi.fn((text: string) => <span>{text}</span>);
+  const props = { stateKey: 'nested-tabs', renderMarkdown };
+  const view = render(<RichAnswer {...props} source={source} complete={false} />);
+  expect(screen.getByText('Before')).toBeTruthy();
+  expect(renderMarkdown).toHaveBeenCalledTimes(1);
+
+  renderMarkdown.mockClear();
+  source += line(12, { op: 'append', id: 'leaf', text: ' and after' });
+  view.rerender(<RichAnswer {...props} source={source} complete={false} />);
+  expect(screen.getByText('Before and after')).toBeTruthy();
+  expect(renderMarkdown).toHaveBeenCalledTimes(1);
+
+  renderMarkdown.mockClear();
+  view.rerender(<RichAnswer {...props} source={source} complete />);
+  expect(screen.getByText('Before and after')).toBeTruthy();
+  expect(renderMarkdown).toHaveBeenCalledTimes(1);
+});
+it('keeps inactive tab controls mounted through selection and streamed patches', () => {
+  const source =
+    line(1, { op: 'create', id: 'tabs', kind: 'tabs' }) +
+    line(2, {
+      op: 'create',
+      id: 'first',
+      kind: 'stack',
+      parent: 'tabs',
+      props: { label: 'First' },
+    }) +
+    line(3, {
+      op: 'create',
+      id: 'second',
+      kind: 'stack',
+      parent: 'tabs',
+      props: { label: 'Second' },
+    }) +
+    line(4, {
+      op: 'create',
+      id: 'input',
+      kind: 'input',
+      parent: 'second',
+      props: { label: 'Name', default: 'Original' },
+    });
+  const props = { stateKey: 'tab-controls', renderMarkdown: (text: string) => <span>{text}</span> };
+  const view = render(<RichAnswer {...props} source={source} complete={false} />);
+  const input = screen.getByLabelText('Name');
+  fireEvent.click(screen.getByRole('tab', { name: 'Second' }));
+  fireEvent.change(input, { target: { value: 'Edited' } });
+  fireEvent.click(screen.getByRole('tab', { name: 'First' }));
+  view.rerender(
+    <RichAnswer
+      {...props}
+      source={
+        source +
+        line(5, {
+          op: 'patch',
+          id: 'input',
+          props: { default: 'Updated' },
+        })
+      }
+      complete
+    />,
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'Second' }));
+  expect(screen.getByLabelText('Name')).toBe(input);
+  expect((input as HTMLInputElement).value).toBe('Edited');
+  expect(screen.getByRole('tabpanel').contains(input)).toBe(true);
+});
 // Tier 1: mount the production renderer; input identity/state must survive
 // streamed patches, the final marker, and message-list virtualization.
 it('preserves edited controls through patches, finalization and remount', () => {
