@@ -1,5 +1,5 @@
 /** Remote usage data only; each device/provider consumes the same snapshots as its local UI. */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -16,8 +16,8 @@ function isSnapshotShape(value: unknown): value is Record<string, unknown> {
 }
 
 export interface RemoteDeviceUsageMirror<T> {
-  useMirror(deviceId: string | null, providerId?: string): T | null;
-  request(deviceId: string, providerId?: string, queueIfPending?: boolean): void;
+  useMirror(deviceId: string | null, providerId?: string, options?: { live?: boolean; refreshEpoch?: number }): T | null;
+  request(deviceId: string, providerId?: string, queueIfPending?: boolean, scheduling?: { background?: boolean }): void;
   resetForTest(): void;
 }
 
@@ -27,7 +27,13 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   read?: (deviceId: string, providerId?: string) => Promise<unknown>;
   /** Only visible, mounted consumers poll; all consumers still share the entry. */
   refreshIntervalMs?: number;
+  /** Native group quota owns one recovery observer per shared account entry. */
+  refreshOnReconnect?: boolean;
   decodeRead?: (value: unknown) => T | null | undefined;
+  /** A read may return a richer contract than its invalidation push. */
+  decodePush?: (value: unknown) => T | null | undefined;
+  /** A failed reread cannot establish that a cached native snapshot still belongs to the current account. */
+  clearOnReadFailure?: boolean;
   invokeArgs?: unknown[];
   pushChannel: string | null;
   defaultProviderId?: string;
@@ -39,6 +45,12 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     unsupportedUntil: number;
     pending: boolean;
     refreshQueued: boolean;
+    liveObservers: number;
+    hasLiveObservation: boolean;
+    liveRefreshes: Set<object>;
+    refreshSupportProbe?: boolean;
+    stopReconnect?: () => void;
+    refreshScheduling?: { background?: boolean };
     /** Last time a read or push settled this entry; 0 = never. */
     settledAt: number;
     requestedAt: number;
@@ -50,6 +62,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
   function entryFor(deviceId: string, providerId?: string): Entry {
     if (!isDataOwnerGenerationCurrent(cacheOwner)) {
       cacheOwner = getDataOwnerGeneration();
+      for (const entry of entries.values()) entry.stopReconnect?.();
       entries.clear();
     }
     const key = JSON.stringify([deviceId, providerId ?? cfg.defaultProviderId ?? null]);
@@ -61,6 +74,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         unsupportedUntil: 0,
         pending: false,
         refreshQueued: false,
+        liveObservers: 0,
+        hasLiveObservation: false,
+        liveRefreshes: new Set(),
         settledAt: 0,
         requestedAt: 0,
         owner: cacheOwner,
@@ -76,13 +92,20 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     entry.settledAt = Date.now();
     for (const notify of entry.listeners) notify();
   }
-  function request(deviceId: string, providerId?: string, queueIfPending = false): void {
+  function request(deviceId: string, providerId?: string, queueIfPending = false, scheduling?: { background?: boolean }, retryUnsupported = false): void {
     if (!cfg.invokeChannel && !cfg.read) return;
     const entry = entryFor(deviceId, providerId);
     if (entry.pending) {
-      if (queueIfPending) entry.refreshQueued = true;
+      if (queueIfPending) {
+        // An explicit recovery must keep its foreground priority even if a
+        // background refresh was already queued behind the current read.
+        if (!entry.refreshQueued || !scheduling?.background) entry.refreshScheduling = scheduling;
+        entry.refreshQueued = true;
+        entry.refreshSupportProbe ||= retryUnsupported;
+      }
       return;
     }
+    if (retryUnsupported) entry.unsupportedUntil = 0;
     if (Date.now() < entry.unsupportedUntil) return;
     const revision = entry.revision;
     const args = [...(cfg.invokeArgs ?? [])];
@@ -92,7 +115,9 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     entry.requestedAt = Date.now();
     const reading = cfg.read
       ? cfg.read(deviceId, providerId ?? cfg.defaultProviderId)
-      : window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args);
+      : scheduling
+        ? window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args, scheduling)
+        : window.electronAPI.deviceLink.invoke(deviceId, cfg.invokeChannel!, args);
     void reading
       .then((value) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
@@ -103,12 +128,16 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
           providerId !== cfg.defaultProviderId &&
           value !== null &&
           (!isSnapshotShape(value) || value.providerId !== providerId)
-        )
+        ) {
+          if (cfg.clearOnReadFailure) apply(entry, null);
           return;
+        }
         if (cfg.decodeRead) {
           const decoded = cfg.decodeRead(value);
           if (decoded !== undefined) apply(entry, decoded);
+          else if (cfg.clearOnReadFailure) apply(entry, null);
         } else if (value === null || isSnapshotShape(value)) apply(entry, value as T | null);
+        else if (cfg.clearOnReadFailure) apply(entry, null);
       })
       .catch((error: unknown) => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || entry.revision !== revision) return;
@@ -118,17 +147,30 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         ) {
           entry.unsupportedUntil = Date.now() + UNSUPPORTED_RETRY_AFTER_MS;
         }
+        if (cfg.clearOnReadFailure) apply(entry, null);
       })
       .finally(() => {
         entry.pending = false;
-        if (entry.refreshQueued) {
+        const liveQueued = entry.liveRefreshes.size > 0;
+        entry.liveRefreshes.clear();
+        if (entry.refreshQueued || liveQueued) {
+          const queuedScheduling = liveQueued ? undefined : entry.refreshScheduling;
+          // An old in-flight request can install a negative capability cache
+          // after reconnect. Native probes and still-observed live recovery
+          // tokens bypass that TTL; cancelling the card removes its token.
+          const retrySupport = entry.refreshSupportProbe || liveQueued;
+          entry.refreshSupportProbe = false;
           entry.refreshQueued = false;
-          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId);
+          entry.refreshScheduling = undefined;
+          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) request(deviceId, providerId, false, queuedScheduling, retrySupport);
         }
       });
   }
-  function useMirror(deviceId: string | null, providerId?: string): T | null {
+  function useMirror(deviceId: string | null, providerId?: string, options: { live?: boolean; refreshEpoch?: number } = {}): T | null {
     const entry = deviceId ? entryFor(deviceId, providerId) : null;
+    const live = options.live === true;
+    const refreshEpoch = live ? options.refreshEpoch : undefined;
+    const lastLiveEntry = useRef<Entry | null>(null);
     const [, rerender] = useState(0);
     useEffect(() => {
       if (!deviceId || !entry) return;
@@ -141,12 +183,59 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
         entry.listeners.size > 0 &&
         entry.settledAt > 0 &&
         Date.now() - entry.settledAt < MOUNT_REUSE_MS;
+      // A pending request from before an observation gap cannot stand in for
+      // the fresh read required on resume/reconnect. A changed live refreshEpoch
+      // reopens this observation so its queued work remains owned by this effect.
+      // Concurrent first-time live consumers still share the pending read.
+      const firstObserver = entry.listeners.size === 0;
+      const resumePending = !live && firstObserver && entry.pending;
+      const resumed = live && (lastLiveEntry.current === entry ||
+        (entry.hasLiveObservation && entry.liveObservers === 0));
+      let liveRefresh: object | undefined;
+      if (live) {
+        entry.liveObservers++;
+        entry.hasLiveObservation = true;
+        lastLiveEntry.current = entry;
+        if (resumed && entry.pending) {
+          liveRefresh = {};
+          entry.liveRefreshes.add(liveRefresh);
+        }
+      }
       entry.listeners.add(notify);
+      if (cfg.refreshOnReconnect && firstObserver) {
+        // Subscribe once per entry, rather than once per card: contextBridge
+        // can clone the same host event separately for different consumers.
+        let online: boolean | null = true;
+        let relay: 'stopped' | 'connecting' | 'online' | null = null;
+        const recover = () => {
+          if (isDataOwnerGenerationCurrent(entry.owner) && entry.listeners.size > 0) {
+            request(deviceId, providerId, true, undefined, true);
+          }
+        };
+        const api = window.electronAPI.deviceLink;
+        const offPresence = api.onPresenceChanged(snapshot => {
+          if (snapshot.deviceId !== deviceId) return;
+          const wasOnline = online;
+          online = snapshot.online;
+          if (online && wasOnline !== true) recover();
+        });
+        const offStatus = api.onStatusChanged(({ status }) => {
+          const previous = relay;
+          relay = status;
+          if (status !== 'online') online = null;
+          else if (previous !== 'online') { online = true; recover(); }
+        });
+        const offReset = api.onPeerLinkReset?.(event => { if (event.deviceId === deviceId) recover(); });
+        const offReopened = api.onPeerLinkReopened?.(event => { if (event.deviceId === deviceId) recover(); });
+        entry.stopReconnect = () => { offPresence(); offStatus(); offReset?.(); offReopened?.(); };
+      }
       // The existing gate also includes native hide/minimize broadcasts: Electron
       // can keep visibilityState "visible" while active turns disable throttling.
       const visible = () => document.visibilityState !== 'hidden'
         && !document.documentElement.hasAttribute(HIDDEN_ANIMATION_ATTR);
-      if (!settled && (!cfg.refreshIntervalMs || visible())) request(deviceId, providerId);
+      // An explicit live recovery rechecks capabilities; ordinary polling still
+      // respects the negative cache, including after another unsupported reply.
+      if ((!settled || resumed) && (!cfg.refreshIntervalMs || visible())) request(deviceId, providerId, resumePending, undefined, resumed || (cfg.refreshOnReconnect && firstObserver));
       let timer: ReturnType<typeof setInterval> | undefined;
       const poll = () => {
         if (!isDataOwnerGenerationCurrent(entry.owner) || !visible()) return;
@@ -190,17 +279,23 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
           value = push.payload.snapshot;
         } else return;
         if (value !== null && !isSnapshotShape(value)) return;
+        const decoded = cfg.decodePush ? cfg.decodePush(value) : (value as T | null);
+        if (decoded === undefined) return;
         entry.unsupportedUntil = 0;
-        apply(entry, value as T | null);
+        if (decoded === null) entry.liveRefreshes.clear();
+        apply(entry, decoded);
       }) : () => {};
       return () => {
         clearInterval(timer);
         hiddenObserver?.disconnect();
         if (cfg.refreshIntervalMs) document.removeEventListener('visibilitychange', watchVisibility);
         entry.listeners.delete(notify);
+        if (live) entry.liveObservers--;
+        if (liveRefresh) entry.liveRefreshes.delete(liveRefresh);
+        if (entry.listeners.size === 0) { entry.stopReconnect?.(); entry.stopReconnect = undefined; }
         off();
       };
-    }, [deviceId, providerId, entry]);
+    }, [deviceId, providerId, entry, live, refreshEpoch]);
     // Read the current entry during render: switching devices/accounts must not show the old value.
     return entry?.snapshot ?? null;
   }
@@ -208,6 +303,7 @@ export function createRemoteDeviceUsageMirror<T extends object>(cfg: {
     useMirror,
     request,
     resetForTest: () => {
+      for (const entry of entries.values()) entry.stopReconnect?.();
       entries.clear();
       cacheOwner = getDataOwnerGeneration();
     },
