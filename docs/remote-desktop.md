@@ -167,6 +167,16 @@ and preserve explicit confirmation before taking over someone else's desktop.
 Main retains the same owner/target cleanup barrier across Renderer replacement;
 rebinding to a different owner or target does not wait on that old barrier.
 
+Desktop and Mobile heartbeat invokes time out after five seconds, independently
+of the longer capture/offer budget. Both viewers serialize heartbeats on a
+three-second interval, so a lost reply must release that wait before the host's
+twelve-second lease expires. The next heartbeat can renew the same lease; a timeout
+does not reset the peer link or shared relay. Other desktop operations keep their
+existing budgets. Regression coverage is in
+[invokePolicy.test.ts](../packages/device-link/src/__tests__/invokePolicy.test.ts)
+and the Desktop
+[viewerLifecycle.test.ts](../apps/desktop/src/renderer/features/remote-desktop/__tests__/viewerLifecycle.test.ts).
+
 The window reuses the existing resource-usage auxiliary-window controller and
 factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
 recovery. Prewarming loads only the shell and never connects to or captures a
