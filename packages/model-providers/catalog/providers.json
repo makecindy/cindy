@@ -2197,6 +2197,55 @@
       }
     },
     {
+      "id": "runcrate",
+      "name": "Runcrate",
+      "docsUrl": "https://runcrate.ai/docs",
+      "regionHint": "global",
+      "models": [
+        {
+          "id": "deepseek-ai/DeepSeek-V4-Flash",
+          "name": "DeepSeek V4 Flash",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
+        },
+        {
+          "id": "zai-org/GLM-5.3",
+          "name": "GLM-5.3",
+          "contextWindow": 1048576,
+          "supportsImageInput": false
+        },
+        {
+          "id": "moonshotai/Kimi-K2.6",
+          "name": "Kimi K2.6",
+          "contextWindow": 262144,
+          "supportsImageInput": false
+        },
+        {
+          "id": "Qwen/Qwen3-Coder-480B-A35B-Instruct-Turbo",
+          "name": "Qwen3 Coder 480B",
+          "contextWindow": 262144,
+          "supportsImageInput": false
+        }
+      ],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.runcrate.ai/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://api.runcrate.ai/v1/models"
+        },
+        "codex": {
+          "baseUrl": "https://api.runcrate.ai/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://api.runcrate.ai/v1/models"
+        },
+        "pi": {
+          "baseUrl": "https://api.runcrate.ai/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://api.runcrate.ai/v1/models"
+        }
+      }
+    },
+    {
       "id": "agnes",
       "name": "Agnes AI",
       "docsUrl": "https://wiki.agnes-ai.com/en/docs/overview",
