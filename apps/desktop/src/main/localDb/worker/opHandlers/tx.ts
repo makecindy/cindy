@@ -1948,6 +1948,7 @@ function messageRewindUserAfterClear(
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   const transaction = db.transaction(() => {
     const changes = db
       .prepare(
@@ -1959,7 +1960,19 @@ function messageRewindUserAfterClear(
             AND rewind_at IS NULL`,
       )
       .run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      // 先走上面的软隐藏，让 rewind 触发器清掉向量索引；再删掉这一行（FTS 由删除触发器清）。
+      db.prepare(
+        `DELETE FROM messages
+          WHERE session_id = ?
+            AND client_id = ?
+            AND role = 'user'
+            AND rewind_at = ?`,
+      ).run(sessionId, clientId, rewoundAt);
+      db.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       db.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);

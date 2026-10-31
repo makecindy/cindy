@@ -20533,9 +20533,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // auto-resume bookkeeping as direct maker sends.  Keeping one writer also
     // preserves message ordering when a clear-race rewind follows the insert.
     createUserMessage: createUserMessageDurably,
-    rewindPersistedUserMessageAfterClear: (sessionId, clientId) =>
+    rewindPersistedUserMessageAfterClear: (sessionId, clientId, options) =>
       enqueueDurableWrite(`user-rewind:${sessionId}:${clientId}`, () =>
-        rewindPersistedUserMessageAfterClear(sessionId, clientId),
+        rewindPersistedUserMessageAfterClear(sessionId, clientId, options),
       ),
     resolveSessionReferences,
     refreshAgentReferencesBeforeDispatch: async (item) => {

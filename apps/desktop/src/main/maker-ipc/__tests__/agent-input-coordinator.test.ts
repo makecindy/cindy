@@ -1621,7 +1621,9 @@ function createHarness(opts?: {
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
-  const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
+  const rewindPersistedUserMessageAfterClear = vi.fn(
+    async (_sessionId: string, _clientId: string, _options?: { discard?: boolean }) => {},
+  );
   const coordinator = new AgentInputCoordinator({
     rewindPersistedUserMessageAfterClear,
     sendToAgent,
@@ -12167,7 +12169,7 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
   });
 
   it.each(['cancel-result', 'cancel-throw', 'mode-throw'])(
-    'rewinds the scheduler row after persisted preparation rejection: %s', async (path) => {
+    'discards the scheduler row after persisted preparation rejection: %s', async (path) => {
       const h = createHarness();
       const sid = 'scheduler-preparation-rejected';
       h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
@@ -12180,7 +12182,9 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
       });
       h.coordinator.enqueue(sid, makeItem('scheduled-row', 'heartbeat', { origin: schedOrigin }));
       await flush();
-      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row');
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(
+        sid, 'scheduled-row', { discard: true },
+      );
       expect(h.persistTerminalSendError).not.toHaveBeenCalled();
       expect(latestProjection(h.projections).error).toBeNull();
       expect(latestProjection(h.projections).recovery).toBeNull();

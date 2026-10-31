@@ -1298,10 +1298,16 @@ export function broadcastMessageDeleted(
  * cleanup must not create a context-rebuild marker, reset the native session,
  * or touch any other turn.  The row stays as a rewind tombstone so the same
  * clientId remains idempotent across a weak-link retry.
+ *
+ * `discard` is for scheduled prompts proven never to have reached the vendor.
+ * Each fire mints a fresh clientId and a cancelled one is never retried, so a
+ * tombstone protects nothing there; keeping it lets a deferral loop grow the
+ * session by one hidden prompt per attempt.  The row is deleted instead.
  */
 export async function rewindPersistedUserMessageAfterClear(
   sessionId: string,
   clientId: string,
+  options?: { discard?: boolean },
 ): Promise<void> {
   const ownerScope = captureOwnerBroadcastScope();
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
@@ -1327,6 +1333,7 @@ export async function rewindPersistedUserMessageAfterClear(
     sessionId,
     clientId,
     rewoundAt,
+    ...(options?.discard ? { discard: true } : {}),
   });
   if (!isOwnerBroadcastScopeCurrent(ownerScope)) return;
   if (updated.changes === 0) return;
