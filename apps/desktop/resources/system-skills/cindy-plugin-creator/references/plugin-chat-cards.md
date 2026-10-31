@@ -49,6 +49,9 @@ cindy.onHostMessage(async function (msg) {
   `data-ghost-prompt="占位文案"`(≤128 字,可空串)。用户点击时主机弹标准输入框
   收集文字(textarea,回车发送/Esc 取消),card-action 事件多带 `prompt` 字段
   (≤2000 字)——输入交互由主机代管;
+- **App 图标**:`span` / `div` 加 `data-ghost-icon="settings"`,主机换成 App 里同一个设置图标(Lucide,
+  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前只登记了 `settings`;位置里写一个兜底图形,
+  旧版客户端会照常显示它;
 - **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
   (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
   属性转义;没有当前值写空串)。新版电脑端点击时在按钮正下方弹出 Cindy 的模型列表,选中后

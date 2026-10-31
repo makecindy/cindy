@@ -18,6 +18,7 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
+  isGhostCardIconName,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
 import { isPluginModelPickerRoute as isPluginModelSelection } from '../../shared/pluginModelPicker.js';
@@ -301,6 +302,9 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   // 在线指示(data-ghost-live):空值属性,只挂 span / div。宿主给它播统一的呼吸光环
   // (transform + opacity,卡片不可见时暂停),卡内仍零动画源码,历史卡照样静态存档。
   if ((tag === 'span' || tag === 'div') && attrs['data-ghost-live'] !== undefined) parts.push(' data-ghost-live=""');
+  // 图标位(data-ghost-icon):只挂 span / div、只认 GHOST_CARD_ICONS 里的名字,宿主换成 App 的同名图标。
+  const icon = tag === 'span' || tag === 'div' ? (attrs['data-ghost-icon'] ?? '').trim() : '';
+  if (isGhostCardIconName(icon)) parts.push(` data-ghost-icon="${icon}"`);
   // 位置声明(data-ghost-placement):只挂 div、只认 turn-end,宿主据此把卡排到本轮末尾
   // (isTurnEndGhostCardHtml)。其它值只丢属性。
   if (tag === 'div' && attrs['data-ghost-placement']?.trim() === 'turn-end') parts.push(' data-ghost-placement="turn-end"');

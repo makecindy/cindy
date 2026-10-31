@@ -67,6 +67,7 @@ import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
 import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
 import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
 import { usePrStatus } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
@@ -490,6 +491,7 @@ function GhostCardCanvas({
       liveDisposeRef.current = startGhostCardLiveIndicators(doc, iframeRef.current);
     }
     fillPrStatus(doc);
+    fillGhostCardIcons(doc);
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {

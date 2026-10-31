@@ -408,6 +408,15 @@ describe('sanitizeGhostCardHtml · 手机呈现提示(data-ghost-primary / data-
   });
 });
 
+// 图标位:宿主换成 App 里的同名图标;只认登记过的名字,其它值只丢属性、保留插件的兜底图形。
+describe('sanitizeGhostCardHtml · 图标位(data-ghost-icon)', () => {
+  it('span / div 上只放行登记的图标名', () => {
+    expect(ok('<span data-ghost-icon="settings"><b>x</b></span>')).toBe('<span data-ghost-icon="settings"><b>x</b></span>');
+    expect(ok('<span data-ghost-icon="rocket">a</span><button data-ghost-icon="settings">b</button>'))
+      .toBe('<span>a</span><button type="button">b</button>');
+  });
+});
+
 // 模型下拉框:宿主据此在按钮下方弹模型列表,并凭紧跟动作的这段字面量核对动作确实声明了下拉框。
 describe('sanitizeGhostCardHtml · 模型下拉框(data-ghost-model-select)', () => {
   it('只挂在有动作的 button 上,值只留合格的模型选择', () => {

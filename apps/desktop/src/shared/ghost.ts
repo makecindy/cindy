@@ -7610,6 +7610,16 @@ export function ghostCardDeclaresModelSelect(html: string, actionId: string): bo
     html.includes(` data-ghost-action="${actionId}" data-ghost-model-select="`);
 }
 
+/**
+ * 卡内图标位:插件在 span / div 上标 `data-ghost-icon="<名字>"`,宿主换成 App 里同一个
+ * Lucide 图标(跟随主题颜色),与 App 其它地方统一。不认识的宿主保留插件写在里面的兜底图形。
+ */
+export const GHOST_CARD_ICONS = ['settings'] as const;
+export type GhostCardIconName = (typeof GHOST_CARD_ICONS)[number];
+export function isGhostCardIconName(value: string): value is GhostCardIconName {
+  return (GHOST_CARD_ICONS as readonly string[]).includes(value);
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
