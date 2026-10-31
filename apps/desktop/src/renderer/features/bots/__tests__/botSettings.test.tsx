@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => {
   params: {} as { botId?: string },
   availableVendors: new Set(['cc', 'codex', 'pi']),
   defaultModelChain: [] as BotModelRoute[],
+  autonomySettings: null as { schedulerBotId: string | null; isCustomized?: boolean } | null,
   modelListeners: new Set<() => void>(),
   runtimeListeners: new Set<() => void>(),
   updateBotProfile: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({
@@ -99,7 +100,7 @@ vi.mock('../botStore', () => ({
     mocks.modelListeners.add(listener);
     return () => mocks.modelListeners.delete(listener);
   },
-  useBotAutonomySettings: () => null,
+  useBotAutonomySettings: () => mocks.autonomySettings,
   setBotSchedulerBotId: vi.fn(),
   resetBotAutonomySettings: vi.fn(),
 }));
@@ -244,6 +245,7 @@ beforeEach(() => {
   mocks.params = {};
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
   mocks.defaultModelChain = [];
+  mocks.autonomySettings = null;
   mocks.modelListeners.clear();
   mocks.runtimeListeners.clear();
   mocks.getSession.mockReset().mockResolvedValue({ agentKind: 'cc', workingDir: '/bot/workspace' });
@@ -581,6 +583,16 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
   });
 
+  it('returns to the previous settings page when saving fails', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('save unavailable'));
+    renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Unsaved name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.settingsTabs.model' })).toBeTruthy());
+    expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+    expect(mocks.updateBotProfile).toHaveBeenCalled();
+  });
   it('lists messaging platforms after capabilities and opens it from the home row or a deep link', () => {
     const view = renderSettings();
     const rows = screen
@@ -599,18 +611,95 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByTestId('bot-channels-page')).toBeTruthy();
   });
 
-  it('keeps the current inner page and its draft when saving before navigation fails', async () => {
+  it.each([
+    ['resolve', false],
+    ['reject', false],
+    ['resolve', true],
+    ['reject', true],
+  ] as const)('keeps New draft after a hung save %s (ime=%s) and autosaves only that draft', async (outcome, ime) => {
+    vi.useFakeTimers();
+    try {
+      let settle!: (result: 'resolve' | 'reject') => void;
+      mocks.updateBotProfile.mockImplementation(async (_id, patch) => {
+        const result = await new Promise<'resolve' | 'reject'>((resolve) => { settle = resolve; });
+        if (result === 'reject') throw new Error('late failure');
+        return { id: 'bot-1', currentVersion: 2, ...patch };
+      });
+      renderSettings();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'First draft' } });
+      fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+      expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+      const name = screen.getByRole('textbox', { name: 'bots.nameLabel' });
+      if (ime) fireEvent.compositionStart(name);
+      fireEvent.change(name, { target: { value: 'New draft' } });
+      const callsBeforeSettle = mocks.updateBotProfile.mock.calls.length;
+      await act(async () => { settle(outcome); });
+      expect((name as HTMLInputElement).value).toBe('New draft');
+      if (ime) fireEvent.compositionEnd(name);
+      mocks.updateBotProfile.mockImplementation(async (_id, patch) => ({ id: 'bot-1', currentVersion: 3, ...patch }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+      const later = mocks.updateBotProfile.mock.calls.slice(callsBeforeSettle);
+      expect(later.map((call) => call[1])).toEqual([{ name: 'New draft' }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns home and restores the saved name when saving before navigation fails', async () => {
     mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
     const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
     render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
     fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
-    await screen.findByRole('button', { name: 'bots.autosave.retry' });
-    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
-    let allowed = true;
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.profile.title' })).toBeTruthy());
+    expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('PR steward');
+    let allowed = false;
     await act(async () => { allowed = await beforeCloseRef.current!(); });
+    expect(allowed).toBe(true);
+  });
+
+  it('keeps the unsaved teammate draft when a routine leave is cancelled', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
+    mocks.autonomySettings = { schedulerBotId: 'holder', isCustomized: false };
+    mocks.profiles = [bot(), bot({ id: 'holder', name: 'Cindy' })];
+    const routine = {
+      id: 'routine', botId: 'bot-1', name: 'Review', prompt: 'Old instructions', enabled: true,
+      revision: 1, createdAt: 1, updatedAt: 1, triggers: [{ id: 'timer', kind: 'interval', intervalMs: 3600000 }],
+    };
+    const api = window.electronAPI as unknown as { routines?: unknown };
+    api.routines = {
+      list: vi.fn(async () => [routine]),
+      sources: vi.fn(async () => []),
+      history: vi.fn(async () => []),
+      onChanged: vi.fn(() => () => undefined),
+      save: vi.fn(async () => routine),
+    };
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(
+      <ConfirmDialogProvider>
+        <BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />
+      </ConfirmDialogProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'routines.title' }));
+    const followName = 'bots.autonomy.allowSchedulerFollow.title:{"name":"Cindy"}';
+    fireEvent.click(await screen.findByRole('switch', { name: followName }));
+    await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    fireEvent.change(screen.getByLabelText('routines.instructions'), { target: { value: 'Edited instructions' } });
+    const closing = beforeCloseRef.current!();
+    fireEvent.click(await screen.findByRole('button', { name: 'routines.continueEditing' }));
+    let allowed = true;
+    await act(async () => { allowed = await closing; });
     expect(allowed).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'routines.discard' }));
+    expect((await screen.findByRole('switch', { name: followName })).getAttribute('aria-checked')).toBe('true');
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {

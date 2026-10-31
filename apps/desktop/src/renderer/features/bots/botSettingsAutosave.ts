@@ -215,6 +215,14 @@ export interface BotSettingsAutosaveHandle {
   flushDetached(): void;
   /** 取消未触发的计时,不提交。 */
   cancel(): void;
+  /**
+   * 离开时丢弃未落库的草稿。已发出的保存仍可完成，但这次等待
+   * 以及随后的卸载补交都不得再把丢弃的旧草稿提交回去。
+   * 之后的编辑会重新允许保存。
+   */
+  abandon(): Promise<boolean>;
+  /** 记录一次编辑但不提交。输入法组合中的半成品不能保存，但仍要挡住迟到恢复。 */
+  markEdited(): void;
   /** 是否有已改但未落库的内容。 */
   isDirty(): boolean;
 }
@@ -230,6 +238,12 @@ export function createBotSettingsAutosave(
   let instantPending = false;
   let inFlight: Promise<void> | null = null;
   let detached = false;
+  /** 丢弃草稿后递增。正在等待的 flush 用它识别自己已经作废。 */
+  let epoch = 0;
+  /** 丢弃后、下一次编辑前，禁止把恢复出来的旧值再提交。 */
+  let suppressTrailing = false;
+  /** 用户编辑次数。丢弃后的迟到回调用它判断能不能再整表恢复。 */
+  let revision = 0;
 
   const emit = (status: BotAutosaveStatus): void => {
     if (detached) return;
@@ -248,13 +262,15 @@ export function createBotSettingsAutosave(
     !botSettingsPayloadEqual(options.readPayload(), options.readBaseline());
 
   const runNow = async (): Promise<void> => {
+    const started = epoch;
     clearTimer();
     while (inFlight) {
       // 撞上在途提交:等它结束再重判脏(trailing save),不丢这一批修改。
       // 多个 blur/flush 同时等待时，先醒来的调用可能已开始下一次保存。
       await inFlight.catch(() => undefined);
+      if (detached || started !== epoch || suppressTrailing) return;
     }
-    if (detached) return;
+    if (detached || started !== epoch || suppressTrailing) return;
     const payload = options.readPayload();
     if (botSettingsPayloadEqual(payload, options.readBaseline())) {
       // 无实际变化 —— 不发 IPC。
@@ -283,8 +299,13 @@ export function createBotSettingsAutosave(
   };
 
   return {
+    markEdited() {
+      revision += 1;
+    },
     schedule(trigger) {
       if (detached) return;
+      revision += 1;
+      suppressTrailing = false;
       if (trigger === 'instant') {
         if (timer !== null) clearTimeout(timer);
         instantPending = true;
@@ -309,25 +330,37 @@ export function createBotSettingsAutosave(
       clearTimer();
       const payload = options.readPayload();
       const dirty = !botSettingsPayloadEqual(payload, options.readBaseline());
+      const suppressed = suppressTrailing;
       // 先断开状态回调:组件正在卸载,任何 setState 都是无主的。
       detached = true;
       if (!dirty) return;
       if (inFlight) {
         // 在途提交发的是更早的快照,不能拿它当「已落库」。等它结束后补发一次,
         // 否则「改完立刻返回聊天」这一下正好撞上在途保存就会丢最后一批修改。
+        // 丢弃草稿后不得补交恢复出来的旧值；丢弃之后又编辑过则仍要补交。
         void inFlight
           .catch(() => undefined)
           .then(() => {
+            if (suppressed && suppressTrailing) return;
             const trailing = options.readPayload();
             if (botSettingsPayloadEqual(trailing, options.readBaseline())) return;
             return options.commit(trailing).catch(() => undefined);
           });
         return;
       }
+      if (suppressTrailing) return;
       void options.commit(payload).catch(() => undefined);
     },
     cancel() {
       clearTimer();
+    },
+    abandon() {
+      epoch += 1;
+      suppressTrailing = true;
+      const revisionAtDiscard = revision;
+      clearTimer();
+      const pending = inFlight?.then(() => undefined, () => undefined) ?? Promise.resolve();
+      return pending.then(() => revision === revisionAtDiscard);
     },
     isDirty,
   };
