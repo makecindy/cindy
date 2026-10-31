@@ -12889,6 +12889,7 @@
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexUsageLimit": "目前連線的 Codex 帳號已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "gatewayQuotaExhausted": "Cindy AI 餘額不足，請充值後繼續",
+      "gatewayUpstreamQuotaExhausted": "模型上游配額無法使用，請切換其他模型後重試。",
       "viewBalance": "檢視餘額",
       "viewBalanceTitle": "開啟「用量和計費」檢視餘額並充值",
       "credentialSwitchBusy": "Codex 正在其它任務中執行，暫時無法按本任務選擇的模型來源切換（需要重啟共享的 Codex 後臺處理程序）。等它結束後點「重試」即可。",

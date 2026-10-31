@@ -12890,6 +12890,7 @@
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexUsageLimit": "接続中の Codex アカウントは利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "gatewayQuotaExhausted": "Cindy AI の残高が不足しています。チャージすると続行できます。",
+      "gatewayUpstreamQuotaExhausted": "モデルの上流プロバイダーのクォータが使用できません。別のモデルに切り替えて再試行してください。",
       "viewBalance": "残高を見る",
       "viewBalanceTitle": "「使用量と請求」を開いて残高を確認・チャージ",
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
