@@ -120,8 +120,11 @@ import { useTurnChangeSets } from './useTurnChangeSets';
 import {
   canCompensateMessageHeight,
   findRenderItemElement,
+  isRestoredScrollTakeover,
+  measureRestoredScrollGeometry,
   rememberedItemIntrinsicSize,
   viewportAnchorCorrection,
+  type RestoredScrollGeometry,
 } from './messageViewportCompensation';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { createLogger } from '@/lib/logger';
@@ -3124,6 +3127,7 @@ export function MessageStream({
     restoreSnapshotRef.current ? restoreSnapshotRef.current.isNearBottom === false : false,
   );
   const restoreLoadRef = useRef<'idle' | 'pending' | 'loaded' | 'failed' | 'settled'>('idle');
+  const restoredScrollGeometryRef = useRef<RestoredScrollGeometry | null>(null);
   const restoreMountedRef = useRef(false);
   const [restoreRevision, setRestoreRevision] = useState(0);
   const restoreCancelledRef = useRef(false);
@@ -4270,6 +4274,7 @@ export function MessageStream({
     ) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const cTop = container.getBoundingClientRect().top;
@@ -4279,11 +4284,13 @@ export function MessageStream({
     if (Math.abs(delta) < 1) {
       restoreLoadRef.current = 'settled';
       refreshViewportAnchor();
+      restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
       return true;
     }
     const generation = beginProgrammaticScroll();
     container.scrollTop += delta;
     restoreLoadRef.current = 'settled';
+    restoredScrollGeometryRef.current = measureRestoredScrollGeometry(container, target);
     requestAnimationFrame(() => {
       if (finishProgrammaticScroll(generation) === false) refreshViewportAnchor();
     });
@@ -4714,8 +4721,8 @@ export function MessageStream({
   );
   // wheel/touch/键盘接管：结束当前 smooth，但让期间延期的删除补偿重放。
   const clearChipJumpSuppression = useCallback(() => {
-    // Only input intent ends restoration. Chromium's intrinsic-size correction
-    // also emits scroll events and must not be mistaken for a user scroll.
+    // Direct input (or a settled, layout-stable chained scroll) ends restoration.
+    // Chromium's intrinsic-size corrections must still preserve the anchor.
     restoringRef.current = false;
     suppressHeightCompensationUntilRef.current = 0;
     disclosureAnchorRef.current = null;
@@ -5852,9 +5859,18 @@ export function MessageStream({
 
     const draggingScrollbar = scrollbarDragStartTopRef.current != null;
     if (restoringRef.current && !draggingScrollbar) {
-      applyRestoreRef.current();
-      prevScrollTopRef.current = el.scrollTop;
-      return;
+      if (isRestoredScrollTakeover(
+        el, restoredScrollGeometryRef.current,
+        restoreLoadRef.current === 'settled', programmaticScrollRef.current,
+      )) {
+        // An iframe's chained wheel never reached onWheel. Let the normal
+        // scroll path save this new reading position and update follow intent.
+        clearChipJumpSuppression();
+      } else {
+        applyRestoreRef.current();
+        prevScrollTopRef.current = el.scrollTop;
+        return;
+      }
     }
     const draggingUp =
       draggingScrollbar &&
@@ -6047,6 +6063,7 @@ export function MessageStream({
     setAnchoredForwardItems,
     sessionId,
     unpinAutoFollowForUserUpIntent,
+    clearChipJumpSuppression,
   ]);
 
   // 渲染窗口下移到 render-item 轴后,U2 "末尾窗口全是 orphan tool_result"
