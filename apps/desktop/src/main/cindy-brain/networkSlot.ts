@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto';
 
 import { sniffMediaMime, additionalMp3BytesNeeded } from '../cindy-media/sniffMediaMime.js';
 import { classifyFetchNetworkFailure, fetchTimeoutFailure } from './fetchFailure.js';
-import { isCindyOfficialTrustInfo } from './GhostManager.js';
+import { canUseGithubHostCredentials } from './GhostManager.js';
 
 import {
   GHOST_FETCH_BODY_MAX_BYTES,
@@ -1106,13 +1106,7 @@ export class GhostNetworkSlot {
     const declaredHosts = net?.hosts ?? [];
     const declaredSecrets = net?.secrets ?? [];
     const ghCliSecrets = declaredSecrets.filter((secret) => secret.source === 'gh-cli');
-    if (
-      ghCliSecrets.length > 0 &&
-      (ghost.manifest.id !== 'cindy-github' || ghost.namespace != null ||
-        ghost.namespaceState === 'pending' ||
-        ghost.namespaceState === 'unconfirmed' ||
-        !isCindyOfficialTrustInfo(ghost.trust))
-    ) {
+    if (ghCliSecrets.length > 0 && !canUseGithubHostCredentials(ghost)) {
       return { ok: false, message: '本意识未通过官方 GitHub 宿主凭证信任校验，已阻断 gh-cli 凭证请求' };
     }
     // 连接地址每单现读快照(用户在设置页增删地址下一单即生效);本单内含

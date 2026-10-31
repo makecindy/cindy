@@ -50,7 +50,6 @@ import {
   DEFAULT_AGENT_ISLAND_MASCOT_SKIN,
   cloneAgentIslandDisplayTarget,
   cloneAgentIslandSoundSettings,
-  computeAgentIslandContentHeight,
   createDefaultAgentIslandDisplayConfig,
   createEmptyAgentIslandPillSnapshot,
   getAgentIslandDefaultContentWidth,
@@ -2421,27 +2420,53 @@ export class AgentIslandService {
   }
 
   private computeNativeFrame(displayState: AgentIslandDisplayState, display: Display): AgentIslandNativeFrame {
-    const rawScreenMetrics = this.getScreenLayoutMetrics(display);
     const layoutPreference = this.getLayoutPreferenceForDisplay(display);
     const expanded = displayState.notchStatus === 'expanded';
     const hasSession = displayState.totalCount > 0;
+    const contentWidthFor = (mode: { expanded: boolean; hasSession: boolean }) => this.computeNativeContentWidth({
+      displayState,
+      display,
+      layoutPreference,
+      ...mode,
+    });
+    const contentWidth = contentWidthFor({ expanded, hasSession });
+    // The carrier keeps one size for both modes: macOS animates every window resize
+    // while Mission Control is open, which made expanding and collapsing jump. The
+    // expanded width assumes a session so the first task does not resize it either.
+    const carrierContentWidth = Math.max(
+      expanded ? contentWidthFor({ expanded: false, hasSession }) : contentWidth,
+      contentWidthFor({ expanded: true, hasSession: true }),
+    );
+    return {
+      ...computeAgentIslandWindowBounds(display, {
+        expanded: true,
+        centerXRatio: layoutPreference.centerXRatio,
+        contentWidth: carrierContentWidth,
+        minimumContentWidth: carrierContentWidth,
+      }),
+      displayId: display.id,
+      displayBounds: display.bounds,
+      contentWidth,
+    };
+  }
+
+  private computeNativeContentWidth(input: {
+    displayState: AgentIslandDisplayState;
+    display: Display;
+    layoutPreference: AgentIslandLayoutPreference;
+    expanded: boolean;
+    hasSession: boolean;
+  }): number {
+    const { displayState, display, layoutPreference, expanded, hasSession } = input;
     const screenMetrics = this.getEffectiveScreenLayoutMetrics({
       display,
       expanded,
       layoutPreference,
-      screenMetrics: rawScreenMetrics,
-    });
-    const contentHeight = computeAgentIslandContentHeight({
-      mode: displayState.mode,
-      displaySurface: displayState.displaySurface,
-      hasSession,
-      totalCount: displayState.totalCount,
-      measuredContentHeight: displayState.measuredContentHeight,
+      screenMetrics: this.getScreenLayoutMetrics(display),
     });
     const rawPreferredContentWidth = expanded
       ? layoutPreference.expandedContentWidth
       : layoutPreference.compactContentWidth;
-    const expandedPreferredContentWidth = layoutPreference.expandedContentWidth;
     const defaultContentWidth = getAgentIslandDefaultContentWidth({
       expanded,
       hasSession,
@@ -2466,39 +2491,14 @@ export class AgentIslandService {
         pillSnapshot: displayState.pillSnapshot,
       })
       : null;
-    const contentWidth = preferredContentWidth !== null
-      ? preferredContentWidth
-      : defaultContentWidth;
-    const expandedClampContentWidth = typeof expandedPreferredContentWidth === 'number'
-      ? expandedPreferredContentWidth
-      : getAgentIslandDefaultContentWidth({
-        expanded: true,
-        hasSession,
-        displayWidth: display.bounds.width,
-        screenMetrics,
-      });
-    const carrierSize = computeAgentIslandCarrierSize(
+    return computeAgentIslandCarrierSize(
       display,
       expanded,
-      contentHeight,
-      contentWidth,
+      undefined,
+      preferredContentWidth ?? defaultContentWidth,
       defaultContentWidth,
       minimumContentWidth,
-    );
-    return {
-      ...computeAgentIslandWindowBounds(display, {
-        expanded,
-        contentHeight,
-        centerXRatio: layoutPreference.centerXRatio,
-        contentWidth,
-        defaultContentWidth,
-        minimumContentWidth,
-        expandedClampContentWidth,
-      }),
-      displayId: display.id,
-      displayBounds: display.bounds,
-      contentWidth: carrierSize.contentWidth,
-    };
+    ).contentWidth;
   }
 
   private getTargetDisplays(displays = this.getAvailableDisplays()): Display[] {

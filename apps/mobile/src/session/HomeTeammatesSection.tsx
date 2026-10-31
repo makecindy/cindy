@@ -313,7 +313,7 @@ const BotStripCell = memo(function BotStripCell({ deviceId, botId, title, lastRe
       </View>
       <TeammateStatusDot status={status} />
     </View>
-    <Text style={[styles.cellName, unread && styles.cellNameUnread]} numberOfLines={1}>{title}</Text>
+    <Text style={styles.cellName} numberOfLines={1}>{title}</Text>
   </Pressable>;
 });
 
@@ -349,7 +349,7 @@ function GroupStripCell({ entry, online, connected, quiet, onPress }: StripCellP
       </View>
       <TeammateStatusDot status={status} />
     </View>
-    <Text style={[styles.cellName, unread && styles.cellNameUnread]} numberOfLines={1}>{title}</Text>
+    <Text style={styles.cellName} numberOfLines={1}>{title}</Text>
   </Pressable>;
 }
 
@@ -368,9 +368,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   strip: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
   cell: { width: STRIP_CELL_WIDTH, alignItems: 'center', gap: spacing.xs, paddingVertical: spacing.xs, borderRadius: radius.container },
   cellAvatar: { width: STRIP_AVATAR_SIZE, height: STRIP_AVATAR_SIZE },
-  cellName: { width: STRIP_CELL_WIDTH, color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption,
-    fontWeight: fontWeight.regular, textAlign: 'center' },
-  cellNameUnread: { color: colors.textPrimary, fontWeight: fontWeight.medium },
+  cellName: { width: STRIP_CELL_WIDTH, color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption,
+    fontWeight: fontWeight.medium, textAlign: 'center' },
   cellNameSpace: { height: lineHeight.caption },
   unreadDot: { width: TEAMMATE_AVATAR.dot, height: TEAMMATE_AVATAR.dot, borderRadius: radius.pill, backgroundColor: colors.botUnread },
   attentionDot: { backgroundColor: colors.statusAwaiting },

@@ -130,6 +130,7 @@
   "rotate": "Girar pantalla",
   "sound": "sonido",
   "smallWindow": "Ejecutar en segundo plano",
+  "inputUnsupported": "El entorno de escritorio actual de esta computadora no admite el control remoto del teclado y el ratón en Cindy.",
   "controlUnavailableHint": "El control por ordenador no está disponible temporalmente. Aún puedes desplazarte y hacer zoom en la pantalla.",
   "backgroundRunningHint": "Sigue mostrando la pantalla en una ventana flotante cuando sales del escritorio remoto o cambias de aplicación.",
   "displaySettings": "Pantalla",

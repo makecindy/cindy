@@ -1116,6 +1116,7 @@ import {
 import { INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, type InputHandoffHolder, type InputHandoffSnapshot } from '@cindy/device-link';
 import { getInputHandoffService, initInputHandoffService } from '../input-handoff/service.js';
 import { closeInputHandoffAskpass, initInputHandoffAskpass } from '../input-handoff/askpass/index.js';
+import { resolveGithubAuthRecovery } from '../input-handoff/askpass/githubRecoveryHost.js';
 import { onQuit } from '../lifecycle.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { createMacHandoffDriver, readPictureQr } from '../input-handoff/macDriver.js';
@@ -3664,6 +3665,7 @@ initInputHandoffService({
 });
 // sudo / ssh / git password prompts in the owner's local tasks become one-step 代输入 cards.
 initInputHandoffAskpass({
+  getAuthRecovery: resolveGithubAuthRecovery,
   startTerminalPrompt: (request) => getInputHandoffService()?.startTerminalPrompt(request) ?? { ok: false },
   isDisabledForSession: isInputHandoffDisabledForSession,
   logger: log,

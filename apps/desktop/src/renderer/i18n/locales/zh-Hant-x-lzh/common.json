@@ -1090,6 +1090,7 @@
     "allow": "許遠端桌面",
     "allowHint": "許已登門之同名籍裝置，覽並操作此機之一切應用程式。須並啟上方之裝置控制。",
     "permissionHint": "請於此機之系統設定中許螢幕錄製與輔助使用，而後重連。",
+    "inputUnsupported": "Cindy 暫不支援此機目前桌面環境的遠端鍵鼠控制。",
     "controlUnavailable": "遠方之機暫不能受操作，請察遠端控制權限與連線，而後重連。",
     "beingControlled": "桌面方受遠端控制",
     "beingViewed": "桌面方受遠端檢視",
@@ -10514,6 +10515,7 @@
       "header": {
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
+        "queued": "{{name}} 候次",
         "planning": "{{name}} 方籌畫…"
       },
       "memberCount_one": "{{count}} 人",
@@ -10700,6 +10702,9 @@
         "hostNotReady": "Cindy 尚在準備，請稍後再試",
         "planOpen": "方分工中，畢或止後，方可另籌",
         "planClosed": "此籌畫已終或已更",
+        "revisionConflict": "工作狀態已更，未能完成操作",
+        "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
+        "nothingToStop": "目前無可停止之工作",
         "invalidAttachment": "附件不能讀，請重擇後再遣。",
         "attachmentUnavailable": "未能自手機取回附件，請察裝置連線後再試。",
         "attachmentTooLarge": "附件逾 100 MB，請擇較小之卷。",

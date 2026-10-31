@@ -2396,6 +2396,20 @@ describe('Chat Server result delivery and refresh', () => {
         await vi.advanceTimersByTimeAsync(0);
       };
 
+      // #8045: cancelling an in-flight arrangement is a real stop even before a plan/execution exists.
+      it('reports a stop while the organizer is still deciding and fences the late plan', async () => {
+        divisionServer();
+        let finish!: (value: unknown) => void;
+        deps.decidePlan = vi.fn(() => new Promise(resolve => { finish = resolve; })) as typeof deps.decidePlan;
+        await send('Make a draft');
+        expect(deps.decidePlan).toHaveBeenCalled();
+        expect(await service.stopRound(roomId)).toEqual({ ok: true });
+        finish({ needsPlan: true, steps: [{ botId: otherBot, task: 'draft' }] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans`)).toBe(false);
+        expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'NOTHING_TO_STOP' });
+      });
+
       it('starts the card a request writes out, without the organizer', async () => {
         divisionServer();
         deps.decidePlan = vi.fn() as typeof deps.decidePlan;
@@ -2523,6 +2537,64 @@ describe('Chat Server result delivery and refresh', () => {
       expect(await service.stopRound(roomId, scope)).toEqual({ ok: true });
       const stops = fixture.requests.slice(from).filter(r => r.url.endsWith('/control'));
       expect(stops.map(r => [Object.entries(ids).find(([, id]) => r.url.includes(id))![0], r.actor || undefined])).toEqual(expected);
+    });
+
+    // #8045: exercise the production stop entry point, including server refusals and races.
+    it.each([
+      ['missing requester', undefined, 'STOP_OWNERSHIP_UNKNOWN'],
+      ['another requester', otherHuman, 'PERMISSION_DENIED'],
+      ['no active work', null, 'NOTHING_TO_STOP'],
+    ])('does not report a successful stop with %s', async (_label, requester, errorCode) => {
+      singleSpeaker(route => route === `/conversations/${roomId}/executions` ? { body: requester === null ? []
+        : [{ ...execution, status: 'queued', bot_id: foreignBot, requester_id: requester }] } : undefined);
+      const from = fixture.requests.length;
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode });
+      expect(fixture.requests.slice(from).filter(r => r.url.endsWith('/control'))).toEqual([]);
+    });
+
+    it.each([
+      [403, 'queued', 'PERMISSION_DENIED'],
+      [409, 'running', 'REVISION_CONFLICT'],
+      [404, 'needs_input', 'SERVICE_ERROR'],
+      [409, 'cancelled', null],
+      [404, 'absent', 'SERVICE_ERROR'],
+      [409, 'stopping', null],
+      [409, 'succeeded', null],
+      [409, 'unknown', 'REVISION_CONFLICT'],
+    ])('rechecks a %s stop response and reports the current %s state', async (status, nextStatus, errorCode) => {
+      let rejected = false;
+      singleSpeaker(route => {
+        if (route.endsWith('/control')) { rejected = true; return { status, body: { error: { code: 'CONTROL_REFUSED' } } }; }
+        if (route === `/conversations/${roomId}/executions`) return { body: rejected && nextStatus === 'absent' ? []
+          : [{ ...execution, status: rejected ? nextStatus : 'queued', bot_id: foreignBot, requester_id: selfId }] };
+      });
+      expect(await service.stopRound(roomId)).toMatchObject(errorCode ? { ok: false, errorCode } : { ok: true });
+      expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/executions`)).toHaveLength(2);
+    });
+
+    it('still stops an eligible execution when another stop is refused, without reporting full success', async () => {
+      const secondId = '40000000-0000-4000-8000-00000000000a';
+      singleSpeaker(route => {
+        if (route.endsWith(`/${execution.id}/control`)) return { status: 403, body: { error: { code: 'ROLE_REQUIRED' } } };
+        if (route === `/conversations/${roomId}/executions`) return { body: [execution.id, secondId].map(id =>
+          ({ ...execution, id, status: 'queued', bot_id: foreignBot, requester_id: selfId })) };
+      });
+      expect(await service.stopRound(roomId)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fixture.handle.mock.calls.filter(([route]) => route.endsWith('/control')).map(([route]) => route))
+        .toContain(`/conversations/${roomId}/executions/${secondId}/control`);
+    });
+
+    it.each(['running', 'stopped'])('does not hide a rejected plan stop when the plan remains %s', async status => {
+      const planId = '80000000-0000-4000-8000-000000000002';
+      let rejected = false;
+      const plan = { id: planId, creator_id: selfId, status: 'running', revision: 1 };
+      singleSpeaker((route, method) => {
+        if (route === `/conversations/${roomId}/plans/${planId}` && method === 'POST') {
+          rejected = true; return { status: 409, body: { error: { code: 'PLAN_CHANGED' } } };
+        }
+        if (route.includes('/plans')) return { body: [{ ...plan, status: rejected ? status : 'running' }] };
+      });
+      expect(await service.stopRound(roomId)).toMatchObject(status === 'running' ? { ok: false, errorCode: 'REVISION_CONFLICT' } : { ok: true });
     });
 
     // Without the capability the server still runs rounds: Stop ends the whole round and replies read the full main group.
