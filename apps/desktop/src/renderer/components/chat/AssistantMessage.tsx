@@ -56,6 +56,15 @@ import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
+import { toast } from '@/lib/toast';
+import { resolveSystemLocale } from '../../../shared/locale';
+import { needsTranslation } from '../../../shared/messageTranslation';
+import {
+  getMessageTranslation,
+  messageTranslationKey,
+  subscribeMessageTranslations,
+  toggleMessageTranslation,
+} from './messageTranslationStore';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
@@ -266,7 +275,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   modelMismatch,
   ghostReplyPending,
 }: AssistantMessageProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [hovered, setHovered] = useState(false);
   // 出口钩子自绘卡(will-assistant-message render):卡片以本消息 clientId 为键
   // 存在 ghostCardStore 里,存在即"该气泡被意识自绘替换"。原文仍在 content 里,
@@ -344,6 +353,35 @@ export const AssistantMessage = memo(function AssistantMessage({
     ? `${currentSessionId ?? ''}\u0000${messageClientId}`
     : undefined;
 
+  // 翻译只换显示：译文留在 renderer 内存，会话记录与模型上下文仍是原文。
+  // 已是界面语言的回复不提供入口；自绘卡在场时原文本就不显示，也不提供。
+  const locale = resolveSystemLocale(i18n.resolvedLanguage);
+  const translatable = useMemo(
+    () => !isStreaming && showActionBar && !ghostRenderCard && Boolean(streamFadeKey)
+      && needsTranslation(displayContent, locale),
+    [displayContent, ghostRenderCard, isStreaming, locale, showActionBar, streamFadeKey],
+  );
+  const translationKey = translatable && streamFadeKey
+    ? messageTranslationKey(streamFadeKey, displayContent, locale)
+    : undefined;
+  const translation = useSyncExternalStore(subscribeMessageTranslations, () =>
+    translationKey ? getMessageTranslation(translationKey) : undefined,
+  );
+  const shownTranslation = translation?.status === 'ready' && translation.shown ? translation.text : null;
+  const handleTranslate = useCallback(() => {
+    if (!translationKey) return;
+    void toggleMessageTranslation(translationKey, displayContent, locale).then((entry) => {
+      if (entry?.status !== 'error') return;
+      toast.warning(t(
+        entry.reason === 'unavailable'
+          ? 'chat.messageActionBar.translateUnavailable'
+          : entry.reason === 'too_long'
+            ? 'chat.messageActionBar.translateTooLong'
+            : 'chat.messageActionBar.translateFailed',
+      ));
+    });
+  }, [displayContent, locale, t, translationKey]);
+
   // Empty streaming starts stay chrome-free until there is something to read.
   const botBubble = simplifiedBotConversation
     && Boolean(content.trim() || failedSamplingAttempt || ghostRenderCard);
@@ -355,7 +393,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       sessionId={currentSessionId}
       clientId={messageClientId}
       createdAt={createdAt}
-      copyText={richAnswerText(content)}
+      copyText={richAnswerText(shownTranslation ?? content)}
       copyLinkText={messageDeepLink}
       align="left"
       hovered={hovered}
@@ -373,6 +411,14 @@ export const AssistantMessage = memo(function AssistantMessage({
       onFork={!sharedGuest && canFork ? handleFork : undefined}
       onAddToChat={messageDeepLink ? handleAddToChat : undefined}
       onShareAsImage={handleShareAsImage}
+      translateAction={translationKey ? {
+        state: translation?.status === 'loading'
+          ? 'loading'
+          : translation?.status === 'ready'
+            ? translation.shown ? 'shown' : 'hidden'
+            : 'idle',
+        onClick: handleTranslate,
+      } : undefined}
       onDelete={!sharedGuest && currentSessionId && messageClientId ? handleDelete : undefined}
       turnMoney={turnMoney}
       turnCostUsd={turnCostUsd}
@@ -434,7 +480,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <MarkdownRenderer
             renderRichAnswers
             workingDir={workingDir}
-            content={displayContent}
+            content={shownTranslation ?? displayContent}
             isStreaming={isStreaming}
             streamFadeKey={streamFadeKey}
             localFileRefs={localFileRefs}
@@ -452,6 +498,17 @@ export const AssistantMessage = memo(function AssistantMessage({
             style={{ color: 'var(--text-tertiary)' }}
           >
             {showOriginal ? t('chat.ghostHook.viewGhostCard') : t('chat.ghostHook.viewOriginal')}
+          </button>
+        )}
+        {/* 正在看译文时常显一行提示：不悬停也知道这不是 AI 的原话，并能一键切回。 */}
+        {shownTranslation !== null && (
+          <button
+            type="button"
+            onClick={handleTranslate}
+            className="mt-1 text-11 underline decoration-dotted underline-offset-2"
+            style={{ color: 'var(--text-tertiary)' }}
+          >
+            {t('chat.messageActionBar.translatedNotice')}
           </button>
         )}
         {/* 出口钩子后台处理中:回复已显示、意识还在跑那段的轻指示(规则 7:

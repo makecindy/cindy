@@ -12974,6 +12974,13 @@
       "hiddenEarlier_many": "{{count}} prompts précédents non affichés"
     },
     "messageActionBar": {
+      "translate": "Traduire",
+      "translating": "Traduction…",
+      "showOriginal": "Voir l’original",
+      "translatedNotice": "Traduit · Voir l’original",
+      "translateUnavailable": "Aucun modèle auxiliaire n’est disponible. Configurez-en un dans Paramètres → Personnalisation → Modèles auxiliaires, puis réessayez.",
+      "translateFailed": "Impossible de traduire ce message. Réessayez.",
+      "translateTooLong": "Ce message est trop long pour être traduit.",
       "copy": "Copier le message",
       "copied": "Copié",
       "reply": "Répondre",

@@ -12845,6 +12845,13 @@
       "hiddenEarlier_other": "其前尚有 {{count}} 问"
     },
     "messageActionBar": {
+      "translate": "译之",
+      "translating": "译之中…",
+      "showOriginal": "览原文",
+      "translatedNotice": "已译 · 览原文",
+      "translateUnavailable": "无可用之辅佐模型。请于「规制 → 个性 → 辅佐模型」设之，而后再试。",
+      "translateFailed": "译之未成，请再试",
+      "translateTooLong": "此文过长，不能译之",
       "copy": "录此讯",
       "copied": "已录",
       "reply": "答",

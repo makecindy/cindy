@@ -12865,6 +12865,13 @@
       "hiddenEarlier_other": "{{count}} frühere Prompts nicht angezeigt"
     },
     "messageActionBar": {
+      "translate": "Übersetzen",
+      "translating": "Wird übersetzt …",
+      "showOriginal": "Original anzeigen",
+      "translatedNotice": "Übersetzt · Original anzeigen",
+      "translateUnavailable": "Kein Hilfsmodell verfügbar. Richte eines unter Einstellungen → Personalisierung → Hilfsmodelle ein und versuche es erneut.",
+      "translateFailed": "Diese Nachricht konnte nicht übersetzt werden. Versuche es erneut.",
+      "translateTooLong": "Diese Nachricht ist zu lang zum Übersetzen.",
       "copy": "Nachricht kopieren",
       "copied": "Kopiert",
       "reply": "Antworten",

@@ -974,6 +974,7 @@ import {
   resetCacheForNewDb as resetChatEmbedderCache,
 } from './embedders/chat-history-embedder.js';
 import { registerWorkingStatusIpc } from './maker-ipc/workingStatus.js';
+import { registerMessageTranslationIpc } from './maker-ipc/messageTranslation.js';
 import { registerMakerTitleIpc } from './maker-ipc/title.js';
 import { registerAuxiliaryModelSettingsIpc } from './maker-ipc/auxiliary-model-settings.js';
 import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
@@ -6487,6 +6488,7 @@ const registerIpcHandlers = () => {
       });
       registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerWorkingStatusIpc();
+      registerMessageTranslationIpc();
       registerAuxiliaryModelSettingsIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();

@@ -12813,6 +12813,13 @@
       "hiddenEarlier_other": "更早还有 {{count}} 条提问"
     },
     "messageActionBar": {
+      "translate": "翻译",
+      "translating": "正在翻译…",
+      "showOriginal": "显示原文",
+      "translatedNotice": "已翻译 · 显示原文",
+      "translateUnavailable": "没有可用的辅助模型。请在「设置 → 个性化 → 辅助模型」中配置后再试。",
+      "translateFailed": "翻译失败，请重试",
+      "translateTooLong": "这条消息太长，暂时无法翻译",
       "copy": "复制消息",
       "copied": "已复制",
       "reply": "回复",

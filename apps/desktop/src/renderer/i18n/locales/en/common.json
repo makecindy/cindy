@@ -12866,6 +12866,13 @@
       "hiddenEarlier_other": "{{count}} earlier prompts not shown"
     },
     "messageActionBar": {
+      "translate": "Translate",
+      "translating": "Translating…",
+      "showOriginal": "Show original",
+      "translatedNotice": "Translated · Show original",
+      "translateUnavailable": "No auxiliary model is available. Set one up in Settings → Personalization → Auxiliary models, then try again.",
+      "translateFailed": "Couldn't translate this message. Try again.",
+      "translateTooLong": "This message is too long to translate.",
       "copy": "Copy message",
       "copied": "Copied",
       "reply": "Reply",

@@ -988,6 +988,52 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // 消息翻译依赖此开关:截在输出上限的非空正文不能被当成完整结果缓存显示。
+  // 未开启的调用方(标题、状态文案等短预算)行为不变。
+  it.each([false, true])('非空正文被长度截断:rejectTruncated=%s(默认链 chat-completions)', async (rejectTruncated) => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '前半段译文' }, finish_reason: 'length' }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', { maxTokens: 800, rejectTruncated });
+    expect(result).toMatchObject(rejectTruncated ? { ok: false } : { ok: true, text: '前半段译文' });
+  });
+
+  it('rejectTruncated:显式来源的 responses SSE 以 max_output_tokens 结束 → 判失败,不返回半截正文', async () => {
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'tapsvc',
+        name: 'Tap Service',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {
+          codex: { upstream: 'https://custom.example/v1', authStrategy: 'api-key-header' },
+        },
+        models: { codex: [{ id: 'custom-mini', name: 'Custom Mini', contextWindow: 100_000 }] },
+      }],
+    } as never);
+    readCustomKey.mockReturnValue('custom-secret');
+    fetchMock.mockResolvedValue({
+      ok: true,
+      text: async () => 'data: {"type":"response.output_text.delta","delta":"前半段"}\n'
+        + 'data: {"type":"response.incomplete","response":{"status":"incomplete",'
+        + '"incomplete_details":{"reason":"max_output_tokens"}}}\n'
+        + 'data: [DONE]\n',
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'translate', {
+      providerId: 'tapsvc',
+      agentKind: 'codex',
+      model: 'custom-mini',
+      maxTokens: 800,
+      rejectTruncated: true,
+    });
+    expect(result).toMatchObject({ ok: false });
+  });
+
   it('pinnedProfileId 钉住某一档时只用它,绕开默认链', async () => {
     // 默认链(mock)是 codex-mini + litellm-mini;钉 deepseek 应当完全绕开它们,
     // 只解析出 deepseek 这一个候选(取自真实档位表,不受链 mock 影响)。

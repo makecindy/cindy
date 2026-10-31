@@ -12813,6 +12813,13 @@
       "hiddenEarlier_other": "이전 질문 {{count}}개"
     },
     "messageActionBar": {
+      "translate": "번역",
+      "translating": "번역 중…",
+      "showOriginal": "원문 보기",
+      "translatedNotice": "번역됨 · 원문 보기",
+      "translateUnavailable": "사용할 수 있는 보조 모델이 없습니다. 「설정 → 개인화 → 보조 모델」에서 설정한 후 다시 시도하세요.",
+      "translateFailed": "번역하지 못했습니다. 다시 시도하세요.",
+      "translateTooLong": "메시지가 너무 길어 번역할 수 없습니다.",
       "copy": "메시지 복사",
       "copied": "복사했습니다",
       "reply": "답장",

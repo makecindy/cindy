@@ -12812,6 +12812,13 @@
       "hiddenEarlier_other": "更早還有 {{count}} 條提問"
     },
     "messageActionBar": {
+      "translate": "翻譯",
+      "translating": "正在翻譯…",
+      "showOriginal": "顯示原文",
+      "translatedNotice": "已翻譯 · 顯示原文",
+      "translateUnavailable": "沒有可用的輔助模型。請在「設定 → 個性化 → 輔助模型」中設定後再試。",
+      "translateFailed": "翻譯失敗，請重試",
+      "translateTooLong": "這則訊息太長，暫時無法翻譯",
       "copy": "複製訊息",
       "copied": "已複製",
       "reply": "回覆",

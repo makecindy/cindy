@@ -12974,6 +12974,13 @@
       "hiddenEarlier_many": "{{count}} pedidos anteriores não apresentados"
     },
     "messageActionBar": {
+      "translate": "Traduzir",
+      "translating": "A traduzir…",
+      "showOriginal": "Ver original",
+      "translatedNotice": "Traduzido · Ver original",
+      "translateUnavailable": "Não há nenhum modelo auxiliar disponível. Configure um em Definições → Personalização → Modelos auxiliares e tente novamente.",
+      "translateFailed": "Não foi possível traduzir esta mensagem. Tente novamente.",
+      "translateTooLong": "Esta mensagem é demasiado longa para ser traduzida.",
       "copy": "Copiar mensagem",
       "copied": "Copiado",
       "reply": "Responder",

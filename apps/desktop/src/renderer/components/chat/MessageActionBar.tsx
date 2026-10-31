@@ -6,7 +6,7 @@
  * Layout:
  *   - Bar gap 2px, align-items: center
  *   - Order is `align`-driven:
- *       align="left"  → [CopyBtn][ForkBtn][EditBtn][MoreMenu][TimeText][CostText]
+ *       align="left"  → [CopyBtn][TranslateBtn][ForkBtn][EditBtn][MoreMenu][TimeText][CostText]
  *       align="right" → [TimeText][CopyBtn][ForkBtn][EditBtn][MoreMenu] (user)
  *   - Action buttons are 24×24; More uses a pill trigger and a 12px menu
  *     containing message deep-link copy and single-message deletion.
@@ -32,6 +32,7 @@ import {
   Check,
   Copy,
   Ellipsis,
+  Languages,
   Link2,
   MessageSquarePlus,
   MessagesSquare,
@@ -112,6 +113,12 @@ interface MessageActionBarProps {
   onAddToChat?: () => void;
   /** 进入「分享为图片」选择模式并预选本条。放在复制按钮右边(产品指定位置)。 */
   onShareAsImage?: () => void;
+  /**
+   * Display-only translation of an assistant reply. `idle` offers it, `shown`
+   * means the bubble currently shows the translation (click returns to the
+   * original), `hidden` means a cached translation is available.
+   */
+  translateAction?: { state: 'idle' | 'loading' | 'shown' | 'hidden'; onClick: () => void };
   /** Thread replies use the same toolbar geometry as private-chat replies. */
   replyAction?: { onClick: () => void; label: string; count?: number };
   /** Quote this message into the current timeline's composer (group 引用回复); never opens a Thread. */
@@ -175,6 +182,7 @@ export function MessageActionBar({
   onFork,
   onAddToChat,
   onShareAsImage,
+  translateAction,
   replyAction,
   quoteAction,
   menuActions,
@@ -379,6 +387,46 @@ export function MessageActionBar({
         </button>
       </Tooltip.Trigger>
       <Tooltip.Content>{t('chat.shareImage.entry')}</Tooltip.Content>
+    </Tooltip.Root>
+  );
+
+  const translateLabel = translateAction && t(
+    translateAction.state === 'shown'
+      ? 'chat.messageActionBar.showOriginal'
+      : translateAction.state === 'loading'
+        ? 'chat.messageActionBar.translating'
+        : 'chat.messageActionBar.translate',
+  );
+  const translateBtn = translateAction && (
+    <Tooltip.Root key="translate">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            translateAction.onClick();
+          }}
+          disabled={inFlight || translateAction.state === 'loading'}
+          className={actionButtonClass}
+          aria-label={translateLabel}
+          aria-pressed={translateAction.state === 'shown'}
+          aria-busy={translateAction.state === 'loading'}
+        >
+          {translateAction.state === 'loading' ? (
+            <Spinner size={14} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+          ) : (
+            <Languages
+              size={14}
+              strokeWidth={2}
+              className={cn(
+                actionIconClass,
+                translateAction.state === 'shown' && 'text-[var(--msg-assistant-text)]',
+              )}
+            />
+          )}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{translateLabel}</Tooltip.Content>
     </Tooltip.Root>
   );
 
@@ -834,18 +882,20 @@ export function MessageActionBar({
   );
 
   // 普通任务:
-  // align='left'  → [copy][share][fork][edit][more][time][cost]
+  // align='left'  → [copy][share][translate][fork][edit][more][time][cost]
   // align='right' → [time][copy][share][fork][edit][more]   (user)
   // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
-  // 贴在气泡旁（compact，群聊）:[引用回复][话题][朗读][表情][编辑][more]，复制、分享与时间收进 more
+  // 伙伴私聊（companionFooter）:[复制][回复][朗读][翻译][编辑][more]
+  // 贴在气泡旁（compact，群聊）:[引用回复][话题][朗读][翻译][表情][编辑][more]，复制、分享与时间收进 more
   const items = companionFooter
-    ? [copyBtn, quoteBtn || replyBtn, readAloudBtn, editBtn, moreMenu]
+    ? [copyBtn, quoteBtn || replyBtn, readAloudBtn, translateBtn, editBtn, moreMenu]
     : compact
-    ? align === 'left' ? [quoteBtn || botReplyBtn, replyBtn, readAloudBtn, reactionBtn, editBtn, moreMenu] : [moreMenu, editBtn, reactionBtn, readAloudBtn, replyBtn, quoteBtn || botReplyBtn]
+    ? align === 'left' ? [quoteBtn || botReplyBtn, replyBtn, readAloudBtn, translateBtn, reactionBtn, editBtn, moreMenu] : [moreMenu, editBtn, reactionBtn, translateBtn, readAloudBtn, replyBtn, quoteBtn || botReplyBtn]
     : align === 'left'
       ? [
           copyBtn,
           shareBtn,
+          translateBtn,
           forkBtn,
           quoteBtn,
           replyBtn,
@@ -872,6 +922,7 @@ export function MessageActionBar({
         // (browser CSS transition behavior — no replay from 0).
         'transition-opacity duration-[var(--motion-enter)] ease-[var(--motion-ease-out)] motion-reduce:transition-none',
         simplifiedBotConversation || visible || menuOpen || forkConfirmed || reactionAction?.open
+          || translateAction?.state === 'loading'
           ? 'opacity-100'
           : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
         // Menu-owned actions dim the entire bar and block clicks. Fork only

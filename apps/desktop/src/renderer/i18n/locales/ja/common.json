@@ -12813,6 +12813,13 @@
       "hiddenEarlier_other": "これより前に {{count}} 件の質問"
     },
     "messageActionBar": {
+      "translate": "翻訳",
+      "translating": "翻訳中…",
+      "showOriginal": "原文を表示",
+      "translatedNotice": "翻訳済み · 原文を表示",
+      "translateUnavailable": "利用できる補助モデルがありません。「設定 → パーソナライズ → 補助モデル」で設定してから、もう一度お試しください。",
+      "translateFailed": "翻訳できませんでした。もう一度お試しください。",
+      "translateTooLong": "このメッセージは長すぎるため翻訳できません。",
       "copy": "メッセージをコピー",
       "copied": "コピーしました",
       "reply": "返信",
