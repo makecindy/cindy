@@ -1,5 +1,5 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
-import type { DingTalkIM } from '@cindy/im';
+import { decodeDingTalkLaneUserId, type DingTalkIM } from '@cindy/im';
 
 import { autoReviewUnavailablePromptLine, permissionOperationPreview, permissionPromptDescription } from '../shared/autoReviewUnavailablePrompt';
 import type { SharedPermission } from '../../maker-ipc/sharedPermission';
@@ -16,7 +16,23 @@ export function handleDingTalkTextInteraction(
   if (request.kind === 'ask_user_question') {
     return answerQuestions(im, userId, request);
   }
-  const result = im.requestTextReply(userId, formatInteractionPrompt(request), (text) =>
+  let replyUserId = userId;
+  if (request.kind === 'permission' && !decodeDingTalkLaneUserId(userId)) {
+    // A guest can answer task questions, but cannot approve host tool access.
+    // Register the permission waiter in the verified owner's DM instead.
+    replyUserId = im.getOwnerUserId();
+    if (!replyUserId) {
+      const decision: InteractionDecision = {
+        kind: 'permission', behavior: 'deny', reason: 'dingtalk_permission_owner_unbound',
+      };
+      if (shared) {
+        shared.decide(decision);
+        return shared.result;
+      }
+      return Promise.resolve(decision);
+    }
+  }
+  const result = im.requestTextReply(replyUserId, formatInteractionPrompt(request), (text) =>
     parseInteractionReply(request, text),
     options?.timeoutMs,
     shared,
@@ -25,7 +41,7 @@ export function handleDingTalkTextInteraction(
     shared.decide({ kind: 'permission', behavior: 'deny', reason: 'dingtalk_interaction_timeout_or_cancelled' });
     return shared.result;
   });
-  if (shared) void result.then((decision) => im.sendText(userId,
+  if (shared) void result.then((decision) => im.sendText(replyUserId,
     permissionOutcomeText(decision, request.kind === 'permission' ? request.toolName : undefined),
   )).catch(() => {});
   return result;

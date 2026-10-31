@@ -8,7 +8,7 @@ import { captureImContext } from '../../../shared/imMessageSource';
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { DINGTALK_PERSONAL_GROUP_WINDOW } from '../shared/channelGroupWindow';
 import { createLogger } from '../../logger';
-import { imChannelNoteSourceFromEvent } from '../shared/channelNote';
+import { imChannelNoteDirectSourceFromEvent, imChannelNoteSourceFromEvent } from '../shared/channelNote';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { handleDingTalkTextInteraction } from './interaction';
 import { createDingTalkTurnPermissionPolicy } from './permissionPolicy';
@@ -102,8 +102,8 @@ export function buildDingTalkAdapter(
     processingEmoji: '',
     silentQueue: true,
     buildVendorOptions: (userId) => ({ dingtalkChatId: userId, source: 'dingtalk' }),
-    // 伙伴自有连接: TOFU 认定的主人私聊进主任务(传输层已丢弃非主人私聊, 这里仍按 id
-    // 判一次); 群会话按 conversation 一条专线。
+    // 伙伴自有连接: 主人私聊进主任务, 其他人按 userId 进入独立受限任务;
+    // 群会话按 conversation 一条专线。传输层同时提供真实 speaker 身份。
     companionLane: (userId) => {
       const lane = decodeDingTalkLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.conversationId, threadId: '' };
@@ -122,8 +122,14 @@ export function buildDingTalkAdapter(
       if (companion && event.speaker.isOwner) return undefined;
       return createDingTalkTurnPermissionPolicy(event.messageId, event.speaker.isOwner);
     },
+    // Match Telegram / Feishu companions: the owner's Full access setting is the
+    // teammate's authority, including guest turns. Agent approval hooks cannot
+    // enforce a turn policy in that mode; Auto / Ask retain the member policy.
+    turnPolicyOptionalForMode: (mode) => companion && mode === 'bypassPermissions',
     // 群里发言人已由下面的 `[发言人]` 行写明(含主人标记), 渠道说明不再重复。
-    channelNoteSourceFor: (event) => imChannelNoteSourceFromEvent(event, { omitSender: true }),
+    channelNoteSourceFor: (event) => decodeDingTalkLaneUserId(event.senderId)
+      ? imChannelNoteSourceFromEvent(event, { omitSender: true })
+      : imChannelNoteDirectSourceFromEvent(event),
     // 群: 先把这条入窗, 再拼「自上次以来群里的消息」前缀(与 Telegram 同一张表、同一套
     // 游标语义, 游标在消息被受理后 commit), 然后是发言人行与正文。
     prepareAgentTurnText: async (event) => {

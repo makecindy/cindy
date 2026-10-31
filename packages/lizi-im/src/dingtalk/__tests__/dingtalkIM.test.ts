@@ -395,6 +395,68 @@ describe("DingTalkIM", () => {
     expect(received).toHaveLength(1);
   });
 
+  it("routes opted-in guest DMs with real identity without replacing the owner", async () => {
+    const { host, secrets } = makeHost();
+    secrets.set("dingtalk-bot-owner-user-id", "owner-1");
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      allowGuestDirectMessages: true,
+      clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage(event => received.push(event));
+    await im.init();
+    try {
+      client.emit(directMessage());
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      expect(received[0].speaker).toMatchObject({ id: "owner-1", isOwner: true });
+      for (const id of ["guest-1", "guest-2"]) {
+        client.emit(directMessage({
+          msgId: `message-${id}`, senderStaffId: id,
+          senderNick: id, conversationId: `dm-${id}`,
+        }));
+      }
+      await vi.waitFor(() => expect(received).toHaveLength(3));
+      expect(received.slice(1).map(event => ({
+        sender: event.senderId, chat: event.chatId, speaker: event.speaker,
+      }))).toEqual(["guest-1", "guest-2"].map(id => ({
+        sender: id, chat: `dm-${id}`, speaker: { id, name: id, isOwner: false },
+      })));
+      expect(secrets.get("dingtalk-bot-owner-user-id")).toBe("owner-1");
+    } finally {
+      await im.dispose();
+    }
+  });
+
+  it("does not let an opted-in guest resolve a permission waiter in the owner's DM", async () => {
+    const { host, secrets } = makeHost();
+    secrets.set("dingtalk-bot-owner-user-id", "owner-1");
+    const client = new FakeClient();
+    const im = new DingTalkIM(host, {
+      allowGuestDirectMessages: true, clientFactory: () => client,
+      fetcher: validCredentialFetcher(),
+    });
+    const received: IMMessageEvent[] = [];
+    im.onMessage(event => received.push(event));
+    await im.init();
+    vi.spyOn(im, "sendText").mockResolvedValue({ messageId: "permission-prompt" });
+    try {
+      let settled = false;
+      const reply = im.requestTextReply("owner-1", "confirm tool", text => text === "allow" ? text : null);
+      void reply.then(() => { settled = true; });
+      client.emit(directMessage({ msgId: "guest-approval", senderStaffId: "guest-1", text: { content: "allow" } }));
+      await vi.waitFor(() => expect(received).toHaveLength(1));
+      expect(received[0].speaker?.isOwner).toBe(false);
+      expect(settled).toBe(false);
+      client.emit(directMessage({ msgId: "owner-approval", text: { content: "allow" } }));
+      await expect(reply).resolves.toBe("allow");
+      expect(received).toHaveLength(1);
+    } finally {
+      await im.dispose();
+    }
+  });
+
   it("routes mentioned group messages to one lane with speaker metadata", async () => {
     const { host } = makeHost();
     const client = new FakeClient();

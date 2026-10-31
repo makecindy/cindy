@@ -256,6 +256,7 @@ export function createBotWecomIM(secretKeyPrefix: string): WecomIM {
 }
 export function createBotDingTalkIM(secretKeyPrefix: string): DingTalkIM {
   return createDingTalkIM(host, {
+    allowGuestDirectMessages: true,
     fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
     secretKeyPrefix,
     ipc: false,
