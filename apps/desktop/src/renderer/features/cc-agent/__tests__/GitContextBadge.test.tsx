@@ -504,6 +504,31 @@ describe('GitContextBadge', () => {
     }
   });
 
+  // Merged PRs drop the header check signal, whatever the checks say; the panel keeps them.
+  it.each([
+    [{ total: 3, passed: 3, skipped: 0, failed: 0, pending: 0 }, 'check'],
+    [{ total: 3, passed: 2, skipped: 0, failed: 1, pending: 0 }, 'circle-x'],
+    [null, 'circle-help'],
+  ] as const)('已合并 PR 的徽标不显示检查状态：%j', (checks, icon) => {
+    const { context, rerender } = renderHeader();
+    const status = context.prStatuses.get('octo/repo#7')!;
+    gitContextMock.mockReturnValue({
+      ...context,
+      prStatuses: new Map([['octo/repo#7', { ...status, status: 'merged', checks }]]),
+    });
+    rerender(
+      <Tooltip.Provider>
+        <GitContextBadge session={dialogueSession} />
+      </Tooltip.Provider>,
+    );
+    const trigger = screen.getAllByRole('button', { name: /pr.openAria/ })[0];
+    expect(trigger.querySelector('.lucide-git-merge')).toBeTruthy();
+    expect(trigger.querySelector(`.lucide-${icon}`)).toBeNull();
+    pointer(trigger, 'over');
+    advance(300);
+    expect(Boolean(screen.queryByText('ccAgent.gitContext.pr.checks'))).toBe(checks !== null);
+  });
+
   // #7924: passing + skipped is a successful aggregate; keep both panel categories.
   it.each([
     [{ total: 25, passed: 23, skipped: 2, failed: 0, pending: 0 }, 'check'],
