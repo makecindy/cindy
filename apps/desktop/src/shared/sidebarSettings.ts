@@ -5,6 +5,8 @@ import { isValidPluginStoragePart } from './pluginIdentity.js';
 export const SIDEBAR_PINNED_ORDER_MAX_ENTRIES = 10_000;
 export const SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH = 4_096;
 export const SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES = 1_000;
+export const SIDEBAR_PROJECT_PIN_HOST_MAX_ENTRIES = 1_000;
+const SIDEBAR_PROJECT_PIN_HOST_ID_MAX_LENGTH = 256;
 
 export function isSidebarGhostId(value: unknown): value is string {
   return typeof value === 'string' && isValidPluginStoragePart(value);
@@ -17,6 +19,12 @@ export interface SidebarSettingsSnapshot extends DataOwnerPushStamp {
   readonly hiddenProjectKeys: string[];
   /** Plugin ids with an explicit user override that hides their main-view sidebar entry. */
   readonly hiddenMainViewGhostIds: string[];
+  /**
+   * Remote devices that own their project pins. This computer has handed its old local pins
+   * for their projects to them; its `project:device:<id>:` entries are now display order only.
+   * Main always sends it; fixtures and fallbacks may omit it (treated as empty).
+   */
+  readonly projectPinHostDeviceIds?: string[];
 }
 
 /** Main's durable arbitration result for the one unscoped Renderer namespace. */
@@ -41,7 +49,7 @@ export type SidebarPinnedOrderMutation =
   | { readonly kind: 'remove'; readonly entryId: string }
   | { readonly kind: 'migrate-legacy'; readonly order: readonly string[] };
 
-const PINNED_PROJECT_ENTRY_PREFIX = 'project:';
+export const PINNED_PROJECT_ENTRY_PREFIX = 'project:';
 
 /** Project pins compare by local Windows identity; conversation ids stay exact. */
 export function sidebarPinnedEntryComparisonKey(entryId: string, localPlatform: string): string {
@@ -63,6 +71,32 @@ export interface SidebarProjectHiddenWriteRequest extends DataOwnerPushStamp {
 export interface SidebarMainViewHiddenWriteRequest extends DataOwnerPushStamp {
   readonly ghostId: string;
   readonly hidden: boolean;
+}
+
+export interface SidebarProjectPinHostWriteRequest extends DataOwnerPushStamp {
+  readonly deviceId: string;
+}
+
+export function isSidebarProjectPinHostDeviceId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value.length <= SIDEBAR_PROJECT_PIN_HOST_ID_MAX_LENGTH
+  );
+}
+
+export function normalizeSidebarProjectPinHostDeviceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (!isSidebarProjectPinHostDeviceId(entry) || seen.has(entry)) continue;
+    seen.add(entry);
+    next.push(entry);
+    if (next.length >= SIDEBAR_PROJECT_PIN_HOST_MAX_ENTRIES) break;
+  }
+  return next;
 }
 
 export function normalizeSidebarPinnedOrder(value: unknown): string[] {
@@ -93,6 +127,9 @@ export function isSidebarSettingsSnapshot(value: unknown): value is SidebarSetti
     isStringArray(candidate.pinnedOrder) &&
     isStringArray(candidate.hiddenProjectKeys) &&
     isHiddenMainViewGhostIds(candidate.hiddenMainViewGhostIds) &&
+    (candidate.projectPinHostDeviceIds === undefined ||
+      (isStringArray(candidate.projectPinHostDeviceIds) &&
+        candidate.projectPinHostDeviceIds.every(isSidebarProjectPinHostDeviceId))) &&
     (candidate.pinnedOrderIsAuthoritative || candidate.pinnedOrder.length === 0)
   );
 }

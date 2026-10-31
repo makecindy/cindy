@@ -4758,6 +4758,21 @@ interface ElectronAPI {
         ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
       ) => void,
     ) => () => void;
+    /** This window's legacy Renderer pin migration finished or was not needed (opens remote writes). */
+    markPinnedOrderReady?: (
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<void>;
+    /** Remote devices whose project pins this computer has handed to them. */
+    markProjectPinHost: (
+      deviceId: string,
+      ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+    ) => Promise<string[]>;
+    onProjectPinHostsChanged: (
+      cb: (
+        deviceIds: string[],
+        ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
     getProjectOrder: () => Promise<
       import('../shared/projectOrderSettings').SyncedProjectOrderSnapshot
     >;

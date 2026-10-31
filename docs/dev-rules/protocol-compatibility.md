@@ -21,6 +21,34 @@ Desktop 参与全部九键，Mobile 应用语言与浅深色模式，并保留�
 `pnpm --filter @cindy/device-link-relay run interop` 的真实加入、签名通信和重连。
 用户实际设备间的最终体验仍需发布后验证；自动化结果不代表正在运行的安装版已更新。
 
+## 项目置顶跟随所属电脑（2026-10-31）
+
+同账号 invoke 白名单新增 `sidebar-settings:get-project-pins`、`sidebar-settings:apply-project-pins`，
+push 白名单新增 `sidebar-settings:project-pins-changed` 并入 `sessions` topic。项目所在电脑（宿主）
+沿用 Main 中 owner 作用域的置顶列表作为正本：GET 只返回其中的 `local:` 项目键与宿主 owner 代次；
+APPLY 只接受 1–64 个显式 `local:` 键的置顶或取消，复用本机侧栏的 promote / remove 语义与窗口广播，
+不收会话 id、SSH 或其他设备的键，也不改动其余条目的顺序。宿主还没有持久的置顶列表、且它自己的
+侧栏在本次运行中尚未报告旧版渲染端置顶已迁移或无需迁移时，APPLY 返回 `PRECONDITION_FAILED`，以免
+远程写入先让 Main 成为正本、导致旧版暂存被丢弃；本机项目置顶集合确有变化时才推送完整快照，会话
+置顶与其他设备项目的变化不发帧。
+
+控制端只在设备合格（在线、允许远控、未撤销）期间读取，生命周期与远程项目别名一致：bootstrap、
+周期对账、peer reset 与重连时重读，断线保留最近快照，关远控、撤销或移除设备时清除。推送与写回
+结果会作废更早发出的 GET，宿主 owner 代次只增不减。宿主的 `local:<path>` 映射为控制端的
+`device:<id>:<path>`。控制端本机置顶列表中该设备的 `project:device:` 条目，在宿主首次可写时一次性
+转交（APPLY），成功后把设备写入控制端 owner 作用域的 `projectPinHostDeviceIds`；此后这些条目只决定
+本机显示顺序，宿主不再置顶的条目随即清理。宿主暂不可达时，这些条目代替最近一次置顶结果显示，
+但不会新增仅存在本机的置顶。Windows 宿主的盘符与 UNC 路径按不区分大小写匹配，并以控制端侧栏
+的写法显示。转交没有墓碑：很晚才升级的控制端会把它的旧置顶交给宿主，可能恢复在别处取消过的置顶。
+
+兼容：旧宿主对新通道返回 `CHANNEL_NOT_ALLOWED`，控制端保留原有的本机置顶；旧控制端不调用新通道，
+宿主照常工作。完整同步需要项目所在电脑与查看端都更新。SSH 项目（`remote:`）的置顶和手动置顶顺序
+仍按设备保存；宿主上与本机项目同路径的 SSH 项目，在控制端已合并为同一 `device:` 项目，按本机项目处理。
+手机目前没有项目置顶入口，本次不改 Mobile。官方与自建中转沿用通用 invoke / push 转发，不解析新增
+channel，无需修改中转内核、帧格式或协议版本；共享客户端测试、自建中转测试与
+`pnpm --filter @cindy/device-link-relay run interop` 结果记录在 PR 中。
+恢复只影响单台设备的元数据读取：不重建 link、不重放写操作，转交与过期排序项清理失败都按 10 秒起的退避重试。
+
 ## Desktop 群聊消息的即时投影（2026-10-31）
 
 既有 `maker:bot-group:changed` 可选追加 `messages`（已授权的 `BotGroupMessageView[]`）和

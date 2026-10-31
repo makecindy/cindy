@@ -50,6 +50,7 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 - Right-click a session and choose **Pin** / **Unpin**. There's no limit; a new pin goes to the front.
 - In a project's **⋮** menu, choose **Pin project** / **Unpin project** to pin the whole project. Pinned projects and sessions share one draggable order.
+- A project from another computer is pinned on that computer, so the pin shows on every signed-in device that can see the project, including that computer itself. Pinning it requires that computer to be online and updated; projects from older versions are pinned only on this device. Pins you made earlier on this device move to the owning computer once it is updated.
 - The **Pinned** header has its own view-style button: **Text**, **Cards**, or **List** (Cards is only available in Pinned).
 
 **Collapse / expand all groups:**
@@ -81,5 +82,5 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 **Notes:**
 
 - Click the sidebar collapse arrow to shrink it to an icon-only strip; nothing is lost.
-- Task pin / unpin changes are saved on the computer that owns the task and update its connected views, including newly pinned tasks outside the recent list. Pin order, project pins, hidden projects, project filters, and collapse state remain local to each installation and separate for each Cindy account.
+- Task and project pins are saved on the computer that owns the task or project and update its connected views, including newly pinned tasks outside the recent list. Another computer's tasks and projects, and their pins, appear only while that computer allows remote control. Pin order, SSH project pins, hidden projects, project filters, and collapse state remain local to each installation and separate for each Cindy account.
 - On updated clients, list style, pinned-section style, grouping, session sorting, and session info synchronize between your signed-in computers. Devices exchange saved changes when online again; older clients keep their local preferences. This does not require remote control to be enabled, but explicitly revoked devices do not participate.

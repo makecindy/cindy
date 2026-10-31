@@ -227,6 +227,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-order')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:set-project-order')).toBe(false);
+    // Host-owned project pins: controllers read and write only the host's local project pins.
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:get-project-pins')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:apply-project-pins')).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('sidebar-settings:save-pinned-order')).toBe(false);
+    expect(PUSH_FORWARD_ALLOWLIST.has('sidebar-settings:project-pins-changed')).toBe(true);
   });
 
   it('exposes host project aliases as a read-only snapshot and forwards invalidations', () => {

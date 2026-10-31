@@ -70,6 +70,10 @@ describe('topicForPush', () => {
       projectOrder: 'custom',
       manualProjectOrder: ['local:/a'],
     })).toBe('sessions');
+    expect(topicForPush('sidebar-settings:project-pins-changed', {
+      available: true,
+      projectKeys: ['local:/a'],
+    })).toBe('sessions');
     // Claude 订阅余量快照(账号级,无 sessionId;null = 登出清除)→ 并入 sessions topic。
     expect(topicForPush('usage:claude-subscription-changed', {
       fiveHour: { utilization: 4, resetsAt: 1788345000 },

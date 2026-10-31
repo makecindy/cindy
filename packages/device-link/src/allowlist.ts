@@ -299,6 +299,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // → CHANNEL_NOT_ALLOWED → 控制端吞掉,回退本机/按时间。
   'sidebar-settings:get-project-order',
   'sidebar-settings:apply-project-order',
+  // 被控端本机项目的置顶状态(真相在被控端 Main 的置顶列表)。GET 只回 `local:` 项目键;
+  // APPLY 只能置顶 / 取消被控端 `local:` 项目,不收会话 id、SSH 或其它设备的键,也不改顺序。
+  // 不用 `:set` 后缀(全局设置写禁模式)。老被控端无 handler → CHANNEL_NOT_ALLOWED →
+  // 控制端保留本机置顶。
+  'sidebar-settings:get-project-pins',
+  'sidebar-settings:apply-project-pins',
   // Host-owned project names are read-only on controllers. Local overrides and write channels stay local.
   'sidebar-settings:get-project-aliases',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
@@ -837,6 +843,8 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   'local-db:session:error-persisted',
   // 被控端项目手动顺序变化:控制端 / 手机首页按被控端正本重排。
   'sidebar-settings:project-order-changed',
+  // 被控端本机项目置顶集合变化:payload 为完整快照(只含 `local:` 项目键),控制端整份替换。
+  'sidebar-settings:project-pins-changed',
   'local-db:project-aliases:changed',
   // 被控端「当前 New Maker 草稿」全量变更:被控端草稿 effort/fast/选中 等任意变化时广播,
   // 控制端的远程项目草稿据此实时刷新显示镜像(remoteDraftState)。账号 / 全局级、无 sessionId →

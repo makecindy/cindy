@@ -37,6 +37,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
 import { historyTurnEnded } from '@cindy/maker-shared/message-window';
 import { PROJECT_ALIASES_CHANGED_CHANNEL } from '@cindy/maker-shared/project-alias-sync';
+import { PROJECT_PINS_CHANGED_CHANNEL } from '@cindy/maker-shared/project-pin-sync';
 import { useAuth } from '@/contexts/AuthContext';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createLogger } from '@/lib/logger';
@@ -74,6 +75,7 @@ import {
 } from '@/hooks/useGitSafetySettings';
 import { extractIpcError } from '@/utils/ipcError';
 import { remoteProjectAliases } from './remoteProjectAliases';
+import { remoteProjectPins } from './remoteProjectPins';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -402,6 +404,7 @@ export function useDeviceLinkRemoteProjects(
   useEffect(() => {
     clearMirrorCacheAccountState();
     remoteProjectAliases.clear();
+    remoteProjectPins.clear();
     // 清完必须**主动补读 session-list** 直到拿到新账号的 owner 锚点:
     //  1. 主 effect 只依赖 isAuthenticated / selfDeviceId,A→B 直接切换(两者都不变)时不会
     //     重跑,而读 session-list 的调用挂在主 effect 里 —— 不补读的话 B 的排程回写会一直
@@ -420,6 +423,7 @@ export function useDeviceLinkRemoteProjects(
       // 同 'stopped' / unmount:cancel 在 clear 之后,免得 clear 的同步通知又排一次回写。
       remoteProjectsStore.clear();
       remoteProjectAliases.clear();
+      remoteProjectPins.clear();
       cancelSessionListPersist();
       // 登出分支:上面的 dataOwnerId effect 已清 mirror 状态,这里补 cancel 去抖回写。
       return;
@@ -532,6 +536,7 @@ export function useDeviceLinkRemoteProjects(
       revokedDevicesStore.markRevoked(deviceId);
       remoteProjectsStore.removeDevice(deviceId);
       remoteProjectAliases.remove(deviceId);
+      remoteProjectPins.remove(deviceId);
       removeRemoteSessionActivityForDevice(deviceId);
       // 被控端明确拒绝我们:盘上那份镜像缓存也不该留(尊重对方的拒绝,不在本机留副本)。
       cacheHydrationBlocked.add(deviceId);
@@ -553,6 +558,11 @@ export function useDeviceLinkRemoteProjects(
     const refreshAliases = (deviceId: string, invalidate = false): Promise<void> => {
       const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
       return remoteProjectAliases.refresh(deviceId, () => canBootstrap(deviceId, lifecycleEpoch), invalidate);
+    };
+    // Host-owned project pins follow the same eligibility, bootstrap and reconcile cadence.
+    const refreshProjectPins = (deviceId: string): Promise<void> => {
+      const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(deviceId);
+      return remoteProjectPins.refresh(deviceId, () => canBootstrap(deviceId, lifecycleEpoch));
     };
     const runSubscribeAndBootstrap = async (
       deviceId: string,
@@ -595,6 +605,7 @@ export function useDeviceLinkRemoteProjects(
       // bootstrap 期间被撤销(subscribe 成功、list 被拒)→ refreshRemoteDeviceSessions 返 'revoked'
       // (而非静默 give-up)→ 这里 handleRevoked,而不是继续预取能力 / 清撤销标记无视拒绝。
       void refreshAliases(deviceId);
+      void refreshProjectPins(deviceId);
       const result = await refreshRemoteDeviceSessions(deviceId, name, { scope: 'both' });
       if (!canContinue()) return;
       if (result === 'revoked') return void handleRevoked(deviceId);
@@ -709,9 +720,11 @@ export function useDeviceLinkRemoteProjects(
         if (action === 'disconnect') {
           remoteProjectsStore.markDeviceDisconnected(d.deviceId);
           remoteProjectAliases.suspend(d.deviceId);
+          remoteProjectPins.suspend(d.deviceId);
         } else {
           remoteProjectsStore.removeDevice(d.deviceId);
           remoteProjectAliases.remove(d.deviceId);
+          remoteProjectPins.remove(d.deviceId);
           removeRemoteSessionActivityForDevice(d.deviceId);
           // 设备明确离场(关被控 / 本机禁用控制 / 是自己):它的冷缓存一起清掉,
           // 否则下次冷启动会把一台已经不该出现的设备画回侧边栏。
@@ -759,6 +772,7 @@ export function useDeviceLinkRemoteProjects(
             clearArchivedSessionRetry(deviceId);
             remoteProjectsStore.removeDevice(deviceId);
             remoteProjectAliases.remove(deviceId);
+            remoteProjectPins.remove(deviceId);
             removeRemoteSessionActivityForDevice(deviceId);
             // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
             // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
@@ -850,6 +864,7 @@ export function useDeviceLinkRemoteProjects(
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         void refreshAliases(deviceId);
+        void refreshProjectPins(deviceId);
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
           scope: 'both',
           snapshotMode: 'merge',
@@ -893,7 +908,10 @@ export function useDeviceLinkRemoteProjects(
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
           remoteProjectsStore.markAllDisconnected();
-          for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+          for (const deviceId of eligible.keys()) {
+            remoteProjectAliases.suspend(deviceId);
+            remoteProjectPins.suspend(deviceId);
+          }
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
         // 「无响应」熔断镜像的初值:按设备合并,已被 push 覆盖的设备以 push 为准
@@ -938,6 +956,12 @@ export function useDeviceLinkRemoteProjects(
           () => canBootstrap(push.deviceId, lifecycleEpoch))) void refreshAliases(push.deviceId, true);
         return;
       }
+      if (push.channel === PROJECT_PINS_CHANGED_CHANNEL) {
+        const lifecycleEpoch = remoteProjectsStore.getDeviceLifecycleEpoch(push.deviceId);
+        remoteProjectPins.acceptPush(push, localOwnerStamp,
+          () => canBootstrap(push.deviceId, lifecycleEpoch));
+        return;
+      }
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (windowRole === 'main' && push.channel === 'local-db:sessions:patched') {
         const payload = push.payload as { sessionId?: string; patch?: { lastTurnEndedAt?: unknown } } | null;
@@ -978,7 +1002,10 @@ export function useDeviceLinkRemoteProjects(
       linkOnline = p.status === 'online';
       if (p.status !== 'online') {
         clearAllArchivedSessionRetries();
-        for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
+        for (const deviceId of eligible.keys()) {
+          remoteProjectAliases.suspend(deviceId);
+          remoteProjectPins.suspend(deviceId);
+        }
         // relay 瞬时重连(connecting):保留远程会话镜像,只标记 disconnected,让 All Sessions
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
@@ -994,6 +1021,7 @@ export function useDeviceLinkRemoteProjects(
         clearTimeout(initialDiscoveryTimer);
         remoteProjectsStore.clear();
         remoteProjectAliases.clear();
+        remoteProjectPins.clear();
         cancelSessionListPersist();
         clearRemoteSessionActivity();
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
@@ -1015,7 +1043,11 @@ export function useDeviceLinkRemoteProjects(
     // A peer reset can lose invalidations while relay presence stays online.
     const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.(({ deviceId }) => {
       remoteProjectAliases.suspend(deviceId);
-      if (!disposed) void refreshAliases(deviceId);
+      remoteProjectPins.suspend(deviceId);
+      if (!disposed) {
+        void refreshAliases(deviceId);
+        void refreshProjectPins(deviceId);
+      }
     });
 
     const offControlTarget = window.electronAPI.deviceLink.onControlTargetChanged((p) => {
@@ -1025,6 +1057,7 @@ export function useDeviceLinkRemoteProjects(
       if (!p.enabled) {
         cancelDeviceReseeds(p.deviceId);
         remoteProjectAliases.remove(p.deviceId);
+        remoteProjectPins.remove(p.deviceId);
         clearArchivedSessionRetry(p.deviceId);
         const wasEligible = eligible.delete(p.deviceId);
         if (wasEligible) {
@@ -1062,6 +1095,7 @@ export function useDeviceLinkRemoteProjects(
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
       remoteProjectAliases.remove(deviceId);
+      remoteProjectPins.remove(deviceId);
       if (eligible.delete(deviceId)) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});
       }
@@ -1117,6 +1151,7 @@ export function useDeviceLinkRemoteProjects(
       // 任何订阅者,但顺序保持一致,免得将来有人在两者之间插入新的订阅。
       remoteProjectsStore.clear();
       remoteProjectAliases.clear();
+      remoteProjectPins.clear();
       cancelSessionListPersist();
       clearRemoteSessionActivity();
       revokedDevicesStore.clearAll();

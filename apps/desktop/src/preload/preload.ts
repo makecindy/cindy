@@ -223,6 +223,7 @@ import type {
 import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
 import {
   isSidebarGhostId,
+  isSidebarProjectPinHostDeviceId,
   isSidebarLegacyRendererOwnerClaim,
   isSidebarSettingsSnapshot,
   type SidebarLegacyRendererOwnerClaim,
@@ -630,6 +631,9 @@ const fanOutSidebarHiddenMainViewGhostIdsChanged = createIpcFanOut(
   'sidebar-settings:hidden-main-view-ghost-ids-changed',
 );
 const fanOutSidebarProjectOrderChanged = createIpcFanOut(SIDEBAR_PROJECT_ORDER_CHANGED_CHANNEL);
+const fanOutSidebarProjectPinHostsChanged = createIpcFanOut(
+  'sidebar-settings:project-pin-hosts-changed',
+);
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
 const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
@@ -5677,6 +5681,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             pinnedOrder: Array.from(value.pinnedOrder),
             hiddenProjectKeys: Array.from(value.hiddenProjectKeys),
             hiddenMainViewGhostIds: Array.from(value.hiddenMainViewGhostIds),
+            projectPinHostDeviceIds: Array.from(value.projectPinHostDeviceIds ?? []),
           }
         : {
             dataOwnerId: null,
@@ -5685,6 +5690,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
             pinnedOrder: [],
             hiddenProjectKeys: [],
             hiddenMainViewGhostIds: [],
+            projectPinHostDeviceIds: [],
           };
     },
     mutatePinnedOrder: async (
@@ -5756,6 +5762,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
         if (
           Array.isArray(payload) &&
           payload.every(isSidebarGhostId) &&
+          isDataOwnerPushStamp(ownerStamp)
+        ) {
+          cb(Array.from(payload), ownerStamp);
+        }
+      }),
+    markPinnedOrderReady: async (ownerStamp: DataOwnerPushStamp): Promise<void> => {
+      await ipcRenderer.invoke('sidebar-settings:pinned-order-ready', { ...ownerStamp });
+    },
+    markProjectPinHost: async (
+      deviceId: string,
+      ownerStamp: DataOwnerPushStamp,
+    ): Promise<string[]> => {
+      const result: unknown = await ipcRenderer.invoke('sidebar-settings:mark-project-pin-host', {
+        ...ownerStamp,
+        deviceId,
+      });
+      if (!Array.isArray(result) || !result.every(isSidebarProjectPinHostDeviceId)) {
+        throw new Error('invalid project pin host response');
+      }
+      return Array.from(result);
+    },
+    onProjectPinHostsChanged: (
+      cb: (deviceIds: string[], ownerStamp: DataOwnerPushStamp) => void,
+    ): (() => void) =>
+      fanOutSidebarProjectPinHostsChanged((payload, ownerStamp) => {
+        if (
+          Array.isArray(payload) &&
+          payload.every(isSidebarProjectPinHostDeviceId) &&
           isDataOwnerPushStamp(ownerStamp)
         ) {
           cb(Array.from(payload), ownerStamp);

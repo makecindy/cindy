@@ -6,26 +6,39 @@
  * only keep optimistic mirrors.
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+
+import {
+  PROJECT_PINS_APPLY_CHANNEL,
+  PROJECT_PINS_APPLY_MAX_KEYS,
+  PROJECT_PINS_CHANGED_CHANNEL,
+  PROJECT_PINS_GET_CHANNEL,
+  type HostProjectPinsSnapshot,
+} from '@cindy/maker-shared/project-pin-sync';
 
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush.js';
 import { isIpcError } from '../shared/ipc-errors.js';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import {
+  isSidebarProjectPinHostDeviceId,
   normalizeSidebarPinnedOrder,
+  normalizeSidebarProjectPinHostDeviceIds,
+  PINNED_PROJECT_ENTRY_PREFIX,
   sidebarPinnedEntryComparisonKey,
   SIDEBAR_HIDDEN_MAIN_VIEW_MAX_ENTRIES,
   SIDEBAR_PINNED_ORDER_ENTRY_MAX_LENGTH,
   SIDEBAR_PINNED_ORDER_MAX_ENTRIES,
+  SIDEBAR_PROJECT_PIN_HOST_MAX_ENTRIES,
   isSidebarGhostId,
   type SidebarMainViewHiddenWriteRequest,
   type SidebarPinnedOrderMutation,
   type SidebarPinnedOrderWriteRequest,
   type SidebarLegacyRendererOwnerClaim,
   type SidebarProjectHiddenWriteRequest,
+  type SidebarProjectPinHostWriteRequest,
   type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings.js';
 import {
@@ -36,6 +49,8 @@ import {
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
 } from './appSessionState.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
+import { isDeviceLinkInvoke } from './device-link/invoke-context.js';
 import { createLogger } from './logger.js';
 import { resumeInputDeviceTaskSlots } from './input-devices/registry.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
@@ -56,12 +71,14 @@ interface SidebarSettingsShape {
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
   hiddenMainViewGhostIds: string[];
+  projectPinHostDeviceIds: string[];
 }
 
 const DEFAULTS: SidebarSettingsShape = {
   pinnedOrder: [],
   hiddenProjectKeys: [],
   hiddenMainViewGhostIds: [],
+  projectPinHostDeviceIds: [],
 };
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
@@ -79,6 +96,10 @@ const stores = new Map<
   ReturnType<typeof createOverrideSettingsFile<SidebarSettingsShape>>
 >();
 const writeChains = new Map<string, Promise<unknown>>();
+// Owner scopes whose own sidebar reported in this run that its one-time legacy Renderer
+// pin migration finished or was not needed. Until then (and while Main has no durable
+// pinned order) a remote project pin write must not make Main authoritative first.
+const pinnedOrderReadyScopes = new Set<string>();
 
 function normalizeHiddenProjectKeys(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -121,6 +142,9 @@ function normalizeSettings(raw: unknown): SidebarSettingsShape {
     pinnedOrder: normalizeSidebarPinnedOrder(value.pinnedOrder),
     hiddenProjectKeys: normalizeHiddenProjectKeys(value.hiddenProjectKeys),
     hiddenMainViewGhostIds: normalizeHiddenMainViewGhostIds(value.hiddenMainViewGhostIds),
+    projectPinHostDeviceIds: normalizeSidebarProjectPinHostDeviceIds(
+      value.projectPinHostDeviceIds,
+    ),
   };
 }
 
@@ -223,6 +247,7 @@ export function loadSidebarSettingsSnapshot(): SidebarSettingsSnapshot {
     pinnedOrder: Array.from(current.settings.pinnedOrder),
     hiddenProjectKeys: Array.from(current.settings.hiddenProjectKeys),
     hiddenMainViewGhostIds: Array.from(current.settings.hiddenMainViewGhostIds),
+    projectPinHostDeviceIds: Array.from(current.settings.projectPinHostDeviceIds),
   };
 }
 
@@ -462,11 +487,13 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   requireSidebarStoreAccess();
   const store = currentStore();
   let changed = false;
+  let previousOrder: readonly string[] = [];
   let nextSettings: SidebarSettingsShape;
   try {
     nextSettings = await enqueueWrite(scopeKey, () =>
       store.updateAtomic((current) => {
         requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        previousOrder = current.value.pinnedOrder;
         const nextOrder = applyPinnedMutation(
           current.value.pinnedOrder,
           mutation,
@@ -489,8 +516,211 @@ async function savePinnedOrder(rawRequest: unknown): Promise<string[]> {
   if (changed) {
     broadcastPinnedOrderChanged(nextSettings.pinnedOrder, ownerStamp);
     refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
+    publishHostProjectPinsIfChanged(previousOrder, nextSettings.pinnedOrder, ownerStamp);
   }
   return Array.from(nextSettings.pinnedOrder);
+}
+
+/** Host-local project pins in this desktop's pinned order; other entries stay private. */
+function hostLocalProjectPinKeys(order: readonly string[]): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of order) {
+    if (!entry.startsWith(PINNED_PROJECT_ENTRY_PREFIX)) continue;
+    const projectKey = normalizeProjectKey(entry.slice(PINNED_PROJECT_ENTRY_PREFIX.length));
+    if (!projectKey?.startsWith('local:') || projectKey.length > MAX_PROJECT_KEY_LENGTH) continue;
+    const identity = projectKeyComparisonKey(projectKey, process.platform) ?? projectKey;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    keys.push(projectKey);
+  }
+  return keys;
+}
+
+/** Controllers follow the host snapshot; unchanged project pins send no frame. */
+function publishHostProjectPinsIfChanged(
+  previousOrder: readonly string[],
+  nextOrder: readonly string[],
+  ownerStamp: DataOwnerPushStamp,
+): void {
+  const projectKeys = hostLocalProjectPinKeys(nextOrder);
+  if (sameStringArray(hostLocalProjectPinKeys(previousOrder), projectKeys)) return;
+  const snapshot: HostProjectPinsSnapshot = { available: true, projectKeys, ownerStamp };
+  tapWindowBroadcast(PROJECT_PINS_CHANGED_CHANNEL, snapshot, ownerStamp);
+}
+
+/** Read model for controllers. Without an owner stamp a controller must not write. */
+function readHostProjectPins(): HostProjectPinsSnapshot {
+  const stamp = getActiveDataOwnerPushStamp();
+  if (!stamp.dataOwnerId || isAppSessionBoundaryPending() || sidebarStoreAccessResult() === 'blocked') {
+    return { available: true, projectKeys: [] };
+  }
+  return {
+    available: true,
+    projectKeys: hostLocalProjectPinKeys(readCurrentSettings().settings.pinnedOrder),
+    ownerStamp: stamp,
+  };
+}
+
+function requireHostProjectPinKeys(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > PROJECT_PINS_APPLY_MAX_KEYS) {
+    throwIpcError('INVALID_PARAMS', 'invalid project pin keys');
+  }
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    // A bare string would normalize to a local path; remote callers must name `local:` keys.
+    if (typeof entry !== 'string' || !entry.startsWith('local:')) {
+      throwIpcError('INVALID_PARAMS', 'project pins accept host-local projects only');
+    }
+    const projectKey = requireProjectKey(entry);
+    if (!projectKey.startsWith('local:')) {
+      throwIpcError('INVALID_PARAMS', 'project pins accept host-local projects only');
+    }
+    const identity = projectKeyComparisonKey(projectKey, process.platform) ?? projectKey;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    keys.push(projectKey);
+  }
+  return keys;
+}
+
+/**
+ * Pin or unpin host-local projects for a controller. It uses the same durable list,
+ * broadcasts and promote/remove semantics as this desktop's own sidebar.
+ */
+async function applyHostProjectPins(rawRequest: unknown): Promise<HostProjectPinsSnapshot> {
+  const request = requireWriteRequest(rawRequest);
+  const projectKeys = requireHostProjectPinKeys(request.projectKeys);
+  if (typeof request.pinned !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid project pin state');
+  }
+  const pinned = request.pinned;
+  assertRequestedOwner(request);
+  const scopeKey = activeOwnerScopeKey();
+  const ownerStamp: DataOwnerPushStamp = {
+    dataOwnerId: request.dataOwnerId,
+    ownerGeneration: request.ownerGeneration,
+  };
+  requireSidebarStoreAccess();
+  const store = currentStore();
+  let changed = false;
+  let previousOrder: readonly string[] = [];
+  let nextSettings: SidebarSettingsShape;
+  try {
+    nextSettings = await enqueueWrite(scopeKey, () =>
+      store.updateAtomic((current) => {
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        previousOrder = current.value.pinnedOrder;
+        const authoritative = hasAuthoritativePinnedOrder(current.customizedKeys);
+        if (!authoritative && !pinnedOrderReadyScopes.has(scopeKey)) {
+          throwIpcError('PRECONDITION_FAILED', 'sidebar pinned order migration is pending');
+        }
+        // Promote in reverse so a multi-project handoff keeps its relative order on top.
+        const ordered = pinned ? [...projectKeys].reverse() : projectKeys;
+        let nextOrder: string[] = Array.from(current.value.pinnedOrder);
+        for (const projectKey of ordered) {
+          nextOrder = applyPinnedMutation(
+            nextOrder,
+            {
+              kind: pinned ? 'promote' : 'remove',
+              entryId: `${PINNED_PROJECT_ENTRY_PREFIX}${projectKey}`,
+            },
+            authoritative,
+            process.platform,
+          );
+        }
+        changed = !sameStringArray(current.value.pinnedOrder, nextOrder);
+        return { pinnedOrder: nextOrder };
+      }, SIDEBAR_WRITE_OPTIONS),
+    );
+    assertScopeCurrent(scopeKey);
+  } catch (err) {
+    if (isIpcError(err)) throw err;
+    if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'active account changed during sidebar mutation');
+    }
+    log.error('failed to persist remote project pins', err);
+    throwIpcError('INTERNAL', 'failed to persist sidebar settings');
+  }
+  if (changed) {
+    broadcastPinnedOrderChanged(nextSettings.pinnedOrder, ownerStamp);
+    refreshInputDeviceTaskSlotsAfterPinnedOrderChange();
+    publishHostProjectPinsIfChanged(previousOrder, nextSettings.pinnedOrder, ownerStamp);
+  }
+  return {
+    available: true,
+    projectKeys: hostLocalProjectPinKeys(nextSettings.pinnedOrder),
+    ownerStamp,
+  };
+}
+
+function broadcastProjectPinHostsChanged(
+  deviceIds: readonly string[],
+  ownerStamp: DataOwnerPushStamp,
+): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!isAppContentWindow(window)) continue;
+    window.webContents.send(
+      'sidebar-settings:project-pin-hosts-changed',
+      Array.from(deviceIds),
+      ownerStamp,
+    );
+  }
+}
+
+/** Record that a remote device now owns its project pins on this computer. */
+async function markProjectPinHost(rawRequest: unknown): Promise<string[]> {
+  const request = requireWriteRequest(rawRequest);
+  if (!isSidebarProjectPinHostDeviceId(request.deviceId)) {
+    throwIpcError('INVALID_PARAMS', 'invalid project pin host');
+  }
+  const deviceId = request.deviceId;
+  assertRequestedOwner(request);
+  const scopeKey = activeOwnerScopeKey();
+  const ownerStamp: DataOwnerPushStamp = {
+    dataOwnerId: request.dataOwnerId,
+    ownerGeneration: request.ownerGeneration,
+  };
+  requireSidebarStoreAccess();
+  const store = currentStore();
+  let changed = false;
+  let nextSettings: SidebarSettingsShape;
+  try {
+    nextSettings = await enqueueWrite(scopeKey, () =>
+      store.updateAtomic((current) => {
+        requireSidebarStoreAccess({ rejectSnapshotChange: true });
+        const currentIds = current.value.projectPinHostDeviceIds;
+        if (currentIds.includes(deviceId)) return { projectPinHostDeviceIds: currentIds };
+        if (currentIds.length >= SIDEBAR_PROJECT_PIN_HOST_MAX_ENTRIES) {
+          throwIpcError('INVALID_PARAMS', 'too many project pin hosts');
+        }
+        changed = true;
+        return { projectPinHostDeviceIds: [...currentIds, deviceId] };
+      }, SIDEBAR_WRITE_OPTIONS),
+    );
+    assertScopeCurrent(scopeKey);
+  } catch (err) {
+    if (isIpcError(err)) throw err;
+    if (activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'active account changed during sidebar mutation');
+    }
+    log.error('failed to persist project pin hosts', err);
+    throwIpcError('INTERNAL', 'failed to persist sidebar settings');
+  }
+  if (changed) broadcastProjectPinHostsChanged(nextSettings.projectPinHostDeviceIds, ownerStamp);
+  return Array.from(nextSettings.projectPinHostDeviceIds);
+}
+
+/** The host sidebar's legacy pin migration has finished or was not needed in this run. */
+function markPinnedOrderReady(rawRequest: unknown): void {
+  const request = requireWriteRequest(rawRequest);
+  assertRequestedOwner(request);
+  pinnedOrderReadyScopes.add(activeOwnerScopeKey());
+}
+
+function assertProjectPinsOrigin(event: IpcMainInvokeEvent): void {
+  if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
 }
 
 /** Restore one local project using the same owner fence and broadcast as the sidebar. */
@@ -919,6 +1149,23 @@ export function registerSidebarSettingsIpc(): void {
   ipcMain.handle('sidebar-settings:set-main-view-hidden', (event, request) => {
     assertTrustedAppRendererEvent(event);
     return setMainViewHidden(request as SidebarMainViewHiddenWriteRequest);
+  });
+  ipcMain.handle('sidebar-settings:pinned-order-ready', (event, request) => {
+    assertTrustedAppRendererEvent(event);
+    markPinnedOrderReady(request);
+  });
+  ipcMain.handle('sidebar-settings:mark-project-pin-host', (event, request) => {
+    assertTrustedAppRendererEvent(event);
+    return markProjectPinHost(request as SidebarProjectPinHostWriteRequest);
+  });
+  // Same-account controllers reach these through the device-link allowlist.
+  ipcMain.handle(PROJECT_PINS_GET_CHANNEL, (event) => {
+    assertProjectPinsOrigin(event);
+    return readHostProjectPins();
+  });
+  ipcMain.handle(PROJECT_PINS_APPLY_CHANNEL, (event, request) => {
+    assertProjectPinsOrigin(event);
+    return applyHostProjectPins(request);
   });
 }
 

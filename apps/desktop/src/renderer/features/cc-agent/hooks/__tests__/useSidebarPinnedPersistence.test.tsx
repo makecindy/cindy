@@ -38,6 +38,7 @@ function deferred<T>() {
 
 let pinnedListeners: PinnedListener[];
 let mutatePinnedOrder: ReturnType<typeof vi.fn>;
+let markPinnedOrderReady: ReturnType<typeof vi.fn>;
 let durablePinnedOrder: string[];
 let pinnedOrderIsAuthoritative: boolean;
 let legacyRendererOwnerId: string | null;
@@ -52,6 +53,7 @@ beforeEach(() => {
   pinnedOrderIsAuthoritative = false;
   legacyRendererOwnerId = null;
   pinnedLegacyConsumed = false;
+  markPinnedOrderReady = vi.fn().mockResolvedValue(undefined);
   mutatePinnedOrder = vi.fn().mockImplementation(async (mutation: SidebarPinnedOrderMutation) => {
     if (
       mutation.kind === 'migrate-legacy' &&
@@ -104,6 +106,7 @@ beforeEach(() => {
         pinnedOrder: Array.from(durablePinnedOrder),
       }),
       mutatePinnedOrder: (...args: unknown[]) => mutatePinnedOrder(...args),
+      markPinnedOrderReady: (...args: unknown[]) => markPinnedOrderReady(...args),
       onPinnedOrderChanged: (listener: PinnedListener) => {
         pinnedListeners.push(listener);
         return () => {
@@ -262,6 +265,29 @@ describe('pinned sidebar persistence', () => {
     expect(view.result.current.manualPinnedOrder).toEqual(['session-c', 'session-b', 'session-a']);
   });
 
+  // Other desktops write this computer's project pins only after the legacy Renderer copy
+  // reached Main; reporting earlier would let a remote write make Main authoritative and
+  // silently discard that copy.
+  it('reports the pinned order ready only once legacy pins reach Main, or at once without any', async () => {
+    window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["legacy-session"]');
+    const migration = deferred<string[]>();
+    mutatePinnedOrder.mockImplementationOnce(() => migration.promise);
+    const migrating = renderFilter();
+    await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
+    expect(markPinnedOrderReady).not.toHaveBeenCalled();
+
+    await act(async () => {
+      migration.resolve(['legacy-session']);
+    });
+    await waitFor(() => expect(markPinnedOrderReady).toHaveBeenCalledWith(OWNER_STAMP));
+    migrating.unmount();
+
+    window.localStorage.clear();
+    markPinnedOrderReady.mockClear();
+    renderFilter();
+    expect(markPinnedOrderReady).toHaveBeenCalledWith(OWNER_STAMP);
+  });
+
   it('keeps the legacy localStorage copy when its first main-process write fails', async () => {
     window.localStorage.setItem(MANUAL_PINNED_ORDER_KEY, '["legacy-session"]');
     mutatePinnedOrder.mockRejectedValueOnce(new Error('read-only disk'));
@@ -271,6 +297,7 @@ describe('pinned sidebar persistence', () => {
     await waitFor(() => expect(mutatePinnedOrder).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(view.result.current.manualPinnedOrder).toEqual(['legacy-session']));
     expect(window.localStorage.getItem(MANUAL_PINNED_ORDER_KEY)).toBe('["legacy-session"]');
+    expect(markPinnedOrderReady).not.toHaveBeenCalled();
   });
 
   it('retries legacy migration after a hidden-only scoped snapshot is created', async () => {

@@ -65,6 +65,7 @@
     "./payload-summary": "./src/payloadSummary.ts",
     "./project-alias-sync": "./src/projectAliasSync.ts",
     "./project-order-sync": "./src/projectOrderSync.ts",
+    "./project-pin-sync": "./src/projectPinSync.ts",
     "./path-text": "./src/pathText.ts",
     "./permission-mode": "./src/permissionMode.ts",
     "./presentation-localization": "./src/presentationLocalization.ts",

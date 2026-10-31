@@ -29,6 +29,8 @@ const harness = vi.hoisted(() => ({
   loggerInfo: vi.fn(),
   loggerError: vi.fn(),
   loggerWarn: vi.fn(),
+  tapWindowBroadcast: vi.fn(),
+  deviceLinkInvoke: false,
 }));
 
 vi.mock('electron', () => ({
@@ -99,6 +101,14 @@ vi.mock('../windowFocusClassifier.js', () => ({
     window.appContent === true && !window.isDestroyed(),
 }));
 
+vi.mock('../device-link/broadcast-tap.js', () => ({
+  tapWindowBroadcast: (...args: unknown[]) => harness.tapWindowBroadcast(...args),
+}));
+
+vi.mock('../device-link/invoke-context.js', () => ({
+  isDeviceLinkInvoke: () => harness.deviceLinkInvoke,
+}));
+
 const originalPlatform = process.platform;
 let sidebarTesting: (typeof import('../sidebarSettingsStore'))['__testing'];
 
@@ -151,11 +161,21 @@ function loadSnapshot(): {
   pinnedOrder: string[];
   hiddenProjectKeys: string[];
   hiddenMainViewGhostIds: string[];
+  projectPinHostDeviceIds?: string[];
 } {
   const listener = harness.listeners.get('sidebar-settings:load-snapshot-sync');
   const event: { returnValue?: ReturnType<typeof loadSnapshot> } = {};
   listener?.(event);
   return event.returnValue as ReturnType<typeof loadSnapshot>;
+}
+
+async function projectPinsHandler(
+  channel: 'get-project-pins' | 'apply-project-pins' | 'mark-project-pin-host' | 'pinned-order-ready',
+  payload?: unknown,
+): Promise<unknown> {
+  const handler = harness.handlers.get(`sidebar-settings:${channel}`);
+  expect(handler).toBeDefined();
+  return handler?.({}, payload);
 }
 
 function claimLegacyRendererOwner(): {
@@ -190,6 +210,8 @@ describe('sidebarSettingsStore', () => {
     harness.loggerInfo.mockReset();
     harness.loggerError.mockReset();
     harness.loggerWarn.mockReset();
+    harness.tapWindowBroadcast.mockReset();
+    harness.deviceLinkInvoke = false;
     vi.resetModules();
 
     const { registerSidebarSettingsIpc, __testing } = await import('../sidebarSettingsStore');
@@ -1692,5 +1714,164 @@ describe('sidebarSettingsStore', () => {
       pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } })),
     ).rejects.toThrow('untrusted renderer');
     expect(fs.existsSync(ownerFile())).toBe(false);
+  });
+
+  /*
+   * Host-owned project pins. A controller reads this desktop's local project pins and writes
+   * them back over device-link, so another computer's view follows the owning desktop.
+   * Regression: before this, project pins never left the computer that pinned them.
+   */
+  it('serves controllers only host-local project pins and applies their writes to the durable list', async () => {
+    await pinnedHandler(
+      request({
+        mutation: {
+          kind: 'migrate-legacy',
+          order: [
+            'session-a',
+            'project:local:/workspace/a',
+            'project:remote:ssh-1:/srv/b',
+            'project:device:peer:/workspace/c',
+          ],
+        },
+      }),
+    );
+    // A durable Main order cannot be overwritten by a later legacy migration: no ready signal needed.
+    harness.deviceLinkInvoke = true;
+    harness.assertTrusted.mockImplementation(() => {
+      throw new Error('device-link calls carry no renderer sender');
+    });
+    const stamp = request({});
+    expect(await projectPinsHandler('get-project-pins')).toEqual({
+      available: true,
+      projectKeys: ['local:/workspace/a'],
+      ownerStamp: stamp,
+    });
+
+    harness.send.mockClear();
+    const pinned = await projectPinsHandler(
+      'apply-project-pins',
+      request({ projectKeys: ['local:/workspace/new'], pinned: true }),
+    );
+    expect(pinned).toEqual({
+      available: true,
+      projectKeys: ['local:/workspace/new', 'local:/workspace/a'],
+      ownerStamp: stamp,
+    });
+    harness.assertTrusted.mockReset();
+    expect(loadSnapshot().pinnedOrder).toEqual([
+      'project:local:/workspace/new',
+      'session-a',
+      'project:local:/workspace/a',
+      'project:remote:ssh-1:/srv/b',
+      'project:device:peer:/workspace/c',
+    ]);
+    // The host's own windows and every other controller see the same change.
+    expect(harness.send).toHaveBeenCalledWith(
+      'sidebar-settings:pinned-order-changed',
+      expect.arrayContaining(['project:local:/workspace/new']),
+      stamp,
+    );
+    expect(harness.tapWindowBroadcast).toHaveBeenCalledWith(
+      'sidebar-settings:project-pins-changed',
+      pinned,
+      stamp,
+    );
+
+    harness.deviceLinkInvoke = true;
+    expect(
+      await projectPinsHandler(
+        'apply-project-pins',
+        request({ projectKeys: ['local:/workspace/a'], pinned: false }),
+      ),
+    ).toMatchObject({ projectKeys: ['local:/workspace/new'] });
+  });
+
+  it('holds remote project pin writes until the host sidebar finished its legacy pin migration', async () => {
+    harness.deviceLinkInvoke = true;
+    // No durable Main order yet: the host sidebar may still be moving legacy Renderer pins.
+    loadSnapshot();
+    await expect(
+      projectPinsHandler(
+        'apply-project-pins',
+        request({ projectKeys: ['local:/workspace/a'], pinned: true }),
+      ),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+
+    harness.deviceLinkInvoke = false;
+    await expect(
+      projectPinsHandler('pinned-order-ready', {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: harness.session.generation - 1,
+      }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    await projectPinsHandler('pinned-order-ready', request({}));
+    harness.deviceLinkInvoke = true;
+    for (const projectKeys of [
+      [],
+      ['session-a'],
+      ['/workspace/a'],
+      ['remote:ssh-1:/srv/b'],
+      ['device:peer:/workspace/c'],
+    ]) {
+      await expect(
+        projectPinsHandler('apply-project-pins', request({ projectKeys, pinned: true })),
+      ).rejects.toThrow('[INVALID_PARAMS]');
+    }
+    await expect(
+      projectPinsHandler('apply-project-pins', {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: harness.session.generation - 1,
+        projectKeys: ['local:/workspace/a'],
+        pinned: true,
+      }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(loadSnapshot().pinnedOrder).toEqual([]);
+    expect(harness.tapWindowBroadcast).not.toHaveBeenCalled();
+
+    await projectPinsHandler(
+      'apply-project-pins',
+      request({ projectKeys: ['local:/workspace/a'], pinned: true }),
+    );
+    expect(loadSnapshot().pinnedOrder).toEqual(['project:local:/workspace/a']);
+  });
+
+  it('pushes host project pins to controllers only when the local project set changes', async () => {
+    const stamp = request({});
+    await pinnedHandler(request({ mutation: { kind: 'promote', entryId: 'session-a' } }));
+    await pinnedHandler(
+      request({ mutation: { kind: 'promote', entryId: 'project:device:peer:/workspace/c' } }),
+    );
+    expect(harness.tapWindowBroadcast).not.toHaveBeenCalled();
+
+    await pinnedHandler(
+      request({ mutation: { kind: 'promote', entryId: 'project:local:/workspace/a' } }),
+    );
+    expect(harness.tapWindowBroadcast).toHaveBeenCalledTimes(1);
+    expect(harness.tapWindowBroadcast).toHaveBeenCalledWith(
+      'sidebar-settings:project-pins-changed',
+      { available: true, projectKeys: ['local:/workspace/a'], ownerStamp: stamp },
+      stamp,
+    );
+  });
+
+  it('records which remote desktops own their project pins per owner', async () => {
+    const stamp = request({});
+    expect(
+      await projectPinsHandler('mark-project-pin-host', request({ deviceId: 'peer-1' })),
+    ).toEqual(['peer-1']);
+    expect(
+      await projectPinsHandler('mark-project-pin-host', request({ deviceId: 'peer-1' })),
+    ).toEqual(['peer-1']);
+    expect(loadSnapshot().projectPinHostDeviceIds).toEqual(['peer-1']);
+    expect(
+      harness.send.mock.calls.filter(([channel]) => channel === 'sidebar-settings:project-pin-hosts-changed'),
+    ).toEqual([['sidebar-settings:project-pin-hosts-changed', ['peer-1'], stamp]]);
+    await expect(
+      projectPinsHandler('mark-project-pin-host', request({ deviceId: ' peer-2' })),
+    ).rejects.toThrow('[INVALID_PARAMS]');
+
+    setSession('cloud', 'owner-b');
+    expect(loadSnapshot().projectPinHostDeviceIds).toEqual([]);
   });
 });

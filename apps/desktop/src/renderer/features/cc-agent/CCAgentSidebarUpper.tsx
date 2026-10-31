@@ -264,8 +264,8 @@ import {
   buildPinnedSidebarRank,
   pinnedProjectEntryId,
   pinnedSidebarEntryComparisonKey,
-  projectKeyFromPinnedEntryId,
 } from './lib/pinnedSidebarOrder';
+import { useProjectPinSync } from './hooks/useProjectPinSync';
 import { createLogger } from '@/lib/logger';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
@@ -1807,14 +1807,14 @@ function ExpandedView({
     return (s: { agentKind?: string | null }) => (s.agentKind ?? 'cc') === v;
   }, [filter.vendor]);
 
-  const pinnedProjectKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const entryId of filter.manualPinnedOrder) {
-      const projectKey = projectKeyFromPinnedEntryId(entryId);
-      if (projectKey) keys.add(projectKey);
-    }
-    return keys;
-  }, [filter.manualPinnedOrder]);
+  // Another desktop's project pins live on that desktop; see useProjectPinSync.
+  const { pinnedProjectKeys, toggleProjectPin } = useProjectPinSync({
+    initialSnapshot: sidebarSettingsSnapshot,
+    manualPinnedOrder: filter.manualPinnedOrder,
+    knownProjectKeys: activeWorkingDirs,
+    promotePin: filter.promotePin,
+    removePin: filter.removePin,
+  });
   const pinnedProjectComparisonKeys = useMemo(
     () => buildProjectKeyComparisonSet(pinnedProjectKeys, localPlatform),
     [pinnedProjectKeys, localPlatform],
@@ -2152,9 +2152,13 @@ function ExpandedView({
         ...sessions,
         ...remoteProjectSessions,
       ]);
+      // Projects pinned on their own desktop may have no local entry yet; a drag ranks them here.
       const fullActivePinnedIds = activePinnedSidebarEntryIds(
         filter.manualPinnedOrder,
-        pinnedSessionIds,
+        [
+          ...pinnedSessionIds,
+          ...visiblePinnedProjects.map(({ project }) => pinnedProjectEntryId(project.projectKey)),
+        ],
         localPlatform,
       );
       const comparisonKey = (entryId: string) =>
@@ -2170,7 +2174,7 @@ function ExpandedView({
         toast.error(t('ccAgent.sidebar.pinFailed'));
       });
     },
-    [sessions, remoteProjectSessions, filter, localPlatform, t],
+    [sessions, remoteProjectSessions, visiblePinnedProjects, filter, localPlatform, t],
   );
 
   // D 期:按日期分组已删除(visibleDateSessions 随 DateGroupedSessionsSection 一并下线)。
@@ -3040,20 +3044,15 @@ function ExpandedView({
 
   const handleToggleProjectPin = useCallback(
     async (project: ProjectNode, currentlyPinned: boolean) => {
-      const entryId = pinnedProjectEntryId(project.projectKey);
       try {
-        if (currentlyPinned) {
-          await filter.removePin(entryId);
-        } else {
-          // New and re-pinned projects lead the unified project/conversation list.
-          await filter.promotePin(entryId);
-        }
+        // New and re-pinned projects lead the unified project/conversation list.
+        await toggleProjectPin(project.projectKey, currentlyPinned);
       } catch (err) {
         log.warn('failed to persist project pin', err);
         toast.error(t('ccAgent.sidebar.pinFailed'));
       }
     },
-    [filter.removePin, filter.promotePin, t],
+    [toggleProjectPin, t],
   );
 
   // Event-only state: metadata updates recreate the collapsed Set even when

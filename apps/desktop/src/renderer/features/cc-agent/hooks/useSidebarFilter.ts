@@ -321,6 +321,18 @@ export function useSidebarFilter(
   const deferredPinnedSnapshotStampRef = useRef<DataOwnerPushStamp | null>(null);
   const legacyMigrationStartedRef = useRef(false);
   const legacyMigrationPendingRef = useRef(loadedPinned.needsLegacyMigration);
+  // Other desktops may write this computer's project pins only after its legacy Renderer
+  // pins reached Main, or there were none (pinned-order-ready gate in sidebarSettingsStore).
+  const pinnedReadyReportedForRef = useRef<string | null>(null);
+  const reportPinnedOrderReady = useCallback(() => {
+    if (legacyMigrationPendingRef.current) return;
+    const stampKey = `${ownerStamp.dataOwnerId ?? ''}:${ownerStamp.ownerGeneration}`;
+    if (pinnedReadyReportedForRef.current === stampKey) return;
+    pinnedReadyReportedForRef.current = stampKey;
+    void window.electronAPI.sidebarSettings.markPinnedOrderReady?.(ownerStamp)?.catch(() => {
+      if (pinnedReadyReportedForRef.current === stampKey) pinnedReadyReportedForRef.current = null;
+    });
+  }, [ownerStamp]);
 
   const reconcilePinnedSnapshot = useCallback(
     (
@@ -333,6 +345,7 @@ export function useSidebarFilter(
       if (pinnedOrderIsAuthoritative) {
         finishManualPinnedOrderLegacyMigration(ownerId);
         legacyMigrationPendingRef.current = false;
+        reportPinnedOrderReady();
         durablePinnedOrderRef.current = snapshot;
       } else if (legacyMigrationPendingRef.current) {
         return;
@@ -347,7 +360,7 @@ export function useSidebarFilter(
       latestPinnedOrderRef.current = snapshot;
       setManualPinnedOrderState((prev) => (sameStringArray(prev, snapshot) ? prev : snapshot));
     },
-    [ownerId, ownerStamp],
+    [ownerId, ownerStamp, reportPinnedOrderReady],
   );
 
   const enqueuePinnedPersist = useCallback(
@@ -373,6 +386,7 @@ export function useSidebarFilter(
               durablePinnedOrderRef.current = Array.from(migrated);
               finishManualPinnedOrderLegacyMigration(ownerId);
               legacyMigrationPendingRef.current = false;
+              reportPinnedOrderReady();
             }
           }
           const persisted = await persistManualPinnedOrder(mutation, mutationOwnerStamp);
@@ -380,6 +394,7 @@ export function useSidebarFilter(
             durablePinnedOrderRef.current = Array.from(persisted);
             finishManualPinnedOrderLegacyMigration(ownerId);
             legacyMigrationPendingRef.current = false;
+            reportPinnedOrderReady();
           }
           succeeded = true;
         } catch (err) {
@@ -419,7 +434,7 @@ export function useSidebarFilter(
       pinnedWriteQueueRef.current = task.catch(() => undefined);
       return task;
     },
-    [ownerId, ownerStamp],
+    [ownerId, ownerStamp, reportPinnedOrderReady],
   );
 
   const updatePinnedOrder = useCallback(
@@ -476,8 +491,10 @@ export function useSidebarFilter(
         log.warn('legacy pinned order migration failed; keeping the legacy copy', err);
       });
     }
+    // No legacy copy to move (or Main already holds the durable order).
+    reportPinnedOrderReady();
     return unsubscribe;
-  }, [enqueuePinnedPersist, ownerStamp, reconcilePinnedSnapshot]);
+  }, [enqueuePinnedPersist, ownerStamp, reconcilePinnedSnapshot, reportPinnedOrderReady]);
 
   const setStatus = useCallback((s: FilterStatus) => {
     setStatusState(s);
