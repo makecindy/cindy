@@ -157,6 +157,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   projectOptions = [],
   matchIndices,
   sourceLabel,
+  sessionOrderHandle = false,
   variant = 'card',
   isFirst = false,
   hideBottomDivider = false,
@@ -363,6 +364,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     inSortableContainer: true,
     sortableDragBlocked: false,
     nativeSortable: false,
+    projectSessionOrder: false,
   });
   useEffect(() => {
     const card = cardRef.current;
@@ -370,6 +372,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       inSortableContainer: Boolean(card?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(card?.closest('[data-no-drag]')),
       nativeSortable: Boolean(card?.closest('[data-sortable-native-dnd]')),
+      projectSessionOrder: Boolean(card?.closest('[data-sortable-session-order]')),
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
@@ -652,13 +655,14 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
 
   return (
-    <div
+      <div
       ref={cardRef}
       data-session-id={session.id}
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
       // 卡片也打这个标记,shift 范围选才能把卡片纳入"可见行"。
       data-sidebar-session-row={navigationOnly ? undefined : 'true'}
       data-sidebar-navigation-row={navigationOnly ? 'true' : undefined}
+      data-sidebar-session-order-handle={sessionOrderHandle ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"
