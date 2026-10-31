@@ -1,7 +1,7 @@
 # Cindy 插件编写手册
 
 插件是 Cindy 的第三方能力包,文件形态是 `.cindy`(zip 包)。装入后可给
-主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
+主机叠加:AI 可调用的工具、常驻界面面板、[工具结果中的交互页面（§4.23）](plugin-interactive-pages.md)、模型代办能力。本手册教你(agent)替用户
 写一个插件。**流程:先按 §0a 确认执行宿主并用 tag / commit 定位开源源码 → 读本 Skill 的参考目录 → 按 §0 用提问卡片和用户对齐设计 → 按需
 读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
 ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish intent 取得一次性票据。**
@@ -39,3 +39,5 @@ ghost_forge_pack 校验并生成 .cindy 产物；需要发布时改用 publish i
 继续工作)、`node-json-rpc`(普通随包 Node 服务)、`node-mcp`(随包 stdio MCP)。正式版
 Cindy 会默认把自身版本写进这份具体插件的 `minCindyVersion`；在开发版或预发布版中制作时，
 调用 scaffold 必须明确传入插件实际依赖的首个 Cindy 正式版本。
+
+需要工具结果中的交互页面，见[§4.23 编写指南与示例](plugin-interactive-pages.md)。

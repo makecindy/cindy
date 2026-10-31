@@ -271,7 +271,11 @@ describe('Pi MCP request lifecycle', () => {
     const controller = new AbortController();
     let bodyStarted!: () => void;
     const bodyReady = new Promise<void>(resolve => { bodyStarted = resolve; });
+    const sent: any[] = [];
     const { call } = gatewayWithFetch(vi.fn(async (_url, options) => {
+      const message = JSON.parse(options!.body as string);
+      sent.push(message);
+      if (message.method === 'notifications/cancelled') return new Response(null, { status: 202 });
       // Response headers arrived; body is still waiting for the tool.
       return { headers: new Headers(), ok: true, json: () => new Promise((_resolve, reject) => {
         options!.signal!.addEventListener('abort', () => reject(new Error('secret URL')), { once: true });
@@ -288,6 +292,9 @@ describe('Pi MCP request lifecycle', () => {
       expect(error.message).not.toContain('schema');
       expect(error.message).not.toContain('secret');
     });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ method: 'notifications/cancelled', params: { requestId: sent[0].id } });
+    await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 

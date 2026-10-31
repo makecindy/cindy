@@ -892,7 +892,7 @@ export function useDeviceLinkRemoteProjects(
         // Presence can start bootstrap before this initial snapshot settles.
         // Reuse disconnect cleanup to clear loading and invalidate in-flight snapshots.
         if (!linkStatusPushSeen && !linkOnline) {
-          remoteProjectsStore.markAllDisconnected();
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
           for (const deviceId of eligible.keys()) remoteProjectAliases.suspend(deviceId);
         }
         if (!controlTargetPushSeen) disabledControlDeviceIds = new Set(state.disabledControlDeviceIds ?? []);
@@ -983,7 +983,7 @@ export function useDeviceLinkRemoteProjects(
         // 不因网络抖动反复增删/重排。eligible 保留不动 → 重连 online 时下面的分支自动
         // 重 subscribe+bootstrap。stopped(登出 / 停服)才清空。
         if (p.status === 'connecting') {
-          remoteProjectsStore.markAllDisconnected();
+          remoteProjectsStore.markAllDisconnected((deviceId) => !isSharedTaskPeer(deviceId));
           return;
         }
         // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
@@ -992,14 +992,20 @@ export function useDeviceLinkRemoteProjects(
         // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
         // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         clearTimeout(initialDiscoveryTimer);
-        remoteProjectsStore.clear();
-        remoteProjectAliases.clear();
+        remoteProjectsStore.clear((deviceId) => !isSharedTaskPeer(deviceId));
+        for (const deviceId of new Set([...eligible.keys(), ...remoteProjectAliases.getSnapshot().keys()])) {
+          if (!isSharedTaskPeer(deviceId)) remoteProjectAliases.remove(deviceId);
+        }
         cancelSessionListPersist();
-        clearRemoteSessionActivity();
+        clearRemoteSessionActivity((deviceId) => !isSharedTaskPeer(deviceId));
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
-        if (p.status === 'stopped') revokedDevicesStore.clearAll();
+        if (p.status === 'stopped') {
+          for (const deviceId of revokedDevicesStore.getSnapshot()) {
+            if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
+          }
+        }
         return;
       }
       if (wasOnline) return;

@@ -17,6 +17,7 @@ import {
   type UsageCardWindow,
 } from './usageCardModel';
 import { QuotaBar, quotaSeverity, type QuotaSeverity } from './QuotaBar';
+import { quotaLevelFromSeverity, strongerQuotaLevel } from '@cindy/maker-shared/quota-level';
 
 export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
@@ -71,33 +72,12 @@ function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
-const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
-  normal: 0,
-  warn: 1,
-  crit: 2,
-};
-
-/**
- * 非字符串按缺失处理；字符串空值或 normal 才是无告警，未知非空值至少保留为 warn。
- * 这与共享告警谓词“任何非 normal severity 均告警”保持一致，
- * 避免新增的上游级别在卡片里被静默降成正常。
- */
-function serverQuotaSeverity(value: unknown): QuotaSeverity {
-  if (typeof value !== 'string') return 'normal';
-  const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === 'normal') return 'normal';
-  if (normalized === 'warning') return 'warn';
-  const parts = normalized.split(/[^a-z]+/).filter(Boolean);
-  if (parts.includes('exceeded') || parts.includes('critical')) return 'crit';
-  return 'warn';
-}
-
+/** 本地阈值与上游 severity 取较重者（共用 `@cindy/maker-shared/quota-level`）。 */
 function effectiveQuotaSeverity(window: UsageCardWindow['window']): QuotaSeverity {
-  const localSeverity = quotaSeverity(window.utilization);
-  const serverSeverity = serverQuotaSeverity(window.severity);
-  return QUOTA_SEVERITY_RANK[serverSeverity] > QUOTA_SEVERITY_RANK[localSeverity]
-    ? serverSeverity
-    : localSeverity;
+  return strongerQuotaLevel(
+    quotaSeverity(window.utilization),
+    quotaLevelFromSeverity(typeof window.severity === 'string' ? window.severity : null),
+  );
 }
 
 function CardDivider() {

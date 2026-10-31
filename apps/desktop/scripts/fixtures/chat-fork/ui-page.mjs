@@ -11,9 +11,18 @@ export default {
     ssh: { about: 'SSH workspaces still hide the unsupported fork action' },
     companion: { about: 'Completed companion replies retain read-aloud and stop in the compact bubble toolbar' },
     'companion-narrow': { about: 'Reply, read-aloud and more fit beside a long reply at 320 px', viewport: { width: 320, height: 520 } },
+    'companion-thread': { about: '2026-10-29: native private reply in a 320px topic retains full width and accessible actions below', viewport: { width: 640, height: 520 } },
   },
   async check(page, ui) {
     if (ui.case.startsWith('companion')) {
+      if (ui.case === 'companion-thread') {
+        const layout = await page.locator('[data-bot-reply-bubble]').evaluate(el => {
+          const bubble = el.getBoundingClientRect(), row = el.parentElement.getBoundingClientRect();
+          const actions = el.querySelector('.chat-bubble-toolbar').getBoundingClientRect();
+          return { unused: row.width - bubble.width, inside: actions.left >= bubble.left && actions.right <= bubble.right };
+        });
+        assert.ok(layout.unused < 10 && layout.inside, 'private topic uses its column without hiding message actions');
+      }
       await page.locator('[data-bot-reply-bubble]').hover();
       const read = page.getByRole('button', { name: await ui.t('bots.voiceMode.readAloud'), exact: true });
       assert.equal(await read.count(), 1);

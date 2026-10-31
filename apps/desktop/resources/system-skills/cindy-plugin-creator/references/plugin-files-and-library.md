@@ -211,3 +211,11 @@ await cindy.library({
   供应商分享不能使用此通道。Node Worker 不获得账号凭证或设备密钥。
 - Host 复用 owner-scoped safeStorage 的设备密钥和首次公钥固定机制，采用 X25519 / AES-GCM。
   Device Link relay 只搬运密文；离线没有云端存储，不承诺两台从不同时在线的电脑能够交换。
+
+### 在交互页面里使用文件
+
+工具返回 resource_link，uri 使用 Library 相对引用或本插件媒体引用；页面从该内容块的
+_meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路径或长期保存页面 URL。
+大文件优先由 cindy.pick 写入 Library，再由工具上传；页面不搬运完整文件字节。
+参数、限额、拖放和下载写法统一见[§4.23 文件参考](examples/interactive-pages/REFERENCE.md#文件)，
+完整代码见[files 示例](examples/interactive-pages/files/)。

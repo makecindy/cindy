@@ -50,6 +50,8 @@ import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
 import { useSessionUsageMoney, type SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import { useSessionTokens } from '@/hooks/useSessionTokens';
+import { useUsageCostDetails } from '@/hooks/useUsageCostDetails';
+import { UsageCostDetails } from './UsageCostDetails';
 import { useChatDisplaySnapshot } from '@/components/chat/ChatDisplaySnapshotContext';
 import {
   requestCodexAccountRefresh,
@@ -83,7 +85,6 @@ import {
 } from '@/hooks/useRemoteDeviceUsage';
 import {
   isClaudeSubscriptionAlerting,
-  isClaudeUsageWindowAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
@@ -142,6 +143,14 @@ import {
   isZhipuCodingPlanProviderView,
 } from '@/lib/providerAccountUsageView';
 import { type ProviderAccountUsageSnapshot, type ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
+import {
+  quotaLevelFromRemaining,
+  quotaLevelFromSeverity,
+  quotaLevelFromUsed,
+  strongerQuotaLevel,
+  type QuotaLevel,
+} from '@cindy/maker-shared/quota-level';
+import { QUOTA_TEXT_COLOR_CLASSES } from './QuotaBar';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
 // 登录随凭据只下发 { endpoint, apiKey }(见 main/model-access/credentialsSync.ts),不含
@@ -296,8 +305,14 @@ interface ChipWindowSegment extends ChipWindowSlot {
    * 而不是僵住的旧百分比, 新快照落地时由重置滚动动画揭晓。
    */
   resetPending: boolean;
-  /** 本窗口自身达到告警条件:chip 只把这一段的剩余百分比染红, 其余段保持常色。 */
-  alerting: boolean;
+  /** 本窗口的额度级别(共用 quota-level 规则):chip 只给这一段的剩余百分比上色, 其余段保持常色。 */
+  level: QuotaLevel;
+}
+
+/** Claude 窗口:剩余比例按共用规则, 服务端 severity 只会把级别往上提。 */
+function claudeWindowLevel(window: { utilization?: number | null; severity?: string | null }): QuotaLevel {
+  const used = typeof window.utilization === 'number' ? quotaLevelFromUsed(clampPercent(window.utilization)) : 'normal';
+  return strongerQuotaLevel(used, quotaLevelFromSeverity(window.severity));
 }
 
 // 悬念期上限常量在 quotaResetRollup.ts(tick 节奏要踩着超时边界调度, 判定与
@@ -373,7 +388,7 @@ function toCodexChipWindow(
     remainingPercent: 100 - clampPercent(window.usedPercent),
     resetsAtMs,
     resetPending: isResetPending(resetsAtMs, nowMs),
-    alerting: false,
+    level: quotaLevelFromUsed(clampPercent(window.usedPercent)),
   };
 }
 
@@ -480,7 +495,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(fiveHour.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(fiveHour),
+      level: claudeWindowLevel(fiveHour),
     });
   }
   const weekly = resolveClaudeWeeklyWindow(snapshot, modelId, t);
@@ -510,7 +525,7 @@ function getClaudeChipWindows(
       remainingPercent: 100 - clampPercent(weekly.window.utilization),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isClaudeUsageWindowAlerting(weekly.window),
+      level: claudeWindowLevel(weekly.window),
     });
   }
   return windows.map((window) => ({
@@ -549,7 +564,7 @@ function getZhipuChipWindows(
       remainingPercent,
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: remainingPercent <= 20,
+      level: quotaLevelFromRemaining(remainingPercent),
     });
   };
   push('zhipu-5h', snapshot.fiveHour, '5h', FIVE_HOUR_WINDOW_MINUTES);
@@ -752,7 +767,7 @@ function getXaiChipWindows(
       remainingPercent: 100 - clampPercent(used),
       resetsAtMs,
       resetPending: isResetPending(resetsAtMs, nowMs),
-      alerting: isXaiSubscriptionAlerting(snapshot, nowMs),
+      level: quotaLevelFromUsed(clampPercent(used)),
     },
   ];
 }
@@ -1161,6 +1176,7 @@ export function TodaySpendChip({
   const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage, sessionTokens);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const costDetails = useUsageCostDetails(sessionId, quotaPopoverOpen);
   // 浮层宿主：紧跟触发器之后（见 popover.tsx 的 portalContainer 注释）。portal 到 body
   // 末尾时，键盘焦点一旦进卡就再也 Tab 不回底栏（用户实测）。
   const [quotaPopoverPortalHost, setQuotaPopoverPortalHost] = React.useState<HTMLDivElement | null>(
@@ -1428,7 +1444,7 @@ export function TodaySpendChip({
         remainingPercent: 100 - w.usedPercent,
         resetsAtMs: w.resetsAt,
         resetPending: isResetPending(w.resetsAt, windowLabelNowMs),
-        alerting: w.usedPercent >= 80,
+        level: quotaLevelFromUsed(w.usedPercent),
       })) : [])
     : usesCodexQuotaForm
     ? getCodexChipWindows(accountUsage, t, windowLabelNowMs)
@@ -1488,7 +1504,7 @@ export function TodaySpendChip({
       >
         {interpolateRemaining(
           text,
-          window.alerting ? <span className="text-[var(--error-fg)]">{remaining}</span> : remaining,
+          window.level !== 'normal' ? <span className={QUOTA_TEXT_COLOR_CLASSES[window.level]}>{remaining}</span> : remaining,
         )}
       </span>
     );
@@ -1617,7 +1633,6 @@ export function TodaySpendChip({
     windowLabelNowMs,
   ]);
 
-  const isDashboardClickable = usageDashboardUrl !== null;
   const handleClick = () => {
     if (!usageDashboardUrl) return; // 网关账号暂无看板:点击无反应
     void window.electronAPI.openExternal(usageDashboardUrl);
@@ -1809,17 +1824,21 @@ export function TodaySpendChip({
     account.emptyText = t('todaySpend.codex.noUsageDetail');
   }
 
-  // 告警态: 达到条件的窗口只把它自己的剩余百分比染 error 色 (语义豁免色, 跨主题一致),
+  // 告警态: 黄 / 红的窗口只给它自己的剩余百分比上色 (共用 quota-level 规则与额度色),
   // 其它窗口段、分隔线与任务价值保持常色。其它模型的周限吃紧不染红 —— chip 上没有
   // 那一段, 红了也无从解释 (见 isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
   // 兜底: 当前会话确实受限 (headers 报 rejected, 或 scoped 周限占位时总周限告警) 但
-  // chip 上没有任何一个窗口达到条件 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
+  // chip 上没有任何一个上色的窗口 → 仍整条变红, 不丢受限信号。悬念期的告警窗口也算
   // 「chip 上有」: 它的旧数据已失真, 段上显示「重置中…」不染红, 也不借兜底把整条染红。
-  const hasAlertingChipWindow = chipWindows.some((window) => window.alerting);
+  const hasAlertingChipWindow = chipWindows.some((window) => window.level !== 'normal');
+  // 服务端明确拒绝 (rejected) 是红色信号, 不被只有黄色的窗口挡掉。
+  const claudeRejected =
+    isClaudeSubscription && claudeSubscriptionUsage?.rateLimitStatus?.trim().toLowerCase() === 'rejected';
   const chipAlertingFallback =
-    !hasAlertingChipWindow &&
-    ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
-      (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage)));
+    claudeRejected ||
+    (!hasAlertingChipWindow &&
+      ((isClaudeSubscription && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId)) ||
+        (usesXaiQuotaForm && isXaiSubscriptionAlerting(xaiSubscriptionUsage))));
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
@@ -1854,10 +1873,8 @@ export function TodaySpendChip({
             ref={setQuotaPopoverFocusTarget}
             type="button"
             onClick={(event) => {
-              // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
               event.preventDefault();
-              if (isDashboardClickable) handleClick();
-              else openQuotaPopoverImmediately();
+              openQuotaPopoverImmediately();
             }}
             onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
             onMouseLeave={handleQuotaPopoverMouseLeave}
@@ -1876,7 +1893,8 @@ export function TodaySpendChip({
               closeQuotaPopoverImmediately();
             }}
             className={buttonClass}
-            aria-label={usageDashboardLabel ?? t('quotaCard.usageTitle')}
+            aria-label={t('quotaCard.usageTitle')}
+            data-testid="task-usage-trigger"
           >
             {labelNode}
           </button>
@@ -1958,7 +1976,9 @@ export function TodaySpendChip({
                 {manualReset.canRetry ? t('codexResets.retryReset') : t('codexResets.available', { count: codexRateLimits?.rateLimitResetCredits?.availableCount ?? 0 })}
               </Button>
             ) : null}
-          />
+          >
+            {sessionId ? <div className="px-4 py-3"><UsageCostDetails rows={costDetails} /></div> : null}
+          </QuotaHoverCard>
         </PopoverContent>
       </Popover>
       <Dialog.Root open={resetListOpen && usesCodexQuotaForm && !isAnyRemoteSession} onOpenChange={setResetListOpen}>

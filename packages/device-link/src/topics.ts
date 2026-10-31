@@ -176,6 +176,7 @@ const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   'maker:provider:changed',
   // runtime Agent roster is a device-level snapshot; controllers refresh after this push.
   'maker:agents:changed',
+  'maker:model-catalog:changed',
   // 模块中立的资源集合失效通知；控制端已有 sessions 常驻订阅可直接接收，
   // 不为每个新模块扩张一档 topic。
   REMOTE_RESOURCE_CHANGED_CHANNEL,

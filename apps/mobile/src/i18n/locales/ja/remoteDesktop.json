@@ -130,6 +130,7 @@
   "rotate": "画面を回転",
   "sound": "サウンド",
   "smallWindow": "バックグラウンド実行",
+  "inputUnsupported": "このパソコンの現在のデスクトップ環境では、Cindy によるキーボードとマウスの遠隔操作に対応していません。",
   "controlUnavailableHint": "現在パソコンを操作できません。画面の移動や拡大・縮小はできます。",
   "backgroundRunningHint": "リモートデスクトップを離れたり、アプリを切り替えたりしても、小さなウィンドウで画面を表示し続けます。",
   "displaySettings": "表示",

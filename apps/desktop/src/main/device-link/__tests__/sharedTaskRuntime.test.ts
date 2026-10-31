@@ -57,6 +57,7 @@ import {
 
 function start() {
   const client = { hasServerCapability: () => true, getStatus: () => 'online', getConnectionEpoch: () => 1,
+    crossAccountConnection() { return this; },
     start: vi.fn(), stop: vi.fn(), revoke: vi.fn() };
   startSharedTaskRuntime({ client: client as never, revoke: client.revoke, changed: vi.fn() });
   return client;

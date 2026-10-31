@@ -80,6 +80,7 @@ import {
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
+  DL_USAGE_WIDGET_SNAPSHOT_CHANNEL,
   SESSION_ACTIVITY_CHANNEL,
   SESSION_SYNC_CHANNEL,
   MAKER_EVENT_BATCH_CHANNEL,
@@ -137,7 +138,7 @@ import {
   redactMessageRowForSharedGuest,
   redactSharedGuestPush,
 } from './sharedTaskMessageOrigin';
-import { isProviderSharePeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
+import { isProviderSharePeer, isScopedPeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER_SHARE_RELAY_CAPABILITY, SHARED_TASK_CAPABILITY } from '@cindy/device-link';
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
@@ -1130,6 +1131,11 @@ function clearReportedControllerName(deviceId: string): void {
   fallbackControllerNameByDevice.delete(deviceId);
 }
 
+/** 承载这个控制端的连接:跨账号控制端可能在独立的官方连接上,状态不能看主连接。 */
+function connectionOf(client: DeviceLinkClient, peer: string): DeviceLinkClient {
+  return client.connectionFor?.(peer) ?? client;
+}
+
 function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
   const candidate = client as DeviceLinkClient & {
     getConnectionEpoch?: () => number;
@@ -1138,7 +1144,7 @@ function readConnectionEpoch(client: DeviceLinkClient): number | undefined {
 }
 
 function markControllerLinkActive(client: DeviceLinkClient, deviceId: string): void {
-  const epoch = readConnectionEpoch(client);
+  const epoch = readConnectionEpoch(connectionOf(client, deviceId));
   if (epoch !== undefined) controllerConnectionEpochByDevice.set(deviceId, epoch);
   const candidate = client as DeviceLinkClient & {
     getPeerLinkGeneration?: (peerDeviceId: string) => number;
@@ -1280,7 +1286,7 @@ const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
 const SESSION_ACTIVITY_WINDOW_SOFT_CAP = Math.floor(MAX_TRANSPORT_REASSEMBLIES / 2);
 
 function canSendSessionState(dst: string): boolean {
-  return !!activeClient && activeClient.getStatus() === 'online'
+  return !!activeClient && connectionOf(activeClient, dst).getStatus() === 'online'
     && activeClient.canSendPush?.(dst) !== false
     && activeClient.getReliableSendQueueDepth(dst) < SESSION_ACTIVITY_WINDOW_SOFT_CAP;
 }
@@ -1423,7 +1429,7 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
   }
   stage.timer = setTimeout(() => {
     stage.timer = null;
-    if (!activeClient || activeClient.getStatus() !== 'online'
+    if (!activeClient || connectionOf(activeClient, dst).getStatus() !== 'online'
       || !makerEventBatchOwnerStampEquals(stage.ownerStamp, broadcastTap.getSafeDataOwnerPushStamp?.())) {
       clearSessionSyncStage(dst);
       return;
@@ -1761,7 +1767,7 @@ function flushMakerEventBatchSession(
       const payload: MakerEventBatchPayload = { sessionId, events: slice };
       const historyRequired = !slice.every(isNonFinalTextPush);
       try {
-        if (!activeClient || activeClient.getStatus() !== 'online') {
+        if (!activeClient || connectionOf(activeClient, dst).getStatus() !== 'online') {
           throw new DeviceLinkError('NOT_CONNECTED', 'relay offline');
         }
         if (
@@ -1957,7 +1963,7 @@ async function drainSessionActivityStage(dst: string, stage: SessionActivityStag
     // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
     // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
     // handleControllerOffline 会清空暂存、终止重试。
-    if (activeClient.getStatus() !== 'online' || activeClient.canSendPush?.(dst) === false) {
+    if (connectionOf(activeClient, dst).getStatus() !== 'online' || activeClient.canSendPush?.(dst) === false) {
       scheduleSessionActivityRetry(dst, stage);
       return;
     }
@@ -2163,11 +2169,23 @@ function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerSt
     return [...new Set([...ordinary, ...shared])];
   };
   const dsts = targetsFor(false);
+  // Background catalog readers have no sessions subscription and must not
+  // acquire one (that changes control intent). Send only empty invalidations
+  // over their already-accepted same-account link; no payload or new link.
+  if ((channel === 'maker:provider:changed' || channel === 'maker:agents:changed')
+    && activeClient.getStatus() === 'online' && readDeviceLinkSettings().remoteControlEnabled) {
+    for (const dst of acceptedLinkControllers) {
+      if (dsts.includes(dst) || isProviderSharePeer(dst) || isSharedTaskPeer(dst)
+        || isControllerRevoked(dst)
+        || !subscriptions.controllerSupports(dst, DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1)) continue;
+      sendPushBestEffort(dst, channel, {}, ownerStamp);
+    }
+  }
   // The active registry describes peer topic intent, not whether this host can
   // currently write to the relay. During host-side reconnects sendPush is a
   // silent no-op, so route queueable pushes through the offline backlog instead.
-  const relayOnline = activeClient.getStatus() === 'online';
-  const liveTargets = relayOnline ? dsts : [];
+  const pushClient = activeClient;
+  const liveTargets = dsts.filter((dst) => connectionOf(pushClient, dst).getStatus() === 'online');
   // 微批只对声明了能力的控制端启用;只在 maker:event 这一条 channel 上查询,
   // 不给其它 channel 增加每帧 capability 查询开销。
   const batchTargets = channel === MAKER_PUSH.EVENT && liveTargets.length > 0
@@ -2464,7 +2482,7 @@ function truncateRemoteString(value: string, state: TruncationState): string {
  */
 function syncForwarding(): void {
   setBroadcastTapListener(
-    subscriptions.isEmpty() && !subscriptions.hasRememberedTopics()
+    subscriptions.isEmpty() && !subscriptions.hasRememberedTopics() && acceptedLinkControllers.size === 0
       ? null
       : forwardPush,
   );
@@ -2590,10 +2608,19 @@ export function deactivateController(
   return changed;
 }
 
-/** Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。 */
-export function deactivateAllControllers(reason: string): void {
-  stopFilePeers();
-  remoteDesktop.signalingLost();
+/**
+ * Relay 连接离开 online：清本连接代所有 active controller，但保留恢复意图。
+ * 跨账号控制端在独立连接上时只清断开的那条连接上的控制端(`scope`):文件直连与远程桌面
+ * 只存在于同账号链路,跨账号连接断开不动它们。
+ */
+export function deactivateAllControllers(
+  reason: string,
+  scope: 'all' | 'same-account' | 'cross-account' = 'all',
+): void {
+  if (scope !== 'cross-account') {
+    stopFilePeers();
+    remoteDesktop.signalingLost();
+  }
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -2601,7 +2628,7 @@ export function deactivateAllControllers(reason: string): void {
     ...controllerConnectionEpochByDevice.keys(),
     ...controllerLinkGenerationByDevice.keys(),
     ...reportedControllerNameByDevice.keys(),
-  ]);
+  ].filter((deviceId) => scope === 'all' || isScopedPeer(deviceId) === (scope === 'cross-account')));
   let changed = false;
   for (const deviceId of controllerIds) {
     changed = deactivateControllerState(deviceId, undefined, undefined, true) || changed;
@@ -2761,7 +2788,7 @@ function scheduleLinkAcceptRetry(
     linkAcceptRetryTimers.delete(src);
     // 世代/连接校验:client 已更换或 relay 已断线时放弃——断线会 fail 掉控制端
     // 的 pending openLink,它必然重发 link-open,旧 requestId 的 accept 已无意义。
-    if (activeClient !== client || client.getStatus() !== 'online') return;
+    if (activeClient !== client || connectionOf(client, src).getStatus() !== 'online') return;
     handleLinkOpen(client, src, requestId, payload, failedAttempts);
   }, LINK_ACCEPT_RETRY_DELAYS_MS[failedAttempts - 1]);
   (timer as unknown as { unref?: () => void }).unref?.();
@@ -2784,10 +2811,11 @@ function handleLinkOpen(
   if (isProviderSharePeer(src)) {
     if (!authorityReady) {
       const attempt = {};
-      const epoch = client.getConnectionEpoch();
+      const connection = connectionOf(client, src);
+      const epoch = connection.getConnectionEpoch();
       pendingSharedTaskOpens.set(src, attempt);
       const current = () => pendingSharedTaskOpens.get(src) === attempt && activeClient === client &&
-        client.getConnectionEpoch() === epoch && client.getStatus() === 'online';
+        connection.getConnectionEpoch() === epoch && connection.getStatus() === 'online';
       void (providerShareAccess?.ensureKnown(src) ?? Promise.resolve()).then(() => {
         if (current()) handleLinkOpen(client, src, requestId, payload, acceptAttempt, true);
       }).catch(() => {
@@ -2824,10 +2852,11 @@ function handleLinkOpen(
   if (isSharedTaskPeer(src)) {
     if (!authorityReady) {
       const attempt = {};
-      const epoch = client.getConnectionEpoch();
+      const connection = connectionOf(client, src);
+      const epoch = connection.getConnectionEpoch();
       pendingSharedTaskOpens.set(src, attempt);
       const current = () => pendingSharedTaskOpens.get(src) === attempt && activeClient === client &&
-        client.getConnectionEpoch() === epoch && client.getStatus() === 'online';
+        connection.getConnectionEpoch() === epoch && connection.getStatus() === 'online';
       void refreshSharedTaskPeer(src).then(() => {
         if (current()) {
           handleLinkOpen(client, src, requestId, payload, acceptAttempt, true);
@@ -3696,6 +3725,7 @@ function scheduleRemoteInvokeResultOutboxFlush(): void {
   // relay 在线才值得 500ms 快重试;离线只保留慢节奏 TTL 出清,投递由事件驱动
   // (ws-online 全量 / link-open、subscribe 定向)。
   const delayMs = activeClient?.getStatus() === 'online'
+    || activeClient?.crossAccountConnection?.().getStatus() === 'online'
     ? REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS
     : REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS;
   remoteInvokeResultOutboxTimer = setTimeout(() => {
@@ -3746,7 +3776,6 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     scheduleRemoteInvokeResultOutboxFlush();
     return;
   }
-  const relayOnline = client.getStatus() === 'online';
   const now = Date.now();
   const blockedPeers = new Set<string>();
   for (const [key, queued] of remoteInvokeResultOutbox) {
@@ -3760,7 +3789,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
       continue;
     }
     // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
-    if (!relayOnline) continue;
+    if (connectionOf(client, queued.src).getStatus() !== 'online') continue;
     if (blockedPeers.has(queued.src)) continue;
     // presence 已明确宣告该控制端离线、且它当下也没有 accepted link:全量轮跳过盲发
     // (每 500ms 一帧必弹 DEVICE_OFFLINE,只喂 relay 聚合背压),条目保留、TTL 照常。
@@ -4710,6 +4739,12 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     }
   }
 
+  // iPhone 桌面小组件：与菜单栏面板同一份余量与用量汇总（只读、已打码、无凭证），
+  // 任何平台、面板开关与否都能答；未登录或暂时汇总不出时回 unavailable。
+  if (payload.channel === DL_USAGE_WIDGET_SNAPSHOT_CHANNEL) {
+    const { readUsageWidgetSnapshot } = await import('../quota-overview/service.js');
+    return { ok: true, result: await readUsageWidgetSnapshot() };
+  }
   if (payload.channel === DL_TELEGRAM_STATUS_CHANNEL) {
     return { ok: true, result: readTelegramRemoteStatus() };
   }

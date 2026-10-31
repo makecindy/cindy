@@ -1,3 +1,4 @@
+import { getPluginToolUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
 import { describe, expect, it } from 'vitest';
 import {
   GHOST_MANUAL_DESCRIPTION_MAX_CHARS,
@@ -1976,3 +1977,92 @@ describe('package release notes', () => {
     expect(validateGhostManifest({ ...base, releaseNotes: { version: '1' } }).ok).toBe(false);
   });
 });
+
+// ui is a preserved v3 capability, not a change to existing tool declarations.
+// The old top-level extension tests cover preservation; these cases protect the new
+// page/reference/path/domain authority at the production validator. Tier: unit.
+describe('interactive page declarations', () => {
+  const base = { ...validManifest, schemaVersion: 3, slots: undefined, minCindyVersion: '0.1.0',
+    network: { hosts: ['api.example.com'] },
+    mcpApps: { ui: { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com'] }
+        }], tools: { help: { resourceUri: "ui://planner", visibility: ['model', 'app'] } } } } };
+  it('preserves top-level pages while leaving the original tool declaration unchanged', () => {
+    const original = validateGhostManifest({ ...base, mcpApps: undefined });
+    const result = validateGhostManifest(base);
+    expect(result.ok).toBe(true);
+    if (!result.ok || !original.ok) throw new Error('invalid fixture');
+    expect(result.manifest.mcpApps).toEqual(base.mcpApps);
+    expect(result.manifest.tools).toEqual(original.manifest.tools);
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { resources: [], tools: { help: { visibility: ['app'] } } } } }).ok).toBe(true);
+  });
+  it.each([
+    { resources: [{
+            uri: "ui://planner",
+            file: '../outside.html'
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { missing: { resourceUri: "ui://planner" } } },
+    { resources: base.mcpApps.ui.resources, tools: { help: { resourceUri: "ui://unknown" } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { resourceDomains: ['https://outside.example'] }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: base.mcpApps.ui.resources, tools: { help: { visibility: ['admin'] } } },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: null }
+        }], tools: base.mcpApps.ui.tools },
+    { resources: [{
+            uri: "ui://planner",
+            file: 'ui/planner.html',
+            csp: { connectDomains: ['https://api.example.com; unsafe-inline'] }
+        }], tools: base.mcpApps.ui.tools },
+  ])('rejects invalid page authority: %j', ui => {
+    expect(validateGhostManifest({ ...base, mcpApps: { ui } }).ok).toBe(false);
+  });
+  // Declared mcpApps extensions must survive normalization without becoming authority.
+  // Minimal inputs distinguish duplicate IDs, wrong URI scheme and inert standard metadata.
+  it('preserves future extensions and standard resource metadata without granting them', () => {
+    const resource = { ...base.mcpApps.ui.resources[0], domain: 'app.example.com', permissions: { camera: {} } };
+    const mcpApps = { future: { enabled: true }, ui: { ...base.mcpApps.ui, resources: [resource] } };
+    const result = validateGhostManifest({ ...base, mcpApps });
+    expect(result).toMatchObject({ ok: true, manifest: { mcpApps } });
+    expect(validateGhostManifest({ ...base, mcpApps: { future: { enabled: true } } })).toMatchObject({ ok: true });
+  });
+  it.each([
+    { uri: 'https://planner' }, { uri: 'ui://' }, { domain: false },
+    { permissions: { camera: true } }, { permissions: { camera: { allow: true } } },
+  ])('rejects malformed resource metadata: %j', patch => {
+    const resources = [{ ...base.mcpApps.ui.resources[0], ...patch }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('rejects duplicate resource URIs even when their files differ', () => {
+    const resources = [base.mcpApps.ui.resources[0], { ...base.mcpApps.ui.resources[0], file: 'other.html' }];
+    expect(validateGhostManifest({ ...base, mcpApps: { ui: { ...base.mcpApps.ui, resources } } }).ok).toBe(false);
+  });
+  it('does not silently add page capabilities to schema v2', () => {
+    expect(validateGhostManifest({ ...base, schemaVersion: 2 }).ok).toBe(false);
+  });
+});
+
+// Unit: historical unknown mcpApps must stay inert; the strict authoring validator
+// already rejects these values, but capability checks previously accepted traversal.
+it.each(['../page.html', '/page.html', 'ui/../page.html', 'ui\\page.html', 'con.html'])(
+  'does not grant any page authority for historical path %s', file => {
+    const manifest = { schemaVersion: 3, tools: [{ name: 'help' }], network: { hosts: ['api.example.com'] },
+      mcpApps: { ui: { resources: [{ uri: 'ui://help', file, csp: { connectDomains: ['https://api.example.com'] } }],
+        tools: { help: { resourceUri: 'ui://help', visibility: ['app'] } } } } };
+    expect(getPluginToolUi(manifest)).toBeUndefined();
+    expect(pluginHasToolUi(manifest)).toBe(false);
+    expect(pluginToolVisible(manifest, 'help', 'model')).toBe(true);
+    expect(pluginToolVisible(manifest, 'help', 'app')).toBe(false);
+    expect(pluginUiDomains(manifest)).toEqual([]);
+    expect(pluginUiPermissionsExpand({}, manifest)).toBe(false);
+    const valid = { ...manifest, mcpApps: { ui: { ...manifest.mcpApps.ui, resources: [{ uri: 'ui://help', file: 'page.html' }] } } };
+    expect(pluginUiPermissionsExpand(manifest, valid)).toBe(true);
+  },
+);

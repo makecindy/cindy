@@ -139,8 +139,9 @@ export interface AgentSwitchBoundaryContent {
    */
   consumed?: boolean;
   /**
-   * 只在 Agent 换电脑时出现:离场 / 目标位置(null = 任务所在电脑)。名称在切换时快照,
-   * 那台电脑之后改名或移除，分隔条仍看得懂；缺名称时界面显示「另一台电脑」。
+   * 离场设备始终记录；toAgentDeviceId 只在 Agent 换电脑时出现(null = 任务所在电脑)。
+   * 名称只在换电脑时快照,那台电脑之后改名或移除，分隔条仍看得懂；缺名称时界面显示
+   * 「另一台电脑」。
    */
   fromAgentDeviceId?: string | null;
   toAgentDeviceId?: string | null;
@@ -270,11 +271,13 @@ export interface MakerSessionAgentSwitchHandlerDeps {
   readWorkingMemoryNote?(sessionId: string): Promise<string | null>;
   /**
    * Phase 2:查目标引擎的停泊原生会话(边界行派生)。缺省(测试最小 harness /
-   * 显式关闭)= 恒无绑定,回落 v1 全量交接行为。
+   * 显式关闭)= 恒无绑定,回落 v1 全量交接行为。fromAgentDeviceId 用于排除在
+   * 另一台电脑离场的原生线程——本机没有它的历史,误 resume 会合成错误身份。
    */
   findParkedEngineSession?(
     sessionId: string,
     targetDbKind: DbAgentKind,
+    fromAgentDeviceId: string | null,
   ): Promise<ParkedEngineSessionRef | null>;
   /**
    * 提交切换:update agent_kind/model/provider_id + sdk_session_id + 广播
@@ -1019,9 +1022,10 @@ export async function performSessionAgentSwitch(
   // 交接素材与停泊绑定先于任何状态变更取得(失败不留半切换状态)。
   // Phase 2:目标引擎有停泊原生会话 → resume + 增量交接(只补离开期间的进展,
   // 工作状态区仍按全量历史提取);无绑定 → v1 全量交接 + 全新原生会话。
-  // 换电脑不复用目标电脑旧的停泊记录；关闭当前会话后迁移最新原生历史。
+  // 换电脑不复用目标电脑旧的停泊记录；同机回切也只认在本机离场的线程，
+  // 避免把另一台电脑上的原生会话误当成本机可续接的历史。
   const parked = deps.findParkedEngineSession && !relocating && !orcaGroupReturnRebuild
-    ? await deps.findParkedEngineSession(sessionId, toDbKind)
+    ? await deps.findParkedEngineSession(sessionId, toDbKind, currentAgentDeviceId)
     : null;
   const fullSourceMessages = await deps.listMessagesForHandoff(sessionId);
   throwIfAgentSwitchAborted(signal);
@@ -1246,9 +1250,13 @@ export async function performSessionAgentSwitch(
       resumed: !!(relocatedNativeId || parked),
       ...(relocating && fromDbKind === toDbKind ? { nativeHistory: relocatedNativeId ? 'restored' as const : 'fallback' as const } : {}),
       consumed: false,
+      // Always record where this engine left from, including same-device engine
+      // switches: a later relocation must not make an old local boundary look
+      // resumable. The renderer only treats toAgentDeviceId as a device change,
+      // so a same-device boundary stays visually unchanged.
+      fromAgentDeviceId: currentAgentDeviceId,
       ...(relocating
         ? {
-            fromAgentDeviceId: currentAgentDeviceId,
             toAgentDeviceId: targetAgentDeviceId,
             // 强制换电脑时实际运行的电脑由对方选，本机不知道是哪台(也不该显示)：分隔条写「另一台电脑」。
             fromAgentDeviceName: forcedRelocation ? null : deps.describeAgentDevice?.(currentAgentDeviceId) ?? null,

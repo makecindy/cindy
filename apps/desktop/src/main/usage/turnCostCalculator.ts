@@ -4,6 +4,7 @@
 
 import { isByokProviderId, type AgentKind } from '@cindy/model-providers';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
 
 import { gatewayLedgerCurrency, getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
@@ -554,12 +555,21 @@ export function buildClaudeTurnUsageDetails(
   perModel?: ResolvedModelCost[],
   durationMs?: number,
   turnDurationMs?: number,
+  billing?: UsageBillingSource,
 ): TurnUsageDetails | null {
   const hasModelUsageDeltas = Boolean(deltas && deltas.length > 0);
   const perModelCost = perModel
     ?.filter((item) => item.money && item.money.amount > 0)
-    .map((item) => ({ model: item.model, money: item.money! }));
+    .map((item) => {
+      const billingSource = item.source === 'gateway' ? 'cindy-ai' as const
+        : item.source === 'subscription' ? 'subscription' as const : billing?.billingSource;
+      // A bridge can use another account type in the same turn. Never attach
+      // the selected provider's identity to that different billing source.
+      return { model: item.model, money: item.money!,
+        ...(billingSource === billing?.billingSource ? billing : {}), billingSource };
+    });
   return buildTurnUsageDetails({
+    ...billing,
     inputTokens: hasModelUsageDeltas
       ? deltas?.reduce((sum, delta) => sum + delta.inputTokensDelta, 0)
       : usage?.input_tokens,

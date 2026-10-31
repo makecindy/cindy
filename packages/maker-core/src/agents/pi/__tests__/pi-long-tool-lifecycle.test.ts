@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PiTransport } from '../transport.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -318,16 +318,27 @@ describe('Pi long tool lifecycle through real stdio RPC', () => {
     expect(write.mock.calls.map(([line]) => JSON.parse(line).type)).toEqual(['fixture_lose_rpc']);
   });
 
-  it('preserves the completed result when settled is followed by RPC EOF', async () => {
-    const { events, transport } = await start();
-    await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
-    await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
-    expect(events.filter(event => event.type === 'done')).toHaveLength(1);
-    expect(events.find(event => event.type === 'done')?.data).toMatchObject({
-      status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+  describe('completed result followed by RPC EOF', () => {
+    let running: Awaited<ReturnType<typeof start>>;
+
+    // Real subprocess startup belongs to fixture preparation, not the EOF
+    // lifecycle deadline. Keep the test and waitFor deadlines unchanged so a
+    // lost result or slow EOF settlement still fails on Windows and macOS.
+    beforeEach(async () => {
+      running = await start();
     });
-    expect(events.some(event => event.type === 'error')).toBe(false);
-    expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+
+    it('preserves the completed result when settled is followed by RPC EOF', async () => {
+      const { events, transport } = running;
+      await transport.writeLine(JSON.stringify({ type: 'fixture_finish', eof: true }));
+      await vi.waitFor(() => expect(session!.getStatus()).toBe('closed'));
+      expect(events.filter(event => event.type === 'done')).toHaveLength(1);
+      expect(events.find(event => event.type === 'done')?.data).toMatchObject({
+        status: 'completed', result: 'Build finished.', usage: { outputTokens: 3 },
+      });
+      expect(events.some(event => event.type === 'error')).toBe(false);
+      expect(events.find(event => event.type === 'tool_result_full')?.data).toMatchObject({ fullText: 'fixture build complete' });
+    });
   });
 
   it('preserves tool result, final answer and usage drained after stdin EPIPE', async () => {

@@ -32,6 +32,7 @@ const harness = vi.hoisted(() => ({
   prepare: vi.fn(),
   operation: vi.fn(),
   commit: vi.fn(),
+  changes: vi.fn(),
   list: vi.fn(),
   detail: vi.fn(),
   releases: vi.fn(),
@@ -92,6 +93,7 @@ vi.mock('../api', () => ({
     prepare = async (...args: unknown[]) => { await this.guard?.(); return harness.prepare(...args); };
     operation = harness.operation;
     commit = async (...args: unknown[]) => { await this.guard?.(); return harness.commit(...args); };
+    changes = harness.changes;
     list = harness.list;
     detail = harness.detail;
     releases = harness.releases;
@@ -241,6 +243,7 @@ beforeEach(async () => {
   harness.snapshot.mockImplementation(async () => harness.entry!.summary);
   harness.detail.mockResolvedValue(ownDetail());
   harness.preflight.mockResolvedValue({ subject, queriedAt: at, policyVersion: 2, target: { pluginId: null, ghostId: 'hello', version: '1.0.0', expectedRelease: null }, pendingRelease: null, blockers: [], actions: { canSubmit: true } });
+  harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 1 });
   harness.list.mockResolvedValue({ plugins: [], nextCursor: null });
   harness.prepare.mockResolvedValue(uploadResponse());
   harness.commit.mockResolvedValue({ subject, operationId: 'operation-1', status: 'validating' });
@@ -572,6 +575,54 @@ describe('review result reading state', () => {
   function plugin(latestSubmission: SubmissionView = approved()) {
     return { pluginId: 'plugin-1', updatedAt: at, latestSubmission };
   }
+  // The real poll entry must skip full reads for equal owner/token, reread local
+  // markers, and detect equal-timestamp new events. Existing review tests lack changes.
+  it('skips list/detail for an unchanged token but detects a new event count at the same timestamp', async () => {
+    harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
+    const service = await import('../reviewUpdates');
+    const [first] = await service.reviewUpdates();
+    service.markReviewRead('plugin-1', first.key);
+    expect((await service.reviewUpdates())[0].unread).toBe(false);
+    expect(harness.list).toHaveBeenCalledTimes(1); expect(harness.detail).toHaveBeenCalledTimes(1);
+    harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 2 });
+    harness.detail.mockResolvedValue({ history: { events: [{ eventId: 'disabled', type: 'disabled', at,
+      releaseId: null, version: null, revision: null }], nextCursor: null } });
+    expect(await service.reviewUpdates()).toEqual([expect.objectContaining({ status: 'disabled', unread: true })]);
+    expect(harness.list).toHaveBeenCalledTimes(2); expect(harness.detail).toHaveBeenCalledTimes(2);
+    harness.changes.mockRejectedValueOnce(new Error('changes offline'));
+    await expect(service.reviewUpdates()).rejects.toThrow('changes offline');
+    expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+  it('retains the token read before a full refresh so an event arriving during it is fetched next time', async () => {
+    harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
+    harness.detail.mockImplementationOnce(async () => {
+      harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 2 });
+      return { history: { events: [], nextCursor: null } };
+    });
+    const service = await import('../reviewUpdates');
+    await service.reviewUpdates(); await service.reviewUpdates();
+    expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    ['disabled', undefined, 'disabled'], ['disabled', 'archived', 'archived'],
+    ['revoked', undefined, 'revoked'], ['enabled', undefined, 'enabled'],
+  ])('lets a newer %s/%s market event replace an approval and a later review replace that event', async (type, pluginStatus, status) => {
+    harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
+    harness.detail.mockResolvedValue({ history: { events: [{ eventId: 'market-event', type, pluginStatus,
+      at: '2026-10-16T00:00:00.000Z', releaseId: null, version: null, revision: null }], nextCursor: null } });
+    const service = await import('../reviewUpdates');
+    expect(await service.reviewUpdates()).toEqual([expect.objectContaining({ status, unread: true })]);
+    harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 2 });
+    harness.list.mockResolvedValue({ plugins: [plugin({ ...approved(), decidedAt: '2026-10-17T00:00:00.000Z' })], nextCursor: null });
+    expect(await service.reviewUpdates()).toEqual([expect.objectContaining({ status: 'approved', decidedAt: '2026-10-17T00:00:00.000Z' })]);
+  });
+  it('does not light a result dot for a current-version change alone', async () => {
+    harness.list.mockResolvedValue({ plugins: [plugin(submission())], nextCursor: null });
+    harness.detail.mockResolvedValue({ history: { events: [{ eventId: 'current', type: 'current_changed', at,
+      releaseId: revision.releaseId, version: '1.0.0', revision, reason: 'Switch version' }], nextCursor: null } });
+    const service = await import('../reviewUpdates');
+    expect(await service.reviewUpdates()).toEqual([]);
+  });
   it('keeps an older proven approval discoverable beneath a newer pending version and caches its history', async () => {
     harness.list.mockResolvedValue({ plugins: [plugin({ ...submission(), reviewStatus: 'pending', decidedAt: null })], nextCursor: null });
     harness.detail.mockResolvedValue({ history: { events: [], nextCursor: 'older' } });
@@ -594,6 +645,7 @@ describe('review result reading state', () => {
     harness.owner = `A:${testGeneration}:2`;
     service = await import('../reviewUpdates');
     expect((await service.reviewUpdates())[0].unread).toBe(false);
+    harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 2 });
     harness.list.mockResolvedValue({ plugins: [plugin({ ...approved(), decidedAt: '2026-10-16T00:00:00.000Z' })], nextCursor: null });
     expect((await service.reviewUpdates())[0].unread).toBe(true);
     expect(() => service.markReviewRead('plugin-1', first.key)).toThrow('PRECONDITION_FAILED');
@@ -611,7 +663,9 @@ describe('review result reading state', () => {
     expect(harness.list).toHaveBeenLastCalledWith({ query: '', filter: 'all', cursor: 'page-2' });
     let finish!: (value: unknown) => void;
     harness.list.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    harness.changes.mockResolvedValue({ subject, queriedAt: at, changedAt: at, eventCount: 2 });
     const late = service.reviewUpdates();
+    await Promise.resolve();
     harness.owner = `B:${testGeneration}:1`;
     finish({ plugins: [plugin()], nextCursor: null });
     await expect(late).rejects.toThrow('OWNER_CHANGED');
@@ -635,6 +689,7 @@ describe('review result reading state', () => {
     await expect(service.reviewUpdates()).rejects.toThrow('PRECONDITION_FAILED');
     expect(source === 'list' ? harness.list : harness.history).toHaveBeenCalledTimes(source === 'list' ? 2 : 1);
     harness.list.mockResolvedValue({ plugins: [plugin()], nextCursor: null });
+    harness.detail.mockResolvedValue({ history: { events: [], nextCursor: null } });
     expect(await service.reviewUpdates()).toEqual([expect.objectContaining({ pluginId: 'plugin-1', unread: true })]);
   });
 });
@@ -645,6 +700,14 @@ describe('review result reading state', () => {
 // 缺口：原用例依赖已撤除的关联记录，无法覆盖无回执和正常本地迭代。
 // 最小输入：本人 API 的一个目标和一个同 ID 安装；tier: unit。
 describe('author installation projection', () => {
+  // Author detail/list projection must preserve the server-owned market reason;
+  // the previous hardcoded null erased every moderation explanation (unit).
+  it('preserves a server market reason and keeps old responses without it readable', async () => {
+    harness.list.mockResolvedValue({ plugins: [{ ...ownPlugin(), market: { ...ownPlugin().market, reason: '停止维护' } }], nextCursor: null, queriedAt: at });
+    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBe('停止维护');
+    harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });
+    expect((await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0].market.reason).toBeNull();
+  });
   async function localView() {
     harness.list.mockResolvedValue({ plugins: [ownPlugin()], nextCursor: null, queriedAt: at });
     return (await host.listMyPlugins({ query: '', filter: 'all' })).plugins[0];

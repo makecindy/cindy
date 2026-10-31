@@ -13,7 +13,7 @@ import { hasPendingSessionInterruption } from '@cindy/maker-shared/session-activ
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
 import { getSessionInterruptionBootAt } from './sessionInterruptionBoot';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
-import { projectMcpAppContent } from '@cindy/maker-shared/mcp-apps';
+import { projectMcpAppHistory } from '../mcp-apps/history.js';
 import { markdownPreviewText } from '../../shared/markdownPreviewText.js';
 import {
   parseOrcaRemoteLead,
@@ -275,6 +275,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     userId: '', // 本地 db 已按 user 隔离，无需冗余存储
     title: row.title,
     workingDir: row.workingDir,
+    projectDir: row.projectDir,
     workspaceKind: normalizeWorkspaceKind(row.workspaceKind),
     model: row.model,
     effort: row.effort as Effort,
@@ -383,7 +384,7 @@ export function messageToCamel(row: MessageRow): Message {
     clientId: row.clientId,
     sessionId: row.sessionId,
     role: row.role as MessageRole,
-    content: projectMcpAppContent(content, agentMeta?.mcpApp === true),
+    content: projectMcpAppHistory(content, agentMeta?.mcpApp === true),
     toolUseId: row.toolUseId,
     agentMeta,
     agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
@@ -414,6 +415,7 @@ export function sessionCreateToRow(
         id?: string;
         title?: string;
         workingDir?: string;
+        projectDir?: string | null;
         workspaceKind?: WorkspaceKind;
         model?: string;
         effort?: string;
@@ -451,6 +453,7 @@ export function sessionCreateToRow(
         ? body.title.trim()
         : DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: normalizeWorkingDirForStorage(body?.workingDir),
+    projectDir: normalizeWorkingDirForStorage(body?.projectDir),
     workspaceKind: body?.workspaceKind ?? 'project',
     model: body?.model ?? 'claude-sonnet-4-6',
     effort: (body?.effort as SessionInsert['effort']) ?? 'high',
@@ -528,6 +531,10 @@ export function sessionPatchToRow(
   if (patch.workingDir !== undefined)
     out.workingDir = normalizeWorkingDirForStorage(patch.workingDir);
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
+  // Move controls explicitly set workspaceKind; an execution-only cwd update
+  // (e.g. attaching a worktree) must preserve the chosen project.
+  if (patch.workspaceKind === 'dialogue'
+    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = persistableSessionEffort(patch.effort);
   if (persistableEffort !== undefined) out.effort = persistableEffort;

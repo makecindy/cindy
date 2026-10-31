@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Serviço de retransmissão",
+    "currentLabel": "Serviço de retransmissão",
+    "official": "Retransmissão oficial de {{appName}}",
+    "switchToOfficial": "Voltar à retransmissão oficial",
+    "officialHint": "Os seus dispositivos ligam-se através da retransmissão oficial de {{appName}}. Para usar a sua própria retransmissão, apresente o respetivo código QR de adesão no computador onde é executada e leia-o com a câmara do telemóvel.",
+    "selfHostedHint": "Os seus dispositivos ligam-se através da sua própria retransmissão em {{address}}. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}.",
+    "removedHint": "Este telemóvel foi removido da retransmissão ou a retransmissão foi desativada. Volte à retransmissão oficial ou adira novamente a partir do computador.",
+    "credentialMissingHint": "A credencial de retransmissão já não está neste telemóvel. Adira novamente a partir do computador ou volte à retransmissão oficial.",
+    "confirmTitle": "Voltar à retransmissão oficial?",
+    "confirmBody": "Este telemóvel vai sair de “{{name}}” e usar o relay oficial de {{appName}}. Para voltar a usar esse relay, adira novamente a partir do computador.",
+    "confirmAction": "Voltar ao oficial",
+    "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente dentro de momentos.",
+    "pushUnavailable": "Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel."
+  },
+  "issue": {
+    "removedTitle": "Removido do relay",
+    "removedHint": "Este telemóvel foi removido do relay ou o relay foi desativado. Pode voltar ao relay oficial nas Definições."
+  },
+  "join": {
+    "title": "Aderir ao relay",
+    "checking": "A ligar ao relay…",
+    "body": "Após aderir, este telemóvel liga-se aos seus computadores através deste relay. O início de sessão, os modelos, as tarefas partilhadas e outros serviços continuam a usar {{appName}}. Enquanto usar o seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este telemóvel.",
+    "switchNote": "Ao aderir, este telemóvel muda de “{{current}}” para este relay.",
+    "action": "Aderir",
+    "pairingCodeLabel": "Código de emparelhamento",
+    "verifyHint": "No computador onde o relay está em execução, confirme que apresenta estes dígitos e aprove.",
+    "waiting": "A aguardar aprovação…",
+    "cancel": "Cancelar",
+    "joinedTitle": "Adesão ao relay concluída",
+    "joinedBody": "Este telemóvel liga-se agora aos seus computadores através de “{{name}}”.",
+    "done": "Concluído",
+    "retry": "Tentar novamente",
+    "signedOut": "Inicie sessão em {{appName}} primeiro e depois adira a este relay.",
+    "signIn": "Iniciar sessão",
+    "invalidLink": "Esta ligação de adesão não é válida ou expirou. Crie uma nova no computador.",
+    "cancelled": "A adesão foi cancelada. Para aderir a este relay, crie uma nova ligação de adesão no computador."
+  },
+  "errors": {
+    "unreachable": "Não é possível aceder a este relay. Certifique-se de que o telemóvel e o computador estão na mesma rede ou de que o telemóvel consegue abrir este endereço.",
+    "insecureUnreachable": "Não é possível aceder a este relay. Os telemóveis só podem aderir a um relay por HTTPS. Configure um certificado para o relay no computador e crie uma nova ligação de adesão.",
+    "notRelay": "Este endereço não é um relay de {{appName}}. Verifique a ligação de adesão.",
+    "incompatible": "Este relay não funciona com esta versão de {{appName}}. Atualize o relay e {{appName}}.",
+    "accountMismatch": "Este relay pertence a outra conta de {{appName}}.",
+    "codeInvalid": "Esta ligação de adesão expirou. Crie uma nova no computador.",
+    "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde.",
+    "rejected": "O pedido de adesão foi recusado no computador.",
+    "expired": "O pedido excedeu o tempo limite enquanto aguardava aprovação. Crie uma nova ligação de adesão no computador.",
+    "ownerMismatch": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de adesão. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida.",
+    "failed": "Não foi possível aderir ao relay. Tente novamente mais tarde.",
+    "saveFailed": "O pedido foi aprovado, mas não foi possível guardar a credencial do relay neste telemóvel. Crie uma nova ligação de adesão no computador e tente novamente.",
+    "credentialUnavailable": "Este telemóvel não tem uma credencial de relay utilizável. Adira novamente ou volte ao relay oficial nas Definições."
+  }
+}

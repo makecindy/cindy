@@ -98,6 +98,7 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
 import {
@@ -678,7 +679,7 @@ export interface RemoteAgentRelocation {
  */
 export interface RemoteAgentSelectorOptions {
   /** 可以运行 Agent 的其他电脑(已配对、在线);不含任务所在电脑。 */
-  devices: readonly { deviceId: string; name: string }[];
+  devices: readonly { deviceId: string; name: string; favoriteSource?: ControlledModelFavoriteSource }[];
   /** 当前的 Agent 所在电脑(已建任务按下一条消息时的位置);null = 任务所在电脑。 */
   selectedDeviceId: string | null;
   /**
@@ -686,6 +687,8 @@ export interface RemoteAgentSelectorOptions {
    * 不传 = 本机任务,用本机目录。
    */
   homeDeviceId?: string;
+  /** Read remote sources through the task computer, using its grants and connections. */
+  catalogHostDeviceId?: string;
   /** homeDeviceId 那台电脑的名字(供应商组那一项的悬停写任务在哪台运行时用)。 */
   homeDeviceName?: string;
   /** 本机的设备 id:供应商组里的组员就是本机时,按任务所在电脑比对任务在哪台运行。 */
@@ -1277,6 +1280,7 @@ function ModelSelectorContentView({
   // 没在浏览其他电脑时列任务所在电脑的目录:本机任务是本机,被控电脑上的任务是那台。
   const homeDeviceId = remoteAgent?.homeDeviceId;
   const deviceId = remoteAgent ? (remoteBrowse?.deviceId ?? homeDeviceId) : deviceIdProp;
+  const catalogDeviceId = modelCatalogKey(deviceId, remoteAgent?.catalogHostDeviceId);
   /**
    * 「最近」记录没有设备字段:面板正在浏览**其他电脑**的目录时(远程 Agent 入口的模型格 /
    * device-link 被控电脑)选中不得写进本机历史 —— 两台电脑若存在同来源同模型 id,回到本机会把
@@ -1371,16 +1375,16 @@ function ModelSelectorContentView({
     void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
   };
   // 同时拉三个 agent —— vendorKey 不传时把三边模型一起展示。hooks 必须按固定顺序调用。
-  const cc = useAgentCapabilities('claude-code', deviceId);
-  const codex = useAgentCapabilities('codex', deviceId);
-  const pi = useAgentCapabilities('pi', deviceId);
+  const cc = useAgentCapabilities('claude-code', catalogDeviceId);
+  const codex = useAgentCapabilities('codex', catalogDeviceId);
+  const pi = useAgentCapabilities('pi', catalogDeviceId);
   // 本机折扣 GPT 仍按本机 API key gate；device-link 必须只看被控端 provider 状态。
   // 旧被控端不支持 provider:list 时按远端 capabilities 退化，不得误用控制端 key。
   const { hasSavedKey } = useApiKey();
   // 供应商来源:本机会话用本机 useProviders;device-link 远程会话用**被控端**供应商目录
   // (useDeviceProviders,隧道 maker:provider:list)。两 hook 都无条件调用(hooks 规则),按 deviceId 取。
   const localProviders = useProviders();
-  const remoteProviders = useDeviceProviders(deviceId);
+  const remoteProviders = useDeviceProviders(catalogDeviceId);
   // 远程 Agent 只能用那台电脑「允许被远程调用」的供应商(远程控制照常列全部,被控电脑上的任务
   // 浏览被控电脑自己的目录时也一样)。
   const remoteAgentBrowsing = remoteAgent !== undefined && remoteBrowse !== null;
@@ -1421,14 +1425,14 @@ function ModelSelectorContentView({
       ? t('providerShare.picker.hostOutdated')
       : undefined;
   const retryRemoteModels = useCallback(() => {
-    if (!deviceId) return;
-    evictDeviceCapabilities(deviceId);
-    evictDeviceProviders(deviceId);
+    if (!catalogDeviceId) return;
+    evictDeviceCapabilities(catalogDeviceId);
+    evictDeviceProviders(catalogDeviceId);
     void Promise.allSettled([
-      prefetchDeviceCapabilities(deviceId),
-      prefetchDeviceProviders(deviceId),
+      prefetchDeviceCapabilities(catalogDeviceId),
+      prefetchDeviceProviders(catalogDeviceId),
     ]);
-  }, [deviceId]);
+  }, [catalogDeviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();
   const [query, setQuery] = useState('');
@@ -1590,11 +1594,21 @@ function ModelSelectorContentView({
   // 栏位要同时列出本机与各台电脑的供应商,而列表此刻只装着其中一份目录:本机格与远程格
   // 各自按**自己的**目录与可见性派生,不借用正在浏览的那一份。
   const remoteAgentDevices = remoteAgent?.devices;
+  const routedFavoriteSources = useMemo(() => remoteAgent?.catalogHostDeviceId
+    ? new Map((remoteAgentDevices ?? []).flatMap(device => device.favoriteSource
+      ? [[device.deviceId, device.favoriteSource] as const] : []))
+    : undefined, [remoteAgentDevices, remoteAgent?.catalogHostDeviceId]);
   const remoteAgentDeviceIds = useMemo(
     () => (remoteAgentDevices ?? []).map((device) => device.deviceId),
     [remoteAgentDevices],
   );
-  const remoteDeviceCatalogs = useDevicesProviders(remoteAgentDeviceIds);
+  const remoteCatalogKeys = useMemo(
+    () => remoteAgentDeviceIds.map(id => modelCatalogKey(id, remoteAgent?.catalogHostDeviceId)!),
+    [remoteAgentDeviceIds, remoteAgent?.catalogHostDeviceId],
+  );
+  const scopedCatalogs = useDevicesProviders(remoteCatalogKeys);
+  const remoteDeviceCatalogs = useMemo(() => new Map(remoteAgentDeviceIds.map((id, index) =>
+    [id, scopedCatalogs.get(remoteCatalogKeys[index])!] as const)), [remoteAgentDeviceIds, remoteCatalogKeys, scopedCatalogs]);
   // 任务所在电脑那一格:本机任务用本机目录与可见性偏好;被控电脑上的任务用被控电脑的目录与它的
   // 可见性快照(顺序沿用被控端快照,不套本机排序,同远程控制)。
   const homeDeviceProviders = useDeviceProviders(homeDeviceId);
@@ -3595,6 +3609,7 @@ function ModelSelectorContentView({
                     labelOf: remoteAgentLabelOf,
                     // 远程收藏按任务所在电脑共享(§1.5):被控电脑上的任务读写那台的收藏,本机任务读写本机。
                     ...(homeDeviceId ? { favoritesDeviceId: homeDeviceId } : {}),
+                    shareFavoriteSources: routedFavoriteSources,
                     homeDeviceId: homeDeviceId ?? selfDeviceId,
                     unavailableDeviceIds: remoteAgentUnavailableDeviceIds,
                     onSelectDeviceFavorite: selectDeviceFavorite,

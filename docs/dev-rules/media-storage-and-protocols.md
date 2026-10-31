@@ -144,6 +144,17 @@
   `node scripts/prepare-wallpaper-previews.mjs` 从原始图片重建，该组三张图的总预算为 300 KiB。
   静态缩略图复用现有 `thumbnails/`，当前随包预览资源合计约 0.55 MiB。
   清单见 Desktop 的 `src/shared/wallpaper-video-manifest.json`。
+- 《Cindy MCP Apps 页面生成手册》（内置 Skill 的 `cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md`）
+  沿用壁纸的按内容寻址发布：对象名为 `plugin-pages/manual/<sha256>.md`，客户端用内置手册的 sha256 拼
+  `{cdnBaseUrl}/plugin-pages/manual/<sha256>.md` 交给业务后端，路径约定只在
+  `apps/desktop/src/shared/pluginPageManual.mjs` 定义；手册在 `.gitattributes` 固定 LF，保证各平台打包出同一份字节、
+  同一个 sha256。脚本读取当前检出里的手册，因此发布与 `--check-cdn` 都在本次发版所用的提交（发版分支或 tag
+  的检出）上执行，不要在最新 main 上执行。手册改动后、对应客户端上线前，在每个区域手动执行
+  `node --env-file=<发布配置> scripts/publish-page-manual.mjs --region=global|cn|dev`（区域必填，仓库没有手册时
+  跳过）；`--dry-run` 不连 OSS、不联网，只打印 key、sha256 与 CDN 地址。**发版前检查项**：
+  `node scripts/publish-page-manual.mjs --check-cdn --region=global` 与 `--region=cn` 都通过，即当前手册已在
+  两个区域线上；只读校验的 CDN 地址取法同壁纸。同一 key 只有一种内容，远端已有相同内容时不再上传，上传仍带
+  `x-oss-forbid-overwrite`；该检查不进 CI，避免 CI 依赖外网。
 - 伙伴头像的本机副本（2026-10-17 用户裁决：读过的头像在本机缓存一份，显示前先读缓存）：另一台电脑上
   伙伴的 `cindy-media://blobs/…` 头像与云端伙伴身份的 `https://` 公开头像，经 `companion-cloud/avatarCache.ts`
   复用集成缓存的索引（`integration-cache` 引用行，键 `companion-avatar:…`，`isCache: true`）入仓，由回收器按
@@ -170,6 +181,11 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 读取、协议与边界
 
+- 宿主选择的 `userData` 根目录允许通过符号链接或 Windows Junction 重定向。
+  `blobStore` 仅解析这一可信根的真实路径，入仓与受检读取使用相同的物理路径基线；
+  `cindy-media`、作用域、分桶和目标文件内部的链接仍然拒绝，不得对完整 blob 路径
+  直接 `realpath` 后跳过这些检查。回归见 `clientWallpaperMedia.test.ts` 的普通目录／
+  重定向根对照与内部链接拒绝矩阵。
 - 持久地址统一使用 `cindy-media://blobs/<sha256>.<ext>`。路径解析必须走
   `blobStore.resolveSafe` 或现有上层适配器，不根据 URL 字符串手工拼磁盘路径。
 - 客户端壁纸地址为 `cindy-media://client-wallpaper/<sha256>.webp` 或 `.mp4`，
@@ -183,23 +199,14 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   路径校验和 Renderer 暴露面。
 - 默认不把媒体仓绝对路径直接暴露给 Renderer、插件或远端。跨边界传递使用托管 URL、
   受控 grant／deposit／ledger，或已有上传与远程媒体服务。
-- 当前任务的图片检查直接走 Core `media(action: "inspect", url)`，不需要先揭示路径或让
-  用户另行口头同意检查。普通工具权限仍然适用；Host 校验当前账号、任务实例和该任务的
-  `session-attachment` 引用，读取后复核归属、清空代次与引用。只支持 `cindy-media://blobs/`
-  的本机受管副本，不根据外部地址、远程路径或其他任务的引用找文件。
-  同步生成与异步 poll 的成功图片结果在挂账后自动附最多两张预览；其余地址明确标为省略，
-  Agent 可按需 inspect。预览使用 MCP image 内容块，原图 URL 继续交付，预览字节不塞进
-  JSON 文字、不新建媒体副本或自动发到 IM。复用现有 140 KB 内联预算；失败只影响检查，
-  不改变生成成功状态，不引导重新付费生成。
-  图片预览沿用模型图片的 6 MiB 输入上限，在分配读取 Buffer 和 Base64 转换前拒绝超限；
-  源图最多 16,777,216 像素，直接由 Buffer 解码为最长边 1280 的缩略图，后续质量调整只
-  处理缩略图，达标后才编码 Base64。小于内联预算的图片经同一像素上限校验后保留原字节。
-  超限只省略预览，原始成果保留，可用路径工具自行分析。
-  视频不在 Core 内解码或抽帧，Agent 可通过下述路径解析能力取得
-  视频文件，再自行选择查看、抽帧或分析工具。本功能不引入 ffmpeg 依赖、隐藏解码窗或
-  并发调度机制。只查看视频帧不代表声音、对白或音画同步已经验收。
-  实现与回归见 `cindy-media/mediaInspection.ts`、
-  `__tests__/mediaInspection.test.ts` 与 `packages/cindy-tools/src/__tests__/ghostMcp.test.ts`。
+- Core 媒体生成的同步结果与异步 poll 结果只返回受管地址和元数据，不自动附图给模型，
+  也不提供独立的 `inspect` 动作。图片和视频均由 Agent 按任务需要决定是否查看：通过
+  下述路径解析能力取得文件，再使用已有的文件查看、抽帧或分析工具，不在 Core 重做
+  查看机制。用户端继续使用受管地址展示成果；生成成功不代表 Agent 已经看过内容。
+  不引入 ffmpeg 依赖、隐藏解码窗或并发调度机制；只查看视频帧不代表声音、对白或
+  音画同步已经验收。实现与回归见 `mcp-integrations/ghost.ts`、
+  `mcp-integrations/__tests__/ghostWorkdirGate.test.ts` 与
+  `packages/cindy-tools/src/__tests__/ghostMcp.test.ts`。
 - Agent 为完成当前任务而查看、抽帧或分析已有媒体，或回答用户的存储位置查询时，可主动
   调用 `media(action: "resolve_local_path", url)`；不要求用户先问本地路径或另行口头同意检查。
   Host 用安全解析器核验为现存普通文件，沿用已有路径揭示权限，不因分析用途绕过审批。
@@ -244,6 +251,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不因原内存大小上限拒绝下载或追加大小审批；完成、失败、取消后尽力清理临时文件。
   文件源仍走 `ingestMedia` 和现有字节仓的原子发布、去重与记账，不另建媒体存储。
   base64 响应沿用原大小限制。
+- 下载等待响应与重试共用 120 秒预算；响应到达后以字节为进度，只有断流 30 秒或累计 9 分钟才
+  结束，避免慢线路截断已付费成片。累计上限须低于 Agent 工具调用的 10 分钟超时。失败日志只记
+  错误名、已收字节和耗时，不记错误正文或签名地址。
 - 下载失败保留原调用的成功响应。异步签名地址失效时只查询原上游任务刷新地址，不重新
   付费生成；刷新结果成功入库前不覆盖原成功响应。本地入库失败由客户端对同一份已下载
   字节最多尝试三次，期间复核账号和任务，不再次下载、生成或审批。

@@ -166,4 +166,4 @@ $url = 'cindy://provider/import?v=1&data=' . $data;
 
 端点必须为 HTTP(S)，不得含用户名、密码、query 或 fragment；OAuth 端点必须 HTTPS。可选 `modelsUrl` 必须与对应 `baseUrl` 同源（协议、主机及端口一致），否则整条拒绝，避免运行时忽略该地址。API Key 放在专用字段，不能放在端点 URL。`requestPath` 必须以单个 `/` 开头（如 `/responses`），不能带 query/fragment 或指定另一主机。自定义 Header 会进入凭证存储，不在预览显示值。
 
-用上面的假 Key 和 `example.invalid` 测试即可，不要使用真实用户 Key。开发版 UI/自动测试不能证明操作系统的安装协议注册；发布前还需 packaged macOS/Windows 的冷启动与运行中唤起冒烟。
+用上面的假 Key 和 `example.invalid` 测试即可，不要使用真实用户 Key。未打包的开发版不注册系统 URL scheme，以免把正式版的链接交给临时 Electron 路径；URL/argv 解析与待处理导入仍可做定向测试。开发版 UI/自动测试不能证明操作系统的安装协议注册；发布前还需 packaged macOS/Windows 的冷启动与运行中唤起冒烟。旧开发版留下的错误关联按[开发深链与系统关联](dev-rules/desktop-development.md#开发深链与系统关联)恢复。

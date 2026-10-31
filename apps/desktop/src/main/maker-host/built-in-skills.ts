@@ -26,11 +26,11 @@ const VERSIONS_DIRECTORY = '.versions';
 const ACTIVE_BUNDLE_LINK = '.active';
 const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
 /** Increment whenever shipped built-in Skill bytes change between releases. */
-export const BUILT_IN_SKILLS_BUNDLE_VERSION = 31;
+export const BUILT_IN_SKILLS_BUNDLE_VERSION = 56;
 /** Skills added after the first bundle, with the bundle version that first shipped each one. */
 const LATER_BUILT_IN_SKILL_FIRST_VERSIONS: ReadonlyMap<string, number> = new Map([
   [CINDY_PLUGIN_CREATOR_NAME, 13],
-  [CINDY_PR_NAME, 27],
+  [CINDY_PR_NAME, 56],
 ]);
 
 export interface BuiltInSkillDescriptor {

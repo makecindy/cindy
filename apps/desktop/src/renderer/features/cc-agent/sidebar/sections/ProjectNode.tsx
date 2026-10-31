@@ -122,8 +122,8 @@ export interface ProjectNodeProps {
   onOpenConversationSearch: (project: ProjectNodeData) => void;
   /** 在系统文件管理器中打开该 project 的 workingDir。 */
   onOpenInExplorer: (workingDir: string) => void;
-  onLinkCodexProject: (project: ProjectNodeData) => void;
-  linkingCodexProject: boolean;
+  /** 打开设置 → 任务导入，只看这个项目。 */
+  onImportFromTools: (project: ProjectNodeData) => void;
   /** 进入 workdir 文件浏览模式 (vscode-style file tree + body viewer)。
    *  父层负责挑出该 project 下「最近活跃且非 archived」的 session 并 navigate
    *  到 /cc-agent/files/:sessionId。 */
@@ -165,8 +165,7 @@ export const ProjectNode = memo(function ProjectNode({
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onLinkCodexProject,
-  linkingCodexProject,
+  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
 }: ProjectNodeProps) {
@@ -196,8 +195,7 @@ export const ProjectNode = memo(function ProjectNode({
         onCreateInProject={onCreateInProject}
         onOpenConversationSearch={onOpenConversationSearch}
         onOpenInExplorer={onOpenInExplorer}
-        onLinkCodexProject={onLinkCodexProject}
-        linkingCodexProject={linkingCodexProject}
+        onImportFromTools={onImportFromTools}
         onBrowseFiles={onBrowseFiles}
         onArchiveAll={onArchiveAll}
       />
@@ -260,8 +258,7 @@ type ProjectHeaderProps = Pick<
   | 'onCreateInProject'
   | 'onOpenConversationSearch'
   | 'onOpenInExplorer'
-  | 'onLinkCodexProject'
-  | 'linkingCodexProject'
+  | 'onImportFromTools'
   | 'onBrowseFiles'
   | 'onArchiveAll'
 >;
@@ -281,8 +278,7 @@ const ProjectHeader = memo(function ProjectHeader({
   onCreateInProject,
   onOpenConversationSearch,
   onOpenInExplorer,
-  onLinkCodexProject,
-  linkingCodexProject,
+  onImportFromTools,
   onBrowseFiles,
   onArchiveAll,
 }: ProjectHeaderProps) {
@@ -686,12 +682,11 @@ const ProjectHeader = memo(function ProjectHeader({
                     <DropdownMenuItem
                       onClick={() => {
                         setMenuPos(null);
-                        onLinkCodexProject(project);
+                        onImportFromTools(project);
                       }}
-                      disabled={linkingCodexProject}
                       className={MENU_ITEM_CLASS}
                     >
-                      {t('ccAgent.sidebar.projectAction.syncCodex')}
+                      {t('settings.sessionImport.projectMenu')}
                     </DropdownMenuItem>
                   </>
                 )}

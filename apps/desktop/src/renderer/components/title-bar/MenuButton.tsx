@@ -1,4 +1,6 @@
 import { Menu } from 'lucide-react';
+import { openPerformanceTrace } from '@/components/performance-trace/PerformanceTrace';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -80,6 +82,9 @@ export function MenuButton({ onExitFullscreen }: { onExitFullscreen?: () => void
         >
           {t('titleBar.menuItems.resourceUsage')}
         </DropdownMenuItem>
+        {!isSecondaryWindow() && <DropdownMenuItem onSelect={openPerformanceTrace}>
+          {t('performanceTrace.title')}
+        </DropdownMenuItem>}
         <DropdownMenuItem
           onSelect={() => {
             log.info('Help clicked');

@@ -1,0 +1,88 @@
+{
+  "cachedHistory": {
+    "title": "电脑未连",
+    "hint": "可览已缓存之内容，余者须待电脑上线后加载。"
+  },
+  "recovery": {
+    "syncing": "方同步…",
+    "recovered": "已复",
+    "syncingHint": "方更电脑上之内容。"
+  },
+  "syncFailed": "同步未成",
+  "resync": "重同步",
+  "resyncing": "方重同步",
+  "syncShort": "同步",
+  "deviceUnresponsiveTitle": "彼端暂无回音",
+  "deviceUnresponsiveHint": "请求尚未得应，方自动再试。",
+  "localNetwork": {
+    "title": "手机网络不可用",
+    "hint": "请察手机网络，恢复后将自动连接。"
+  },
+  "serviceConnection": {
+    "title": "暂连不上服务",
+    "hint": "手机暂连不上服务，方自动重连。"
+  },
+  "connectStep1": "于电脑上安装并打开 {{appName}}",
+  "connectStep2": "以与手机同一名籍登门",
+  "connectStep3": "于「设置 → 远程连接」中打开「允许同帐号设备控制本机」",
+  "brandEyebrow": "CINDY 手机版",
+  "cloudTeaserTitle": "云端 {{appName}}，方在筹措",
+  "cloudTeaserCopy": "上线之后，无须电脑，手机版即可径用。",
+  "sectionFirstRun": "始用",
+  "sectionOffline": "曾连之机",
+  "sectionRemoteDisabled": "于电脑操作",
+  "sectionAccessRevoked": "须重许",
+  "retryAccess": "再试访问",
+  "recheck": "重察",
+  "deviceRemovedTitle": "机已移除",
+  "deviceRemovedHint": "请辞出后重新登门，以重入机录。",
+  "authFailedTitle": "登门已失效",
+  "authFailedHint": "登门之状已过期，请辞出后重新登门。",
+  "replacedTitle": "连接已见夺",
+  "replacedHint": "此机之连接为他处同一设备所顶替，方重连。",
+  "tooManyConnectionsTitle": "连接数已满",
+  "tooManyConnectionsHint": "此名籍同时在线之机过多，请断开他机后再试。",
+  "versionMismatchTitle": "版本不合",
+  "versionMismatchHint": "此 App 版本与服务端协议不合，请升至最新版本。",
+  "unstableTitle": "连接屡断",
+  "unstableHint": "连接不稳，请察网络并候其恢复",
+  "relay": {
+    "label": {
+      "online": "Relay 已连",
+      "connecting": "方连 Relay",
+      "stopped": "Relay 未连"
+    },
+    "hint": {
+      "online": "可同步远程差事。",
+      "lastSynced": "前番同步 {{time}}",
+      "connecting": "网络恢复后，将自动重订远程差事。",
+      "stopped": "归于前景或重新登门后，连接即复。"
+    }
+  },
+  "agentAuth": {
+    "noKey": "{{agent}} 不可用：电脑端尚未设可用之 API Key。请于电脑端 {{appName}} 之「设置 → 模型供应商」设毕后再试。",
+    "noOauth": "{{agent}} 不可用：电脑端尚未完成名籍授权。请于电脑端 {{appName}} 之「设置 → 模型供应商」重连名籍后再试。",
+    "noCredentials": "{{agent}} 不可用：电脑端尚未登门。请于电脑端 {{appName}} 之「设置 → 模型供应商」登门后再试。",
+    "noEncryption": "{{agent}} 不可用：电脑端系统安全保存空间不可用，读不到已存之密钥。请察系统钥匙圈（macOS）或系统帐号加密（Windows），然后重启电脑端 {{appName}}。",
+    "proxyNotReady": "{{agent}} 暂不可用：电脑端组件未就。请稍候再试；若屡见之，请重启电脑端 {{appName}}。",
+    "default": "{{agent}} 不可用：电脑端登门凭证不可用。请于电脑端 {{appName}} 之「设置 → 模型供应商」重新登门后再试。（{{reason}}）"
+  },
+  "remoteError": {
+    "remoteDisabled": "远方之机已关闭远程控制之许可。",
+    "channelNotAllowed": "目前电脑端版本不支持此远程能力。",
+    "accessRevoked": "此机已撤手机之访问权柄。",
+    "deviceUnresponsive": "请求尚未得应，方自动再试。",
+    "versionMismatch": "与服务端协定版本不合，请升级 App 后再试。",
+    "payloadTooLarge": "此番传输之内容过大，请拆分后再试。",
+    "mediaFetchFailed": "取电脑端之卷未成，可稍后再试。",
+    "voiceTranscribeFailed": "声之转写未成，可再试或改以键盘输入。",
+    "linkNotOpen": "与远方之机之连接已断，方重连。",
+    "accountChanged": "Codex 名籍或工作区已变，请更察限额后再确认。",
+    "offerExpired": "Codex 重设凭证已失效，请更察限额后再确认。",
+    "preconditionFailed": "操作条件已变，请更察后再确认。",
+    "transient": "网络或远方之机暂不可用，可稍后重新同步。",
+    "callFailed": "远程调用未毕。请稍后再试。",
+    "unclassified": "此操作未毕。请稍后再试。",
+    "notFound": "所欲操作之内容已不存。请归列表更察后再试。"
+  }
+}

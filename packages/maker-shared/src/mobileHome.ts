@@ -14,7 +14,7 @@ import {
 import type { PresentationLocalizer } from './presentationLocalization.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 export { remoteProjectAlias, remoteProjectAliasKey, parseHostProjectAliases,
@@ -375,7 +375,7 @@ function buildProjectGroups(
       const firstSession = first.session as MobileHomeSessionLike;
       const deviceId = sessionDeviceKey(firstSession) ?? null;
       const cindyMake = isCindyMakeSession(firstSession);
-      const workingDir = cindyMake ? '' : normalizeProjectWorkingDir(firstSession.workingDir);
+      const workingDir = cindyMake ? '' : normalizeProjectWorkingDir(sessionProjectDirectory(firstSession));
       const deviceName = firstSession.deviceLinkDeviceName
         ?? (deviceId ? deviceNames.get(deviceId) : null)
         ?? '未知电脑';
@@ -407,7 +407,7 @@ function projectGroupKey(session: RemoteSessionListSessionLike): string {
   // 分组用 canonicalDeviceId(设备归并结果),只补空值兜底 + workingDir 归一化(去尾斜杠 / Windows 大小写)。
   const deviceId = sessionDeviceKey(session as MobileHomeSessionLike)?.trim() || '__unknown_device__';
   if (isCindyMakeSession(session)) return `cindy-make:${encodeURIComponent(deviceId)}`;
-  return `device:${encodeURIComponent(deviceId)}:${normalizePathKey(session.workingDir ?? '__unknown_project__')}`;
+  return `device:${encodeURIComponent(deviceId)}:${normalizePathKey(sessionProjectDirectory(session) ?? '__unknown_project__')}`;
 }
 
 /**
@@ -674,10 +674,11 @@ function isWindowsStylePath(value: string): boolean {
  * 过滤的结果和首页分组一致。调用方需自行确保 deviceId 维度已对齐(同一台设备内比较)。
  */
 export function sessionMatchesProjectDir(
-  sessionWorkingDir: string | null | undefined,
+  session: string | null | undefined | { workingDir: string | null; projectDir?: string | null },
   projectWorkingDir: string | null | undefined,
 ): boolean {
-  return normalizePathKey(sessionWorkingDir ?? '__unknown_project__')
+  const directory = typeof session === 'object' && session !== null ? sessionProjectDirectory(session) : session;
+  return normalizePathKey(directory ?? '__unknown_project__')
     === normalizePathKey(projectWorkingDir ?? '__unknown_project__');
 }
 

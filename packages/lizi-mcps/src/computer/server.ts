@@ -1559,7 +1559,7 @@ export function createComputerMcpServer(
   /**
    * 代输入 hint: a password field is the owner's to fill. Typing into one from
    * the agent would put the secret in the model's context, so refuse and point
-   * at request_input_handoff. Runs after the freshness check resolved the target.
+   * at ask_owner (kind fill). Runs after the freshness check resolved the target.
    */
   async function checkSecureField(
     name: ComputerMcpToolName,
@@ -1591,7 +1591,7 @@ export function createComputerMcpServer(
         data: {
           tool: name,
           message: 'This element is a password field. Cindy does not let the agent type into password fields.',
-          hint: 'Call request_input_handoff with this pid and window so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
+          hint: 'Call ask_owner with kind="fill" and this pid and window as target so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
         },
       },
       true,

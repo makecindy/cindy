@@ -263,12 +263,13 @@ enum Palette {
   static let wellShade = dynamic(NSColor(white: 0, alpha: 0.08), NSColor(white: 0, alpha: 0.5))
   /// Red of the Cindy logo's ">" mark (the logo red, not a state color).
   static let brand = Color(nsColor: hex(0xF70121))
-  static let warn = Color(nsColor: hex(0xEA6B17))
+  /// Quota yellow (30% or less left, `@cindy/maker-shared/quota-level`); `error` is 10% or less.
+  static let warn = Color(nsColor: hex(0xF3A115))
   /// Shared by the menu-bar dot and its explanation inside the panel.
   private static let remoteControlValue: UInt32 = 0xFF9F0A
   static let remoteControlHex = String(format: "#%06X", remoteControlValue)
   static let remoteControl = Color(nsColor: hex(remoteControlValue))
-  static let error = Color(nsColor: hex(0xD91F37))
+  static let error = Color(nsColor: hex(0xEF4444))
   static let focus = Color(nsColor: hex(0x417CDD))
   static let claude = Color(nsColor: hex(0xD97757))
   static let claude2 = Color(nsColor: hex(0xE8A184))
@@ -2267,7 +2268,8 @@ struct CellView: View {
         }
       }
       .monospacedDigit()
-      .foregroundStyle(Palette.level(cell.level) ?? Palette.ink)
+      // The number keeps its ink; the liquid and its glow carry the quota color.
+      .foregroundStyle(Palette.ink)
       .animation(Motion.quick, value: value)
     } else if let label = cell.valueLabel {
       Text(label)

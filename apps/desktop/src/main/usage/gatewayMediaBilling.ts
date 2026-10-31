@@ -3,6 +3,7 @@ import type { DbClient } from '../localDb/client/DbClient.js';
 import { retainDbClient } from '../localDb/client/pendingOperations.js';
 import { localDayKey } from '../localDb/dailySpend.js';
 import { createLogger } from '../logger.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -35,6 +36,7 @@ export async function prepareGatewayMediaBilling(input: {
 }): Promise<GatewayMediaBillingRecorder> {
   const ownerScope = captureDataOwnerBroadcastScope();
   const dbOwnerId = getCurrentDbClientUserId();
+  const providerName = getActiveCatalog().providers.find(provider => provider.id === 'xd')?.name;
   const db = input.db ?? (dbOwnerId ? getDbClient() : null);
   const currency = await getGatewayMediaBillingCurrency().catch(() => null);
   const userTurn =
@@ -68,6 +70,7 @@ export async function prepareGatewayMediaBilling(input: {
         const session = await db.tx('usage.recordMediaSpend', {
           day: localDayKey(now),
           model: billing.model ?? input.model,
+          ...(providerName ? { providerName } : {}),
           amount: billing.cost,
           currency,
           sessionId: input.sessionId,

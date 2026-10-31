@@ -100,6 +100,15 @@ const log = createLogger('rightSidebar.shell');
 /** 组内激活记忆的订阅(与组归属同一个通知源)。 */
 const subscribeGroupActive = (cb: () => void) => subscribeTabGroups(cb);
 const EMPTY_TAB_ID_SET = new Set<string>();
+
+// helpers
+/** 已挂载页签里属于全局页签的那部分:全局页签跨任务存活,任务页签跟任务走。 */
+function selectPinnedTabIds(
+  tabIds: ReadonlySet<string>,
+  pinnedTabIds: ReadonlySet<string>,
+): Set<string> {
+  return new Set([...tabIds].filter((tabId) => pinnedTabIds.has(tabId)));
+}
 /**
  * Mac 合并顶栏右端 spacer 宽度，对应 MainLayout 固定唤起按钮：28px 按钮 + 8px 右距。
  * detach / maximize / 收起均属于面板自身，直接渲染在本顶栏中。
@@ -393,23 +402,29 @@ export function RightSidebarShell({
     sessionId: string | null;
     tabIds: Set<string>;
   }>(() => ({ sessionId: null, tabIds: new Set() }));
-  const deferredMountedTabIds =
-    deferredMountState.sessionId === sessionId ? deferredMountState.tabIds : EMPTY_TAB_ID_SET;
+  const pinnedTabIds = useMemo(() => new Set(pinnedTabs.map((tab) => tab.id)), [pinnedTabs]);
+  // 全局页签(webview 持有插件的页面状态)一旦挂载就不因任务变化卸载,所以换任务的这一帧
+  // 也要保住它们——effect 来不及:它在 commit 之后才把状态换成新任务,而这一帧的 render
+  // 已经决定了谁被卸载。任务页签仍按新任务重新计。
+  const deferredMountedTabIds = useMemo(() => {
+    if (deferredMountState.sessionId === sessionId) return deferredMountState.tabIds;
+    const kept = selectPinnedTabIds(deferredMountState.tabIds, pinnedTabIds);
+    return kept.size > 0 ? kept : EMPTY_TAB_ID_SET;
+  }, [deferredMountState, pinnedTabIds, sessionId]);
 
   useEffect(() => {
     setDeferredMountState((previous) => {
       if (previous.sessionId !== sessionId) {
-        return {
-          sessionId,
-          tabIds: activeTabId ? new Set([activeTabId]) : new Set(),
-        };
+        const tabIds = selectPinnedTabIds(previous.tabIds, pinnedTabIds);
+        if (activeTabId) tabIds.add(activeTabId);
+        return { sessionId, tabIds };
       }
       if (!activeTabId || previous.tabIds.has(activeTabId)) return previous;
       const next = new Set(previous.tabIds);
       next.add(activeTabId);
       return { sessionId, tabIds: next };
     });
-  }, [activeTabId, sessionId]);
+  }, [activeTabId, pinnedTabIds, sessionId]);
 
   useEffect(() => {
     if (!bucket.hydrated || !sessionId) return;
@@ -842,13 +857,19 @@ export function RightSidebarShell({
     [activeTabId, onDetachTab],
   );
 
-  const bodyHosts = useRetainedBrowserTabHosts(
-    contentReady
-      ? tabs
-          .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
-          .map((tab) => ({ tab, sessionId, workdir, remoteHostId, deviceLinkDeviceId }))
-      : [],
+  // 桶还没水合(contentReady=false)时只挡任务页签:全局页签不依赖任务桶,卸载它等于丢掉插件页面状态。
+  const retainedHosts = useRetainedBrowserTabHosts(
+    tabs
+      .filter((tab) => contentReady || pinnedTabIds.has(tab.id))
+      .filter((tab) => tab.id === activeTabId || deferredMountedTabIds.has(tab.id))
+      .map((tab) => ({ tab, sessionId, workdir, remoteHostId, deviceLinkDeviceId })),
   );
+  // 全局页签的 wrapper 在 keyed 列表里排最前、彼此顺序稳定:useRetainedBrowserTabHosts 会把
+  // 浏览器页签排到前面,不重排的话 React 为了让位会移动全局页签的 wrapper,断开里面的 webview guest。
+  const bodyHosts = [
+    ...retainedHosts.filter((host) => pinnedTabIds.has(host.tab.id)),
+    ...retainedHosts.filter((host) => !pinnedTabIds.has(host.tab.id)),
+  ];
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">

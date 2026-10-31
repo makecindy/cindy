@@ -108,6 +108,8 @@ export interface CcMeta {
   botLearning?: import('@cindy/maker-shared/bot-learning').BotLearningReceipt[];
   /** Provider text phase, retained to exclude commentary from notification previews. */
   assistantPhase?: string;
+  /** Native text item identity, used to reconcile streamed and imported history. */
+  agentMessageId?: string;
   /** Exact native sampling attempt that failed before response completion. Original text is retained. */
   failedSamplingAttempt?: { threadId: string; turnId: string; attempt: number; itemId: string; error?: string };
   uuid?: string;
@@ -343,9 +345,11 @@ export interface Session {
   userId: string;
   title: string;
   workingDir: string | null;
+  /** Explicit project membership; old hosts/tasks fall back to workingDir. */
+  projectDir?: string | null;
   /**
    * 侧边栏/产品归属语义。
-   * - project: workingDir 是项目目录, 参与 Projects 分组。
+   * - project: projectDir 决定 Projects 分组，旧任务回落 workingDir。
    * - dialogue: workingDir 只是对话运行/文件目录, 不参与 Projects 分组。
    */
   workspaceKind: WorkspaceKind;

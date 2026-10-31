@@ -22,6 +22,13 @@
 > （下节 5）对**所有**触及相关路径的改动都生效，不因是存量代码而豁免。作者契约同步
 > （下节 6）在改动命中作者可见契约时触发；不要求为统一形式专项重构无关存量。
 
+MCP Apps 交互页面的 iframe 使用 `allow-scripts allow-same-origin allow-forms`。
+`allow-forms` 只让页面收到 submit 事件；页面须 `preventDefault()` 后调用工具，由 Host 执行授权请求。
+宿主前置代码在 window 冒泡阶段兜底取消默认提交，并令 `form.submit()` 不执行；整页替换后恢复监听，
+避免未处理的表单把卡片导航到 CSP 错误页。此 JS 保护不替代 CSP 权限边界。
+Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 'none'`，原生提交到任何地址均被禁止，
+不增加网络或凭证权限。依赖此行为的页面要求执行端与查看端均为 `0.1.122-beta` 或更新版本。
+
 ## 事实来源
 
 | 内容                                                 | 权威来源                                                                                                                                                                                                                                                                                                          |
@@ -127,7 +134,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   `minCindyVersion`。Manifest schema 不设置统一的 Cindy 版本下限；具体版本只属于插件包元数据。
   v3 **没有** `slots`；
   `tools`、`card`、`panel`、`mainView`、`taskView`、`subscribe`、`skill`、`cindy`、`agent`、`node`、`network`、
-  `preview`、`browserExtension` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
+  `preview`、`mcpApps`、`browserExtension` 等顶层字段本身就是插件贡献项或自主 Host 能力的直接声明。
 - `browserExtension` 是宿主承接随包浏览器扩展连接的直接字段（2026-10-27 由 Cindy Chrome
   插件自带接线进程迁入宿主）：`protocol` 必须是当前宿主实现的 `cindy-browser-extension/3`，
   `extensionIds` 是允许连接的扩展 id（装入时逐条展示并钉死），可选 `nativeHost{name,binary}`
@@ -151,6 +158,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   但当前 Host 不展示、不授权、也不因此阻止安装或发布。
   未来 Host 识别该字段后，才按正常的能力展示和运行时守门链路启用。不能把
   未知字段猜成现有权限，也不能让它意外获得能力。
+- `mcpApps.ui` 使用 `resources[]`（作者指定唯一 `ui://` URI、包内 `file`）与按原工具名声明的标准 `_meta.ui`。资源 `file` 不透传；`domain` / `permissions` 仅校验保留，不授予权限。资源 URI 单独改名不算扩权，新增资源、页面域名或 app 可调用工具仍按安装批准规则处理。旧宿主保留未知顶层 `mcpApps`，不授权。
+  新包上传、Forge 打包和本地包安装严格校验 UI 资源文件；已存储 Release（含市场默认下发）、
+  已安装快照分享及启动读取遇到缺失、目录、链接或超过 4 MiB 的资源时，只移除运行时/确认投影的 UI，普通工具继续可用。
+  原始清单与签名/摘要不改写；Host receipt 的可选 `unavailableUiResources:true` 仅记录历史包资源无效，
+  不授予权限，不改变 receipt 版本。旧 receipt 无该字段时仍读取，并按实际文件收窄 UI。
+  分享和导出已有插件沿用存量校验；重新上传提审仍严格校验并返回具体原因。页面不可用时，模型结果仍按原批准声明移除根 `_meta`，不恢复页面授权。
 - 顶层 `showTaskPreferences?: boolean` 由每个插件在自己的 manifest 声明。
   省略或 `true` 保持该插件的卡片配置、权限限制和执行规则；`false` 隐藏该插件的 Desktop/手机卡片，
   且运行期不读取、不使用、不回写其模型、目录和权限配置。旧数据保留，重新启用后恢复。
@@ -279,6 +292,14 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
     捕获的记录 compare-and-write 清除。未安装记录上的 opt-out 无法与真实卸载区分，一律保留；
     缺清单摘要的旧记录不足以证明包身份，也保留；记录在对账期间被并发卸载改变则不清除。修复
     逻辑幂等，不新增账本字段或持久标记。仍有 opt-out 的服务端插件扩权更新必须确认。
+    **交互页面同样随下发方静默授予**：合法默认首装、组织接管、同源更新和仍具默认资格的恢复，
+    在真实包的安装批准事务中一并写入 `uiCapabilityApproved`，不另弹页面确认、不出待确认提示条。
+    旧 Host 安装缺该事实时，只有当前默认资格、来源账本、已批准实例与包身份均匹配，才通过
+    同一市场更新事务重新校验当前 Release 并补齐；保留启停态和同来源数据。落位前复核 owner、
+    实例、批准 revision 与退订资格。没有有效安装 receipt 的后台恢复仍拒绝。
+    普通市场手动安装、自定义市场、本地 `.cindy`、Forge 以及已失去默认资格的插件仍走原确认流程；
+    市场审核结果、展示 manifest 或内置种子身份不能替代服务端默认下发资格。实现与真实 receipt
+    组合回归见 `main/plugin-market/service.ts`、`main/cindy-brain/ghostInstallConsent.ts` 及对应测试。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
   任一来源账本文件存在却损坏时，读写都必须拒绝，不得把其它来源的记录当成完整视图重写并覆盖损坏文件。
   自定义市场还必须匹配 `sourceKey`；已装目录的原始 `ghost.json` 字节 SHA-256 必须与账本
@@ -775,7 +796,9 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 技能随应用内置 bundle 升级，不另建安装或权限流程。
 `forgeGuide.ts` 从这些 Markdown 构造兼容的 `FORGE_GUIDE`，供旧 `ghost_forge_guide`
 调用按原章节号读取。不要在 TypeScript、工具描述或界面文案中另存一套编写流程。
-修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。
+修改随包 Skill 字节时同步递增 `BUILT_IN_SKILLS_BUNDLE_VERSION`。改动其中的《Cindy MCP Apps 页面生成手册》
+（`PAGE-GENERATION.md`）时，还要在对应客户端上线前把新手册发布到各区域 CDN，用法与发版前检查见
+[`media-storage-and-protocols.md`](media-storage-and-protocols.md) 的《Cindy MCP Apps 页面生成手册》一条。
 **手册过期 = AI 按旧规则写出过不了校验的插件包**（校验拒装只是兜底，用户体验是“AI
 反复打包反复被拒”）。
 

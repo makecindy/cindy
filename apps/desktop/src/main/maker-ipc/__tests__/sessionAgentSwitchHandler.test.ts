@@ -1443,7 +1443,7 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     const { deps } = makeResumeDeps();
     const result = await performSessionAgentSwitch(deps, validParams);
     expect(result).toMatchObject({ switched: true, engineReady: true });
-    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex');
+    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex', null);
     expect(deps.applyAgentSwitchToDb).toHaveBeenCalledWith('s1', {
       agentKind: 'codex',
       model: 'gpt-5.5',
@@ -1457,11 +1457,23 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     });
     const boundary = vi.mocked(deps.insertBoundaryMessage).mock.calls[0][1];
     expect(boundary.resumed).toBe(true);
+    // Same-device engine switches still record the departure device so a later
+    // relocation cannot make this boundary look local to another computer.
+    expect(boundary.fromAgentDeviceId).toBeNull();
+    expect(boundary).not.toHaveProperty('toAgentDeviceId');
     // 增量 framing(归位续接),且工作状态区来自全量历史
     expect(boundary.handoff).toContain('now it is switching back to you');
     expect(boundary.handoff).toContain('- /repo/a.ts');
     expect(boundary.handoff).not.toContain('最早的问题');
     expect(boundary.handoff).toContain('离开期间的问题');
+  });
+
+  it('passes the task device so a thread parked on another computer is not resumed', async () => {
+    const { deps } = makeResumeDeps({
+      getSessionRow: vi.fn(async () => makeRow({ agentDeviceId: 'device-remote' })),
+    });
+    await performSessionAgentSwitch(deps, validParams);
+    expect(deps.findParkedEngineSession).toHaveBeenCalledWith('s1', 'codex', 'device-remote');
   });
 
   it('无停泊绑定(查询返回 null):v1 全量行为不变', async () => {

@@ -3,6 +3,7 @@ import type { InteractionDecision, InteractionRequest, InteractionResolver } fro
 
 import {
   beginInteractionRoute,
+  allowHostPagePermission,
   getActiveInteractionRoute,
   requestHostInteraction,
   installDesktopInteractionHandler,
@@ -422,4 +423,20 @@ describe('session interaction router', () => {
 
     first.release();
   });
+});
+
+// unit: a committed mode change must answer the existing page request, not cancel
+// and start a second request. Minimum input: one model request and one page request.
+it('Full Access answers only the page request through the existing Desktop resolver', async () => {
+  const host = makeSession();
+  const resolvers = new Map<string, (decision: InteractionDecision) => void>();
+  const resolve = vi.fn((id: string, decision: InteractionDecision) => resolvers.get(id)?.(decision));
+  installDesktopInteractionHandler(host.session, request => new Promise(r => resolvers.set(request.requestId, r)), undefined, resolve);
+  const signal = new AbortController();
+  const model = requestHostInteraction(host.session, permission('model'), signal.signal);
+  const page = requestHostInteraction(host.session, { ...permission('page'), metadata: { mcpApp: { clientId: 'card' } } } as InteractionRequest, signal.signal);
+  allowHostPagePermission(host.session, 'model'); expect(resolve).not.toHaveBeenCalled();
+  allowHostPagePermission(host.session, 'page');
+  expect(await page).toEqual({ kind: 'permission', behavior: 'allow' });
+  signal.abort(); await model;
 });

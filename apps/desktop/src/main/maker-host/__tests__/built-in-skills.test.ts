@@ -123,7 +123,7 @@ describe('built-in Skills', () => {
       expect(fs.statSync(path.join(plugin.absolutePath, relative)).isFile()).toBe(true);
     }
     const references = path.join(plugin.absolutePath, 'references');
-    const chapters = fs.readdirSync(references).sort();
+    const chapters = fs.readdirSync(references).filter(file => file.endsWith('.md')).sort();
     // The legacy tool and native Skill loaders consume the same shipped bytes,
     // even though capability filenames no longer encode the legacy chapter order.
     let remainingGuide = FORGE_GUIDE;
@@ -131,6 +131,11 @@ describe('built-in Skills', () => {
       const chapter = fs.readFileSync(path.join(references, file), 'utf8');
       expect(remainingGuide).toContain(chapter);
       remainingGuide = remainingGuide.replace(chapter, '');
+    }
+    // Shipped examples are executable assets, not guide chapters. They must also
+    // survive the production Skill copy (a link to a missing example is unusable).
+    for (const example of ['static/ghost.json', 'static/main.js', 'static/ui/page.html', 'loader/main.js', 'loader/ui/page.html', 'files/main.js', 'REFERENCE.md', 'README.md']) {
+      expect(fs.statSync(path.join(references, 'examples/interactive-pages', example)).isFile()).toBe(true);
     }
     expect(remainingGuide.trim()).toBe('');
     expect(new Set(referencePaths.map((file) => path.basename(file)))).toEqual(new Set(chapters));
@@ -169,8 +174,8 @@ describe('built-in Skills', () => {
   it.each([
     ['cindy-plugin-creator', 12, '# Plugin Creator', 'success'],
     ['cindy-plugin-creator', 12, '# Plugin Creator', 'missing-source'],
-    ['pr', 25, '# PR', 'success'],
-    ['pr', 25, '# PR', 'missing-source'],
+    ['pr', 55, '# PR', 'success'],
+    ['pr', 55, '# PR', 'missing-source'],
   ] as const)('upgrades a bundle from before %s was added (v%i, %s, %s)', async (name, previousVersion, heading, mode) => {
     const input = fixture();
     const previous = await prepareBuiltInSkills({ ...input, bundleVersion: previousVersion });

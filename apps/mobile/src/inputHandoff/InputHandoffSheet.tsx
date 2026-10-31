@@ -122,7 +122,7 @@ function InputHandoffSheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot 
 }
 
 /** Scan-to-sign-in: open the link here (the app that handles it takes over), or save or share the code. */
-function InputHandoffQrActions({ qr, busy, onClose }: InputHandoffSheetProps & { qr: InputHandoffQrSheet }) {
+function InputHandoffQrActions({ qr, busy, onClose, snapshot, onDone }: InputHandoffSheetProps & { qr: InputHandoffQrSheet }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   const link = qr.view.link;
@@ -130,9 +130,12 @@ function InputHandoffQrActions({ qr, busy, onClose }: InputHandoffSheetProps & {
   const share = { label: t("interaction.inputHandoff.qr.share"), disabled, onPress: qr.onShare };
   return (
     <>
-      <Text style={styles.sheetNote}>
-        {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
-      </Text>
+      {/* An agent's screenshot does not continue by itself; the header says to hand back. */}
+      {snapshot.agentPicture ? null : (
+        <Text style={styles.sheetNote}>
+          {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
+        </Text>
+      )}
       <View style={styles.sheetButtons}>
         <MainWindowActionButton
           grow
@@ -152,6 +155,18 @@ function InputHandoffQrActions({ qr, busy, onClose }: InputHandoffSheetProps & {
           <MainWindowActionButton grow action={{ ...share, tone: "secondary", testID: "interaction.inputHandoff.qr.share" }} />
         ) : null}
         {qr.notice ? <Text style={[styles.sheetNote]}>{qr.notice}</Text> : null}
+        {snapshot.agentPicture ? (
+          <MainWindowActionButton
+            grow
+            action={{
+              label: t("interaction.inputHandoff.action.done"),
+              tone: "secondary",
+              disabled: busy,
+              testID: "interaction.inputHandoff.qr.done",
+              onPress: onDone,
+            }}
+          />
+        ) : null}
         <MainWindowActionButton
           grow
           action={{ label: t("interaction.inputHandoff.action.close"), tone: "secondary", onPress: onClose }}
@@ -165,7 +180,7 @@ function InputHandoffQuietLinks({ snapshot, busy, onPicture, onLiveView, qr }: I
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   // A terminal prompt has no screen to look at; a picture step is already one, except a QR code cut out of it.
-  const picture = !snapshot.command && (!snapshot.picture || snapshot.qr === "scan");
+  const picture = !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || snapshot.qr === "scan");
   const copy = snapshot.qr === "scan" && qr?.view.text ? qr : null;
   if (!picture && !onLiveView && !copy) return null;
   return (

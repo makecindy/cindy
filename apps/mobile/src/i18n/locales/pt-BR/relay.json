@@ -1,0 +1,55 @@
+{
+  "settings": {
+    "sectionTitle": "Serviço de retransmissão",
+    "currentLabel": "Serviço de retransmissão",
+    "official": "Retransmissor oficial do {{appName}}",
+    "switchToOfficial": "Voltar ao retransmissor oficial",
+    "officialHint": "Seus dispositivos se conectam pelo retransmissor oficial do {{appName}}. Para usar seu próprio retransmissor, exiba o QR code de conexão no computador em que ele está sendo executado e escaneie o código com a câmera do celular.",
+    "selfHostedHint": "Seus dispositivos se conectam pelo seu próprio retransmissor em {{address}}. O login, os modelos, as tarefas compartilhadas e outros serviços continuam usando o {{appName}}.",
+    "removedHint": "Este celular foi removido do retransmissor, ou o retransmissor foi desativado. Volte ao retransmissor oficial ou conecte-se novamente pelo computador.",
+    "credentialMissingHint": "A credencial do retransmissor não está mais neste celular. Conecte-se novamente pelo computador ou volte ao retransmissor oficial.",
+    "confirmTitle": "Voltar ao retransmissor oficial?",
+    "confirmBody": "Este celular sairá de “{{name}}” e usará o relay oficial do {{appName}}. Para usar esse relay novamente, entre nele pelo computador.",
+    "confirmAction": "Voltar ao oficial",
+    "switchFailed": "Não foi possível voltar ao relay oficial. Tente novamente em instantes.",
+    "pushUnavailable": "Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular."
+  },
+  "issue": {
+    "removedTitle": "Removido do relay",
+    "removedHint": "Este celular foi removido do relay ou o relay foi desativado. Você pode voltar ao relay oficial nas Configurações."
+  },
+  "join": {
+    "title": "Entrar no relay",
+    "checking": "Conectando ao relay…",
+    "body": "Após entrar, este celular se conectará aos seus computadores por este relay. Login, modelos, tarefas compartilhadas e outros serviços continuarão usando o {{appName}}. Enquanto você usa seu próprio relay, as notificações de tarefas dos seus computadores não são enviadas para este celular.",
+    "switchNote": "Ao entrar, este celular passará de “{{current}}” para este relay.",
+    "action": "Entrar",
+    "pairingCodeLabel": "Código de pareamento",
+    "verifyHint": "No computador que executa o relay, confira se estes dígitos aparecem e aprove.",
+    "waiting": "Aguardando aprovação…",
+    "cancel": "Cancelar",
+    "joinedTitle": "Conectado ao relay",
+    "joinedBody": "Este celular agora se conecta aos seus computadores por “{{name}}”.",
+    "done": "Concluído",
+    "retry": "Tentar novamente",
+    "signedOut": "Entre no {{appName}} primeiro e depois entre neste relay.",
+    "signIn": "Entrar",
+    "invalidLink": "Este link de entrada é inválido ou expirou. Crie outro no computador.",
+    "cancelled": "A entrada foi cancelada. Para entrar neste relay, crie um novo link de entrada no computador."
+  },
+  "errors": {
+    "unreachable": "Não foi possível acessar este relay. Verifique se o celular e o computador estão na mesma rede ou se o celular consegue abrir este endereço.",
+    "insecureUnreachable": "Não foi possível acessar este relay. Celulares só podem entrar em um relay por HTTPS. Configure um certificado para o relay no computador e crie um novo link de entrada.",
+    "notRelay": "Este endereço não é um relay do {{appName}}. Verifique o link de entrada.",
+    "incompatible": "Este relay não funciona com esta versão do {{appName}}. Atualize o relay e o {{appName}}.",
+    "accountMismatch": "Este relay pertence a outra conta do {{appName}}.",
+    "codeInvalid": "Este link de entrada expirou. Crie outro no computador.",
+    "rateLimited": "Muitas tentativas. Tente novamente mais tarde.",
+    "rejected": "A solicitação de entrada foi recusada no computador.",
+    "expired": "O tempo de espera pela aprovação esgotou. Crie um novo link de entrada no computador.",
+    "ownerMismatch": "O relay retornou um certificado que não foi emitido pelo proprietário indicado no link de entrada. Você pode estar conectado a um relay falso, por isso a entrada foi interrompida.",
+    "failed": "Não foi possível entrar no relay. Tente novamente mais tarde.",
+    "saveFailed": "A solicitação foi aprovada, mas não foi possível salvar a credencial do relay neste celular. Crie um novo link de entrada no computador e tente novamente.",
+    "credentialUnavailable": "Este celular não tem uma credencial de relay utilizável. Entre novamente ou volte ao relay oficial nas Configurações."
+  }
+}

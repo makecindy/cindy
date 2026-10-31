@@ -1,6 +1,7 @@
 import { RoutineEventAdmission, addRoutineReceipt, compactRoutineReceipts, receiptIsLive } from './routine-event-admission.js';
 import {
   BUILTIN_ROUTINE_ERROR,
+  LEGACY_TODO_CHECK_BUILTIN,
   matchesRoutineEvent,
   nextRoutineTriggerAt,
   parseRoutineEvent,
@@ -29,6 +30,8 @@ export interface RoutineRun {
   scheduleRunId?: string;
   sessionId?: string;
   resultText?: string;
+  /** Execution remains successful when only delivery fails; never rerun work to resend it. */
+  delivery?: { status: 'delivered' | 'failed' | 'suppressed'; error?: string };
 }
 
 /** One account-owned snapshot; the host commits each transition atomically. */
@@ -87,6 +90,11 @@ export function rewriteRoutinePluginSource(
 
 export interface RoutineEngineDeps {
   load(): Promise<RoutineState | null>;
+  /**
+   * Replacement name/prompt for a legacy built-in daily todo check, applied once while it is migrated on
+   * load and before queued runs resume, so the revision and any pending batch stay valid.
+   */
+  legacyTodoCheckContent?(routine: Routine): Partial<Pick<RoutineInput, "name" | "prompt">> | null;
   save(state: RoutineState): Promise<void>;
   execute(
     routine: Routine,
@@ -99,6 +107,7 @@ export interface RoutineEngineDeps {
     sessionId?: string;
     error?: string;
     resultText?: string;
+    delivery?: RoutineRun['delivery'];
     deferred?: boolean;
     skipped?: boolean;
     /** Host-owned execution cap reached; persist disabling with this run's result. */
@@ -147,7 +156,16 @@ export class RoutineEngine {
       ) {
         throw new Error("Unsupported routine storage");
       }
-      for (const routine of saved.routines) parseRoutineInput(routine);
+      saved.routines = saved.routines.map(routine => {
+        const loaded: Routine = { ...routine, ...parseRoutineInput(routine) };
+        // The startup save below persists the migration; later loads see an ordinary routine.
+        if ((routine.builtin as string | undefined) === LEGACY_TODO_CHECK_BUILTIN) {
+          delete loaded.builtin;
+          delete loaded.builtinVersion;
+          Object.assign(loaded, this.deps.legacyTodoCheckContent?.(loaded) ?? {});
+        }
+        return loaded;
+      });
       this.state = saved;
     }
     this.state.receipts = compactRoutineReceipts(this.state.receipts, this.deps.now());
@@ -312,6 +330,7 @@ export class RoutineEngine {
           enabled: existing.enabled,
           modelOverride: existing.modelOverride,
           sessionMode: existing.sessionMode,
+          delivery: existing.delivery,
         } : {}),
       });
       if (id && !existing && !creationId && !options.builtin) throw new Error("Routine not found");

@@ -2,7 +2,7 @@ import { resolveWorkerCreationDefaults, type OrcaWorkerCreateRequest, type Worke
 import type { WorkerCreationSelection } from '../../shared/workerCreationSelection';
 import type { WorkerWorktreeRequest, WorkerOwnedWorktree, WorkerWorktreeSourceSelection } from '../../shared/orca-worker-project';
 import type { AgentKind } from '@cindy/maker-core';
-import { isCodexGatewayWireModel, type AuthStrategy } from '@cindy/model-providers';
+import { isCodexGatewayWireModel, type AuthStrategy, type CatalogModel, type ProviderAccess } from '@cindy/model-providers';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole, orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import path from 'node:path';
 
@@ -76,6 +76,12 @@ export interface OrcaWorkerProviderSnapshot {
   id: string;
   name: string;
   models: readonly string[];
+  access?: ProviderAccess;
+  /** Non-secret picker metadata for automation model discovery, scoped to this source. */
+  modelDetailsByModel?: Readonly<Record<string, Pick<CatalogModel,
+    'description' | 'contextWindow' | 'efforts' | 'defaultEffort' | 'effortsUnknown' | 'supportsFastMode'
+    | 'supportsUltrafastMode' | 'supportsToolCalls' | 'cost' | 'currency' | 'costDiscount' | 'displayPricing'
+  >>>;
   /**
    * 运行 model id 对应的 Model Registry 稳定身份。缺失表示目录无法证明该路由 model
    * 与规范身份相同；这种情况下只能使用精确 ID，不能仅凭后缀推断 managed alias。

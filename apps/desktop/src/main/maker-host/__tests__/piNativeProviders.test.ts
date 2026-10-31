@@ -59,6 +59,28 @@ import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
 
+// Unit: native Pi bypasses the Desktop proxy; assert the emitted model config,
+// including endpoint overrides and explicit user headers (not just a helper).
+it('attributes native Pi per model endpoint without lending identity to another service', () => {
+  const cfg: Cfg = { id: 'router', name: 'Router', runtimes: { pi: {
+    baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
+    models: [{ id: 'router-model' }, { id: 'other-model', route: {
+      baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat',
+    } }],
+  } } };
+  const result = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  expect(result.providers[0].headers).toBeUndefined();
+  expect(result.providers[0].models[0].headers).toMatchObject({
+    'HTTP-Referer': 'https://cindy.app', 'X-OpenRouter-Title': 'Cindy',
+  });
+  expect(result.providers[0].models[1].headers).toBeUndefined();
+  cfg.runtimes.pi!.headers = { 'http-referer': 'https://custom.example', 'x-title': 'Custom app' };
+  const custom = buildPiNativeProvidersFromConfigs([cfg], () => 'fixture-key');
+  const headers = custom.providers[0].models[0].headers!;
+  expect(headers['X-OpenRouter-Title']).toBeUndefined();
+  expect(custom.env[headers['x-title'].slice(1)]).toBe('Custom app');
+});
+
 it('never projects retired independent Claude accounts into Pi', () => {
   const original = BUNDLED_CATALOG.providers.find(provider => provider.id === 'anthropic')!;
   const catalog: Catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers,
