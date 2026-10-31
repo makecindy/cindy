@@ -11871,12 +11871,6 @@
         "ASSESSMENT_FAILED": "暫時無法重新整理配置狀態，請重試。",
         "TIMEOUT": "等待設定超時，請重試。"
       },
-      "hostRequirements": {
-        "modelProvider": {
-          "label": "AI 模型服務",
-          "description": "使用插件宣告的圖片或影片能力前，需要先連線可用的模型服務"
-        }
-      },
       "form": {
         "placeholder": "請輸入{{label}}",
         "required": "請輸入{{label}}",

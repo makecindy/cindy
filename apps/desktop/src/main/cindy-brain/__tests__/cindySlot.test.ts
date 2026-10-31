@@ -785,6 +785,29 @@ describe('目录空清单 = 能力暂不可用', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
+  // #7581:模型服务不再是插件级前置门禁,未登录时媒体代办要在调用这一刻给出对因的错误,
+  // 而不是"目录暂时取不到、重启试试"。已登录但目录为空仍是旧口径的临时状态。
+  // 账号切换期间网关能力暂时为否:仍按临时状态回复,不能误判为未登录。
+  it.each([
+    [false, false, 'NO_CANDIDATE', 'Cindy 模型服务未登录'],
+    [true, false, undefined, '模型目录暂时取不到'],
+    [false, true, undefined, '模型目录暂时取不到'],
+  ] as const)('图像清单空、模型服务就绪=%s、账号切换中=%s → 对因的拒单', async (ready, switching, errorCode, text) => {
+    const { slot, generateImage } = makeSlot({
+      getImageConfig: vi.fn(() => EMPTY_CONFIG) as unknown as CindySlotDeps['getImageConfig'],
+      isModelAccessReady: () => ready,
+      isOwnerBoundaryPending: () => switching,
+    });
+    const result = (await slot.handleModelRequest('art', REQ)) as {
+      ok: boolean;
+      message: string;
+      errorCode?: string;
+    };
+    expect(result).toMatchObject({ ok: false });
+    expect(result.errorCode).toBe(errorCode);
+    expect(result.message).toContain(text);
+    expect(generateImage).not.toHaveBeenCalled();
+  });
 });
 
 describe('媒体选型没有逐插件覆盖(2026-10 起只走系统默认)', () => {
