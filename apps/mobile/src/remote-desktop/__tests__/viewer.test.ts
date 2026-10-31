@@ -33,6 +33,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
   const listeners: Record<string, (event: unknown) => void> = {};
   const documentListeners: Record<string, (event: unknown) => void> = {};
   const windowListeners: Record<string, (event: unknown) => void> = {};
+  let resize = () => {};
   let activeElement: object | null = null;
   const elements = Object.fromEntries(
     [
@@ -183,6 +184,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
       },
     },
     ResizeObserver: class {
+      constructor(callback: () => void) { resize = callback; }
       observe() {}
     },
     setInterval: (fn: () => void) => intervals.push(fn),
@@ -196,6 +198,7 @@ function viewer(rtc = false, frameCallback = true, nativeMedia = false) {
     cancelAnimationFrame: (key: number) => frames.delete(key),
   });
   return {
+    resize: () => resize(),
     dataChannel,
     messages,
     elements,
@@ -772,6 +775,32 @@ describe("remote desktop viewport", () => {
       { kind: "scroll", dx: 0, dy: -9 },
       { kind: "scroll", dx: 0, dy: -30 },
     ]);
+  });
+  // Unit: Duo Modern sometimes overlaps its skin rail after switching from a
+  // smaller retro canvas. Insets and WebView resize arrive independently; the
+  // previous test only sent insets after the final dimensions were available.
+  it.each(["insets-first", "resize-first", "initial-layout"])("keeps Modern above the fold when switching skins (%s)", (order) => {
+    const v = viewer(false, true, true);
+    v.elements.stage.clientWidth = order === "initial-layout" ? 0 : 560;
+    v.elements.stage.clientHeight = order === "initial-layout" ? 0 : 310;
+    v.send({ type: "init", epoch: "fold", width: 1920, height: 1080 });
+    const applyInsets = () => v.send({ type: "mouseButtons", fitToInsets: true, topInset: 80, bottomInset: 720 });
+    const expand = () => {
+      v.elements.stage.clientWidth = 900;
+      v.elements.stage.clientHeight = 1400;
+      v.resize();
+    };
+    if (order === "resize-first") { expand(); applyInsets(); }
+    else { applyInsets(); expand(); }
+    v.frame(300);
+    expect(v.messages.findLast(m => m.type === "nativeViewport")).toMatchObject({
+      x: 0, y: 126.875, width: 900, height: 506.25,
+    });
+    for (const el of [v.elements.image, v.elements.video]) {
+      expect(el.style.top).toBe("126.875px");
+      expect(parseFloat(el.style.top) + parseFloat(el.style.height)).toBeLessThanOrEqual(680);
+    }
+    expect(v.messages.findLast(m => m.type === "viewportChanged")).toMatchObject({ width: 900, height: 600 });
   });
   it('fits the folded desktop above the touchpad without shrinking the background stage', () => {
     const v = viewer(false, true, true);

@@ -14,6 +14,7 @@ import RemoteDesktopScreen, {
   RemoteDesktopSession,
 } from "../RemoteDesktopScreen";
 import { RemoteDesktopDisplaySettings } from "../RemoteDesktopDisplaySettings";
+import { retroDesktopViewport } from "../FoldDesktopSkin";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -142,6 +143,8 @@ const fixture = vi.hoisted(() => ({
   canControl: true,
   systemAudio: false,
   playback: vi.fn(async (_enabled: boolean) => {}),
+  keyFeedback: vi.fn(async () => {}),
+  keyFeedbackForSkin: vi.fn(async (_skin: string, _code: string) => {}),
   trickleIce: false,
   focused: true,
   status: "online",
@@ -245,6 +248,8 @@ vi.mock("expo-modules-core", () => ({
 vi.mock("../../../modules/cindy-remote-presentation/src", () => ({
   remotePresentation: {
     playback: fixture.playback,
+    keyFeedback: fixture.keyFeedback,
+    keyFeedbackForSkin: fixture.keyFeedbackForSkin,
     rotate: vi.fn(async () => {}),
   },
 }));
@@ -531,6 +536,19 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it("keeps the MacBook opening stable across host display ratios", async () => {
+    await act(async () => {});
+    const panel = { x: 0, y: 0, width: 669, height: 455 };
+    const reference = retroDesktopViewport(panel, "macbook", panel, 1.54);
+    expect(reference.y).toBe(0);
+    expect(reference.width).toBe(669);
+    expect(reference.height).toBeLessThan(panel.height);
+    for (const ratio of [16 / 9, 4 / 3, 21 / 9, 9 / 16, undefined]) {
+      expect(retroDesktopViewport(panel, "macbook", panel, ratio)).toEqual(
+        reference,
+      );
+    }
+  });
   it.each([false, true])(
     "allows the Wayland consent window while keeping the overall wait bounded (native=%s)",
     async (native) => {
@@ -5496,6 +5514,87 @@ describe("remote desktop controls", () => {
       lockOnExit: false,
     });
   });
+  // Unit: a skin selected through the real swipe rail must survive leaving the
+  // screen. Earlier fold tests only kept the same component mounted.
+  it("restores the last selected skin on re-entry without overwriting a new choice with a late read", async () => {
+    const key = "cindy.mobile.remote-desktop.fold-skin.v1";
+    const geometry: WindowGeometry = {
+      width: 900,
+      height: 1400,
+      insets: { top: 80, left: 0, right: 0, bottom: 20 },
+      regularWidth: true,
+      regularHeight: true,
+      barEdge: "none",
+      reservedRegionsSupported: true,
+      regions: [{ kind: "division", x: 0, y: 680, width: 900, height: 30 }],
+    };
+    fixture.size = { width: 900, height: 1400 };
+    const enter = async () => {
+      await act(async () =>
+        root.render(
+          <GeometryContext.Provider value={geometry}>
+            <RemoteDesktopScreen />
+          </GeometryContext.Provider>,
+        ),
+      );
+      await connect();
+    };
+    const leave = async () => {
+      await act(async () => root.render(null));
+    };
+    const swipe = () => {
+      const rail = fixture.views["remoteDesktop.skinSwipe"];
+      act(() =>
+        rail.onStartShouldSetResponderCapture({
+          nativeEvent: { pageX: 100, pageY: 440 },
+        }),
+      );
+      act(() =>
+        rail.onResponderGrant({ nativeEvent: { pageX: 0, pageY: 440 } }),
+      );
+      act(() =>
+        rail.onResponderRelease({ nativeEvent: { pageX: 0, pageY: 440 } }),
+      );
+    };
+    await leave();
+    storage.items.set(key, "thinkpad");
+    await enter();
+    swipe(); // ThinkPad -> MacBook.
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.macbookBezel"]'),
+    ).not.toBeNull();
+    await leave();
+    expect(storage.items.get(key)).toBe("macbook");
+    await enter();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.macbookBezel"]'),
+    ).not.toBeNull();
+    swipe(); // MacBook -> plain controls, also a remembered choice.
+    await leave();
+    expect(storage.items.get(key)).toBe("modern");
+    await enter();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+    ).toBeNull();
+    await leave();
+    let resolveRead!: (value: string) => void;
+    const original = storage.getItem;
+    const read = vi.spyOn(storage, "getItem").mockImplementation((k) =>
+      k === key
+        ? new Promise<string>((resolve) => {
+            resolveRead = resolve;
+          })
+        : original(k),
+    );
+    await enter();
+    swipe(); // Default Macintosh II -> PowerBook while storage is pending.
+    await act(async () => resolveRead("macbook"));
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.macbookBezel"]'),
+    ).toBeNull();
+    expect(storage.items.get(key)).toBe("powerbook");
+    read.mockRestore();
+  });
   it("resends the upper-pane bounds whenever a folded viewer becomes ready", async () => {
     fixture.size = { width: 900, height: 1400 };
     const geometry: WindowGeometry = {
@@ -5597,8 +5696,9 @@ describe("remote desktop controls", () => {
     expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
     expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
     const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
-    act(() => letter.onPressOut());
+    const touch = { nativeEvent: { identifier: 1, changedTouches: [{ identifier: 1 }] } };
+    act(() => letter.onTouchStart(touch));
+    act(() => letter.onTouchEnd(touch));
     expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
     // Android IME resizes the window instead of adding an iOS keyboard inset.
     fixture.size = { width: 700, height: 550 };
@@ -5796,7 +5896,37 @@ describe("remote desktop controls", () => {
     ).not.toBeNull();
     fixture.post.mockClear();
     const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
-    act(() => letter.onPressIn());
+    // Two native touches must retain independent key lifetimes. Pressable's
+    // single responder used to release Command when the second finger landed.
+    const touch = (identifier: number) => ({
+      nativeEvent: { identifier, changedTouches: [{ identifier }] },
+    });
+    const command = fixture.views["remoteDesktop.retroKey.MetaLeft"];
+    // iOS Fabric sends the same changedTouches batch to both targets.
+    const batch = (identifier: number) => ({
+      nativeEvent: {
+        identifier: 1,
+        changedTouches: [{ identifier: 1 }, { identifier: 2 }],
+        targetTouches: [{ identifier }],
+      },
+    });
+    act(() => command.onTouchStart(batch(1)));
+    act(() => letter.onTouchStart(batch(2)));
+    act(() => letter.onTouchEnd(touch(2)));
+    expect(sent().filter((m) => m.type === "events")).toEqual([
+      {
+        type: "events",
+        events: [{ kind: "key", code: "MetaLeft", down: true }],
+      },
+      { type: "events", events: [{ kind: "key", code: "KeyA", down: true }] },
+      { type: "events", events: [{ kind: "key", code: "KeyA", down: false }] },
+    ]);
+    act(() => command.onTouchCancel(touch(1)));
+    expect(sent().at(-1)).toEqual({
+      type: "events",
+      events: [{ kind: "key", code: "MetaLeft", down: false }],
+    });
+    act(() => letter.onTouchStart(touch(3)));
     expect(sent()).toContainEqual({
       type: "events",
       events: [{ kind: "key", code: "KeyA", down: true }],
@@ -5831,7 +5961,119 @@ describe("remote desktop controls", () => {
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
-    swipe(-100); // ThinkPad → modern.
+    swipe(-100); // ThinkPad → MacBook: same viewer and keyboard input.
+    // MacBook keeps its own opening regardless of the host aspect. Shorter
+    // panels cap the height at the physical fold, and the viewer adds fill.
+    expect(
+      Object.assign(
+        {},
+        ...fixture.views["remoteDesktop.media"].style
+          .flat(Infinity)
+          .filter(Boolean),
+      ),
+    ).toMatchObject({
+      left: 0,
+      right: 0,
+      top: 0,
+      bottom: 500,
+      borderRadius: 0,
+    });
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.macbookBezel"]'),
+    ).not.toBeNull();
+    fixture.post.mockClear();
+    const macCommand = fixture.views["remoteDesktop.retroKey.MetaLeft"];
+    const macShift = fixture.views["remoteDesktop.retroKey.ShiftLeft"];
+    const macLetter = fixture.views["remoteDesktop.retroKey.KeyZ"];
+    // Unit: skin/key must reach the native audio boundary; previously all skins
+    // played one sound. Simultaneous touches still produce one cue per key down.
+    fixture.keyFeedbackForSkin.mockClear();
+    act(() => macCommand.onTouchStart(touch(4)));
+    act(() => macShift.onTouchStart(touch(5)));
+    act(() => macLetter.onTouchStart(touch(6)));
+    act(() => macLetter.onTouchEnd(touch(6)));
+    act(() => macShift.onTouchEnd(touch(5)));
+    act(() => macCommand.onTouchEnd(touch(4)));
+    expect(fixture.keyFeedbackForSkin.mock.calls).toEqual([
+      ["macbook", "MetaLeft"],
+      ["macbook", "ShiftLeft"],
+      ["macbook", "KeyZ"],
+    ]);
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m) => m.events),
+    ).toEqual([
+      { kind: "key", code: "MetaLeft", down: true },
+      { kind: "key", code: "ShiftLeft", down: true },
+      { kind: "key", code: "KeyZ", down: true },
+      { kind: "key", code: "KeyZ", down: false },
+      { kind: "key", code: "ShiftLeft", down: false },
+      { kind: "key", code: "MetaLeft", down: false },
+    ]);
+    fixture.post.mockClear();
+    act(() => macLetter.onTouchStart(touch(7)));
+    act(() => macLetter.onTouchStart(touch(8)));
+    expect(fixture.keyFeedbackForSkin).toHaveBeenCalledTimes(4);
+    act(() => macLetter.onTouchEnd(touch(7)));
+    expect(sent().filter((m) => m.type === "events")).toHaveLength(1);
+    act(() => macLetter.onTouchEnd(touch(8)));
+    expect(sent().at(-1)).toMatchObject({
+      events: [{ code: "KeyZ", down: false }],
+    });
+    act(() => macCommand.onTouchStart(touch(9)));
+    act(() => {
+      AppState.currentState = "inactive";
+      fixture.appState!("inactive");
+    });
+    expect(sent()).toContainEqual({ type: "releaseInput" });
+    const beforeDisabledTouch = sent().length;
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.MetaLeft"].onTouchStart(touch(10)),
+    );
+    act(() => macCommand.onTouchEnd(touch(9)));
+    expect(sent()).toHaveLength(beforeDisabledTouch);
+    act(() => {
+      AppState.currentState = "active";
+      fixture.appState!("active");
+    });
+    fixture.post.mockClear();
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.KeyZ"].onAccessibilityAction({
+        nativeEvent: { actionName: "activate" },
+      }),
+    );
+    expect(
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m) => m.events),
+    ).toEqual([
+      { kind: "key", code: "KeyZ", down: true },
+      { kind: "key", code: "KeyZ", down: false },
+    ]);
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.Space"].onTouchStart(touch(11)),
+    );
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.Space"].onTouchEnd(touch(11)),
+    );
+    expect(fixture.keyFeedbackForSkin).toHaveBeenLastCalledWith(
+      "macbook",
+      "Space",
+    );
+    swipe(100); // MacBook → ThinkPad: the next press selects its own recording.
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.KeyZ"].onTouchStart(touch(12)),
+    );
+    act(() =>
+      fixture.views["remoteDesktop.retroKey.KeyZ"].onTouchEnd(touch(12)),
+    );
+    expect(fixture.keyFeedbackForSkin).toHaveBeenLastCalledWith(
+      "thinkpad",
+      "KeyZ",
+    );
+    swipe(-100);
+    swipe(-100); // MacBook → plain modern controls.
     expect(
       sent()
         .filter((m) => m.type === "theme")
@@ -5851,12 +6093,9 @@ describe("remote desktop controls", () => {
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).toBeNull();
     expect(sent()).toContainEqual({ type: "releaseInput" });
-    act(() => letter.onPressOut());
-    expect(
-      sent()
-        .filter((m) => m.type === "events")
-        .at(-1),
-    ).toEqual({ type: "events", events: [] });
+    const beforeLateRelease = sent().length;
+    act(() => letter.onTouchEnd(touch(3)));
+    expect(sent()).toHaveLength(beforeLateRelease);
     expect(sent().some((m) => m.type === "nativeTouchpad")).toBe(false);
     expect(
       sent()
@@ -5867,6 +6106,7 @@ describe("remote desktop controls", () => {
     expect(
       host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
     ).not.toBeNull();
+    swipe(100); // MacBook → ThinkPad.
     swipe(100); // ThinkPad → PowerBook.
     swipe(100); // PowerBook → Macintosh II restores the same viewport.
     expect(fixture.views["remoteDesktop.media"].style).toEqual(initialFrame);

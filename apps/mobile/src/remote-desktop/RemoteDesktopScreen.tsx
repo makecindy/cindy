@@ -3,6 +3,7 @@ import { foldDesktopLayout, foldDesktopRegion } from "./foldDesktopLayout";
 import { useAdaptiveWindow } from "@/platform/AdaptiveWindowContext";
 import { controlRegion } from "@/platform/windowGeometry";
 import { FoldTouchpad } from "./FoldTouchpad";
+import { RemoteDesktopKey } from "./RemoteDesktopKey";
 import {
   FoldDesktopBezel,
   FoldDesktopDeck,
@@ -10,8 +11,9 @@ import {
   FoldDesktopSkinSwitch,
   retroDesktopViewport,
   foldDesktopSkinColors,
-  type FoldDesktopSkin,
+  foldDesktopKeyDepth,
 } from "./FoldDesktopSkin";
+import { useFoldSkinPreference } from "./useFoldSkinPreference";
 import {
   useCallback,
   useMemo,
@@ -577,7 +579,7 @@ export function RemoteDesktopSession({
     keyboardPanelHeight,
     keyboard,
   );
-  const [foldSkin, setFoldSkin] = useState<FoldDesktopSkin>("macii");
+  const [foldSkin, setFoldSkin] = useFoldSkinPreference();
   const foldSkinAvailable = Boolean(foldLayout);
   const retroDesktop =
     foldSkinAvailable &&
@@ -602,7 +604,14 @@ export function RemoteDesktopSession({
   const retroViewport =
     retroDesktop && foldLayout
       ? retroDesktopViewport(
-          hardwareMedia,
+          foldSkin === "macbook"
+            ? {
+                ...hardwareMedia,
+                // Keep the display flush at the top; the physical fold band
+                // belongs to the silver case rather than the video surface.
+                height: foldLayout.media.y + foldLayout.media.height,
+              }
+            : hardwareMedia,
           foldSkin,
           foldLayout.media,
           lease && lease.display.height > 0
@@ -3235,19 +3244,23 @@ export function RemoteDesktopSession({
     return LABELS[code] ?? code.replace(/^Key|^Digit/, "");
   };
   const heldKey = (code: string, retro = false) => (
-    <Pressable
-      key={code}
+    <RemoteDesktopKey
+      key={retro ? `${foldSkin}:${code}` : code}
       testID={retro ? `remoteDesktop.retroKey.${code}` : undefined}
-      disabled={retro && !canInput}
-      accessibilityRole="button"
-      accessibilityLabel={keyLabel(code)}
-      style={({ pressed }) => [
+      disabled={!canInput || !focused || appState !== "active"}
+      label={keyLabel(code)}
+      style={(pressed) => [
         styles.computerKey,
         retro && styles.retroKey,
+        retro && { paddingBottom: foldDesktopKeyDepth(foldSkin) + spacing.xs },
+        retro &&
+          /^(Escape|Backspace|Tab|Enter|ShiftLeft)$/.test(code) && {
+            flex: 1.4,
+          },
         retro && code === "Space" && { flex: 4 },
         pressed && styles.keyPressed,
       ]}
-      onPressIn={() => {
+      onDown={() => {
         if (!inputAllowed(Boolean(active.current?.controlling))) return;
         const alreadyHeld = new Set([...heldKeys.current.values()].flat());
         const keys = !retro && comboMode ? [...modifiers, code] : [code];
@@ -3262,18 +3275,27 @@ export function RemoteDesktopSession({
               down: true,
             })),
         });
+        // Optional on older native packages; feedback must never delay input.
+        const feedback = remotePresentation?.keyFeedbackForSkin
+          ? remotePresentation.keyFeedbackForSkin(
+              retro ? foldSkin : "modern",
+              code,
+            )
+          : remotePresentation?.keyFeedback?.();
+        void feedback?.catch(() => {});
       }}
-      onPressOut={() => {
+      onUp={() => {
         const keys = heldKeys.current.get(code) ?? [];
         heldKeys.current.delete(code);
         const stillHeld = new Set([...heldKeys.current.values()].flat());
-        send({
-          type: "events",
-          events: keys
-            .filter((key) => !stillHeld.has(key))
-            .toReversed()
-            .map((key) => ({ kind: "key", code: key, down: false })),
-        });
+        if (keys.length)
+          send({
+            type: "events",
+            events: keys
+              .filter((key) => !stillHeld.has(key))
+              .toReversed()
+              .map((key) => ({ kind: "key", code: key, down: false })),
+          });
         if (!comboMode) setModifiers([]);
       }}
     >
@@ -3286,7 +3308,10 @@ export function RemoteDesktopSession({
             ? styles.keyText
             : styles.specialKeyText,
           retro && {
-            color: foldDesktopSkinColors(foldSkin).textPrimary,
+            color:
+              foldSkin === "macbook"
+                ? darkColors.textPrimary
+                : foldDesktopSkinColors(foldSkin).textPrimary,
             fontWeight: fontWeight.medium,
             maxWidth: "100%",
             flexShrink: 1,
@@ -3298,11 +3323,15 @@ export function RemoteDesktopSession({
           ? "⌘"
           : retro && code === "ControlLeft"
             ? "Ctrl"
-            : retro && code === "Backspace"
-              ? "⌫"
-              : keyLabel(code)}
+            : retro && code === "AltLeft" && caps?.platform === "darwin"
+              ? "⌥"
+              : retro && code === "ShiftLeft"
+                ? "⇧"
+                : retro && code === "Backspace"
+                  ? "⌫"
+                  : keyLabel(code)}
       </Text>
-    </Pressable>
+    </RemoteDesktopKey>
   );
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
@@ -3327,6 +3356,13 @@ export function RemoteDesktopSession({
     >
       {Platform.OS === "android" && focused && <StatusBar hidden />}
       <View style={[styles.body, landscape && styles.landscape]}>
+        {retroDesktop && focused && foldLayout && foldSkin === "macbook" ? (
+          <FoldDesktopBezel
+            region={hardwareMedia}
+            skin={foldSkin}
+            viewport={retroViewport}
+          />
+        ) : null}
         <View
           style={[
             styles.canvas,
@@ -3356,7 +3392,7 @@ export function RemoteDesktopSession({
                 },
           ]}
         >
-          {retroDesktop && focused && foldLayout ? (
+          {retroDesktop && focused && foldLayout && foldSkin !== "macbook" ? (
             <FoldDesktopBezel
               region={hardwareMedia}
               skin={foldSkin}
@@ -3375,7 +3411,7 @@ export function RemoteDesktopSession({
                 top: retroViewport.y,
                 bottom:
                   geometry.height - retroViewport.y - retroViewport.height,
-                borderRadius: radius.control,
+                borderRadius: foldSkin === "macbook" ? 0 : radius.control,
                 overflow: "hidden",
               },
             ]}
@@ -4505,9 +4541,11 @@ const makeStyles = (colors: ThemeColors) =>
       borderBottomColor: colors.border,
     },
     retroKey: {
+      minHeight: 0,
       backgroundColor: "transparent",
       borderBottomWidth: 0,
-      paddingHorizontal: spacing.sm,
+      borderRadius: radius.micro,
+      paddingHorizontal: 2,
       paddingBottom: spacing.xs,
       overflow: "hidden",
     },
