@@ -79,6 +79,18 @@ describe('provider model candidates', () => {
     expect(presetModelCandidate(preset, 'claude-code', model, registry, route, route, true)).toEqual(model);
   });
 
+  it.each([5, 6] as const)('preserves legacy Pi mixed-API suggestions only before V6, schema=%s', schemaVersion => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(candidate => candidate.id === 'opencode-go')!);
+    preset.runtimes.pi!.models = [];
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    registry.schemaVersion = schemaVersion;
+    delete registry.interfaceProfiles;
+    const candidates = presetSupplementalModels(preset, 'pi', registry);
+    for (const id of ['gpt-5.6-luna', 'grok-4.6', 'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor']) {
+      expect(candidates.some(model => model.id === id)).toBe(schemaVersion === 5);
+    }
+  });
+
   it('keeps legacy direct-protocol discovery but does not infer another protocol from a shared inventory', () => {
     const preset: ProviderPreset = { id: 'review', name: 'Review', runtimes: {
       'claude-code': { baseUrl: 'https://review.example/anthropic', models: [] },

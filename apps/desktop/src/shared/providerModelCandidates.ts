@@ -81,7 +81,7 @@ export function presetSupplementalModels(
   }
   const candidates = new Map<string, ProviderRuntimeModelConfig>();
   for (const sourceRoute of routes) {
-    for (const model of providerModelsForRoute(sourceRoute.baseUrl, agent === 'pi' && !registry ? undefined : sourceRoute.wireProtocol)) {
+    for (const model of providerModelsForRoute(sourceRoute.baseUrl, agent === 'pi' && (!registry || registry.schemaVersion < 6) ? undefined : sourceRoute.wireProtocol)) {
       if (candidates.has(model.id)) continue;
       const candidate = presetModelCandidate(preset, agent, model, registry, runtimeRoute, sourceRoute);
       if (candidate) candidates.set(model.id, candidate);
