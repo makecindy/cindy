@@ -10,6 +10,7 @@ Settings > Appearance controls how the app looks. It starts with **Theme** and *
 **Theme:**
 
 - **Theme**: pick a theme family; each family supplies its own light and dark colors. Local themes are marked **(Local)**. Families with only one variant are tagged **Light only** / **Dark only**; while one is selected the appearance mode is fixed to that variant, and your saved mode returns when you switch to a two-variant theme.
+  - Your light / dark / system preference synchronizes with updated devices signed in to the same Cindy account. Theme families, imported theme files, and wallpaper remain on each device.
 - **Appearance Mode**: **Light**, **Dark**, or **Auto** (follows your system).
 - **Local themes** row:
   - **Create local copy** — writes an editable JSON copy of the current theme into your themes folder.

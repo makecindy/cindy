@@ -492,6 +492,56 @@ describe('remoteProjectsStore', () => {
       expect(reseed).toHaveBeenCalledTimes(1);
     });
 
+    // Unit regression: patch-meta may push only pinnedAt for an old task absent
+    // from the bounded list. Existing coverage only unpins an already-known row.
+    // applyPatch must reload that device's list so the new pin becomes visible.
+    it('reloads an unseen pinned task without reading for an unseen unpin', () => {
+      const pinnedAt = '2026-01-02T00:00:00.000Z';
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('recent')]);
+      const reseed = vi.fn((deviceId: string) => {
+        remoteProjectsStore.setDeviceSessions(deviceId, 'B', [
+          mk('recent'), mk('old-pinned', { pinnedAt }),
+        ]);
+      });
+      setRemoteReseedImpl(reseed);
+
+      remoteProjectsStore.applyPatch('dev-B', 'old-pinned', { pinnedAt: null });
+      remoteProjectsStore.applyPatch('dev-B', 'old-pinned', { pinnedAt: '' });
+      expect(reseed).not.toHaveBeenCalled();
+
+      remoteProjectsStore.applyPatch('dev-B', 'old-pinned', { pinnedAt });
+
+      expect(reseed).toHaveBeenCalledExactlyOnceWith('dev-B', 'active');
+      expect(remoteProjectsStore.getMergedRemoteSessions().find(row => row.id === 'old-pinned'))
+        .toMatchObject({ pinnedAt, deviceLinkDeviceId: 'dev-B' });
+    });
+
+    // Unit regression: Mobile can pin an archived task with no status in its
+    // push. An active-only refresh cannot recover it from an already-loaded
+    // archived bucket. Explicit status must still select only its own bucket.
+    it.each([
+      { status: undefined, taskStatus: 'archived', expectedBuckets: ['active', 'archived'] },
+      { status: 'active', taskStatus: 'active', expectedBuckets: ['active'] },
+      { status: 'archived', taskStatus: 'archived', expectedBuckets: ['archived'] },
+    ] as const)('recovers an unseen pin with status=$status from the loaded status buckets', ({ status, taskStatus, expectedBuckets }) => {
+      const pinnedAt = '2026-01-02T00:00:00.000Z';
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('recent')]);
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [], 'archived');
+      const reseed = vi.fn((deviceId: string, bucket: 'active' | 'archived') => {
+        remoteProjectsStore.setDeviceSessions(deviceId, 'B', bucket === taskStatus
+          ? [mk('old-pinned', { pinnedAt, status: taskStatus })] : [], bucket);
+      });
+      setRemoteReseedImpl(reseed);
+
+      remoteProjectsStore.applyPatch('dev-B', 'old-pinned', {
+        pinnedAt, ...(status === undefined ? {} : { status }),
+      });
+
+      expect(reseed.mock.calls).toEqual(expectedBuckets.map(bucket => ['dev-B', bucket]));
+      expect(remoteProjectsStore.getMergedRemoteSessions().find(row => row.id === 'old-pinned'))
+        .toMatchObject({ pinnedAt, status: taskStatus, deviceLinkDeviceId: 'dev-B' });
+    });
+
     it('落到未知 session 丢弃(不造壳)', () => {
       remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
       remoteProjectsStore.applyPatch('dev-B', 'ghost', { title: 'X' });

@@ -2,7 +2,7 @@
  * useLocale —— 显示语言偏好 + 实际生效语言。
  *
  * 设计上和 useTheme 镜像：
- *   - 偏好持久化在 localStorage (key='language')，不经 server。
+ *   - localStorage (key='language') 是账号偏好的本机投影。
  *   - 'system' = 运行时跟 OS 走，由 main 进程读取 OS 首选语言列表并解析。
  *   - 切换语言时同步 i18next.changeLanguage 触发 react-i18next 重渲染，
  *     同步 <html lang="...">，并通知 main 刷新 macOS 原生菜单文案。
@@ -26,7 +26,7 @@ import {
   type LocalePreference,
   type SupportedLocale,
 } from '@/i18n';
-import { readStoredLocale, writeStoredLocale, effectiveOf, getEffectiveLocale } from '@/lib/localePreference';
+import { readStoredLocale, writeStoredLocale, observeStoredLocale, effectiveOf, getEffectiveLocale } from '@/lib/localePreference';
 
 interface LocaleContextValue {
   /** 用户的偏好选择 (含 'system')。 */
@@ -86,6 +86,17 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyLocale(effectiveLocale);
   }, [effectiveLocale]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== 'language') return;
+      const next = observeStoredLocale(event.newValue);
+      setLocaleState(next);
+      setEffectiveLocale(effectiveOf(next));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const value = useMemo<LocaleContextValue>(
     () => ({ locale, effectiveLocale, setLocale }),

@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { getSidebarInstallVintage } from '@/features/cc-agent/lib/sidebarInstallVintage';
+import { notifyLocalPreferenceChanged } from '@/lib/accountPreferencesSync';
 
 export type SidebarViewMode = 'text' | 'card' | 'list';
 /** 主列表显示模式:无 card 档(卡片版仅置顶区支持)。 */
@@ -52,6 +53,7 @@ let mainMemoryValue: SidebarMainViewMode | null = null;
 
 /** 同步读(置顶段)——给非 hook 路径用。 */
 export function getSidebarViewMode(): SidebarViewMode {
+  ensurePinnedModeStorageListener();
   if (memoryValue !== null) return memoryValue;
   try {
     const parsed = parseMode(localStorage.getItem(STORAGE_KEY));
@@ -70,6 +72,7 @@ export function getSidebarViewMode(): SidebarViewMode {
  * (他们靠 sidebarInstallVintage 的使用痕迹识别)。
  */
 export function getSidebarMainViewMode(): SidebarMainViewMode {
+  ensureMainModeStorageListener();
   if (mainMemoryValue !== null) return mainMemoryValue;
   try {
     const parsed = parseMainMode(localStorage.getItem(MAIN_STORAGE_KEY));
@@ -140,6 +143,7 @@ export function useSidebarCardMode(): {
     } catch {
       // localStorage 不可用——内存 SoT 已生效;仅跨窗口同步缺失。
     }
+    notifyLocalPreferenceChanged(STORAGE_KEY, next);
     mainNotified = true;
     notifyPinnedCardSummaries(next);
     listeners.forEach((fn) => fn());
@@ -163,6 +167,18 @@ export function useSidebarCardMode(): {
 
 /** 主列表显示模式 hook——与置顶段同构,独立 key 与 listener 集合。 */
 const mainListeners = new Set<() => void>();
+let mainStorageListenerBound = false;
+
+function ensureMainModeStorageListener(): void {
+  if (mainStorageListenerBound || typeof window === 'undefined') return;
+  mainStorageListenerBound = true;
+  window.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key !== MAIN_STORAGE_KEY) return;
+    mainMemoryValue = parseMainMode(event.newValue);
+    // Reset/missing follows the loader's existing install-vintage and old-mode migration.
+    mainListeners.forEach(fn => fn());
+  });
+}
 
 export function useSidebarMainViewMode(): {
   mode: SidebarMainViewMode;
@@ -178,21 +194,16 @@ export function useSidebarMainViewMode(): {
     } catch {
       // localStorage 不可用——内存 SoT 已生效;仅跨窗口同步缺失。
     }
+    notifyLocalPreferenceChanged(MAIN_STORAGE_KEY, next);
     mainListeners.forEach((fn) => fn());
   }, []);
 
   useEffect(() => {
+    ensureMainModeStorageListener();
     const sync = () => setModeState(getSidebarMainViewMode());
     mainListeners.add(sync);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== MAIN_STORAGE_KEY) return;
-      mainMemoryValue = parseMainMode(e.newValue) ?? DEFAULT_MAIN_MODE;
-      sync();
-    };
-    window.addEventListener('storage', onStorage);
     return () => {
       mainListeners.delete(sync);
-      window.removeEventListener('storage', onStorage);
     };
   }, []);
 

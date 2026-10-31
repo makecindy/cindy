@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { createMobileAccountPreferencesSync, mobileAccountPreferencesTesting } from '@/settings/accountPreferencesStore';
 
 const store = vi.hoisted(() => new Map<string, string>());
 
@@ -18,6 +20,7 @@ import {
   __testing,
   readLanguagePreference,
   saveLanguagePreference,
+  subscribeLanguagePreference,
 } from '@/i18n/languagePreferenceStore';
 
 describe('languagePreferenceStore', () => {
@@ -46,5 +49,39 @@ describe('languagePreferenceStore', () => {
   it('存储里出现非法值时回退 system', async () => {
     store.set(__testing.storageKey, 'it');
     await expect(readLanguagePreference()).resolves.toBe('system');
+  });
+
+  // Unit: the actual language store must project peer updates and durable reset
+  // tombstones to mounted subscribers. Device-wide read/write tests cannot catch
+  // a remote reset being lost or an incoming change creating another revision.
+  it('applies a peer language once, persists a system reset and isolates another realm', async () => {
+    setMobileAuthOwner('language-owner');
+    await readLanguagePreference();
+    const changed = vi.fn();
+    const off = subscribeLanguagePreference(changed);
+    const sent = vi.fn();
+    const sync = createMobileAccountPreferencesSync({
+      isCurrent: () => true, isRevoked: () => false, selfDeviceId: () => 'phone', send: sent,
+    });
+    try {
+      sync.setOnline(true);
+      sync.peer('desktop', true);
+      await sync.receive('desktop', { version: 1, dataOwnerId: 'language-owner', state: {
+        version: 1, fields: { language: { value: 'ja', counter: 8, nodeId: 'desktop' } },
+      } });
+      expect(await readLanguagePreference()).toBe('ja');
+      expect(changed).toHaveBeenLastCalledWith('ja');
+      expect(sent.mock.lastCall?.[2].state.fields.language).toEqual({ value: 'ja', counter: 8, nodeId: 'desktop' });
+      await saveLanguagePreference('system');
+      const record = JSON.parse(store.get(mobileAccountPreferencesTesting.storageKey(getMobileAuthOwner().accountKey))!);
+      expect(record.state.fields.language).toMatchObject({ value: null, counter: 9 });
+      setMobileAuthOwner('language-owner', 'cn');
+      expect(await readLanguagePreference()).toBe('system');
+      setMobileAuthOwner('language-owner');
+      expect(await readLanguagePreference()).toBe('system');
+    } finally {
+      sync.dispose(); off(); setMobileAuthOwner(null);
+      await mobileAccountPreferencesTesting.reset();
+    }
   });
 });

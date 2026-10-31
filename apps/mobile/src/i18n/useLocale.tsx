@@ -30,6 +30,7 @@ import { i18n, detectSystemLocale, type LocalePreference, type SupportedLocale }
 import {
   readLanguagePreference,
   saveLanguagePreference,
+  subscribeLanguagePreference,
 } from './languagePreferenceStore';
 
 interface LocaleContextValue {
@@ -75,13 +76,20 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
   // 未设置 override 的用户全程无切换)。
   useEffect(() => {
     let cancelled = false;
+    let changed = false;
+    const unsubscribe = subscribeLanguagePreference(next => {
+      changed = true;
+      setLocaleState(next);
+      setEffectiveLocale(applyLocale(next));
+    });
     void readLanguagePreference().then((pref) => {
-      if (cancelled || userChoseRef.current || pref === 'system') return;
+      if (cancelled || changed || userChoseRef.current || pref === 'system') return;
       setLocaleState(pref);
       setEffectiveLocale(applyLocale(pref));
     });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

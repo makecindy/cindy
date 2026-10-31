@@ -877,8 +877,16 @@ const actions = {
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) {
-      if (patch.status === 'active') requestRemoteReseed(deviceId, 'active');
-      if (patch.status === 'archived' && shard.loadedStatuses.has('archived')) {
+      // Another controller's patch-meta pin can omit status. The old task may
+      // be outside our bounded list; includePinned will recover its full row.
+      const newlyPinned = typeof patch.pinnedAt === 'string' && patch.pinnedAt.length > 0;
+      const pinnedWithoutStatus = patch.status === undefined && newlyPinned;
+      if (patch.status === 'active' || pinnedWithoutStatus) {
+        requestRemoteReseed(deviceId, 'active');
+      }
+      // The same pin-only push may refer to an archived task. Refresh history
+      // only if this controller already loaded that bucket.
+      if ((patch.status === 'archived' || pinnedWithoutStatus) && shard.loadedStatuses.has('archived')) {
         requestRemoteReseed(deviceId, 'archived');
       }
       return;
@@ -1429,7 +1437,7 @@ export function setRemoteSessionBootstrapRetryImpl(fn: ((deviceId: string) => vo
 /**
  * 请求重拉某被控设备的会话列表(reconcile)。由 push 消费侧调用:
  *  - `sessions:created`(无 row 数据)→ 重拉该设备;
- *  - applyPatch 收到未知 session 的 status=active(unarchive)→ 重拉补回。
+ *  - applyPatch 收到未知 session 的 status=active(unarchive)或置顶→ 重拉补回。
  * 实现(含防抖)由 listing tier 注入;未挂载时 no-op。
  */
 export function requestRemoteReseed(

@@ -10,6 +10,7 @@ import {
 import { onLocalThemesChange } from '../themes/local-themes';
 import { themeService } from '../themes/theme-service';
 import type { ThemeType } from '../themes/types';
+import { notifyLocalPreferenceChanged } from '../lib/accountPreferencesSync';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -281,6 +282,7 @@ export function ThemeProvider({
     } catch {
       // localStorage may be unavailable
     }
+    notifyLocalPreferenceChanged(STORAGE_KEY, next);
     applyThemeClass(next);
   }, []);
 
@@ -335,7 +337,7 @@ export function ThemeProvider({
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) {
-        const next = e.newValue;
+        const next = e.newValue === null ? 'system' : e.newValue;
         if (next === 'light' || next === 'dark' || next === 'system') {
           setThemeState(next);
           applyThemeClass(next);

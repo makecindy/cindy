@@ -5,6 +5,7 @@ import {
   readThemePreference,
   resolveThemeMode,
   saveThemePreference,
+  subscribeThemePreference,
   type ThemePreference,
 } from './themePreferenceStore';
 
@@ -53,9 +54,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let changed = false;
+    const unsubscribe = subscribeThemePreference(next => {
+      changed = true;
+      applyNativeScheme(next);
+      setPreferenceState(next);
+      setPreferenceReady(true);
+    });
     void readThemePreference().then((stored) => {
       if (cancelled) return;
-      if (!userChoseRef.current && stored !== 'system') {
+      if (!changed && !userChoseRef.current && stored !== 'system') {
         applyNativeScheme(stored);
         setPreferenceState(stored);
       }
@@ -63,6 +71,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 

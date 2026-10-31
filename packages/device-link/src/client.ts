@@ -70,6 +70,7 @@ import {
   type RetransmitEstimate,
 } from './transport.js';
 import { PLUGIN_SYNC_CHANNEL } from './pluginSyncProtocol.js';
+import { ACCOUNT_PREFERENCES_SYNC_CHANNEL } from './accountPreferencesSync.js';
 import { RELAY_AUTH_CHANNEL, relayAuthHandshake } from './selfHostedRelayAuth.js';
 import { DIRECT_LINK_CAPABILITY, DIRECT_LINK_SIGNAL, PROVIDER_SHARE_DIRECT_CAPABILITY, DirectLinkNegotiator, parseDirectSignal,
   type DirectRuntime } from './directNegotiation.js';
@@ -6023,6 +6024,7 @@ const UNLINKED_LEGACY_PUSH_CHANNELS = new Set([
   // Same-account encrypted sync does not require an open remote-control link.
   // The Desktop plugin-sync receiver still checks owner, revocation and capability.
   PLUGIN_SYNC_CHANNEL,
+  ACCOUNT_PREFERENCES_SYNC_CHANNEL,
   'device-link:voice:dictionary:snapshot',
 ]);
 

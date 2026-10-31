@@ -1,4 +1,5 @@
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type LocalePreference, type SupportedLocale } from '../../shared/locale';
+import { notifyLocalPreferenceChanged } from './accountPreferencesSync';
 
 const LOCALE_STORAGE_KEY = 'language';
 let unpersistedPreference: LocalePreference | undefined;
@@ -11,6 +12,15 @@ export function writeStoredLocale(preference: LocalePreference): void {
     // A blocked storage write must not change this window's effective language.
     unpersistedPreference = preference;
   }
+  notifyLocalPreferenceChanged(LOCALE_STORAGE_KEY, preference);
+}
+
+/** A received snapshot replaces a failed local write too, without producing another write. */
+export function observeStoredLocale(raw: string | null): LocalePreference {
+  const next = raw === 'system' || (raw !== null && (SUPPORTED_LOCALES as readonly string[]).includes(raw))
+    ? raw as LocalePreference : 'system';
+  unpersistedPreference = next;
+  return next;
 }
 
 export function readStoredLocale(): LocalePreference {

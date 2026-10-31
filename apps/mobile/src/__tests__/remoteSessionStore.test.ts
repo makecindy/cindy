@@ -4339,6 +4339,37 @@ describe('remoteSessionStore', () => {
     expect(reseed).toHaveBeenCalledTimes(1);
   });
 
+  // Unit regression: another controller's patch-meta push can pin an old task
+  // absent from this device's bounded list. Existing unpin coverage needs a row;
+  // a pinnedAt-only push must refresh the Host list to make the new pin visible.
+  it.each([false, true])('loads an unseen pin with an existing device shard=%s and ignores unseen unpins', withShard => {
+    if (withShard) remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('recent')]);
+    const pinnedAt = '2026-01-02T00:00:00.000Z';
+    const reseed = vi.fn(() => {
+      remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('old-pinned', { pinnedAt })]);
+    });
+    const otherDevice = vi.fn();
+    remoteSessionStore.registerReseedHandler('dev-1', reseed);
+    remoteSessionStore.registerReseedHandler('dev-2', otherDevice);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 'old-pinned', patch: { pinnedAt: null },
+    });
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 'old-pinned', patch: { pinnedAt: '' },
+    });
+    expect(reseed).not.toHaveBeenCalled();
+
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:sessions:patched', {
+      sessionId: 'old-pinned', patch: { pinnedAt },
+    });
+
+    expect(reseed).toHaveBeenCalledOnce();
+    expect(otherDevice).not.toHaveBeenCalled();
+    expect(remoteSessionStore.getHomeSessions().find(row => row.id === 'old-pinned'))
+      .toMatchObject({ pinnedAt, deviceLinkDeviceId: 'dev-1' });
+  });
+
   // Unit regression: unopened side chats are absent from the ordinary mirror.
   // Existing reseed coverage handled creation only, leaving their count stale.
   it.each(['deleted', 'archived'] as const)('invalidates device lists on an unseen child becoming %s', status => {

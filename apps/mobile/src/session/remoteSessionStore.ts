@@ -3712,7 +3712,9 @@ export const remoteSessionStore = {
       }
       // Separate host-owned lists can include children never opened in this mirror.
       // Terminal changes invalidate those lists just as unseen creations do.
-      if (patch.status === 'active' || patch.status === 'deleted' || patch.status === 'archived') {
+      // A pinnedAt-only push can also expose an old task outside the recent list.
+      const newlyPinned = typeof patch.pinnedAt === 'string' && patch.pinnedAt.length > 0;
+      if (patch.status === 'active' || patch.status === 'deleted' || patch.status === 'archived' || newlyPinned) {
         reseedHandlers.get(deviceId)?.forEach((handler) => handler());
       }
       return;

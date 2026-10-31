@@ -230,6 +230,12 @@ import {
   type SidebarSettingsSnapshot,
 } from '../shared/sidebarSettings';
 import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../shared/dataOwnerPush';
+import {
+  isAccountPreferencesSnapshot,
+  type AccountPreferencesSnapshot,
+  type AccountPreferenceWriteRequest,
+  type AccountPreferencesLegacyImportRequest,
+} from '../shared/accountPreferences';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
@@ -5627,6 +5633,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string;
       confirmForce?: ReviewPushConfirmForce;
     }): Promise<ReviewPushResult> => ipcRenderer.invoke('git-review:push', params),
+  },
+
+  accountPreferences: {
+    load: (): Promise<AccountPreferencesSnapshot> =>
+      ipcRenderer.invoke('account-preferences:load'),
+    set: (request: AccountPreferenceWriteRequest): Promise<AccountPreferencesSnapshot> =>
+      ipcRenderer.invoke('account-preferences:set', request),
+    importLegacy: (request: AccountPreferencesLegacyImportRequest): Promise<AccountPreferencesSnapshot> =>
+      ipcRenderer.invoke('account-preferences:import-legacy', request),
+    onChanged: (cb: (snapshot: AccountPreferencesSnapshot) => void): (() => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, value: unknown) => {
+        if (isAccountPreferencesSnapshot(value)) cb(value);
+      };
+      ipcRenderer.on('account-preferences:changed', handler);
+      return () => ipcRenderer.removeListener('account-preferences:changed', handler);
+    },
   },
 
   // Sidebar identity state is owner-scoped in main and every mutation/push is generation-fenced.

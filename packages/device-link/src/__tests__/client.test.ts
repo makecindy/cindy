@@ -35,6 +35,7 @@ import {
   parseTransportPayload,
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
+import { ACCOUNT_PREFERENCES_SYNC_CHANNEL } from '../accountPreferencesSync.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
@@ -3816,8 +3817,8 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
-  // PR #6569: plugin data sync remains independent from the control link (unit wire fixture).
-  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
+  // Account data sync must remain usable after remote control is explicitly closed (unit wire fixture).
+  it.each(['device-link:voice:dictionary:snapshot', PLUGIN_SYNC_CHANNEL, ACCOUNT_PREFERENCES_SYNC_CHANNEL])('显式 close 后 %s push 仍走 unlinked legacy,不报 LINK_NOT_OPEN', async (channel) => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
     await tick();
@@ -3861,6 +3862,18 @@ describe('DeviceLinkClient', () => {
       payload: { channel },
     });
     expect(parseTransportPayload(sent.payload)).toBeNull();
+    const received = vi.fn();
+    h.client.onFrame(received);
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      id: 'account-data-after-control-close',
+      src: 'dev-b',
+      payload: { channel, payload: { value: 'updated' } },
+    });
+    expect(received).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'push', src: 'dev-b', payload: { channel, payload: { value: 'updated' } },
+    }));
     h.client.stop();
   });
 

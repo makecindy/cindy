@@ -45,6 +45,7 @@ import {
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
+  ACCOUNT_PREFERENCES_SYNC_CHANNEL,
   type DeviceLinkConnectionIssue,
   type DeviceLinkStatus,
   type DeviceInfo,
@@ -60,11 +61,13 @@ import {
   DeviceLinkError,
   resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
+import { accountPreferencesSyncDriver } from '../account-preferences/driver.js';
+import { onAccountPreferencesChanged } from '../account-preferences/store.js';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
 import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
-import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
@@ -311,6 +314,8 @@ export function applyControllerPresenceListSnapshot(
     onPeerBecameOnline: (deviceId, platform) => {
       if (isMobilePlatform(platform)) handleMobilePeerOnline(deviceId);
       else handleDesktopPeerOnline(deviceId);
+      ensureAccountPreferencesSync();
+      accountPreferencesSyncDriver.peerOnline(deviceId);
       replayActiveSubscriptions('directory-online', deviceId);
     },
   });
@@ -582,6 +587,33 @@ let unsubscribeDictionaryChanged: (() => void) | null = null;
  */
 function isDeviceRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
+}
+
+/** Account data replication is separate from remote control and never accepts scoped guests. */
+function isAccountPreferencesPeerAllowed(deviceId: string): boolean {
+  return !!client && client.getStatus() === 'online' && !isAppSessionBoundaryPending()
+    && !isScopedPeer(deviceId) && deviceId !== client.getSelfDeviceId()
+    && presenceOnlineByDevice.get(deviceId) === true
+    && !isDeviceRevoked(deviceId) && !revokedByRemote.has(deviceId);
+}
+
+let accountPreferencesSyncScope: string | null = null;
+
+/** A connection survives sign-in and ownership changes; bind each replica to the current owner epoch. */
+function ensureAccountPreferencesSync(): void {
+  if (!client || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated
+    || getActiveAppSession().mode !== 'cloud' || isAppSessionBoundaryPending()) return;
+  const scope = activeOwnerScopeKey();
+  if (accountPreferencesSyncScope === scope) return;
+  accountPreferencesSyncScope = scope;
+  accountPreferencesSyncDriver.connect({
+    peers: () => [...presenceOnlineByDevice.keys()].filter(isAccountPreferencesPeerAllowed),
+    allowed: deviceId => activeOwnerScopeKey() === scope && isAccountPreferencesPeerAllowed(deviceId),
+    send: (deviceId, frame) => {
+      if (activeOwnerScopeKey() !== scope || !client || !isAccountPreferencesPeerAllowed(deviceId)) return;
+      client.sendPush(deviceId, ACCOUNT_PREFERENCES_SYNC_CHANNEL, frame);
+    },
+  });
 }
 
 const pluginSyncAccess = new PluginSyncAccess({
@@ -989,6 +1021,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
     handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
+    if (snap.online && wasOnline !== true) {
+      ensureAccountPreferencesSync();
+      accountPreferencesSyncDriver.peerOnline(snap.deviceId);
+    }
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
     // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
     // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
@@ -1095,6 +1131,15 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }
     if (env.kind !== 'push') return;
     const p = env.payload as PushPayload;
+    if (p?.channel === ACCOUNT_PREFERENCES_SYNC_CHANNEL) {
+      if (isAccountPreferencesPeerAllowed(env.src)) {
+        ensureAccountPreferencesSync();
+        void accountPreferencesSyncDriver.receive(env.src, p.payload).catch(() => {
+          log.warn('account preferences sync could not be applied');
+        });
+      }
+      return;
+    }
     const sharePeer = parseProviderSharePeer(env.src);
     if (sharePeer && p?.channel === 'maker:provider:changed') {
       if (sharePeer.role !== 'host' || !getReceivedShares().some(share => share.shareId === sharePeer.shareId
@@ -1160,6 +1205,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       ...(p.ownerStamp ? { ownerStamp: p.ownerStamp } : {}),
       ...(sourceEpoch !== undefined ? { sourceEpoch } : {}),
     });
+  });
+
+  const offPreferenceChanges = onAccountPreferencesChanged(() => ensureAccountPreferencesSync());
+  const offPreferenceInvalidation = onAppSessionInvalidated(() => {
+    accountPreferencesSyncScope = null;
   });
 
   // 词典对等同步:传输能力注入驱动,驱动只管什么时候发、发给谁。
@@ -1245,6 +1295,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 认领成功但期间已登出:不连(登出路径已 stop 仲裁,这里是 tick 竞态兜底)
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
+      ensureAccountPreferencesSync();
       if (client) startSharedTaskRuntime({
         client,
         revoke(sharedTaskId, memberId) {
@@ -1299,6 +1350,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     syncWithAuthState(state.isAuthenticated, realmChanged);
   });
   onQuit('device-link', () => {
+    offPreferenceChanges();
+    offPreferenceInvalidation();
     authRealmReconnectGeneration += 1;
     unsubscribeAuthState?.();
     unsubscribeAuthState = null;
@@ -1348,6 +1401,7 @@ function syncWithAuthState(isAuthenticated: boolean, realmChanged = false): void
     }
     // 不直接 client.start():先参与仲裁,认领成功由 onAcquire 启动连接
     arbiter.start();
+    ensureAccountPreferencesSync();
   } else {
     authRealmReconnectGeneration += 1;
     stopArbitrationAndTeardown();
@@ -1454,6 +1508,8 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  accountPreferencesSyncScope = null;
+  accountPreferencesSyncDriver.stop();
   pluginDeviceSync.reset();
   pluginSyncAccess.reset();
   invalidatePluginOauth();
