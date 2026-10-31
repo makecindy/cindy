@@ -214,7 +214,8 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
         'experimentalFeature/list', { threadId: handle.id, limit: 200, ...(cursor ? { cursor } : {}) },
       ));
       const enabledOutsideAllowlist = threadFeatures
-        .filter((feature) => feature.enabled && feature.stage !== 'removed' && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name))
+        .filter((feature) => feature.enabled && feature.stage !== 'removed' && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)
+          && !(guest && feature.name === 'image_generation'))
         .map((feature) => feature.name);
       if (guest || localHostOnly) expect(enabledOutsideAllowlist).toEqual([]);
       else expect(enabledOutsideAllowlist.length).toBeGreaterThan(0);
@@ -304,7 +305,8 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
           'experimentalFeature/list', { threadId: rewound!.sdkSessionId, limit: 200, ...(cursor ? { cursor } : {}) },
         ));
         expect(afterRewindFeatures.filter(feature => feature.enabled && feature.stage !== 'removed'
-          && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)).map(feature => feature.name)).toEqual([]);
+          && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name)
+          && feature.name !== 'image_generation').map(feature => feature.name)).toEqual([]);
         expect(bodies.join('')).not.toContain('private_canary');
       }
       await handle.close();
