@@ -41,6 +41,11 @@ export interface ExtractedStep {
   deviceCode?: InputHandoffDeviceCode;
   /** A browser window whose page is not readable yet; only its own toolbar could be seen. */
   pageMissing?: boolean;
+  /**
+   * The step asks for an account, a password or a code. The owner signs in on
+   * the window itself; mistaking another form for this only sends them there.
+   */
+  signIn?: boolean;
 }
 
 const SKIPPED_SUBROLES = new Set([
@@ -55,6 +60,7 @@ const SKIPPED_SUBROLES = new Set([
 ]);
 const TEXT_ROLES = new Set(['AXTextField', 'AXTextArea', 'AXSearchField', 'AXComboBox', 'AXDateTimeArea']);
 const BUTTON_ROLES = new Set(['AXButton', 'AXLink', 'AXMenuButton', 'AXDisclosureTriangle', 'AXMenuItem']);
+const SIGN_IN_FIELDS = new Set<InputHandoffContentType>(['username', 'email', 'password', 'one-time-code']);
 const PRIMARY_LABEL =
   /^(next|continue|sign ?in|log ?in|login|submit|confirm|allow|authori[sz]e|accept|approve|ok|done|verify|send|proceed|下一步|继续|登录|登入|提交|确认|确定|允许|授权|同意|验证|完成|发送|进入)\b/i;
 
@@ -122,7 +128,7 @@ function nearbyLabel(field: NativeAxNode, texts: Array<{ node: NativeAxNode; ind
 export function contentTypeFor(node: NativeAxNode, label: string): InputHandoffContentType {
   if (node.secure) return 'password';
   const hint = [label, node.placeholder, node.domId, node.desc, node.title].filter(Boolean).join(' ');
-  if (/(one[- ]?time|\botp\b|verification code|security code|auth(entication)? code|2fa|two[- ]?(factor|step)|验证码|动态码|校验码|安全码)/i.test(hint))
+  if (/(one[- ]?time|\botp\b|verification code|security code|auth(entication)? code|2fa|two[- ]?(factor|step)|\bdigit\b|验证码|动态码|校验码|安全码)/i.test(hint))
     return 'one-time-code';
   if (/(e-?mail|邮箱|邮件)/i.test(hint)) return 'email';
   if (/(phone|mobile|\btel\b|手机|电话)/i.test(hint)) return 'tel';
@@ -358,6 +364,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
   }
   const texts = inScope.map((node) => textOf(node)).filter((text): text is string => !!text);
   const deviceCode = findDeviceCode(inScope, capped.some((control) => control.kind === 'text'));
+  const signIn = capped.some((control) => control.kind === 'text' && SIGN_IN_FIELDS.has(control.contentType));
   return {
     controls: capped,
     shown: deviceCode ? [] : ownerControls(capped),
@@ -369,6 +376,7 @@ export function extractStep(snapshot: NativeAxSnapshot): ExtractedStep {
     texts,
     ...(deviceCode ? { deviceCode } : {}),
     ...(pageMissing ? { pageMissing } : {}),
+    ...(signIn ? { signIn } : {}),
   };
 }
 

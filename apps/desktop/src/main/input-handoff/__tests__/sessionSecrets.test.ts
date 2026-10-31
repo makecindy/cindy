@@ -99,19 +99,22 @@ describe('代输入 secrets', () => {
     expect(finished[0]).toMatchObject({ status: 'failed', failure: 'origin_changed' });
   });
 
-  it('reports a secret typed into a browser the agent drives', async () => {
+  it('reports a sign-in page as soon as it shows a password, in any browser, and a secret typed into a browser the agent drives', async () => {
+    const page = 'https://login.example.com/signin';
     const entered: Array<{ pid: number; url?: string }> = [];
-    const page = loginPage('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222');
-    const { session, latest } = start(page.driver, (target) => entered.push(target));
+    const driven = loginPage('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222');
+    const { session, latest } = start(driven.driver, (target) => entered.push(target));
     await session.start();
+    // The owner may type straight into the window, so the page is guarded before any answer.
+    expect(entered).toEqual([{ pid: 20, url: page }]);
     await session.submit(answer(latest()));
-    expect(entered).toEqual([{ pid: 20, url: 'https://login.example.com/signin' }]);
+    expect(entered.length).toBeGreaterThan(1);
+    expect(new Set(entered.map((target) => target.url))).toEqual(new Set([page]));
 
-    const ownChrome = loginPage();
-    const own: unknown[] = [];
-    const second = start(ownChrome.driver, (target) => own.push(target));
+    // The owner's own Chrome, reached through the extension, carries no automation flag and is guarded too.
+    const own: Array<{ pid: number; url?: string }> = [];
+    const second = start(loginPage().driver, (target) => own.push(target));
     await second.session.start();
-    await second.session.submit(answer(second.latest()));
-    expect(own).toEqual([]);
+    expect(own).toEqual([{ pid: 20, url: page }]);
   });
 });

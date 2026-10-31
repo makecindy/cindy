@@ -15900,6 +15900,7 @@
     "agentControlled": "Der Agent hat diesen Bildschirm geöffnet. Prüfe vor dem Ausfüllen, ob du dich wirklich hier anmelden möchtest.",
     "agentPicture": "Dieser Code stammt aus einem Screenshot des Agent, daher kann Cindy den ursprünglichen Bildschirm nicht sehen oder erkennen, wann du fertig bist. Prüfe, ob er zur gewünschten Anmeldeseite führt, und wähle nach dem Scannen „An Agent zurückgeben“.",
     "error": {
+      "raise": "Das Fenster ließ sich nicht öffnen. Wechsle am Computer dorthin.",
       "decision": "Das hat nicht geklappt. Versuch es erneut.",
       "stale": "Der Bildschirm hat sich geändert. Verwende die neueste Version.",
       "submit": "Deine Eingabe wurde nicht übermittelt. Versuche es erneut."
@@ -15935,6 +15936,8 @@
       "picture": "Bildschirm anzeigen",
       "backToForm": "Zurück zum Formular",
       "liveView": "Live-Ansicht",
+      "openWindow": "Anmeldefenster öffnen",
+      "openRemoteDesktop": "Remote-Desktop öffnen",
       "fill": "Ausfüllen",
       "skip": "Überspringen",
       "continue": "Weiter",
@@ -15942,6 +15945,9 @@
       "showPassword": "Passwort anzeigen",
       "hidePassword": "Passwort ausblenden",
       "scan": "Scannen"
+    },
+    "directSignIn": {
+      "hint": "Melde dich direkt im Fenster an. Danach geht es automatisch weiter."
     },
     "remoteUnavailable": "Dieser Computer kann keine Remote-Eingaben empfangen. Schließe diesen Schritt auf dem Host-Computer ab und gib dann an den Agent zurück.",
     "unnamedField": "Feld",

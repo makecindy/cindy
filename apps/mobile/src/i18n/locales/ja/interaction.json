@@ -299,6 +299,7 @@
       "picture": "画面を見る",
       "backToForm": "フォームに戻る",
       "liveView": "ライブ表示",
+      "openRemoteDesktop": "リモートデスクトップを開く",
       "fill": "入力",
       "skip": "スキップ",
       "continue": "続ける",
@@ -306,6 +307,9 @@
       "showPassword": "パスワードを表示",
       "hidePassword": "パスワードを隠す",
       "scan": "スキャン"
+    },
+    "directSignIn": {
+      "hint": "ウィンドウで直接ログインしてください。完了すると自動で続行します。"
     },
     "remoteUnavailable": "このコンピュータはリモートから入力を受け取れません。ホストのコンピュータでこのステップを完了してから Agent に戻してください。",
     "unnamedField": "入力欄",

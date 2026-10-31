@@ -16044,6 +16044,7 @@
     "agentControlled": "El Agent abrió esta pantalla. Antes de completarla, comprueba que sea donde quieres iniciar sesión.",
     "agentPicture": "Este código proviene de una captura tomada por el Agent. Cindy no puede ver la pantalla original ni saber cuándo terminas. Comprueba que lleve al sitio donde quieres iniciar sesión. Después de escanearlo, elige Devolver al Agent.",
     "error": {
+      "raise": "No se pudo abrir la ventana. Cambia a ella en el ordenador.",
       "decision": "Eso no sucedió. Intentar otra vez.",
       "stale": "La pantalla ha cambiado. Utilice la última versión.",
       "submit": "Tu entrada no fue aprobada. Intentar otra vez."
@@ -16079,6 +16080,8 @@
       "picture": "Mostrar pantalla",
       "backToForm": "volver al formulario",
       "liveView": "Vista en vivo",
+      "openWindow": "Abrir ventana de inicio de sesión",
+      "openRemoteDesktop": "Abrir escritorio remoto",
       "fill": "Completar",
       "skip": "Omitir",
       "continue": "Continuar",
@@ -16086,6 +16089,9 @@
       "showPassword": "Mostrar contraseña",
       "hidePassword": "Ocultar contraseña",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Inicia sesión directamente en la ventana. Al terminar, se continuará automáticamente."
     },
     "remoteUnavailable": "Esta computadora no admite entradas remotas. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
     "unnamedField": "campo",

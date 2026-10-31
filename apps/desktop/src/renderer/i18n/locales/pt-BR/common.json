@@ -16044,6 +16044,7 @@
     "agentControlled": "O Agent abriu esta tela. Verifique se é realmente onde você quer entrar antes de preenchê-la.",
     "agentPicture": "Este código vem de uma captura de tela feita pelo Agent, então o Cindy não pode ver a tela original nem saber quando você terminou. Verifique se ele leva ao site em que você pretende entrar e escolha Devolver ao Agent após escanear.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "Não deu certo. Tente novamente.",
       "stale": "A tela mudou. Use a versão mais recente.",
       "submit": "Sua entrada não foi enviada. Tente novamente."
@@ -16079,6 +16080,8 @@
       "picture": "Mostrar tela",
       "backToForm": "Voltar ao formulário",
       "liveView": "Visualização ao vivo",
+      "openWindow": "Abrir janela de login",
+      "openRemoteDesktop": "Abrir área de trabalho remota",
       "fill": "Preencher",
       "skip": "Pular",
       "continue": "Continuar",
@@ -16086,6 +16089,9 @@
       "showPassword": "Mostrar senha",
       "hidePassword": "Ocultar senha",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Faça login diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
     "unnamedField": "Campo",

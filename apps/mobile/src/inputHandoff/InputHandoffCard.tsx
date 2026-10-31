@@ -250,6 +250,19 @@ export function InputHandoffCard({
     spinner = true;
     status = t("interaction.inputHandoff.qr.scanned");
     actions = [skip, handBack];
+  } else if (snapshot.phase === "ready" && snapshot.directSignIn && openLiveView) {
+    // A sign-in happens on the window, here through its live view; without one, the form below finishes it.
+    status = t("interaction.inputHandoff.directSignIn.hint");
+    actions = [
+      skip,
+      {
+        label: t("interaction.inputHandoff.action.openRemoteDesktop"),
+        disabled: busy,
+        tone: "primary",
+        testID: "interaction.inputHandoff.openRemoteDesktop",
+        onPress: openLiveView,
+      },
+    ];
   } else if (snapshot.phase === "ready" && sheetContent) {
     actions = [
       skip,

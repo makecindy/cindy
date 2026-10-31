@@ -149,6 +149,63 @@ describe('代输入 requests the agent makes', () => {
     if (errorCode === 'TARGET_IS_CINDY') expect(problem!.message).toContain('kind="scan"');
   });
 
+  it('closes a waiting card when the owner writes in the task, without a second turn, and tells the agent once', async () => {
+    const h = harness();
+    await startReady(h);
+    h.service.dismissForOwnerMessage('task');
+    expect(h.latest()).toMatchObject({ phase: 'cancelled', terminal: true });
+    expect(h.continued).toEqual([]);
+    expect(h.service.takeOwnerMessageNote('task')).toContain('owner sent the message');
+    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+    // Nothing was waiting: nothing to say.
+    h.service.dismissForOwnerMessage('task');
+    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+  });
+
+  it('leaves a terminal prompt to the owner when they write: its command would fail', async () => {
+    const h = harness();
+    const answers: Array<string | null> = [];
+    const started = h.service.startTerminalPrompt({
+      sessionId: 'task', prompt: 'Password:', program: 'sudo', command: 'sudo ls', answer: (value) => answers.push(value),
+    });
+    if (!started.ok) throw new Error(started.errorCode);
+    h.service.dismissForOwnerMessage('task');
+    expect(answers).toEqual([]);
+    expect(h.service.takeOwnerMessageNote('task')).toBeNull();
+    started.abandon?.();
+  });
+
+  it('replaces a waiting card when the agent asks again, but not a terminal prompt', async () => {
+    const h = harness();
+    const first = await startReady(h);
+    const second = await startReady(h);
+    expect(second).not.toBe(first);
+    expect(h.continued).toEqual([]);
+    expect(h.service.pendingSnapshots('task').map((entry) => entry.request.requestId)).toEqual([second]);
+
+    const answers: Array<string | null> = [];
+    const prompt = h.service.startTerminalPrompt({
+      sessionId: 'shell', prompt: 'Password:', program: 'sudo', command: 'sudo ls', answer: (value) => answers.push(value),
+    });
+    if (!prompt.ok) throw new Error(prompt.errorCode);
+    expect(h.service.start({ sessionId: 'shell', purpose: 'Sign in', target: { app: 'Example' } })).toMatchObject({ ok: false, errorCode: 'HANDOFF_ACTIVE' });
+    prompt.abandon?.();
+  });
+
+  it('asks the agent to name a window instead of guessing among several', async () => {
+    const h = harness();
+    const shown = { frame: [0, 0, 800, 600], focused: false, minimized: false };
+    h.desktop.driver.windows = async () => ({ frontmost: 5, apps: [
+      { pid: 5, app: 'Google Chrome', bundleId: 'com.google.Chrome', windows: [
+        { ...shown, index: 0, title: 'Home', focused: true }, { ...shown, index: 1, title: 'App Store Connect', minimized: true },
+      ] },
+    ] });
+    const problem = await h.service.checkTarget({ app: 'Google Chrome' });
+    expect(problem?.errorCode).toBe('TARGET_AMBIGUOUS');
+    expect(problem?.message).toContain('"App Store Connect"');
+    expect(await h.service.checkTarget({ app: 'Google Chrome', windowTitle: 'App Store Connect' })).toBeNull();
+  });
+
   // Seen in a real run: a Chinese desktop lists Finder as 访达, and a dev build
   // runs as Electron, so "Finder" and "Cindy" both came back TARGET_NOT_FOUND.
   it('finds an app named in English on a localized desktop and knows a dev build is Cindy', async () => {

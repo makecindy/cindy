@@ -68,7 +68,7 @@ export interface HandoffCompletionHints {
   urlContains?: string;
 }
 
-export type HandoffEndReason = 'owner' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
+export type HandoffEndReason = 'owner' | 'owner_message' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
 
 export interface HandoffResult {
   status: 'succeeded' | 'cancelled' | 'failed' | 'expired';
@@ -116,6 +116,7 @@ export interface HandoffSessionOptions {
   sleep?: (ms: number) => Promise<void>;
   finishingDelayMs?: number;
   settleTimeoutMs?: number;
+  windowWatchMs?: number;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -194,6 +195,17 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
 const RESTORED_PAGE_WAIT_MS = 6000;
 /** How long a browser may take to expose its page to accessibility on the first read. */
 const BROWSER_PAGE_WAIT_MS = 3000;
+/** How often a waiting card looks at its window; reading does not bring it forward. */
+const WINDOW_WATCH_MS = 2000;
+/** Reads in a row before concluding: pages clear their forms for a moment while they load. */
+const FIELDS_GONE_READS = 3;
+const WINDOW_GONE_READS = 2;
+
+/** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
+const fieldShape = (step: ExtractedStep): string =>
+  JSON.stringify(step.shown.map((control) => (control.kind === 'text'
+    ? [control.id, control.label, control.contentType]
+    : [control.id, control.kind === 'note' ? control.text : ''])));
 
 /**
  * One 代输入 request: a loop of read step → owner answers → act → wait for
@@ -228,6 +240,16 @@ export class InputHandoffSession {
   private qrBaseline: QrBaseline | null = null;
   private qrTimer: ReturnType<typeof setTimeout> | undefined;
   private qrChecking = false;
+  /** A step of this request asked for a sign-in: the owner signs in on the window itself. */
+  private signInMode = false;
+  /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
+  private asked = false;
+  /** The asked fields went away without an answer through the card: the owner did it on the window. */
+  private doneOutside = false;
+  private watchTimer: ReturnType<typeof setTimeout> | undefined;
+  private watchList: NativeWindowList | null = null;
+  private fieldsGoneReads = 0;
+  private windowGoneReads = 0;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -299,6 +321,7 @@ export class InputHandoffSession {
       ...(this.ended ? { terminal: true as const } : {}),
       ...(picture ? { picture: true as const } : {}),
       ...(this.liveViewOffered() ? { liveView: true as const } : {}),
+      ...(this.directSignInOffered() ? { directSignIn: true as const } : {}),
       ...(!picture && !qr && this.phase === 'ready' && step?.deviceCode ? { deviceCode: { ...step.deviceCode } } : {}),
       ...(qr ? { qr } : {}),
     };
@@ -307,6 +330,20 @@ export class InputHandoffSession {
   private liveViewOffered(): boolean {
     return !this.ended && !!this.target && !!this.options.driver.raise
       && (this.phase === 'ready' || this.phase === 'finishing') && this.options.liveView?.() === true;
+  }
+
+  private directSignInOffered(): boolean {
+    return !this.ended && this.phase === 'ready' && this.signInMode && !this.picture && !this.qrState
+      && !!this.step?.signIn && !this.step.deviceCode && !!this.options.driver.raise;
+  }
+
+  /** The owner chose to sign in on the window: show it to them. */
+  async bringToFront(): Promise<boolean> {
+    const driver = this.options.driver;
+    const target = this.target;
+    if (!target || !driver.raise || this.ended || this.busy) return false;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    return !!raised && !('error' in raised);
   }
 
   /**
@@ -360,6 +397,7 @@ export class InputHandoffSession {
     this.publish('reading');
     this.expiryTimer = setTimeout(() => this.end('expired', 'timeout', 'timeout'), this.options.timeoutMs);
     this.expiryTimer.unref?.();
+    this.armWindowWatch();
     try {
       const permission = await this.options.driver.permission();
       if (permission !== 'granted') {
@@ -369,15 +407,21 @@ export class InputHandoffSession {
           return;
         }
       }
-      const target = this.resolveTarget(await this.options.driver.windows());
+      const windows = await this.options.driver.windows({ background: true });
+      const target = this.resolveTarget(windows);
+      // What the window watch compares against, so a page renaming its window from here on is not a closed window.
+      this.watchList = windows;
       if (!target) {
         this.end('failed', 'failure', 'target_gone');
         return;
       }
       await this.useTarget(target);
       this.initial = target;
-      const step = await this.readFirstStep(await this.restoreTarget(target));
+      const restored = await this.restoreTarget(target);
+      const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
+        // A sign-in happens on the window itself, wherever the owner answers from.
+        if (step.signIn && !restored) await this.bringToFront();
         this.present(step);
         return;
       }
@@ -541,7 +585,7 @@ export class InputHandoffSession {
         this.publish('ready');
         return true;
       }
-      if (step && !this.picture) {
+      if (step && !step.pageMissing && !this.picture) {
         this.failure = undefined;
         this.present(step, true);
         return true;
@@ -570,17 +614,31 @@ export class InputHandoffSession {
     this.options.publish(this.snapshot());
   }
 
-  private present(step: ExtractedStep, suppressAutoFinish = false): void {
+  /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
+  private guardSignInPage(step: ExtractedStep): void {
+    if (step.signIn && step.hasSecure && this.target)
+      this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
+  }
+
+  private present(read: ExtractedStep, suppressAutoFinish = false): void {
     this.stopQr();
     this.dropPicture();
+    this.fieldsGoneReads = 0;
+    if (read.signIn) this.signInMode = true;
+    // Past a sign-in, a page's own fields (a reply box) are not its next step.
+    const signInOver = this.signInMode && !read.signIn && !read.pageMissing && !read.deviceCode;
+    const step = signInOver ? { ...read, shown: [] } : read;
     this.step = step;
-    if (this.submissions === 0 && !actionable(step)) {
+    this.guardSignInPage(step);
+    this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
+    if (this.submissions === 0 && !actionable(step) && !this.doneOutside) {
       // Nothing was asked of the owner yet and there is nothing to type: hand the screen back to the agent.
       this.end('cancelled', 'detected', 'nothing_to_fill');
       return;
     }
+    this.asked = true;
     if (this.stepNumber === 0) this.stepNumber = 1;
-    if (!suppressAutoFinish && this.shouldFinish(step)) {
+    if ((!suppressAutoFinish || this.doneOutside) && this.shouldFinish(step)) {
       this.finishingUntil = this.now() + (this.options.finishingDelayMs ?? 3000);
       this.publish('finishing');
       this.finishingTimer = setTimeout(() => {
@@ -601,7 +659,7 @@ export class InputHandoffSession {
 
   private shouldFinish(step: ExtractedStep): boolean {
     if (this.stayedOn !== undefined && this.stayedOn === step.signature) return false;
-    if (this.hintsMet(step)) return true;
+    if (this.hintsMet(step) || this.doneOutside) return true;
     // A sign-in code is still waiting to be used on the owner's device; they say when they are done.
     if (step.deviceCode) return false;
     // Generic end: after the owner answered, nothing is left to type. Buttons from here on are the agent's.
@@ -918,9 +976,89 @@ export class InputHandoffSession {
     this.finishingUntil = undefined;
   }
 
+  private armWindowWatch(): void {
+    if (this.ended) return;
+    this.watchTimer = setTimeout(() => {
+      void this.checkWindow().catch(() => undefined).finally(() => this.armWindowWatch());
+    }, this.options.windowWatchMs ?? WINDOW_WATCH_MS);
+    this.watchTimer.unref?.();
+  }
+
+  /** Waiting on a form nobody has started answering through the card, so the window is the only news. */
+  private watching(): boolean {
+    return !this.ended && !this.busy && this.phase === 'ready' && !this.holder && !this.picture && !this.qrState
+      && !!this.target && !!this.step && actionable(this.step) && !this.step.deviceCode;
+  }
+
+  /**
+   * The owner may finish on the window itself, or close it, without touching
+   * the card. Nothing is concluded from what cannot be seen: a window that is
+   * minimized, on another desktop or behind another app may just be out of reach.
+   */
+  private async checkWindow(): Promise<void> {
+    if (!this.watching()) {
+      this.watchList = null;
+      this.fieldsGoneReads = 0;
+      this.windowGoneReads = 0;
+      return;
+    }
+    const driver = this.options.driver;
+    const target = this.target!;
+    const list = await driver.windows().catch(() => null);
+    if (!list || !this.watching() || this.target !== target) return;
+    const previous = this.watchList;
+    this.watchList = list;
+    // Coming back from answering or a picture: this read is only the new baseline.
+    if (!previous) return;
+    const mine = list.apps.find((app) => app.pid === target.pid);
+    if (!mine) {
+      // Not on screen: gone only if the program itself is.
+      if (!(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
+      return;
+    }
+    const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
+      ?? mine.windows.find((w) => w.title === target.window.title);
+    const window = known ?? this.renamedWindow(mine.windows, previous.apps.find((app) => app.pid === target.pid)?.windows);
+    if (!window) {
+      if (list.frontmost === target.pid) this.noteWindowGone();
+      return;
+    }
+    this.windowGoneReads = 0;
+    if (window.minimized) return;
+    if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
+    const step = await this.read().catch(() => null);
+    if (!step || step.pageMissing || !this.watching() || !this.step) return;
+    if (this.signInMode ? step.signIn : actionable(step)) {
+      this.fieldsGoneReads = 0;
+      if (fieldShape(step) !== fieldShape(this.step)) {
+        this.present(step, true);
+      } else {
+        // Same question: keep the card as it is (a form may be open), but act on the fresh screen.
+        this.step = step;
+        this.guardSignInPage(step);
+      }
+      return;
+    }
+    if (++this.fieldsGoneReads >= FIELDS_GONE_READS) this.present(step, true);
+  }
+
+  /** The target's title went away and exactly one new one came: a page changed its title, the window is the same. */
+  private renamedWindow<W extends { title: string }>(windows: W[], before: Array<{ title: string }> | undefined): W | undefined {
+    if (!before?.some((w) => w.title === this.target?.window.title)) return undefined;
+    const fresh = windows.filter((w) => !before.some((old) => old.title === w.title));
+    return fresh.length === 1 ? fresh[0] : undefined;
+  }
+
+  private noteWindowGone(): void {
+    if (++this.windowGoneReads < WINDOW_GONE_READS) return;
+    if (this.options.completeWhen?.windowClosed) this.end('succeeded', 'detected');
+    else this.end('failed', 'failure', 'target_gone');
+  }
+
   private end(status: HandoffResult['status'], reason: HandoffEndReason, failure?: InputHandoffFailure): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
     this.clearFinishing();
     this.stopQr();
     this.dropPicture();

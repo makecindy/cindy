@@ -237,6 +237,19 @@ it("opens a live view of just this window on the computer running the task", asy
   expect(buttons(ended.container)).not.toContain("interaction.inputHandoff.action.liveView");
 });
 
+it("sends a sign-in to the live view, and keeps the form when there is none", async () => {
+  const { container } = mount(step({ directSignIn: true, liveView: true }));
+  expect(container.textContent).toContain("interaction.inputHandoff.directSignIn.hint");
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.action.fill");
+  await press(container, "interaction.inputHandoff.action.openRemoteDesktop");
+  expect(push).toHaveBeenCalledWith({
+    pathname: "/devices/desktop/[deviceId]",
+    params: { deviceId: "mac", deviceName: "Studio", handoff: "req1" },
+  });
+  const noLive = mount(step({ directSignIn: true }));
+  expect(buttons(noLive.container)).toContain("interaction.inputHandoff.action.fill");
+});
+
 it("offers a sign-in code to copy and its link to open on this phone", async () => {
   const deviceCode = {
     code: "WDJB-MJHT",

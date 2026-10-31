@@ -299,6 +299,7 @@
       "picture": "Afficher l'écran",
       "backToForm": "Retour au formulaire",
       "liveView": "Vue en direct",
+      "openRemoteDesktop": "Ouvrir le bureau à distance",
       "fill": "Remplir",
       "skip": "Ignorer",
       "continue": "Continuer",
@@ -306,6 +307,9 @@
       "showPassword": "Afficher le mot de passe",
       "hidePassword": "Masquer le mot de passe",
       "scan": "Scanner"
+    },
+    "directSignIn": {
+      "hint": "Connectez-vous directement dans la fenêtre. La suite reprendra automatiquement."
     },
     "remoteUnavailable": "Cet ordinateur ne peut pas recevoir de saisie à distance. Terminez cette étape sur l'ordinateur hôte, puis rendez la main à l'Agent.",
     "unnamedField": "Champ",

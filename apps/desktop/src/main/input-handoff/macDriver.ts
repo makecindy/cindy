@@ -24,7 +24,8 @@ const exec = promisify(execFile);
 export interface HandoffDriver {
   permission(): Promise<'granted' | 'missing' | 'unknown'>;
   requestPermission(): Promise<void>;
-  windows(): Promise<NativeWindowList>;
+  /** Apps with a window on screen; `background` also lists apps whose only windows are minimized (slower). */
+  windows(options?: { background?: boolean }): Promise<NativeWindowList>;
   snapshot(pid: number, window?: NativeWindowRef): Promise<NativeAxSnapshot | { error: string }>;
   act(request: NativeActRequest): Promise<NativeActResult>;
   /** Command line of a process, for agent-controlled target detection only. */
@@ -215,8 +216,8 @@ export function createMacHandoffDriver(): HandoffDriver {
       const binary = await resolveDesktopInputBinary();
       await exec(binary, ['--request-permission'], { timeout: 5000, maxBuffer: 1024 }).catch(() => undefined);
     },
-    async windows() {
-      const result = (await runHelper({ op: 'windows' }, 8000)) as NativeWindowList & { error?: string };
+    async windows(options) {
+      const result = (await runHelper({ op: 'windows', ...(options?.background ? { background: true } : {}) }, 8000)) as NativeWindowList & { error?: string };
       if (result.error || !Array.isArray(result.apps)) throw new Error(result.error ?? 'unavailable');
       return result;
     },

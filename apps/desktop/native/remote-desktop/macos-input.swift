@@ -544,7 +544,7 @@ func handoffSecureTarget(_ request: [String: Any]) -> [String: Any] {
   }
   return ["secure": false]
 }
-func handoffWindowList() -> [String: Any] {
+func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   var pids = Set<Int32>()
   if let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
     for info in infos where (info[kCGWindowLayer as String] as? Int) == 0 {
@@ -553,8 +553,10 @@ func handoffWindowList() -> [String: Any] {
   }
   // An app with only minimized windows has nothing on screen (macOS may even report it hidden), yet the step may wait in one of them.
   let onScreen = pids
-  for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
-    pids.insert(running.processIdentifier)
+  if request["background"] as? Bool == true {
+    for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
+      pids.insert(running.processIdentifier)
+    }
   }
   var apps: [[String: Any]] = []
   for pid in pids {
@@ -940,7 +942,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A locked screen is never read or typed into; the owner unlocks the computer first.
   if session["CGSSessionScreenIsLocked"] as? Bool ?? false { handoffRespond(["error": "locked"]) }
   switch request["op"] as? String {
-  case "windows": handoffRespond(handoffWindowList())
+  case "windows": handoffRespond(handoffWindowList(request))
   case "snapshot": handoffRespond(handoffSnapshot(request))
   case "act": handoffRespond(handoffAct(request))
   case "secure": handoffRespond(handoffSecureTarget(request))

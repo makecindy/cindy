@@ -16044,6 +16044,7 @@
     "agentControlled": "C'est l'Agent qui a ouvert cet écran. Vérifiez qu'il s'agit bien de l'endroit où vous voulez vous connecter avant de le remplir.",
     "agentPicture": "Ce code provient d'une capture d'écran prise par l'Agent, donc Cindy ne peut pas voir l'écran d'origine ni savoir quand vous avez terminé. Vérifiez qu'il mène au site auquel vous souhaitez vous connecter et choisissez Revenir à Agent après la numérisation.",
     "error": {
+      "raise": "Impossible d'ouvrir la fenêtre. Passez-y depuis l'ordinateur.",
       "decision": "Cela n'a pas abouti. Réessayez.",
       "stale": "L'écran a changé. Utilisez la version la plus récente.",
       "submit": "Votre saisie n'a pas abouti. Réessayez."
@@ -16079,6 +16080,8 @@
       "picture": "Afficher l'écran",
       "backToForm": "Retour au formulaire",
       "liveView": "Vue en direct",
+      "openWindow": "Ouvrir la fenêtre de connexion",
+      "openRemoteDesktop": "Ouvrir le bureau à distance",
       "fill": "Remplir",
       "skip": "Passer",
       "continue": "Continuer",
@@ -16086,6 +16089,9 @@
       "showPassword": "Afficher le mot de passe",
       "hidePassword": "Masquer le mot de passe",
       "scan": "Scanner"
+    },
+    "directSignIn": {
+      "hint": "Connectez-vous directement dans la fenêtre. La suite reprendra automatiquement."
     },
     "remoteUnavailable": "Cet ordinateur ne peut pas recevoir de saisie à distance. Terminez cette étape sur l'ordinateur hôte, puis rendez la main à l'Agent.",
     "unnamedField": "Champ",

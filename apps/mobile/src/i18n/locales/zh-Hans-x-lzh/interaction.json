@@ -299,6 +299,7 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openRemoteDesktop": "启远程桌面",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -306,6 +307,9 @@
       "showPassword": "显密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远程受书。请于主机之上竟此步，再交还 Agent。",
     "unnamedField": "输入处",

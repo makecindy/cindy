@@ -57,7 +57,7 @@ export type InputHandoffImageStartError = InputHandoffStartError | 'NOT_AN_IMAGE
 
 /** Why a target cannot be handed off, known before starting. */
 export interface InputHandoffTargetProblem {
-  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND';
+  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS';
   message: string;
 }
 
@@ -83,6 +83,8 @@ interface HandoffRun {
   /** Live view of the window (screen steps only; terminal prompts have no window). */
   liveWindow?(): Promise<LiveHandoffWindow | null>;
   afterLiveView?(): Promise<void>;
+  /** Show the window to the owner on this computer (screen steps only). */
+  bringToFront?(): Promise<boolean>;
   /** Screenshot of the current step, when the step is answered on a picture. */
   pictureFor?(revision: number): InputHandoffPicture | null;
 }
@@ -159,6 +161,8 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
     : result.failure === 'nothing_to_fill'
     ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
+    : result.status === 'succeeded' && result.steps === 0 && result.reason === 'detected'
+    ? 'The owner finished on the window itself: the fields you asked about are gone. Check the current screen yourself and continue; ask again only if something still needs them.'
     : result.status === 'succeeded'
     ? 'The owner\'s fields were typed in and confirmed. Check the current screen yourself and handle any buttons or options left; values they entered were not shared with you.'
     : result.failure === 'permission'
@@ -179,6 +183,7 @@ export class InputHandoffService {
   private readonly entries = new Map<string, Entry>();
   private readonly recentStarts = new Map<string, number[]>();
   private readonly decoding = new Set<{ sessionId: string; cancelled: boolean }>();
+  private readonly ownerMessageNotes = new Set<string>();
 
   constructor(private readonly deps: InputHandoffServiceDeps) {}
 
@@ -217,8 +222,20 @@ export class InputHandoffService {
     const driver = this.deps.createDriver();
     if (!driver) return null;
     if ((await driver.permission().catch(() => 'unknown' as const)) !== 'granted') return null;
-    const list = await driver.windows().catch(() => null);
-    if (!list || resolveHandoffTarget(list, target, this.deps.hostPid)) return null;
+    const list = await driver.windows({ background: true }).catch(() => null);
+    if (!list) return null;
+    const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
+    if (resolved) {
+      if (target.windowTitle || (target.pid === undefined && !target.app)) return null;
+      // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
+      const titles = list.apps.find((app) => app.pid === resolved.pid)?.windows.map((w) => w.title).filter(Boolean) ?? [];
+      if (titles.length < 2) return null;
+      return {
+        errorCode: 'TARGET_AMBIGUOUS',
+        message: `${resolved.app} has several windows: ${[...new Set(titles)].slice(0, 8).map((title) => JSON.stringify(title)).join(', ')}. `
+          + 'Ask again with target.window_title naming the one that shows the step.',
+      };
+    }
     const host = list.apps.find((app) => app.pid === this.deps.hostPid);
     const wanted = target.app?.trim().toLowerCase();
     // By name too: a dev or renamed build is not listed as "Cindy", and no other
@@ -329,9 +346,13 @@ export class InputHandoffService {
     this.recentStarts.set(sessionId, recent);
     if (recent.length >= INPUT_HANDOFF_MAX_PER_TASK)
       return { ok: false, errorCode: 'RATE_LIMITED', message: 'Too many input handoffs in this task recently. Tell the owner what is blocked instead of asking again.' };
-    for (const entry of this.entries.values()) {
-      if (entry.sessionId === sessionId && !entry.snapshot?.terminal)
-        return { ok: false, errorCode: 'HANDOFF_ACTIVE', message: 'An input handoff is already waiting for the owner in this task.' };
+    const waiting = [...this.entries.values()].filter((entry) => entry.sessionId === sessionId && !entry.snapshot?.terminal);
+    // A terminal command is still blocked on its prompt; a card is only a question, and the new one replaces it.
+    if (waiting.some((entry) => entry.silent))
+      return { ok: false, errorCode: 'HANDOFF_ACTIVE', message: 'An input handoff is already waiting for the owner in this task.' };
+    for (const entry of waiting) {
+      entry.silent = true;
+      entry.session.cancel('cancelled');
     }
     return null;
   }
@@ -371,6 +392,11 @@ export class InputHandoffService {
    * The window a live view should show, raised. Caller: the remote desktop host
    * only, after its own same-account authorization; never a viewer-named window.
    */
+  /** Bring the step's window to the front on this computer. */
+  async bringToFront(requestId: string): Promise<boolean> {
+    return (await this.entries.get(requestId)?.session.bringToFront?.()) ?? false;
+  }
+
   async liveWindow(requestId: string): Promise<LiveHandoffWindow | null> {
     const entry = this.entries.get(requestId);
     if (!entry?.snapshot?.liveView || entry.snapshot.terminal) return null;
@@ -430,7 +456,29 @@ export class InputHandoffService {
     return this.pendingSnapshots(sessionId).length > 0;
   }
 
+  /**
+   * The owner wrote in the task while a card waited: the card is over. No second
+   * turn is started for it; the agent learns from a note on the owner's message.
+   * Terminal prompts stay: their command would fail without an answer.
+   */
+  dismissForOwnerMessage(sessionId: string): void {
+    for (const pending of this.decoding) if (pending.sessionId === sessionId) pending.cancelled = true;
+    for (const entry of this.entries.values()) {
+      if (entry.sessionId !== sessionId || entry.snapshot?.terminal || entry.silent) continue;
+      entry.silent = true;
+      entry.session.cancel('owner_message');
+      this.ownerMessageNotes.add(sessionId);
+    }
+  }
+
+  /** The note for the message that closed the card, once. */
+  takeOwnerMessageNote(sessionId: string): string | null {
+    if (!this.ownerMessageNotes.delete(sessionId)) return null;
+    return 'Your input handoff card was closed because the owner sent the message below. Check the screen yourself before relying on it; ask again if a field still needs them.';
+  }
+
   cleanupForSession(sessionId: string): void {
+    this.ownerMessageNotes.delete(sessionId);
     for (const pending of this.decoding) if (pending.sessionId === sessionId) pending.cancelled = true;
     for (const entry of this.entries.values()) {
       if (entry.sessionId !== sessionId || entry.snapshot?.terminal) continue;
