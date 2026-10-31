@@ -5681,6 +5681,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
           refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
             voiceContext.createRefinerTarget(providerId, options),
+          refineRequestBudget: () => voiceContext.refineRequestBudget(),
           warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string }) =>
             voiceContext.warmRefiner(input),
           initialDraft,

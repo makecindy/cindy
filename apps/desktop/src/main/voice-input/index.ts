@@ -2378,6 +2378,8 @@ export function registerVoiceInputIpc(): void {
           timelineEvent,
           provider.activeProviderKind,
         ));
+      } else if (timelineEvent.type === 'speculative_refine_skipped') {
+        log.info('speculative refinement skipped', summarizeTimelineEventForLog(timelineEvent));
       } else if (timelineEvent.type === 'refine_accepted' || timelineEvent.type === 'refine_rejected') {
         const start = timelineEvents.get(`${timelineEvent.runId}:start_clicked`);
         log.info('refinement latency summary', {
@@ -2398,6 +2400,9 @@ export function registerVoiceInputIpc(): void {
       refiner,
       audioGate,
       pauseRefinementEnabled: true,
+      // Managed refinement is capped per voice-server session; keep one request
+      // for the final text. BYOK refiners have no such cap.
+      refineRequestBudget: voiceContext ? () => voiceContext.refineRequestBudget() : undefined,
       recoveryErrorMessage: voiceContext ? getVoiceInputRateLimitMessage : undefined,
       logger,
       callbacks: {

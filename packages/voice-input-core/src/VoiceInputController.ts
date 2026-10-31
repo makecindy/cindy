@@ -3,6 +3,7 @@ import type {
   AsrProvider,
   AudioTrace,
   EditableRange,
+  RefineRequestBudget,
   RefinementResult,
   SpeechSegment,
   VoiceInputCallbacks,
@@ -44,6 +45,12 @@ type VoiceInputControllerOptions = {
   stableWaitMs?: number;
   /** Host opt-in: refine during a speech pause and publish a live draft. */
   pauseRefinementEnabled?: boolean;
+  /**
+   * Refinement requests the current managed voice session accepts. Speculative
+   * requests (pause-time, and stop-time before ASR finalizes) only go out while
+   * one request stays free for the final text. Undefined means no limit.
+   */
+  refineRequestBudget?: () => RefineRequestBudget | undefined;
   /** Replay retained audio once after an audible recording ends without text. */
   retryEmptyTranscript?: boolean;
   /** Host opt-in for known recovery failures; undefined keeps the generic error. */
@@ -102,6 +109,11 @@ export class VoiceInputController {
   private readonly callbacks: VoiceInputCallbacks;
   private readonly stableWaitMs: number;
   private readonly pauseRefinementEnabled: boolean;
+  private readonly refineRequestBudget?: () => RefineRequestBudget | undefined;
+  // Requests sent to the session identified by refineBudgetSessionKey.
+  private refineBudgetSessionKey: string | undefined;
+  private refineRequestsStarted = 0;
+  private speculativeRefineSkipLogged = false;
   private readonly retryEmptyTranscript: boolean;
   private readonly recoveryErrorMessage?: (error: unknown) => string | undefined;
   private readonly audioGate?: AudioGate;
@@ -170,6 +182,7 @@ export class VoiceInputController {
     this.callbacks = options.callbacks;
     this.stableWaitMs = options.stableWaitMs ?? 500;
     this.pauseRefinementEnabled = options.pauseRefinementEnabled ?? false;
+    this.refineRequestBudget = options.refineRequestBudget;
     this.retryEmptyTranscript = options.retryEmptyTranscript ?? false;
     this.recoveryErrorMessage = options.recoveryErrorMessage;
     this.audioGate = options.audioGate;
@@ -211,6 +224,9 @@ export class VoiceInputController {
     this.lastTranscriptChangeAt = performance.now();
     this.pauseRefinement = undefined;
     this.liveRefinementPreview = undefined;
+    this.refineBudgetSessionKey = undefined;
+    this.refineRequestsStarted = 0;
+    this.speculativeRefineSkipLogged = false;
     const gateRunId = this.runId;
     this.audioGate?.begin((chunk, trace) => this.forwardAudio(gateRunId, chunk, trace));
     this.startStallWatchdog();
@@ -615,6 +631,7 @@ export class VoiceInputController {
     // against the visible draft immediately, but only apply it if the final
     // ASR text matches. If the provider corrects or extends the text, we
     // discard this request and refine the final transcript instead.
+    if (!this.speculativeRefineLeavesFinalRequest('stop')) return undefined;
     return this.startRefinementRequest(runId, text, [createVoiceInputId()]);
   }
 
@@ -625,6 +642,7 @@ export class VoiceInputController {
     if (this.pauseRefinement && !this.pauseRefinement.settled) return;
     const text = normalizeSubmittedText(this.latestTranscript);
     if (!hasAdditionalSentence(this.pauseRefinement?.text ?? '', text)) return;
+    if (!this.speculativeRefineLeavesFinalRequest('pause')) return;
     const runId = this.runId;
     const request = this.startRefinementRequest(runId, text, [createVoiceInputId()]);
     this.pauseRefinement = request;
@@ -640,8 +658,49 @@ export class VoiceInputController {
     });
   }
 
+  /**
+   * Requests already sent to the current session, restarting the count when a
+   * reconnect switched to a new session. Undefined when there is no limit.
+   */
+  private currentRefineBudget(): { limit: number; started: number } | undefined {
+    const budget = this.refineRequestBudget?.();
+    if (!budget) return undefined;
+    if (budget.sessionKey !== this.refineBudgetSessionKey) {
+      this.refineBudgetSessionKey = budget.sessionKey;
+      this.refineRequestsStarted = 0;
+      this.speculativeRefineSkipLogged = false;
+    }
+    return { limit: budget.limit, started: this.refineRequestsStarted };
+  }
+
+  /**
+   * Speculative requests (during a pause, or at stop before ASR finalizes) may
+   * be superseded by the final text, so one may only go out while another
+   * request stays free for the final refinement. With the legacy server limit
+   * of 2 this allows one speculative request per session.
+   */
+  private speculativeRefineLeavesFinalRequest(stage: 'pause' | 'stop'): boolean {
+    const budget = this.currentRefineBudget();
+    if (!budget || budget.started + 2 <= budget.limit) return true;
+    if (!this.speculativeRefineSkipLogged) {
+      this.speculativeRefineSkipLogged = true;
+      this.logger.record({
+        type: 'speculative_refine_skipped',
+        runId: this.runId,
+        at: Date.now(),
+        stage,
+        reason: 'final_request_reserved',
+        requestLimit: budget.limit,
+        requestsStarted: budget.started,
+      });
+    }
+    return false;
+  }
+
   private startRefinementRequest(runId: string, text: string, segmentIds: string[]): PendingRefinement {
     if (!this.refiner) throw new Error('Dictation refiner is not configured.');
+    this.currentRefineBudget();
+    this.refineRequestsStarted += 1;
     const refineStartedAt = performance.now();
     this.logger.record({ type: 'refine_requested', runId, at: Date.now(), text });
 
