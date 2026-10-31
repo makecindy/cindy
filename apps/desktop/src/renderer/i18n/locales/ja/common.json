@@ -3638,6 +3638,8 @@
           "removeRow": "この行を削除"
         },
         "wireProtocol": {
+          "defaultLabel": "接続のデフォルトプロトコル",
+          "precedenceHelp": "モデルの個別設定やモデルカタログで指定されたプロトコルが優先されます。モデルの詳細で設定元を確認したり、プロトコルとアドレスをデフォルトに戻したりできます。",
           "responses": "OpenAI Responses（ネイティブ）",
           "chat": "Chat Completions（Cindy ブリッジ）",
           "anthropic": "Anthropic Messages（Cindy ブリッジ）",
@@ -3953,6 +3955,11 @@
           },
           "effortMixed": "推論強度はエンジンごとに異なります。選択した強度に対応するエンジンに適用します。",
           "protocol": {
+            "sourceConnection": "接続のデフォルトを使用",
+            "sourceModel": "モデルの個別設定",
+            "sourceCatalog": "モデルカタログの指定",
+            "connectionDefault": "接続のデフォルト：{{protocol}}",
+            "restoreRoute": "プロトコルとアドレスをデフォルトに戻す",
             "reference": "ネイティブAPI",
             "compatibility": "互換モード",
             "compatibilityHint": "Cindy がローカルでリクエストを変換します。動作が不安定になったり、一部の機能が正常に動作しない場合があります。経験のあるユーザー向けです。",

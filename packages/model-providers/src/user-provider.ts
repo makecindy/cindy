@@ -517,9 +517,20 @@ export function buildUserProvider(
             ?? configuredModel.route.baseUrl,
         } }
         : configuredModel;
-      const m = rt.requestPath ? boundConfiguredModel : alignModelApiRoute(
-        providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry),
-        resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
+      const interfaceModel = rt.requestPath ? boundConfiguredModel
+        : providerInterfaceModelRoute(boundConfiguredModel, agent, rt.catalogPresetId, resolvedBaseUrl, false, options.modelRegistry ?? BUNDLED_CATALOG.modelRegistry);
+      // V6 projects explicit selections too, so object identity alone no longer
+      // proves catalog ownership. Automatic/default or a maintained correction of
+      // a legacy API belongs to the catalog; an explicit interface remains editable.
+      const configuredApi = boundConfiguredModel.api ?? boundConfiguredModel.piApi ??
+        (boundConfiguredModel.route?.wireProtocol === 'openai-chat'
+          ? 'openai-completions' : boundConfiguredModel.route?.wireProtocol);
+      const catalogInterfaceApplied = Boolean(interfaceModel.selectedInterface) && (
+        boundConfiguredModel.interfaceId === 'auto' ||
+        (!boundConfiguredModel.interfaceId && interfaceModel.api !== configuredApi)
+      );
+      const m = rt.requestPath ? interfaceModel : alignModelApiRoute(
+        interfaceModel, resolvedBaseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
       const presetModel = followsPreset
         ? presetRuntime.models.find((model) => model.id === m.id)
@@ -652,6 +663,20 @@ export function buildUserProvider(
         ...(nativeApi !== undefined ? { nativeApi } : {}),
         // Projection is not a user edit. Save only the original configuration.
         userModelConfig: structuredClone(storedModel),
+        // applyPreset snapshots protocol fields into storage. Their presence is
+        // not evidence of a user edit while they match this bound preset. Keep
+        // storage intact; only the displayed provenance uses this comparison.
+        // A maintained correction owns the effective route even when the saved
+        // legacy Chat snapshot differs from the current preset (or it is absent).
+        protocolCustomized: Boolean(storedModel.interfaceId && storedModel.interfaceId !== 'auto') || (!catalogInterfaceApplied && Boolean(
+          (storedModel.api && storedModel.api !== presetModel?.api) ||
+          (storedModel.piApi && storedModel.piApi !== presetModel?.piApi) ||
+          (storedModel.route && (
+            storedModel.route.baseUrl !== presetModel?.route?.baseUrl ||
+            storedModel.route.wireProtocol !== presetModel?.route?.wireProtocol ||
+            storedModel.route.requestPath !== presetModel?.route?.requestPath
+          ))
+        )),
         ...(m.api ? { api: m.api, ...(agent === 'pi' ? { piApi: m.api } : {}) } : {}),
         ...(importedApi && !m.piApi && !m.api ? {
           api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),

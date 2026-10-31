@@ -334,6 +334,8 @@ export interface CatalogModel {
   supportsToolCalls?: boolean;
   reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
+  /** Display-only provenance against the matching current preset; never persisted as user config. */
+  protocolCustomized?: boolean;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
   discoveredCost?: ModelCost;

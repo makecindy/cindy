@@ -21,8 +21,10 @@ import {
   BUNDLED_CATALOG,
   buildRegistry,
   buildUserProvider,
+  modelProtocolComparison,
   type AgentKind,
   type RoutingDescriptor,
+  type ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 
 import {
@@ -143,6 +145,30 @@ afterEach(() => {
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
   setCustomProviderHeaderReader(() => null);
+});
+
+describe('issue #6015: displayed protocol agrees with the host route', () => {
+  for (const agent of ['codex', 'claude-code'] as const) {
+    it.each([
+      { name: 'connection default', model: {}, expected: 'openai-chat' },
+      { name: 'explicit model API', model: { api: 'openai-responses' }, expected: 'openai-responses' },
+      { name: 'explicit model route', model: { route: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-responses' } }, expected: 'openai-responses' },
+      { name: 'custom model path with stale API', model: { api: 'openai-responses', route: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat', requestPath: '/custom' } }, expected: 'openai-chat' },
+      { name: 'custom connection path with stale API', model: { api: 'openai-responses' }, requestPath: '/custom', expected: 'openai-chat' },
+    ])(`${agent}: $name`, ({ model, requestPath, expected }) => {
+      const provider = buildUserProvider({
+        id: 'protocol-route-test', name: 'Protocol route test', auth: { method: 'none' },
+        runtimes: { [agent]: { baseUrl: 'https://example.invalid/v1', wireProtocol: 'openai-chat', requestPath,
+          models: [{ id: 'diagnostic-model', name: 'Diagnostic model', ...model } as ProviderRuntimeModelConfig],
+        } },
+      });
+      const actual = providerRoutingForModel(provider, agent, 'diagnostic-model');
+      expect(actual?.wireProtocol).toBe(expected);
+      expect(modelProtocolComparison(provider, { [agent]: provider.models[agent]![0] }).forAgent(agent)?.outbound)
+        .toBe(expected === 'openai-chat' ? 'openai-completions' : expected);
+      if (requestPath || model.route?.requestPath) expect(actual?.requestPath).toBe('/custom');
+    });
+  }
 });
 
 describe('Codex local auth policy', () => {
