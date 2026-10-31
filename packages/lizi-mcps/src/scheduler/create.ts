@@ -16,7 +16,9 @@
 import { z } from 'zod';
 
 import { AGENT_KIND, EFFORT, EXECUTION_MODE, SCRIPT_CAPABILITY } from './_enums.js';
-import { assertCronAndTimezoneValid, withScheduler } from './_shared.js';
+import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_shared.js';
+import { classifySchedulerError } from './errors.js';
+import { isLocalDevice, runOnDevice } from './_devices.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
@@ -43,7 +45,7 @@ export function registerScheduleCreateTool(
       '(7) 确定是检查时显式设 silentWhenIdle=true（无变化不播报）；提醒/定时发送设 false，保留用户选择。省略此字段会按 false 处理，避免旧调用方的提醒被吞。如果用户定义了提醒条件，把条件保留在 prompt 里（如 CI 失败/新评论时提醒），有结果时用 schedule_notify_current_run 主动上报；' +
       '(8) 轮询型任务（"有新 PR 才 review / CI 挂了才处理"）优先配 preRunHook 前置检查（exit 0=放行、exit 2=跳过本轮不烧 token；报错/超时 fail-closed 阻止本轮并记录失败）。**脚本一律经 schedule_set_pre_run_hook 创建/修改**（落盘路径、协议、自测由宿主代码统一保证），不要自己写脚本文件再手填 preRunHook.command——先调它拿 command 再来创建，或创建后传 scheduleId 让它直接挂载；' +
       '(9) 既有工作流程中的自动跟进，沿用该流程明确的频率、执行引擎、静默与通知默认值；用户在线也不需要为这些默认值另行确认。用户主动新建独立任务时，若关键实体或会实质改变目标的参数缺失，先询问，不盲猜；用户已明确说明或已有流程定义的参数不重复问。' +
-      '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本"。',
+      '(10) **仅运行脚本模式（零 token）**：executionMode="script" 时不启动 agent，宿主直接执行 scriptConfig.command（cwd=workingDir，必填本地项目目录）；脚本经 stdout/stdin 的 cindy-script/1 JSONL 协议回调宿主受限能力，能力按 scriptConfig.capabilities 白名单授予（默认全拒）。script 模式不需要 prompt（可省），不支持 useWorktree / persistentSession。单任务跟进应传 bindToCurrentSession=true 或 targetSessionId：它是脚本的生命周期绑定及唯一投递目标，普通目标归档后会像用户发消息一样恢复原任务，完成后保持激活；目标删除或不存在时自动暂停，恢复任务不会自动恢复已暂停的调度。未绑定脚本保留独立任务语义。与 preRunHook 的分工：preRunHook 只是"要不要跑"的闸门，script 模式是"任务本体就是脚本。(11) 在另一台电脑上创建：传 device=那台电脑的 deviceId（同账号、在线、已开启远程控制）。workingDir 必须是那台电脑上已存在的目录，或省略。model / providerId 用 schedule_list_models 的 agentDeviceId=同一台电脑 得到的目录，不要用本机来源 id。不能 bindToCurrentSession。创建回执若是 REMOTE_RESULT_UNKNOWN 或 REMOTE_TIMEOUT，先 schedule_list / schedule_get 确认没有重复再建，不要盲重试。把已有任务迁过去用 schedule_move。',
     inputShape: {
       name: z.string().min(1).describe('展示名（GUI / 通知里出现）'),
       prompt: z
@@ -180,12 +182,53 @@ export function registerScheduleCreateTool(
         .int()
         .optional()
         .describe('Unix ms 截止时间戳（可选）；超过后 scheduler 不再触发'),
+      device: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('local（默认，本机）或要存放这条自动化的电脑 deviceId。闹钟保存在那台电脑上，对方关机则不会触发。workingDir 必须是那台电脑上已存在的目录，或省略。'),
     },
-    handler: async (args) =>
-      withScheduler(deps, async (scheduler) => {
-        const { bindToCurrentSession, ...rest } = args as CreateScheduleInput & {
-          bindToCurrentSession?: boolean;
-        };
+    handler: async (args) => {
+      const { bindToCurrentSession, device, ...rest } = args as CreateScheduleInput & {
+        bindToCurrentSession?: boolean;
+        device?: string;
+      };
+      if (!isLocalDevice(device)) {
+        try {
+        if (bindToCurrentSession) {
+          throw new Error('invalid request: 在其它电脑上创建不能绑定当前会话');
+        }
+        let input = rest as CreateScheduleInput;
+        if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
+          const { agentDeviceId: _local, ...localInput } = input;
+          input = localInput;
+        }
+        if (input.targetSessionId?.includes('::')) {
+          const split = input.targetSessionId.indexOf('::');
+          const owner = input.targetSessionId.slice(0, split);
+          const localId = input.targetSessionId.slice(split + 2);
+          if (owner !== device || !localId || localId.includes('::')) {
+            throw new Error('invalid request: targetSessionId 必须是目标电脑上的任务');
+          }
+          input = { ...input, targetSessionId: localId };
+        }
+        if ((input.executionMode ?? 'agent') === 'script') {
+          if (!input.scriptConfig?.command?.trim() || !(input.workingDir ?? '').trim()) {
+            throw new Error('invalid request: executionMode="script" 需要 scriptConfig.command 和目标电脑上已存在的 workingDir');
+          }
+        } else if (!input.prompt?.trim()) {
+          throw new Error('invalid request: prompt 不能为空(agent 模式必填)');
+        }
+        if (input.intervalMs !== undefined) assertCronAndTimezoneValid(input.cronExpr, input.timezone);
+        return runOnDevice(deps, device, async () => {
+          throw new Error('invalid device: remote create must not use the local scheduler');
+        }, { op: 'create', args: [input] });
+        } catch (err) {
+          const classified = classifySchedulerError(err);
+          return buildJsonResult({ ok: false, ...classified }, true);
+        }
+      }
+      return withScheduler(deps, async (scheduler) => {
         let input = rest as CreateScheduleInput;
         if (input.agentDeviceId === LOCAL_SCHEDULE_AGENT_DEVICE) {
           const { agentDeviceId: _local, ...localInput } = input;
@@ -243,6 +286,7 @@ export function registerScheduleCreateTool(
           });
         }
         return scheduler.create(input);
-      }),
+      });
+    },
   });
 }

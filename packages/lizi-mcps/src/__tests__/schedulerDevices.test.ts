@@ -10,8 +10,10 @@ import {
   type SchedulerToolResult,
 } from "../cindy_schedulerToolRegistry.js";
 import {
+  registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
+  registerScheduleMoveTool,
   registerScheduleListRunsTool,
   registerScheduleListTool,
   registerSchedulePauseTool,
@@ -507,5 +509,383 @@ describe("cindy_scheduler cross-device routing", () => {
         code: "REMOTE_UNSUPPORTED",
       });
     }
+  });
+});
+
+
+describe('remote schedule create and move', () => {
+  const source = {
+    id: 'src',
+    name: '游戏领域雷达',
+    prompt: '围绕主题搜集动态',
+    kind: 'cron',
+    cronExpr: '0 9 * * 1-5',
+    timezone: 'Asia/Shanghai',
+    recurring: true,
+    manual: false,
+    agentKind: 'pi',
+    model: 'grok-4.6',
+    providerId: 'xai',
+    status: 'active',
+    notify: { desktop: true, feishu: false },
+    useWorktree: false,
+    workingDir: '/Users/elfcv/Documents/games',
+    agentDeviceId: 'spark',
+    targetSessionId: 'mac-session',
+    preRunHook: { command: 'node check.mjs' },
+  };
+  function setup(opts: { create?: () => Promise<SchedulerRemoteResult> } = {}) {
+    const created = {
+      ...source,
+      id: 'dst',
+      providerId: 'xai-2fdb5bc7',
+      workingDir: undefined,
+      agentDeviceId: undefined,
+      targetSessionId: undefined,
+      preRunHook: undefined,
+      workspaceKind: 'dialogue',
+      status: 'active',
+    };
+    const scheduler = {
+      get: vi.fn(async (id: string) => (id === 'src' ? source : null)),
+      list: vi.fn(async () => [source]),
+      create: vi.fn(async () => created),
+      pause: vi.fn(async (id: string) => ({ id, status: 'paused' })),
+      delete: vi.fn(async () => undefined),
+    };
+    const remoteRows = new Map<string, any>();
+    const invoke = vi.fn(async (_deviceId: string, op: string, args: unknown[]): Promise<SchedulerRemoteResult> => {
+      if (op === 'list') return { ok: true, data: [...remoteRows.values()] };
+      if (op === 'get') return { ok: true, data: remoteRows.get(String(args[0])) ?? null };
+      if (op === 'create') {
+        if (opts.create) return opts.create();
+        const row = { ...(args[0] as object), id: 'dst', status: 'active' };
+        remoteRows.set('dst', row);
+        return { ok: true, data: row };
+      }
+      if (op === 'pause') {
+        const row = remoteRows.get(String(args[0]));
+        if (row) row.status = 'paused';
+        return { ok: true, data: row ?? null };
+      }
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const registry = new SchedulerToolRegistry();
+    const deps = {
+      getScheduler: () => scheduler as unknown as Scheduler,
+      remote: { listDevices: async () => [], invoke },
+      listModels: vi.fn(async () => ({
+        ok: true as const,
+        pi: [{ id: 'grok-4.6', label: 'Grok 4.6', providers: [{ id: 'xai-2fdb5bc7', name: 'xAI' }], defaultProviderId: 'xai-2fdb5bc7' }],
+      })),
+    };
+    registerScheduleCreateTool(registry, deps);
+    registerScheduleMoveTool(registry, deps);
+    return { registry, invoke, scheduler, deps, remoteRows, created };
+  }
+
+  it('creates on the named computer and does not touch the local scheduler', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      name: '游戏领域雷达',
+      prompt: '围绕主题搜集动态',
+      cronExpr: '0 9 * * 1-5',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      providerId: 'xai-2fdb5bc7',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({
+      name: '游戏领域雷达',
+      providerId: 'xai-2fdb5bc7',
+    })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects binding the current session when creating remotely', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      bindToCurrentSession: true,
+      name: 'n',
+      prompt: 'p',
+      cronExpr: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(s.invoke).not.toHaveBeenCalled();
+  });
+
+  it('moves an active schedule, remaps the provider, and pauses the source only after get', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', targetDevice: 'spark' }));
+    expect(result).toMatchObject({
+      ok: true,
+      sourceId: 'src',
+      targetId: 'dst',
+      targetDevice: 'spark',
+      sourceAction: 'pause',
+      omitted: expect.arrayContaining(['workingDir', 'targetSessionId', 'agentDeviceId', 'preRunHook']),
+    });
+    const createArgs = s.invoke.mock.calls.find((call) => call[1] === 'create')?.[2][0] as {
+      providerId?: string;
+      workspaceKind?: string;
+      workingDir?: string;
+      agentDeviceId?: string;
+    };
+    expect(createArgs).toMatchObject({ providerId: 'xai-2fdb5bc7', workspaceKind: 'dialogue' });
+    expect(createArgs.workingDir).toBeUndefined();
+    expect(createArgs.agentDeviceId).toBeUndefined();
+    expect(s.scheduler.pause).toHaveBeenCalledWith('src');
+    const createAt = s.invoke.mock.invocationCallOrder[s.invoke.mock.calls.findIndex((call) => call[1] === 'create')];
+    const getAt = s.invoke.mock.invocationCallOrder[s.invoke.mock.calls.findIndex((call) => call[1] === 'get')];
+    expect(createAt).toBeLessThan(getAt);
+    expect(s.scheduler.pause.mock.invocationCallOrder[0]).toBeGreaterThan(getAt);
+  });
+
+  it('does not create again when the receipt is unknown and no new copy is found', async () => {
+    let creates = 0;
+    const s = setup({
+      create: async () => {
+        creates += 1;
+        return { ok: false, code: 'REMOTE_RESULT_UNKNOWN', message: 'unknown' };
+      },
+    });
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', targetDevice: 'spark' }));
+    expect(result).toMatchObject({ ok: false, code: 'REMOTE_RESULT_UNKNOWN', sourceUntouched: true, queryBeforeRetry: true });
+    expect(creates).toBe(1);
+    expect(s.scheduler.pause).not.toHaveBeenCalled();
+  });
+
+  it('adopts the single new copy after an unknown receipt instead of creating twice', async () => {
+    const s = setup({
+      create: async () => {
+        const row = {
+          id: 'dst',
+          name: source.name,
+          prompt: source.prompt,
+          cronExpr: source.cronExpr,
+          timezone: source.timezone,
+          agentKind: 'pi',
+          model: 'grok-4.6',
+          providerId: 'xai-2fdb5bc7',
+          recurring: true,
+          manual: false,
+          useWorktree: false,
+          workspaceKind: 'dialogue',
+          persistentSession: false,
+          silentWhenIdle: false,
+          notify: { desktop: true, feishu: false },
+          status: 'active',
+        };
+        s.remoteRows.set('dst', row);
+        return { ok: false, code: 'REMOTE_TIMEOUT', message: 'timeout' };
+      },
+    });
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', targetDevice: 'spark' }));
+    expect(result).toMatchObject({ ok: true, targetId: 'dst' });
+    expect(s.invoke.mock.calls.filter((call) => call[1] === 'create')).toHaveLength(1);
+    expect(s.scheduler.pause).toHaveBeenCalledWith('src');
+  });
+
+  it('does not pause the target when a lost source receipt already paused the source', async () => {
+    const s = setup();
+    let sourceReads = 0;
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'list') return { ok: true, data: [...s.remoteRows.values()] };
+      if (op === 'get' && args[0] === 'src') {
+        sourceReads += 1;
+        return { ok: true, data: { ...source, status: sourceReads > 1 ? 'paused' : 'active' } };
+      }
+      if (op === 'get') return { ok: true, data: s.remoteRows.get(String(args[0])) ?? null };
+      if (op === 'create') {
+        const row = { ...(args[0] as object), id: 'dst', status: 'active' };
+        s.remoteRows.set('dst', row);
+        return { ok: true, data: row };
+      }
+      if (op === 'pause' && args[0] === 'src') return { ok: false, code: 'REMOTE_RESULT_UNKNOWN', message: 'unknown' };
+      if (op === 'pause') return { ok: true, data: null };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', sourceDevice: 'mac', targetDevice: 'spark' }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause' && call[2][0] === 'dst')).toBe(false);
+  });
+
+  it('does not pause an adopted target when verification cannot be read', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'get' && args[0] === 'src') return { ok: true, data: source };
+      if (op === 'get') return { ok: false, code: 'REMOTE_TIMEOUT', message: 'timeout' };
+      if (op === 'pause') return { ok: true, data: null };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const result = parse(await s.registry.call('schedule_move', {
+      id: 'src', sourceDevice: 'mac', targetDevice: 'spark', adoptTargetId: 'already-there',
+    }));
+    expect(result).toMatchObject({ ok: false, sourceUntouched: true, targetPaused: false, targetId: 'already-there' });
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause')).toBe(false);
+  });
+
+  it('remaps a remote provider id against the local catalog when moving home', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'get') return { ok: true, data: { ...source, providerId: 'remote-xai' } };
+      if (op === 'pause') return { ok: true, data: { id: args[0], status: 'paused' } };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    s.scheduler.create.mockImplementation(async (input: Record<string, unknown>) => ({ ...input, id: 'home', status: 'active' }));
+    s.scheduler.get.mockImplementation(async (id: string) => id === 'home'
+      ? { ...(s.scheduler.create.mock.calls[0][0] as object), id: 'home', status: 'active' }
+      : null);
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', sourceDevice: 'mac', targetDevice: 'local' }));
+    expect(result.ok).toBe(true);
+    expect(s.deps.listModels).toHaveBeenCalledWith({ agent: 'pi', agentDeviceId: null });
+    expect(s.scheduler.create.mock.calls[0][0]).toMatchObject({ providerId: 'xai-2fdb5bc7' });
+  });
+
+  it('pauses a newly created target when verification cannot be read', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'get' && args[0] === 'src') return { ok: true, data: source };
+      if (op === 'list') return { ok: true, data: [] };
+      if (op === 'create') return { ok: true, data: { id: 'dst', name: source.name, status: 'active' } };
+      if (op === 'get') return { ok: false, code: 'REMOTE_TIMEOUT', message: 'timeout' };
+      if (op === 'pause') return { ok: true, data: null };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const result = parse(await s.registry.call('schedule_move', {
+      id: 'src', sourceDevice: 'mac', targetDevice: 'spark',
+    }));
+    expect(result).toMatchObject({ ok: false, sourceUntouched: true, targetPaused: true, targetId: 'dst' });
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause' && call[2][0] === 'dst')).toBe(true);
+    expect(s.invoke.mock.calls.filter((call) => call[1] === 'create')).toHaveLength(1);
+  });
+
+  it('pauses a newly created target that does not match the moved definition', async () => {
+    const s = setup();
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'get' && args[0] === 'src') return { ok: true, data: source };
+      if (op === 'list') return { ok: true, data: [] };
+      if (op === 'create') {
+        const row = { ...(args[0] as object), id: 'dst', status: 'active', effort: 'low' };
+        s.remoteRows.set('dst', row);
+        return { ok: true, data: row };
+      }
+      if (op === 'get') return { ok: true, data: s.remoteRows.get(String(args[0])) ?? null };
+      if (op === 'pause') return { ok: true, data: null };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const result = parse(await s.registry.call('schedule_move', {
+      id: 'src', sourceDevice: 'mac', targetDevice: 'spark',
+    }));
+    expect(result).toMatchObject({ ok: false, sourceUntouched: true, targetPaused: true, targetId: 'dst' });
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause' && call[2][0] === 'dst')).toBe(true);
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause' && call[2][0] === 'src')).toBe(false);
+  });
+
+  it('copies execution fields and rejects an adopted target that differs', async () => {
+    const s = setup();
+    const defined = {
+      ...source,
+      modelAgentDeviceId: 'model-host',
+      effort: 'high',
+      fastMode: 'ultrafast' as const,
+      expireAt: 1_700_000_000_000,
+      notify: { desktop: true, feishu: false, wecomGroup: true },
+    };
+    s.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+      if (op === 'get' && args[0] === 'src') return { ok: true, data: defined };
+      if (op === 'list') return { ok: true, data: [] };
+      if (op === 'create') {
+        const row = { ...(args[0] as object), id: 'dst', status: 'active' };
+        s.remoteRows.set('dst', row);
+        return { ok: true, data: row };
+      }
+      if (op === 'get') return { ok: true, data: s.remoteRows.get(String(args[0])) ?? null };
+      if (op === 'pause' && args[0] === 'src') return { ok: true, data: { id: 'src', status: 'paused' } };
+      return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+    });
+    const moved = parse(await s.registry.call('schedule_move', {
+      id: 'src', sourceDevice: 'mac', targetDevice: 'spark',
+    }));
+    expect(moved.ok).toBe(true);
+    expect(s.invoke.mock.calls.find((call) => call[1] === 'create')?.[2][0]).toMatchObject({
+      modelAgentDeviceId: 'model-host',
+      effort: 'high',
+      fastMode: 'ultrafast',
+      expireAt: 1_700_000_000_000,
+      notify: { desktop: true, feishu: false, wecomGroup: true },
+    });
+
+    const differences = [
+      { effort: 'low' },
+      { fastMode: false },
+      { expireAt: 99 },
+      { modelAgentDeviceId: 'other-host' },
+      { notify: { desktop: false, feishu: false, wecomGroup: true } },
+      { notify: { desktop: true, feishu: false, wecomGroup: false } },
+    ];
+    for (const difference of differences) {
+      const rejected = setup();
+      rejected.invoke.mockImplementation(async (_deviceId: string, op: string, args: unknown[]) => {
+        if (op === 'get' && args[0] === 'src') return { ok: true, data: defined };
+        if (op === 'get') {
+          return {
+            ok: true,
+            data: {
+              id: 'already-there',
+              name: defined.name,
+              prompt: defined.prompt,
+              kind: 'cron',
+              cronExpr: defined.cronExpr,
+              timezone: defined.timezone,
+              recurring: true,
+              manual: false,
+              agentKind: 'pi',
+              model: 'grok-4.6',
+              providerId: 'xai-2fdb5bc7',
+              modelAgentDeviceId: 'model-host',
+              effort: 'high',
+              fastMode: 'ultrafast',
+              expireAt: 1_700_000_000_000,
+              useWorktree: false,
+              workspaceKind: 'dialogue',
+              persistentSession: false,
+              silentWhenIdle: false,
+              notify: { desktop: true, feishu: false, wecomGroup: true },
+              status: 'active',
+              ...difference,
+            },
+          };
+        }
+        if (op === 'pause') return { ok: true, data: null };
+        return { ok: false, code: 'REMOTE_UNSUPPORTED', message: op };
+      });
+      const result = parse(await rejected.registry.call('schedule_move', {
+        id: 'src', sourceDevice: 'mac', targetDevice: 'spark', adoptTargetId: 'already-there',
+      }));
+      expect(result).toMatchObject({ ok: false, sourceUntouched: true, targetPaused: false, targetId: 'already-there' });
+      expect(rejected.invoke.mock.calls.some((call) => call[1] === 'pause' || call[1] === 'create')).toBe(false);
+    }
+  });
+
+  it('pauses the target copy if stopping the source fails', async () => {
+    const s = setup();
+    s.scheduler.pause.mockRejectedValueOnce(new Error('source busy'));
+    const result = parse(await s.registry.call('schedule_move', { id: 'src', targetDevice: 'spark' }));
+    expect(result.ok).toBe(false);
+    expect(result.targetPaused).toBe(true);
+    expect(s.invoke.mock.calls.some((call) => call[1] === 'pause' && call[2][0] === 'dst')).toBe(true);
+    expect(s.invoke.mock.calls.filter((call) => call[1] === 'create')).toHaveLength(1);
   });
 });

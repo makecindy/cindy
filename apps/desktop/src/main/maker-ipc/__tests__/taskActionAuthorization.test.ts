@@ -968,6 +968,39 @@ describe('teammate turn principal', () => {
     },
   );
 
+  it('accepts a verified owner continuation on a non-teammate task', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    h.caller.botId = null;
+    h.caller.source = 'desktop';
+    h.activeInput.automatic = true;
+    h.activeInput.ownerInput = false;
+    h.activeInput.ownerContinuation = false;
+    const remoteCreate = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_create',
+      args: { device: 'spark', name: 'radar', prompt: 'scan', cronExpr: '0 9 * * 1-5', timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', notify: { desktop: true, feishu: false } } };
+    const effect = vi.fn(async () => 'created');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, remoteCreate, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
+    h.activeInput.ownerContinuation = true;
+    expect(await withToolCallAuthority(h.authorize, remoteCreate, effect)).toBe('created');
+    expect(effect).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses remote schedule placement unless this turn is a verified owner request', async () => {
+    const h = desktopFixture('automatic');
+    live(h);
+    const remoteCreate = { sessionId: 'companion', server: 'cindy_scheduler' as const, tool: 'schedule_create',
+      args: { device: 'spark', name: 'radar', prompt: 'scan', cronExpr: '0 9 * * 1-5', timezone: 'Asia/Shanghai', recurring: true, agentKind: 'pi', notify: { desktop: true, feishu: false } } };
+    const moved = { ...remoteCreate, tool: 'schedule_move', args: { id: 'src', targetDevice: 'spark' } };
+    const effect = vi.fn(async () => 'created');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, remoteCreate, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
+    expect(JSON.stringify(await withToolCallAuthority(h.authorize, moved, effect))).toContain('REMOTE_SCHEDULE_OWNER_REQUIRED');
+    expect(effect).not.toHaveBeenCalled();
+    h.activeInput.ownerContinuation = true;
+    expect(await withToolCallAuthority(h.authorize, remoteCreate, effect)).toBe('created');
+    expect(await withToolCallAuthority(h.authorize, moved, effect)).toBe('created');
+    expect(effect).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['schedule_list', 'schedule_get', 'schedule_list_runs', 'schedule_notify_current_run', 'routine_list'])(
     'keeps cindy_scheduler %s available on its own initiative', async tool => {
       const h = desktopFixture('automatic');

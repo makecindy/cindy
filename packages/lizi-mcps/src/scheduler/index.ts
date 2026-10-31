@@ -9,6 +9,7 @@
 export { registerScheduleListTool } from './list.js';
 export { registerScheduleGetTool } from './get.js';
 export { registerScheduleCreateTool } from './create.js';
+export { registerScheduleMoveTool } from './move.js';
 export { registerScheduleUpdateTool } from './update.js';
 export { registerScheduleDeleteTool } from './delete.js';
 export { registerSchedulePauseTool } from './pause.js';

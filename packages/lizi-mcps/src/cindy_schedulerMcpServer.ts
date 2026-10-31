@@ -27,6 +27,7 @@ import { jsonObjectArg } from './json-object-arg.js';
 import { SchedulerToolRegistry } from './cindy_schedulerToolRegistry.js';
 import {
   registerScheduleCreateTool,
+  registerScheduleMoveTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
   registerScheduleListRunsTool,
@@ -90,7 +91,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行可指定电脑（device，查询可传 all）；新建、检查脚本安装、当前运行的通知设置只在本机。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建和 schedule_move 迁移，可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置只在本机。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(
@@ -212,6 +213,7 @@ export function createSchedulerMcpServer(
   // create / update 都注入 ctx:bindToCurrentSession 据 sessionId 自动填 targetSessionId,
   // 免去 agent 自己查 / 抄 session id(同 silence,避免绑错会话)。
   registerScheduleCreateTool(registry, deps, getSessionContext);
+  registerScheduleMoveTool(registry, deps);
   registerScheduleUpdateTool(registry, deps, getSessionContext);
   // 前置检查脚本统一安装通道;host 未注入 hookScript 服务时内部自动跳过注册。
   registerScheduleSetPreRunHookTool(registry, deps);

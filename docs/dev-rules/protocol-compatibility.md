@@ -4066,6 +4066,7 @@ SQL NULL 对应缺省；项目 `version: 1` 配置同样允许该字段，旧文
 绑定任务或持续模式的 Agent 自动化显式选本机时也须有 `modelAgentKind` 与 `model`；不完整选择在保存前拒绝，
 不把“选本机”误作继承绑定任务的位置。更新可沿用已存的完整选择，恢复跟随时清除显式选择。
 `maker:get-capabilities` 返回 `supportsScheduleAgentDeviceSelection: true`。
+远程创建定时任务前，调用方还必须看到 `supportsRemoteScheduleDirectoryCheck: true`。旧端虽有 `maker:schedule:create`，但不会检查 `workingDir` 是否存在，因此缺此能力时必须在写入前返回 `REMOTE_UNSUPPORTED`，不能静默落库。
 新调用方只有明确看到此能力才向其它电脑提交位置选择；旧端未知字段会被忽略，禁止静默降级。
 跨电脑更新非空 `modelAgentKind` 时，即使省略位置以继承原位置，也必须先确认既有
 `supportsScheduleModelSelection: true`；旧端不支持时在写入前拒绝。同时设置位置或清空模型
