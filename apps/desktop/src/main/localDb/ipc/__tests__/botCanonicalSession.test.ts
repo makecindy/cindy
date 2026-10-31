@@ -1123,6 +1123,36 @@ describe('Bot canonical Session lifecycle', () => {
     expect(updated.invitation.stage).toBe('avatar');
   });
 
+  // #6448: exercise the settings IPC round trip against SQLite, not only the
+  // stored JSON. Existing permission tests did not cover these capability bits.
+  it('round-trips scheduler follow and input handoff settings in both directions', async () => {
+    for (const capabilities of [
+      { allowSchedulerFollow: true, inputHandoff: false },
+      { allowSchedulerFollow: false, inputHandoff: true },
+    ]) {
+      const saved = await invoke('local-db:bots:update', { id: 'bot-1', capabilities });
+      const loaded = await invoke('local-db:bots:get', 'bot-1');
+      const version = h.sqlite!.prepare(
+        'SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = ?',
+      ).get('bot-1', saved.currentVersion) as { capabilities_json: string };
+
+      expect(JSON.parse(version.capabilities_json)).toMatchObject(capabilities);
+      expect(saved.capabilities).toMatchObject(capabilities);
+      expect(loaded.capabilities).toMatchObject(capabilities);
+    }
+  });
+
+  it('keeps scheduler follow disabled and input handoff allowed for profiles without either setting', async () => {
+    const loaded = await invoke('local-db:bots:get', 'bot-1');
+    const version = h.sqlite!.prepare(
+      'SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = ?',
+    ).get('bot-1', loaded.currentVersion) as { capabilities_json: string };
+    const stored = JSON.parse(version.capabilities_json);
+    expect(stored).not.toHaveProperty('allowSchedulerFollow');
+    expect(stored).not.toHaveProperty('inputHandoff');
+    expect(loaded.capabilities).toMatchObject({ allowSchedulerFollow: false, inputHandoff: true });
+  });
+
   it.each([['ask', 'ask'], ['auto', 'auto'], ['trusted', 'bypassPermissions']])('applies saved %s permissions to the existing chat and live runtime', async (permissions, mode) => {
     const created = await invoke('local-db:bots:create-canonical-session', {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,

@@ -1356,6 +1356,8 @@ async function readProfile(
         ? { mcpServerNames: Object.fromEntries(Object.entries(config.mcpServerNames as Record<string, unknown>)
             .filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
       memory: config.memory !== false,
+      allowSchedulerFollow: config.allowSchedulerFollow === true,
+      inputHandoff: config.inputHandoff !== false,
       permissions: config.permissions === 'trusted' || config.permissions === 'auto' ? config.permissions : 'ask',
       // Stored and enforced elsewhere (input handoff policy, scheduler follow); the settings page reads them
       // back from here, so an explicit choice must survive a reload. Absent keeps the defaults.
