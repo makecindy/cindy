@@ -14052,6 +14052,7 @@
       "continueHint": "Continuez. Aucun ajustement nécessaire pour l'instant.",
       "unknownHint": "L'utilisation actuelle s'affiche lorsque le modèle la communique.",
       "tokens": "{{used}} / {{total}} jetons",
+      "snapshotHint": "L’utilisation repose sur le dernier relevé ou une estimation et peut changer à la prochaine requête.",
       "compact": "Compacter le contexte",
       "compactHelp": "Résumer le contenu précédent pour libérer de l'espace. Certains détails peuvent être omis.",
       "adjust": "Ajuster la fenêtre",

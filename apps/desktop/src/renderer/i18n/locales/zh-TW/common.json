@@ -13823,6 +13823,7 @@
       "continueHint": "可以繼續對話，暫時無需調整。",
       "unknownHint": "收到模型的用量資料後，這裡會顯示目前占用。",
       "tokens": "{{used}} / {{total}} tokens",
+      "snapshotHint": "用量取自最近的回報或估算，可能隨下一次請求變動。",
       "compact": "壓縮上下文",
       "compactHelp": "概括較早內容，騰出空間。部分細節可能省略。",
       "adjust": "調整視窗",

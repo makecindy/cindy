@@ -11,6 +11,19 @@ export default {
   },
   cases: {
     default: { about: 'One ring opens usage, manual compaction and window choices' },
+    companion: {
+      about: 'Companion usage and compaction without task-window settings at 320px',
+      data: { companion: true },
+      viewport: { width: 320, height: 650 },
+    },
+    'companion-unknown': {
+      about: 'A companion with no runtime snapshot remains unknown',
+      data: { companion: true, snapshotKnown: false },
+    },
+    'companion-codex': {
+      about: 'Codex companion explains automatic compaction without a manual action',
+      data: { companion: true, codex: true },
+    },
     high: { about: 'Context nearly full', data: { high: true } },
     codex: { about: 'Native Codex details above window choices', data: { codex: true } },
     narrow: {
@@ -32,7 +45,7 @@ export default {
   },
   async check(page, ui) {
     const ring = page.locator('[data-context-window-budget-chip]');
-    assert.equal(await ring.textContent(), ui.data.high ? '92%' : '12%');
+    assert.equal(await ring.textContent(), ui.data.snapshotKnown === false ? '—' : ui.data.high ? '92%' : '12%');
     assert.equal(await page.getByRole('radiogroup').count(), 0);
     await ui.capture('entry', { locator: page.locator('[data-testid="context-footer"]') });
     // Hover must allow moving into the same card to reach its options.
@@ -41,13 +54,21 @@ export default {
     await card.waitFor();
     await card.hover();
     await ui.capture('details', { locator: card });
-    if (ui.case === 'codex') {
+    if (ui.data.codex) {
       const technical = card.locator('details:not([data-context-window-options]) > summary');
       await technical.click();
       await ui.capture('native-details', { locator: card });
       await technical.click();
     }
-    if (ui.case === 'unknown') {
+    if (ui.data.companion) {
+      assert.equal(await card.locator('[data-context-window-options]').count(), 0);
+      assert.equal(await page.getByRole('radiogroup').count(), 0);
+      assert.equal(await card.getByRole('button', { name: await ui.t('ccAgent.contextRingPanel.compact'), exact: true }).count(), ui.data.codex || ui.data.snapshotKnown === false ? 0 : 1);
+      if (ui.data.snapshotKnown === false) {
+        assert.equal(await card.getByRole('progressbar').count(), 0);
+        assert.equal(await card.getByText(await ui.t('ccAgent.contextRingPanel.unknownHint')).count(), 1);
+      }
+    } else if (ui.case === 'unknown') {
       assert.equal(await page.getByRole('radiogroup').count(), 0);
     } else {
       await page.locator('[data-context-window-options] > summary').click();
