@@ -144,7 +144,7 @@ export function isPiRequestBodyTooLarge(data: unknown): boolean {
   return [rec.message, rec.sdkError].some(value =>
     typeof value === 'string' && (
       /Failed to buffer the request body:\s*length limit exceeded/i.test(value)
-      || /\b413\b[^\n]{0,120}\b(?:request body|payload|length limit exceeded)\b/i.test(value)
+      || /\b413\b[^\n]{0,120}\b(?:request body|payload|request entity too large|content too large|length limit exceeded)\b/i.test(value)
     ));
 }
 
@@ -852,9 +852,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         continuedInputs.set(sessionId, plan.sourceUserClientId);
       }
 
+      if (piRequestTooLarge && (externalOwnerAtFailure || plan.skipGenericReplay || deps.hasExternalRecoveryOwner?.(sessionId))) return false;
       if (live) await deps.closeSession(sessionId);
       signal?.throwIfAborted();
-      if (oversized && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+      if ((oversized || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const label = engineLabelForOverflow(sessionRow.agentKind);
       const handoff = buildHandoffText(plan.handoffMessages, {
         fromLabel: label,
@@ -865,6 +866,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         companion: isBotChatContext(sessionRow),
         ...(await companionRecall(sessionId, isBotChatContext(sessionRow))),
       });
+      if (piRequestTooLarge && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       await deps.commitRebuild(sessionId, handoff, {
         reason: 'context-overflow',
         sourceUserClientId: plan.sourceUserClientId,
@@ -882,7 +884,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         });
         return true;
       }
-      if (oversized && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+      if ((oversized || piRequestTooLarge) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
       const sourceWire = persistedUserContentToWireMessage(
         plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
       );
@@ -1307,7 +1309,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       try {
         // IM may not persist this input (protected content), and an attached IM
         // turn can outlive its binding. Check live ownership before any await.
-        if (isOversizedHistoryErrorData(errorData) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+        if ((isOversizedHistoryErrorData(errorData) || isPiRequestBodyTooLarge(errorData)) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
         // Terminal subscribers may release a headless/IM marker immediately.
         // Keep learning, but never take over that turn's replay after an await.
         const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)

@@ -1806,6 +1806,8 @@ describe('createContextOverflowRollover', () => {
 
   it.each([
     '413 Failed to buffer the request body: length limit exceeded',
+    '413 Request Entity Too Large',
+    '413 Content Too Large',
     'PI_REQUEST_BODY_RECOVERY_EXHAUSTED: pi compact failed: upstream connection closed',
   ])('recovers a Pi byte-limit failure on the failed turn without resending old images: %s', async message => {
     const imageMessage = JSON.stringify({ text: '查看图片', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
@@ -1827,8 +1829,17 @@ describe('createContextOverflowRollover', () => {
     expect(deps.onRebuilt).toHaveBeenCalledOnce();
   });
 
-  it('rebuilds a Pi session after its first request-body 413 without retrying the oversized history', async () => {
-    const error = { message: '413 Failed to buffer the request body: length limit exceeded' };
+  it('does not take over an externally owned Pi 413 turn', async () => {
+    const deps = makeDeps([msg('user', 'IM message', 'u1')]);
+    const rollover = createContextOverflowRollover({ ...deps, hasExternalRecoveryOwner: () => true });
+    await expect(rollover.tryRecover('s1', { message: '413 Request Entity Too Large' })).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['413 Failed to buffer the request body: length limit exceeded', '413 Request Entity Too Large', '413 Content Too Large'])('rebuilds before send after Pi byte-limit failure: %s', async message => {
+    const error = { message };
     const imageMessage = JSON.stringify({ text: '之前的内容', images: [{ data: 'data:image/png;base64,AAAA' }], files: [] });
     const source = [msg('user', imageMessage, 'u1'), msg('assistant', '已完成', 'a1'),
       msg('user', '继续', 'u2'), msg('error', JSON.stringify(error), 'e1')];

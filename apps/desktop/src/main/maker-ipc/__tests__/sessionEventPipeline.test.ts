@@ -1167,18 +1167,20 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
-  it.each(['pi', 'codex'] as const)('claims a first request-body 413 only for Pi (%s)', async agentKind => {
+  it.each([{ agentKind: 'pi', recovered: true }, { agentKind: 'pi', recovered: false }, { agentKind: 'codex', recovered: false }] as const)('claims a first request-body 413 only for Pi (%s)', async ({ agentKind, recovered }) => {
     const h = harness(agentKind);
     const claim = vi.fn((_sessionId: string, _turn: unknown, recoverable: boolean) =>
       recoverable ? 'claimed' as const : 'idle' as const);
-    const tryRecover = vi.fn(async () => true);
+    const tryRecover = vi.fn(async () => recovered);
     (h.deps as { contextOverflowRolloverHolder: unknown }).contextOverflowRolloverHolder = { claim, tryRecover };
     const errorData = { message: '413 Failed to buffer the request body: length limit exceeded' };
     h.emit(event('error', errorData, { source: agentKind }));
     expect(claim).toHaveBeenCalledWith('task', { instanceId: undefined, generation: undefined }, agentKind === 'pi');
     expect(tryRecover).toHaveBeenCalledTimes(agentKind === 'pi' ? 1 : 0);
+    if (agentKind === 'pi') expect(effects.fn('broadcast')).not.toHaveBeenCalled();
     await microtasks();
-    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(agentKind === 'pi' ? 0 : 1);
+    expect(effects.fn('onTurnErrorEvent')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
+    expect(effects.fn('reserveTurnErrorPersistId')).toHaveBeenCalledTimes(agentKind === 'pi' && recovered ? 0 : 1);
     await h.dispose();
   });
 

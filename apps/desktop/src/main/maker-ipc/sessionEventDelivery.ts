@@ -7,6 +7,7 @@ import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import {
   isContextOverflowErrorData,
+  isPiRequestBodyTooLarge,
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
@@ -112,6 +113,7 @@ export function deliverSessionEvent(
     event.type === 'error' &&
     isTerminalTurnErrorEvent(event) &&
     (isContextOverflowErrorData(event.data) ||
+      (session.agentKind === 'pi' && isPiRequestBodyTooLarge(event.data)) ||
       isOversizedHistoryErrorData(event.data) ||
       // 与 sessionEventTerminal 的 overflowClaim 判据保持一致：PI compat 自愈的终态错误
       // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
