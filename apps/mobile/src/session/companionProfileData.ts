@@ -16,6 +16,7 @@ export interface ProfilePanel {
   /** Optional creation capability; older hosts omit it. */
   creationModelChain?: string;
   title?: RemoteText;
+  notice?: RemoteText;
   entries?: Array<{ id: string; title: RemoteText; resourceId: string; subtitle?: RemoteText; timestamp?: number }>;
   portraits?: Array<{ value: string; uri: string }>;
   /** Open primitive name, kept so pages can recognize portable blocks such as `search`. */
@@ -109,6 +110,7 @@ export function parseCompanionProfileData(raw: unknown, ref: RemoteResourceRef):
       ...(Number.isSafeInteger(payload?.count) && Number(payload?.count) >= 0 ? { count: Number(payload?.count) } : {}),
       ...(block.primitive === 'search' && string(payload?.query, 1_000) ? { query: payload?.query as string } : {}),
       ...(block.primitive === 'search' && text(payload?.placeholder) ? { placeholder: payload?.placeholder as RemoteText } : {}),
+      ...(text(payload?.notice) ? { notice: payload.notice } : {}),
       ...(text(block.title) ? { title: block.title } : {}),
       ...(typeof payload?.followsDefault === 'boolean' ? { followsDefault: payload.followsDefault } : {}) });
   }

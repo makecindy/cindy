@@ -1,3 +1,4 @@
+import type { TeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 /**
  * cindySlot.ts — cindy 槽代办(卡槽⑤,原名模型槽)。
  * ---------------------------------------------------------------------------
@@ -216,9 +217,9 @@ export interface CindySlotDeps {
    * 默认/档位选型(同样来自目录,代码零模型字面量);清单空 / defaults null
    * = 目录没给,能力暂不可用。
    */
-  getImageConfig(action?: 'generate' | 'edit'): CindyMediaConfig;
+  getImageConfig(action?: 'generate' | 'edit', providerId?: string): CindyMediaConfig;
   /** 当前视频能力配置(同 getImageConfig 语义;白名单 id = 视频 provider 层 alias)。 */
-  getVideoConfig(action?: 'generate' | 'edit'): CindyMediaConfig;
+  getVideoConfig(action?: 'generate' | 'edit', providerId?: string): CindyMediaConfig;
   /**
    * 当前向量能力配置(同 getImageConfig 语义;白名单 id = embedding catalog 的
    * model id)。可选依赖:不注入 = 该能力未接线,代办按 INTERNAL 明拒。
@@ -589,7 +590,7 @@ export class GhostCindySlot {
    * 永不 reject——一切失败折叠成 { ok:false, message },沙箱拿到的是
    * 结构化拒绝而不是异常穿透。
    */
-  async handleModelRequest(ghostId: string, payload: unknown): Promise<GhostPipeModelResult> {
+  async handleModelRequest(ghostId: string, payload: unknown, teammateModels?: TeammateMediaModels | null): Promise<GhostPipeModelResult> {
     this.sweepJobs();
     const p = payload as {
       kind?: unknown;
@@ -822,13 +823,14 @@ export class GhostCindySlot {
     // 旧插件报的裸 ID 会在唯一时升级为完整 ID；已失效或歧义值保留前面
     // 已解析的用户配置/当前默认。配置从图像/视频目录按当前动作筛选，默认值失效时
     // 由目录派生层回落到该动作的首个可用模型。
-    const cfg =
-      info.category === 'image'
-        ? this.deps.getImageConfig(info.action)
-        : this.deps.getVideoConfig(info.action);
+    const teammateSelection = teammateModels?.[info.category];
+    const cfg = info.category === 'image'
+      ? (teammateSelection ? this.deps.getImageConfig(info.action, teammateSelection.providerId) : this.deps.getImageConfig(info.action))
+      : (teammateSelection ? this.deps.getVideoConfig(info.action, teammateSelection.providerId) : this.deps.getVideoConfig(info.action));
     // 目录没给该类目任何模型 = 能力暂不可用:早拒并说清原因,不落回任何写死型号
     // (说明见 cindyMediaCatalog.ts;详情页对应的那几行同时显示为灰字不可选)。
     if (cfg.models.length === 0 || cfg.defaults === null) {
+      if (teammateSelection) return { ok: false, message: 'The teammate’s selected media model does not support this operation or is unavailable.' };
       const category = CATEGORY_LABEL[info.category];
       return {
         ok: false,
@@ -885,6 +887,15 @@ export class GhostCindySlot {
       const catalogSelection = cfg.models.find((candidate) => candidate.id === model);
       providerId = catalogSelection?.providerId;
       providerModelLabel = catalogSelection?.label;
+    }
+
+    if (teammateSelection) {
+      // A missing route must not fall through to another provider/account.
+      const selected = cfg.models.find(candidate => candidate.id === teammateSelection.modelId && candidate.providerId === teammateSelection.providerId);
+      if (!selected) return { ok: false, message: 'The teammate’s selected media model does not support this operation or is unavailable.' };
+      model = selected.id;
+      providerId = teammateSelection.providerId;
+      providerModelLabel = selected.label;
     }
 
     // 画面参数按**解析出的型号**二次校验:协议层值域是所有 provider 的

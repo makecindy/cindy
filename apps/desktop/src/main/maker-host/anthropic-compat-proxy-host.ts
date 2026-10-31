@@ -1284,7 +1284,12 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         // 旧 #794 strip 继续兜底。
         // 供应商分享受邀者的请求不走视觉桥：视觉后端是本机用户自己配的其它供应商，
         // 受邀者只能用分享给它的那一个(图片照原样交给分享的模型)。
-        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest),
+        buildVisionBridgeProxyTransform(log, isGuestProviderShareRequest, ctx => {
+          const piSessionId = headerValue(ctx.headers, 'x-cindy-pi-session-id');
+          if (piSessionId) return authenticatePiProxySession(piSessionId, headerValue(ctx.headers, 'x-cindy-pi-session-token')) ? piSessionId : null;
+          const sdkId = headerValue(ctx.headers, 'x-claude-code-session-id');
+          return sdkId ? _resolveCcSessionId?.(sdkId) : null;
+        }),
         createXdToolResultImageNoticeTransform(claudeUpstreamEndpoint),
         // PI / Claude 走本 proxy 的 /responses 时（Gateway grok、自定义 LiteLLM）
         // 不会经过 Codex 的 xAI 订阅 transform，必须在这里洗 ModelInput。

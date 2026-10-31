@@ -5608,7 +5608,7 @@ export class PiAgent extends BaseAgent {
       // 供应商分享受邀者不注入：视觉后端是本机用户自己的其它供应商，且 vision 工具直接读本机文件。
       const visionBridgeEnv = hostedGuest
         ? null
-        : this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId) ?? null;
+        : (await this.deps.resolvePiVisionBridgeEnv?.(opts.model, opts.sessionId)) ?? null;
       // 这些值必须留在 Pi 父进程，供 models.json 的 $ENV 请求期解析及 bridge
       // client 使用；cindy-bridge 用该**仅含变量名**的清单在 bash spawn 边界剥离
       // 真值，阻止 LLM shell 绕过工具审批直连 localhost proxy/MCP 或盗用 BYOM key。

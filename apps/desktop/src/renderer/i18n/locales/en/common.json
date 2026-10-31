@@ -10102,6 +10102,17 @@
       "done": "Completed",
       "unread": "Unread"
     },
+    "mediaModels": {
+      "unavailable": "Available models could not be loaded. Your saved choices are kept.",
+      "vision": "Vision Bridge model",
+      "fallback": "Vision Bridge fallback",
+      "image": "Image generation model",
+      "video": "Video generation model",
+      "inherit": "Use app settings",
+      "none": "No fallback",
+      "title": "Media models",
+      "hint": "Choose models for this teammate. Vision Bridge follows the app’s enable switch and target models. Restart this teammate to apply Vision Bridge changes to Pi tools. Generation overrides apply to Cindy media tools; independent services keep their own settings."
+    },
     "workbench": {
       "ownedMark": "Belongs to {{names}}",
       "createdMark": "Created by {{names}}",

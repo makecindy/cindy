@@ -1,3 +1,4 @@
+import { listTeammateMediaModels } from '../../vision-bridge/teammate-media-catalog.js';
 import { getBotAutonomySettingsView, resetBotAutonomySchedulerSettings, setBotAutonomySchedulerBotId } from '../../bot-autonomy/hub.js';
 import { readEffectiveBotModelChain } from '../../maker-host/bot-model-chain-settings-store.js';
 import type { RemoteResourceHostContext } from '../../device-link/remoteResourceRegistry.js';
@@ -35,6 +36,7 @@ const deps = {
     if (isAppSessionBoundaryPending() || owner !== activeOwnerScopeKey()) throwIpcError('PRECONDITION_FAILED', 'Account changed');
   },
   read: getBotRemoteSettingsSource,
+  mediaModels: listTeammateMediaModels,
   update: async (input: Record<string, unknown>, version: number) => {
     const owner = activeOwnerScopeKey();
     const capabilities = input.capabilities as { modelChainOverride?: BotModelRoute[] | null } | undefined;
@@ -168,6 +170,7 @@ const settingsHost = createBotRemoteSettingsHost({
   },
   botVisible: async botId => (await readRemoteBotSessionAccess(botId, 'bot')) === 'visible',
   ops: createBotRemoteSettingsOps({
+    mediaModels: listTeammateMediaModels,
     readProfile: readBotSettingsProfile,
     updateProfile: input => updateBotProfile(input, undefined, validateBotCapabilityAdditions),
     async setAvatar(botId, avatarImageBase64) {

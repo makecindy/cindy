@@ -1,3 +1,5 @@
+import { listTeammateMediaModels } from '../vision-bridge/teammate-media-catalog.js';
+import { parseTeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
 import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
 import type { BotCapabilityCallbacks, BotControlState } from '@cindy/mcps';
 import { and, eq } from 'drizzle-orm';
@@ -292,17 +294,19 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           connectionsAvailable: Boolean(deps.readConversationConnections),
           guidance: 'Recall a topic with search_chat_history(query, teammate_id=teammateId), without a workdir or creation-date filter. list_sessions(teammate_id=teammateId, time_field=activity) includes old active, archived and topic/channel chats. Read matching originals with get_chat_history. If no match, existing account-history permission permits a bounded topic search without teammate_id for unlinked legacy records; report companion=null as unverified ownership, never infer it from a current connection, name or directory. device=all queries online authorized computers; unavailable/older devices and capped results are incomplete coverage.',
         } : undefined;
-        await ctx.refresh();
         const state: BotControlState = {
           ...(conversations ? { conversations } : {}),
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
+          mediaModels: { overrides: parseTeammateMediaModels(ctx.config.mediaModels),
+            ...(ctx.canReadOwnerModels ? { available: await listTeammateMediaModels() } : {}) },
           model: { source: explicit === null ? 'default' : 'override', candidates },
           memory: { enabled: ctx.config.memory !== false, scope: 'self' },
           references: { skills: strings(ctx.config.skills), mcpServers: strings(ctx.config.mcpServers),
             toolsets: strings(ctx.config.toolsets) },
         };
+        await ctx.refresh();
         return { ok: true as const, state };
       } catch (error) {
         if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
@@ -342,8 +346,9 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.description !== undefined ? { description: input.description } : {}),
           ...(input.identitySource !== undefined ? { identitySource: input.identitySource } : {}),
-          ...(modelChain !== undefined ? { capabilities: {
-            modelChainOverride: modelChain, modelOverride: null,
+          ...((modelChain !== undefined || input.mediaModels !== undefined) ? { capabilities: {
+            ...(modelChain !== undefined ? { modelChainOverride: modelChain, modelOverride: null } : {}),
+            ...(input.mediaModels !== undefined ? { mediaModels: input.mediaModels } : {}),
           } } : {}),
         }, input.expectedVersion);
         ctx.assertOwner();

@@ -1,3 +1,4 @@
+import { listTeammateMediaModels, validateTeammateMediaModels } from '../../vision-bridge/teammate-media-catalog.js';
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
@@ -1338,6 +1339,7 @@ async function readProfile(
       modelChainOverride: Array.isArray(config.modelChainOverride)
         ? normalizeBotModelChain(config.modelChainOverride)
         : null,
+      mediaModels: config.mediaModels ?? null,
       ...(config.taskModelOverride !== undefined ? { taskModelOverride: readBotTaskModelOverride(config.taskModelOverride) } : {}),
       skillMode: config.skillMode === 'allowlist' ? 'allowlist' : 'inherit',
       // 跟随全局时被单独关掉的那几项(见 botProfileRuntime 的 excludedSkills)。
@@ -1668,6 +1670,7 @@ export async function getBotRemoteSettingsSource(botId: string) {
     memory: config.memory !== false,
     permissions: config.permissions === 'trusted' || config.permissions === 'auto' ? config.permissions : 'ask',
     modelChain,
+    ...(config.mediaModels !== undefined ? { mediaModels: config.mediaModels } : {}),
     followsDefault: !(Array.isArray(config.modelChainOverride) && config.modelChainOverride.length > 0)
       && (config.modelChainOverride === null || config.modelOverride === null
         || (!Array.isArray(config.modelChainOverride) && !Array.isArray(config.modelChain) && typeof config.model !== 'string')),
@@ -1908,6 +1911,10 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     userContextSource,
     ...(gender ? { gender } : {}),
   });
+  if (requestedCapabilities.mediaModels !== undefined) {
+    persistedCapabilities.mediaModels = await validateTeammateMediaModels(requestedCapabilities.mediaModels);
+    assertCreationOwnerStillCurrent();
+  }
   // Progress is main-owned; callers can request an invitation, never supply its result.
   delete persistedCapabilities.invitation;
   delete persistedCapabilities.templateId;
@@ -2148,6 +2155,12 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (nextGender) nextConfig.gender = nextGender;
     else delete nextConfig.gender;
   }
+  if (body.capabilities && typeof body.capabilities === 'object' &&
+      Object.prototype.hasOwnProperty.call(body.capabilities, 'mediaModels') &&
+      JSON.stringify(previous.mediaModels ?? null) !== JSON.stringify(nextConfig.mediaModels ?? null)) {
+    nextConfig.mediaModels = await validateTeammateMediaModels(nextConfig.mediaModels, previous.mediaModels);
+    owner.assertCurrent();
+  }
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   // Legacy chain-only profiles gain mirrored fields during normalization.
   // Compare the same representation so unrelated edits do not validate stale routes.
@@ -2337,6 +2350,10 @@ export async function searchBotHistory(botId: string, query: string, limit: numb
 }
 
 export function registerBotIpc(): void {
+  ipcMain.handle('local-db:bots:media-models', async event => {
+    assertTrustedAppRendererEvent(event);
+    return listTeammateMediaModels();
+  });
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof token !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid draft');

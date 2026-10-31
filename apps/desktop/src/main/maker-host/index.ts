@@ -165,6 +165,7 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { guardedOutboundFetch, outboundFetch } from './outbound-fetch.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { readSessionVisionSettings } from '../vision-bridge/teammate-media-models.js';
 import { createVisionBridge } from '../vision-bridge/vision-bridge.js';
 import {
   getVisionBridgeController,
@@ -2631,8 +2632,9 @@ export function getMaker(): Maker {
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。
-      resolvePiVisionBridgeEnv: (model, sessionId) =>
-        buildPiVisionBridgeEnv(
+      resolvePiVisionBridgeEnv: async (model, sessionId) => {
+        if (!getVisionBridgeController()?.shouldBridge(model)) return null;
+        return buildPiVisionBridgeEnv(
           {
             getProviderById: (providerId) =>
               getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
@@ -2644,7 +2646,9 @@ export function getMaker(): Maker {
           },
           model,
           sessionId,
-        ),
+          (await readSessionVisionSettings(sessionId)).settings,
+        );
+      },
       // 远端 Pi:给 session 标 remoteHostId 的, PiAgent 通过这个钩子拿远端
       // transport — SSH 连接复用 ConnectionPool (remote-ssh feature 起的),
       // 这里包一层 RemoteHost + SshPiTransport (execStream 直桥远端 pi --mode rpc)。
@@ -2826,6 +2830,7 @@ export function getMaker(): Maker {
 
     setVisionGatewayKeyReader(readClaudeApiKey);
     _visionBridgeInstance = createVisionBridge({
+      resolveSettings: readSessionVisionSettings,
       getProviderById: (providerId) =>
         getActiveCatalog().providers.find((provider) => provider.id === providerId) ?? null,
       resolveTargetModel: (modelId, sessionId) => {

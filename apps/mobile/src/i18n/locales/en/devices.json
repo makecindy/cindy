@@ -741,6 +741,7 @@
     "settings": "Models & Permissions",
     "search": "Search Messages",
     "models": "Model Chain",
+    "media": "Media models",
     "permissions": "Operation Permissions",
     "personalSkills": "Personal Skills",
     "connections": "Referenced Skills & Connections",

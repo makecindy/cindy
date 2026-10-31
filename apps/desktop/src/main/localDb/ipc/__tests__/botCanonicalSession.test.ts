@@ -1,4 +1,5 @@
 import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskCompletionDeliveryHost';
+import { readSessionMediaModels } from '../../../vision-bridge/teammate-media-models.js';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
 import { admitTaskAction, assertTaskActionCurrent, TaskActionAuthorizationError } from '../../../maker-ipc/taskActionAuthorization';
@@ -152,9 +153,21 @@ vi.mock('electron', () => ({
   },
   dialog: { showOpenDialog: h.showOpenDialog },
 }));
+vi.mock('../../../vision-bridge/teammate-media-catalog.js', async () => {
+  const { parseTeammateMediaModels } = await import('@cindy/maker-shared/teammate-media-models');
+  return {
+    listTeammateMediaModels: async () => ({ vision: [], image: [], video: [] }),
+    validateTeammateMediaModels: async (value: unknown) => {
+      const parsed = parseTeammateMediaModels(value);
+      if (parsed?.image?.modelId === 'unavailable') throw new Error('Selected model unavailable');
+      return parsed;
+    },
+  };
+});
 vi.mock('../../client/current', () => ({
   getCurrentDbClientSnapshot: (() => {
     let current: { key: string; client: {
+      drizzle: unknown;
       tx: (name: string, args: unknown) => Promise<unknown>;
       query: (sql: string, params: unknown[]) => Promise<unknown[]>;
     } } | null = null;
@@ -162,6 +175,7 @@ vi.mock('../../client/current', () => ({
       if (!current || current.key !== h.ownerScopeKey) current = {
         key: h.ownerScopeKey,
         client: {
+          get drizzle() { return h.db; },
           tx: (name, args) => h.tx!(name, args),
           query: async (sql, params) => h.sqlite!.prepare(sql).all(...params),
         },
@@ -5004,6 +5018,27 @@ describe('Bot Session task end-to-end runtime', () => {
     h.sqlite!.prepare(`INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, route_key, created_at)
       VALUES (?, 'bot-a', ?, 1, 'group', ?, 1)`).run(`${id}-link`, id, route);
   }
+
+  // Feature contract through real profile IPC + database + session-owned runtime reader.
+  // Existing task-model tests do not cover media override persistence/reset or primary isolation.
+  // Unit tier uses the shared in-memory fixture; capability availability is a synthetic service seam.
+  it('persists teammate media overrides through profile updates, reuses lanes, and resets without changing chat models', async () => {
+    await seedPair(); seedGroupLane();
+    const mediaModels = { vision: { primary: { providerId: 'vision-account', modelId: 'vision' }, fallback: null },
+      image: { providerId: 'image-account', modelId: 'image' }, video: { providerId: 'video-account', modelId: 'video' } };
+    const before = h.sqlite!.prepare("SELECT model, provider_id FROM sessions WHERE id = 'session-1'").get();
+    const saved = await invoke('local-db:bots:update', { id: 'bot-a', capabilities: { mediaModels } });
+    expect(saved.capabilities.mediaModels).toEqual(mediaModels);
+    expect((await readSessionMediaModels('session-1')).overrides).toEqual(mediaModels);
+    expect((await readSessionMediaModels('group-lane')).overrides).toEqual(mediaModels);
+    await invoke('local-db:bots:update', { id: 'bot-a', description: 'Changed introduction' });
+    expect((await readSessionMediaModels('session-1')).overrides).toEqual(mediaModels);
+    await expect(invoke('local-db:bots:update', { id: 'bot-a', capabilities: { mediaModels: { image: { providerId: 'image-account', modelId: 'unavailable' } } } })).rejects.toThrow();
+    expect((await readSessionMediaModels('session-1')).overrides).toEqual(mediaModels);
+    await invoke('local-db:bots:update', { id: 'bot-a', capabilities: { mediaModels: null } });
+    expect((await readSessionMediaModels('session-1')).overrides).toBeNull();
+    expect(h.sqlite!.prepare("SELECT model, provider_id FROM sessions WHERE id = 'session-1'").get()).toEqual(before);
+  });
 
   it('projects the owning group of each hidden group lane so entries can return to that group', async () => {
     await seedPair();

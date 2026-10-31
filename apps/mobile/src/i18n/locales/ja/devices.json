@@ -741,6 +741,7 @@
     "settings": "モデルと権限",
     "search": "メッセージを検索",
     "models": "モデル候補",
+    "media": "メディアモデル",
     "permissions": "操作権限",
     "personalSkills": "学習したスキル",
     "connections": "参照中のスキルと接続",

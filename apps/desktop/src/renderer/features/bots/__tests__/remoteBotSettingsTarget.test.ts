@@ -206,3 +206,14 @@ it('negotiates final delivery and discovers recipients on the teammate computer'
   await current.target.routines.deliveryTargets?.('bot-1');
   expect(sent(1)).toMatchObject({ resourceRef: { id: 'bot-1' }, input: { op: 'routines.deliveryTargets' } });
 });
+
+// New host capability is optional; old hosts must never show a selector that cannot execute.
+it('reads media models from the teammate computer only when the host advertises support', async () => {
+  expect(create().target.mediaModels).toBeUndefined();
+  const { target } = create([...ALL_OPS, 'models.media']);
+  const catalog = { vision: [], image: [{ providerId: 'on-host', modelId: 'image', label: 'Image' }], video: [] };
+  host.invoke.mockResolvedValueOnce(ok(catalog));
+  expect(await target.mediaModels!()).toEqual(catalog);
+  expect(sent().input.op).toBe('models.media');
+  expect(sent().resourceRef?.id).toBe('bot-1');
+});

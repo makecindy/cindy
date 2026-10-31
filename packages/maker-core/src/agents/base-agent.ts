@@ -947,7 +947,7 @@ export interface AgentDeps {
    * 同 session 重建逐字节稳定（pi-harness §4.10），不得用随机值。
    * 返回的键应纳入 piSecretEnvNames 剥离面（host 实现应把含 key 的键名一并声明）。
    */
-  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null;
+  resolvePiVisionBridgeEnv?: (model: string, sessionId?: string) => Record<string, string> | null | Promise<Record<string, string> | null>;
 
   /**
    * Host-owned arbitration for capabilities that overlap with harness-native

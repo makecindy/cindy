@@ -58,6 +58,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
   </Button>;
   const panel = (target?: ProfilePanel) => target?.action ? <>
     {(target.id === 'capability' || target.id === 'follow-up' || target.id === 'project') && target.text ? note(target.text) : null}
+    {target.notice ? note(label(target.notice)) : null}
     {target.action.fields?.map(field => <Field key={field.id} field={field} values={p.values} onChange={p.onChange} busy={p.busy || !p.online || !!target.action?.disabled} />)}
     <Section>{action(tr('save'), () => p.onSubmit(target), !p.online || !p.dirty || p.conflict || !!target.action.disabled)}</Section>
   </> : note(target?.text || tr('hostUpgrade'));
@@ -66,7 +67,7 @@ export function CompanionProfileNativeView(p: CompanionProfileNativeViewProps) {
       <RNHostView matchContents><View style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}><RemoteCompanionAvatar avatar={p.data?.resource.display.avatar ?? p.resource?.display.avatar} name={p.name} deviceId={p.deviceId} online={p.online} size={AVATAR_SIZE} /></View></RNHostView>
       <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(2)]}>{p.name}</Text><Spacer />
     </HStack></Section>
-    <Section>{row('profile', 'person.crop.circle')}{row('memory', 'brain')}{row('models', 'slider.horizontal.3')}{row('skills', 'sparkles')}</Section>
+    <Section>{row('profile', 'person.crop.circle')}{row('memory', 'brain')}{row('models', 'slider.horizontal.3')}{p.data?.panels.some(item => item.id === 'media') ? row('media', 'photo.on.rectangle') : null}{row('skills', 'sparkles')}</Section>
     {/* Device preference for every teammate's chat, not part of this teammate's host profile. */}
     <Section title={tr('chat')} footer={<Text modifiers={[font({ textStyle: 'footnote' }), foregroundStyle(colors.textSecondary)]}>{tr('showReplyTargetHint')}</Text>}>
       <Toggle label={tr('showReplyTarget')} isOn={showReplyTargets} onIsOnChange={value => void saveCompanionReplyTargetPreference(value)}

@@ -10058,6 +10058,17 @@
       "done": "完了",
       "unread": "未読"
     },
+    "mediaModels": {
+      "unavailable": "利用可能なモデルを読み込めませんでした。保存済みの選択は保持されます。",
+      "vision": "Vision Bridge モデル",
+      "fallback": "Vision Bridge の予備モデル",
+      "image": "画像生成モデル",
+      "video": "動画生成モデル",
+      "inherit": "アプリの設定を使用",
+      "none": "予備モデルなし",
+      "title": "メディアモデル",
+      "hint": "このチームメイトのモデルを選択します。Vision Bridge はアプリの有効設定と対象モデルに従います。Pi ツールへの変更の適用にはチームメイトを再起動してください。生成モデルの指定は Cindy のメディアツールに適用され、独立したサービスは各自の設定を使います。"
+    },
     "workbench": {
       "ownedMark": "担当：{{names}}",
       "createdMark": "{{names}} が作成",

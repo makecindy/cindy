@@ -26,6 +26,8 @@ import {
   readVisionBridgeSettings,
 } from '../vision-bridge-settings-store.js';
 import { describeImageWithProvider, VisionBackendError } from '../vision-channel.js';
+import { effectiveTeammateVision, parseTeammateMediaModels } from '@cindy/maker-shared/teammate-media-models';
+import { buildVisionBridgeProxyTransform, setVisionBridgeController } from '../vision-bridge-controller.js';
 
 const mockedSettings = vi.mocked(readVisionBridgeSettings);
 const mockedTargetsCustomized = vi.mocked(isTargetModelsCustomized);
@@ -56,6 +58,65 @@ beforeEach(() => {
 });
 
 describe('createVisionBridge hook', () => {
+  // Feature contract: production hook/description/proxy entries must honor per-owner routes.
+  // Previous coverage had only global settings; unit tier uses fake descriptions (no paid calls).
+  it('inherits live app changes, overrides and resets without sharing cached descriptions between teammates', async () => {
+    let overrides = parseTeammateMediaModels({ vision: { primary: { providerId: 'account-a', modelId: 'vision-a' }, fallback: null } });
+    const bridge = createVisionBridge({ getProviderById: () => null, resolveSettings: async sessionId => ({
+      scope: sessionId ?? '', settings: effectiveTeammateVision(mockedSettings(), sessionId === 'a' ? overrides : null),
+    }) });
+    mockedDescribe.mockImplementation(async (provider, model) => `${provider}/${model}`);
+    const image = { imageUrl: 'data:image/png;base64,AAAA', prompt: 'same' };
+    expect(await bridge.describeImage({ ...image, sessionId: 'a' })).toBe('account-a/vision-a');
+    expect(await bridge.describeImage({ ...image, sessionId: 'a' })).toBe('account-a/vision-a');
+    expect(mockedDescribe).toHaveBeenCalledTimes(1);
+    expect(await bridge.describeImage({ ...image, sessionId: 'b' })).toBe('user-deepseek/deepseek-v4');
+    mockedSettings.mockReturnValue({ ...baseSettings(), primary: { providerId: 'app', modelId: 'new' } });
+    expect(await bridge.describeImage({ ...image, sessionId: 'b' })).toBe('app/new');
+    expect(await bridge.describeImage({ ...image, sessionId: 'a' })).toBe('account-a/vision-a');
+    overrides = null;
+    expect(await bridge.describeImage({ ...image, sessionId: 'a' })).toBe('app/new');
+    const result = await bridge.hook(userMsg('new picture', '/tmp/media-override.png'), { model: 'deepseek-v4', sessionId: 'a' });
+    expect(result.message.content).toEqual(expect.arrayContaining([{ type: 'text', text: expect.stringContaining('app/new') }]));
+    bridge.dispose();
+  });
+
+  it('does not join another teammate’s flight or an old fallback policy, and honors explicit no-fallback', async () => {
+    const primary = { providerId: 'account', modelId: 'vision' };
+    let fallback: typeof primary | null = { providerId: 'backup', modelId: 'vision' };
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    mockedDescribe.mockImplementation(async provider => {
+      if (provider === 'account') { await pending; throw new VisionBackendError('unavailable', 'offline'); }
+      return 'fallback description';
+    });
+    const bridge = createVisionBridge({ getProviderById: () => null,
+      resolveSettings: async id => ({ scope: id ?? '', settings: { ...baseSettings(), primary, fallback } }),
+    });
+    const input = { imageUrl: 'data:image/png;base64,AAAA', prompt: 'same' };
+    const first = bridge.describeImage({ ...input, sessionId: 'a' });
+    await vi.waitFor(() => expect(mockedDescribe).toHaveBeenCalledTimes(1));
+    fallback = null;
+    const second = bridge.describeImage({ ...input, sessionId: 'a' });
+    const other = bridge.describeImage({ ...input, sessionId: 'b' });
+    const results = Promise.allSettled([first, second, other]);
+    release();
+    expect(await results).toMatchObject([{ status: 'fulfilled', value: 'fallback description' }, { status: 'rejected' }, { status: 'rejected' }]);
+    expect(mockedDescribe.mock.calls.filter(call => call[0] === 'account')).toHaveLength(3);
+    bridge.dispose();
+  });
+
+  it('binds concurrent proxy conversions to the Host-resolved session rather than body IDs', async () => {
+    const describeImage = vi.fn(async (input: { sessionId?: string }) => `description:${input.sessionId}`);
+    setVisionBridgeController({ shouldBridge: () => true, describeImage });
+    const transform = buildVisionBridgeProxyTransform(undefined, undefined, ctx => ctx.headers['host-session']);
+    const body = { model: 'deepseek-v4', sessionId: 'model-supplied', input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,AAAA' }] }] };
+    try {
+      const values = await Promise.all(['a', 'b'].map(id => transform(structuredClone(body), { reqId: 1, method: 'POST', url: '/v1/responses', headers: { 'host-session': id } })));
+      expect(JSON.stringify(values[0])).toContain('description:a');
+      expect(JSON.stringify(values[1])).toContain('description:b');
+    } finally { setVisionBridgeController(null); }
+  });
   it('uses the current route metadata before family-name heuristics while preserving explicit choices', async () => {
     mockedSettings.mockReturnValue({ ...baseSettings(), targetModels: [] });
     const resolveTargetModel = vi.fn(() => ({
