@@ -387,6 +387,35 @@ describe('sanitizeGhostCardHtml · 交互卡按钮(v2,data-ghost-action)', () =>
   });
 });
 
+// PR 卡片的「跟进中」要持续几天,卡内不能留动画源码;宿主按这个标记播统一光环。
+describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
+  it('span / div 上保留为空值属性,其它标签与属性值都不放行', () => {
+    expect(ok('<span data-ghost-live="anything">x</span><div data-ghost-live>y</div>')).toBe(
+      '<span data-ghost-live="">x</span><div data-ghost-live="">y</div>',
+    );
+    expect(ok('<button data-ghost-live>z</button>')).not.toContain('data-ghost-live');
+  });
+});
+
+// 宿主把标题栏的 PR 状态填进这个位置;只认 owner/repo#编号,别的值连同它可能夹带的内容都只丢属性。
+describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
+  it('div 上放行 owner/repo#编号,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>')).toBe('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>');
+    expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
+      .toBe('<div>a</div><div>b</div><span>c</span>');
+  });
+});
+
+// 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。
+describe('sanitizeGhostCardHtml · 位置与宽度声明(data-ghost-placement / data-ghost-width)', () => {
+  it('只在 div 上放行 turn-end / full,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-placement=" turn-end " data-ghost-width="full">x</div>'))
+      .toBe('<div data-ghost-placement="turn-end" data-ghost-width="full">x</div>');
+    expect(ok('<div data-ghost-placement="top" data-ghost-width="100%">x</div><span data-ghost-placement="turn-end" data-ghost-width="full">y</span>'))
+      .toBe('<div>x</div><span>y</span>');
+  });
+});
+
 describe('sanitizeGhostCardHtml · 卡内音频播放器插槽(data-ghost-audio)', () => {
   const mp3 = `cindy-media://blobs/${'d'.repeat(64)}.mp3`;
 

@@ -106,6 +106,23 @@ describe('GhostSessionActivityTracker', () => {
     expect(broadcast).toHaveBeenCalledTimes(1);
   });
 
+  // PR 卡片这类状态卡点击后原地换根卡、不长衍生卡:根卡 done 必须熄掉这次点击的呼吸,
+  // 否则侧栏任务要白转到 TTL;已经在衍生卡上出结果的点击不受根卡更新影响。
+  it('根卡 done 结束原地回应的点击;已给衍生卡供片的点击仍等自己的 done', () => {
+    const { tracker, broadcast } = makeTracker();
+    tracker.begin('root::sp1', 's1');
+    tracker.noteCardUpdate('root', 's1', 'done');
+    expect(tracker.isSessionBusy('s1')).toBe(false);
+    expect(broadcast).toHaveBeenLastCalledWith('s1', false);
+
+    tracker.begin('root::sp2', 's1');
+    tracker.noteCardUpdate('root::sp2', 's1', 'working');
+    tracker.noteCardUpdate('root', 's1', 'done');
+    expect(tracker.isSessionBusy('s1')).toBe(true);
+    tracker.noteCardUpdate('root::sp2', 's1', 'done');
+    expect(tracker.isSessionBusy('s1')).toBe(false);
+  });
+
   it('TTL 静默超时兜底熄呼吸', () => {
     const { tracker, broadcast, pendingTimerIds, fire } = makeTracker();
     tracker.begin('k1', 's1');

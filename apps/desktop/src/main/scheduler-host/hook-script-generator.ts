@@ -17,7 +17,7 @@
  *     读入现有内容随 prompt 提交,并**覆写同一路径**(命令不变,复用无感)。
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { AgentKind, Maker } from '@cindy/maker-core';
@@ -272,6 +272,41 @@ function parseSingleFileHookCommand(command: string): ParsedSingleFileHookComman
   return null;
 }
 
+/** Per-process link folder through which Claude Code sees Cindy-managed Skills (maker-core prepareManagedSkillPlugins). */
+const MANAGED_SKILL_LINK_SEGMENT = /^cindy-claude-skills-/;
+
+/**
+ * A Skill's own check script reached through that per-process link folder disappears when Cindy restarts,
+ * so every later run would fail closed. Persist the Skill's real location instead, through the shared
+ * bundle's `.active` entry when that exists, so the hook also survives Cindy updates.
+ */
+export function stabilizeManagedSkillLinks(
+  command: string,
+  realpath: (filePath: string) => string = realpathSync,
+  exists: (filePath: string) => boolean = existsSync,
+): string {
+  return command.replace(/"([^"]*)"|'([^']*)'|(\S+)/g, (token, doubled?: string, single?: string, bare?: string) => {
+    const value = doubled ?? single ?? bare ?? '';
+    const segments = value.split(/[\\/]/);
+    const at = segments.findIndex((segment) => MANAGED_SKILL_LINK_SEGMENT.test(segment));
+    // <link folder>/<plugin>/skills/<skill>/...: the <skill> entry is the link to the real Skill directory.
+    if (at < 0 || segments.length < at + 5 || segments[at + 2] !== 'skills') return token;
+    const linkRoot = segments.slice(0, at + 4).join(path.sep);
+    let skillDir: string;
+    try {
+      skillDir = realpath(linkRoot);
+    } catch {
+      throw new Error(
+        `invalid pre-run hook configuration: ${value} is a temporary Skill link that no longer exists; use the Skill's installed directory instead`,
+      );
+    }
+    const rest = segments.slice(at + 4);
+    const resolved = path.join(skillDir, ...rest);
+    const active = path.join(skillDir.replace(/([\\/])\.versions[\\/][^\\/]+(?=[\\/]|$)/, '$1.active'), ...rest);
+    return shellQuotePath(active !== resolved && exists(active) ? active : resolved);
+  });
+}
+
 /**
  * Make a supported single-file hook command independent from its execution cwd.
  * Arbitrary shell commands (for example `pnpm check`) intentionally stay cwd-relative.
@@ -280,7 +315,9 @@ export function stabilizeHookCommand(
   command: string,
   workingDir?: string,
   exists: (filePath: string) => boolean = existsSync,
+  realpath: (filePath: string) => string = realpathSync,
 ): string {
+  command = stabilizeManagedSkillLinks(command, realpath, exists);
   const parsed = parseSingleFileHookCommand(command);
   if (!parsed) return command;
   const extension = path.extname(parsed.scriptPath).toLowerCase();

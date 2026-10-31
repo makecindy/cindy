@@ -62,6 +62,9 @@ import {
 } from '@/cindy-brain/ghostCardStore';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
+import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
+import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import { usePrStatus } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -70,6 +73,7 @@ import {
   GHOST_CARD_ACTION_INFLIGHT_MS,
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
+  isFullWidthGhostCardHtml,
   isGhostCardLinkAllowed,
 } from '@/../shared/ghost';
 
@@ -208,6 +212,8 @@ function GhostCardCanvas({
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const liveDisposeRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => liveDisposeRef.current?.(), []);
   const formFields = useMemo(() => readGhostCardForm(html), [html]);
   const mail = useMemo(() => readMailCard(html), [html]);
   useEffect(() => {
@@ -308,6 +314,14 @@ function GhostCardCanvas({
   const settledOnceRef = useRef(false);
   const pendingSettleRef = useRef(false);
   const renderedCardHtml = running && animatedHtml ? animatedHtml : html;
+  // PR 状态位:用标题栏同一份状态(随它定时刷新)替换插件的兜底快照。
+  const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
+  const prStatus = usePrStatus(sessionId ?? '', prSlotKey ?? '');
+  const prStatusRef = useRef(prStatus);
+  prStatusRef.current = prStatus;
+  const fillPrStatus = useCallback((doc: Document) => {
+    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => (key === prSlotKey ? prStatusRef.current : undefined), t);
+  }, [prSlotKey, t]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -460,6 +474,13 @@ function GhostCardCanvas({
     // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
     // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
     alignFrameWithGate(doc);
+    // 在线指示每份文档只挂一次(量高会让本回调对同一文档重跑);换新文档先清旧光环。
+    if (doc.documentElement.dataset.xdtLiveBridged !== '1' && iframeRef.current) {
+      doc.documentElement.dataset.xdtLiveBridged = '1';
+      liveDisposeRef.current?.();
+      liveDisposeRef.current = startGhostCardLiveIndicators(doc, iframeRef.current);
+    }
+    fillPrStatus(doc);
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {
@@ -626,7 +647,7 @@ function GhostCardCanvas({
       });
     });
     measureHeight();
-  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId]);
+  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus]);
 
   const cardSrcDoc = buildCardSrcDoc(renderedCardHtml, themeVars);
   const initialMailDocument = useRef(cardSrcDoc);
@@ -645,6 +666,14 @@ function GhostCardCanvas({
     // 含 themeVars:主题切换重建 srcDoc 后同样要重挂点击桥并重测。
     attachClickBridge();
   }, [html, animatedHtml, running, themeVars, attachClickBridge]);
+
+  // 标题栏的 PR 状态刷新时重填当前文档(换行可能改变高度,随后重测)。
+  useEffect(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc?.body || !prSlotKey) return;
+    fillPrStatus(doc);
+    measureHeight();
+  }, [prStatus, prSlotKey, fillPrStatus, measureHeight]);
 
   // 权威实测的高度提交落地后才放开缓动开关:依赖 measuredHeight = 只在
   // 新高度**已渲染提交**的那次 commit 之后翻闸——若挂在"每次渲染后跑",
@@ -965,7 +994,11 @@ export function GhostToolCard({
   return (
     <div
       className="flex min-w-0 flex-col"
-      style={{ maxWidth: mail || legacyMail ? 'min(100%, max(480px, 75%))' : CARD_MAX_WIDTH }}
+      style={{
+        maxWidth: mail || legacyMail
+          ? 'min(100%, max(480px, 75%))'
+          : isFullWidthGhostCardHtml(html) ? '100%' : CARD_MAX_WIDTH,
+      }}
       aria-label={ariaTitle}
       data-mail-call-id={mail ? callId : undefined}
     >

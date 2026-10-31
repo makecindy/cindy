@@ -17,6 +17,8 @@
  * 依赖全注入(规则 14):broadcast / 时钟 / 定时器可替换,单测零 Electron。
  */
 
+import { GHOST_CARD_SPAWN_SEP } from '../../shared/ghost.js';
+
 export interface GhostSessionActivityDeps {
   /** 会话忙闲变化广播(0↔1 转变才调;busy=true 亮呼吸,false 熄)。 */
   broadcast(sessionId: string, busy: boolean): void;
@@ -39,6 +41,8 @@ export const GHOST_SESSION_ACTIVITY_TTL_MS = 180_000;
 interface ActivityEntry {
   sessionId: string;
   timer: unknown;
+  /** 该卡位自己收到过 card-update(意识把结果画在了这张衍生卡上)。 */
+  updated?: boolean;
 }
 
 /** 意识后台活动跟踪器(单例装配见 cindy-brain/index.ts)。 */
@@ -109,15 +113,33 @@ export class GhostSessionActivityTracker {
   noteCardUpdate(key: string, sessionId: string | null, state: 'working' | 'done' | null): void {
     if (state === 'done') {
       this.end(key);
+      this.endClicksAnsweredInPlace(key);
       return;
     }
     const existing = this.entries.get(key);
     if (existing) {
+      existing.updated = true;
       this.cancel(existing.timer);
       existing.timer = this.armTtl(key);
       return;
     }
-    if (state === 'working' && sessionId) this.begin(key, sessionId);
+    if (state === 'working' && sessionId) {
+      this.begin(key, sessionId);
+      const entry = this.entries.get(key);
+      if (entry) entry.updated = true;
+    }
+  }
+
+  /**
+   * 意识回应点击时原地换了被点的根卡、没给衍生卡位供片:根卡的 done 也就结束了
+   * 这次点击,否则会话要白白呼吸到 TTL。已经给衍生卡供过片的点击照旧等它自己的 done。
+   */
+  private endClicksAnsweredInPlace(rootKey: string): void {
+    if (rootKey.includes(GHOST_CARD_SPAWN_SEP)) return;
+    const prefix = rootKey + GHOST_CARD_SPAWN_SEP;
+    for (const [key, entry] of [...this.entries]) {
+      if (key.startsWith(prefix) && !entry.updated) this.end(key);
+    }
   }
 
   /** 活动结束(done 声明 / TTL 超时):引用计数归零才熄该会话的呼吸。 */

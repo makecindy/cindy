@@ -32,10 +32,13 @@ describe('PR summary', () => {
   });
 
   it('keeps one GraphQL request and reports truncated reviews as unknown', async () => {
-    const pr = { headRefOid: 'head', commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
+    // The PR card's live strip also needs merge readiness; it rides on the same request.
+    const pr = { headRefOid: 'head', mergeStateStatus: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED',
+      commits: { nodes: [{ commit: { oid: 'head', statusCheckRollup: null } }] },
       reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: true } } };
     const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: pr } });
-    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', unresolved: null, checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 } });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: 'head', unresolved: null,
+      checks: { total: 0, passed: 0, failed: 0, pending: 0, skipped: 0 }, mergeState: 'BLOCKED', reviewDecision: 'REVIEW_REQUIRED' });
     expect(graphql).toHaveBeenCalledTimes(1);
     pr.reviewThreads.pageInfo.hasNextPage = false;
     expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 1 });
@@ -44,7 +47,7 @@ describe('PR summary', () => {
 
   it('does not turn missing PR data or a changed head into zero/all passing', async () => {
     const graphql = vi.fn().mockResolvedValue({ repository: { pullRequest: null } });
-    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: null, unresolved: null, checks: null });
+    expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toEqual({ headOid: null, unresolved: null, checks: null, mergeState: null, reviewDecision: null });
     graphql.mockResolvedValue({ repository: { pullRequest: { headRefOid: 'new', commits: { nodes: [{ commit: { oid: 'old', statusCheckRollup: null } }] }, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } } } });
     expect(await fetchPrSummary({ graphql } as unknown as GithubClient, Q)).toMatchObject({ unresolved: 0, checks: null });
   });
