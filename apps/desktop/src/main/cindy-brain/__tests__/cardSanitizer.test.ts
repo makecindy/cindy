@@ -387,6 +387,16 @@ describe('sanitizeGhostCardHtml · 交互卡按钮(v2,data-ghost-action)', () =>
   });
 });
 
+// PR 卡片的「跟进中」要持续几天,卡内不能留动画源码;宿主按这个标记播统一光环。
+describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
+  it('span / div 上保留为空值属性,其它标签与属性值都不放行', () => {
+    expect(ok('<span data-ghost-live="anything">x</span><div data-ghost-live>y</div>')).toBe(
+      '<span data-ghost-live="">x</span><div data-ghost-live="">y</div>',
+    );
+    expect(ok('<button data-ghost-live>z</button>')).not.toContain('data-ghost-live');
+  });
+});
+
 describe('sanitizeGhostCardHtml · 卡内音频播放器插槽(data-ghost-audio)', () => {
   const mp3 = `cindy-media://blobs/${'d'.repeat(64)}.mp3`;
 

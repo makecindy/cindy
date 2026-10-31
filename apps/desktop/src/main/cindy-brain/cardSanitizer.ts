@@ -281,6 +281,9 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
       if (AUDIO_DURATION_RE.test(dur)) parts.push(` data-ghost-audio-duration="${dur}"`);
     }
   }
+  // 在线指示(data-ghost-live):空值属性,只挂 span / div。宿主给它播统一的呼吸光环
+  // (transform + opacity,卡片不可见时暂停),卡内仍零动画源码,历史卡照样静态存档。
+  if ((tag === 'span' || tag === 'div') && attrs['data-ghost-live'] !== undefined) parts.push(' data-ghost-live=""');
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。

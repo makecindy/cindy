@@ -62,6 +62,7 @@ import {
 } from '@/cindy-brain/ghostCardStore';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
+import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -208,6 +209,8 @@ function GhostCardCanvas({
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const liveDisposeRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => liveDisposeRef.current?.(), []);
   const formFields = useMemo(() => readGhostCardForm(html), [html]);
   const mail = useMemo(() => readMailCard(html), [html]);
   useEffect(() => {
@@ -460,6 +463,12 @@ function GhostCardCanvas({
     // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
     // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
     alignFrameWithGate(doc);
+    // 在线指示每份文档只挂一次(量高会让本回调对同一文档重跑);换新文档先清旧光环。
+    if (doc.documentElement.dataset.xdtLiveBridged !== '1' && iframeRef.current) {
+      doc.documentElement.dataset.xdtLiveBridged = '1';
+      liveDisposeRef.current?.();
+      liveDisposeRef.current = startGhostCardLiveIndicators(doc, iframeRef.current);
+    }
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {
