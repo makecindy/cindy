@@ -2788,6 +2788,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         await cancelExecution(run);
         return;
       }
+      // A transport failure does not establish that the lease was revoked. Let
+      // the next heartbeat renew or reject the same running turn.
+      if (!(error instanceof ChatResponseError) || retryableResponse(error)) return;
       // An in-flight heartbeat must not discard a result that became ready while
       // it was awaiting its response; retry the terminal operation for its receipt.
       if (!run.settlement && running.get(run.execution.id) === run) {
