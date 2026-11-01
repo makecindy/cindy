@@ -10,7 +10,10 @@ import type { VoiceQuestionBridge } from '@/components/new-chat/voiceQuestionSel
 export type VoiceCallSlot = {
   element: HTMLElement;
   openTask(clientId: string): void;
-  questionBridge: VoiceQuestionBridge;
+  /** Present only while this page's question card is on screen to take a spoken answer. */
+  questionBridge?: VoiceQuestionBridge;
+  /** Page-local reasons the call must stay paused; the host reads them live. */
+  blocked: boolean;
 };
 /** Stable between audio frames, so task pages do not rerender with the level meter. */
 export type VoiceCallSummary = {
@@ -89,9 +92,10 @@ export function installVoiceCallHost(
 
 export const publishVoiceCallStatus = setStatus;
 
-/** Local in the main window, otherwise routed there by Main. */
+/** Operations run locally in the main window; starts and other windows go through Main. */
 export async function sendVoiceCallCommand(command: VoiceCallCommand): Promise<boolean> {
-  if (localCommands) return localCommands(command);
+  // Main arbitrates every start, so two windows cannot both be told they got the line.
+  if (localCommands && command.type !== 'start') return localCommands(command);
   const result = await window.electronAPI.voiceConversation.callCommand(command);
   return result.ok;
 }

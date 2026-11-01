@@ -4388,12 +4388,10 @@ function CCAgentSessionContent({
     || pendingPluginSetup || pendingIssueConfirm || pendingRenameSessionsConfirm
     || pendingGhostGrantConfirm || pendingRemoteDesktopConfirmation || pendingInputHandoff || sessionBinding.attached
     || remoteHandoffPreparing || cindyMakeInputLocked || queuePaused);
-  // A page-local reason to pause has no store state the call could read by itself.
-  const voicePausedByPage = voiceModeOpen && (remoteHandoffPreparing || cindyMakeInputLocked);
-  useEffect(() => {
-    if (voicePausedByPage && sessionId)
-      void sendVoiceCallCommand({ type: 'pause', sessionId }).catch(() => undefined);
-  }, [voicePausedByPage, sessionId]);
+  // The host reads these live through the composer slot, so a pause cannot be undone by Resume.
+  const voicePageBlocked = remoteHandoffPreparing || cindyMakeInputLocked;
+  // A settings drawer or a secondary window can cover the card: then it takes no spoken answer.
+  const voiceQuestionVisible = voiceSurfaceAvailable && !voiceModeBlocked && !companionSettingsOpen && !isSecondaryWindow();
   const messageReadAloud = useMessageReadAloud({
     botId: botChatIdentity?.id,
     sessionId: sessionId ?? '',
@@ -5998,7 +5996,7 @@ function CCAgentSessionContent({
                   />
                 ) : pendingAskUser ? (
                   <AskUserQuestionPrompt
-                    voiceBridge={voiceModeOpen && voiceSurfaceAvailable && !voiceModeBlocked && !isSecondaryWindow() ? voiceQuestionBridge : undefined}
+                    voiceBridge={voiceModeOpen && voiceQuestionVisible ? voiceQuestionBridge : undefined}
                     voiceShortcutPreferred={isOrcaLeadSessionView}
                     hostVisible={viewVisible}
                     sessionId={sessionId}
@@ -6058,7 +6056,7 @@ function CCAgentSessionContent({
               {/* Only the compact bar reserves composer space; its transcript is a
                   dismissible popover, so expansion does not move the main timeline. */}
               {voiceSurfaceAvailable && sessionId ? (
-                <VoiceCallComposerSlot sessionId={sessionId} questionBridge={voiceQuestionBridge} openTask={openVoiceTask} />
+                <VoiceCallComposerSlot sessionId={sessionId} questionBridge={voiceQuestionVisible ? voiceQuestionBridge : undefined} blocked={voicePageBlocked} openTask={openVoiceTask} />
               ) : null}
               {/* 互斥:控制端能终结的 pending interaction 会接管 composer；
                  Desktop-only 只读确认只能提示等待，必须保留 ChatInput，避免控制端

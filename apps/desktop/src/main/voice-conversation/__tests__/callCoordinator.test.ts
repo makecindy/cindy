@@ -52,6 +52,22 @@ it('keeps the live call when another window tries to start a second one', () => 
   });
 });
 
+// Two windows can send start before the host has rendered and published anything.
+it('reserves the line for the first start until the host publishes or the reservation lapses', () => {
+  vi.useFakeTimers();
+  const start = (id: string) =>
+    ({ type: 'start', sessionId: id, bot: { id: `b-${id}`, name: id } }) as const;
+  expect(coordinator.command(start('first'))).toBe(true);
+  expect(coordinator.command(start('second'))).toBe(false);
+  coordinator.publish(HOST, { status: status(false) });
+  expect(coordinator.command(start('third'))).toBe(true);
+  // A host that rejects a start publishes nothing: the line must not stay held.
+  expect(coordinator.command(start('fourth'))).toBe(false);
+  vi.advanceTimersByTime(10_000);
+  expect(coordinator.command(start('fifth'))).toBe(true);
+  vi.useRealTimers();
+});
+
 it('accepts status only from the main window and shows it only to windows that asked', () => {
   coordinator.publish(OTHER, { status: status() });
   expect(coordinator.subscribe(OTHER)).toBeNull();
@@ -75,6 +91,8 @@ it('clears a call whose main window is gone but not when another window closes',
   expect(onActiveChange).toHaveBeenLastCalledWith(true);
   coordinator.windowGone(3);
   expect(onActiveChange).toHaveBeenCalledTimes(1);
+  // The destroyed window no longer resolves as the host.
+  coordinator.configure({ hostSender: () => null, send, onActiveChange });
   coordinator.windowGone(HOST);
   expect(onActiveChange).toHaveBeenLastCalledWith(false);
   expect(send).toHaveBeenLastCalledWith(OTHER, 'voice-conversation:call-status-changed', {

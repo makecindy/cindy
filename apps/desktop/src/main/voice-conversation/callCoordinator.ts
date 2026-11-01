@@ -6,6 +6,8 @@ import type {
 
 const COMMAND_CHANNEL = 'voice-conversation:call-command';
 const STATUS_CHANNEL = 'voice-conversation:call-status-changed';
+/** Longest a start may stay unconfirmed, e.g. when the host rejects it without a status. */
+const START_RESERVATION_MS = 10_000;
 
 type Deps = {
   hostSender(): number | null;
@@ -21,6 +23,10 @@ type Deps = {
 export class VoiceCallCoordinator {
   private deps: Deps | null = null;
   private status: VoiceCallStatus | null = null;
+  /** A start already accepted whose first status has not arrived yet. */
+  private starting: ReturnType<typeof setTimeout> | null = null;
+  /** The host window may already be gone when its destruction is reported. */
+  private lastHost: number | null = null;
   private readonly subscribers = new Set<number>();
 
   configure(deps: Deps): void {
@@ -34,6 +40,7 @@ export class VoiceCallCoordinator {
 
   publish(sender: number, update: VoiceCallStatusUpdate): void {
     if (sender !== this.deps?.hostSender()) return;
+    this.lastHost = sender;
     this.apply(update, sender);
   }
 
@@ -41,17 +48,31 @@ export class VoiceCallCoordinator {
     const host = this.deps?.hostSender() ?? null;
     if (host === null) return false;
     // The call in progress keeps the line; a second one never replaces it.
-    if (command.type === 'start' && this.status?.open) return false;
+    if (command.type === 'start') {
+      if (this.status?.open || this.starting) return false;
+      // Reserve now: the host only publishes after it renders, and a second window
+      // could otherwise be told it got the line in that gap.
+      this.starting = setTimeout(() => (this.starting = null), START_RESERVATION_MS);
+    }
     this.deps?.send(host, COMMAND_CHANNEL, command);
     return true;
   }
 
   windowGone(sender: number): void {
     this.subscribers.delete(sender);
-    if (sender === this.deps?.hostSender() && this.status) this.apply({ status: null }, sender);
+    if (sender !== this.deps?.hostSender() && sender !== this.lastHost) return;
+    this.lastHost = null;
+    this.clearStarting();
+    if (this.status) this.apply({ status: null }, sender);
+  }
+
+  private clearStarting(): void {
+    if (this.starting) clearTimeout(this.starting);
+    this.starting = null;
   }
 
   private apply(update: VoiceCallStatusUpdate, sender: number): void {
+    this.clearStarting();
     const wasActive = this.status?.open ?? false;
     if ('status' in update) this.status = update.status;
     else if (this.status)

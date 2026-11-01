@@ -60,6 +60,7 @@ vi.mock('@/hooks/useSessionBinding', () => ({
 }));
 
 import type { VoiceCallCommand } from '@/../shared/voiceConversation';
+import { VoiceCallCoordinator } from '../../../../../main/voice-conversation/callCoordinator';
 import {
   GlobalVoiceCallHost,
   RemoteVoiceCallSurface,
@@ -70,7 +71,11 @@ import { sendVoiceCallCommand } from '../voiceCallStore';
 
 const start = vi.fn(async (input: { callId: string }) => ({ callId: input.callId }));
 const end = vi.fn(async () => {});
-const publishCallStatus = vi.fn();
+let coordinator: VoiceCallCoordinator;
+let deliver: (command: VoiceCallCommand) => void = () => {};
+const publishCallStatus = vi.fn((update: Parameters<VoiceCallCoordinator['publish']>[1]) =>
+  coordinator.publish(1, update),
+);
 const bridge = { current: null };
 const startCommand = (sessionId: string, name = 'Partner'): VoiceCallCommand => ({
   type: 'start',
@@ -81,6 +86,15 @@ const startCommand = (sessionId: string, name = 'Partner'): VoiceCallCommand => 
 beforeEach(() => {
   vi.clearAllMocks();
   chat.light = { pendingPermission: null, pendingAskUser: null };
+  // Main arbitrates starts and hands the accepted one to the host window.
+  coordinator = new VoiceCallCoordinator();
+  coordinator.configure({
+    hostSender: () => 1,
+    send: (_sender, channel, payload) => {
+      if (channel === 'voice-conversation:call-command') deliver(payload as VoiceCallCommand);
+    },
+    onActiveChange: () => {},
+  });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -93,9 +107,16 @@ beforeEach(() => {
         onEvent: () => () => {},
         callStatus: async () => null,
         publishCallStatus,
-        callCommand: vi.fn(async () => ({ ok: true })),
+        callCommand: vi.fn(async (command: VoiceCallCommand) => ({
+          ok: coordinator.command(command),
+        })),
         onCallStatus: () => () => {},
-        onCallCommand: () => () => {},
+        onCallCommand: (callback: (command: VoiceCallCommand) => void) => {
+          deliver = callback;
+          return () => {
+            deliver = () => {};
+          };
+        },
         submitTurn: vi.fn(async () => true),
       },
       voiceInput: { onPowerStateChange: () => () => {} },
@@ -120,7 +141,12 @@ function MainWindow() {
       <button onClick={() => setPage('a')}>go-a</button>
       {page ? (
         <section key={page} data-testid={`page-${page}`}>
-          <VoiceCallComposerSlot sessionId={page} questionBridge={bridge} openTask={vi.fn()} />
+          <VoiceCallComposerSlot
+            sessionId={page}
+            questionBridge={bridge}
+            blocked={false}
+            openTask={vi.fn()}
+          />
         </section>
       ) : null}
     </MemoryRouter>
@@ -163,6 +189,75 @@ it('keeps capture running while task pages unmount and draws the bar where it ca
   expect(audio.start).toHaveBeenCalledTimes(1);
   expect(audio.stop).not.toHaveBeenCalled();
   expect(end).not.toHaveBeenCalled();
+});
+
+// Review finding: both starts used to be acknowledged before the host rendered.
+it('gives the line to one of two starts sent in the same tick', async () => {
+  render(<MainWindow />);
+  let results: boolean[] = [];
+  await act(async () => {
+    results = await Promise.all([
+      sendVoiceCallCommand(startCommand('a', 'First')),
+      sendVoiceCallCommand(startCommand('b', 'Second')),
+    ]);
+  });
+  await act(async () => {});
+  expect(results).toEqual([true, false]);
+  expect(start).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId('page-a').querySelector('.companion-voice-toolbar')).toBeTruthy();
+});
+
+// Review finding: a page-local pause was a one-shot command that Resume could undo.
+it('keeps Resume unavailable while the page still holds the call paused', async () => {
+  function Page({ blocked }: { blocked: boolean }) {
+    return (
+      <VoiceCallComposerSlot
+        sessionId="a"
+        questionBridge={bridge}
+        blocked={blocked}
+        openTask={vi.fn()}
+      />
+    );
+  }
+  const view = render(
+    <MemoryRouter>
+      <VoiceCallFloatingSlot />
+      <GlobalVoiceCallHost />
+      <Page blocked={false} />
+    </MemoryRouter>,
+  );
+  await begin();
+  view.rerender(
+    <MemoryRouter>
+      <VoiceCallFloatingSlot />
+      <GlobalVoiceCallHost />
+      <Page blocked />
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  expect(phase()).toBe('bots.voiceMode.status.confirmation');
+  const resume = screen.getByRole('button', { name: /bots.voiceMode.resume/ }) as HTMLButtonElement;
+  expect(resume.disabled).toBe(true);
+});
+
+// Review finding: a settings drawer covering the card must not take spoken answers.
+it('treats a question card without a bridge as off screen', async () => {
+  function Page() {
+    return <VoiceCallComposerSlot sessionId="a" blocked={false} openTask={vi.fn()} />;
+  }
+  render(
+    <MemoryRouter>
+      <VoiceCallFloatingSlot />
+      <GlobalVoiceCallHost />
+      <Page />
+    </MemoryRouter>,
+  );
+  await begin();
+  await act(async () => {
+    chat.light = { ...chat.light, pendingAskUser: { id: 'q' } };
+    for (const listener of chat.listeners) listener();
+  });
+  expect(phase()).toBe('bots.voiceMode.status.questionElsewhere');
 });
 
 it('refuses a second call and ends the first only when asked', async () => {

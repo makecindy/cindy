@@ -114,11 +114,15 @@ function HostedVoiceCall({
     light.pendingRemoteDesktopConfirmation ||
     light.pendingInputHandoff ||
     binding.attached ||
-    light.queuePaused,
+    light.queuePaused ||
+    // Page-local reasons stay part of the live state, so Resume cannot outrun them.
+    slot?.blocked,
   );
   const questionAsked = light.pendingAskUser !== null;
-  // Only a card on screen in this window can take a voice answer.
-  const questionElsewhere = questionAsked && !slot;
+  // Only a card visible in this window can take a voice answer; a settings
+  // drawer or another window covering it does not count.
+  const questionVisible = !!slot?.questionBridge;
+  const questionElsewhere = questionAsked && !questionVisible;
   useEffect(() => {
     if (frame) onStatus({ open, bot, sessionId, callId, ...frame, questionElsewhere });
   }, [open, bot, sessionId, callId, frame, questionElsewhere, onStatus]);
@@ -137,7 +141,7 @@ function HostedVoiceCall({
       sessionId={sessionId}
       messages={messages}
       blocked={blocked}
-      questionPending={questionAsked && !!slot}
+      questionPending={questionAsked && questionVisible}
       questionElsewhere={questionElsewhere}
       questionBridge={slot?.questionBridge}
       // Calls hand work over through submitTurn, which tracks its own activity.
@@ -178,6 +182,7 @@ export function GlobalVoiceCallHost() {
   const controlsRef = useRef<VoiceCallControls | null>(null);
   const publishRemote = useVoiceCallPublisher();
   const close = useCallback(() => {
+    if (hostedRef.current) hostedRef.current = { ...hostedRef.current, phase: 'closing' };
     setHosted((value) => (value ? { ...value, phase: 'closing' } : value));
   }, []);
   const handleCommand = useCallback(
@@ -186,7 +191,10 @@ export function GlobalVoiceCallHost() {
       if (command.type === 'start') {
         // The call in progress keeps the line until the user ends it.
         if (current && current.phase !== 'closing') return false;
-        setHosted({ bot: command.bot, sessionId: command.sessionId, phase: 'mounting' });
+        // Reserve before React renders, so a second batched start sees this one.
+        const next: Hosted = { bot: command.bot, sessionId: command.sessionId, phase: 'mounting' };
+        hostedRef.current = next;
+        setHosted(next);
         return true;
       }
       if (!current || current.phase === 'closing' || current.sessionId !== command.sessionId)
@@ -197,8 +205,7 @@ export function GlobalVoiceCallHost() {
       else if (command.type === 'interrupt') controls?.interrupt();
       else if (command.type === 'send') controls?.send();
       else if (command.type === 'cancel-exit') controls?.cancelExit();
-      else if (command.type === 'resume') controls?.resume();
-      else controls?.pause();
+      else controls?.resume();
       return true;
     },
     [close],
@@ -308,10 +315,12 @@ export function VoiceCallFloatingSlot() {
 export function VoiceCallComposerSlot({
   sessionId,
   questionBridge,
+  blocked,
   openTask,
 }: {
   sessionId: string;
-  questionBridge: VoiceQuestionBridge;
+  questionBridge?: VoiceQuestionBridge;
+  blocked: boolean;
   openTask(clientId: string): void;
 }) {
   const [element, setElement] = useState<HTMLElement | null>(null);
@@ -322,8 +331,9 @@ export function VoiceCallComposerSlot({
     return registerVoiceCallSlot(sessionId, {
       element,
       questionBridge,
+      blocked,
       openTask: (clientId) => latestOpenTask.current(clientId),
     });
-  }, [element, questionBridge, sessionId]);
+  }, [element, questionBridge, blocked, sessionId]);
   return <div ref={setElement} className="contents" />;
 }

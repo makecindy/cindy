@@ -37,7 +37,6 @@ export type VoiceCallControls = {
   interrupt(): void;
   send(): void;
   cancelExit(): void;
-  pause(): void;
 };
 
 type Props = {
@@ -226,11 +225,6 @@ export function CompanionVoicePanel(props: Props) {
   if (props.controlsRef) {
     props.controlsRef.current = {
       ...actions,
-      pause: () => {
-        ++launchVersion.current;
-        setLoading(false);
-        controller.setBlocked(true);
-      },
     };
   }
   if (props.surface === null) return null;

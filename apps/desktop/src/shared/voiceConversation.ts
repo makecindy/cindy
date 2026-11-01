@@ -99,7 +99,7 @@ export type VoiceCallStatusUpdate = { status: VoiceCallStatus | null } | { level
 export type VoiceCallCommand =
   | { type: 'start'; bot: VoiceCallBot; sessionId: string }
   | {
-      type: 'end' | 'mute' | 'interrupt' | 'send' | 'cancel-exit' | 'resume' | 'pause';
+      type: 'end' | 'mute' | 'interrupt' | 'send' | 'cancel-exit' | 'resume';
       sessionId: string;
     };
 

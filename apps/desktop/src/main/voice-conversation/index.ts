@@ -86,7 +86,7 @@ function readVoiceCallCommand(raw: unknown): VoiceCallCommand {
     };
   }
   if (
-    !['end', 'mute', 'interrupt', 'send', 'cancel-exit', 'resume', 'pause'].includes(
+    !['end', 'mute', 'interrupt', 'send', 'cancel-exit', 'resume'].includes(
       value.type as string,
     )
   )

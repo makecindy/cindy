@@ -94,7 +94,18 @@ export default {
       'popover centers on the toolbar',
     );
     assert.ok(Math.abs(popoverBox.width - barBox.width) < 1, 'popover follows the toolbar width');
-    assert.ok(popoverBox.y + popoverBox.height <= barBox.y, 'transcript floats above its toolbar');
+    if ((await page.locator('[data-voice-placement="top"]').count()) > 0) {
+      // At the top of the content there is no room above: the popover flips below
+      // the bar, over the timeline, without pushing it down.
+      assert.ok(popoverBox.y >= barBox.y + barBox.height, 'transcript opens below the top toolbar');
+      assert.ok(popoverBox.y + popoverBox.height <= 900, 'transcript stays inside the window');
+      assert.ok(barBox.y < 40, 'top toolbar sits above the content');
+    } else {
+      assert.ok(
+        popoverBox.y + popoverBox.height <= barBox.y,
+        'transcript floats above its toolbar',
+      );
+    }
     if (ui.data.empty) {
       const emptyText = await ui.t('bots.voiceMode.transcriptEmpty');
       await page.getByText(emptyText).waitFor();
