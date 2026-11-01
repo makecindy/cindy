@@ -68,7 +68,7 @@ export interface HandoffCompletionHints {
   urlContains?: string;
 }
 
-export type HandoffEndReason = 'owner' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
+export type HandoffEndReason = 'owner' | 'owner_message' | 'detected' | 'cancelled' | 'timeout' | 'failure' | 'session_closed';
 
 export interface HandoffResult {
   status: 'succeeded' | 'cancelled' | 'failed' | 'expired';
@@ -80,6 +80,8 @@ export interface HandoffResult {
   finalOrigin?: string;
   /** Device that answered the last applied step; absent when no values were applied. */
   answeredOn?: InputHandoffHolder;
+  /** The program had several windows and the request named none: their titles, for asking again. */
+  ambiguousTitles?: string[];
   /** A QR code from the agent's own screenshot: the owner reports the scan, Cindy cannot see it. */
   scanned?: true;
 }
@@ -116,6 +118,7 @@ export interface HandoffSessionOptions {
   sleep?: (ms: number) => Promise<void>;
   finishingDelayMs?: number;
   settleTimeoutMs?: number;
+  windowWatchMs?: number;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -155,9 +158,14 @@ const bundleTail = (bundleId: string): string => bundleId.slice(bundleId.lastInd
  * The window a handoff works on: by pid, else by app name or bundle id, else
  * the frontmost app; never Cindy itself. Shared with the request-time check so
  * a bad target is reported to the agent at once instead of minutes later.
+ *
+ * Minimized windows stay reachable (Cindy's browser window opens minimized), but
+ * only when named or when the app has nothing else: a shown window answers first.
  */
 export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTargetSpec, hostPid: number): HandoffTarget | null {
-  const candidates = list.apps.filter((app) => app.pid !== hostPid && app.windows.some((w) => !w.minimized));
+  const others = list.apps.filter((app) => app.pid !== hostPid && app.windows.length > 0);
+  const showing = (app: NativeWindowList['apps'][number]) => app.windows.some((w) => !w.minimized);
+  const candidates = [...others.filter(showing), ...others.filter((app) => !showing(app))];
   let app = spec.pid !== undefined ? candidates.find((entry) => entry.pid === spec.pid) : undefined;
   if (!app && spec.app) {
     const wanted = spec.app.trim().toLowerCase();
@@ -170,13 +178,68 @@ export function resolveHandoffTarget(list: NativeWindowList, spec: HandoffTarget
   }
   if (!app && spec.pid === undefined && !spec.app) app = candidates.find((entry) => entry.pid === list.frontmost);
   if (!app) return null;
-  const visibleWindows = app.windows.filter((window) => !window.minimized);
   const title = spec.windowTitle?.toLowerCase();
-  const window = (title ? visibleWindows.find((w) => w.title.toLowerCase().includes(title)) : undefined)
+  const named = (w: { title: string }) => !!title && w.title.toLowerCase().includes(title);
+  // The same browser can run as several processes (profiles, an automation copy): the named window may be in any of them.
+  if (title && spec.pid === undefined && !app.windows.some(named)) {
+    const sameApp = candidates.filter((entry) => entry.bundleId === app!.bundleId && entry.windows.some(named));
+    app = sameApp.find((entry) => entry.windows.some((w) => named(w) && !w.minimized)) ?? sameApp[0] ?? app;
+  }
+  // A title that matches nothing is not "the focused window": the owner would be sent, and type, in the wrong one.
+  if (title && !app.windows.some(named)) return null;
+  const visibleWindows = app.windows.filter((window) => !window.minimized);
+  const window = visibleWindows.find(named)
+    ?? app.windows.find(named)
     ?? visibleWindows.find((w) => w.focused)
-    ?? visibleWindows[0];
+    ?? visibleWindows[0]
+    ?? app.windows[0];
   if (!window) return null;
-  return { pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title } };
+  return {
+    pid: app.pid, app: app.app, bundleId: app.bundleId, window: { index: window.index, title: window.title },
+    ...(window.minimized ? { minimized: true } : {}),
+  };
+}
+
+/** A password or a one-time code still on the screen is a sign-in step, whether or not its page address could be read. */
+const hasSecretField = (step: ExtractedStep): boolean =>
+  step.shown.some((control) => control.kind === 'text' && (control.contentType === 'password' || control.contentType === 'one-time-code'));
+
+/** How long a window just brought back may take to draw its form (a sign-in page loads frames). */
+const RESTORED_PAGE_WAIT_MS = 6000;
+/** How long a browser may take to expose its page to accessibility on the first read. */
+const BROWSER_PAGE_WAIT_MS = 3000;
+/** How often a waiting card looks at its window; reading does not bring it forward. */
+const WINDOW_WATCH_MS = 2000;
+/** Reads in a row before concluding: pages clear their forms for a moment while they load. */
+const FIELDS_GONE_READS = 3;
+const WINDOW_GONE_READS = 2;
+
+/** What the owner would be asked, ignoring what they typed; the ids bind an open form to its fields. */
+const fieldShape = (step: ExtractedStep): string =>
+  JSON.stringify(step.shown.map((control) => (control.kind === 'text'
+    ? [control.id, control.label, control.contentType]
+    : [control.id, control.kind === 'note' ? control.text : ''])));
+
+/**
+ * The windows of one program when the agent named neither a window nor a process, so that guessing
+ * which one the owner means could send them to the wrong browser profile; null when there is no doubt.
+ * Shared by the request-time check and the session, so a check that was skipped cannot be bypassed.
+ */
+export function ambiguousWindowTitles(
+  list: NativeWindowList,
+  spec: HandoffTargetSpec,
+  resolved: HandoffTarget,
+  hostPid: number,
+): string[] | null {
+  if (spec.pid === undefined && !spec.app && !spec.windowTitle) return null;
+  const sameApp = spec.pid !== undefined
+    ? list.apps.filter((app) => app.pid === resolved.pid)
+    : list.apps.filter((app) => app.pid !== hostPid && app.bundleId === resolved.bundleId);
+  const windows = sameApp.flatMap((app) => app.windows).filter((w) => w.title);
+  // A named window must be the only one that name fits: a broad title ("Sign in") may fit another profile's too.
+  const title = spec.windowTitle?.toLowerCase();
+  const candidates = title ? windows.filter((w) => w.title.toLowerCase().includes(title)) : windows;
+  return candidates.length < 2 ? null : candidates.map((w) => w.title);
 }
 
 /**
@@ -212,6 +275,17 @@ export class InputHandoffSession {
   private qrBaseline: QrBaseline | null = null;
   private qrTimer: ReturnType<typeof setTimeout> | undefined;
   private qrChecking = false;
+  /** A step of this request asked for a sign-in: the owner signs in on the window itself. */
+  private signInMode = false;
+  /** The owner has been asked something, so a screen with nothing to ask means they finished it. */
+  private asked = false;
+  /** The asked fields went away without an answer through the card: the owner did it on the window. */
+  private doneOutside = false;
+  private ambiguousTitles: string[] | undefined;
+  private watchTimer: ReturnType<typeof setTimeout> | undefined;
+  private watchList: NativeWindowList | null = null;
+  private fieldsGoneReads = 0;
+  private windowGoneReads = 0;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
@@ -283,6 +357,7 @@ export class InputHandoffSession {
       ...(this.ended ? { terminal: true as const } : {}),
       ...(picture ? { picture: true as const } : {}),
       ...(this.liveViewOffered() ? { liveView: true as const } : {}),
+      ...(this.directSignInOffered() ? { directSignIn: true as const } : {}),
       ...(!picture && !qr && this.phase === 'ready' && step?.deviceCode ? { deviceCode: { ...step.deviceCode } } : {}),
       ...(qr ? { qr } : {}),
     };
@@ -294,6 +369,24 @@ export class InputHandoffSession {
   }
 
   /**
+   * The owner does this on the window: a sign-in whose page could be read.
+   */
+  private directSignInOffered(): boolean {
+    if (this.ended || this.phase !== 'ready' || this.qrState || this.picture || !this.options.driver.raise) return false;
+    return this.signInMode && !!this.step?.signIn && !this.step.deviceCode;
+  }
+
+  /** The owner chose to sign in on the window: show it to them. */
+  async bringToFront(): Promise<boolean> {
+    const driver = this.options.driver;
+    const target = this.target;
+    if (!target || !driver.raise || this.ended || this.busy) return false;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    // The window came up only if macOS let the app take the front: a refused activation is a failure to show.
+    return !!raised && !('error' in raised) && raised.activated !== false;
+  }
+
+  /**
    * The owner opened a live view of the window: bring it to the front and say
    * where it is. Only while this request is waiting for the owner.
    */
@@ -302,7 +395,8 @@ export class InputHandoffSession {
     const target = this.target;
     if (!target || !driver.raise || !this.liveViewOffered() || this.busy) return null;
     const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
-    if (!raised || 'error' in raised || this.ended || this.target !== target) return null;
+    // A window macOS would not bring forward can be watched but not worked in: no live view of it.
+    if (!raised || 'error' in raised || raised.activated === false || this.ended || this.target !== target) return null;
     return {
       pid: target.pid,
       app: target.app,
@@ -344,6 +438,7 @@ export class InputHandoffSession {
     this.publish('reading');
     this.expiryTimer = setTimeout(() => this.end('expired', 'timeout', 'timeout'), this.options.timeoutMs);
     this.expiryTimer.unref?.();
+    this.armWindowWatch();
     try {
       const permission = await this.options.driver.permission();
       if (permission !== 'granted') {
@@ -353,15 +448,29 @@ export class InputHandoffSession {
           return;
         }
       }
-      const target = this.resolveTarget(await this.options.driver.windows());
-      if (!target) {
+      const windows = await this.options.driver.windows({ background: true });
+      const target = this.resolveTarget(windows);
+      // What the window watch compares against, so a page renaming its window from here on is not a closed window.
+      this.watchList = windows;
+      const ambiguous = target ? ambiguousWindowTitles(windows, this.options.target, target, this.options.hostPid) : null;
+      if (!target || ambiguous) {
+        // Several windows and no title: say so, with their titles, so the agent can ask again naming one.
+        if (ambiguous) this.ambiguousTitles = [...new Set(ambiguous)].slice(0, 8);
         this.end('failed', 'failure', 'target_gone');
         return;
       }
       await this.useTarget(target);
       this.initial = target;
-      const step = await this.read().catch(() => null);
+      if (target.minimized) await this.coverBeforeRestoring();
+      // Reading while minimized may have updated the window's title: restore the window by what it is called now.
+      const restored = await this.restoreTarget(this.target ?? target);
+      const step = await this.readFirstStep(restored);
       if (step && actionable(step)) {
+        // A sign-in happens on the window itself, wherever the owner answers from.
+        if (step.signIn && !restored) {
+          this.guardSignInPage(step);
+          await this.bringToFront();
+        }
         this.present(step);
         return;
       }
@@ -525,7 +634,7 @@ export class InputHandoffSession {
         this.publish('ready');
         return true;
       }
-      if (step && !this.picture) {
+      if (step && !step.pageMissing && !this.picture) {
         this.failure = undefined;
         this.present(step, true);
         return true;
@@ -554,17 +663,32 @@ export class InputHandoffSession {
     this.options.publish(this.snapshot());
   }
 
-  private present(step: ExtractedStep, suppressAutoFinish = false): void {
+  /** The owner types a password straight into this page: the agent's page reads pause there, as after a form. */
+  private guardSignInPage(step: ExtractedStep): void {
+    // Every direct sign-in field counts, not only a password: a one-time code or an account typed in the window is as readable.
+    if (step.signIn && this.target)
+      this.options.onSecretEntered?.({ pid: this.target.pid, ...(step.url ? { url: step.url } : {}) });
+  }
+
+  private present(read: ExtractedStep, suppressAutoFinish = false): void {
     this.stopQr();
     this.dropPicture();
+    this.fieldsGoneReads = 0;
+    if (read.signIn) this.signInMode = true;
+    // Past a sign-in, a page's own fields (a reply box) are not its next step.
+    const signInOver = this.signInMode && !read.signIn && !read.pageMissing && !read.deviceCode && !hasSecretField(read);
+    const step = signInOver ? { ...read, shown: [] } : read;
     this.step = step;
-    if (this.submissions === 0 && !actionable(step)) {
+    this.guardSignInPage(step);
+    this.doneOutside = this.asked && this.submissions === 0 && !actionable(step) && !step.pageMissing;
+    if (this.submissions === 0 && !actionable(step) && !this.doneOutside) {
       // Nothing was asked of the owner yet and there is nothing to type: hand the screen back to the agent.
       this.end('cancelled', 'detected', 'nothing_to_fill');
       return;
     }
+    this.asked = true;
     if (this.stepNumber === 0) this.stepNumber = 1;
-    if (!suppressAutoFinish && this.shouldFinish(step)) {
+    if ((!suppressAutoFinish || this.doneOutside) && this.shouldFinish(step)) {
       this.finishingUntil = this.now() + (this.options.finishingDelayMs ?? 3000);
       this.publish('finishing');
       this.finishingTimer = setTimeout(() => {
@@ -585,7 +709,7 @@ export class InputHandoffSession {
 
   private shouldFinish(step: ExtractedStep): boolean {
     if (this.stayedOn !== undefined && this.stayedOn === step.signature) return false;
-    if (this.hintsMet(step)) return true;
+    if (this.hintsMet(step) || this.doneOutside) return true;
     // A sign-in code is still waiting to be used on the owner's device; they say when they are done.
     if (step.deviceCode) return false;
     // Generic end: after the owner answered, nothing is left to type. Buttons from here on are the agent's.
@@ -902,9 +1026,122 @@ export class InputHandoffSession {
     this.finishingUntil = undefined;
   }
 
+  private armWindowWatch(): void {
+    if (this.ended) return;
+    this.watchTimer = setTimeout(() => {
+      void this.checkWindow().catch(() => undefined).finally(() => this.armWindowWatch());
+    }, this.options.windowWatchMs ?? WINDOW_WATCH_MS);
+    this.watchTimer.unref?.();
+  }
+
+  /** Waiting on a form nobody has started answering through the card, so the window is the only news. */
+  private watching(): boolean {
+    if (this.ended || this.busy || this.phase !== 'ready' || this.qrState || !this.target) return false;
+    // Another device holding the card is answering a form, whose fields must not change under it; a sign-in on
+    // the window has no form to protect, so taking it over does not stop the watching.
+    if (this.holder && !this.directSignInOffered()) return false;
+    if (this.picture) return !this.pictureChosen;
+    return !!this.step && actionable(this.step) && !this.step.deviceCode;
+  }
+
+  /**
+   * The owner may finish on the window itself, or close it, without touching
+   * the card. Nothing is concluded from what cannot be seen: a window that is
+   * minimized, on another desktop or behind another app may just be out of reach.
+   */
+  private async checkWindow(): Promise<void> {
+    if (!this.watching()) {
+      this.watchList = null;
+      this.fieldsGoneReads = 0;
+      this.windowGoneReads = 0;
+      return;
+    }
+    const driver = this.options.driver;
+    const target = this.target!;
+    const list = await driver.windows().catch(() => null);
+    if (!list || !this.watching() || this.target !== target) return;
+    const previous = this.watchList;
+    this.watchList = list;
+    // Coming back from answering or a picture: this read is only the new baseline.
+    if (!previous) return;
+    const mine = list.apps.find((app) => app.pid === target.pid);
+    if (!mine) {
+      // Nothing of it on screen: minimized or on another desktop is still there; no window at all, or no program, is gone.
+      const all = await driver.windows({ background: true }).catch(() => null);
+      if (!this.watching() || this.target !== target) return;
+      const entry = all?.apps.find((app) => app.pid === target.pid);
+      if (all ? !entry || entry.windows.length === 0 : !(await driver.commandLine(target.pid).catch(() => 'unknown'))) this.noteWindowGone();
+      return;
+    }
+    const known = mine.windows.find((w) => w.index === target.window.index && w.title === target.window.title)
+      ?? mine.windows.find((w) => w.title === target.window.title);
+    const window = known ?? this.renamedWindow(mine.windows, previous.apps.find((app) => app.pid === target.pid)?.windows);
+    if (!window) {
+      if (list.frontmost === target.pid) this.noteWindowGone();
+      return;
+    }
+    this.windowGoneReads = 0;
+    if (window.minimized) return;
+    if (!known) this.target = { ...target, window: { index: window.index, title: window.title } };
+    const step = await this.read().catch(() => null);
+    if (!step || step.pageMissing || !this.watching()) return;
+    // Answering on a picture because nothing could be read: now something can.
+    if (this.picture) {
+      if (actionable(step)) this.present(step, true);
+      return;
+    }
+    if (!this.step) return;
+    if (this.signInMode ? step.signIn || hasSecretField(step) : actionable(step)) {
+      this.fieldsGoneReads = 0;
+      // Whatever page the owner is on is covered, whoever is typing where.
+      this.guardSignInPage(step);
+      if (fieldShape(step) === fieldShape(this.step)) {
+        // Same question: keep the card as it is (a form may be open), but act on the fresh screen.
+        this.step = step;
+      } else if (!this.holder || !step.signIn) {
+        this.present(step, true);
+      }
+      // Held: the holder may be typing in this card's form (the way back from the window); swapping its
+      // fields for the new ones would throw the draft away, and the window needs no card update to be used.
+      // A step that can no longer be a sign-in on the window (its page address went missing) is shown anyway.
+      return;
+    }
+    if (++this.fieldsGoneReads < FIELDS_GONE_READS) return;
+    // The fields went away: before calling it done, the next step may be a code to scan (a second factor).
+    if (!this.hintsMet(step)) {
+      this.step = step;
+      const scanning = await this.showQr();
+      // The owner may have ended it or started answering meanwhile.
+      if (this.ended || this.busy || this.phase !== 'ready') return;
+      if (scanning) {
+        this.publish('ready');
+        return;
+      }
+    }
+    this.present(step, true);
+  }
+
+  /**
+   * The target's title went away and exactly one new one came, with as many windows as
+   * before: a page changed its title, the window is the same. (Another window's title
+   * can change as the target closes, say an unread count.)
+   */
+  private renamedWindow<W extends { title: string }>(windows: W[], before: Array<{ title: string }> | undefined): W | undefined {
+    if (before?.length !== windows.length || !before.some((w) => w.title === this.target?.window.title)) return undefined;
+    const fresh = windows.filter((w) => !before.some((old) => old.title === w.title));
+    return fresh.length === 1 ? fresh[0] : undefined;
+  }
+
+  private noteWindowGone(): void {
+    if (++this.windowGoneReads < WINDOW_GONE_READS) return;
+    if (this.options.completeWhen?.windowClosed) this.end('succeeded', 'detected');
+    else this.end('failed', 'failure', 'target_gone');
+  }
+
   private end(status: HandoffResult['status'], reason: HandoffEndReason, failure?: InputHandoffFailure): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.watchTimer) clearTimeout(this.watchTimer);
     this.clearFinishing();
     this.stopQr();
     this.dropPicture();
@@ -922,6 +1159,7 @@ export class InputHandoffSession {
       ...(this.target?.window.title ? { finalWindow: this.target.window.title.slice(0, 200) } : {}),
       ...(this.step?.source.origin ? { finalOrigin: this.step.source.origin } : {}),
       ...(this.answeredOn ? { answeredOn: { ...this.answeredOn } } : {}),
+      ...(this.ambiguousTitles ? { ambiguousTitles: this.ambiguousTitles } : {}),
     });
   }
 
@@ -934,6 +1172,47 @@ export class InputHandoffSession {
       this.agentControlled = AUTOMATION_FLAGS.test(await this.options.driver.commandLine(target.pid));
     }
     this.target = target;
+  }
+
+  /**
+   * The window is about to come back where the owner can type in it. Read it first while it is still
+   * minimized (accessibility sees it), and cover a sign-in page before it shows.
+   */
+  private async coverBeforeRestoring(): Promise<void> {
+    const before = await this.read().catch(() => null);
+    if (before && !before.pageMissing) this.guardSignInPage(before);
+  }
+
+  /** A minimized window draws nothing and the owner cannot see it: bring it back before asking anything. */
+  private async restoreTarget(target: HandoffTarget): Promise<boolean> {
+    const driver = this.options.driver;
+    if (!target.minimized || !driver.raise) return false;
+    const raised = await withDesktopTurn(() => driver.raise!(target)).catch(() => null);
+    // Restored only if it came back and macOS let its app take the front: a window that could not be found
+    // (it was renamed) is still minimized, and one that stayed behind other apps still has to be brought forward.
+    return !!raised && !('error' in raised) && raised.activated !== false;
+  }
+
+  /**
+   * The first read, given a page time to appear: a browser builds its page for
+   * accessibility on demand, and a window just restored is still loading. Other
+   * windows answer on the first read.
+   */
+  private async readFirstStep(restored: boolean): Promise<ExtractedStep | null> {
+    const deadline = this.now() + (restored ? RESTORED_PAGE_WAIT_MS : BROWSER_PAGE_WAIT_MS);
+    for (;;) {
+      const step = await this.read().catch(() => null);
+      const waiting = restored ? !step || !actionable(step) : !!step?.pageMissing;
+      if (!waiting || this.ended || this.now() >= deadline) return step;
+      await this.sleep(350);
+      // The page's title is the window's: it may have changed while loading, so find the raised window again.
+      if (restored && !step && this.target) {
+        const pid = this.target.pid;
+        const list = await this.options.driver.windows().catch(() => null);
+        const window = list?.apps.find((app) => app.pid === pid)?.windows.find((w) => w.focused && !w.minimized);
+        if (window) this.target = { ...this.target, window: { index: window.index, title: window.title } };
+      }
+    }
   }
 
   private async read(): Promise<ExtractedStep | null> {
@@ -1040,7 +1319,7 @@ export class InputHandoffSession {
         else stableReads = 0;
         last = step;
         const changed = step.signature !== previous;
-        if (stableReads >= 1 && (changed || this.now() - start >= 4000)) return step;
+        if (stableReads >= 1 && !step.pageMissing && (changed || this.now() - start >= 4000)) return step;
       }
       if (this.now() >= deadline) {
         if (last) return last;

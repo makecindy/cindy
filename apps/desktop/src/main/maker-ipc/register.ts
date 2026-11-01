@@ -1115,7 +1115,7 @@ import {
   parseCompanionCloudRemoteActionResult,
   parseCompanionCloudRemoteTargets,
 } from '@cindy/device-link';
-import { INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, type InputHandoffHolder, type InputHandoffSnapshot } from '@cindy/device-link';
+import { INPUT_HANDOFF_LOCAL_CHANNEL, INPUT_HANDOFF_LOCAL_PICTURE_CHANNEL, INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, type InputHandoffHolder, type InputHandoffSnapshot } from '@cindy/device-link';
 import { getInputHandoffService, initInputHandoffService } from '../input-handoff/service.js';
 import { closeInputHandoffAskpass, initInputHandoffAskpass } from '../input-handoff/askpass/index.js';
 import { resolveGithubAuthRecovery } from '../input-handoff/askpass/githubRecoveryHost.js';
@@ -1158,7 +1158,7 @@ import {
   takeOverLocalAgentVisibleSession,
 } from '../local-agent/visibleSessions.js';
 import { ingestChatImageFromPath } from '../cindy-media/chatAttachments.js';
-import { UI_ACTION_TRIGGER_PREFIX, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
+import { INPUT_HANDOFF_ENDED_PREFIX, UI_ACTION_TRIGGER_PREFIX, CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
 import {
   createContextOverflowRollover,
   canContinueContextRecovery,
@@ -4121,6 +4121,28 @@ function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: st
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
+}
+
+/**
+ * The owner wrote in the task: a waiting 代输入 card is over. Hidden continuations
+ * and interface actions are not the owner writing.
+ */
+function dismissInputHandoffForOwnerMessage(sessionId: string, text: unknown): void {
+  // A shared-task guest cannot even see the card: their message is not the owner answering it.
+  if (getDeviceLinkInvokeContext()?.sharedTask) return;
+  if (typeof text === 'string' && (text.startsWith(UI_ACTION_TRIGGER_PREFIX) || text.startsWith(INPUT_HANDOFF_ENDED_PREFIX))) return;
+  getInputHandoffService()?.dismissForOwnerMessage(sessionId);
+}
+
+/** Closes the card for the owner's steered message and returns the note the agent should hear, if any. */
+function inputHandoffSteerNote(sessionId: string, message: unknown): string | null {
+  if (getDeviceLinkInvokeContext()?.sharedTask) return null;
+  dismissInputHandoffForOwnerMessage(sessionId, extractPlainText(message));
+  return getInputHandoffService()?.ownerMessageNote(sessionId) ?? null;
+}
+
+function inputHandoffNoteDelivered(sessionId: string): void {
+  getInputHandoffService()?.ownerMessageNoteDelivered(sessionId);
 }
 
 function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
@@ -18767,6 +18789,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
     readTaskDeliveryNote,
+    readInputHandoffOwnerNote: (sessionId) =>
+      getDeviceLinkInvokeContext()?.sharedTask ? null : (getInputHandoffService()?.ownerMessageNote(sessionId) ?? null),
+    inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),
     planRepeatableWireNotes: (sessionId, notes, opts) => wireNoteMemory.plan(sessionId, notes, opts),
     applyPendingAgentSwitch: async (sessionId, options) => {
       if (!options?.scheduled) await scheduledModelScope.restore(sessionId);
@@ -19380,6 +19405,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let steerPayload = steerPlannedNotes['ui-language']
       ? prependNoteToWireUserMessage(withSteerNote as HandoffWireMessage, steerPlannedNotes['ui-language'])
       : withSteerNote;
+    // The owner's message closed a waiting 代输入 card: tell the agent, on this message only.
+    const pendingHandoffNote = so[MCP_APP_MESSAGE_GUARD] ? null : inputHandoffSteerNote(sessionId, message);
+    // A native command keeps its first characters: it carries no note, and the note is dropped, not kept for later.
+    const steerHandoffNote = pendingHandoffNote && shouldPrependMobileClientPromptNote(normalized, sess.agentKind) ? pendingHandoffNote : null;
+    if (pendingHandoffNote && !steerHandoffNote) inputHandoffNoteDelivered(sessionId);
+    if (steerHandoffNote) {
+      steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerHandoffNote);
+    }
     if (steerPlannedNotes['side-chat']) {
       steerPayload = prependNoteToWireUserMessage(steerPayload as HandoffWireMessage, steerPlannedNotes['side-chat']);
     }
@@ -19424,6 +19457,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       });
       appContext?.consume();
       steerNotePlan?.commit();
+      if (steerHandoffNote) inputHandoffNoteDelivered(sessionId);
       log.info('steer: delivered', { sessionId, agentKind: sess.agentKind });
     } catch (err) {
       const messageText = err instanceof Error ? err.message : String(err);
@@ -20733,6 +20767,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       failPendingSchedulerAutoResume(sessionId);
       publishUiSessionIntervention(sessionId);
     },
+    onOwnerMessage: (sessionId, item) => dismissInputHandoffForOwnerMessage(sessionId, item.persistedContent || item.text),
     previewQueuedUserTurn: (sessionId, item) => {
       if (item.botTaskCoordination) return;
       notifyAgentIslandUserPrompt(
@@ -22966,6 +23001,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedAppRendererEvent(event);
     if (typeof requestId !== 'string' || !requestId) throwIpcError('INVALID_PARAMS', 'requestId required');
     return { accepted: (await getInputHandoffService()?.submit(requestId, submission)) ?? false };
+  });
+
+  /** 代输入 sign-in on this computer: the owner chose to go to the window. */
+  ipcMain.handle(INPUT_HANDOFF_LOCAL_RAISE_CHANNEL, async (event, requestId: unknown) => {
+    if (isDeviceLinkInvoke()) throwIpcError('PERMISSION_DENIED', 'only this Desktop may bring its own window forward');
+    assertTrustedAppRendererEvent(event);
+    if (typeof requestId !== 'string' || !requestId) throwIpcError('INVALID_PARAMS', 'requestId required');
+    return (await getInputHandoffService()?.bringToFront(requestId)) ?? false;
   });
 
   /** 代输入 screenshot step on this computer: shown in Cindy's own window only, never pushed or stored. */

@@ -6529,6 +6529,8 @@ interface ElectronAPI {
       requestId: string,
       revision: number,
     ) => Promise<import('@cindy/device-link').InputHandoffPicture | null>;
+    /** 代输入 sign-in on this computer: bring its window to the front (trusted frame only). */
+    raiseInputHandoff: (requestId: string) => Promise<boolean>;
     /** 代输入 screenshot step on another computer (sealed offer, this window only). */
     openRemoteInputHandoffPicture: (
       request: import('../shared/pluginOauth').LocalInputHandoffPictureRequest,

@@ -15795,6 +15795,7 @@
     "agentControlled": "The agent opened this screen. Make sure it's really where you want to sign in before filling it.",
     "agentPicture": "This code is from a screenshot the agent took, so Cindy can't see the original screen or tell when you're done. Check that it leads to the site you mean to sign in to, and choose Hand Back to Agent after scanning.",
     "error": {
+      "raise": "Couldn't open the window. Switch to it on the computer.",
       "decision": "That didn't go through. Try again.",
       "stale": "The screen has changed. Use the latest version.",
       "submit": "Your input didn't go through. Try again."
@@ -15830,6 +15831,9 @@
       "picture": "Show screen",
       "backToForm": "Back to form",
       "liveView": "Live View",
+      "openWindow": "Open sign-in window",
+      "openRemoteDesktop": "Open remote desktop",
+      "useForm": "Use the form instead",
       "fill": "Fill In",
       "skip": "Skip",
       "continue": "Continue",
@@ -15837,6 +15841,9 @@
       "showPassword": "Show Password",
       "hidePassword": "Hide Password",
       "scan": "Scan"
+    },
+    "directSignIn": {
+      "hint": "Sign in directly in the window. Cindy continues on its own when you finish."
     },
     "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",
     "unnamedField": "Field",

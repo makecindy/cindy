@@ -15762,6 +15762,7 @@
     "agentControlled": "此界面乃 Agent 所启。填写之前，请确认此处确为君欲登录之所。",
     "agentPicture": "此 QR 码出自 Agent 之截屏，Cindy 不见原画面，扫毕亦不自续。请确认其所指之网站确为君欲登录之所，扫毕点「交还 Agent」。",
     "error": {
+      "raise": "窗不能启，请于电脑切至之。",
       "decision": "操作未达，请再试。",
       "stale": "界面已变，请依最新内容操作。",
       "submit": "所输入者未达，请再试。"
@@ -15797,6 +15798,9 @@
       "picture": "观画面",
       "backToForm": "归表单",
       "liveView": "即景",
+      "openWindow": "启登录之窗",
+      "openRemoteDesktop": "启远程桌面",
+      "useForm": "改以表单填写",
       "fill": "填",
       "skip": "略",
       "continue": "续",
@@ -15804,6 +15808,9 @@
       "showPassword": "示密码",
       "hidePassword": "隐密码",
       "scan": "扫码"
+    },
+    "directSignIn": {
+      "hint": "请径于窗中登录，毕则自续。"
     },
     "remoteUnavailable": "此机不能自远方受输入。请于主机之机上完成此步，再交还 Agent。",
     "unnamedField": "书栏",

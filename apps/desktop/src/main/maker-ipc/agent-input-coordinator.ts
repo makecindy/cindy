@@ -636,6 +636,8 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /** A new message from a person (not retransmitted, not automatic) entered the queue. */
+  onOwnerMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
    * 真人消息刚进队、尚未 drain / sendToAgent。灵动岛用它在 agent 进程拉起前
    * 就进入 running 并播开始音效,避免「任务开始」跟着 isRunning 一起晚响。
@@ -1962,6 +1964,8 @@ export class AgentInputCoordinator {
       this.deps.onAutomaticEnqueue?.(sessionId, item);
     } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
+      // A shared-task guest is not the owner: only the owner's own message closes their card.
+      if (!item.sharedTaskAuthor && !getDeviceLinkInvokeContext()?.sharedTask) this.deps.onOwnerMessage?.(sessionId, item);
     }
     if (!schedulerOrigin) {
       // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。

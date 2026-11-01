@@ -41,7 +41,12 @@ const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccept
   compilerOptions: { target: ScriptTarget.ES2022 },
 }).outputText;
 
-function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery = false) {
+function productionSteer(
+  session: FakeSession,
+  deliver: (payload?: unknown) => Promise<void>,
+  rejectBeforeDelivery = false,
+  overrides: Record<string, unknown> = {},
+) {
   const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
   const deps = {
     maker: {
@@ -61,6 +66,8 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
     restoreAutoReviewSteerIntent: async () => undefined,
     shouldPrependMobileClientPromptNote: () => false,
+    inputHandoffSteerNote: () => null,
+    inputHandoffNoteDelivered: () => {},
     readWireSourceDevice: () => null,
     isDeviceLinkInvoke: () => false,
     assertRemoteInputClearNotInFlight: () => {},
@@ -77,6 +84,7 @@ function productionSteer(session: FakeSession, deliver: () => Promise<void>, rej
     summarizeIpcUserMessage: () => ({}),
     log: { info: () => {}, warn: () => {}, debug: () => {} },
     throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
+    ...overrides,
   };
   // Keep Session identity stable across the production preflight checks.
   const live = deps.maker.getSession();
@@ -2193,6 +2201,20 @@ describe('GoalController', () => {
       expect(h.session.sends).toHaveLength(1);
     }
     await h.controller.dispose();
+  });
+
+  it('never rewrites a steered native command with the input handoff note, and drops the note instead of keeping it', async () => {
+    const delivered = vi.fn();
+    const payloads: unknown[] = [];
+    h.session.running = true;
+    const steer = productionSteer(h.session, async (payload) => { payloads.push(payload); }, false, {
+      inputHandoffSteerNote: () => '[Card closed]',
+      inputHandoffNoteDelivered: delivered,
+      shouldPrependMobileClientPromptNote: () => false,
+    });
+    await steer('s1', '/compact');
+    expect(String(payloads[0])).not.toContain('[Card closed]');
+    expect(delivered).toHaveBeenCalledOnce();
   });
 
   it.each(['new turn', 'same-turn steer'] as const)(

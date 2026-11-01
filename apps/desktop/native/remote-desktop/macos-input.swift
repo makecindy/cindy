@@ -544,11 +544,18 @@ func handoffSecureTarget(_ request: [String: Any]) -> [String: Any] {
   }
   return ["secure": false]
 }
-func handoffWindowList() -> [String: Any] {
+func handoffWindowList(_ request: [String: Any] = [:]) -> [String: Any] {
   var pids = Set<Int32>()
   if let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
     for info in infos where (info[kCGWindowLayer as String] as? Int) == 0 {
       if let pid = info[kCGWindowOwnerPID as String] as? Int32 { pids.insert(pid) }
+    }
+  }
+  // An app with only minimized windows has nothing on screen (macOS may even report it hidden), yet the step may wait in one of them.
+  let onScreen = pids
+  if request["background"] as? Bool == true {
+    for running in NSWorkspace.shared.runningApplications where running.activationPolicy == .regular {
+      pids.insert(running.processIdentifier)
     }
   }
   var apps: [[String: Any]] = []
@@ -562,10 +569,14 @@ func handoffWindowList() -> [String: Any] {
        "frame": handoffFrame(window) ?? [], "focused": focused.map { CFEqual($0, window) } ?? false,
        "minimized": handoffBool(window, kAXMinimizedAttribute) ?? false]
     }
+    // Without `background`, an app is listed only while it has something on screen. With it, every
+    // app is, even with no window at all: that is how a closed last window is told from a hidden one.
+    if request["background"] as? Bool != true && !onScreen.contains(pid) { continue }
     apps.append(["pid": Int(pid), "app": running.localizedName ?? "", "bundleId": running.bundleIdentifier ?? "",
                  "windows": windows])
   }
-  return ["frontmost": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
+  // Read fresh (see handoffFrontPid): NSWorkspace can name another app in this short-lived process.
+  return ["frontmost": Int(handoffFrontPid() ?? NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), "apps": apps]
 }
 let handoffSource = CGEventSource(stateID: .privateState)
 func handoffKey(_ code: CGKeyCode, flags: CGEventFlags = []) {
@@ -628,9 +639,18 @@ func handoffWaitFront(_ pid: Int32, _ seconds: Double) -> Bool {
   }
   return true
 }
+/// A minimized window draws nothing and takes no input: bring it back and let the Dock animation finish.
+func handoffRestore(_ window: AXUIElement) {
+  guard handoffBool(window, kAXMinimizedAttribute) == true else { return }
+  AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+  let deadline = Date().addingTimeInterval(1.0)
+  while handoffBool(window, kAXMinimizedAttribute) == true && Date() < deadline { usleep(40000) }
+  usleep(300000)
+}
 /// Bring the window forward. Reports whether its app now takes keys: typing must never go anywhere else.
 @discardableResult
 func handoffActivate(_ pid: Int32, _ window: AXUIElement) -> Bool {
+  handoffRestore(window)
   let front = handoffFrontPid() == pid
   if !front {
     _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
@@ -737,10 +757,11 @@ func handoffRaise(_ request: [String: Any]) -> [String: Any] {
   let app = AXUIElementCreateApplication(pid)
   handoffPrepare(app)
   guard let window = handoffResolveWindow(app, request)?.0 else { return ["error": "target_gone"] }
-  handoffActivate(pid, window)
+  // Whether the app now takes keys: macOS may refuse a background helper, and the owner must be told.
+  let activated = handoffActivate(pid, window)
   usleep(180000)
   guard let frame = handoffFrame(window), frame[2] > 0, frame[3] > 0 else { return ["error": "target_gone"] }
-  var result: [String: Any] = ["frame": frame]
+  var result: [String: Any] = ["frame": frame, "activated": activated]
   if let id = handoffWindowID(pid, frame) { result["windowId"] = Int(id) }
   return result
 }
@@ -925,7 +946,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--handoff"] {
   // A locked screen is never read or typed into; the owner unlocks the computer first.
   if session["CGSSessionScreenIsLocked"] as? Bool ?? false { handoffRespond(["error": "locked"]) }
   switch request["op"] as? String {
-  case "windows": handoffRespond(handoffWindowList())
+  case "windows": handoffRespond(handoffWindowList(request))
   case "snapshot": handoffRespond(handoffSnapshot(request))
   case "act": handoffRespond(handoffAct(request))
   case "secure": handoffRespond(handoffSecureTarget(request))

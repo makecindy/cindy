@@ -15972,6 +15972,7 @@
     "agentControlled": "O Agent abriu este ecrã. Certifique-se de que é realmente onde pretende iniciar sessão antes de o preencher.",
     "agentPicture": "Este código provém de uma captura de ecrã feita pelo Agent, pelo que o Cindy não consegue ver o ecrã original nem saber quando terminou. Verifique se conduz ao site onde pretende iniciar sessão e escolha Devolver ao Agent após a leitura do código.",
     "error": {
+      "raise": "Não foi possível abrir a janela. Mude para ela no computador.",
       "decision": "A operação não foi concluída. Tente novamente.",
       "stale": "O ecrã mudou. Use a versão mais recente.",
       "submit": "A sua introdução não foi enviada. Tente novamente."
@@ -16007,6 +16008,9 @@
       "picture": "Mostrar ecrã",
       "backToForm": "Voltar ao formulário",
       "liveView": "Vista em direto",
+      "openWindow": "Abrir janela de início de sessão",
+      "openRemoteDesktop": "Abrir ambiente de trabalho remoto",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Ignorar",
       "continue": "Continuar",
@@ -16014,6 +16018,9 @@
       "showPassword": "Mostrar palavra-passe",
       "hidePassword": "Ocultar palavra-passe",
       "scan": "Ler código"
+    },
+    "directSignIn": {
+      "hint": "Inicie sessão diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber dados remotamente. Conclua este passo no computador anfitrião e depois devolva o controlo ao Agent.",
     "unnamedField": "Campo",

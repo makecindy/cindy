@@ -299,6 +299,8 @@
       "picture": "Show screen",
       "backToForm": "Back to form",
       "liveView": "Live View",
+      "openRemoteDesktop": "Open remote desktop",
+      "useForm": "Use the form instead",
       "fill": "Fill In",
       "skip": "Skip",
       "continue": "Continue",
@@ -306,6 +308,9 @@
       "showPassword": "Show Password",
       "hidePassword": "Hide Password",
       "scan": "Scan"
+    },
+    "directSignIn": {
+      "hint": "Sign in directly in the window. Cindy continues on its own when you finish."
     },
     "remoteUnavailable": "This computer can't receive input remotely. Finish this step on the host computer, then hand back to the agent.",
     "unnamedField": "Field",

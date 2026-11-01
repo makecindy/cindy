@@ -24,6 +24,45 @@ const snapshot = (nodes: NativeAxNode[], extra: Partial<NativeAxSnapshot> = {}):
 });
 
 describe('extractStep', () => {
+  it('never asks for a browser\'s address bar when its page cannot be read', () => {
+    for (const [desc, placeholder] of [['地址和搜索栏', '问问 Google 或输入网址'], ['Address and search bar', 'Search Google or type a URL']]) {
+      const step = extractStep(snapshot([node('0', 'AXTextField', { desc, placeholder, hasValue: true, frame: [40, 10, 600, 20] })]));
+      expect(step).toMatchObject({ shown: [], controls: [], pageMissing: true });
+    }
+  });
+
+  describe('which steps are a sign-in', () => {
+    const page = (url: string, fields: NativeAxNode[], extra: NativeAxNode[] = []) =>
+      snapshot([node('0', 'AXWebArea', { url, frame: [0, 60, 1200, 840] }), ...fields, ...extra]);
+    const field = (label: string, extra: Partial<NativeAxNode> = {}) => node('0.1', 'AXTextField', { title: label, ...extra });
+
+    it('counts a password or a one-time code on any page, and an account only where the page says it is a sign-in', () => {
+      expect(extractStep(page('https://shop.example.com/pay', [field('Password', { secure: true })])).signIn).toBe(true);
+      expect(extractStep(page('https://shop.example.com/pay', [field('Verification code')])).signIn).toBe(true);
+      expect(extractStep(page('https://appstoreconnect.apple.com/login', [field('Email')])).signIn).toBe(true);
+      expect(extractStep(page('https://shop.example.com/pay', [field('Email')], [node('0.0', 'AXHeading', { title: 'Sign in to continue' })])).signIn).toBe(true);
+    });
+
+    it('leaves checkout and account-opening forms as forms', () => {
+      for (const label of ['Email for receipt', 'Bank account number', 'Accounting code']) {
+        expect(extractStep(page('https://shop.example.com/checkout', [field(label)])).signIn).toBeUndefined();
+      }
+    });
+
+    it('keeps a browser page whose address is unknown as an ordinary form', () => {
+      const noAddress = snapshot([node('0', 'AXWebArea', { frame: [0, 60, 1200, 840] }), field('Password', { secure: true })]);
+      expect(extractStep(noAddress).signIn).toBeUndefined();
+      // A native window has no page address to cover and no browser read tools to guard.
+      expect(extractStep(snapshot([field('Password', { secure: true })], { app: 'Notes', bundleId: 'com.example.notes' })).signIn).toBe(true);
+    });
+  });
+
+  it('keeps every control of a native window, which has no page to wait for', () => {
+    const step = extractStep(snapshot([node('0', 'AXTextField', { title: 'Email' })], { app: 'Notes', bundleId: 'com.example.notes' }));
+    expect(step.shown).toHaveLength(1);
+    expect(step.pageMissing).toBeUndefined();
+  });
+
   it('scopes a browser window to the page and maps a login form to standard fields', () => {
     const step = extractStep(snapshot([
       node('0', 'AXButton', { desc: 'Reload', frame: [10, 10, 20, 20] }),
@@ -123,6 +162,9 @@ describe('contentTypeFor', () => {
   it.each([
     ['验证码', 'one-time-code'],
     ['Enter the 6-digit verification code', 'one-time-code'],
+    ['Enter your 6-digit code', 'one-time-code'],
+    ['Enter the 5-digit ZIP code', 'text'],
+    ['Last 4 digits of your card', 'text'],
     ['邮箱', 'email'],
     ['手机号', 'tel'],
     ['用户名', 'username'],
