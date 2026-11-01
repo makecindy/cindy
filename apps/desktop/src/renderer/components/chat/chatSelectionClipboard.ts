@@ -98,6 +98,9 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     // allowlisted declaration so user-message newlines/indentation survive HTML paste.
     const whitespace = whitespaceOf(element);
     if (preservesWhitespace(whitespace)) copy.setAttribute('style', `white-space: ${whitespace};`);
+    // Authored text decoration carries content meaning, without theme paint.
+    const decoration = (element as HTMLElement).style.textDecorationLine;
+    if (decoration) (copy as HTMLElement).style.textDecorationLine = decoration;
     if (element.matches('img:not([data-gallery-src]):not([data-chat-audio-cover])') &&
         !element.closest('[data-chat-image-preview]')) {
       // Content images also occur outside gallery wrappers (site posters and

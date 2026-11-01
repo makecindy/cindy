@@ -478,6 +478,27 @@ describe('chat selection clipboard', () => {
     expect(pasted.textContent).toContain('after drawing');
   });
 
+  // Review4434965004: authored RichAnswer text decoration changes meaning.
+  it.each(['line-through', 'underline'])('preserves authored RichAnswer %s without theme styles', decoration => {
+    installRichAnswerClipboardStyles();
+    const source = [
+      { id: 'old', kind: 'text', props: { text: 'Old price', style: { textDecorationLine: decoration, color: 'danger' } } },
+      { id: 'new', kind: 'text', props: { text: 'Current price' } },
+    ].map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node })).join('\n');
+    const { root, select, copy } = setup(<RichAnswer stateKey={'text-decoration-' + decoration} source={source} complete renderMarkdown={text => <span>{text}</span>} />);
+    expect((root.querySelector('p.rich-answer-text') as HTMLElement).style.textDecorationLine).toBe(decoration);
+    select();
+    const calls = copy().clipboardData.setData.mock.calls;
+    const pasted = document.createElement('div');
+    pasted.innerHTML = calls.find(([type]) => type === 'text/html')![1];
+    const paragraphs = [...pasted.querySelectorAll('p')];
+    expect(paragraphs.find(p => p.textContent === 'Old price')!.style.textDecorationLine).toBe(decoration);
+    expect(paragraphs.find(p => p.textContent === 'Current price')!.style.textDecorationLine).toBe('');
+    expect(pasted.innerHTML).not.toMatch(/background|(?:^|[;" ])color:/);
+    expect(calls.find(([type]) => type === 'text/plain')![1]).toContain('Old price');
+    expect(calls.find(([type]) => type === 'text/plain')![1]).toContain('Current price');
+  });
+
   // Review4434278365: unit through real RichAnswer props.style, not a raw
   // SVG fixture. Explicit author typography survives; inherited host fonts do not.
   it('preserves explicit vector font geometry without freezing inherited theme fonts', () => {
