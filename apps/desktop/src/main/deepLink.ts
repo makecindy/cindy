@@ -51,6 +51,7 @@ import { createLogger } from './logger';
 import { cancelPendingWindowHide } from './mainWindowCloseBehavior';
 import { isValidGhostId } from '../shared/ghost';
 import { registerWindowsDeepLinkName } from './deepLinkWindowsRegistration';
+import { shouldSkipSystemIntegration } from './startupMode';
 import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
@@ -701,7 +702,7 @@ function isWindowsSlashSwitch(value: string): boolean {
  * 由 bootstrap-electron 启动时调用。open-url listener 另行尽早挂载，以接住冷启动事件。
  */
 export function registerDeepLinkProtocol(): void {
-  if (!app.isPackaged) return;
+  if (!app.isPackaged || shouldSkipSystemIntegration()) return;
 
   for (const scheme of DEEP_LINK_SCHEMES) {
     const registered = app.setAsDefaultProtocolClient(scheme);

@@ -1183,6 +1183,7 @@ import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
+import { parseSmokeArgs } from './startupMode.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { setMainClassicalStyle, setMainLocale, t } from './i18n.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
@@ -9080,26 +9081,6 @@ const registerIpcHandlers = () => {
 // schema_version + core tables, emit JSON to stdout, and exit. Electron's
 // native `--user-data-dir` flag is expected to be passed by the smoke script
 // so the fake DB lives in a scratch directory.
-function parseSmokeArgs(): {
-  enabled: boolean;
-  userId: string;
-  pluginStorage: boolean;
-  resultFile: string | null;
-} {
-  const resultFile = !app.isPackaged
-    ? process.env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE?.trim() || null
-    : null;
-  const enabled = process.argv.includes('--smoke-test') || resultFile !== null;
-  const userFlag = process.argv.find((a) => a.startsWith('--smoke-user='));
-  const userId = userFlag ? userFlag.slice('--smoke-user='.length) : '__smoke_test__';
-  return {
-    enabled,
-    userId,
-    pluginStorage: process.argv.includes('--smoke-plugin-storage') || resultFile !== null,
-    resultFile,
-  };
-}
-
 async function runSmokeTest(
   userId: string,
   pluginStorage: boolean,
