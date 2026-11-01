@@ -548,6 +548,8 @@ export async function hydrateBotProfileRuntime(
     opts.workingDir = boundGuest.projectPath;
     opts.extraDirs = [];
     opts.writableDirs = [];
+    // The harness sandbox, not the model, keeps this guest inside the project.
+    opts.workspaceConfinement = 'project';
   }
   const config = normalizeBotToolCapabilities(chatOnly ? {
     toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',

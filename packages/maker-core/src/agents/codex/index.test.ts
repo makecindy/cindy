@@ -4161,6 +4161,56 @@ describe('CodexAgent capability routing', () => {
   });
 });
 
+// #8359: a guest bound to a project is confined by Codex's own sandbox, not by
+// the model following instructions; Full access cannot lift it.
+describe('CodexAgent confined guest workspace', () => {
+  it('starts in the project-only profile even when the teammate is on Full access', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'guest-confined', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      permissionMode: 'bypassPermissions', workspaceConfinement: 'project',
+    });
+    const [, params] = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)!;
+    const config = (params as { config: Record<string, unknown> }).config;
+    expect(config).toMatchObject({ default_permissions: 'cindy-guest-project' });
+    expect(config['permissions.cindy-guest-project']).toMatchObject({
+      filesystem: { ':root': 'deny', ':tmpdir': 'deny', '/work/client-a': { '.': 'write' } },
+      network: { enabled: false },
+    });
+    expect(Object.hasOwn(config, 'sandbox_mode')).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps the project profile on guest turns instead of the disk-wide read-only sandbox', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
+    const handle = await agent.startSession({
+      sessionId: 'guest-confined-turn', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      permissionMode: 'auto', workspaceConfinement: 'project',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'telegram', taskId: 'guest-msg' },
+      confirmationSurface: 'channel',
+      forceConfirmToolCall: () => false,
+    };
+    await handle.send({ type: 'user', content: 'read ../client-b/infoB.txt' }, { turnPermissionPolicy: policy });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as Record<string, unknown>;
+    expect(turnParams).toMatchObject({ approvalPolicy: 'untrusted' });
+    expect(turnParams).not.toHaveProperty('sandboxPolicy');
+    await handle.close();
+  });
+
+  it('refuses to start when the app-server cannot enforce permission profiles', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent, undefined, { userAgent: 'codex/0.140.0' });
+    await expect(agent.startSession({
+      sessionId: 'guest-old-codex', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      permissionMode: 'ask', workspaceConfinement: 'project',
+    })).rejects.toThrow(/confined guest/);
+  });
+});
+
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
 

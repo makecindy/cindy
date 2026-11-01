@@ -461,6 +461,15 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     expect(knobs.spawnedEnvs).toHaveLength(0);
   });
 
+  // #8359: Pi cannot narrow its tools to one project, so a bound guest never starts.
+  it('refuses a confined guest before acquiring a process', async () => {
+    const agent = new PiAgent(buildDeps());
+    await expect(agent.startSession({ ...opts(), workspaceConfinement: 'project' })).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+    });
+    expect(knobs.spawnedEnvs).toHaveLength(0);
+  });
+
   it('closes an acquired transport if its RPC wrapper cannot be constructed', async () => {
     knobs.rpcCtorThrows = true;
     const agent = new PiAgent(buildDeps());

@@ -208,6 +208,8 @@ describe('guest-DM lanes bound to a project', () => {
     expect(readMemoryIndex).toHaveBeenCalledWith('bot:bot:guest:telegram:555');
     expect(readMemoryIndex).not.toHaveBeenCalledWith('bot:bot');
     expect(opts.workingDir).toBe('/work/client-a');
+    // The harness sandbox enforces the project boundary (#8359).
+    expect(opts.workspaceConfinement).toBe('project');
     expect(opts.extraDirs ?? []).toEqual([]);
     expect(opts.writableDirs ?? []).toEqual([]);
     expect(prompt(opts)).not.toContain('/bots/bot');

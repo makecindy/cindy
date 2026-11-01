@@ -2624,6 +2624,13 @@ export class PiAgent extends BaseAgent {
     if (this.disposeStarted) {
       throw new AgentStartupStoppedError(new Error('Pi agent is disposing; refusing to start a new session'));
     }
+    // #8359: Pi has no native sandbox Cindy can narrow to one project, so a
+    // bound IM guest fails closed here instead of relying on the model.
+    if (opts.workspaceConfinement === 'project') {
+      throw new AgentStartupStoppedError(new Error(
+        'Pi cannot keep a guest inside its project yet. Use Claude Code or Codex for a teammate that serves bound guests.',
+      ));
+    }
     const startup = this.startSessionWhileRunning(opts);
     this.inFlightStartups.add(startup);
     try {
