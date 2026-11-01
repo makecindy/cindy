@@ -4,7 +4,7 @@
  *   断言列出哪些任务（含子 Agent 只计数、空记录不列）以及读出的消息顺序与内容。
  * - Bug／规则依据：设计说明 §12（真实数据与极限情况）——撤回、分支、分叉、覆盖写、多代文件
  *   这些来源语义读错，导入后的任务就会多出被撤回的轮次或丢掉最新回复。
- * - 现有覆盖缺口：这些来源此前没有任何读取代码；真实数据只有 Cursor 一种在本机可验证。
+ * - 现有覆盖缺口：这些来源此前没有任何读取代码；真实数据 Cursor、Trae 两种在本机可验证。
  * - 最小失败输入：每个来源一份最小样本，只放触发其特有语义的几行记录。
  * - tier：unit（临时目录里的文件与 SQLite，进程内完成）。
  * - 实测耗时：见 PR 描述。
@@ -24,6 +24,7 @@ import { geminiAdapter } from '../sources/gemini';
 import { kimiAdapter } from '../sources/kimi';
 import { opencodeAdapter } from '../sources/opencode';
 import { qwenAdapter } from '../sources/qwen';
+import { traeAdapter } from '../sources/trae';
 import { workbuddyAdapter } from '../sources/workbuddy';
 import type { NormalizedMessage, SourceAdapter } from '../types';
 
@@ -199,6 +200,42 @@ describe('foreign source adapters', () => {
       'tool_use:{"toolUseId":"k1","toolName":"sql","input":{}}',
       'tool_result:42',
     ]);
+  });
+
+  it('Trae merges memory files across date dirs and renders per-turn digests', async () => {
+    const sid = '6a9d780fd2c7e9c7ae6a844c';
+    // 项目目录是「分隔符换成 -」的转码 + --p2- 后缀；同一会话写在两个日期目录里。
+    await put(`.trae-cn/memory/projects/${dashedProject()}--p2-54ea0aa77b3242876bf9/20260909/session_memory_${sid}.jsonl`, [
+      { intent: '修登录 bug', actions: ['读 auth.ts', '改 login 函数'], outcome: '修好了', compact_summary_meta: { created_at_ms: new Date(2026, 8, 9, 13, 45, 57).getTime() }, message_summary_time: '2026-09-09 13:45:57', message_id: 'm2' },
+    ]);
+    await put(`.trae-cn/memory/projects/${dashedProject()}--p2-54ea0aa77b3242876bf9/20260907/session_memory_${sid}.jsonl`, [
+      { intent: '搭好项目脚手架', actions: ['创建 Vite 项目'], outcome: '脚手架可用', learned: ['pnpm 脚本约定'], message_summary_time: '2026-09-07 10:00:00', message_id: 'm1' },
+    ]);
+    // 国际版同格式；目录解码不出实际路径 → 归入对话；actions 是字符串时渲染成单行。
+    await put('.trae/memory/projects/-no-such-project-xyz/20260701/session_memory_6a0edbe60fa6e2984c283423.jsonl', [
+      { intent: '快速问答', actions: '直接回答', message_summary_time: '2026-07-01 09:00:00', message_id: 'm3' },
+    ]);
+    // SOLO 工作模式项目：转码名里带 work-mode-projects-<id>，映射回应用数据目录里的实际文件夹。
+    const soloId = '6a609ee623196ddbd8e094ed';
+    const soloCwd = path.join(home, 'Library', 'Application Support', 'TRAE SOLO CN', 'ModularData', 'ai-agent', 'work-mode-projects', soloId);
+    await mkdir(soloCwd, { recursive: true });
+    await put(`.trae-cn/memory/projects/ry-Application-Support-TRAE-SOLO-CN-ModularData-ai-agent-work-mode-projects-${soloId}-n4pyph/20260722/session_memory_6a609ee623196ddbd8e094f0.jsonl`, [
+      { intent: '梳理需求文档', outcome: '文档就绪', compact_summary_meta: { created_at_ms: new Date(2026, 6, 22, 15, 0, 0).getTime() }, message_summary_time: '2026-07-22 15:00:00', message_id: 'm4' },
+    ]);
+    const { listed, messages } = await readAll(traeAdapter);
+    const at = (y: number, mo: number, d: number, h: number, mi: number, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
+    const byId = Object.fromEntries(listed.sessions.map((s) => [s.sourceSessionId, s]));
+    // 跨日期目录合并：标题取最早一轮，时间取首尾两轮。
+    expect(byId[sid]).toMatchObject({ title: '搭好项目脚手架', cwd: project(), dialogue: false, createdAt: at(2026, 9, 7, 10, 0), updatedAt: at(2026, 9, 9, 13, 45, 57) });
+    expect(byId['6a0edbe60fa6e2984c283423']).toMatchObject({ title: '快速问答', cwd: null, dialogue: true, createdAt: at(2026, 7, 1, 9, 0) });
+    expect(byId['6a609ee623196ddbd8e094f0']).toMatchObject({ title: '梳理需求文档', cwd: soloCwd, dialogue: false });
+    // 逐轮摘要：按日期目录顺序读，key 用 message_id 保证幂等。
+    expect(brief(messages[sid]!)).toEqual([
+      'assistant:Intent: 搭好项目脚手架\n\nActions:\n- 创建 Vite 项目\n\nOutcome: 脚手架可用\n\nLearned:\n- pnpm 脚本约定',
+      'assistant:Intent: 修登录 bug\n\nActions:\n- 读 auth.ts\n- 改 login 函数\n\nOutcome: 修好了',
+    ]);
+    expect(messages[sid]!.map((m) => m.key)).toEqual(['m1', 'm2']);
+    expect(brief(messages['6a0edbe60fa6e2984c283423']!)).toEqual(['assistant:Intent: 快速问答\n\nActions: 直接回答']);
   });
 
   it.each([
