@@ -133,3 +133,10 @@ export {
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
 export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+export {
+  resolveModelRoute,
+  normalizeBaseUrl,
+  type ResolvedModelRoute,
+  type ModelRouteResolverOptions,
+} from './providers/model-route-resolver.js';
+

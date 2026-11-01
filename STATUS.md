@@ -10,6 +10,26 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Wire Cindy UI model picker selections to Hermes agent turns (`unit-tested`)
+
+**Outcome:**
+1. `packages/maker-core/src/providers/model-route-resolver.ts` (+ tests in `packages/maker-core/src/providers/__tests__/model-route-resolver.test.ts`, +3 tests): maps requested model or route names to endpoint parameters (`model`, `provider`, `baseUrl`, optional `apiKey`) from `~/.cindy-harness/routing.yaml` and `providers.yaml`.
+2. `packages/maker-core/src/agents/base-agent.ts` + `packages/maker-core/src/agents/hermes/agent.ts`: updated `AgentSessionHandle.setModel` and `HermesAgentSession.startSession` to resolve model routes and propagate `provider`, `baseUrl`, and `apiKey` to the Hermes daemon.
+3. `packages/maker-hermes-manager/src/protocol.ts` + `session-registry.ts` + `hermes-manager.ts` + `hermes-run.ts`: added `--base-url` and `--api-key` CLI flag handling. In `hermes-manager.ts`, provider or baseUrl switches against frozen `launch` clear `hermesSessionId` and start a fresh Hermes CLI session on the new provider instead of failing on `--resume`. Rebuilt `dist/hermes-mgr.mjs`.
+4. `apps/desktop/src/main/maker-ipc/register.ts`: on `handleSetModel` for Hermes sessions, calls `resolveModelRoute` and passes resolved route options to `sess.setModel`.
+5. `~/.hermes-cindy/config.yaml`: added `model.ollama_num_ctx: 65536` to bypass Hermes CLI's 64k token context window floor check on local models (e.g. LM Studio Qwen3-8b). Backup saved to `config.yaml.bak-20261101-numctx`.
+6. Dev app restarted with `pnpm restart:desktop:remote --region=global`.
+
+**Mutation checks (2):**
+- In `packages/maker-core/src/providers/model-route-resolver.ts`, breaking `normalizeBaseUrl` failed `model-route-resolver.test.ts` (2 tests failed: normalization and route resolution baseUrl mismatch); restored byte-identical.
+- In `packages/maker-hermes-manager/src/hermes-manager.ts`, setting `providerChanged = false` failed `hermes-manager.test.ts` (`expected [ '/model qwen3-8b', 'turn 2' ] to deeply equal [ 'turn 2' ]`); restored byte-identical.
+
+**Not claimed:** visual selection in the running UI is unit-tested and proved via CLI; final owner turn verification in desktop UI is pending.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Defect Fix: Relocate route/context banners from window titlebar to chat composer stack (`unit-tested`)
 
 **Outcome:**

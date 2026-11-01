@@ -1,0 +1,99 @@
+/**
+ * model-route-resolver.ts — maps a requested model or route name to its endpoint
+ * in `~/.cindy-harness/providers.yaml` and `routing.yaml`.
+ *
+ * Used by HermesAgent and host-side setModel to route chat turns to local providers
+ * (e.g. LM Studio, Ollama) via `--provider custom --base-url <url>`.
+ * Returns null when the model is not in providers.yaml (falls back to Hermes home default).
+ */
+
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { loadProvidersFile, type ProviderFileEntry } from './providers-file.js';
+import { loadRoutingFile } from './routing-file.js';
+
+export interface ResolvedModelRoute {
+  model: string;
+  provider: string;
+  baseUrl: string;
+  apiKey?: string;
+}
+
+export interface ModelRouteResolverOptions {
+  harnessDir?: string;
+  env?: Record<string, string | undefined>;
+}
+
+export function normalizeBaseUrl(url: string): string {
+  const trimmed = url.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
+}
+
+export function resolveModelRoute(
+  modelId: string | undefined | null,
+  options?: ModelRouteResolverOptions,
+): ResolvedModelRoute | null {
+  if (!modelId) return null;
+  const trimmed = modelId.trim();
+  if (!trimmed || trimmed === 'hermes-default') return null;
+
+  const harnessDir = options?.harnessDir ?? path.join(os.homedir(), '.cindy-harness');
+  const providersFile = path.join(harnessDir, 'providers.yaml');
+  const routingFile = path.join(harnessDir, 'routing.yaml');
+
+  const { providers } = loadProvidersFile(providersFile);
+  if (providers.length === 0) return null;
+
+  const providerMap = new Map<string, ProviderFileEntry>();
+  for (const p of providers) providerMap.set(p.id, p);
+
+  const routing = loadRoutingFile(routingFile, Array.from(providerMap.keys()));
+
+  let targetModel = trimmed;
+  let targetProviderId: string | undefined;
+
+  // 1. Direct match on a route name in routing.yaml (e.g. "local-small")
+  if (routing.routes && trimmed in routing.routes) {
+    const route = routing.routes[trimmed];
+    targetModel = route.model;
+    targetProviderId = route.provider;
+  }
+
+  // 2. Match route by model id in routing.yaml (e.g. model "qwen3-8b" in route "local-small")
+  if (!targetProviderId && routing.routes) {
+    for (const route of Object.values(routing.routes)) {
+      if (route.model === trimmed) {
+        targetModel = route.model;
+        targetProviderId = route.provider;
+        break;
+      }
+    }
+  }
+
+  // 3. Match format "<providerId>/<modelId>" (e.g. "lmstudio-local/qwen3-8b")
+  if (!targetProviderId && trimmed.includes('/')) {
+    const slashIdx = trimmed.indexOf('/');
+    const prefix = trimmed.slice(0, slashIdx);
+    const suffix = trimmed.slice(slashIdx + 1);
+    if (providerMap.has(prefix)) {
+      targetProviderId = prefix;
+      targetModel = suffix;
+    }
+  }
+
+  if (!targetProviderId) return null;
+
+  const entry = providerMap.get(targetProviderId);
+  if (!entry) return null;
+
+  const env = options?.env ?? process.env;
+  const apiKey = entry.keyEnv ? env[entry.keyEnv] : undefined;
+
+  return {
+    model: targetModel,
+    provider: 'custom',
+    baseUrl: normalizeBaseUrl(entry.baseUrl),
+    ...(apiKey ? { apiKey } : {}),
+  };
+}

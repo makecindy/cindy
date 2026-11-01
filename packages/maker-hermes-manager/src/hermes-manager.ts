@@ -33,6 +33,7 @@ import {
   type HermesQueryEventNotification,
   type HermesQueryStartParams,
   type HermesQuerySendParams,
+  type HermesQuerySetModelParams,
   type SessionClosedNotification,
   type SessionListResult,
 } from './protocol.js';
@@ -211,6 +212,8 @@ export class HermesManager {
         ...(p.resumeHermesSessionId ? { hermesSessionId: p.resumeHermesSessionId } : {}),
         ...(p.model ? { model: p.model } : {}),
         ...(p.provider ? { provider: p.provider } : {}),
+        ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+        ...(p.apiKey ? { apiKey: p.apiKey } : {}),
         ...(p.permissionMode ? { permissionMode: p.permissionMode } : {}),
         ...(p.systemPromptPreamble ? { preamble: p.systemPromptPreamble } : {}),
       });
@@ -266,10 +269,13 @@ export class HermesManager {
       // has not configured one either.
       let routeModel = rec.model;
       let routeProvider = rec.provider;
+      let routeBaseUrl = rec.baseUrl;
+      let routeApiKey = rec.apiKey;
       if (rec.permissionMode !== 'bypassPermissions' && (!routeModel || !routeProvider)) {
         const homeRoute = await readHermesDefaultRoute(this.hermesHome);
         routeModel = routeModel ?? homeRoute.model;
         routeProvider = routeProvider ?? homeRoute.provider;
+        routeBaseUrl = routeBaseUrl ?? homeRoute.baseUrl;
         if (!routeModel) {
           throw rpcError(
             'INVALID_PARAMS',
@@ -333,9 +339,11 @@ export class HermesManager {
         const frozen = resumeHermesSessionId ? this.registry.get(rec.sessionId)?.launch : undefined;
         const flagModel = frozen ? frozen.model : routeModel;
         const flagProvider = frozen ? frozen.provider : routeProvider;
+        const flagBaseUrl = frozen ? frozen.baseUrl : routeBaseUrl;
+        const flagApiKey = frozen ? frozen.apiKey : routeApiKey;
         if (!resumeHermesSessionId) {
           this.registry.update(rec.sessionId, {
-            launch: { model: routeModel, provider: routeProvider },
+            launch: { model: routeModel, provider: routeProvider, baseUrl: routeBaseUrl, apiKey: routeApiKey },
             appliedModel: routeModel,
           });
         }
@@ -344,6 +352,8 @@ export class HermesManager {
             ...baseSpec,
             ...(flagModel ? { model: flagModel } : {}),
             ...(flagProvider ? { provider: flagProvider } : {}),
+            ...(flagBaseUrl ? { baseUrl: flagBaseUrl } : {}),
+            ...(flagApiKey ? { apiKey: flagApiKey } : {}),
             ...(resumeHermesSessionId ? { resumeHermesSessionId } : {}),
           },
           onEvent,
@@ -396,23 +406,44 @@ export class HermesManager {
       // than silently running the wrong model.
       const resumeId = this.registry.get(rec.sessionId)?.hermesSessionId;
       const current = this.registry.get(rec.sessionId);
+      const launch = current?.launch;
+      const providerChanged = Boolean(
+        launch && (
+          (launch.provider ?? '') !== (routeProvider ?? '') ||
+          (launch.baseUrl ?? '') !== (routeBaseUrl ?? '')
+        ),
+      );
+
+      let effectiveResumeId = resumeId;
+      if (providerChanged && effectiveResumeId) {
+        // Provider or baseUrl changed: Hermes CLI rejects changing provider flags on resume.
+        // Start a fresh Hermes session on the target provider.
+        effectiveResumeId = undefined;
+        this.registry.update(rec.sessionId, {
+          hermesSessionId: undefined,
+          launch: undefined,
+          appliedModel: undefined,
+        });
+      }
+
       let switchTo: string | undefined;
-      if (resumeId && current?.launch) {
+      if (effectiveResumeId && current?.launch && !providerChanged) {
         const running = current.appliedModel ?? current.launch.model;
         let desired = routeModel;
         if (!desired && running) desired = (await readHermesDefaultRoute(this.hermesHome)).model;
         if (desired && desired !== running) switchTo = desired;
       }
-      if (resumeId && switchTo) {
+      if (effectiveResumeId && switchTo) {
         const target = switchTo;
         const switchRun = startHermesRun(
           {
             ...baseSpec,
             text: `/model ${target}`,
             preamble: undefined,
-            resumeHermesSessionId: resumeId,
+            resumeHermesSessionId: effectiveResumeId,
             ...(current?.launch?.model ? { model: current.launch.model } : {}),
             ...(current?.launch?.provider ? { provider: current.launch.provider } : {}),
+            ...(current?.launch?.baseUrl ? { baseUrl: current.launch.baseUrl } : {}),
           },
           () => undefined,
         );
@@ -424,7 +455,7 @@ export class HermesManager {
           const ok = !switchTurn.killed && !res.spawnError && res.code === 0;
           if (ok) {
             this.registry.update(rec.sessionId, { appliedModel: target });
-            startTurn(resumeId, true);
+            startTurn(effectiveResumeId, true);
             return;
           }
           this.running.delete(rec.sessionId);
@@ -436,7 +467,7 @@ export class HermesManager {
           );
         });
       } else {
-        startTurn(rec.hermesSessionId, true);
+        startTurn(effectiveResumeId, true);
       }
 
       return {
@@ -551,7 +582,7 @@ export class HermesManager {
     });
 
     s.setHandler(METHODS.QUERY_SET_MODEL, async (raw) => {
-      const p = raw as { sessionId?: string; model?: string };
+      const p = raw as HermesQuerySetModelParams;
       this.requireRecord(p.sessionId);
       if (typeof p.model !== 'string') {
         throw rpcError('INVALID_PARAMS', 'model is required');
@@ -560,7 +591,12 @@ export class HermesManager {
       // home default route again (config.yaml). Cindy's 'hermes-default'
       // sentinel arrives here as '' for exactly that reason.
       const model = p.model.trim();
-      this.registry.update(p.sessionId!, { model: model || undefined });
+      this.registry.update(p.sessionId!, {
+        model: model || undefined,
+        provider: p.provider?.trim() || undefined,
+        baseUrl: p.baseUrl?.trim() || undefined,
+        apiKey: p.apiKey?.trim() || undefined,
+      });
       return {};
     });
 

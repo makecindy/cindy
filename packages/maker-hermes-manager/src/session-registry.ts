@@ -22,13 +22,15 @@ export interface HermesSessionRecord {
   cwd: string;
   model?: string;
   provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
   permissionMode?: HermesPermissionMode;
   /**
    * Route flags the Hermes session was created with. Hermes rejects a resume whose
    * -m/--provider differ from the launch, so resumes replay these and a model
    * change goes through `/model` instead (ROADMAP 1.8d).
    */
-  launch?: { model?: string; provider?: string };
+  launch?: { model?: string; provider?: string; baseUrl?: string; apiKey?: string };
   /** Model the Hermes session currently runs (launch model, then each `/model` switch). */
   appliedModel?: string;
   /** Cindy context preamble; consumed by the daemon on the session's first turn. */

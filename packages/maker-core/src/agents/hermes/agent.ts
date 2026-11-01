@@ -23,7 +23,7 @@ import {
 } from '../base-agent.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { NotSupportedError, type Capabilities } from '../../types/capabilities.js';
-import type { PermissionMode, UserMessage } from '../../types/common.js';
+import type { Effort, PermissionMode, UserMessage } from '../../types/common.js';
 import type { AgentEvent, InteractionResolver, UsageSnapshot } from '../../types/events.js';
 import {
   HERMES_METHODS,
@@ -37,6 +37,7 @@ import {
 import { normalizeHermesEvent, type NormalizedHermesTokens } from './translator.js';
 import { createHermesTransport, type HermesTransport } from './transport.js';
 import { collectHermesProviderEnv } from './hermes-provider-env.js';
+import { resolveModelRoute } from '../../providers/model-route-resolver.js';
 
 const HERMES_DEFAULT_MODEL_ID = 'hermes-default';
 /** Advertised window; the daemon does not report a runtime value. */
@@ -271,13 +272,22 @@ export class HermesAgent extends BaseAgent {
         logger: this.deps.logger,
       });
       await transport.hello();
+      const route = resolveModelRoute(opts.model);
+      const targetModel = route ? route.model : (opts.model && opts.model !== HERMES_DEFAULT_MODEL_ID ? opts.model : undefined);
+      const targetProvider = route ? route.provider : opts.providerId;
+      const targetBaseUrl = route?.baseUrl;
+      const targetApiKey = route?.apiKey;
+
       const startResult = await transport.request<HermesQueryStartResult>(
         HERMES_METHODS.QUERY_START,
         {
           sessionId,
           cwd: opts.workingDir,
           ...(requestedResumeId ? { resumeHermesSessionId: requestedResumeId } : {}),
-          ...(opts.model && opts.model !== HERMES_DEFAULT_MODEL_ID ? { model: opts.model } : {}),
+          ...(targetModel ? { model: targetModel } : {}),
+          ...(targetProvider ? { provider: targetProvider } : {}),
+          ...(targetBaseUrl ? { baseUrl: targetBaseUrl } : {}),
+          ...(targetApiKey ? { apiKey: targetApiKey } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           // Provider keys ride per-session env (the daemon's own env is
           // deliberately secret-free). Hermes reads provider credentials from
@@ -761,12 +771,35 @@ export class HermesAgent extends BaseAgent {
       // the CLI with the record's model; the home default route applies when the
       // override is absent). 'hermes-default' is Cindy's sentinel for "follow
       // the home default again" and maps to an empty override on the wire.
-      async setModel(model: string): Promise<void> {
+      async setModel(
+        model: string,
+        options?: {
+          providerId?: string | null;
+          effort?: Effort;
+          thinkingEnabled?: boolean;
+          contextWindowBudget?: number | null;
+          provider?: string;
+          baseUrl?: string;
+          apiKey?: string;
+        },
+      ): Promise<void> {
         const trimmed = model.trim();
         if (!trimmed) throw new Error('hermes: model is required');
+        const route = options?.baseUrl
+          ? {
+              provider: options.provider ?? 'custom',
+              baseUrl: options.baseUrl,
+              apiKey: options.apiKey,
+              model: trimmed,
+            }
+          : resolveModelRoute(trimmed);
+        const targetModel = trimmed === HERMES_DEFAULT_MODEL_ID ? '' : (route?.model ?? trimmed);
         await transport.request(HERMES_METHODS.QUERY_SET_MODEL, {
           sessionId,
-          model: trimmed === HERMES_DEFAULT_MODEL_ID ? '' : trimmed,
+          model: targetModel,
+          ...(route?.provider ? { provider: route.provider } : {}),
+          ...(route?.baseUrl ? { baseUrl: route.baseUrl } : {}),
+          ...(route?.apiKey ? { apiKey: route.apiKey } : {}),
         });
       },
     };

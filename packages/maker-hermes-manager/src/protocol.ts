@@ -177,6 +177,8 @@ export interface HermesQueryStartParams {
   model?: string;
   /** Hermes provider name from the Hermes home's config; omit for auto. */
   provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
   permissionMode?: HermesPermissionMode;
   /**
    * Session preamble prepended to the first turn's query (Cindy context).
@@ -214,6 +216,9 @@ export interface HermesQuerySendParams {
 export interface HermesQuerySetModelParams {
   sessionId: string;
   model: string;
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface HermesQuerySetPermissionModeParams {

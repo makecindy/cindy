@@ -110,6 +110,8 @@ export interface HermesQueryStartParams {
   env?: Record<string, string>;
   model?: string;
   provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
   permissionMode?: HermesPermissionMode;
   systemPromptPreamble?: string;
   maxTurns?: number;
@@ -130,6 +132,14 @@ export interface HermesQuerySendParams {
 export interface HermesQuerySetPermissionModeParams {
   sessionId: string;
   mode: HermesPermissionMode;
+}
+
+export interface HermesQuerySetModelParams {
+  sessionId: string;
+  model: string;
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface HermesSessionParams {

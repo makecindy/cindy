@@ -314,6 +314,42 @@ describe('HermesManager socket integration (fake hermes)', () => {
     for (const r of third) expect(flagOf(r.argv, '-m')).toBe('fake/default-model');
   }, 30_000);
 
+  it('query/setModel with a changed provider starts a fresh Hermes session on the new provider', async () => {
+    const h = current!;
+    await h.client.request(METHODS.QUERY_START, {
+      sessionId: 'sm-switch-provider',
+      cwd: h.dir,
+      permissionMode: 'bypassPermissions',
+    }, { timeoutMs: 5_000 });
+
+    const first = await runTurnLog(h, 'sm-switch-provider', 1);
+    expect(first).toHaveLength(1);
+    expect(first[0].argv).not.toContain('--base-url');
+
+    // Switch model AND provider to local custom endpoint
+    await h.client.request(METHODS.QUERY_SET_MODEL, {
+      sessionId: 'sm-switch-provider',
+      model: 'qwen3-8b',
+      provider: 'custom',
+      baseUrl: 'http://127.0.0.1:1234/v1',
+    }, { timeoutMs: 5_000 });
+
+    const second = await runTurnLog(h, 'sm-switch-provider', 2);
+    // Provider changed, so Hermes CLI cannot resume: runs a fresh session with new flags, no /model switch
+    expect(second.map((r) => r.text)).toEqual(['turn 2']);
+    expect(second[0].argv).not.toContain('--resume');
+    expect(flagOf(second[0].argv, '-m')).toBe('qwen3-8b');
+    expect(flagOf(second[0].argv, '--provider')).toBe('custom');
+    expect(flagOf(second[0].argv, '--base-url')).toBe('http://127.0.0.1:1234/v1');
+
+    // Next turn on the same local provider resumes it
+    const third = await runTurnLog(h, 'sm-switch-provider', 3);
+    expect(third[0].argv).toContain('--resume');
+    expect(flagOf(third[0].argv, '-m')).toBe('qwen3-8b');
+    expect(flagOf(third[0].argv, '--provider')).toBe('custom');
+    expect(flagOf(third[0].argv, '--base-url')).toBe('http://127.0.0.1:1234/v1');
+  }, 30_000);
+
   it('query/setModel ends the turn with an error when the /model switch fails, without running the turn', async () => {
     const h = current!;
     await h.client.request(METHODS.QUERY_START, {

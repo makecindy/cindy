@@ -28,6 +28,7 @@
     "./expert-handoff": "./src/experts/expert-handoff.ts",
     "./routing-file": "./src/providers/routing-file.ts",
     "./routed-auxiliary": "./src/providers/routed-auxiliary.ts",
+    "./model-route-resolver": "./src/providers/model-route-resolver.ts",
     "./turn-timeline": "./src/tasks/turn-timeline.ts"
   },
   "scripts": {

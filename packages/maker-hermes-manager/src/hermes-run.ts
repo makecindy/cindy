@@ -21,6 +21,8 @@ export interface HermesSpawnSpec {
   resumeHermesSessionId?: string;
   model?: string;
   provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
   permissionMode?: HermesPermissionMode;
   maxTurns?: number;
   runBudgetSeconds?: number;
@@ -93,6 +95,8 @@ export function buildHermesArgs(spec: HermesSpawnSpec): string[] {
   if (spec.resumeHermesSessionId) args.push('--resume', spec.resumeHermesSessionId);
   if (spec.model) args.push('-m', spec.model);
   if (spec.provider) args.push('--provider', spec.provider);
+  if (spec.baseUrl) args.push('--base-url', spec.baseUrl);
+  if (spec.apiKey) args.push('--api-key', spec.apiKey);
   if (spec.maxTurns !== undefined) args.push('--max-turns', String(spec.maxTurns));
   args.push(...permissionModeToFlags(spec.permissionMode));
   return args;

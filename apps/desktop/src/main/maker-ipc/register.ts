@@ -176,6 +176,7 @@ import {
 import {
   PI_CACHE_RECOVERY_EXPECTATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION, MAIN_OWNED_SEND_CONTEXT, TurnDispatchRejectedError,
+  resolveModelRoute,
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import type {
@@ -22640,7 +22641,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           let runtimeChanged = false;
           try {
             if (sess?.setModel) {
-              await sess.setModel(nextModel);
+              const route = resolveModelRoute(nextModel);
+              if (route) {
+                await (sess.setModel as (m: string, opt?: unknown) => Promise<void>)(route.model, {
+                  provider: route.provider,
+                  baseUrl: route.baseUrl,
+                  apiKey: route.apiKey,
+                });
+              } else {
+                await sess.setModel(nextModel);
+              }
               runtimeChanged = true;
             }
             await routeSnapshot.client.drizzle

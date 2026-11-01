@@ -2563,6 +2563,9 @@ export interface AgentSessionHandle {
        * 触发重建，不走热切）。
        */
       contextWindowBudget?: number | null;
+      provider?: string;
+      baseUrl?: string;
+      apiKey?: string;
     },
   ): Promise<void>;
 
