@@ -394,8 +394,15 @@ export interface AgentInputCoordinatorDeps {
    * injects its FIFO writer so steer and drain persistence share one ordering.
    */
   createUserMessage?: typeof createDbMessage;
-  /** Hide a user row that was written after `/clear` won the persistence race. */
-  rewindPersistedUserMessageAfterClear?: (sessionId: string, clientId: string) => Promise<void>;
+  /**
+   * Hide a user row that was written after `/clear` won the persistence race.
+   * `discard` deletes a scheduled row proven never to have reached the vendor.
+   */
+  rewindPersistedUserMessageAfterClear?: (
+    sessionId: string,
+    clientId: string,
+    options?: { discard?: boolean },
+  ) => Promise<void>;
   /**
    * interrupted-turn-resume:判断某条已派发 user 消息之后 agent 是否已产出内容
    * (assistant / tool_use / thinking 持久化行)。retryLastError 用它决定语义:
@@ -5471,6 +5478,8 @@ export class AgentInputCoordinator {
   /** Only proven preparation rejection can erase a scheduled continuation row.
    * The coordinator owns its clientId even when dispatch beats enqueue's return.
    * Unknown vendor outcomes and interactive messages keep their existing history.
+   * The row is deleted, not tombstoned: a routine that keeps deferring would
+   * otherwise leave one hidden copy of its prompt per attempt.
    */
   private async rewindSchedulerPreparationFailure(
     sessionId: string,
@@ -5491,7 +5500,7 @@ export class AgentInputCoordinator {
         && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
     if (!preparationRejected) return false;
     try {
-      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId, { discard: true });
       return true;
     } catch (err) {
       log.warn('scheduled preparation rollback failed; retaining failure presentation', {

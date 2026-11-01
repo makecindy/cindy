@@ -445,6 +445,11 @@ export interface MessageRewindUserAfterClearArgs {
   sessionId: string;
   clientId: string;
   rewoundAt: number;
+  /**
+   * 该行已证实从未送达 vendor（调度 prompt 派发前被撤回）：软隐藏后在同一事务里删掉，
+   * 不留历史。重试循环里每次撤回都只软隐藏会让 messages 无界增长。
+   */
+  discard?: boolean;
 }
 
 /**

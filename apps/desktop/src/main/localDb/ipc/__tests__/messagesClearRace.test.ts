@@ -184,6 +184,61 @@ describe('message persistence clear boundary', () => {
     expect(h.broadcast).not.toHaveBeenCalled();
   });
 
+  // A routine that keeps deferring used to leave one hidden prompt per attempt
+  // (thousands of rows / hundreds of MB in one teammate chat).
+  it('discards an undispatched scheduled row instead of keeping a tombstone', async () => {
+    // Vector cleanup only fires on the rewind UPDATE (drizzle/0034); a bare DELETE
+    // would orphan the vectors. A plain table stands in for the vec0 virtual table.
+    sqlite.exec(`
+      CREATE TABLE embedding_jobs (source TEXT NOT NULL, source_id TEXT NOT NULL);
+      CREATE TABLE chat_messages_vec_v1 (embedding BLOB);
+      CREATE TRIGGER trg_chat_rewind_clean_vec
+      AFTER UPDATE OF rewind_at ON messages
+      WHEN NEW.rewind_at IS NOT NULL AND OLD.rewind_at IS NULL
+      BEGIN
+        DELETE FROM chat_messages_vec_v1 WHERE rowid IN (
+          SELECT rowid FROM embedding_jobs WHERE source = 'chat' AND source_id = NEW.id
+        );
+        DELETE FROM embedding_jobs WHERE source = 'chat' AND source_id = NEW.id;
+      END;
+    `);
+    const insert = sqlite.prepare(
+      `INSERT INTO messages
+        (id, client_id, session_id, role, content, created_at, rewind_at)
+       VALUES (?, ?, ?, 'user', ?, ?, NULL)`,
+    );
+    insert.run('row-owner', 'owner-1', 's1', 'owner message', 100);
+    insert.run('row-scheduled', 'scheduled-1', 's1', '[UI_ACTION_TRIGGER]check tasks', 200);
+    for (const [rowid, sourceId] of [[1, 'row-owner'], [2, 'row-scheduled']] as const) {
+      sqlite.prepare("INSERT INTO embedding_jobs (rowid, source, source_id) VALUES (?, 'chat', ?)").run(rowid, sourceId);
+      sqlite.prepare("INSERT INTO chat_messages_vec_v1 (rowid, embedding) VALUES (?, x'00')").run(rowid);
+    }
+    sqlite
+      .prepare('UPDATE sessions SET list_preview = ?, list_preview_role = ?, list_message_count = ? WHERE id = ?')
+      .run('check tasks', 'user', 2, 's1');
+
+    await rewindPersistedUserMessageAfterClear('s1', 'scheduled-1', { discard: true });
+
+    expect(sqlite.prepare('SELECT client_id AS clientId, rewind_at AS rewindAt FROM messages').all())
+      .toEqual([{ clientId: 'owner-1', rewindAt: null }]);
+    expect(sqlite.prepare('SELECT source_id AS sourceId FROM embedding_jobs').all())
+      .toEqual([{ sourceId: 'row-owner' }]);
+    expect(sqlite.prepare('SELECT rowid FROM chat_messages_vec_v1').all()).toEqual([{ rowid: 1 }]);
+    expect(
+      sqlite
+        .prepare('SELECT list_preview AS preview, list_preview_role AS role, list_message_count AS count FROM sessions WHERE id = ?')
+        .get('s1'),
+    ).toEqual({ preview: null, role: null, count: null });
+    expect(h.broadcast).toHaveBeenCalledWith('local-db:messages:deleted', {
+      sessionId: 's1',
+      clientId: 'scheduled-1',
+      clientIds: ['scheduled-1'],
+    });
+    h.broadcast.mockClear();
+    await rewindPersistedUserMessageAfterClear('s1', 'scheduled-1', { discard: true });
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
   it('reconciles session attachment refs for a rewound user row', async () => {
     const { collectCindyMediaHashes } = await import('../../../cindy-media/chatAttachments');
     const { removeSessionAttachmentRefIfUnreferencedByLiveMessage } = await import(

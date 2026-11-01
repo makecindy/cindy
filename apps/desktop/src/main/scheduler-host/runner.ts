@@ -2257,8 +2257,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         baselineStarted = false;
       }
     } catch (err) {
-      // A preparation guard proves this turn never reached the vendor. Reuse
-      // the exact-message soft rewind; do not roll back ambiguous send errors.
+      // A preparation guard proves this turn never reached the vendor. Discard
+      // the exact message (a deferral retries with a new clientId, so no
+      // tombstone is needed); do not roll back ambiguous send errors.
       if (
         (err instanceof RoutineDispatchDeferredError ||
           err instanceof QueuedRouteDisabledError ||
@@ -2266,7 +2267,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         acceptedMessageClientId
       ) {
         try {
-          await rewindPersistedUserMessageAfterClear(session.id, acceptedMessageClientId);
+          await rewindPersistedUserMessageAfterClear(session.id, acceptedMessageClientId, {
+            discard: true,
+          });
         } catch (rollbackError) {
           waiter.stopListening();
           ctx.signal.removeEventListener('abort', onAbort);

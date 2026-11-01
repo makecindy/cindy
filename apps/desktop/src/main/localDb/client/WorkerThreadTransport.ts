@@ -899,11 +899,19 @@ function messageRewindUserAfterClear(readyDb, args) {
   const sessionId = expectString(payload.sessionId, 'sessionId');
   const clientId = expectString(payload.clientId, 'clientId');
   const rewoundAt = expectNumber(payload.rewoundAt, 'rewoundAt');
+  const discard = payload.discard === true;
   return readyDb.transaction(() => {
     const changes = readyDb.prepare(
       "UPDATE messages SET rewind_at = ? WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at IS NULL",
     ).run(rewoundAt, sessionId, clientId).changes;
-    if (changes > 0) {
+    if (changes > 0 && discard) {
+      readyDb.prepare(
+        "DELETE FROM messages WHERE session_id = ? AND client_id = ? AND role = 'user' AND rewind_at = ?",
+      ).run(sessionId, clientId, rewoundAt);
+      readyDb.prepare(
+        'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',
+      ).run(sessionId);
+    } else if (changes > 0) {
       readyDb.prepare(
         'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL WHERE id = ?',
       ).run(sessionId);
