@@ -162,6 +162,7 @@
     "mediaErrorLine": "Error: {{message}}",
     "mediaDeviceLinkHint": "Before opening, your phone asks the remote device to upload this media.",
     "controlDelete": "Delete message",
+    "controlEdit": "Edit",
     "controlRewind": "Back to here",
     "controlFork": "Start new session from here",
     "markdownDocAriaLabel": "Message body",

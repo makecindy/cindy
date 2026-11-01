@@ -182,10 +182,20 @@ import { InteractionPanel, type MobilePlanViewerState } from '@/session/Interact
 import {
   COMPANION_AVATAR_SIZE,
   MessageRenderer,
+  findLastUserMessageClientId,
   type CompanionQuoteOptions,
   type MobileMessageActionBusyKind,
   type MobileMessageDraft,
+  type MobileMessageEditDraft,
 } from '@/session/MessageRenderer';
+import {
+  buildMessageEditAttachments,
+  commitMessageEditRewind,
+  messageEditErrorText,
+  mergeMessageEditDraft,
+  messageEditRollbackHint,
+  type MessageEditRollbackHint,
+} from '@/session/messageEdit';
 import { BotGroupQuote } from '@/session/BotGroupQuote';
 import {
   clearSentCompanionReplyQuote,
@@ -591,6 +601,7 @@ import {
   type MobileVoiceControllerSession,
 } from '@/session/mobileVoiceController';
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
+import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -821,6 +832,15 @@ const shareCharacterAsset = require('../../assets/share/cindy-share-character.jp
 const shareLogoLightAsset = require('../../assets/login/login-wordmark.png');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const shareLogoDarkAsset = require('../../assets/login/login-wordmark-dark.png');
+
+/** 编辑最后一条用户消息:composer 暂时承载这条消息,stash 保存用户原本的草稿与附件。 */
+interface MessageEditingState {
+  clientId: string;
+  stashedDocument: ComposerDocument;
+  stashedAttachments: RemoteSerializedAttachment[];
+  /** null = 预览尚未返回或失败(不提示、不阻塞发送)。 */
+  rollbackHint: MessageEditRollbackHint;
+}
 
 /**
  * 排队消息「复用 composer 编辑」的会话内状态:clientId 定位队列条目,
@@ -1424,6 +1444,16 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [sessionId]);
   // 排队编辑复用 composer；推荐只属于用户的普通草稿。
   const [queueEditing, setQueueEditing] = useState<QueueEditingState | null>(null);
+  // 编辑最后一条用户消息同样复用 composer(对齐桌面编辑框):发送 = rewind + 重发,
+  // 取消原样恢复 stash。ref 镜像供 send() 等异步闭包读最新值。
+  const [messageEditing, setMessageEditing] = useState<MessageEditingState | null>(null);
+  const messageEditingRef = useRef<MessageEditingState | null>(null);
+  const [messageEditSubmitting, setMessageEditSubmitting] = useState(false);
+  const messageEditSubmittingRef = useRef(false);
+  // 提交锁的代际:切任务时释放锁并推进代际,旧任务的迟到收尾只释放自己那一代,不动新任务的锁。
+  const messageEditLockGenerationRef = useRef(0);
+  // 进入 / 退出 / 切任务都推进代际,迟到的预览结果不落到别的编辑上。
+  const messageEditSeqRef = useRef(0);
   const [voiceStartPending, setVoiceStartPending] = useState(false);
   const voiceStartPendingSeqRef = useRef(0);
   const voiceStartedOnPressInRef = useRef(false);
@@ -1435,13 +1465,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     agentKind: recommendationSession ? agentKindForSession(recommendationSession) : null,
     revision: recommendationSession?.lastTurnEndedAt, running: remoteSessionRunning,
     composerSource: composerDraftSource,
-    queueEditing: queueEditing !== null,
+    queueEditing: queueEditing !== null || messageEditing !== null,
     hasAttachments: attachments.length > 0 || pendingUploads.length > 0 || pastePlaceholderCount > 0,
     hasTerminalError: remoteSessionRunStatus.hasTerminalError === true,
     voiceIsBusy: voiceStartPending || voiceState === 'listening'
       || voiceState === 'submitting' || voiceState === 'refining',
   });
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const {
+    visible: voiceSpeakerFiltered,
+    show: showVoiceSpeakerFiltered,
+    clear: clearVoiceSpeakerFiltered,
+  } = useSpeakerFilterNotice();
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);
   // 听写期间原生光标停在插入前的位置;停止后要等最终识别与润色完成才定位到插入末尾。
   // 这段时间继续隐藏光标,避免先在文字中间闪现再跳到末尾。
@@ -3296,7 +3331,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [applyComposerDocument]);
 
   const applyRichComposerChange = useCallback((value: ComposerDocument) => {
-    applyComposerDocument(value, queueEditingRef.current ? { persist: false } : undefined);
+    applyComposerDocument(value, queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDocument]);
 
   const setComposerDraft = useCallback((next: SetStateAction<string>) => {
@@ -3306,7 +3341,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 进入编辑前的原草稿,中途导航离开 / 杀进程后恢复的是用户自己的未发送草稿
     // (PR#709 review P1);退出编辑时 cancelQueueEdit 先清 ref 再回填 stash,
     // 那一拍恢复正常持久化,草稿库与内存重新对齐。
-    applyComposerDraft(value, queueEditingRef.current ? { persist: false } : undefined);
+    applyComposerDraft(value, queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDraft]);
 
   useIncomingShareComposer({
@@ -3314,7 +3349,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       collectionId: readRouteParam(params.resourceCollectionId) ?? '',
       kind: readRouteParam(params.resourceKind) ?? '', id: readRouteParam(params.resourceId) ?? '',
     })],
-    ready: composerDraftHydrated && canUseComposer && companionEntry.ready && !queueEditingRef.current,
+    ready: composerDraftHydrated && canUseComposer && companionEntry.ready && !queueEditingRef.current && !messageEditingRef.current,
     appendText: text => setComposerDraft(current => [current, text].filter(Boolean).join('\n\n')),
     attachmentCount: attachments.length,
     enqueueUploads, getPendingUploadCount, onError: setAttachmentError,
@@ -3407,6 +3442,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // effect body 之前完成,这里再清 ref 是幂等的,保证两者时刻一致。
     queueEditingRef.current = null;
     setQueueEditing(null);
+    // 消息编辑文本从未写入草稿库(persist:false),原草稿天然保留;stash 不跨任务恢复。
+    messageEditSeqRef.current += 1;
+    messageEditingRef.current = null;
+    setMessageEditing(null);
+    messageEditLockGenerationRef.current += 1;
+    messageEditSubmittingRef.current = false;
+    setMessageEditSubmitting(false);
     setSettlingQueueItems(() => EMPTY_SETTLING_ITEMS);
     settlingAddedAtRef.current.clear();
     setSettlingBaseline({ ...EMPTY_SETTLING_BASELINE, sessionId });
@@ -3606,7 +3648,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     let next = composerDocumentRef.current;
     for (const quote of quotes) next = appendComposerNode(next, { type: 'quote', quote });
     clearQuotes(sessionId);
-    applyComposerDocument(next, queueEditingRef.current ? { persist: false } : undefined);
+    applyComposerDocument(next, queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined);
   }, [applyComposerDocument, composerDraftHydrated, quotes, sessionId]);
 
   useEffect(() => {
@@ -5503,7 +5545,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     );
     applyComposerDocument(
       nextDocument,
-      queueEditingRef.current ? { persist: false } : undefined,
+      queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined,
     );
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);
     if (command.kind === 'desktop' && command.name === 'side' && canUseSideChats && !queueEditingRef.current) {
@@ -5513,14 +5555,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
   const openPluginPalette = useCallback(() => {
     const document = appendComposerPluginTrigger(composerDocumentRef.current);
-    applyComposerDocument(document, queueEditingRef.current ? { persist: false } : undefined);
+    applyComposerDocument(document, queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined);
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(document);
     requestAnimationFrame(() => composerInputRef.current?.focus());
   }, [applyComposerDocument]);
 
   const selectComposerPlugin = useCallback((plugin: ComposerPlugin, roster: ComposerPlugin[]) => {
     const nextDocument = placeComposerPlugin(composerDocumentRef.current, plugin, roster);
-    applyComposerDocument(nextDocument, queueEditingRef.current ? { persist: false } : undefined);
+    applyComposerDocument(nextDocument, queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined);
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);
   }, [applyComposerDocument]);
 
@@ -5535,7 +5577,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     );
     applyComposerDocument(
       nextDocument,
-      queueEditingRef.current ? { persist: false } : undefined,
+      queueEditingRef.current || messageEditingRef.current ? { persist: false } : undefined,
     );
     composerInputRef.current?.applyDocumentAndSetSelectionToEnd(nextDocument);
   }, [applyComposerDocument]);
@@ -5554,6 +5596,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     prewarmAgentOnTyping();
     voiceStopAfterStartRef.current = false;
     setVoiceError(null);
+    clearVoiceSpeakerFiltered();
     setVoiceReleaseToSendActive(false);
     let claimedPrewarm: PrewarmedMobileVoiceAsr | null = null;
     let permissionRequestSeq: number | null = null;
@@ -5660,7 +5703,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           credential.settings?.language,
           CINDY_MANAGED_REFINER_PROVIDER,
         );
-      const audioGate = createMobileSpeakerGate();
+      const audioGate = createMobileSpeakerGate(() => {
+        if (voiceStartupSeqRef.current === startupSeq) showVoiceSpeakerFiltered();
+      });
       if (voiceStartupSeqRef.current !== startupSeq) {
         // This run never opened the microphone; release only its claimed ASR.
         void prewarmedVoice?.asr.stop().catch(() => undefined);
@@ -5782,7 +5827,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [deviceId, openLink, prewarmAgentOnTyping, renderItems, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
+  }, [clearVoiceSpeakerFiltered, deviceId, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
     const controller = voiceControllerSessionRef.current;
@@ -6462,9 +6507,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftOverride?: string;
     documentOverride?: ComposerDocument;
     independentText?: string;
+    /** 编辑消息提交流程内部的重发:绕过编辑入口与提交锁。 */
+    messageEditResend?: boolean;
   } = {}) {
     const independent = options.independentText !== undefined;
     let messageAccepted = false;
+    // 编辑提交进行中(回退 → 重发 → 恢复),拒绝其它发送,避免重复发送。
+    if (messageEditSubmittingRef.current && !options.messageEditResend) return;
     // A committed outbox item may still own the draft shown during hydration.
     // Do not submit that snapshot before its durable handoff is reconciled.
     if (!composerDraftHydrated) return;
@@ -6474,6 +6523,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       options.documentOverride === undefined
     ) {
       await finishVoiceRecording({ sendAfterTranscribe: true });
+      return;
+    }
+    // 编辑最后一条消息时,发送 = rewind + 重发(语音先收尾,转写结果进入编辑内容)。
+    if (!independent && messageEditingRef.current) {
+      await submitMessageEdit(options.documentOverride ?? (options.draftOverride === undefined
+        ? undefined
+        : reconcileComposerProjectedText(composerDocumentRef.current, options.draftOverride)));
       return;
     }
     if (sendInFlightRef.current || sending) return;
@@ -6546,9 +6602,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const replyQuoteAtSend = outboxEligible && !independent ? getPendingCompanionReplyQuote(sessionId) ?? undefined : undefined;
     const uploadsInFlight = outboxEligible && !independent ? getPendingUploadCount() : 0;
     const willHaveAttachments = !independent && (attachmentsRef.current.length > 0 || uploadsInFlight > 0);
-    const earlyLocalCommand = independent || willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
+    // 编辑重发的是已捕获的原文,不再按命令解释(/side、/goal 等会改道并清空输入框);与桌面
+    // 编辑重发直接 sendMessage 同口径。
+    const earlyLocalCommand = independent || options.messageEditResend || willHaveAttachments ? null : parseMobileLocalSystemCommand(body);
     const pendingSkillAtSend = pendingSkillSelectionRef.current;
-    const parsedDesktopCommandAtSend = independent ? null : parseMobileDesktopCommand(body, commandsAtSend);
+    const parsedDesktopCommandAtSend = independent || options.messageEditResend ? null : parseMobileDesktopCommand(body, commandsAtSend);
     const eligibleDesktopCommand = willHaveAttachments && !['goal', 'side'].includes(parsedDesktopCommandAtSend?.name ?? '')
       ? null : parsedDesktopCommandAtSend;
     const earlyDesktopCommand =
@@ -7734,7 +7792,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           ]}
           testID="session.sendButton"
         >
-          {sending ? (
+          {sending || messageEditSubmitting ? (
             <ActivityIndicator color={colors.textSecondary} size="small" />
           ) : (
             <PaperPlaneIcon
@@ -7930,6 +7988,239 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       discardQueueEditTransientAttachmentResources;
   }, [discardQueueEditTransientAttachmentResources]);
 
+  // ── 编辑最后一条用户消息(对齐桌面 edit-last-message)──────────────────────
+  // 进入编辑零副作用(运行中会先停下当前回复,桌面同款产品决策);发送 = rewind 到本条
+  // + 用 composer 里的内容重发;取消原样恢复 stash。
+
+  /** 退出编辑并回填 stash。merge:rewind 已提交但重发没被受理,编辑内容不能丢,原草稿接在后面。 */
+  const restoreMessageEditStash = useCallback((editing: MessageEditingState, mode: 'replace' | 'merge') => {
+    // 用「有内容」而非投影文字判断:只含引用块的草稿投影文字为空,但不能丢。
+    const stashHasText = composerDocumentHasContent(editing.stashedDocument);
+    const currentHasText = composerDocumentHasContent(composerDocumentRef.current);
+    const document = mode === 'replace'
+      ? editing.stashedDocument
+      : normalizeComposerDocument({
+          version: 1,
+          nodes: [
+            ...composerDocumentRef.current.nodes,
+            ...(stashHasText
+              ? [
+                  ...(currentHasText ? [{ type: 'text' as const, text: '\n\n' }] : []),
+                  ...editing.stashedDocument.nodes,
+                ]
+              : []),
+          ],
+        });
+    const current = mode === 'replace' ? [] : attachmentsRef.current;
+    const currentIds = new Set(current.map((attachment) => attachment.id));
+    const nextAttachments = [
+      ...current,
+      ...editing.stashedAttachments.filter((attachment) => !currentIds.has(attachment.id)),
+    ];
+    composerInputRef.current?.applyDocumentAndSetSelection(
+      document, composerDocumentProjectedText(document).length,
+    );
+    applyComposerDocument(document);
+    attachmentsRef.current = nextAttachments;
+    setAttachments(nextAttachments);
+  }, [applyComposerDocument]);
+
+  const cancelMessageEdit = useCallback(() => {
+    const editing = messageEditingRef.current;
+    if (!editing || messageEditSubmittingRef.current) return;
+    messageEditSeqRef.current += 1;
+    messageEditingRef.current = null;
+    setMessageEditing(null);
+    // 编辑期新增的附件(不在 stash 里)随放弃一起回收;原消息附件是被控端路径,回收是 no-op。
+    discardAllPendingUploads();
+    const stashedIds = new Set(editing.stashedAttachments.map((attachment) => attachment.id));
+    const discardedIds = new Set<string>();
+    for (const attachment of attachmentsRef.current) {
+      if (stashedIds.has(attachment.id)) continue;
+      discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
+      discardedIds.add(attachment.id);
+    }
+    releaseUploadedSources([...discardedIds]);
+    if (discardedIds.size > 0) {
+      setAttachmentPreviews((current) => Object.fromEntries(
+        Object.entries(current).filter(([attachmentId]) => !discardedIds.has(attachmentId)),
+      ));
+      setMediaAssetAttachments((current) => Object.fromEntries(
+        Object.entries(current).filter(([, attachmentId]) => !discardedIds.has(attachmentId)),
+      ));
+    }
+    restoreMessageEditStash(editing, 'replace');
+  }, [auth, discardAllPendingUploads, releaseUploadedSources, restoreMessageEditStash]);
+
+  const beginMessageEdit = useCallback((clientId: string, draft: MobileMessageEditDraft) => {
+    if (!deviceId || !canUseComposer || messageEditSubmittingRef.current || sendInFlightRef.current) return;
+    if (messageEditingRef.current?.clientId === clientId) return;
+    // 排队消息是针对回退前的旧上下文写的,重发会排到它们后面,顺序错乱;先让用户处理队列。
+    if (
+      queueEditingRef.current
+      || remoteSessionStore.getInputProjection(sessionId).pendingQueue.length > 0
+      || outboxRef.current.length > 0
+    ) {
+      setError(t('session.messageEdit.queueNotEmpty'));
+      return;
+    }
+    // 在途上传完成后会追加进当前托盘,会被误算进编辑内容或在放弃时被回收。
+    if (getPendingUploadCount() > 0) {
+      setError(t('session.messageEdit.uploadsPending'));
+      return;
+    }
+    if (remoteSessionStore.isSessionRunning(sessionId)) {
+      void maker.input.stop(sessionId).catch(() => undefined);
+    }
+    const previous = messageEditingRef.current;
+    const next: MessageEditingState = {
+      clientId,
+      stashedDocument: previous?.stashedDocument ?? composerDocumentRef.current,
+      stashedAttachments: previous ? previous.stashedAttachments : [...attachmentsRef.current],
+      rollbackHint: null,
+    };
+    messageEditSeqRef.current += 1;
+    messageEditingRef.current = next;
+    setMessageEditing(next);
+    setError(null);
+    applyComposerDocument(draft.document, { persist: false });
+    const files = buildMessageEditAttachments(draft.attachments, `message-edit:${clientId}`);
+    attachmentsRef.current = files;
+    setAttachments(files);
+    setAttachmentError(null);
+    composerInputRef.current?.applyDocumentAndSetSelectionToEnd(draft.document);
+  }, [applyComposerDocument, canUseComposer, deviceId, getPendingUploadCount, maker, sessionId, t]);
+
+  // 静默预览文件回滚影响(桌面编辑框同款提示);运行中会被拒绝,等停下后再跑一次。
+  // 失败只是不提示,不阻塞发送。
+  const messageEditPreviewSeqRef = useRef(-1);
+  useEffect(() => {
+    const editing = messageEditing;
+    if (!editing || remoteSessionRunning) return;
+    const seq = messageEditSeqRef.current;
+    if (messageEditPreviewSeqRef.current === seq) return;
+    messageEditPreviewSeqRef.current = seq;
+    void maker.rewindPreview(sessionId, editing.clientId).then((preview) => {
+      const current = messageEditingRef.current;
+      if (messageEditSeqRef.current !== seq || !current) return;
+      const updated = { ...current, rollbackHint: messageEditRollbackHint(preview) };
+      messageEditingRef.current = updated;
+      setMessageEditing(updated);
+    }, () => undefined);
+  }, [maker, messageEditing, remoteSessionRunning, sessionId]);
+
+  // 编辑期间会话来了新的用户消息(自动化注入、另一台控制端) → 本条不再是最后一条,
+  // 继续发送会把新消息一起回退。直接退出编辑(桌面同款);发送途中由被控端权威校验兜底。
+  const latestLoadedUserClientId = useMemo(
+    () => findLastUserMessageClientId(messageListItems),
+    [messageListItems],
+  );
+  useEffect(() => {
+    const editing = messageEditingRef.current;
+    if (!editing || messageEditSubmittingRef.current) return;
+    if (latestLoadedUserClientId && latestLoadedUserClientId !== editing.clientId) cancelMessageEdit();
+  }, [cancelMessageEdit, latestLoadedUserClientId, messageEditing]);
+
+  // 编辑期间另一台控制端往队列里加了消息 → 与「队列非空不可编辑」同口径,退出编辑。
+  const pendingQueueCount = inputProjection.pendingQueue.length;
+  useEffect(() => {
+    if (!messageEditingRef.current || messageEditSubmittingRef.current) return;
+    if (pendingQueueCount > 0) cancelMessageEdit();
+  }, [cancelMessageEdit, messageEditing, pendingQueueCount]);
+
+  /** 页面已不在前台的收尾:按该任务草稿库的现状幂等合并(见 mergeMessageEditDraft)。 */
+  function persistMessageEditDraft(draftSessionId: string, input: { stash: ComposerDocument; replacement: ComposerDocument | null }) {
+    const merged = mergeMessageEditDraft({
+      stored: readComposerDocumentDraftSync(draftSessionId),
+      ...input,
+    });
+    saveComposerDraft(draftSessionId, composerDocumentProjectedText(merged));
+    saveComposerDocumentDraft(draftSessionId, merged);
+  }
+
+  async function submitMessageEdit(documentOverride?: ComposerDocument) {
+    const editing = messageEditingRef.current;
+    if (!editing || messageEditSubmittingRef.current || sendInFlightRef.current) return;
+    if (!deviceId || !canUseComposer) return;
+    const seq = messageEditSeqRef.current;
+    const stillCurrent = () => messageEditSeqRef.current === seq && outboxSessionAliveRef.current === sessionId;
+    let document = documentOverride ?? composerDocumentRef.current;
+    const inputAtSend = composerInputRef.current;
+    if (!documentOverride && inputAtSend?.flushDocument) {
+      try {
+        document = await inputAtSend.flushDocument(stillCurrent);
+      } catch {
+        if (stillCurrent()) Alert.alert(t('session.screen.operationFailed'), t('session.screen.inputSyncFailed'));
+        return;
+      }
+      if (!stillCurrent()) return;
+    }
+    // 空文本 + 无附件的重发会变成「只回退不重发」,那是「回到此处」不是编辑。
+    if (!composerDocumentHasContent(document) && attachmentsRef.current.length === 0 && getPendingUploadCount() === 0) {
+      return;
+    }
+    if (remoteSessionStore.getInputProjection(sessionId).pendingQueue.length > 0 || outboxRef.current.length > 0) {
+      setError(t('session.messageEdit.queueNotEmpty'));
+      return;
+    }
+    // 提交锁覆盖「回退 → 重发 → 恢复草稿」全程;send() 对非内部调用在锁内直接拒绝,
+    // 避免等待期间用户再点发送造成重复发送。
+    messageEditSubmittingRef.current = true;
+    setMessageEditSubmitting(true);
+    const lockGeneration = ++messageEditLockGenerationRef.current;
+    setError(null);
+    try {
+      let updated: Awaited<ReturnType<typeof maker.rewindCommit>>;
+      try {
+        updated = await commitMessageEditRewind({
+          rewindCommit: (opts) => maker.rewindCommit(sessionId, editing.clientId, opts),
+          ...(messageEditingRef.current?.rollbackHint?.kind === 'conversation-only'
+            ? { allowFileRestore: false as const }
+            : {}),
+          stillCurrent,
+        });
+      } catch (err) {
+        // rewind 未发生:保持编辑态(内容不丢),用户可重试或放弃。
+        if (stillCurrent()) setError(messageEditErrorText(err) ?? humanizeRemoteError(err));
+        return;
+      }
+      // applySessionPatch 按显式 sessionId 写分片,即使用户已切走也要执行。
+      remoteSessionStore.applySessionPatch(deviceId, sessionId, updated);
+      if (!stillCurrent()) {
+        // 旧回合已在被控端软删,用户在提交途中离开了任务:替代消息与暂存草稿都要落到
+        // 该任务自己的草稿里(回来时可见),不能因页面不在前台就丢掉。
+        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: document });
+        remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
+        return;
+      }
+      // 先退出编辑态(恢复正常草稿持久化),再按普通发送路径重发 composer 里的内容。
+      messageEditSeqRef.current += 1;
+      messageEditingRef.current = null;
+      setMessageEditing(null);
+      // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
+      // 同步只是尽力而为,失败不得打断重发与草稿恢复。
+      const accepted = await send({ documentOverride: document, messageEditResend: true });
+      await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
+      if (outboxSessionAliveRef.current !== sessionId) {
+        // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
+        // 重发没来得及受理时,编辑内容也一并留在该任务草稿里。
+        persistMessageEditDraft(sessionId, {
+          stash: editing.stashedDocument,
+          replacement: accepted === true ? null : document,
+        });
+        return;
+      }
+      // 一律合并:等待期间用户新输入的内容不能被暂存草稿覆盖;重发成功时输入框为空,等价于恢复;
+      // 重发没被受理时编辑内容仍在输入框,原草稿接在后面。
+      restoreMessageEditStash(editing, 'merge');
+    } finally {
+      if (messageEditLockGenerationRef.current === lockGeneration) {
+        messageEditSubmittingRef.current = false;
+        setMessageEditSubmitting(false);
+      }
+    }
+  }
+
   /**
    * 进入排队消息编辑:把条目的文本/附件载入底部 composer(复用其全部编辑能力),
    * 暂存用户原本的草稿与附件托盘;桌面端同步加编辑锁,期间该条不会被自动派发。
@@ -7938,6 +8229,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
    */
   const beginQueueEdit = useCallback((item: QueuedRemoteMessage) => {
     if (queueAvailabilityReason || queueBusy) return;
+    // 两种编辑态共用 composer,不能并存;消息编辑会在队列出现内容时自行退出(见上方 effect)。
+    if (messageEditingRef.current) return;
     // 上一条的保存(update-content)在途时不允许进入/切换编辑:切换路径会立即解锁
     // 旧条目并回收其编辑期附件,与在途 RPC 竞争——桌面端可能用旧内容抢先派发,或
     // OSS 引用在物化完成前被删(review P2)。编辑生命周期的全部入口/出口由此都被
@@ -10546,6 +10839,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     onOpenSourceDevice={openSourceDevice}
                     onOpenSessionLink={openSessionLink}
                     onPreviewRewind={isSharedTaskPeer(deviceId) ? undefined : previewRewindAtMessage}
+                    onEditMessage={isSharedTaskPeer(deviceId) || !canUseComposer ? undefined : beginMessageEdit}
+                    editingMessageClientId={messageEditing?.clientId ?? null}
                     onEnterShareSelection={enterShareSelection}
                     shareSelectionActive={shareSelectionActive}
                     shareSelectionBusy={conversationShareBusy}
@@ -10992,6 +11287,39 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
+              {messageEditing && !queueEditing ? (
+                <View
+                  style={[
+                    styles.queueEditBar,
+                    { marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
+                  ]}
+                  testID="session.messageEditBar"
+                >
+                  <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                  <View style={styles.messageEditBarBody}>
+                    <Text numberOfLines={1} style={styles.messageEditBarText}>
+                      {t('session.messageEdit.editing')}
+                    </Text>
+                    {messageEditing.rollbackHint ? (
+                      <Text numberOfLines={2} style={styles.messageEditBarText} testID="session.messageEditRollbackHint">
+                        {messageEditing.rollbackHint.kind === 'files'
+                          ? t('session.messageEdit.rollbackHint', { count: messageEditing.rollbackHint.count })
+                          : t('session.messageEdit.conversationOnlyHint')}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <RouteActionButton
+                    accessibilityLabel={t('session.messageEdit.discard')}
+                    disabled={messageEditSubmitting || sending}
+                    hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+                    onPress={() => cancelMessageEdit()}
+                    style={styles.queueEditBarClose}
+                    testID="session.messageEditCancel"
+                  >
+                    <X color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                  </RouteActionButton>
+                </View>
+              ) : null}
               {queueEditing ? (
                 <View
                   style={[
@@ -11084,11 +11412,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 voiceStartPending={voiceStartPending}
                 voiceCaretPlacementPending={voiceCaretPlacementPending}
                 voiceError={voiceError}
+                voiceSpeakerFiltered={voiceSpeakerFiltered}
                 composerVoiceHoldArmed={composerVoiceHoldArmed}
                 setComposerVoiceHoldArmed={setComposerVoiceHoldArmed}
                 modelSheetOpen={modelSheetOpen}
                 permissionSheetOpen={permissionSheetOpen}
-                sending={sending}
+                sending={sending || messageEditSubmitting}
                 queueBusy={queueBusy}
                 nativeShellLayout={nativeShellLayout}
                 composerTouchLayout={composerTouchLayout}
@@ -11956,6 +12285,8 @@ interface SessionComposerInputProps {
   voiceStartPending: boolean;
   voiceCaretPlacementPending: boolean;
   voiceError: string | null;
+  /** The voiceprint filter just muted someone else's speech. */
+  voiceSpeakerFiltered: boolean;
   composerVoiceHoldArmed: boolean;
   setComposerVoiceHoldArmed: (value: boolean) => void;
   modelSheetOpen: boolean;
@@ -11989,7 +12320,7 @@ interface SessionComposerInputProps {
 function SessionComposerInput({
   promptRecommendation,
   onDismissPromptRecommendation,
-  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
+  source, sessionId, composerInputRef, canUseComposer, canStopComposer, canUseRemoteSessionControls, remoteUnavailableReason, voiceState, voiceStartPending, voiceCaretPlacementPending, voiceError, voiceSpeakerFiltered, composerVoiceHoldArmed, setComposerVoiceHoldArmed, modelSheetOpen, permissionSheetOpen, sending, queueBusy, nativeShellLayout, composerTouchLayout, keyboardState, attachmentError, visualFocusComposer, applyRichComposerChange, setComposerDraft, handleComposerInputPressIn, beginPastePlaceholders, failPastePlaceholders, resolvePastedSessionLinkLabel, openVoiceSettings,
   composerSendUnavailableReason, attachmentCount, pendingUploadCount,
   onPasteImages, onDragActiveChange, onInputTopLayout, composerPullThrough, renderControls,
 }: SessionComposerInputProps) {
@@ -12089,9 +12420,10 @@ function SessionComposerInput({
   });
   const composerEffectiveContentHeight = composerInputContentHeight;
   const voiceDraftShowsListeningPrompt = voiceIsListening && draft.length === 0;
-  // 状态行只承载错误信息;「正在听 / 转写中」不再占一行,对齐桌面版——
+  // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceError);
+  const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
+  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
 
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
@@ -12349,7 +12681,7 @@ function SessionComposerInput({
                 {voiceStatusVisible ? (
                   <View style={styles.voiceStatusRow}>
                     <Text style={styles.voiceStatusText} testID="session.voiceStatus">
-                      {voiceError}
+                      {voiceStatusText}
                     </Text>
                     {canOpenVoiceSettings ? (
                       <RouteActionButton
@@ -13265,6 +13597,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.footnote,
     lineHeight: lineHeight.caption,
     minWidth: 0,
+  },
+  messageEditBarBody: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  messageEditBarText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
   },
   queueEditBarClose: {
     alignItems: 'center',

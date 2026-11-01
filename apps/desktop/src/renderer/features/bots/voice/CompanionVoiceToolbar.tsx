@@ -224,6 +224,10 @@ export function CompanionVoiceToolbar(props: Props) {
                   <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
                     {t('bots.voiceMode.microphoneMuted')}
                   </p>
+                ) : state.speakerFiltered ? (
+                  <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
+                    {t('voiceInputOverlay.speakerFiltered')}
+                  </p>
                 ) : null}
               </div>
             </div>

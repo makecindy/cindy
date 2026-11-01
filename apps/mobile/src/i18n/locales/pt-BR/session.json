@@ -780,5 +780,17 @@
     "confirm": "Trocar",
     "remember": "Trocar e fazer isso automaticamente a partir de agora (somente nesta tarefa)",
     "cancel": "Cancelar"
+  },
+  "messageEdit": {
+    "editing": "Editando mensagem",
+    "discard": "Descartar edição da mensagem",
+    "stopTimeout": "O tempo de espera para a tarefa parar esgotou — tente novamente",
+    "queueNotEmpty": "Esta sessão tem mensagens na fila — envie ou remova essas mensagens antes de editar",
+    "notLast": "Há uma mensagem mais recente nesta sessão — esta não é mais a última e não pode ser editada",
+    "failed": "Falha ao editar e reenviar. Tente novamente",
+    "noPriorAssistant": "Não há resposta da IA antes desta mensagem, e a versão do Cindy no computador ainda não consegue editá-la. Atualize o Cindy no computador e tente novamente.",
+    "uploadsPending": "Ainda há anexos sendo enviados. Aguarde a conclusão antes de editar a mensagem.",
+    "rollbackHint": "O envio desfará alterações em {{count}} arquivo(s) do último turno",
+    "conversationOnlyHint": "O envio não restaurará os arquivos do projeto; as alterações anteriores nos arquivos serão mantidas"
   }
 }

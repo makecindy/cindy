@@ -7677,14 +7677,17 @@ const registerIpcHandlers = () => {
     'fs:resolve-path-batch',
     async (
       _event: Electron.IpcMainInvokeEvent,
-      params: { hrefs: string[]; workingDir: string },
+      params: { hrefs: string[]; workingDir: string; revalidateNegative?: boolean },
     ): Promise<
       Record<string, { status: 'unique' | 'multiple' | 'none'; candidates: string[] }>
     > => {
       try {
-        return await resolveWorkspacePathBatchCached(params.hrefs, params.workingDir, {
-          isPathAllowed,
-        });
+        return await resolveWorkspacePathBatchCached(
+          params.hrefs,
+          params.workingDir,
+          { isPathAllowed },
+          params.revalidateNegative === true,
+        );
       } catch (err) {
         createLogger('fs:resolve-path-batch').error('failed', { error: String(err) });
         const fallback: Record<

@@ -770,6 +770,12 @@ function AskUserQuestionForm({
       </p>
     </div>
   ) : null;
+  // A companion call's question bridge shows this on the call bar instead.
+  const speakerFilteredNotice = !voiceBridge && dictation.speakerFiltered ? (
+    <p role="status" className="px-[4px] text-12 leading-5 text-[var(--text-secondary)]">
+      {t('voiceInputOverlay.speakerFiltered')}
+    </p>
+  ) : null;
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -1093,7 +1099,11 @@ function AskUserQuestionForm({
       restoreAriaLabel={t('chat.askUserQuestion.restoreAriaLabel')}
       minimizeAriaLabel={t('chat.askUserQuestion.minimizeAriaLabel')}
       minimizeDisabled={isAnimating}
-      pinnedContent={voiceBridge ? <div className="flex flex-col gap-3">{voiceNotice}{customAnswerEntry}</div> : customAnswerEntry}
+      pinnedContent={voiceBridge
+        ? <div className="flex flex-col gap-3">{voiceNotice}{customAnswerEntry}</div>
+        : customAnswerEntry && speakerFilteredNotice
+          ? <div className="flex flex-col gap-2">{customAnswerEntry}{speakerFilteredNotice}</div>
+          : customAnswerEntry}
       headerLeading={
         currentQ?.header ? (
           <Tip text={currentQ.header}>
@@ -1268,6 +1278,7 @@ function AskUserQuestionForm({
             </div>
           </div>
         )}
+        {options.length === 0 && speakerFilteredNotice}
       </div>
     </InteractionPromptCardShell>
   );

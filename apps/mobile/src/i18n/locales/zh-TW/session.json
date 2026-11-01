@@ -763,5 +763,17 @@
     "confirm": "換過去",
     "remember": "換過去，以後自動換（僅此任務）",
     "cancel": "取消"
+  },
+  "messageEdit": {
+    "editing": "正在編輯訊息",
+    "discard": "放棄編輯訊息",
+    "stopTimeout": "等待任務停止超時，請稍後重試",
+    "queueNotEmpty": "任務有排隊中的訊息，先傳送或移除佇列內容後再編輯",
+    "notLast": "任務裡已有更新的訊息，這條不再是最後一條，無法編輯重發",
+    "failed": "編輯重發失敗，請重試",
+    "noPriorAssistant": "這條訊息前面還沒有 AI 回覆，電腦端目前版本暫不支援編輯；更新電腦端 Cindy 後再試。",
+    "uploadsPending": "還有附件正在上傳，等上傳完成後再編輯訊息。",
+    "rollbackHint": "傳送將撤銷上一輪對 {{count}} 個檔案的改動",
+    "conversationOnlyHint": "傳送不會恢復專案檔案，上一輪的檔案改動會保留"
   }
 }

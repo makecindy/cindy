@@ -3425,6 +3425,8 @@ export function ChatInput({
     currentStorageKey: storageKeyForDraftRef.current,
   });
   const composerMutationLocked = composerEditorLocked || voiceBusyOnCurrentComposer;
+  // Only the composer that owns the run explains why someone else's words are missing.
+  const showSpeakerFilteredNotice = voiceInput.speakerFiltered && voiceBusyOnCurrentComposer;
   useEffect(() => {
     onComposerVoiceBusyChange?.(voiceBusyOnCurrentComposer);
   }, [onComposerVoiceBusyChange, voiceBusyOnCurrentComposer]);
@@ -9315,16 +9317,20 @@ export function ChatInput({
           />
         </div>
       )}
-      {/* Voice-input error + attachment rejections (oversize / blocked /
+      {/* Voice-input error (or the voiceprint filter notice) + attachment rejections (oversize / blocked /
           read-failed) share ONE floating slot above the input card — so they
           don't shrink the typing area and are clearly visible. They MUST live
           in a single flex-col container: two separate same-position absolute
           divs would overlap, and the later one in the DOM would hide the other.
           Stacked here (voice error on top, rejections below) so both stay
           visible when present simultaneously. */}
-      {(voiceInput.lastError || rejections.length > 0) && (
+      {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-20 mb-2 flex flex-col items-center gap-1 px-3">
-          {voiceInput.lastError && <VoiceInputStatusNotice message={voiceInput.lastError} />}
+          {voiceInput.lastError ? (
+            <VoiceInputStatusNotice message={voiceInput.lastError} />
+          ) : showSpeakerFilteredNotice ? (
+            <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
+          ) : null}
           {rejections.length > 0 && (
             <AttachmentRejectionStrip rejections={rejections} onDismiss={dismissRejection} />
           )}

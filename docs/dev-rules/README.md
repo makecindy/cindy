@@ -62,4 +62,4 @@
 - [`remote-and-mobile-adaptation.md`](remote-and-mobile-adaptation.md)：SSH 远程工作区、
   device-link allowlist、手机版入口与功能类 PR 的远程／手机三选一门禁。
 - [`development-workflow.md`](development-workflow.md)：worktree dogfooding 会话契约、提 PR
-  与直推 `main` 门禁，以及 Review P0／P1／P2 严重度口径。
+  与直推 `main` 门禁、Review P0／P1／P2 严重度口径，以及项目知识归属。

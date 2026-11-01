@@ -90,7 +90,7 @@
   "controlling": "方控",
   "viewOnly": "唯觀",
   "upgrade": "請升級機上之 Cindy，然後用遠端桌面。",
-  "disabled": "請於機上之「規制 → 遠端連線」中啟遠端桌面。",
+  "disabled": "此機尚未啟遠端桌面。\n請於彼機開 Cindy → 規制 → 遠端連線，啟「許遠端桌面」，再返此處重察而連。",
   "busy": "他器或 Agent 方操此機。請先止他器之操作，或候 Agent 操作終了。",
   "connectionBusy": "已有他器連此遠端桌面。請先於該器出遠端桌面，再試連之。",
   "connectionError": "連線已終。請察機是否在線，然後重連。",

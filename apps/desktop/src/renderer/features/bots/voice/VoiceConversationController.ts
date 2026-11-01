@@ -3,6 +3,8 @@ import type {
   VoiceConversationSelection,
   VoiceExitDecision,
 } from '@/../shared/voiceConversation';
+import { SPEAKER_FILTER_NOTICE_MS } from '@cindy/voice-input-core';
+
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -55,6 +57,8 @@ export type VoiceSnapshot = {
   muted: boolean;
   microphonePending: boolean;
   microphoneError: boolean;
+  /** "Recognize my voice" just muted someone else; cleared shortly after. */
+  speakerFiltered: boolean;
   exitCountdown: {
     reason: 'idle' | 'farewell' | 'semantic';
     secondsRemaining: number;
@@ -78,6 +82,7 @@ export class VoiceConversationController {
     muted: false,
     microphonePending: false,
     microphoneError: false,
+    speakerFiltered: false,
     exitCountdown: null,
   };
   private listeners = new Set<() => void>();
@@ -118,6 +123,7 @@ export class VoiceConversationController {
   private idleSince: number | null = null;
   private exitDeadline = 0;
   private exitTimer: ReturnType<typeof setTimeout> | undefined;
+  private speakerFilteredTimer: ReturnType<typeof setTimeout> | undefined;
   private exitVersion = 0;
   private exitAfterSend: { reason: IntentExitReason } | null = null;
   private pendingExitHandoffs = 0;
@@ -172,6 +178,18 @@ export class VoiceConversationController {
     // PCM level updates are not evidence of speech and must not reset idleness.
     if (Object.keys(patch).some((key) => key !== 'level' && key !== 'exitCountdown'))
       this.refreshActivity();
+  }
+
+  private showSpeakerFiltered(): void {
+    clearTimeout(this.speakerFilteredTimer);
+    this.speakerFilteredTimer = setTimeout(() => this.clearSpeakerFiltered(), SPEAKER_FILTER_NOTICE_MS);
+    if (!this.state.speakerFiltered) this.patch({ speakerFiltered: true });
+  }
+
+  private clearSpeakerFiltered(): void {
+    clearTimeout(this.speakerFilteredTimer);
+    this.speakerFilteredTimer = undefined;
+    if (this.state.speakerFiltered) this.patch({ speakerFiltered: false });
   }
 
   private isIdle(): boolean {
@@ -388,6 +406,10 @@ export class VoiceConversationController {
           // ASR can disconnect after its resume handshake while getUserMedia is
           // still pending. Do not report listening when that input is gone.
           if (event.type === 'error' && this.resumingInput) this.patch({ microphoneError: true });
+          return;
+        }
+        if (event.type === 'speaker-filtered') {
+          this.showSpeakerFiltered();
           return;
         }
         if (event.type === 'speech-started') {
@@ -1080,6 +1102,7 @@ export class VoiceConversationController {
       this.queued = [];
       this.capturedQuestion = undefined;
       this.patch({ muted: true, transcript: '', unsent });
+      this.clearSpeakerFiltered();
       // A possible interruption can no longer be confirmed with the mic closed.
       // Restore the held reply instead of discarding its playback/ownership.
       if (this.speechCandidate) {
@@ -1200,6 +1223,7 @@ export class VoiceConversationController {
 
   private release(): void {
     this.cancelCountdown('release', false);
+    this.clearSpeakerFiltered();
     ++this.epoch;
     this.resumingInput = false;
     ++this.captureVersion;

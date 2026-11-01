@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erreur : {{message}}",
     "mediaDeviceLinkHint": "Avant l'ouverture, votre téléphone demande à l'appareil distant d'envoyer ce média.",
     "controlDelete": "Supprimer le message",
+    "controlEdit": "Modifier",
     "controlRewind": "Revenir ici",
     "controlFork": "Démarrer une nouvelle session à partir d'ici",
     "markdownDocAriaLabel": "Corps du message",

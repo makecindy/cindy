@@ -162,6 +162,7 @@
     "mediaErrorLine": "谬误：{{message}}",
     "mediaDeviceLinkHint": "启之前，手机将先请远程设备上呈此媒体。",
     "controlDelete": "删讯",
+    "controlEdit": "修",
     "controlRewind": "归于此",
     "controlFork": "自此新开差事",
     "markdownDocAriaLabel": "讯之正文",

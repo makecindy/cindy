@@ -3391,6 +3391,8 @@ interface ElectronAPI {
   resolvePathBatch: (params: {
     hrefs: string[];
     workingDir: string;
+    /** Re-walk hrefs whose cached answer is `none` / `multiple`. */
+    revalidateNegative?: boolean;
   }) => Promise<
     Record<
       string,

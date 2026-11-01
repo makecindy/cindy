@@ -26,7 +26,7 @@ function pageCallback(name: string, bindings: Record<string, unknown>) {
 it.each([false, true])('atomically applies a selected slash command while queue editing=%s', (editing) => {
   const apply = vi.fn(); const placeCaret = vi.fn(); const focus = vi.fn();
   const bindings = { pendingSkillSelectionRef: { current: null }, sessionId: 's1', draftRef: { current: '/he' },
-    composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing },
+    composerDocumentRef: { current: textComposerDocument('/he') }, queueEditingRef: { current: editing }, messageEditingRef: { current: null },
     composerInputRef: { current: { applyDocumentAndSetSelectionToEnd: placeCaret, focus } },
     applyComposerDocument: apply, detectComposerTrigger, replaceComposerTextRange, slashCommandTextNode };
   pageCallback('selectSlashCommand', bindings)({ name: 'help', kind: 'agent-skill' });

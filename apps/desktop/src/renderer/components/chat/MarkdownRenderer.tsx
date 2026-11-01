@@ -2,6 +2,7 @@ import { VideoSitePreview } from './VideoSitePreview';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
+import { WorkspaceMediaSrc } from './useWorkspaceMediaPath';
 /**
  * MarkdownRenderer
  * ---------------------------------------------------------------------------
@@ -349,6 +350,13 @@ interface MarkdownRendererProps {
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
   isStreaming?: boolean;
+  /**
+   * Whether the message holding embedded media is still streaming, when it differs
+   * from `isStreaming`: a cindy-ui image renders its Markdown statically inside a
+   * streaming answer. Missing media are re-checked when this turns false.
+   * Defaults to `isStreaming`.
+   */
+  mediaStreaming?: boolean;
   /**
    * Stable identity of the streaming message. Keeps the word-fade timeline
    * across task-view remounts so already-rendered text cannot replay.
@@ -1764,6 +1772,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   workingDir,
   content,
   isStreaming = false,
+  mediaStreaming,
   streamFadeKey,
   localFileRefs,
   currentSessionId,
@@ -1771,6 +1780,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   allowPrivilegedLinks = true,
   emitSourceLines = false,
 }: MarkdownRendererProps) {
+  const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
   // Cap markdown re-parse + syntax highlight cost during streaming.
   // Static callers (TextLightbox) leave isStreaming undefined → false,
   // so the throttle is fully bypassed — same behavior as before.
@@ -1832,6 +1842,10 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         : undefined,
     [currentSessionId, sessionFileCtx],
   );
+  // 本机会话消息里的相对媒体路径，直接拼接找不到时按任务目录搜索（见 useWorkspaceMediaPath）。
+  // 不传 currentSessionId 的调用方渲染的是文件内容而非会话消息，保持原拼接行为。
+  // 远程归属注入前 origin 会暂时是 local，所以以「已确认本机」为准，不看 origin。
+  const resolveMediaInWorkspace = Boolean(currentSessionId) && allowPrivilegedLinks && sessionFileCtx.localConfirmed === true;
   // F1: text-local <a> click → open TextLightbox with the resolved abs path.
   const [textLightboxFile, setTextLightboxFile] = useState<{
     path: string;
@@ -1853,33 +1867,40 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       ...(emitSourceLines ? makeSourceLineWrappers() : {}),
       img: ({ src, alt, node, ...props }) => {
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
-        const normalized = normalizeMarkdownImageSrc(
-          typeof rawLocalSrc === 'string' ? rawLocalSrc : src,
-          workingDir,
-          allowPrivilegedLinks,
-        );
-        if (isManagedMarkdownVideoUrl(normalized)) {
-          // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
-          // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
-          return (
-            <ChatVideoView
-              src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
-              filename={markdownMediaFilename(normalized, alt)}
-              variant="tool-output"
-              sessionId={currentSessionId}
-            />
-          );
-        }
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
         return (
-          <LightboxImage
-            streaming={isStreaming}
-            src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
-            alt={alt}
-            onZoom={setLightboxSrc}
-            {...imageProps}
-          />
+          <WorkspaceMediaSrc
+            src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
+            workingDir={workingDir}
+            enabled={resolveMediaInWorkspace}
+            streaming={embeddedMediaStreaming}
+          >
+            {(localSrc) => {
+              const normalized = normalizeMarkdownImageSrc(localSrc, workingDir, allowPrivilegedLinks);
+              if (isManagedMarkdownVideoUrl(normalized)) {
+                // 远程会话里视频 URL 同样指向远端机器，先按来源改写到 cindy-remote-media://
+                // 再交给 ChatVideoView(与下面的图片分支同一条改写路径)。
+                return (
+                  <ChatVideoView
+                    src={rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin)}
+                    filename={markdownMediaFilename(normalized, alt)}
+                    variant="tool-output"
+                    sessionId={currentSessionId}
+                  />
+                );
+              }
+              return (
+                <LightboxImage
+                  streaming={isStreaming}
+                  src={normalized ? rewriteToRemoteMediaOrigin(normalized, remoteMediaOrigin) : normalized}
+                  alt={alt}
+                  onZoom={setLightboxSrc}
+                  {...imageProps}
+                />
+              );
+            }}
+          </WorkspaceMediaSrc>
         );
       },
       // text-lightbox-trigger-extension v2: inline `<code>` whose content
@@ -2014,6 +2035,8 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       currentSessionTitle,
       allowPrivilegedLinks,
       remoteMediaOrigin,
+      resolveMediaInWorkspace,
+      embeddedMediaStreaming,
     ],
   );
 
@@ -2080,18 +2103,27 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   const sessionFileCtx = useChatSessionFile();
   const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
   const renderMedia = (node: RichNode) => {
-    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} />;
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} mediaStreaming={props.isStreaming ?? false} />;
     const raw = richMediaSource(node);
     if (!raw) return null;
     if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
-    const normalized = raw.startsWith('xdt-audio://') && props.allowPrivilegedLinks !== false ? raw : normalizeMarkdownImageSrc(raw, props.workingDir, props.allowPrivilegedLinks !== false);
-    if (!normalized) return null;
-    // Local audio has its own extension-checked protocol; xdt-file serves
-    // images/documents/video and rejects MP3. Preserve the encoded path and
-    // select the handler before wrapping the URL for a remote source device.
-    const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
-    const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
-    return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+    const allowPrivilegedLinks = props.allowPrivilegedLinks !== false;
+    // 与 Markdown 图片同一条判定：只在本机会话消息里按任务目录搜索相对路径。
+    const resolveInWorkspace = Boolean(props.currentSessionId) && allowPrivilegedLinks && sessionFileCtx.localConfirmed === true;
+    return (
+      <WorkspaceMediaSrc src={raw} workingDir={props.workingDir} enabled={resolveInWorkspace} streaming={props.isStreaming ?? false}>
+        {(localSrc = raw) => {
+          const normalized = localSrc.startsWith('xdt-audio://') && allowPrivilegedLinks ? localSrc : normalizeMarkdownImageSrc(localSrc, props.workingDir, allowPrivilegedLinks);
+          if (!normalized) return null;
+          // Local audio has its own extension-checked protocol; xdt-file serves
+          // images/documents/video and rejects MP3. Preserve the encoded path and
+          // select the handler before wrapping the URL for a remote source device.
+          const playable = node.kind === 'audio' ? normalized.replace(/^xdt-file:/, 'xdt-audio:') : normalized;
+          const src = rewriteToRemoteMediaOrigin(playable, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+          return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+        }}
+      </WorkspaceMediaSrc>
+    );
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
   if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
@@ -2099,5 +2131,5 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
         renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
-    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} mediaStreaming={props.isStreaming ?? false} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
 });

@@ -162,6 +162,7 @@
     "mediaErrorLine": "Fehler: {{message}}",
     "mediaDeviceLinkHint": "Vor dem Öffnen fordert dein Smartphone das entfernte Gerät auf, diese Medien hochzuladen.",
     "controlDelete": "Nachricht löschen",
+    "controlEdit": "Bearbeiten",
     "controlRewind": "Zurück hierher",
     "controlFork": "Neue Sitzung ab hier starten",
     "markdownDocAriaLabel": "Nachrichtentext",

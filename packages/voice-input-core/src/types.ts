@@ -303,4 +303,6 @@ export type VoiceInputRendererEvent =
   | { type: 'refined'; runId: string; text: string; segment: SpeechSegment; range: EditableRange }
   | { type: 'usage'; runId: string; refinement: RefinementTokenUsage }
   | { type: 'timeline'; runId: string; event: VoiceTimelineEvent }
+  /** "Recognize my voice" muted a stretch of speech judged to be someone else. */
+  | { type: 'speaker-filtered'; runId: string }
   | { type: 'error'; runId: string; message: string; code?: VoiceInputErrorCode; transcriptKept?: boolean };
