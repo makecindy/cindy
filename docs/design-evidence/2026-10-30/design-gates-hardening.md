@@ -8,11 +8,11 @@
 
 圆角阻断只在确认的样式语境里生效（class 属性、`cn()` 等调用、纯类名字符串、样式对象 `borderRadius:`、CSS 文件）；写在普通文案里的 `rounded-md` 只报告。
 
-**近期命中**：main 最近 100 个 first-parent 合并（`97b785ae43..d8ccef49fa`），每个按 `<merge>^1..<merge>` 回放：
+**近期命中**：main 最近 100 个 first-parent 合并（`0682fcb13e..22940326ed`，窗口随 main 前进，JSON 里是最终一次运行的范围），每个按 `<merge>^1..<merge>` 回放：
 
-- 规范外圆角 block：1 个合并，命中 `AutomationSessionGroupItem.tsx:779` 的 `rounded-md`（#7889 `teammate-routine-folder`，合并提交 `cfd02a20b4`）。这是 20px 图标按钮的真实 6px 圆角，应为 `rounded-full` 或 8px，属于真违规，不是误报；它在本 PR 创建之后才合进 main，是 CI 在旧基线上第一次拦下它的原因。
+- 规范外圆角 block：1 个合并，命中 #8092（`session-header-pr-links`，合并提交 `37c5bb9519`）新增的 3 处 `rounded-md`：`GitContextBadge.tsx:341`、`:406`、`SessionPrManager.tsx:281`，都是真实的 6px 圆角，属于真违规，不是误报。此前窗口里命中的是 #7889（`cfd02a20b4`，侧栏 20px 图标按钮的同一种写法）；它们都在本 PR 创建之后才合进 main，是 CI 在旧基线上先后拦下它们的原因。
 - 颜色 block：0（豁免过期没有拦下任何近期改动）。
-- 其余 99 个合并无命中（另用 `git diff` 独立统计新增行，同样没有遗漏）。
+- 其余 99 个合并无命中。
 
 **正向对照**：用 `git log -G` 找到历史上新增过规范外圆角的 6 个合并，新规则在其中 4 个各拦下 1 处，另外 2 个只是删除了这类写法，没有命中：
 

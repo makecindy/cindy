@@ -105,18 +105,42 @@ function namedStylesUsedOnText(source: string): Set<string> {
 }
 
 /** 文字样式里出现的所有颜色 token:命名样式块、内联 style(对象、数组、条件分支)与 SwiftUI foregroundStyle。 */
-/** 简单局部别名:`const color = cond ? colors.a : colors.b`、`const phaseColor = colors.x`(最多两层)。 */
-function localColorAliases(source: string): Map<string, string[]> {
-  const aliases = new Map<string, string[]>();
-  for (let pass = 0; pass < 2; pass++) {
-    for (const m of source.matchAll(/\b(?:const|let)\s+(\w+)\s*(?::[^=\n]+)?=\s*([^;]{1,400})/g)) {
-      const direct = tokensIn(m[2]).filter((t) => t !== 'login');
-      const viaAlias = [...m[2].matchAll(/(?<![.\w])([A-Za-z_]\w*)\b(?!\s*\.)/g)].flatMap((id) => aliases.get(id[1]) ?? []);
-      const all = [...new Set([...direct, ...viaAlias])];
-      if (all.length) aliases.set(m[1], all);
-    }
+/** 每个 `{ … }` 块的起止位置(按开括号顺序),用来判断一个别名声明在哪个词法作用域里可见。 */
+function braceBlocks(source: string): Array<[number, number]> {
+  const blocks: Array<[number, number]> = [];
+  const stack: number[] = [];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === '{') stack.push(i);
+    else if (source[i] === '}' && stack.length) blocks.push([stack.pop()!, i]);
   }
-  return aliases;
+  return blocks;
+}
+
+/**
+ * 简单局部别名:`const color = cond ? colors.a : colors.b`、`const phaseColor = colors.x`、别名套别名。
+ * 按词法作用域和使用位置解析:同名别名出现在不同组件里互不覆盖;嵌套作用域取最内层、且声明在使用之前的那个。
+ * 返回 (表达式文本, 表达式在源码中的位置) → 追到的 theme token。
+ */
+function makeColorResolver(source: string): (expr: string, at: number) => string[] {
+  const blocks = braceBlocks(source);
+  const innermost = (index: number): [number, number] =>
+    blocks.filter(([from, to]) => from < index && index < to).sort((x, y) => (x[1] - x[0]) - (y[1] - y[0]))[0] ?? [0, source.length];
+  const decls: Array<{ name: string; index: number; scope: [number, number]; tokens: string[] }> = [];
+  const resolve = (expr: string, at: number): string[] => {
+    const via = [...expr.matchAll(/(?<![.\w])([A-Za-z_]\w*)\b(?!\s*\.)/g)].flatMap((id) => {
+      const visible = decls
+        .filter((d) => d.name === id[1] && d.index < at && d.scope[0] <= at && at <= d.scope[1])
+        .sort((x, y) => (x.scope[1] - x.scope[0]) - (y.scope[1] - y.scope[0]) || y.index - x.index);
+      return visible[0]?.tokens ?? [];
+    });
+    return [...new Set([...tokensIn(expr), ...via])];
+  };
+  for (const m of source.matchAll(/\b(?:const|let)\s+(\w+)\s*(?::[^=\n]+)?=\s*([^;]{1,400})/g)) {
+    // `const login = colors.login` 是命名空间对象,不是颜色。
+    const tokens = resolve(m[2], m.index!).filter((t) => t !== 'login');
+    if (tokens.length) decls.push({ name: m[1], index: m.index!, scope: innermost(m.index!), tokens });
+  }
+  return resolve;
 }
 /** `color: expr` 与对象简写 `{ color }` 的颜色表达式文本。 */
 const colorExprs = (body: string): string[] => [
@@ -126,18 +150,17 @@ const colorExprs = (body: string): string[] => [
 
 function scanTextColors(source: string): Array<{ where: string; token: string }> {
   const found: Array<{ where: string; token: string }> = [];
-  const aliases = localColorAliases(source);
-  const resolve = (expr: string) => [...new Set([...tokensIn(expr), ...[...expr.matchAll(/(?<![.\w])([A-Za-z_]\w*)\b(?!\s*\.)/g)].flatMap((id) => aliases.get(id[1]) ?? [])])];
+  const resolve = makeColorResolver(source);
   const onText = namedStylesUsedOnText(source);
   for (const block of source.matchAll(/(?:const\s+)?(\w+)(?::|\s*=)\s*\{([^{}]*)\}/g)) {
     const [, key, body] = block;
     // 带排版属性、样式名像文字、或实际被 <Text> 引用的样式块,都算文字样式。
     if (!TEXT_STYLE_PROPS.test(body) && !/Text$|Label$|Title$|^text|^label|^title/i.test(key) && !onText.has(key)) continue;
-    for (const expr of colorExprs(body)) for (const token of resolve(expr)) found.push({ where: key, token });
+    for (const expr of colorExprs(body)) for (const token of resolve(expr, block.index!)) found.push({ where: key, token });
   }
   for (const attr of source.matchAll(/\b(?:style|textStyle)=\{/g)) {
     const span = balancedFrom(source, attr.index! + attr[0].length);
-    for (const expr of colorExprs(span)) for (const token of resolve(expr)) found.push({ where: 'inline', token });
+    for (const expr of colorExprs(span)) for (const token of resolve(expr, attr.index!)) found.push({ where: 'inline', token });
   }
   // SwiftUI 的 foregroundStyle 也给形状、渐变、图标上色,这些所有者排除;文字控件与可复用修饰器都统计。
   for (const call of source.matchAll(/foregroundStyle\(([^)]*)\)/g)) {
@@ -147,8 +170,10 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   }
   return found;
 }
-const scanPlaceholderColors = (source: string): string[] =>
-  [...source.matchAll(/placeholderTextColor=\{([^}]*)\}/g)].flatMap((m) => tokensIn(m[1]));
+const scanPlaceholderColors = (source: string): string[] => {
+  const resolve = makeColorResolver(source);
+  return [...source.matchAll(/placeholderTextColor=\{([^}]*)\}/g)].flatMap((m) => resolve(m[1], m.index!));
+};
 
 /** 计数并对照存量名单;返回违规与「可收紧」提示。 */
 function reconcile(found: Map<string, number>, debt: Map<string, number>, fix: string) {
@@ -177,6 +202,12 @@ describe('text color discipline', () => {
     expect(tokens('const color = on ? colors.destructive : colors.border;\n<Text style={{ color }} />')).toEqual(['destructive', 'border']);
     expect(tokens('const phaseColor = colors.border;\nconst x = { fontSize: typeScale.body, color: phaseColor }')).toEqual(['border']);
     expect(tokens('const base = colors.border;\nconst tone = base;\n<Text style={[a, { color: tone }]} />')).toEqual(['border']);
+    // 同名别名在不同组件里互不覆盖(词法作用域 + 使用位置)。
+    expect(tokens('function A() { const color = colors.border; return <Text style={{ color }} />; }\nfunction B() { const color = colors.textPrimary; return <Text style={{ color }} />; }')).toEqual(['border', 'textPrimary']);
+    expect(tokens('function B() { const color = colors.textPrimary; return <Text style={{ color }} />; }\nfunction A() { const color = colors.border; return <Text style={{ color }} />; }')).toEqual(['textPrimary', 'border']);
+    expect(tokens('const color = colors.textPrimary;\nfunction A() { const color = colors.border; return <Text style={{ color }} />; }')).toEqual(['border']);
+    expect(scanPlaceholderColors('const placeholderColor = colors.textTertiary;\n<TextInput placeholderTextColor={placeholderColor} />')).toEqual(['textTertiary']);
+    expect(scanPlaceholderColors('function A() { const p = colors.textTertiary; return <TextInput placeholderTextColor={p} />; }\nfunction B() { const p = colors.textPlaceholder; return <TextInput placeholderTextColor={p} />; }')).toEqual(['textTertiary', 'textPlaceholder']);
     expect(tokens('const other = 1;\n<Text style={{ color: other }} />')).toEqual([]);
     expect(tokens('<Image modifiers={[foregroundStyle(colors.border)]} />')).toEqual([]);
     expect(tokens('export const glass = (colors) => [foregroundStyle(colors.border)];')).toEqual(['border']);
