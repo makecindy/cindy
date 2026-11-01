@@ -64,9 +64,18 @@ export function cindySimulatorEnabled({ root = CINDY_SIMULATOR_ROOT, readFile = 
   }
 }
 
+/** Cindy's simulator is the default path whenever it is installed and allowed to run. */
+export function cindySimulatorAvailable({
+  root = CINDY_SIMULATOR_ROOT,
+  exists = existsSync,
+  readFile = readFileSync,
+} = {}) {
+  return exists(join(root, "devices")) && cindySimulatorEnabled({ root, readFile });
+}
+
 /**
  * Device sets to search, in order. CINDY_MOBILE_SIMULATOR=auto (default) prefers Cindy's
- * simulator when it is installed and allowed to run, then the system (Xcode) set;
+ * simulator when it is available, then the system (Xcode) set;
  * `cindy` / `system` pin one, and an absolute path pins that CoreSimulator device set.
  */
 export function resolveSimulatorDeviceSets({
@@ -78,7 +87,7 @@ export function resolveSimulatorDeviceSets({
   const cindy = { name: "cindy", path: join(root, "devices") };
   const system = { name: "system", path: null };
   if (choice === "auto")
-    return exists(cindy.path) && cindySimulatorEnabled({ root, readFile }) ? [cindy, system] : [system];
+    return cindySimulatorAvailable({ root, exists, readFile }) ? [cindy, system] : [system];
   if (choice === "system") return [system];
   if (choice === "cindy") {
     if (!exists(cindy.path))
@@ -98,8 +107,9 @@ export function simctlArgs(deviceSet, args) {
 }
 
 /**
- * Use the set holding the exact UDID, otherwise the first set with a booted device.
- * An unreadable fallback candidate is skipped; a pinned (single) set still reports its error.
+ * Use the set holding the exact UDID, otherwise the first readable set, even with nothing booted:
+ * an idle Cindy simulator must not silently hand the task to whatever the system set is running.
+ * An unreadable candidate is skipped; a pinned (single) set still reports its error.
  */
 export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
   for (const deviceSet of deviceSets) {
@@ -112,9 +122,44 @@ export function selectBootedSimulator(deviceSets, listBooted, simulatorUdid) {
     }
     const booted = bootedSimulatorLinesForTarget(lines, null);
     const targetBooted = bootedSimulatorLinesForTarget(lines, simulatorUdid);
-    if (simulatorUdid ? targetBooted.length : booted.length) return { deviceSet, booted, targetBooted };
+    if (!simulatorUdid || targetBooted.length) return { deviceSet, booted, targetBooted };
   }
   return { deviceSet: deviceSets[0], booted: [], targetBooted: [] };
+}
+
+/** Explain a selection that leaves the default Cindy path; null when there is nothing to say. */
+export function simulatorBackendNotice({
+  deviceSet,
+  booted,
+  simulatorUdid,
+  listDevices,
+  cindyAvailable = cindySimulatorAvailable(),
+}) {
+  if (!cindyAvailable) return null;
+  if (deviceSet.name === "system")
+    return {
+      code: "system-while-cindy-available",
+      message: "正在使用系统模拟器，但 Cindy 模拟器可用。只有用户明确要求时才这样做，并在交付说明里写明。",
+    };
+  if (deviceSet.name !== "cindy" || simulatorUdid || booted.length > 0) return null;
+  let reusable = [];
+  try {
+    reusable = listDevices(deviceSet).split("\n").filter((line) => /\(Shutdown\)/.test(line)).map((line) => line.trim());
+  } catch {
+    // The list only saves a lookup; the guidance below still holds without it.
+  }
+  return {
+    code: "cindy-idle",
+    message: "Cindy 模拟器可用，但没有已开机设备：用 baguette-simulator 插件启动或新建一台。只有用户明确要求或插件不可用时，才传 --udid 或设 CINDY_MOBILE_SIMULATOR=system 使用系统模拟器。",
+    reusable,
+  };
+}
+
+/** Without one exact target nothing was probed, so this must not read as "the app is missing". */
+export function inspectTargetNativeIdentity({ targetBooted, probeFailed, inspect }) {
+  const reason = probeFailed ? "probe-timeout" : targetBooted.length !== 1 ? "target-not-unique" : null;
+  if (!reason) return inspect();
+  return { healthy: false, code: "native-unknown", reason, installedFingerprint: null, expectedFingerprint: null };
 }
 
 /** Find the set that knows this UDID in any state (build-only runs need no booted device). */
