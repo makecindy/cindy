@@ -207,6 +207,16 @@ describe('label scanning stays linear and spans lines', () => {
     expect(hyphen).toContain('foo->go → stop]');
     expect(hyphen).toContain('B --> C');
   });
+  it('resets the edge tip run after punctuation that closes a source id', () => {
+    const out = repairMermaidSource('flowchart TD\n  A.-->B\n  E → F\n  C[label]');
+    expect(out).toContain('A.-->B');
+    expect(out).toContain('E --> F');
+  });
+  it('ends a circle head before a dotted target id that opens an asymmetric label', () => {
+    const out = repairMermaidSource('flowchart TD\n  A--o.>go → stop]\n  E → F');
+    expect(out).toContain('A--o.>go → stop]');
+    expect(out).toContain('E --> F');
+  });
 
   it('leaves an ascii edge tip alone before a slash shape', () => {
     const out = repairMermaidSource('flowchart TD\nA --> B\n  C[/go → stop/] --> D\n  D → E');

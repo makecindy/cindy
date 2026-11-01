@@ -217,6 +217,16 @@ function isAsymmetricOpener(
   // hyphens (`foo..>`, `foo.->`). Recomputing the run here for every character
   // turned a long run of `>` into a quadratic scan.
   const start = runStart;
+  // An id may end in punctuation that glues the tip to it: `A.-->B` is parsed with
+  // `A.` as the source id, so the punctuation run starts inside the id and the tip
+  // is only the dash run that ends at `>`. Without this reset the whole `.-->` reads
+  // as an asymmetric opener, and the rest of the graph stays inside a label that is
+  // never rewritten.
+  if (start < i) {
+    let tipStart = i;
+    while (tipStart > start && (text[tipStart - 1] === '-' || text[tipStart - 1] === '=')) tipStart -= 1;
+    if (tipStart > start && tipStart < i && isEdgeTipRun(text, tipStart, i, prefixes)) return false;
+  }
   if (start === i) return !/[\s=<>|]/.test(text[i - 1]);
   // Every edge tip is excluded, not just the plain ones: `-->`, `==>`, `-.->`, the
   // stretched dotted forms `-..->`/`-...->`, and the bidirectional `<-->` / `<==>`
@@ -325,7 +335,10 @@ function completeEdgeTokenEnd(
     if (after === '.' || after === '-') {
       let run = same + 1;
       while (text[run] === '.' || text[run] === '-') run += 1;
-      return text[run] === '>' ? -1 : same + 1;
+      // Only a dash run that ends in a tip continues the edge (`A--o-->B`). A dot
+      // run before a tip is a target id: `A--o.>go → stop]` points at the id `.`
+      // and opens an asymmetric label, so the head ends before the dots.
+      return text[run] === '>' && after === '-' ? -1 : same + 1;
     }
     return same + 1;
   }
