@@ -24,7 +24,7 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 **Gates (cloud, Node 22.23.4):** serial typecheck `EXIT=0`; `test:runner` 607/0; test-hygiene PASS. maker-core full unit: 6137 pass, 2 fail, both environmental and Pi-only: `cindyBridgeSource.test.ts` (missing `apps/ripgrep-bin/linux-x64/rg` in this container; fails identically with this change stashed) and `cindySubagentRunner.test.ts` (known `/bin/ps` environment item in ROADMAP Debt). **Owner's Mac (Node 22):** related unit tier green: `apps/desktop unit` PASS (327 s), `packages/maker-core unit` PASS, every other workspace PASS.
 
-**Still open:** 2.4c-live and 1.9b-3c-live (owner).
+**Owner live checks (same day): both ✅ `live-proven`.** 1.9b-3c: a new Gemma chat's panel row reads `lmstudio-local/google/gemma-4-…` 14.0k tok · unpriced (was `deepseek/…`). 2.4c: Gemma unloaded in LM Studio, "hi" → the composer shows "Could not complete the reply" (Retry / Error Details) at once, no hang, no model switch. Polish left for later: show the named reason without expanding Error Details; offer a one-click alternative model.
 
 ---
 
