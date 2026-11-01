@@ -3,6 +3,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
+import { useIframeScrollIntent } from './observeIframeScrollIntent';
 import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
@@ -4926,6 +4927,11 @@ export function MessageStream({
     expandWindow,
     refreshViewportAnchor,
   ]);
+  useIframeScrollIntent(
+    scrollRef,
+    () => restoringRef.current && !programmaticScrollRef.current,
+    clearChipJumpSuppression,
+  );
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
