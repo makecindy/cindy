@@ -63,6 +63,7 @@ import {
   clearSelfHostedRelay, forgetSelfHostedRelay, resumeSelfHostedRelay,
   useSavedSelfHostedRelay, useSelfHostedRelay,
 } from '@/device-link/selfHostedRelay';
+import { getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { buildMobileSettingsOverview } from '@/settings/mobileSettings';
 import {
@@ -511,15 +512,17 @@ export default function SettingsScreen() {
   }, [relaySwitching, t]);
 
   const requestForgetRelay = useCallback(() => {
-    if (!savedRelay || relaySwitching) return;
+    if (!selfHostedRelay || !savedRelay || relaySwitching) return;
     const owner = getMobileAuthOwner();
+    const routeGeneration = getSelfHostedRelayRouteGeneration();
     Alert.alert(t('relay.settings.forgetTitle'), t('relay.settings.forgetBody', { name: savedRelay.name }), [
       { text: t('devices.common.cancel'), style: 'cancel' },
       { text: t('relay.settings.forget'), style: 'destructive', onPress: () => {
-        if (isMobileAuthOwnerCurrent(owner)) void forgetRelay();
+        if (isMobileAuthOwnerCurrent(owner)
+          && getSelfHostedRelayRouteGeneration() === routeGeneration) void forgetRelay();
       } },
     ]);
-  }, [forgetRelay, relaySwitching, savedRelay, t]);
+  }, [forgetRelay, relaySwitching, savedRelay, selfHostedRelay, t]);
 
   // 自建中转下:被主人移出 / 中转停用(4410)或中转凭证被拒(401),以及本机凭证缺失,
   // 都要在这里给出原因,并配「切回官方中转」。
@@ -792,7 +795,7 @@ export default function SettingsScreen() {
               testID="settings.relay.useSaved"
             />
           ) : null}
-          {savedRelay ? (
+          {selfHostedRelay && savedRelay ? (
             <ActionInfoRow
               accessibilityLabel={t('relay.settings.forget')}
               chevron={false}
