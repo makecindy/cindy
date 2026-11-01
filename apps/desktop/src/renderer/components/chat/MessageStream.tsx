@@ -3,6 +3,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
+import { observeIframeScrollIntent } from './observeIframeScrollIntent';
 import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
@@ -4929,6 +4930,11 @@ export function MessageStream({
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
+    const stopIframeScrollIntent = observeIframeScrollIntent(
+      root,
+      () => restoringRef.current && !programmaticScrollRef.current,
+      clearChipJumpSuppression,
+    );
     // wheel/touchstart 挂在 scroll 容器上(与上 chip 抑制对称)。容器不可滚时
     // 不会产生 scroll 事件,所以用户继续向上滚动的意图必须在这里接住。
     const onWheel = (event: WheelEvent) => {
@@ -5049,6 +5055,7 @@ export function MessageStream({
     window.addEventListener('blur', onWindowBlur);
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
+      stopIframeScrollIntent();
       root.removeEventListener('wheel', onWheel);
       root.removeEventListener('touchstart', onTouchStart);
       root.removeEventListener('touchmove', onTouchMove);
