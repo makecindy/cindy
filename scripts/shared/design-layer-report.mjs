@@ -112,7 +112,7 @@ export function offScaleRadius(raw) {
       // Tailwind turns `_` into a space, so rounded-[8px_10px] / [6px_12px/4px] is a shorthand:
       // check every item; var() / calc() / % items stay report-only.
       for (const part of arbitrary[1].split(/[_/\s]+/).filter(Boolean)) {
-        const literal = /^(\d*\.?\d+)(px|rem)?$/i.exec(part);
+        const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(part);
         if (!literal) continue;
         const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
         if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
@@ -126,7 +126,7 @@ export function offScaleRadius(raw) {
     if (!css) return null;
     const values = css[1].replace(/!\s*important/i, '').split(/[\s/]+/).filter(Boolean);
     for (const value of values) {
-      const literal = /^(\d*\.?\d+)(px|rem)?$/i.exec(value.replace(/^['"`]+|['"`]+$/g, ''));
+      const literal = /^(\d*\.?\d+(?:e[+-]?\d+)?)(px|rem)?$/i.exec(value.replace(/^['"`]+|['"`]+$/g, ''));
       if (!literal) continue; // var() / calc() / % / keywords stay report-only
       const resolved = Number(literal[1]) * (literal[2]?.toLowerCase() === 'rem' ? 16 : 1);
       if (!GOVERNED_RADIUS_PX.has(resolved)) return resolved;
@@ -190,17 +190,55 @@ function classHelperSpans(source) {
 
 const UTILITY_WORDS = new Set(['flex', 'grid', 'block', 'inline', 'hidden', 'relative', 'absolute', 'fixed', 'sticky', 'border',
   'truncate', 'transition', 'shadow', 'underline', 'static', 'contents', 'container', 'rounded', 'italic', 'uppercase']);
-/** A string literal on this line made only of class-like tokens (a bare class list). */
-function insideClassListLiteral(source, index) {
-  const lineStart = source.lastIndexOf('\n', index - 1) + 1;
-  const lineEnd = source.indexOf('\n', index); const end = lineEnd < 0 ? source.length : lineEnd;
-  const line = source.slice(lineStart, end), at = index - lineStart;
-  for (const m of line.matchAll(/(["'`])((?:\\.|(?!\1).)*)\1/g)) {
-    if (at < m.index || at > m.index + m[0].length) continue;
-    const tokens = m[2].split(/\s+/).filter(Boolean);
-    return tokens.length > 0 && tokens.every(t => /^[\w!:[\]/.%()#&>*~@=,+-]+$/.test(t) && (/[-:[]/.test(t) || UTILITY_WORDS.has(t)));
+/** Start index of the string / template literal that encloses `index` (same lexical rules as
+ * insideStringLiteral), or -1 when `index` is in code. */
+function enclosingStringStart(source, index) {
+  let mode = 'code', start = -1;
+  const exprDepth = [];
+  for (let i = 0; i < index; i++) {
+    const char = source[i], next = source[i + 1];
+    if (mode === 'code') {
+      if (char === '/' && next === '/') mode = 'line';
+      else if (char === '/' && next === '*') { mode = 'block'; i++; }
+      else if (char === "'") { mode = 'sq'; start = i; }
+      else if (char === '"') { mode = 'dq'; start = i; }
+      else if (char === '`') { mode = 'tpl'; start = i; }
+      else if (char === '{' && exprDepth.length) exprDepth[exprDepth.length - 1]++;
+      else if (char === '}' && exprDepth.length) { if (exprDepth[exprDepth.length - 1] === 0) { exprDepth.pop(); mode = 'tpl'; } else exprDepth[exprDepth.length - 1]--; }
+    } else if (mode === 'sq' || mode === 'dq') {
+      if (char === '\\') i++;
+      else if (char === '\n' || char === (mode === 'sq' ? "'" : '"')) mode = 'code';
+    } else if (mode === 'tpl') {
+      if (char === '\\') i++;
+      else if (char === '`') mode = 'code';
+      else if (char === '$' && next === '{') { exprDepth.push(0); mode = 'code'; i++; }
+    } else if (mode === 'line') { if (char === '\n') mode = 'code'; }
+    else if (mode === 'block' && char === '*' && next === '/') { mode = 'code'; i++; }
   }
-  return false;
+  return mode === 'sq' || mode === 'dq' || mode === 'tpl' ? start : -1;
+}
+
+/** The whole enclosing string (template literals may span lines; `${…}` parts are blanked) is a bare
+ * class list: every token class-like. */
+function insideClassListLiteral(source, index) {
+  const start = enclosingStringStart(source, index);
+  if (start < 0) return false;
+  const quote = source[start];
+  let text = '';
+  for (let i = start + 1; i < source.length; i++) {
+    const char = source[i];
+    if (char === '\\') { text += ' '; i++; continue; }
+    if (char === quote || (quote !== '`' && char === '\n')) break;
+    if (quote === '`' && char === '$' && source[i + 1] === '{') {
+      let depth = 0;
+      for (; i < source.length; i++) { if (source[i] === '{') depth++; else if (source[i] === '}' && --depth === 0) break; }
+      text += ' ';
+      continue;
+    }
+    text += char;
+  }
+  const tokens = text.split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every(t => /^[\w!:[\]/.%()#&>*~@=,+-]+$/.test(t) && (/[-:[]/.test(t) || UTILITY_WORDS.has(t)));
 }
 /** True when `index` sits inside a string literal or template text (prose, help text, embedded CSS),
  * tracked lexically from the start of the file: ' and " end at the line break, template literals span

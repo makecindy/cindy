@@ -167,6 +167,10 @@ function scanTextColors(source: string): Array<{ where: string; token: string }>
   for (const prop of source.matchAll(/\b(text|label|title|subtitle|value|foreground)Color=\{([^}]*)\}/g)) {
     for (const token of resolve(prop[2], prop.index!)) found.push({ where: `${prop[1]}Color prop`, token });
   }
+  // 对象型配置里的文字颜色键:elementColors={{ textColor: …, disabledTextColor: … }} 等(含 disabledTextColor 这类复合键)。
+  for (const key of source.matchAll(/\b(?!placeholder)(\w*[Tt]ext|label|title|subtitle|value|foreground)Color\s*:\s*([^,}]+)/g)) {
+    for (const token of resolve(key[2], key.index!)) found.push({ where: `${key[1]}Color key`, token });
+  }
   // SwiftUI 的 foregroundStyle 也给形状、渐变、图标上色,这些所有者排除;文字控件与可复用修饰器都统计。
   for (const call of source.matchAll(/foregroundStyle\(([^)]*)\)/g)) {
     const owner = enclosingTag(source, call.index!);
@@ -202,6 +206,10 @@ describe('text color discipline', () => {
     expect(tokens('const x = { fontSize: typeScale.body, color: c.inputCaret }')).toEqual(['inputCaret']);
     expect(tokens('<Text modifiers={[foregroundStyle(ok ? colors.textSecondary : colors.cta)]} />')).toEqual(['textSecondary', 'cta']);
     expect(tokens('<Circle modifiers={[foregroundStyle(colors.statusReady)]} />')).toEqual([]);
+    expect(tokens('<Menu elementColors={{ textColor: colors.border, disabledTextColor: on ? colors.textTertiary : colors.statusError }} />')).toEqual(['border', 'textTertiary', 'statusError']);
+    expect(tokens('const c2 = colors.border;\nconst o = { labelColor: c2 };')).toEqual(['border']);
+    expect(scanPlaceholderColors('<TextInput placeholderTextColor={colors.textPlaceholder} />')).toEqual(['textPlaceholder']);
+    expect(tokens('const o = { placeholderTextColor: colors.border };')).toEqual([]);
     expect(tokens('<Row textColor={colors.border} />')).toEqual(['border']);
     expect(tokens('<Row textColor={on ? colors.textPrimary : colors.border} labelColor={colors.textSecondary} />')).toEqual(['textPrimary', 'border', 'textSecondary']);
     expect(tokens('const fg = on ? colors.ctaText : colors.border;\n<Text modifiers={[foregroundStyle(fg)]} />')).toEqual(['ctaText', 'border']);

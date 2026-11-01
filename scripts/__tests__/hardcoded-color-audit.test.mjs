@@ -581,3 +581,18 @@ test('quoted and bracketed static radius keys are code, not prose', () => {
   // A quoted mention inside prose is still just prose.
   for (const source of ['const h = "borderRadius: 6 is bad";', "const h = 'use borderRadius: 6';"]) assert.deepEqual(dispositions(source), ['report'], source);
 });
+
+test('scientific-notation radii and multi-line class-list templates are handled', () => {
+  const file = `${renderer}components/Example.tsx`;
+  const css = `${renderer}styles/x.css`;
+  const run = (source, at = file) => inspect(at, source).filter(f => f.rule === 'off-scale-radius').map(f => f.disposition);
+  assert.deepEqual(run('.x { border-radius: 6e0px }', css), ['block']);
+  assert.deepEqual(run('<i className="rounded-[6E+0px]" />'), ['block']);
+  assert.deepEqual(run('.x { border-radius: 1.2e1px }', css), []);
+  assert.deepEqual(run('.x { border-radius: 8e0px }', css), []);
+  // A bare class list may span lines (template literal) and contain interpolations.
+  assert.deepEqual(run('const classes = `flex items-center\n  rounded-md`;'), ['block']);
+  assert.deepEqual(run('const classes = `flex ${x}\n  rounded-md border`;'), ['block']);
+  // Prose that spans lines is still prose.
+  assert.deepEqual(run('const h = `Use the\n rounded-md class`;'), ['report']);
+});
