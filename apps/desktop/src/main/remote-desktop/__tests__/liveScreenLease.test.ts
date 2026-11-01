@@ -122,8 +122,10 @@ describe('live screen leases', () => {
   it('allows only operations that stay on the screen', async () => {
     const h = harness();
     const { lease } = await h.start({ control: true });
+    // The relay still picture is never the desktop: a viewer polling it just gets nothing.
+    expect(await h.controller.request('phone', { op: 'frame', lease })).toEqual({ jpeg: null });
+    expect(h.deps.frame).not.toHaveBeenCalled();
     for (const request of [
-      { op: 'frame', lease },
       { op: 'clipboard', lease, action: 'copy' },
       { op: 'displayModes', lease },
       { op: 'privacyScreen', lease, enabled: true },

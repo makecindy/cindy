@@ -1131,6 +1131,8 @@ export class RemoteDesktopController {
     const active = this.require(peer, request.lease);
     if (active.handoff && !HANDOFF_WINDOW_OPS.has(request.op))
       throw new Error('DESKTOP_HANDOFF_WINDOW_ONLY');
+    // A plugin screen has no relay still picture: its video is WebRTC only.
+    if (active.screen && request.op === 'frame') return { jpeg: null };
     if (active.screen && !LIVE_SCREEN_OPS.has(request.op)) throw new Error('DESKTOP_SCREEN_ONLY');
     if (
       this.displayChanging &&
