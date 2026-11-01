@@ -38,6 +38,9 @@ The send path was never the problem. Every lazy-create / prewarm path re-reads `
 - The session from the owner's failing repro likely still has a `claude-*` id in `sessions.model`. Re-selecting `qwen3-8b` in that session's picker rewrites it through `handleSetModel`; no manual DB edit needed.
 - Found, not fixed (separate task): the Hermes `AgentSessionHandle.model` in `packages/maker-core/src/agents/hermes/agent.ts` is a fixed property set at start and never updated by `setModel`, while `Session.model` assumes the handle getter tracks switches. Runtime profiles that read `live.model` (`readSessionRuntimeProfiles` in `register.ts`) can therefore report the start model after a mid-session switch.
 
+**Owner live check (same day, after `pnpm restart:desktop:remote --region=global` on this branch):** new task → Hermes → `qwen3-8b (lmstudio-local)` → "hi". The header and composer pill both still read `qwen3-8b` after the turn ended, so the revert is fixed for turn 1. Turn 2 has not been run yet.
+New, separate issue seen in the same run: the turn produced no reply. `qwen3-8b` called Hermes `skill_view` 5+ times and ran for 3m 22s, then Cindy's loop guard stopped it ("kept cycling between tool calls ... 12 calls"). Open as ROADMAP 2.2b-4. Not yet diagnosed: check which skill it opened (expand the `skill_view` rows) and whether a plain no-tool chat works on this model.
+
 **Surprising:** the earlier "foreign model sanitization" hid this bug instead of exposing it: a `claude-*` id written into a Hermes row rendered as the Hermes default rather than as an obviously wrong model.
 
 ---
