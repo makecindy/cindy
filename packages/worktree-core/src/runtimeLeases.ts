@@ -2,6 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
+import {
+  isLaterProcessThan,
+  type DesktopProcessIdentity,
+} from "./processIdentity.js";
 import type { WorktreeManagerPorts } from "./managerPorts.js";
 import type * as identity from "./processIdentity.js";
 import { isManagedWorktreeDirectoryName } from "@cindy/maker-shared/worktree-paths";
@@ -29,6 +34,31 @@ export function managedWorktreeRoot(value: string): string | null {
       current = parent;
     }
   }
+
+// Ownership is process-wide: separate account/host factories can read the same leases.
+/** How often Main refreshes the modification time of the leases it holds, as a liveness heartbeat. */
+const LEASE_HEARTBEAT_MS = 5 * 60_000;
+/** Lease files this process published and has not released. */
+const heldLeaseFiles = new Set<string>();
+let leaseHeartbeat: ReturnType<typeof setInterval> | null = null;
+
+function holdLeaseFile(file: string): void {
+  heldLeaseFiles.add(file);
+  if (leaseHeartbeat) return;
+  leaseHeartbeat = setInterval(() => {
+    const now = new Date();
+    for (const held of heldLeaseFiles)
+      void fs.utimes(held, now, now).catch(() => undefined);
+  }, LEASE_HEARTBEAT_MS);
+  leaseHeartbeat.unref?.();
+}
+
+function dropLeaseFile(file: string): void {
+  heldLeaseFiles.delete(file);
+  if (heldLeaseFiles.size || !leaseHeartbeat) return;
+  clearInterval(leaseHeartbeat);
+  leaseHeartbeat = null;
+}
 
 export function createWorktreeRuntimeLeases(
   ports: Pick<
@@ -94,6 +124,28 @@ export function createWorktreeRuntimeLeases(
     });
   }
 
+  /** Bounds how long the first acquisition waits for this process's own OS identity. */
+  const OWN_IDENTITY_WAIT_MS = 2_000;
+  let ownIdentity: Promise<DesktopProcessIdentity | null> | null = null;
+
+  /**
+   * This Main's OS birth time and executable, probed once. Readers compare it with the process
+   * now holding the PID. Unavailable within the bound, the lease omits it and readers fall back
+   * to its modification time.
+   */
+  async function ownProcessIdentity(): Promise<DesktopProcessIdentity | null> {
+    ownIdentity ??= readDesktopProcessIdentity(process.pid).catch(() => null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), OWN_IDENTITY_WAIT_MS);
+    });
+    try {
+      return await Promise.race([ownIdentity, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function publishRuntimeLease(
     sessionId: string,
     physicalPath: string,
@@ -101,14 +153,18 @@ export function createWorktreeRuntimeLeases(
   ): Promise<WorktreeRuntimeLease> {
     await fs.mkdir(directory, { recursive: true });
     const lease = { file: leaseFile(sessionId, directory), physicalPath };
+    const processIdentity = (await ownProcessIdentity()) ?? undefined;
     // A partial write is intentionally unreadable, hence protective to deletion.
     try {
+      // heartbeatMs tells readers that the modification time tracks when this Main was last alive.
       await fs.writeFile(
         lease.file,
         JSON.stringify({
           version: 1,
           pid: process.pid,
           path: physicalPath,
+          heartbeatMs: LEASE_HEARTBEAT_MS,
+          processIdentity,
         }),
         { flag: "wx", mode: 0o600 },
       );
@@ -119,6 +175,7 @@ export function createWorktreeRuntimeLeases(
       }
       throw error;
     }
+    holdLeaseFile(lease.file);
     return lease;
   }
 
@@ -186,6 +243,7 @@ export function createWorktreeRuntimeLeases(
   async function releaseWorktreeRuntimeLease(
     lease: WorktreeRuntimeLease,
   ): Promise<void> {
+    dropLeaseFile(lease.file);
     await releaseRuntimeLeaseFile(lease);
   }
 
@@ -355,6 +413,110 @@ export function createWorktreeRuntimeLeases(
     }
   }
 
+  /** Generous margin for clock corrections after boot; only clearly older evidence is waived. */
+  const BOOT_MARGIN_MS = 10 * 60_000;
+  /**
+   * Once Main is gone, an agent it started gets no further input and settles well within this.
+   * Counted from the lease's last heartbeat, i.e. from when its Main was last known alive.
+   */
+  const ABANDONED_LEASE_GRACE_MS = 60 * 60_000;
+  /** Older clients wrote no heartbeat: their modification time is only the acquisition time. */
+  const LEGACY_ABANDONED_LEASE_GRACE_MS = 24 * 60 * 60_000;
+
+  function startedBeforeBoot(timestampMs: unknown): boolean {
+    return (
+      typeof timestampMs === "number" &&
+      Number.isFinite(timestampMs) &&
+      timestampMs < Date.now() - os.uptime() * 1000 - BOOT_MARGIN_MS
+    );
+  }
+
+  const isPid = (value: unknown): value is number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+  /**
+   * Evidence (PID and stamp) whose writer is proven gone. Only that answer is cached: once the
+   * writer has exited it stays gone, while "may still be the writer" must be asked again.
+   */
+  const goneWriterCache = new Set<string>();
+
+  /**
+   * Whether `pid` may be the process that last touched evidence stamped at `stampedAtMs`.
+   * A live process born clearly after the writer cannot be it (PID reuse). A lease is written
+   * by its own process and never adopted, so no executable name is exempt, unlike instance
+   * registrations. The writer's recorded OS identity is compared when present: both times come
+   * from the OS, so a clock corrected after the writer started cannot misjudge it. Older leases
+   * compare against the stamp. An unknown identity stays protective.
+   */
+  async function mayBeEvidenceWriter(
+    pid: number,
+    stampedAtMs: number,
+    writerIdentity?: unknown,
+  ): Promise<boolean> {
+    if (!pidMayBeAlive(pid)) return false;
+    const recorded =
+      writerIdentity === undefined
+        ? { startedAtMs: stampedAtMs }
+        : { processIdentity: writerIdentity };
+    const key = `${pid}:${JSON.stringify(recorded)}`;
+    if (goneWriterCache.has(key)) return false;
+    const identity = await readDesktopProcessIdentity(pid);
+    if (!pidMayBeAlive(pid)) return false;
+    if (!identity || !isLaterProcessThan(recorded, identity)) return true;
+    if (goneWriterCache.size > 512) goneWriterCache.clear();
+    goneWriterCache.add(key);
+    return false;
+  }
+
+  /**
+   * A lease its Main never released, once no process that could still write is left: the owner
+   * and recorded children have exited (or their PIDs were reused), and the lease predates this
+   * boot or has gone without a heartbeat for the grace period. Live compatible Cindy instances
+   * and leases this process holds always stay protective.
+   */
+  async function isAbandonedLease(
+    file: string,
+    lease: {
+      pid?: unknown;
+      processIdentity?: unknown;
+      childPid?: unknown;
+      childPids?: unknown;
+      heartbeatMs?: unknown;
+    },
+    liveInstancePids: ReadonlySet<number>,
+  ): Promise<boolean> {
+    if (
+      !isPid(lease.pid) ||
+      (lease.pid === process.pid && heldLeaseFiles.has(file))
+    )
+      return false;
+    // This process holds every lease it wrote; one with its PID was left by an earlier process.
+    if (lease.pid !== process.pid && liveInstancePids.has(lease.pid))
+      return false;
+    const { mtimeMs } = await fs.stat(file);
+    if (
+      lease.pid !== process.pid &&
+      (await mayBeEvidenceWriter(lease.pid, mtimeMs, lease.processIdentity))
+    )
+      return false;
+    // Unknown child evidence stays protective, like the explicit orphan reclaim path.
+    const children = [
+      lease.childPid,
+      ...(Array.isArray(lease.childPids) ? lease.childPids : []),
+    ];
+    for (const child of children) {
+      if (child == null) continue;
+      if (!isPid(child) || (await mayBeEvidenceWriter(child, mtimeMs)))
+        return false;
+    }
+    if (startedBeforeBoot(mtimeMs)) return true;
+    const grace =
+      typeof lease.heartbeatMs === "number"
+        ? ABANDONED_LEASE_GRACE_MS
+        : LEGACY_ABANDONED_LEASE_GRACE_MS;
+    return Date.now() - mtimeMs > grace;
+  }
+
   /** Unknown/older live instances keep terminal task references protected. */
   async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
     const registry = path.join(ports.userDataRoot(), ".dev-instances");
@@ -383,11 +545,19 @@ export function createWorktreeRuntimeLeases(
         // Only unsupported instances can block the entire lease view. Do not add
         // an OS subprocess per compatible instance to the normal recycle path.
         if (record.worktreeLeaseProtocol !== 1) {
+          // Always re-query: a replacement Cindy may hold this PID before it registers.
           const identity = await readDesktopProcessIdentity(pid);
           // A replacement instance may have registered while the OS query ran.
           if ((await readRecord(name)) !== raw) return null;
           if (!pidMayBeAlive(pid)) continue;
-          if (identity && isReusedDesktopInstancePid(record, identity)) {
+          // A later OS birth proves the PID was reused. When the identity query fails (it can
+          // time out), a registration from before this boot is still enough: that instance
+          // cannot be running now. The SingletonLock check below revalidates before waiving it.
+          if (
+            identity
+              ? isReusedDesktopInstancePid(record, identity)
+              : startedBeforeBoot(record.startedAtMs)
+          ) {
             reusedInstanceRecords.set(pid, raw);
             continue;
           }
@@ -445,13 +615,14 @@ export function createWorktreeRuntimeLeases(
       for (const name of leases) {
         if (!leaseNamePattern.test(name)) continue;
         // Main may have crashed while a detached child still uses the directory.
-        // Only explicit release proves source I/O stopped, across every profile.
+        // Explicit release proves source I/O stopped; otherwise only a reboot or an
+        // exited owner past the grace period does, across every profile.
         try {
-          const lease = JSON.parse(
-            await fs.readFile(path.join(directory, name), "utf8"),
-          );
+          const file = path.join(directory, name);
+          const lease = JSON.parse(await fs.readFile(file, "utf8"));
           if (lease.version !== 1 || typeof lease.path !== "string")
             return null;
+          if (await isAbandonedLease(file, lease, compatiblePids)) continue;
           paths.add(lease.path);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;

@@ -159,6 +159,20 @@ export function isReusedDesktopInstancePid(
     ).replace(/\/$/, "");
     if (executable.startsWith(`${runtimeRoot}/`)) return false;
   }
+  return isLaterProcessThan(record, current, platform);
+}
+
+/**
+ * Whether `current` is provably not the process that wrote `record`: born clearly after the
+ * recorded OS identity or, without one, after `startedAtMs`. No executable is exempt; callers
+ * whose records can be adopted by a replacement runtime add those exemptions themselves.
+ */
+export function isLaterProcessThan(
+  record: { startedAtMs?: unknown; processIdentity?: unknown },
+  current: DesktopProcessIdentity,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!validIdentity(current, platform)) return false;
   // ps reports whole seconds; also allow timestamp rounding in legacy records.
   const toleranceMs = 2_000;
   if (record.processIdentity !== undefined) {

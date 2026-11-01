@@ -8,6 +8,7 @@ import {
   writeFile,
   access,
   realpath,
+  utimes,
 } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -226,6 +227,11 @@ it("exposes native occupancy to the existing GUI lease reader and preserves unre
     canRemove: async () => true,
   });
   await access(f.meta.path);
+  // Multiple host factories in one process must recognize each other's held leases,
+  // even when a clock correction makes the heartbeat look older than its grace.
+  const oldHeartbeat = new Date(Date.now() - 25 * 60 * 60_000);
+  await utimes(lease!.file, oldHeartbeat, oldHeartbeat);
+  expect(await gui.readWorktreeRuntimePaths()).toContain(worktreeKey);
   await f.host.runtime.releaseWorktreeRuntimeLease(lease!);
   expect(await gui.readWorktreeRuntimePaths()).not.toContain(worktreeKey);
   expect(await f.host.references.readLocalWorktreeReferences()).toContainEqual(
