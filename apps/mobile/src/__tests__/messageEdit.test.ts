@@ -2,8 +2,15 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildMessageEditAttachments,
   commitMessageEditRewind,
+  mergeMessageEditDraft,
   messageEditErrorText,
 } from '@/session/messageEdit';
+import {
+  composerDocumentProjectedText,
+  emptyComposerDocument,
+  textComposerDocument,
+  type ComposerDocument,
+} from '@/session/composerDocument';
 
 // §3.2: edit-last-message on mobile must use the same host contract as the desktop
 // edit box. A dropped requireLatestUser would let the host soft-delete newer turns;
@@ -64,5 +71,33 @@ describe('buildMessageEditAttachments', () => {
       }),
       expect.objectContaining({ id: 'edit:m1:2', name: 'spec.md', path: '/Users/me/repo/spec.md', category: 'text' }),
     ]);
+  });
+});
+
+// 回退提交后页面已离场:任务草稿库终态只能由库内状态推导。旧补丁用「发送是否受理」推导,
+// 离场受理时库里仍是暂存草稿,再追加一次就复制两遍。
+describe('mergeMessageEditDraft', () => {
+  const stash = textComposerDocument('原草稿');
+  const replacement = textComposerDocument('改后的消息');
+  const text = (doc: ComposerDocument) => composerDocumentProjectedText(doc);
+
+  it('keeps one copy of the stashed draft when the left-behind send never cleared it', () => {
+    expect(text(mergeMessageEditDraft({ stored: stash, stash, replacement: null }))).toBe('原草稿');
+  });
+
+  it('restores the stash after a send that did clear the store', () => {
+    expect(text(mergeMessageEditDraft({ stored: emptyComposerDocument(), stash, replacement: null }))).toBe('原草稿');
+  });
+
+  it('keeps the unsent replacement ahead of the stash, once each', () => {
+    expect(text(mergeMessageEditDraft({ stored: stash, stash, replacement }))).toBe('改后的消息\n\n原草稿');
+  });
+
+  it('keeps a quote-only stash that has no projected text', () => {
+    const quoteOnly: ComposerDocument = {
+      version: 1,
+      nodes: [{ type: 'quote', quote: { text: '引用内容' } } as ComposerDocument['nodes'][number]],
+    };
+    expect(mergeMessageEditDraft({ stored: null, stash: quoteOnly, replacement: null }).nodes).toHaveLength(1);
   });
 });

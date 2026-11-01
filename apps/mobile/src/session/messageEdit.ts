@@ -7,6 +7,12 @@
  * 错误文案与文件回滚提示。
  */
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import {
+  composerDocumentHasContent,
+  composerDocumentsEqual,
+  normalizeComposerDocument,
+  type ComposerDocument,
+} from '@/session/composerDocument';
 import { i18n } from '@/i18n';
 import {
   buildMobileRemoteFileAttachment,
@@ -125,4 +131,28 @@ function imageExtForMime(mimeType: string): string {
   if (mimeType === 'image/gif') return '.gif';
   if (mimeType === 'image/webp') return '.webp';
   return '.png';
+}
+
+/**
+ * 回退提交后页面已不在前台时,该任务草稿库的终态(幂等):
+ * 〔未入队的替代内容〕+〔库里本来就有的内容〕+〔暂存草稿〕,每份各一次。
+ * 编辑期间输入框内容不写草稿库(persist:false),所以此刻库里要么仍是暂存草稿
+ * (替代消息没清过它,例如离场后才受理的发送),要么是 send 清空后的空草稿,
+ * 要么是别的内容——只能由库内状态推导,不能由「发送是否受理」推导,否则
+ * 暂存草稿会被复制两遍或丢掉。
+ */
+export function mergeMessageEditDraft(input: {
+  stored: ComposerDocument | null;
+  stash: ComposerDocument;
+  /** 尚未进入发件箱的替代内容;已受理时传 null。 */
+  replacement: ComposerDocument | null;
+}): ComposerDocument {
+  const stored = input.stored && !composerDocumentsEqual(input.stored, input.stash) ? input.stored : null;
+  const nodes: ComposerDocument['nodes'] = [];
+  for (const part of [input.replacement, stored, input.stash]) {
+    if (!part || !composerDocumentHasContent(part)) continue;
+    if (nodes.length > 0) nodes.push({ type: 'text', text: '\n\n' });
+    nodes.push(...part.nodes);
+  }
+  return normalizeComposerDocument({ version: 1, nodes });
 }

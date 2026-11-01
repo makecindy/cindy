@@ -192,6 +192,7 @@ import {
   buildMessageEditAttachments,
   commitMessageEditRewind,
   messageEditErrorText,
+  mergeMessageEditDraft,
   messageEditRollbackHint,
   type MessageEditRollbackHint,
 } from '@/session/messageEdit';
@@ -8118,15 +8119,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (pendingQueueCount > 0) cancelMessageEdit();
   }, [cancelMessageEdit, messageEditing, pendingQueueCount]);
 
-  /** 把若干文档按顺序合并写进指定任务的草稿库(跳过空文档),用于页面已不在前台的收尾。 */
-  function persistMessageEditDraft(draftSessionId: string, documents: ComposerDocument[]) {
-    const nodes: ComposerDocument['nodes'] = [];
-    for (const item of documents) {
-      if (!composerDocumentHasContent(item)) continue;
-      if (nodes.length > 0) nodes.push({ type: 'text', text: '\n\n' });
-      nodes.push(...item.nodes);
-    }
-    const merged = normalizeComposerDocument({ version: 1, nodes });
+  /** 页面已不在前台的收尾:按该任务草稿库的现状幂等合并(见 mergeMessageEditDraft)。 */
+  function persistMessageEditDraft(draftSessionId: string, input: { stash: ComposerDocument; replacement: ComposerDocument | null }) {
+    const merged = mergeMessageEditDraft({
+      stored: readComposerDocumentDraftSync(draftSessionId),
+      ...input,
+    });
     saveComposerDraft(draftSessionId, composerDocumentProjectedText(merged));
     saveComposerDocumentDraft(draftSessionId, merged);
   }
@@ -8149,7 +8147,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!stillCurrent()) return;
     }
     // 空文本 + 无附件的重发会变成「只回退不重发」,那是「回到此处」不是编辑。
-    if (!composerDocumentProjectedText(document).trim() && attachmentsRef.current.length === 0 && getPendingUploadCount() === 0) {
+    if (!composerDocumentHasContent(document) && attachmentsRef.current.length === 0 && getPendingUploadCount() === 0) {
       return;
     }
     if (remoteSessionStore.getInputProjection(sessionId).pendingQueue.length > 0 || outboxRef.current.length > 0) {
@@ -8182,7 +8180,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (!stillCurrent()) {
         // 旧回合已在被控端软删,用户在提交途中离开了任务:替代消息与暂存草稿都要落到
         // 该任务自己的草稿里(回来时可见),不能因页面不在前台就丢掉。
-        persistMessageEditDraft(sessionId, [document, editing.stashedDocument]);
+        persistMessageEditDraft(sessionId, { stash: editing.stashedDocument, replacement: document });
         remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
         return;
       }
@@ -8197,10 +8195,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       if (outboxSessionAliveRef.current !== sessionId) {
         // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
         // 重发没来得及受理时,编辑内容也一并留在该任务草稿里。
-        persistMessageEditDraft(sessionId, [
-          accepted === true ? (readComposerDocumentDraftSync(sessionId) ?? emptyComposerDocument()) : document,
-          editing.stashedDocument,
-        ]);
+        persistMessageEditDraft(sessionId, {
+          stash: editing.stashedDocument,
+          replacement: accepted === true ? null : document,
+        });
         return;
       }
       // 一律合并:等待期间用户新输入的内容不能被暂存草稿覆盖;重发成功时输入框为空,等价于恢复;
