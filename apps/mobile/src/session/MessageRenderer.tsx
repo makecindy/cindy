@@ -4820,7 +4820,8 @@ function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem;
       ? <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
       : <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
           streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />)}
-    {flattened.loaders.some(loader => loader.loading) && <ActivityIndicator color={colors.textSecondary} />}
+    {/* Live turns already spin in the header; a detail-read row would come and go and shift the list. */}
+    {!item.isStreaming && flattened.loaders.some(loader => loader.loading) && <CompactActivityIndicator color={colors.textTertiary} size={iconSize.sm} />}
     {flattened.loaders.filter(loader => loader.failed).map(loader => <Pressable key={loader.key} accessibilityRole="button"
       onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>)}
     {item.isStreaming && segments.at(-1)?.kind === 'content' && <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} failed={false} />}
