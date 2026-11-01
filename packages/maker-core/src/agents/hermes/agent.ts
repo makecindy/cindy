@@ -659,13 +659,18 @@ export class HermesAgent extends BaseAgent {
       queue.end();
     });
 
+    // The current Cindy model id ('hermes-default' sentinel or an override).
+    // Session.model reads it and expects it to follow successful switches.
+    let currentModel = input.model;
     const handle: AgentSessionHandle = {
       // Maker persists this as sessions.sdk_session_id and feeds it back as
       // resumeSessionId. It must be the Hermes-native id or '' (fresh), never the
       // daemon's logical routing id.
       id: input.resumableSessionId,
       agentKind: 'hermes',
-      model: input.model,
+      get model(): string {
+        return currentModel;
+      },
       validateSendOptions(sendOpts: SendOptions): void {
         rejectUnsupportedSendOptions(sendOpts);
       },
@@ -801,6 +806,7 @@ export class HermesAgent extends BaseAgent {
           ...(route?.baseUrl ? { baseUrl: route.baseUrl } : {}),
           ...(route?.apiKey ? { apiKey: route.apiKey } : {}),
         });
+        currentModel = trimmed;
       },
     };
 

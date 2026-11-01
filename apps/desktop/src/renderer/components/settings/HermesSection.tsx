@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { invalidateHermesModelCatalog } from '@/hooks/useHermesModelCatalog';
@@ -66,6 +67,7 @@ export function HermesSection() {
   const [newServerType, setNewServerType] = useState<'http' | 'stdio'>('http');
   const [newServerTarget, setNewServerTarget] = useState('');
   const [addingServer, setAddingServer] = useState(false);
+  const [togglingPlugin, setTogglingPlugin] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -165,6 +167,23 @@ export function HermesSection() {
       await loadStatus();
     } catch {
       toast.error('Failed to remove MCP server');
+    }
+  };
+
+  // Runs `hermes plugins enable|disable <id>` via the daemon; Hermes owns config.yaml.
+  // Applies to new chats; a running chat keeps the plugins it started with.
+  const handleTogglePlugin = async (id: string, enabled: boolean) => {
+    setTogglingPlugin(id);
+    try {
+      await window.electronAPI.maker.hermesConfig.setPluginEnabled(id, enabled);
+      toast.success(`Plugin "${id}" ${enabled ? 'enabled' : 'disabled'}. Applies to new chats.`);
+      await loadStatus();
+    } catch (error) {
+      toast.error(
+        `Could not ${enabled ? 'enable' : 'disable'} "${id}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setTogglingPlugin(null);
     }
   };
 
@@ -432,7 +451,7 @@ export function HermesSection() {
             </div>
             <span className={SETTINGS_ROW_HINT_CLASS}>
               Headless Hermes plugins installed in{' '}
-              <code className="font-mono">~/.hermes-cindy/plugins</code>
+              <code className="font-mono">~/.hermes-cindy/plugins</code>. Changes apply to new chats.
             </span>
           </div>
 
@@ -452,6 +471,12 @@ export function HermesSection() {
                   ) : (
                     <span className="text-11 text-[var(--text-tertiary)]">Disabled</span>
                   )}
+                  <Switch
+                    checked={plugin.enabled}
+                    disabled={togglingPlugin !== null}
+                    onCheckedChange={(v) => void handleTogglePlugin(plugin.id, v)}
+                    aria-label={`${plugin.enabled ? 'Disable' : 'Enable'} plugin ${plugin.id}`}
+                  />
                   {plugin.source && (
                     <a
                       href={plugin.source}

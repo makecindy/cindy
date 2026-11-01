@@ -13627,6 +13627,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return removeHermesMcpServer(name);
     },
   );
+  ipcMain.handle(
+    MAKER_INVOKE.HERMES_CONFIG_SET_PLUGIN_ENABLED,
+    async (event, input: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const p = (input ?? {}) as { name?: unknown; enabled?: unknown };
+      const name = typeof p.name === 'string' ? p.name.trim() : '';
+      if (!name || typeof p.enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'plugin name and enabled:boolean are required');
+      }
+      const enabled = p.enabled;
+      // Hermes owns the plugins section of config.yaml; the daemon runs its CLI.
+      return withHermesManagerDaemon((client) =>
+        client.request<{ name: string; enabled: boolean }>(
+          HERMES_MGR_METHODS.CONFIG_SET_PLUGIN_ENABLED,
+          { name, enabled },
+          { timeoutMs: 40_000 },
+        ),
+      );
+    },
+  );
   // Local backup/restore (ROADMAP 0.11). Same code path as `pnpm backup:create|restore`.
   const backupPaths = (): BackupPaths => ({
     ...defaultBackupPaths(),

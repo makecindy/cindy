@@ -10,6 +10,46 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 1.6b plugin switch `live-proven` (owner)
+
+After pulling `claude/jolly-brown-n5edmp` and restarting, the owner used Settings → General → Hermes Harness → Plugins:
+- Switch **on**: `config.yaml` had `plugins: enabled: [superpowers/.hermes-plugin]`, `disabled: []`.
+- Switch **off**: `enabled: []`, `disabled: [superpowers/.hermes-plugin]`.
+
+Hermes's own CLI rewrote the section; Cindy wrote no YAML. Hermes also dropped the blank line before `mcp_servers:` (its own formatting, harmless). Not part of this task, but seen: the Cindy marketplace "Plugins" page and the SkillHub "Public" tab ("Load failed: 请求失败 (0)") are upstream cloud surfaces, unrelated to Hermes plugins.
+
+---
+
+## 2026-11-01 — Hermes handle model tracks switches + plugin on/off in Settings (ROADMAP 1.6a) (`unit-tested`)
+
+**1. Hermes `AgentSessionHandle.model` follows `setModel`** (`packages/maker-core/src/agents/hermes/agent.ts`). The handle exposed `model` as a fixed property from session start. `Session.model` and the desktop runtime profiles (`readSessionRuntimeProfiles`: `live.model`) therefore reported the start model after a mid-session switch. It is now a getter over a variable updated after `QUERY_SET_MODEL` succeeds, keeping the Cindy id (`hermes-default` sentinel or the override). Test: `agent.test.ts` "handle.model follows a successful setModel" failed first (`expected 'hermes-default' to be 'qwen3-8b'`), then passed. 44/44 Hermes agent tests.
+
+**2. Plugin on/off switch (1.6a).**
+- Owner input: `hermes-cindy plugins disable superpowers` left `plugins: { enabled: [], disabled: [superpowers/.hermes-plugin] }` in `~/.hermes-cindy/config.yaml`.
+- Daemon: `config/setPluginEnabled {name, enabled}` → `hermes plugins enable|disable <name>` with `HERMES_HOME` = manager home (`hermes-plugins.ts`). Names must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, so no `..`, no flags. The CLI's stderr comes back as an `INTERNAL` RPC error. Cindy never writes the plugins YAML itself (AGENTS.md §3).
+- Fixture: `fake-hermes.mjs` answers `plugins …` (exit 0, or 1 with `FAKE_PLUGINS_FAIL`).
+- Desktop: channel `maker:hermes-config:set-plugin-enabled` (trusted renderer only), preload `hermesConfig.setPluginEnabled`, `HermesSection.tsx` `Switch` per plugin with a toast. Hint text says changes apply to new chats.
+- `parseHermesPluginLists` (`hermes-manager-client.ts`, js-yaml read-only) replaces a regex that only understood a block `enabled:` list and ignored `disabled:`.
+- Tests: daemon `hermes-manager.test.ts` +1 (both argv calls, home, four bad names refused with no CLI call, CLI failure → `INTERNAL`); mutation check swapping enable/disable failed it. Client `hermesManagerClient.test.ts` +2 (owner's exact config shape; block list; missing/broken YAML). Package: maker-hermes-manager 104/104.
+
+**Gates (Node 22.23.4, cloud container):** serial `pnpm -r typecheck` → `EXIT=0`; `pnpm test:runner` → `EXIT=0` (607/0); `pnpm check:test-hygiene` → PASS. Targeted suites green: maker-hermes-manager 104/104, Hermes agent 44/44, hermesManagerClient 9/9, lizi-mcps 76/76. **Related unit tier NOT yet green.** The first full run failed only on the container's missing `better_sqlite3.node` build (566 "Could not locate the bindings file"; deps were installed with `--ignore-scripts`). After building it, lizi-mcps went 76/76. **Owner's Mac (M5, Node 22), same day:** `test:runner` 608 pass / 0 fail, then every unit workspace PASS, including `apps/desktop unit` (308 s), `packages/maker-core`, `packages/maker-hermes-manager`, `packages/lizi-mcps`; 7 SKIP (no tests by design). **Related unit gate green.**
+
+**Still open:** 1.6b live proof (owner: Settings → Hermes Harness → toggle `superpowers` off/on; check `grep -A4 "^plugins:" ~/.hermes-cindy/config.yaml` matches the page). The dev restart rebuilds `dist/hermes-mgr.mjs`; if the switch errors with an unknown method, the daemon bundle is stale.
+
+---
+
+## 2026-11-01 — ROADMAP 2.2 closed `live-proven` (owner check after merging PR #1)
+
+Owner pulled `main` (PR th3ottoman-png/cindy#1 merged), restarted the dev app, and reported:
+- qwen3-8b with the Hermes `superpowers` plugin disabled answers normally, with no `skill_view` loop. 2.2b-4 is closed by configuration, with no code change.
+- Switching models mid-conversation keeps the selected model in the header and picker.
+
+Row 2.2 is now ✅ `live-proven`. No code changed in this entry.
+
+**Still open in Phase 2 (all owner-clicked live checks, code already `unit-tested`):** 2.1b-live, 2.4b-live, 2.5b-live (the "Summarise and continue" button itself; the banner percentage was proven 2026-11-01).
+
+---
+
 ## 2026-11-01 — Owner live check after disabling `superpowers` (`live-proven`)
 
 Owner disabled the Hermes `superpowers` plugin via the `hermes-cindy` launcher, then ran a new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, 262,144 loaded) with three turns. Screenshot evidence:

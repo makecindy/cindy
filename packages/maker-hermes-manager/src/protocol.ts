@@ -111,6 +111,7 @@ export const METHODS = {
   CONFIG_LIST_MCP_SERVERS: 'config/listMcpServers',
   CONFIG_SET_MCP_SERVER: 'config/setMcpServer',
   CONFIG_REMOVE_MCP_SERVER: 'config/removeMcpServer',
+  CONFIG_SET_PLUGIN_ENABLED: 'config/setPluginEnabled',
 } as const;
 
 export type MethodName = (typeof METHODS)[keyof typeof METHODS];
