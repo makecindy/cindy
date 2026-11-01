@@ -9,12 +9,40 @@ import { getDbClient } from '../localDb/client/current.js';
 import { botGroupPlans, botSessionLinks, sessions } from '../localDb/schema.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupPlanRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, parseBotGroupPlanRouteKey } from '../../shared/botGroupChat.js';
+import {
+  BotGuestAccessRefusedError,
+  parseGuestDmRouteKey,
+  resolveGuestLaneAccess,
+  type GuestLaneAccess,
+} from '../im/shared/botImGuestAccess.js';
+import { linkedProjectDirectoryKey, readBotLinkedProjects } from './botWorkbenchService.js';
 
 export interface BotWorkspaceRuntimeDeps {
   ensureWorkspaceDir?: typeof ensureBotWorkspaceDir;
   ownerUserDataPath?: () => string;
   legacyUserDataPath?: () => string;
   isDirectory?: (dir: string) => Promise<boolean>;
+  resolveGuestAccess?: (botId: string, routeKey: string | null) => Promise<GuestLaneAccess>;
+}
+
+/** Production resolver: connection records + the teammate's linked local projects. */
+export async function resolveBotGuestLaneAccess(
+  botId: string,
+  routeKey: string | null,
+  ownerUserDataPath: () => string = ownerScopedUserDataPath,
+): Promise<GuestLaneAccess> {
+  // Only guest lanes read the connection records; loading the store lazily
+  // keeps every other Bot start free of the IM settings file.
+  if (!parseGuestDmRouteKey(routeKey)) return { kind: 'shared' };
+  const { listBotImConnectionsForBot } = await import('../im/shared/botImConnectionStore.js');
+  return resolveGuestLaneAccess(botId, routeKey, {
+    listConnections: listBotImConnectionsForBot,
+    readLinkedProjectPaths: async (id) => (await readBotLinkedProjects(ownerUserDataPath(), id))
+      .filter((project) => !project.deviceId)
+      .map((project) => project.path),
+    isDirectory: isExistingDirectory,
+    sameDirectory: (left, right) => linkedProjectDirectoryKey(left) === linkedProjectDirectoryKey(right),
+  });
 }
 
 export class BotPlanWorkDirUnavailableError extends Error {
@@ -97,6 +125,22 @@ export async function prepareBotWorkspaceRuntime(
     opts.workspaceKind = 'project';
     opts.remoteHostId = undefined;
     return;
+  }
+
+  // A guest bound to a project works there and only there; the binding is
+  // re-checked on every start, like a group plan's work directory, and a
+  // binding that no longer resolves fails instead of falling back to Home.
+  if (link[0]?.role === 'channel') {
+    const resolveGuestAccess = deps.resolveGuestAccess
+      ?? ((id: string, routeKey: string | null) => resolveBotGuestLaneAccess(id, routeKey, ownerUserDataPath));
+    const guest = await resolveGuestAccess(botId, link[0].routeKey);
+    if (guest.kind === 'refused') throw new BotGuestAccessRefusedError(guest.reason);
+    if (guest.kind === 'bound') {
+      opts.workingDir = guest.projectPath;
+      opts.workspaceKind = 'project';
+      opts.remoteHostId = undefined;
+      return;
+    }
   }
 
   const ensureWorkspaceDir = deps.ensureWorkspaceDir ?? ensureBotWorkspaceDir;

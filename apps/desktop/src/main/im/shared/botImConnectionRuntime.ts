@@ -40,6 +40,7 @@ import {
   type BotImConnectionRemoveResult,
   type BotImConnectionView,
   type BotImFeishuService,
+  type BotImGuestAccessUpdate,
 } from '../../../shared/botImConnection';
 import {
   addBotImConnectionRecord,
@@ -51,8 +52,12 @@ import {
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
   setBotImConnectionGroupActivation,
+  setBotImConnectionGuestAccess,
+  isBotImGuestId,
   updateBotImConnectionRecord,
 } from './botImConnectionStore';
+import { linkedProjectDirectoryKey, readBotLinkedProjects } from '../../maker-ipc/botWorkbenchService';
+import { ownerScopedUserDataPath } from '../../appSessionState';
 import { companionConnectionRouteKeyPrefix } from './imBotBindingRoute';
 import { archiveBotImConnectionLane, listBotImConnectionLanes, resetBotImConnectionLane } from './botImLaneRuntime';
 import type { ImOrchestrator } from './orchestrator';
@@ -610,6 +615,58 @@ export async function setBotImConnectionGroupMode(
   return listBotImConnectionGroups(id);
 }
 
+/**
+ * Owner-only (#8359): bind a guest to one of the teammate's linked local
+ * projects, unbind it, or choose what unbound guests get. The project must be
+ * linked at the moment of binding; runtime re-checks it on every start.
+ */
+export async function setBotImConnectionGuestAccessForSettings(
+  update: BotImGuestAccessUpdate,
+): Promise<BotImConnectionListPayload> {
+  const record = readBotImConnection(update.connectionId);
+  if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const projectPath = update.binding?.projectPath;
+  if (projectPath) {
+    const linked = (await readBotLinkedProjects(ownerScopedUserDataPath(), record.botId))
+      .filter((project) => !project.deviceId)
+      .find((project) => linkedProjectDirectoryKey(project.path) === linkedProjectDirectoryKey(projectPath));
+    if (!linked) throwIpcError('PRECONDITION_FAILED', 'PROJECT_NOT_LINKED');
+  }
+  let updated: BotImConnectionRecord | null;
+  try {
+    updated = await setBotImConnectionGuestAccess(record.id, {
+      ...(update.unbound ? { unbound: update.unbound } : {}),
+      ...(update.binding ? { binding: update.binding } : {}),
+    });
+  } catch (error) {
+    throwIpcError('INVALID_PARAMS', error instanceof Error ? error.message : 'INVALID_GUEST_ACCESS');
+  }
+  if (!updated) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
+  const live = instances.get(record.id);
+  if (live) live.record = updated;
+  log.info(`bot im connection ${record.id}: guest access updated (bindings=${Object.keys(updated.guestAccess?.bindings ?? {}).length}, unbound=${updated.guestAccess?.unbound ?? 'shared'})`);
+  broadcastChanged();
+  return buildBotImConnectionListPayload();
+}
+
+export function parseBotImGuestAccessUpdate(payload: unknown): BotImGuestAccessUpdate {
+  const p = (payload ?? {}) as { connectionId?: unknown; unbound?: unknown; binding?: unknown };
+  if (!isBotImConnectionId(p.connectionId)) throwIpcError('INVALID_PARAMS', 'connectionId is invalid');
+  const out: BotImGuestAccessUpdate = { connectionId: p.connectionId };
+  if (p.unbound !== undefined) {
+    if (p.unbound !== 'shared' && p.unbound !== 'refuse') throwIpcError('INVALID_PARAMS', 'unbound is invalid');
+    out.unbound = p.unbound;
+  }
+  if (p.binding !== undefined) {
+    const b = (p.binding ?? {}) as { guestId?: unknown; projectPath?: unknown };
+    if (!isBotImGuestId(b.guestId)) throwIpcError('INVALID_PARAMS', 'guestId is invalid');
+    if (b.projectPath !== null && typeof b.projectPath !== 'string') throwIpcError('INVALID_PARAMS', 'projectPath is invalid');
+    out.binding = { guestId: b.guestId, projectPath: b.projectPath };
+  }
+  if (!out.unbound && !out.binding) throwIpcError('INVALID_PARAMS', 'nothing to change');
+  return out;
+}
+
 export async function removeBotImConnection(id: string): Promise<BotImConnectionRemoveResult> {
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
@@ -776,6 +833,10 @@ export function registerBotImConnectionIpc(): void {
     return setBotImConnectionGroupMode(p.id, p.chatId, mode);
   });
   // 隐藏任务小节: 群名沿用「群聊」小节同一份已知群(deps.listKnownGroups)。
+  ipcMain.handle('botImConnection:set-guest-access', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    return setBotImConnectionGuestAccessForSettings(parseBotImGuestAccessUpdate(payload));
+  });
   ipcMain.handle('botImConnection:list-lanes', (e, payload) => {
     assertTrustedAppRendererEvent(e);
     const id = (payload as { id?: unknown } | null)?.id;

@@ -8,6 +8,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import { resolveBotGuestLaneAccess } from './botWorkspaceRuntime.js';
+import { BotGuestAccessRefusedError, type GuestLaneAccess } from '../im/shared/botImGuestAccess.js';
 import { buildDefaultBotIdentity } from '../../shared/botProfileDefaults.js';
 import {
   buildBotContextTier,
@@ -114,6 +116,8 @@ export interface BotProfileRuntimeDeps {
     remoteHostId?: string;
   }) => Promise<BotToolsetCatalogItem[]>;
   readMemoryIndex?: (scopeKey: string) => Promise<string>;
+  /** Guest isolation of a `channel` lane (#8359). Defaults to the connection records. */
+  resolveGuestAccess?: (botId: string, routeKey: string | null) => Promise<GuestLaneAccess>;
   /**
    * 这个伙伴绑定了哪些平台的机器人(Telegram / 飞书), 来自 bot-im-connections 记录(不含凭证)。
    *
@@ -532,6 +536,19 @@ export async function hydrateBotProfileRuntime(
     .limit(1);
   if (!version) return null;
   const chatOnly = row.role === 'group' && isChatOnlyGroupLane(row.routeKey);
+  // A guest bound to a project gets that project as its only file surface and
+  // its own memory scope. prepareBotWorkspaceRuntime already moved workingDir;
+  // this resolves the same binding again so memory never outlives a change.
+  const guestAccess = row.role === 'channel'
+    ? await (deps.resolveGuestAccess ?? ((id: string, key: string | null) => resolveBotGuestLaneAccess(id, key)))(row.botId, row.routeKey)
+    : null;
+  if (guestAccess?.kind === 'refused') throw new BotGuestAccessRefusedError(guestAccess.reason);
+  const boundGuest = guestAccess?.kind === 'bound' ? guestAccess : null;
+  if (boundGuest) {
+    opts.workingDir = boundGuest.projectPath;
+    opts.extraDirs = [];
+    opts.writableDirs = [];
+  }
   const config = normalizeBotToolCapabilities(chatOnly ? {
     toolCapabilityVersion: 1, memory: false, userContextSource: '', skills: [], skillMode: 'allowlist',
     mcpServers: [], mcpMode: 'allowlist', toolsets: [], toolsetMode: 'allowlist',
@@ -585,7 +602,7 @@ export async function hydrateBotProfileRuntime(
   // Maker Memory switch. The profile can still explicitly disable its own memory.
   const memoryEngineEnabled = config.memory !== false;
   opts.makerMemoryEnabled = memoryEngineEnabled;
-  const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
+  const botMemoryScopeKey = boundGuest?.memoryScopeKey ?? buildBotMemoryScopeKey(row.botId);
   if (config.memory !== false) opts.makerMemoryScopeKey = botMemoryScopeKey;
   const memoryActive = memoryEngineEnabled;
   let botMemoryIndex: string | null = '';
@@ -603,12 +620,16 @@ export async function hydrateBotProfileRuntime(
   const userContextSource = typeof config.userContextSource === 'string'
     ? config.userContextSource
     : '';
-  opts.botUserProfilePrompt = buildBotUserProfilePrompt(userContextSource);
+  // USER.md describes the owner. A bound guest is not that user, so it does
+  // not receive it (an unbound guest keeps the pre-#8359 behaviour).
+  opts.botUserProfilePrompt = boundGuest ? '' : buildBotUserProfilePrompt(userContextSource);
   const memoryRefs: BotMemoryRuntimeRef[] = !memoryActive
     ? []
     : [
         memoryRef('bot', botMemoryScopeKey, 'read-write', botMemoryIndex),
-        memoryRef('user', `profile:${row.botId}:v${row.profileVersion}`, 'read-only', userContextSource),
+        ...(boundGuest ? [] : [
+          memoryRef('user', `profile:${row.botId}:v${row.profileVersion}`, 'read-only', userContextSource),
+        ]),
       ];
   let resolvedSkills = configuredSkills;
   let unavailableSkills: string[] = [];
@@ -916,11 +937,13 @@ export async function hydrateBotProfileRuntime(
   // Local userData paths are meaningless on a remote harness. Do not promise or
   // mount a Home there until the host provisions an actual remote-owned path.
   if (!chatOnly && deps.readProfileFolder && !opts.remoteHostId) {
+    // A bound guest keeps the persona overlay but never the Home mount: Home
+    // holds the shared workspace other guests and the owner use.
     folderPrompt = await deps
       .readProfileFolder({ botId: row.botId })
       .catch(() => null);
   }
-  const botHomeDir = folderPrompt?.homeDir.trim() ?? '';
+  const botHomeDir = boundGuest ? '' : (folderPrompt?.homeDir.trim() ?? '');
   // 提示词与可写工具面必须同进同退 —— 只给其中一个就是开一张打不开的空头支票。
   if (botHomeDir) {
     const mounted = withBotHomeAccess(

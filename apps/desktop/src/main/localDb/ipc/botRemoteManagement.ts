@@ -212,7 +212,11 @@ const settingsHost = createBotRemoteSettingsHost({
     },
     channels: {
       im: {
-        list: async () => (await imRuntime()).buildBotImConnectionListPayload(),
+        // Guest bindings hold local project paths; they stay on this computer.
+        list: async () => {
+          const payload = (await imRuntime()).buildBotImConnectionListPayload();
+          return { connections: payload.connections.map(({ guestAccess: _local, ...connection }) => connection) };
+        },
         remove: async (id) => (await imRuntime()).removeBotImConnection(id),
         listGroups: async (id) => (await imRuntime()).listBotImConnectionGroups(id),
         setGroupActivation: async (id, chatId, mode) => (await imRuntime()).setBotImConnectionGroupMode(id, chatId, mode),

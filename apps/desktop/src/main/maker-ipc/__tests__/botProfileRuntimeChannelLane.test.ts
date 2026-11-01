@@ -180,3 +180,44 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     await expect(hydrateBotProfileRuntime(opts, {}, { persistSnapshot: false })).resolves.toBeNull();
   });
 });
+
+// #8359: the owner bound this guest to a project. Its lane must not see the
+// teammate's memory, Home or the owner's USER.md; a refused guest never starts.
+describe('guest-DM lanes bound to a project', () => {
+  const bound = {
+    kind: 'bound' as const,
+    route: { channel: 'telegram', botContextId: '777', guestId: '555' },
+    projectPath: '/work/client-a',
+    memoryScopeKey: 'bot:bot:guest:telegram:555',
+  };
+
+  it('isolates memory, file surface and owner profile', async () => {
+    seed('channel', 'im:telegram:777:dm:555', { memory: true, userContextSource: 'Owner: Takeshi', mcpMode: 'inherit', toolsetMode: 'inherit' });
+    const readMemoryIndex = vi.fn(async () => '- guest note');
+    const opts = {
+      id: 'lane', agentKind: 'claude-code', workingDir: '/work/client-a', model: 'm',
+      extraDirs: ['/owner/secret'], writableDirs: ['/owner/secret'],
+    } as unknown as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {
+      resolveGuestAccess: async () => bound,
+      readMemoryIndex,
+      readProfileFolder: async () => ({ homeDir: '/bots/bot', contentWritableDirs: ['/bots/bot/workspace'], systemPromptOverride: '' }),
+    }, { persistSnapshot: false });
+    expect(opts.makerMemoryScopeKey).toBe('bot:bot:guest:telegram:555');
+    expect(readMemoryIndex).toHaveBeenCalledWith('bot:bot:guest:telegram:555');
+    expect(readMemoryIndex).not.toHaveBeenCalledWith('bot:bot');
+    expect(opts.workingDir).toBe('/work/client-a');
+    expect(opts.extraDirs ?? []).toEqual([]);
+    expect(opts.writableDirs ?? []).toEqual([]);
+    expect(prompt(opts)).not.toContain('/bots/bot');
+    expect(opts.botUserProfilePrompt ?? '').not.toContain('Takeshi');
+  });
+
+  it('refuses a guest the owner has not let in', async () => {
+    seed('channel', 'im:telegram:777:dm:556');
+    const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/x', model: 'm' } as MakerSessionCreateOpts;
+    await expect(hydrateBotProfileRuntime(opts, {
+      resolveGuestAccess: async () => ({ kind: 'refused', route: bound.route, reason: 'unbound' }),
+    }, { persistSnapshot: false })).rejects.toMatchObject({ code: 'BOT_GUEST_ACCESS_REFUSED' });
+  });
+});

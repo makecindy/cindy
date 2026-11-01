@@ -153,6 +153,16 @@ export function botProfileMemoryDir(userDataDir: string, botId: string): string 
 }
 
 /**
+ * Memory of one guest bound to its own project. It sits beside, never inside,
+ * `memories/`, so the owner's index and nightly learning never read it. The
+ * directory name is a digest: guest ids come from the IM platform.
+ */
+export function botGuestMemoryDir(userDataDir: string, botId: string, channel: string, guestId: string): string {
+  const digest = createHash('sha256').update(JSON.stringify([channel, guestId])).digest('hex').slice(0, 32);
+  return path.join(botProfileDir(userDataDir, botId), 'guest-memories', digest);
+}
+
+/**
  * Agent 的原始文件工具只拿 workspace，不拿整个 Home。memories / skills 虽然也在
  * Home 内，但只能经宿主的类型化 Memory / Skill 接口写入：这样既不会把 fts.db、
  * 迁移 receipt 等内部文件暴露给模型，也不能用 symlink 把宿主写操作引到 Home 外。

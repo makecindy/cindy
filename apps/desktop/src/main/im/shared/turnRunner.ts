@@ -189,6 +189,7 @@ import {
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImChannelAdapter } from './types';
 import {
+  COMPANION_GUEST_REFUSED,
   companionLaneRouteKey,
   type ImCompanionRouteDeps,
   type ImCompanionSessionTarget,
@@ -1495,9 +1496,13 @@ export function createTurnRunner(
           blocked = await deps.companion.prepareSend(rowId);
         }
         if (blocked) {
-          const text = ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked);
+          const guestRefused = blocked === COMPANION_GUEST_REFUSED;
+          const rejectReason = guestRefused ? 'guest_refused' : 'companion_unavailable';
+          const text = guestRefused
+            ? (ui.agent.guestRefused ?? ui.agent.runtimeError(blocked))
+            : (ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked));
           if (item.turn.queueMode === 'internal') {
-            const consumed = (await item.onEarlyReject?.('companion_unavailable', text)) ?? false;
+            const consumed = (await item.onEarlyReject?.(rejectReason, text)) ?? false;
             if (!consumed) {
               try {
                 await sendTextClaimingOpener(userId, text, item.turn.scopeKey);
@@ -1509,11 +1514,11 @@ export function createTurnRunner(
           await handleSendPreDispatchFailure(state, userId, {
             turn: item.turn,
             source: `${channel}-runner`,
-            reason: 'companion_unavailable',
+            reason: rejectReason,
             context: buildSendContext(rowId),
             onEarlyReject: async () => true,
           });
-          return { kind: 'rejected', reason: 'companion_unavailable' };
+          return { kind: 'rejected', reason: rejectReason };
         }
       }
       // 发送前故障恢复(与桌面直发、官方 hook 同一个入口): 仅在真实满窗或已知

@@ -9,6 +9,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
 import { desktopMakerLogger } from '../../maker-host/logger-adapter.js';
@@ -19,7 +20,10 @@ import {
   type BotImChannel,
   type BotImConnectionRecord,
   type BotImFeishuService,
+  type BotImGuestAccess,
+  type BotImGuestBinding,
   type BotImTaskArchiveActivity,
+  type BotImUnboundGuestPolicy,
 } from '../../../shared/botImConnection.js';
 
 const log = desktopMakerLogger.child('bot-im-connection-store');
@@ -61,6 +65,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
       ? r.botContextId
       : null;
   const groupActivation = normalizeGroupActivation(r.groupActivation);
+  const guestAccess = normalizeGuestAccess(r.guestAccess);
   const archivedTaskRows = normalizeArchivedTaskRows(r.archivedTaskRows);
   const archivedTaskActivity = normalizeArchivedTaskActivity(r.archivedTaskActivity, archivedTaskRows);
   return {
@@ -70,6 +75,7 @@ function normalizeRecord(id: string, raw: unknown): Omit<BotImConnectionRecord, 
     ...(service ? { service } : {}),
     botContextId,
     ...(groupActivation ? { groupActivation } : {}),
+    ...(guestAccess ? { guestAccess } : {}),
     ...(archivedTaskRows ? { archivedTaskRows } : {}),
     ...(archivedTaskActivity ? { archivedTaskActivity } : {}),
   };
@@ -121,6 +127,42 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
     if (/^-?\d{1,32}$/.test(chatId) && mode === 'always') out[chatId] = 'always';
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Platform user ids (Telegram / Discord numbers, Feishu open ids …). */
+const GUEST_ID_PATTERN = /^[A-Za-z0-9_.@-]{1,128}$/;
+export const MAX_GUEST_BINDINGS = 256;
+
+export function isBotImGuestId(value: unknown): value is string {
+  return typeof value === 'string' && GUEST_ID_PATTERN.test(value);
+}
+
+function isProjectPath(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 4096
+    && !value.includes('\0') && path.isAbsolute(value);
+}
+
+/**
+ * Unknown policies fall back to the default ('shared' = not stored); a damaged
+ * binding is dropped, so that guest is treated as unbound, never as bound to
+ * some other directory.
+ */
+function normalizeGuestAccess(raw: unknown): BotImGuestAccess | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const unbound: BotImUnboundGuestPolicy | undefined = r.unbound === 'refuse' ? 'refuse' : undefined;
+  const bindings: Record<string, BotImGuestBinding> = {};
+  if (r.bindings && typeof r.bindings === 'object' && !Array.isArray(r.bindings)) {
+    for (const [guestId, value] of Object.entries(r.bindings as Record<string, unknown>)) {
+      if (Object.keys(bindings).length >= MAX_GUEST_BINDINGS) break;
+      if (!isBotImGuestId(guestId) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const projectPath = (value as Record<string, unknown>).projectPath;
+      if (isProjectPath(projectPath)) bindings[guestId] = { projectPath };
+    }
+  }
+  const hasBindings = Object.keys(bindings).length > 0;
+  if (!unbound && !hasBindings) return undefined;
+  return { ...(unbound ? { unbound } : {}), ...(hasBindings ? { bindings } : {}) };
 }
 
 function normalizeDocument(raw: unknown): BotImConnectionDocument {
@@ -191,7 +233,7 @@ export async function addBotImConnectionRecord(
 
 export async function updateBotImConnectionRecord(
   id: string,
-  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation'>>,
+  patch: Partial<Pick<BotImConnectionRecord, 'botContextId' | 'groupActivation' | 'guestAccess'>>,
 ): Promise<BotImConnectionRecord | null> {
   if (!isBotImConnectionId(id)) return null;
   let next: BotImConnectionRecord | null = null;
@@ -300,6 +342,37 @@ export async function setBotImConnectionGroupActivation(
   else delete next[chatId];
   return updateBotImConnectionRecord(id, {
     groupActivation: Object.keys(next).length > 0 ? next : undefined,
+  });
+}
+
+/**
+ * Change who may use this connection privately and where each guest works.
+ * Validation lives here so every caller (settings IPC, remote settings) gets
+ * the same rules; the caller checks that `projectPath` is a project linked to
+ * the teammate.
+ */
+export async function setBotImConnectionGuestAccess(
+  id: string,
+  change: { unbound?: BotImUnboundGuestPolicy; binding?: { guestId: string; projectPath: string | null } },
+): Promise<BotImConnectionRecord | null> {
+  const current = readBotImConnection(id);
+  if (!current) return null;
+  const unbound = change.unbound ?? current.guestAccess?.unbound ?? 'shared';
+  const bindings = { ...(current.guestAccess?.bindings ?? {}) };
+  if (change.binding) {
+    const { guestId, projectPath } = change.binding;
+    if (!isBotImGuestId(guestId)) throw new Error('INVALID_GUEST_ID');
+    if (projectPath === null) delete bindings[guestId];
+    else {
+      if (!isProjectPath(projectPath)) throw new Error('INVALID_PROJECT_PATH');
+      if (!Object.hasOwn(bindings, guestId) && Object.keys(bindings).length >= MAX_GUEST_BINDINGS) {
+        throw new Error('GUEST_BINDING_CAPACITY_REACHED');
+      }
+      bindings[guestId] = { projectPath };
+    }
+  }
+  return updateBotImConnectionRecord(id, {
+    guestAccess: normalizeGuestAccess({ unbound, bindings }),
   });
 }
 

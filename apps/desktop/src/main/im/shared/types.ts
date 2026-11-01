@@ -385,6 +385,8 @@ export interface ImUiTextPack {
     unsupportedNotice: (entries: IMUnsupportedEntry[]) => string;
     /** 伙伴当前不能接消息(暂停 / 归档等)时的渠道提示。缺省用 runtimeError 包一层。 */
     companionUnavailable?: (reason: string) => string;
+    /** Guest the owner has not let in (no project bound, or the bound one is gone). */
+    guestRefused?: string;
   };
   /**
    * 派发前失败文案。agentUnsupported 用于「所选 Agent 无法提供渠道所需的

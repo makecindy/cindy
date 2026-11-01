@@ -24,6 +24,7 @@ import {
   removeBotImConnectionRecord,
   secretKeyPrefixFor,
   setBotImConnectionGroupActivation,
+  setBotImConnectionGuestAccess,
   updateBotImConnectionRecord,
 } from '../botImConnectionStore';
 
@@ -127,6 +128,28 @@ describe('bot im connection store', () => {
       }),
     );
     expect(readBotImConnection('222222222222')?.groupActivation).toEqual({ '-1': 'always' });
+  });
+
+  // #8359: guest bindings decide where a non-owner's turns run. A damaged entry
+  // must make that guest unbound, never bound to a different directory.
+  it('persists guest bindings and the unbound policy, dropping damaged entries', async () => {
+    await addBotImConnectionRecord({ botId: 'bot-a', channel: 'telegram' }, { id: () => '111111111111' });
+    const projectA = path.join(h.root, 'client-a');
+    await setBotImConnectionGuestAccess('111111111111', { binding: { guestId: '42', projectPath: projectA } });
+    await setBotImConnectionGuestAccess('111111111111', { unbound: 'refuse' });
+    expect(readBotImConnection('111111111111')?.guestAccess).toEqual({
+      unbound: 'refuse', bindings: { '42': { projectPath: projectA } },
+    });
+    await expect(setBotImConnectionGuestAccess('111111111111', { binding: { guestId: '43', projectPath: 'relative/dir' } }))
+      .rejects.toThrow('INVALID_PROJECT_PATH');
+    await setBotImConnectionGuestAccess('111111111111', { unbound: 'shared', binding: { guestId: '42', projectPath: null } });
+    expect(readBotImConnection('111111111111')?.guestAccess).toBeUndefined();
+
+    fs.writeFileSync(file(), JSON.stringify({ connections: { '222222222222': {
+      botId: 'bot-a', channel: 'telegram', createdAt: 5, botContextId: '9',
+      guestAccess: { unbound: 'open', bindings: { '1': { projectPath: projectA }, '2': { projectPath: 'x' }, 'a b': { projectPath: projectA }, '3': 'oops' } },
+    } } }));
+    expect(readBotImConnection('222222222222')?.guestAccess).toEqual({ bindings: { '1': { projectPath: projectA } } });
   });
 
   // 用户明确要求只归档列表、不归档 session。既有存储测试没有行级显示偏好。

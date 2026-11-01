@@ -12,6 +12,7 @@ vi.mock('../../localDb/client/current.js', async () => {
 
 import { BotPlanWorkDirUnavailableError, prepareBotWorkspaceRuntime } from '../botWorkspaceRuntime.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
+import { resolveGuestLaneAccess } from '../../im/shared/botImGuestAccess.js';
 
 function opts(id: string): MakerSessionCreateOpts {
   return { id, workingDir: '/somewhere/else', workspaceKind: 'project', remoteHostId: 'remote-1' } as MakerSessionCreateOpts;
@@ -78,5 +79,60 @@ describe('prepareBotWorkspaceRuntime for 分工 Sessions', () => {
     const o = opts('plain');
     await prepareBotWorkspaceRuntime(o, deps);
     expect(o).toMatchObject({ workingDir: '/somewhere/else', workspaceKind: 'project', remoteHostId: 'remote-1' });
+  });
+});
+
+// #8359: a guest bound by the owner works in its project only; every other
+// outcome either keeps the pre-binding Home or refuses, never another directory.
+describe('prepareBotWorkspaceRuntime for guest private-chat lanes', () => {
+  const ensureWorkspaceDir = vi.fn(async () => '/owner-root/bots/mimi/workspace');
+  const connection = {
+    id: 'aaaaaaaaaaaa', botId: 'mimi', channel: 'telegram' as const, createdAt: 1, botContextId: '777',
+    guestAccess: { unbound: 'refuse' as const, bindings: { '42': { projectPath: '/work/client-a' }, '43': { projectPath: '/work/unlinked' } } },
+  };
+  const resolveGuestAccess = (botId: string, routeKey: string | null) => resolveGuestLaneAccess(botId, routeKey, {
+    listConnections: () => [connection],
+    readLinkedProjectPaths: async () => ['/work/client-a'],
+    isDirectory: async (dir) => dir === '/work/client-a',
+    sameDirectory: (a, b) => a === b,
+  });
+  const deps = { ensureWorkspaceDir, resolveGuestAccess };
+
+  beforeEach(() => {
+    h.sqlite = new Database(':memory:');
+    h.sqlite.exec(`
+      CREATE TABLE bot_session_links (
+        id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, session_id TEXT NOT NULL, profile_version INTEGER,
+        role TEXT NOT NULL, route_key TEXT, created_at INTEGER, archived_at INTEGER
+      );
+      CREATE TABLE bot_group_plans (id TEXT PRIMARY KEY, group_id TEXT, work_dir TEXT);
+      INSERT INTO bot_session_links (id, bot_id, session_id, role, route_key) VALUES
+        ('a', 'mimi', 'bound', 'channel', 'im:telegram:777:dm:42'),
+        ('b', 'mimi', 'stale', 'channel', 'im:telegram:777:dm:43'),
+        ('c', 'mimi', 'stranger', 'channel', 'im:telegram:777:dm:44'),
+        ('d', 'mimi', 'tg-group', 'channel', 'im:telegram:777:g:-100');
+    `);
+  });
+
+  afterEach(() => h.sqlite?.close());
+
+  it('runs a bound guest in its linked project', async () => {
+    const o = opts('bound');
+    await prepareBotWorkspaceRuntime(o, deps);
+    expect(o).toMatchObject({ workingDir: '/work/client-a', workspaceKind: 'project', remoteHostId: undefined });
+  });
+
+  it('refuses unbound guests and stale bindings instead of opening the Home', async () => {
+    for (const [id, reason] of [['stranger', 'unbound'], ['stale', 'project-unavailable']] as const) {
+      const o = opts(id);
+      await expect(prepareBotWorkspaceRuntime(o, deps)).rejects.toMatchObject({ code: 'BOT_GUEST_ACCESS_REFUSED', reason });
+      expect(o.workingDir).toBe('/somewhere/else');
+    }
+  });
+
+  it('keeps group lanes of the same connection in the Home workspace', async () => {
+    const o = opts('tg-group');
+    await prepareBotWorkspaceRuntime(o, deps);
+    expect(o.workingDir).toBe('/owner-root/bots/mimi/workspace');
   });
 });

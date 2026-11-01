@@ -94,20 +94,58 @@ export function buildBotMemoryScopeKey(botId: string): string {
 }
 
 /**
- * Reverse a Bot memory scope without teaching the generic memory manager about
- * Desktop's Bot Home layout. Invalid/non-Bot keys return null and therefore
- * remain ordinary Maker Memory scopes.
+ * Memory scope of one guest of a Bot, bound by the owner to its own project.
+ *
+ * Guest lanes must not read or write the Bot's owner memory: a guest could
+ * otherwise learn what the owner or another guest told the Bot. The key keeps
+ * the Bot prefix (so it stays an independent Bot-owned scope), and every
+ * segment is URI-encoded, so `:` only ever appears as a separator.
  */
-export function parseBotMemoryScopeKey(scopeKey: string): string | null {
-  if (!scopeKey.startsWith('bot:')) return null;
-  const encoded = scopeKey.slice('bot:'.length);
-  if (!encoded) return null;
+export function buildBotGuestMemoryScopeKey(botId: string, channel: string, guestId: string): string {
+  const base = buildBotMemoryScopeKey(botId);
+  if (!channel.trim() || !guestId.trim()) throw new Error('buildBotGuestMemoryScopeKey: channel and guestId required');
+  return `${base}:guest:${encodeURIComponent(channel.trim())}:${encodeURIComponent(guestId.trim())}`;
+}
+
+export interface BotMemoryScope {
+  botId: string;
+  /** Present only for a guest scope; absent means the Bot's own memory. */
+  guest?: { channel: string; guestId: string };
+}
+
+function decodeSegment(value: string | undefined): string | null {
+  if (!value) return null;
   try {
-    const botId = decodeURIComponent(encoded).trim();
-    return botId || null;
+    return decodeURIComponent(value).trim() || null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Parse a Bot scope key, owner or guest. Anything that is neither form returns
+ * null, so a malformed guest key can never fall back to the owner's memory.
+ */
+export function parseBotMemoryScope(scopeKey: string): BotMemoryScope | null {
+  if (!scopeKey.startsWith('bot:')) return null;
+  const parts = scopeKey.slice('bot:'.length).split(':');
+  const botId = decodeSegment(parts[0]);
+  if (!botId) return null;
+  if (parts.length === 1) return { botId };
+  if (parts.length !== 4 || parts[1] !== 'guest') return null;
+  const channel = decodeSegment(parts[2]);
+  const guestId = decodeSegment(parts[3]);
+  return channel && guestId ? { botId, guest: { channel, guestId } } : null;
+}
+
+/**
+ * Reverse a Bot memory scope without teaching the generic memory manager about
+ * Desktop's Bot Home layout. Invalid/non-Bot keys return null and therefore
+ * remain ordinary Maker Memory scopes. Guest scopes return their Bot id too;
+ * callers that resolve storage must use {@link parseBotMemoryScope}.
+ */
+export function parseBotMemoryScopeKey(scopeKey: string): string | null {
+  return parseBotMemoryScope(scopeKey)?.botId ?? null;
 }
 
 /** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */

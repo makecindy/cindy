@@ -19,10 +19,15 @@ import {
   ensureBotChannelLaneSession,
   findBotChannelLaneSession,
 } from '../../localDb/ipc/bots';
-import { botProfiles, sessions } from '../../localDb/schema';
+import { botProfiles, botSessionLinks, sessions } from '../../localDb/schema';
+import { resolveBotGuestLaneAccess } from '../../maker-ipc/botWorkspaceRuntime';
 import { resolveBotCanonicalSession } from '../../maker-ipc/botCanonicalSessionRegistry';
 import { prepareBotSessionForImSend, tryGetBotDelegationService } from '../../maker-ipc/register';
-import type { ImCompanionRouteDeps, ImCompanionSessionResult } from './imBotBindingRoute';
+import {
+  COMPANION_GUEST_REFUSED,
+  type ImCompanionRouteDeps,
+  type ImCompanionSessionResult,
+} from './imBotBindingRoute';
 
 async function readProfileStatus(botId: string): Promise<string | null> {
   const [row] = await getDbClient()
@@ -40,6 +45,17 @@ async function isActiveSession(sessionId: string): Promise<boolean> {
     .where(eq(sessions.id, sessionId))
     .limit(1);
   return row?.status === 'active' && row.source === 'bot';
+}
+
+/** Refuse before the send lock, so a guest never starts a runtime it may not use. */
+async function isRefusedGuestLane(sessionId: string): Promise<boolean> {
+  const [link] = await getDbClient()
+    .drizzle.select({ botId: botSessionLinks.botId, role: botSessionLinks.role, routeKey: botSessionLinks.routeKey })
+    .from(botSessionLinks)
+    .where(eq(botSessionLinks.sessionId, sessionId))
+    .limit(1);
+  if (!link || link.role !== 'channel') return false;
+  return (await resolveBotGuestLaneAccess(link.botId, link.routeKey)).kind === 'refused';
 }
 
 export function createImCompanionRouteDeps(ownerBotId: string | (() => string | null)): ImCompanionRouteDeps {
@@ -86,6 +102,7 @@ export function createImCompanionRouteDeps(ownerBotId: string | (() => string | 
 
     archiveLane: (routeKey) => archiveBotChannelLanes({ routeKey }),
 
-    prepareSend: (sessionId) => prepareBotSessionForImSend(sessionId),
+    prepareSend: async (sessionId) =>
+      (await isRefusedGuestLane(sessionId)) ? COMPANION_GUEST_REFUSED : prepareBotSessionForImSend(sessionId),
   };
 }
