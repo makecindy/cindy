@@ -243,9 +243,9 @@ describe('resolveAutoReviewDecision', () => {
   // 不得原样进 UI / 日志，所以来源必须逐条标出来。
   it('marks the reason source so only policy copy may enter diagnostics', async () => {
     await expect(resolveAutoReviewDecision(
-      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(131_100)}` }),
       async () => ({ verdict: 'allow' }),
-    )).resolves.toMatchObject({ verdict: 'block', policyReason: true });
+    )).resolves.toMatchObject({ verdict: 'ask', policyReason: true });
     // The model boundary never marks its reason as policy copy.
     await expect(resolveAutoReviewDecision(
       request({ kind: 'exec', command: 'npx tsc --noEmit' }),

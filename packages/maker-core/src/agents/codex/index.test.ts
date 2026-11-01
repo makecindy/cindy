@@ -16340,7 +16340,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('Auto MCP reviews a long-argument call instead of blocking it on the action-text budget', async () => {
+  it('Auto MCP reviews a large call with a display copy instead of tripping the complete-budget handoff', async () => {
     const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
     const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
     const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'long-args-turn' } } : undefined);
@@ -16348,10 +16348,12 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
     const handlers = host.getThreadHandlers();
     if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
-    // A few KB of instructions is an ordinary handoff (issue #7254). Counting the
-    // display copy of the same arguments twice pushed it over the review budget,
-    // so the call was silently blocked and the agent was told the user rejected.
-    const args = { instruction: 'x'.repeat(3_500) };
+    // A big-but-reviewable handoff (issue #7254, current budgets): the raw
+    // arguments alone fit MAX_AUTO_REVIEW_ACTION_TEXT_CHARS, but codex sends the
+    // same arguments again as a display rendering. Counting both copies pushed
+    // the evidence past the complete-review budget, so the call was handed off
+    // instead of reviewed. Counting one copy keeps it reviewable.
+    const args = { instruction: 'x'.repeat(90_000) };
     const input = { ghost_id: 'worker', tool: 'delegate', args };
     const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'long-args-turn', serverName: 'cindy', mode: 'form',
       _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call', tool_params: input,
@@ -16361,35 +16363,36 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(result.action).toBe('accept');
     expect(review).toHaveBeenCalledOnce();
     const action = review.mock.calls[0]?.[0].action as { description: string };
-    expect(action.description.length).toBeLessThanOrEqual(MAX_AUTO_REVIEW_ACTION_TEXT_CHARS);
+    // Single-counted: under the budget and nowhere near the doubled ~180k size.
+    expect(action.description.length).toBeLessThan(MAX_AUTO_REVIEW_ACTION_TEXT_CHARS);
+    expect(action.description.length).toBeLessThan(100_000);
     expect(JSON.parse(action.description).input.toolParams).toEqual(input);
     await handle.close();
   });
 
-  it('Auto MCP blocks an over-budget call and reports why', async () => {
+  it('Auto MCP hands an over-budget call to the user instead of silently declining', async () => {
     const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
     const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
     const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'over-budget-turn' } } : undefined);
     const handle = await agent.startSession({ sessionId: 'over-budget', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
-    const events: AgentEvent[] = [];
-    const collect = (async () => { for await (const event of handle.events()) events.push(event); })();
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver?.(resolver);
     await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
     const handlers = host.getThreadHandlers();
     if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    // Beyond MAX_AUTO_REVIEW_ACTION_TEXT_CHARS even with one copy: the reviewer
+    // must not run, and the call must reach the user's confirmation instead of
+    // being silently declined as if the user had rejected it (issue #7254 —
+    // oversized now hands off, it no longer blocks).
     const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'over-budget-turn', serverName: 'cindy', mode: 'form',
       _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call',
-        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { instruction: 'x'.repeat(8_000) } } },
+        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { instruction: 'x'.repeat(132_000) } } },
       message: 'Allow tool call', requestedSchema: {},
     });
-    expect(result.action).toBe('decline');
+    expect(result.action).toBe('decline'); // the test resolver denied the confirmation
     expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(1);
     await handle.close();
-    await collect;
-    const notices = events.filter((event) => event.type === 'error'
-      && String((event.data as { message?: string }).message).includes('[MCP_APPROVAL_AUTO_BLOCKED]'));
-    expect(notices).toHaveLength(1);
-    // The banner must say why, not just that something blocked it.
-    expect(String((notices[0].data as { message?: string }).message)).toContain(String(MAX_AUTO_REVIEW_ACTION_TEXT_CHARS));
   });
 
   it('Auto MCP reports a freshness block with Cindy’s own reason', async () => {
