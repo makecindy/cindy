@@ -3675,6 +3675,8 @@
         "simpleSubtitle": "Vários modelos, faturados através de uma única conta."
       },
       "custom": {
+        "nameSearchUnavailable": "Este fornecedor já não está disponível. Continue com um endpoint personalizado ou pesquise novamente.",
+        "nameSearchHint": "Pode manter este nome e continuar com um endpoint personalizado.",
         "tag": "Personalizado",
         "editAria": "Editar definições da ligação",
         "deleteAria": "Eliminar",

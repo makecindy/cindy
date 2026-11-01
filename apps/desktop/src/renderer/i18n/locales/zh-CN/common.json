@@ -3588,6 +3588,8 @@
         "simpleSubtitle": "多种模型，统一账户结算。"
       },
       "custom": {
+        "nameSearchUnavailable": "此供应商当前不可用，可继续配置自定义端点或重新搜索。",
+        "nameSearchHint": "也可以保留当前名称，继续配置自定义端点。",
         "tag": "自定义",
         "editAria": "编辑连接设置",
         "deleteAria": "删除",

@@ -3824,7 +3824,9 @@
           "modelsBusy": "请先毕方行之模型清单截取或选择，再填入他 Runtime",
           "noCompatibleFields": "他 Runtime 不支持今 Runtime 中可复用之字段",
           "filledToast": "已填入 {{targets}}；各 Runtime 仍各自独立"
-        }
+        },
+        "nameSearchHint": "亦可仍用此名，续设自定端点。",
+        "nameSearchUnavailable": "此供方今不可用，可续设自定端点，或重寻之。"
       },
       "models": {
         "search": "寻模型",

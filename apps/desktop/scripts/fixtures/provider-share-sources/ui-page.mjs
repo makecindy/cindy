@@ -4,10 +4,10 @@ export default {
   name: 'provider-share-sources',
   entry: './fixture.tsx',
   viewport: { width: 1000, height: 720 },
-  real: 'ProvidersSection rail, outgoing-share classification, remote group rows, translations and themes',
-  notCovered: 'Live accounts, device catalogs, sharing authorization and provider detail usage',
+  real: 'ProvidersSection rail, real AddProviderWizard and Radix exit/reopen lifecycle, outgoing-share classification, remote group rows, translations and themes',
+  notCovered: 'Live accounts, actual local runtime connection, device catalogs, sharing authorization and provider detail usage',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ mode: "local", dataOwnerId: "fixture-owner", user: null }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => "fixture-self";',
+    'src/renderer/contexts/AuthContext': 'export const useAuth = () => ({ mode: "local", dataOwnerId: "fixture-owner", user: null }); export const useOptionalAuthUser = () => null; export const useOptionalAuthDeviceId = () => "fixture-self"; export const useOptionalDataOwnerGeneration = () => 1;',
     'src/renderer/hooks/useProviders': 'export const useProviders = () => window.providerSourcesFixture.snapshot;',
     'src/renderer/hooks/useControllableDevices': { partial: 'export const useControllableDevices = () => window.providerSourcesFixture.devices;' },
     'src/renderer/hooks/useDevicesProviders': 'export const useDevicesProviders = () => window.providerSourcesFixture.catalogs;',
@@ -22,11 +22,54 @@ export default {
     default: { about: 'Local and remote outgoing shares appear together, separately from ordinary providers' },
     'shared-sources': { about: 'Local and remote outgoing shares appear together, separately from ordinary providers' },
     'no-outgoing-shares': { about: 'The outgoing section disappears without established shares' },
+    'wizard-reopen': { about: 'Complete the real wizard, reopen during a deferred refresh, and keep the new dialog interactive after the old refresh settles' },
+    'builtin-save-guard': { about: 'Search a builtin API-key entry from a custom draft, save with deferred IPC, and block Escape until completion' },
   },
   async ready(page) {
     await page.getByTestId('provider-share-received').waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'builtin-save-guard') {
+      await page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true }).click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.customAction'), exact: true }).click();
+      await page.getByRole('combobox').fill('Gemini');
+      await page.getByRole('option').filter({ has: page.getByText('Gemini', { exact: true }) }).first().click();
+      const subtitle = page.getByText(await ui.t('settings.providers.wizard.builtinApiKey.subtitle'), { exact: true });
+      await subtitle.waitFor();
+      const key = page.getByRole('dialog').locator('input[type="password"]');
+      await key.fill('fixture-key');
+      await page.getByRole('button', { name: await ui.t('settings.providers.wizard.finish'), exact: true }).click();
+      await page.waitForFunction(() => window.providerSourcesFixture.keySaveControl.pending);
+      await key.press('Escape');
+      assert.equal(await subtitle.isVisible(), true, 'saving must keep the builtin wizard open');
+      assert.equal(await page.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).isDisabled(), true);
+      await ui.capture('builtin-save-pending');
+      await page.evaluate(() => window.providerSourcesFixture.keySaveControl.release());
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      assert.equal(await page.getByRole('combobox').count(), 0, 'success must complete without restoring the draft');
+      return;
+    }
+    if (ui.case === 'wizard-reopen') {
+      const add = page.getByRole('button', { name: await ui.t('settings.providers.addProvider'), exact: true });
+      const dialog = page.getByRole('dialog');
+      await add.click();
+      await dialog.waitFor();
+      await dialog.getByRole('button', { name: /^Ollama/ }).click();
+      await page.waitForFunction(() => window.providerSourcesFixture.refreshControl.pending);
+      await dialog.waitFor({ state: 'hidden' });
+      await add.click();
+      await dialog.waitFor();
+      await ui.capture('reopened-before-refresh');
+      await page.evaluate(() => window.providerSourcesFixture.refreshControl.release());
+      await dialog.getByRole('textbox').first().fill('DeepSeek');
+      await dialog.getByRole('button', { name: /^DeepSeek/ }).first().waitFor();
+      await ui.capture('reopened-after-refresh');
+      await dialog.getByRole('button', { name: await ui.t('settings.providers.wizard.cancel'), exact: true }).click();
+      await dialog.waitFor({ state: 'hidden' });
+      await add.click();
+      await dialog.waitFor();
+      return;
+    }
     const outgoing = page.getByTestId('provider-share-owned');
     if (ui.case === 'no-outgoing-shares') {
       assert.equal(await outgoing.count(), 0);
