@@ -1,3 +1,5 @@
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+
 /** Observe scroll chaining from embedded documents without reading their contents. */
 export function observeIframeScrollIntent(
   root: HTMLElement,
@@ -27,4 +29,23 @@ export function observeIframeScrollIntent(
     root.removeEventListener('pointerout', onPointerOut);
     root.removeEventListener('scroll', onScroll, true);
   };
+}
+
+/** Keep pointer state across message/history rerenders while using current callbacks. */
+export function useIframeScrollIntent(
+  rootRef: RefObject<HTMLElement | null>,
+  shouldTakeOver: () => boolean,
+  onTakeOver: () => void,
+): void {
+  const callbacks = useRef({ shouldTakeOver, onTakeOver });
+  useLayoutEffect(() => { callbacks.current = { shouldTakeOver, onTakeOver }; });
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    return observeIframeScrollIntent(
+      root,
+      () => callbacks.current.shouldTakeOver(),
+      () => callbacks.current.onTakeOver(),
+    );
+  }, [rootRef]);
 }
