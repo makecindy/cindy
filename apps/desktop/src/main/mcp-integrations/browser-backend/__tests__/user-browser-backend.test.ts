@@ -861,6 +861,31 @@ describe('UserBrowserBackend · 读取与动作', () => {
     expect(await call(ob, { action: 'snapshot', targetId: 't1', frame: 'iframe' })).toMatchObject({ ok: false });
   });
 
+  it('分块上传的批次上限:超过 500 MiB 但不超过 1 GiB 的文件能通过校验,其他调用方仍是原限制', async () => {
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const pathMod = await import('node:path');
+    const { resolveUploadFiles } = await import('../rsb-webview-upload-policy');
+    const root = await fsp.mkdtemp(pathMod.join(os.tmpdir(), 'cindy-upload-limit-'));
+    try {
+      const gib = 1024 * 1024 * 1024;
+      const big = pathMod.join(root, 'big.bin');
+      await fsp.writeFile(big, '');
+      await fsp.truncate(big, 600 * 1024 * 1024);
+      const other = pathMod.join(root, 'other.bin');
+      await fsp.writeFile(other, '');
+      await fsp.truncate(other, 400 * 1024 * 1024);
+      const real = await fsp.realpath(big);
+      expect(await resolveUploadFiles([big], [root], gib, gib)).toEqual([real]);
+      expect(await resolveUploadFiles([big, other], [root], gib, gib)).toHaveLength(2);
+      await expect(resolveUploadFiles([big], [root])).rejects.toThrow(/exceeds/);
+      await expect(resolveUploadFiles([big], [root], gib)).rejects.toThrow(/batch exceeds/);
+      await expect(resolveUploadFiles([big, big], [root], gib, 1024 * 1024 * 1024)).rejects.toThrow(/batch exceeds/);
+    } finally {
+      await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('调试接口:Chrome 不允许按需申请,能力表如实报告,扩展拒绝时不让用户去找开启入口', async () => {
     const fake = fakeControl({ version: '0.4.61' });
     expect(userBrowserCapabilities(fake.control)).toMatchObject({ pdf: false, rawProtocol: false, upload: true });

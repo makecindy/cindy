@@ -1369,7 +1369,7 @@ export class UserBrowserBackend implements BrowserBackend {
       typeof sessionId === 'string' && sessionId && this.opts.resolveUploadRoots
         ? await this.opts.resolveUploadRoots(sessionId)
         : [];
-    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX);
+    const paths = await resolveUploadFiles(req.paths, roots, UPLOAD_CHUNKED_BYTES_MAX, UPLOAD_CHUNKED_BYTES_MAX);
     let total = 0;
     for (const file of paths) total += (await fs.stat(file)).size;
     const chunked = extensionAtLeast(
