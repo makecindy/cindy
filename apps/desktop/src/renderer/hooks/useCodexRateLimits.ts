@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
@@ -59,6 +59,9 @@ interface CachedRateLimits {
   snapshot: MobileCodexRateLimitsResult | null;
   version: number;
   pendingReads: number;
+  liveObservers: number;
+  hasLiveObservation: boolean;
+  queuedRefreshes: Set<{ version: number }>;
   listeners: Set<() => void>;
   unsubscribe: Array<() => void>;
   providerId: string;
@@ -77,13 +80,20 @@ function refreshEntry(entry: CachedRateLimits): void {
   // A manual/hover refresh can still read the old auth.json during re-login.
   // Wait for the main-process post-commit signal before allowing any read.
   if (entry.awaitingAuthCompletion) return;
+  entry.queuedRefreshes.clear();
   const version = ++entry.version;
   entry.pendingReads++;
   void readCodexRateLimitsSafely(readCodexRateLimitsReader(), entry.providerId).then(next => {
     if (entry.version !== version || !isDataOwnerGenerationCurrent(entry.owner)) return;
     // An unavailable read is not a logout. Explicit identity clears come by push.
     if (next !== null) publish(entry, next);
-  }).finally(() => { entry.pendingReads--; });
+  }).finally(() => {
+    entry.pendingReads--;
+    if (entry.pendingReads !== 0) return;
+    const queued = [...entry.queuedRefreshes].some(request => request.version === entry.version);
+    entry.queuedRefreshes.clear();
+    if (queued && entry.listeners.size > 0 && isDataOwnerGenerationCurrent(entry.owner)) refreshEntry(entry);
+  });
 }
 
 function cachedRateLimits(providerId: string): CachedRateLimits {
@@ -99,7 +109,7 @@ function cachedRateLimits(providerId: string): CachedRateLimits {
   const cached = snapshots.get(providerId);
   if (cached) return cached;
   const entry: CachedRateLimits = {
-    providerId, owner, snapshot: null, version: 0, pendingReads: 0, listeners: new Set(), unsubscribe: [],
+    providerId, owner, snapshot: null, version: 0, pendingReads: 0, liveObservers: 0, hasLiveObservation: false, queuedRefreshes: new Set(), listeners: new Set(), unsubscribe: [],
     awaitingAuthCompletion: false,
   };
   snapshots.set(providerId, entry);
@@ -141,8 +151,20 @@ function cachedRateLimits(providerId: string): CachedRateLimits {
   return entry;
 }
 
-export function useCodexRateLimits(enabled: boolean, providerId = 'openai'): CodexRateLimitsState {
+/** Visible group cards share in-flight native reads with the local settings card. */
+export function requestCodexRateLimitsRefresh(providerId = 'openai'): void {
   const entry = cachedRateLimits(providerId);
+  if (entry.pendingReads === 0) refreshEntry(entry);
+}
+
+export function useCodexRateLimits(
+  enabled: boolean,
+  providerId = 'openai',
+  options: { live?: boolean } = {},
+): CodexRateLimitsState {
+  const live = options.live === true;
+  const entry = cachedRateLimits(providerId);
+  const lastLiveEntry = useRef<CachedRateLimits | null>(null);
   const subscribe = useCallback((listener: () => void) => {
     if (!enabled) return () => {};
     entry.listeners.add(listener);
@@ -153,6 +175,30 @@ export function useCodexRateLimits(enabled: boolean, providerId = 'openai'): Cod
   const refresh = useCallback(() => {
     if (enabled) refreshEntry(entry);
   }, [enabled, entry]);
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    if (!enabled) return;
+    // First expansion shares an ordinary consumer's pending read. A card that
+    // resumes, or reopens after the last live observer left, queues one reread.
+    // Keep the gap on the entry because collapse discards the card's hook/ref,
+    // while an ordinary details/spend consumer may still keep the RPC alive.
+    const resumed = live && (lastLiveEntry.current === entry ||
+      (entry.hasLiveObservation && entry.liveObservers === 0));
+    if (live) {
+      entry.liveObservers++;
+      entry.hasLiveObservation = true;
+      lastLiveEntry.current = entry;
+    }
+    let request: { version: number } | undefined;
+    if (live && entry.pendingReads > 0) {
+      if (resumed) {
+        request = { version: entry.version };
+        entry.queuedRefreshes.add(request);
+      }
+    } else refreshEntry(entry);
+    return () => {
+      if (live) entry.liveObservers--;
+      if (request) entry.queuedRefreshes.delete(request);
+    };
+  }, [enabled, entry, live]);
   return { snapshot, refresh };
 }

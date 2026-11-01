@@ -26,6 +26,31 @@ afterEach(() => {
 });
 
 describe('useCodexRateLimits', () => {
+  // Unit regression r4362108215: a resumed live card queues behind a pending
+  // read. Existing clear/unmount tests did not have such a queue; neither may
+  // start another read after the old reply settles or restore a cleared quota.
+  it.each(['clear', 'unmount'] as const)('cancels a queued live-card reread after %s', async (stop) => {
+    let clear!: (payload: unknown) => void;
+    let resolveOld!: (value: MobileCodexRateLimitsResult) => void;
+    const reader = vi.fn().mockImplementation(() => new Promise(resolve => { resolveOld = resolve; }));
+    vi.stubGlobal('electronAPI', { maker: { usage: {
+      getCodexRateLimits: reader,
+      onCodexAccountChanged: (callback: (payload: unknown) => void) => { clear = callback; return vi.fn(); },
+    } } });
+    const other = renderHook(() => useCodexRateLimits(true));
+    const hook = renderHook(({ enabled }) => useCodexRateLimits(enabled, 'openai', { live: true }),
+      { initialProps: { enabled: true } });
+    hook.rerender({ enabled: false });
+    hook.rerender({ enabled: true });
+    expect(reader).toHaveBeenCalledTimes(1);
+    if (stop === 'clear') act(() => clear(null));
+    else hook.unmount();
+    await act(async () => resolveOld(result));
+    expect(reader).toHaveBeenCalledTimes(1);
+    if (stop === 'clear') expect(hook.result.current.snapshot).toBeNull();
+    else expect(other.result.current.snapshot).toBe(result);
+  });
+
   it('shows the last snapshot immediately on remount while refreshing', async () => {
     const reader = vi.fn().mockResolvedValueOnce(result).mockImplementation(() => new Promise(() => {}));
     vi.stubGlobal('electronAPI', { maker: { usage: { getCodexRateLimits: reader } } });

@@ -55,13 +55,14 @@ function usageCache(providerId: string) {
   return cache;
 }
 
-export function requestXaiSubscriptionRefresh(providerId = 'xai'): void {
-  usageCache(providerId).refresh();
+export function requestXaiSubscriptionRefresh(providerId = 'xai', shareIfPending = false): void {
+  usageCache(providerId).refresh(shareIfPending);
 }
 
 export function useXaiSubscriptionUsage(
   enabled: boolean,
   providerId = 'xai',
+  options: { live?: boolean } = {},
 ): XaiSubscriptionUsageSnapshot | null {
-  return usageCache(providerId).useSnapshot(enabled);
+  return usageCache(providerId).useSnapshot(enabled, options);
 }

@@ -8,12 +8,14 @@
  *
  * `agent` 用于会话场景（输入框 chip）：同一供应商各引擎可用不同账户的独立密钥，
  * 传入会话所在引擎才能对准当前会话实际消耗的账户；设置页供应商级视图不传。
+ * 组成员卡可用 live/active 暂停观察而保留在途结果，并用 refreshEpoch 排一次
+ * 可取消的恢复补读；组实时卡每 15s 读取，默认调用保持一分钟与取消语义。
  */
 
 import { isDeviceLinkRemotePushCurrent } from '../lib/remoteDataOwnerPushFence';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '../contexts/dataOwnerGeneration';
 import { isKimiCodingProviderView } from '../../shared/kimiCodingUsage';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { AgentKind, ProviderView } from '@cindy/model-providers';
 
@@ -41,7 +43,11 @@ export function useProviderAccountUsage(
   provider: ProviderView | undefined,
   agent?: AgentKind,
   deviceId: string | null = null,
+  options: { live?: boolean; active?: boolean; refreshEpoch?: number } = {},
 ): ProviderAccountUsageState {
+  const live = options.live === true;
+  const active = !live || options.active !== false;
+  const refreshEpoch = live ? options.refreshEpoch : undefined;
   const owner = getDataOwnerGeneration();
   const [revision, setRevision] = useState(0);
   const kimi = isKimiCodingProviderView(provider, agent);
@@ -68,11 +74,23 @@ export function useProviderAccountUsage(
     busy: boolean;
   }>({ identity, result: null, busy: false });
   const requestId = useRef(0);
+  // Visibility pauses observation, not this account identity. A live recovery
+  // owns its trailing read until hidden/closed again; ordinary readers retain
+  // their existing cancellation and newer-request-wins behavior.
+  const lifecycle = useMemo(() => ({
+    mounted: false,
+    pending: 0,
+    observed: false,
+    liveRefreshes: new Set<object>(),
+  }), [identity, supported, live]);
 
   const load = useCallback(
-    async (forceRefresh: boolean) => {
+    async (forceRefresh: boolean, scheduling?: { background?: boolean }): Promise<void> => {
       if (!supported || !provider?.id) return;
+      if (live && !forceRefresh && lifecycle.pending > 0) return;
+      if (forceRefresh) lifecycle.liveRefreshes.clear();
       const id = ++requestId.current;
+      lifecycle.pending++;
       setState((previous) => ({
         identity,
         result: previous.identity === identity ? previous.result : null,
@@ -81,11 +99,15 @@ export function useProviderAccountUsage(
       try {
         const input = {
           providerId: provider.id,
-          forceRefresh,
+          // Live polling must bypass the ordinary five-minute host cache;
+          // the existing host throttle and Retry-After still apply.
+          forceRefresh: forceRefresh || live,
           ...(agent ? { agent } : {}),
         };
         const next = deviceId
-          ? parseKimiAccountUsageResult(await window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:kimi-coding', [input]))
+          ? parseKimiAccountUsageResult(await (scheduling
+              ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:kimi-coding', [input], scheduling)
+              : window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:kimi-coding', [input])))
           : await window.electronAPI.maker.fetchProviderAccountUsage(input);
         if (id === requestId.current && isDataOwnerGenerationCurrent(owner)) setState({ identity, result: next, busy: false });
       } catch {
@@ -99,14 +121,33 @@ export function useProviderAccountUsage(
                 : { status: 'unavailable', error: 'unknown' },
             busy: false,
           }));
+      } finally {
+        lifecycle.pending--;
+        if (live && lifecycle.pending === 0 && lifecycle.liveRefreshes.size > 0) {
+          lifecycle.liveRefreshes.clear();
+          // The new observation owns recovery even if StrictMode replay has
+          // invalidated the original request. A departed identity is unmounted.
+          if (lifecycle.mounted && isDataOwnerGenerationCurrent(owner)) void load(false);
+        }
       }
     },
-    [provider?.id, agent, identity, supported, deviceId, owner],
+    [provider?.id, agent, identity, supported, deviceId, owner, live, lifecycle],
   );
+
+  useEffect(() => {
+    lifecycle.mounted = true;
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.liveRefreshes.clear();
+      // Identity changes and unmount still invalidate every late reply.
+      requestId.current += 1;
+    };
+  }, [lifecycle]);
 
   useEffect(() => {
     if (!kimi) return;
     const changed = () => {
+      lifecycle.liveRefreshes.clear();
       requestId.current += 1;
       setRevision(value => value + 1);
     };
@@ -115,24 +156,28 @@ export function useProviderAccountUsage(
         && isDeviceLinkRemotePushCurrent(push, stamp)) changed();
     });
     return window.electronAPI.maker.onProvidersChanged?.(changed);
-  }, [kimi, deviceId]);
+  }, [kimi, deviceId, lifecycle]);
 
   useEffect(() => {
-    if (!supported) return;
+    if (!supported || !active) return;
+    const recovery = {};
+    if (live && lifecycle.observed && lifecycle.pending > 0) lifecycle.liveRefreshes.add(recovery);
+    lifecycle.observed = true;
     void load(false);
-    // 余额/窗口会随使用变化，挂载期间低频静默刷新（main 缓存优先，不会放大上游请求）。
-    const timer = window.setInterval(() => void load(false), REFRESH_INTERVAL_MS);
+    // Expanded group cards use the 15s cadence; ordinary readers keep one minute.
+    // Pending live reads are coalesced by load, and hidden cards have no timer.
+    const timer = window.setInterval(() => void load(false, { background: true }), live ? 15_000 : REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(timer);
-      // 停用、切换或卸载后，迟到响应不得再提交。
-      requestId.current += 1;
+      lifecycle.liveRefreshes.delete(recovery);
+      if (!live) requestId.current += 1;
     };
-  }, [supported, provider?.id, load]);
+  }, [supported, provider?.id, load, live, active, refreshEpoch, lifecycle]);
 
   return {
-    supported,
-    result: supported && state.identity === identity ? state.result : null,
-    busy: supported && state.identity === identity && state.busy,
-    refresh: () => void load(true),
+    supported: supported && active,
+    result: supported && active && state.identity === identity ? state.result : null,
+    busy: supported && active && state.identity === identity && state.busy,
+    refresh: () => { if (active) void load(true); },
   };
 }

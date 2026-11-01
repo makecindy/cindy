@@ -157,3 +157,20 @@ it('clears Kimi quota when the host broadcasts a credential change on the same c
   expect(hook.result.current.result).toBeNull();
   expect(fetchUsage).toHaveBeenCalledTimes(2);
 });
+
+// Unit: live pending coalescing must survive StrictMode's observation replay;
+// ordinary cancellation tests do not retain the first pending request. Minimal
+// input: one pending read during replay, followed by a successful fresh read.
+it('settles live Kimi quota after StrictMode replays the observation', async () => {
+  let finish!: (result: ProviderAccountUsageResult) => void;
+  fetchUsage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue(kimiReady);
+  const hook = renderHook(() => useProviderAccountUsage(kimiProvider, 'pi', null, { live: true }), {
+    reactStrictMode: true,
+  });
+  await act(async () => {});
+  expect(fetchUsage).toHaveBeenCalledTimes(1);
+  await act(async () => finish(kimiReady));
+  expect(fetchUsage).toHaveBeenCalledTimes(2);
+  expect(hook.result.current.result).toEqual(kimiReady);
+});
