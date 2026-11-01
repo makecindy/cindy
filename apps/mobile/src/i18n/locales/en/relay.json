@@ -9,10 +9,16 @@
     "removedHint": "This phone was removed from the relay, or the relay was turned off. Switch back to the official relay, or join again from your computer.",
     "credentialMissingHint": "The relay credential isn’t on this phone anymore. Join again from your computer, or switch back to the official relay.",
     "confirmTitle": "Switch Back to Official Relay?",
-    "confirmBody": "This phone will leave “{{name}}” and use the {{appName}} official relay. To use that relay again, join it again from your computer.",
-    "confirmAction": "Switch Back",
+    "confirmBody": "This phone will use the {{appName}} official relay and keep its membership in “{{name}}”, so you can switch back without joining again.",
+    "confirmAction": "Switch to Official Relay",
     "switchFailed": "Couldn’t switch back to the official relay. Try again in a moment.",
-    "pushUnavailable": "While you use your own relay, task notifications from your computers aren’t sent to this phone."
+    "pushUnavailable": "While you use your own relay, task notifications from your computers aren’t sent to this phone.",
+    "useSaved": "Use “{{name}}”",
+    "forget": "Leave and Forget Relay",
+    "forgetTitle": "Leave Relay?",
+    "forgetBody": "This phone will leave “{{name}}” and delete its saved membership. To use it again, request to join again.",
+    "resumeFailed": "Couldn’t switch to the saved relay.",
+    "forgetFailed": "Couldn’t leave the relay."
   },
   "issue": {
     "removedTitle": "Removed from Relay",

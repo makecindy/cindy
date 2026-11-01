@@ -9,10 +9,16 @@
     "removedHint": "Dieses Handy wurde aus dem Relay entfernt oder das Relay wurde ausgeschaltet. Wechsle zum offiziellen Relay zurück oder tritt über deinen Computer erneut bei.",
     "credentialMissingHint": "Die Relay-Zugangsdaten sind nicht mehr auf diesem Handy vorhanden. Tritt über deinen Computer erneut bei oder wechsle zum offiziellen Relay zurück.",
     "confirmTitle": "Zum offiziellen Relay zurückwechseln?",
-    "confirmBody": "Dieses Handy verlässt „{{name}}“ und nutzt das offizielle {{appName}}-Relay. Um jenes Relay wieder zu nutzen, tritt ihm über deinen Computer erneut bei.",
-    "confirmAction": "Zurückwechseln",
+    "confirmBody": "Dieses Telefon verwendet den offiziellen {{appName}}-Relay und behält die Mitgliedschaft bei „{{name}}“, damit du ohne erneuten Beitritt zurückwechseln kannst.",
+    "confirmAction": "Zum offiziellen Relay wechseln",
     "switchFailed": "Der Wechsel zum offiziellen Relay ist fehlgeschlagen. Versuche es gleich noch einmal.",
-    "pushUnavailable": "Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet."
+    "pushUnavailable": "Während du dein eigenes Relay nutzt, werden Aufgabenbenachrichtigungen von deinen Computern nicht an dieses Handy gesendet.",
+    "useSaved": "„{{name}}“ verwenden",
+    "forget": "Relay verlassen und vergessen",
+    "forgetTitle": "Relay verlassen?",
+    "forgetBody": "Dieses Telefon verlässt „{{name}}“ und löscht die gespeicherten Zugangsdaten. Für eine erneute Nutzung musst du den Beitritt neu beantragen.",
+    "resumeFailed": "Wechsel zum gespeicherten Relay fehlgeschlagen.",
+    "forgetFailed": "Der Relay konnte nicht verlassen werden."
   },
   "issue": {
     "removedTitle": "Aus Relay entfernt",
