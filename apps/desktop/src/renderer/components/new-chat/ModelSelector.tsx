@@ -3986,6 +3986,40 @@ function ModelSelectorContentView({
 
       {agentKind === 'hermes' && (
         <>
+          {hermesCatalog.endpointStatuses.length > 0 && (
+            <>
+              <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
+              <div
+                data-testid="hermes-endpoint-discovery-statuses"
+                className="flex flex-col gap-1 px-3 py-1.5 text-12 text-[var(--text-tertiary)]"
+              >
+                {hermesCatalog.endpointStatuses.map((endpoint) => (
+                  <div
+                    key={endpoint.id}
+                    data-testid={`hermes-picker-endpoint-${endpoint.id}`}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate font-mono text-[var(--text-secondary)]">
+                      {endpoint.id}
+                    </span>
+                    <span
+                      data-testid={`hermes-picker-endpoint-status-${endpoint.id}`}
+                      className={cn(
+                        'shrink-0',
+                        endpoint.status === 'online'
+                          ? 'text-[var(--status-success-fg,var(--text-secondary))]'
+                          : 'text-[var(--text-tertiary)]',
+                      )}
+                    >
+                      {endpoint.status === 'online'
+                        ? `online · ${endpoint.modelCount} loaded`
+                        : endpoint.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
           <div className="flex items-center justify-between gap-2">
             <button

@@ -10,6 +10,22 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Phase 2: ROADMAP 2.2b-1, local model discovery polling and picker online/offline display (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/renderer/hooks/useHermesModelCatalog.ts` + `apps/desktop/src/renderer/__tests__/hermesModelCatalogDiscovery.test.ts` (new, 2 tests): added `buildDiscoveredEndpointDescriptors` (projects `ProviderFileEndpointView[]` from `projectProviderFileEndpoints` into picker `ModelDescriptor[]` with `endpoint.capabilities.contextLength ?? HERMES_CONTEXT_WINDOW`, deduplicating against home/provider models and never leaking models from `offline`/`error` endpoints, plus `endpointStatuses` summaries) and wired `useHermesModelCatalog` to poll `window.electronAPI.maker.providers.list()` + `discover()` every `DISCOVERY_POLL_INTERVAL_MS` (15 s) while active.
+2. `apps/desktop/src/renderer/components/new-chat/ModelSelector.tsx` (+34 lines): displays `hermesCatalog.endpointStatuses` (`online · N loaded` / `offline` / `error`) in the Hermes model picker footer alongside the loaded local models in the picker list.
+
+**Mutation checks (2):**
+- In `apps/desktop/src/renderer/hooks/useHermesModelCatalog.ts`, removing the `endpoint.status === 'online'` guard on `loadedModels` and allowing `offline` endpoints through leaked stale models and failed `hermesModelCatalogDiscovery.test.ts` (`expected [ { id: 'stale-model-should-not-appear' } ] to deeply equal []`); restored byte-identical.
+- In `apps/desktop/src/renderer/hooks/useHermesModelCatalog.ts`, replacing `endpoint.capabilities.contextLength ?? HERMES_CONTEXT_WINDOW` with `HERMES_CONTEXT_WINDOW` failed `hermesModelCatalogDiscovery.test.ts` (`expected contextWindow 200000 to equal 65536`); restored byte-identical.
+
+**Not claimed:** not exercised in the running desktop app against a live Ollama/LM Studio instance yet. `2.2b-live` stays open for the owner-clicked picker check.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Phase 2: ROADMAP 2.1b-1, `model-providers` projection and Settings UI listing for `providers.yaml` (`unit-tested`)
 
 **Outcome:**
