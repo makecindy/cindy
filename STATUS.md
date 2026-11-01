@@ -10,6 +10,16 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 1.6b plugin switch `live-proven` (owner)
+
+After pulling `claude/jolly-brown-n5edmp` and restarting, the owner used Settings → General → Hermes Harness → Plugins:
+- Switch **on**: `config.yaml` had `plugins: enabled: [superpowers/.hermes-plugin]`, `disabled: []`.
+- Switch **off**: `enabled: []`, `disabled: [superpowers/.hermes-plugin]`.
+
+Hermes's own CLI rewrote the section; Cindy wrote no YAML. Hermes also dropped the blank line before `mcp_servers:` (its own formatting, harmless). Not part of this task, but seen: the Cindy marketplace "Plugins" page and the SkillHub "Public" tab ("Load failed: 请求失败 (0)") are upstream cloud surfaces, unrelated to Hermes plugins.
+
+---
+
 ## 2026-11-01 — Hermes handle model tracks switches + plugin on/off in Settings (ROADMAP 1.6a) (`unit-tested`)
 
 **1. Hermes `AgentSessionHandle.model` follows `setModel`** (`packages/maker-core/src/agents/hermes/agent.ts`). The handle exposed `model` as a fixed property from session start. `Session.model` and the desktop runtime profiles (`readSessionRuntimeProfiles`: `live.model`) therefore reported the start model after a mid-session switch. It is now a getter over a variable updated after `QUERY_SET_MODEL` succeeds, keeping the Cindy id (`hermes-default` sentinel or the override). Test: `agent.test.ts` "handle.model follows a successful setModel" failed first (`expected 'hermes-default' to be 'qwen3-8b'`), then passed. 44/44 Hermes agent tests.
