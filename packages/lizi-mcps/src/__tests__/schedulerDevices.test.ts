@@ -556,6 +556,28 @@ describe('remote schedule create', () => {
     expect(s.scheduler.create).not.toHaveBeenCalled();
   });
 
+  it('a remote silent check carries the program change gate', async () => {
+    const s = setup();
+    const result = parse(await s.registry.call('schedule_create', {
+      device: 'spark',
+      name: 'ci-check',
+      prompt: 'look for failures',
+      cronExpr: '*/10 * * * *',
+      timezone: 'Asia/Shanghai',
+      recurring: true,
+      agentKind: 'pi',
+      silentWhenIdle: true,
+      useWorktree: false,
+      notify: { desktop: true, feishu: false },
+    }));
+    expect(result.ok).toBe(true);
+    expect(s.invoke).toHaveBeenCalledWith('spark', 'create', [expect.objectContaining({
+      silentWhenIdle: true,
+      programChangeGate: true,
+    })]);
+    expect(s.scheduler.create).not.toHaveBeenCalled();
+  });
+
   it('rejects binding the current session when creating remotely', async () => {
     const s = setup();
     const result = parse(await s.registry.call('schedule_create', {

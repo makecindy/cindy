@@ -273,7 +273,7 @@ Pi 将 routine_list、routine_save、routine_sources、routine_history、routine
 Agent 经 schedule_create 新建的检查（silentWhenIdle=true）默认带程序变化门：
 没有脚本 exit 0 或插件放行时不启动模型，run 记 skipped，零 token。没变化由脚本
 exit 2 或插件 skip 表达，不能再叫醒模型判断。变化本身必须由模型发现时，创建时
-显式设 modelDetectsChange=true，沿用启动模型、无变化不播报。提醒、定时发送、
+显式设 modelDetectsChange=true，沿用启动模型、无变化不播报。已经开始、因退出而继续的那一轮不套这道门。绑定的非持续目标已删除，或服务托管任务已归档时，先暂停这条检查，不把没信号记成可以一直空跳。提醒、定时发送、
 桌面表单和已有任务不套这道门，也不批量迁移。
 
 前置检查复用调度器原有命令执行器：exit 2 留下 skipped 记录且不启动模型，

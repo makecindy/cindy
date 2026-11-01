@@ -880,12 +880,24 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
     // 检查的「有没有变化」由程序信号决定。没有脚本放行、也没有插件前置检查时，
     // 不恢复目标、不建会话、不启动模型。提醒和显式交给模型发现变化的任务不带这道门。
+    // 退出后续跑已经过了这道门，不能因为续跑时清掉了 hook 再把它当成没信号。
     if (
+      !ctx.resumeSessionId &&
       schedule.programChangeGate === true &&
       schedule.silentWhenIdle === true &&
       !schedule.preRunHook?.command?.trim() &&
       !schedule.preRunPlugin
     ) {
+      if (schedule.source !== 'bot' && schedule.targetSessionId && !schedule.persistentSession) {
+        const target = await getSessionRowSnapshot(schedule.targetSessionId);
+        if (
+          target &&
+          (target.status === 'deleted'
+            || (target.status === 'archived' && isManagedScheduledTarget(target)))
+        ) {
+          return this.retireHeartbeat(schedule, ctx, target.status);
+        }
+      }
       this.deps.logger.info?.('[runner] check has no program change signal; model not started', {
         scheduleId: schedule.id,
         runId: ctx.runId,

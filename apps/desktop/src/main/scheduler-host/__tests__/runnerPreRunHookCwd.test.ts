@@ -244,6 +244,115 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
+  it('continuing an interrupted gated check does not treat the cleared hook as no signal', async () => {
+    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('past-gate'));
+    const { runner } = createRunner(vi.fn() as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: { command: 'node scripts/check.mjs' },
+      }),
+      { ...createFireContext(), resumeSessionId: 'owner' },
+    )).rejects.toThrow('past-gate');
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+  });
+
+  it.each(['deleted', 'archived'] as const)('a gated check retires a %s non-persistent target before skipping', async (status) => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status,
+      source: status === 'archived' ? 'review' : 'user',
+    });
+    const { runner, maker } = createRunner(vi.fn() as never);
+    const pause = vi.fn(async () => undefined);
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: undefined,
+        targetSessionId: 'owner',
+        persistentSession: false,
+      }),
+      createFireContext(),
+    )).resolves.toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: `Heartbeat stopped: target session ${status}`,
+    });
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+  });
+
+  it('a gated check does not retire an archived ordinary target', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'archived', source: 'user' });
+    const { runner } = createRunner(vi.fn() as never);
+    const pause = vi.fn();
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: undefined,
+        targetSessionId: 'owner',
+      }),
+      createFireContext(),
+    )).resolves.toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: 'skipped: no program change signal; model not started',
+    });
+    expect(pause).not.toHaveBeenCalled();
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+  });
+
+  it('a gated check with a live target skips without restoring it or pausing', async () => {
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    const { runner, maker } = createRunner(vi.fn() as never);
+    const pause = vi.fn();
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: undefined,
+        targetSessionId: 'owner',
+      }),
+      createFireContext(),
+    )).resolves.toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: 'skipped: no program change signal; model not started',
+    });
+    expect(pause).not.toHaveBeenCalled();
+    expect(mocks.restoreArchivedSessionForSend).not.toHaveBeenCalled();
+    expect(maker.createSession).not.toHaveBeenCalled();
+  });
+
+  it('a persistent gated check does not retire a deleted target', async () => {
+    mocks.getSessionRowSnapshot.mockRejectedValue(new Error('should-not-read-target'));
+    const { runner } = createRunner(vi.fn() as never);
+    const pause = vi.fn();
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(
+      baseSchedule({
+        silentWhenIdle: true,
+        programChangeGate: true,
+        preRunHook: undefined,
+        targetSessionId: 'owner',
+        persistentSession: true,
+      }),
+      createFireContext(),
+    )).resolves.toEqual({
+      sessionId: '',
+      skipped: true,
+      resultText: 'skipped: no program change signal; model not started',
+    });
+    expect(pause).not.toHaveBeenCalled();
+    expect(mocks.getSessionRowSnapshot).not.toHaveBeenCalled();
+  });
+
   it('a gated check still runs its hook and skips the model when the hook says unchanged', async () => {
     const { runner, maker } = createRunner(vi.fn() as never);
     const result = await runner.fire(baseSchedule({ programChangeGate: true }), createFireContext());
