@@ -54,19 +54,35 @@ it('keeps the live call when another window tries to start a second one', () => 
   });
 });
 
-// Two windows can send start before the host has rendered and published anything.
-it('reserves the line for the first start until the host publishes or the reservation lapses', () => {
+// Review rounds 2-4 all broke the same invariant: the line stays held from an accepted
+// start until the call is closed. Any frame, including the host's not-yet-open one,
+// used to release it. Interleaving of two windows and the host's frames.
+it('holds the line from an accepted start through the host bringing the call up', () => {
   vi.useFakeTimers();
   const start = (id: string) =>
     ({ type: 'start', sessionId: id, bot: { id: `b-${id}`, name: id } }) as const;
   expect(coordinator.command(start('first'))).toBe(true);
-  expect(coordinator.command(start('second'))).toBe(false);
-  coordinator.publish(HOST, { status: status(false) });
-  expect(coordinator.command(start('third'))).toBe(true);
-  // A host that rejects a start publishes nothing: the line must not stay held.
+  expect(coordinator.command(start('second'))).toBe(false); // before any host frame
+  coordinator.publish(HOST, { status: status(false) }); // host mounted, not open yet
+  vi.advanceTimersByTime(60_000); // a slow bring-up must not lapse the hold
+  expect(coordinator.command(start('third'))).toBe(false);
+  coordinator.publish(HOST, { level: 0.2 });
   expect(coordinator.command(start('fourth'))).toBe(false);
+  coordinator.publish(HOST, { status: status(true) });
+  expect(coordinator.command(start('fifth'))).toBe(false); // live
+  coordinator.publish(HOST, { status: status(false) }); // closing
+  expect(coordinator.command(start('sixth'))).toBe(true);
+  coordinator.publish(HOST, { status: null }); // rejected or ended: released
+  expect(coordinator.command(start('seventh'))).toBe(true);
+  vi.useRealTimers();
+});
+
+it('releases a start the host never reacted to, but not one it acknowledged', () => {
+  vi.useFakeTimers();
+  const start = { type: 'start', sessionId: 's', bot: { id: 'b', name: 'B' } } as const;
+  expect(coordinator.command(start)).toBe(true);
   vi.advanceTimersByTime(10_000);
-  expect(coordinator.command(start('fifth'))).toBe(true);
+  expect(coordinator.command(start)).toBe(true);
   vi.useRealTimers();
 });
 

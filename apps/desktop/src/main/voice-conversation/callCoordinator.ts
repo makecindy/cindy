@@ -6,8 +6,21 @@ import type {
 
 const COMMAND_CHANNEL = 'voice-conversation:call-command';
 const STATUS_CHANNEL = 'voice-conversation:call-status-changed';
-/** Longest a start may stay unconfirmed, e.g. when the host rejects it without a status. */
-const START_RESERVATION_MS = 10_000;
+/** Longest an accepted start may go without any reaction from the host. */
+const START_REACTION_MS = 10_000;
+
+/**
+ * Who holds the one voice line. Main alone writes it, so every window and the host
+ * agree on it:
+ * - free: nothing accepted or live
+ * - starting: a start was handed to the host and nothing came back yet
+ * - acked: the host is bringing the call up (it published a not-yet-open frame)
+ * - open: the call is live
+ * A start is accepted only from `free`. The line is released by the host publishing
+ * null or closing the call, by the host window going away, or by the host never
+ * reacting within START_REACTION_MS.
+ */
+type Line = 'free' | 'starting' | 'acked' | 'open';
 
 type Deps = {
   hostSender(): number | null;
@@ -23,8 +36,8 @@ type Deps = {
 export class VoiceCallCoordinator {
   private deps: Deps | null = null;
   private status: VoiceCallStatus | null = null;
-  /** A start already accepted whose first status has not arrived yet. */
-  private starting: ReturnType<typeof setTimeout> | null = null;
+  private line: Line = 'free';
+  private reaction: ReturnType<typeof setTimeout> | null = null;
   /** The host window may already be gone when its destruction is reported. */
   private lastHost: number | null = null;
   /** The host has subscribed to commands; false while it boots or reloads. */
@@ -45,6 +58,7 @@ export class VoiceCallCoordinator {
     this.lastHost = sender;
     if ('ready' in update) {
       this.hostReady = update.ready;
+      if (!update.ready) this.release();
       return;
     }
     this.apply(update, sender);
@@ -56,10 +70,13 @@ export class VoiceCallCoordinator {
     if (host === null || !this.hostReady) return false;
     // The call in progress keeps the line; a second one never replaces it.
     if (command.type === 'start') {
-      if (this.status?.open || this.starting) return false;
-      // Reserve now: the host only publishes after it renders, and a second window
-      // could otherwise be told it got the line in that gap.
-      this.starting = setTimeout(() => (this.starting = null), START_RESERVATION_MS);
+      if (this.line !== 'free') return false;
+      // Hold the line now: the host only publishes after it renders, and a second
+      // window could otherwise be told it got the line in that gap.
+      this.line = 'starting';
+      this.reaction = setTimeout(() => {
+        if (this.line === 'starting') this.release();
+      }, START_REACTION_MS);
     }
     this.deps?.send(host, COMMAND_CHANNEL, command);
     return true;
@@ -70,17 +87,36 @@ export class VoiceCallCoordinator {
     if (sender !== this.deps?.hostSender() && sender !== this.lastHost) return;
     this.lastHost = null;
     this.hostReady = false;
-    this.clearStarting();
+    this.release();
     if (this.status) this.apply({ status: null }, sender);
   }
 
-  private clearStarting(): void {
-    if (this.starting) clearTimeout(this.starting);
-    this.starting = null;
+  private release(): void {
+    if (this.reaction) clearTimeout(this.reaction);
+    this.reaction = null;
+    this.line = 'free';
+  }
+
+  /** The only place a host frame moves the line. */
+  private follow(update: VoiceCallStatusUpdate): void {
+    if (!('status' in update)) return; // audio levels say nothing about the line
+    if (update.status === null) {
+      this.release();
+    } else if (update.status.open) {
+      if (this.reaction) clearTimeout(this.reaction);
+      this.reaction = null;
+      this.line = 'open';
+    } else if (this.line === 'open') {
+      this.release(); // the live call is closing: a new start may take the line
+    } else if (this.line === 'starting') {
+      if (this.reaction) clearTimeout(this.reaction);
+      this.reaction = null;
+      this.line = 'acked'; // the host is bringing it up; keep holding the line
+    }
   }
 
   private apply(update: VoiceCallStatusUpdate, sender: number): void {
-    this.clearStarting();
+    this.follow(update);
     const wasActive = this.status?.open ?? false;
     if ('ready' in update) return;
     if ('status' in update) this.status = update.status;
