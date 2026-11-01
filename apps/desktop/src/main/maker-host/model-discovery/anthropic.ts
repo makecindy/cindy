@@ -118,7 +118,11 @@ const unresolvedAliasLogged = new Set<string>();
 /**
  * SDK 条目 → 目录模型 id;无法确定时返回 null(该条目不进清单)。
  *
- * 显式 `claude-*` id 原样归一化。SDK 对每个系列的当前型号常只报简称
+ * SDK 在 `resolvedModel` 里写明简称背后的具体型号(`opus` → claude-opus-5-5),这是权威结果,
+ * 在场且为 `claude-*` 时直接采用。实测 Claude Code 2.1.296 / 2.1.308 的简称条目说明不再带版本
+ * ("For your toughest challenges"),只靠说明会把 Fable 5.1 / Sonnet 5.5 / Haiku 5.5 整体漏掉(#4961)。
+ *
+ * 显式 `claude-*` id 原样归一化。旧版 SDK 没有 resolvedModel,对每个系列的当前型号常只报简称
  * (`default` / `opus` / `sonnet` …),具体版本只写在 description 开头
  * (如 "Opus 5.5 · …" / "Opus 4.7 with 1M context · …")。简称按说明里的系列与版本
  * 拼出 `claude-<系列>-<主>-<次>`(Anthropic 的 id 规则)。目录尚未登记的新版本
@@ -126,7 +130,11 @@ const unresolvedAliasLogged = new Set<string>();
  * 只有无法从说明确定版本时才放弃:简称与说明的系列不一致(opus 却写 Sonnet)、
  * 版本号多于两段或说明缺失。
  */
-function resolveSdkModelId(value: string, description: unknown): string | null {
+function resolveSdkModelId(value: string, description: unknown, resolvedModel?: unknown): string | null {
+  if (typeof resolvedModel === 'string') {
+    const resolved = normalizeModelId(resolvedModel);
+    if (resolved.startsWith('claude')) return resolved;
+  }
   const normalized = normalizeModelId(value);
   if (normalized.startsWith('claude')) return normalized;
   const alias = normalized.toLowerCase();
@@ -275,6 +283,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
     if (!entry || typeof entry !== 'object') continue;
     const e = entry as {
       value?: unknown;
+      resolvedModel?: unknown;
       displayName?: unknown;
       description?: unknown;
       supportsEffort?: unknown;
@@ -282,7 +291,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
       supportsFastMode?: unknown;
     };
     if (typeof e.value !== 'string' || e.value.length === 0) continue;
-    const id = resolveSdkModelId(e.value, e.description);
+    const id = resolveSdkModelId(e.value, e.description, e.resolvedModel);
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const reportedName =
