@@ -113,6 +113,10 @@ worktree 建成空目录或自动切到项目根继续修改代码。
     重型 workspace 在本次 runner 内独占；这些边界不限制其它 session。
     可用 `--workspace-concurrency=1` 调低同一次运行的 workspace 并发；需要不同 worker
     配额时，可直接调用目标包 Vitest 的 `--maxWorkers` 参数。
+  - **Windows CI 分组**：Desktop 与其余 workspace 在不同 runner 上各跑四个 unit 分片，
+    使用互补的 `--workspace desktop` / `--exclude-workspace desktop` 选择器；新增 workspace
+    自动进入其余组。每组保留原有 worker、pool、隔离与分片设置。稳定的 `Windows unit tests`
+    汇总检查只有在全部分片和一次性 runner／数据库检查成功后才通过。
   - **跨 worktree 排队默认关闭**：只有主动传 `--lock` 的本地重型测试命令才参与同仓共享
     loopback TCP 锁。`--no-lock` 保留兼容，不能与 `--lock` 同时使用。直接运行 Desktop
     Vitest 也不再隐式加第二层锁。选择排队后，等待超过 15 分钟以退出码 `75` 结束，表示
