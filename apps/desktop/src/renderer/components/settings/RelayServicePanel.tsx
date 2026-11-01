@@ -163,6 +163,8 @@ function FormDialog({
   description: string;
   children: React.ReactNode;
 }) {
+  // 这些窗口没有 Radix Trigger,默认关闭时焦点落到 null:记下打开前的按钮,关闭后还给它。
+  const openerRef = useRef<HTMLElement | null>(null);
   return (
     <Dialog.Root
       open={open}
@@ -174,7 +176,15 @@ function FormDialog({
         <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
-          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[88vh] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col outline-none"
+          onOpenAutoFocus={() => {
+            const active = document.activeElement;
+            openerRef.current = active instanceof HTMLElement && active !== document.body ? active : null;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (openerRef.current?.isConnected) openerRef.current.focus({ preventScroll: true });
+          }}
+          className="modal-panel fixed left-1/2 top-1/2 z-[10001] flex max-h-[88vh] w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto outline-none"
         >
           <div className="flex flex-col gap-1 px-4 pb-4 pt-4">
             <Dialog.Title className="text-16 font-semibold text-[var(--confirm-title)]">{title}</Dialog.Title>
@@ -309,17 +319,25 @@ function AddDevice({
 }) {
   const { t } = useTranslation();
   const [qr, setQr] = useState<string | null>(null);
+  const [enlarged, setEnlarged] = useState<string | null>(null);
+  const [enlargeOpen, setEnlargeOpen] = useState(false);
   const link = state.joinLink?.link ?? null;
   const k = 'settings.remoteControl.relay.add';
 
   useEffect(() => {
     if (!link) {
       setQr(null);
+      setEnlarged(null);
+      setEnlargeOpen(false);
       return;
     }
     let active = true;
+    // 放大版单独按大尺寸生成,避免把 200px 的图拉伸到看不清、扫不上
     void QRCode.toDataURL(link, { margin: 2, width: 200 }).then((url) => {
       if (active) setQr(url);
+    });
+    void QRCode.toDataURL(link, { margin: 2, width: 640 }).then((url) => {
+      if (active) setEnlarged(url);
     });
     return () => {
       active = false;
@@ -339,7 +357,7 @@ function AddDevice({
             )}
             <div className="flex min-w-0 flex-col gap-2">
               <p className="break-all font-mono text-12 text-[var(--text-secondary)]">{link}</p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -352,9 +370,30 @@ function AddDevice({
                 <Button variant="secondary" size="sm" disabled={controller.busy} onClick={() => void controller.run({ type: 'create-join-link' })}>
                   {t(`${k}.newLink`)}
                 </Button>
+                <Button variant="secondary" size="sm" disabled={!enlarged} onClick={() => setEnlargeOpen(true)}>
+                  {t(`${k}.enlarge`)}
+                </Button>
               </div>
             </div>
           </div>
+          <FormDialog
+            open={enlargeOpen && enlarged !== null}
+            onClose={() => setEnlargeOpen(false)}
+            title={t(`${k}.qrTitle`)}
+            description={t(`${k}.hint`)}
+          >
+            {/* 窗口很矮（最小窗口加界面缩放）时 QR 跟着缩小；再矮就保底 120px，整个窗口滚动，关闭按钮仍可达。 */}
+            <div className="flex min-h-[120px] flex-1 justify-center px-4 pb-4">
+              {enlarged ? (
+                <img src={enlarged} alt={t(`${k}.qrAlt`)} className="aspect-square max-h-full w-full max-w-[min(440px,60vh)] rounded-xl object-contain" />
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="secondary" size="sm" palette="confirmation" onClick={() => setEnlargeOpen(false)}>
+                {t(`${k}.close`)}
+              </Button>
+            </DialogFooter>
+          </FormDialog>
           {state.pendingRequests.length === 0 ? <Hint>{t(`${k}.waiting`)}</Hint> : null}
         </>
       ) : (

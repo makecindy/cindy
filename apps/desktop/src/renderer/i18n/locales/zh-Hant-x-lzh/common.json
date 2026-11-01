@@ -5783,9 +5783,12 @@
           "create": "增裝置",
           "hint": "以手機相機掃之，或將連結遣至另一機，於「入他處中繼」中貼上。連結十分鐘內有效，僅可用一次。",
           "qrAlt": "入中繼之 QR 碼",
+          "qrTitle": "入中繼之 QR 碼",
           "copy": "錄連結",
           "copied": "加入連結已錄",
           "newLink": "重生",
+          "enlarge": "放大 QR 碼",
+          "close": "闔 QR 碼",
           "waiting": "倚門候裝置來請…"
         },
         "requests": {

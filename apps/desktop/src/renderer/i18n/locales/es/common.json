@@ -5881,9 +5881,12 @@
           "create": "Agregar dispositivo",
           "hint": "Escanéalo con la cámara de tu teléfono o envía el enlace a otra computadora y pégalo en Unirse a otro retransmisor. El enlace funciona una sola vez y vence en 10 minutos.",
           "qrAlt": "Código QR para unirse al retransmisor",
+          "qrTitle": "Código QR para unirse al retransmisor",
           "copy": "Copiar enlace",
           "copied": "Enlace para unirse copiado",
           "newLink": "Nuevo enlace",
+          "enlarge": "Ampliar código QR",
+          "close": "Cerrar código QR",
           "waiting": "Esperando la solicitud de un dispositivo…"
         },
         "requests": {
