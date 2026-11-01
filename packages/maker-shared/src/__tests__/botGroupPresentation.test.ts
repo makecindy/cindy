@@ -15,7 +15,9 @@ import {
   botGroupActivityAt,
   latestBotGroupMessage,
   chatGroupMemberName,
+  botGroupMemberBaseName,
 } from '../botGroupPresentation.js';
+import { resolveBotGroupMentions } from '../botGroupMentions.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
 
 describe('group list activity', () => {
@@ -340,5 +342,25 @@ describe('chatGroupMemberName owner suffix (#8061)', () => {
     expect(chatGroupMemberName(bot('b1', 'h1'), members)).toBe('Dash (Xing)');
     expect(chatGroupMemberName(bot('b1', 'h1'), [human('h1', 'Xing', 'left'), human('h2', 'Chris')])).toBe('Dash (Account)');
     expect(chatGroupMemberName(bot('b1', 'h1'), [])).toBe('Dash (Account)');
+  });
+});
+
+describe('draft @mentions survive a suffix change (#8061 review)', () => {
+  // Someone joins a self-built group while a draft `@Dash ...` is open: the display name flips from
+  // `Dash` to `Dash (Xing)`. The composer offers both labels, so the typed short name still resolves.
+  const composerMembers = (name: string) => {
+    const member = { botId: 'b1', name, ownerName: 'Xing' };
+    return [{ botId: 'b1', name }, { botId: 'b1', name: botGroupMemberBaseName(member) }];
+  };
+  it('strips only a trailing owner suffix', () => {
+    expect(botGroupMemberBaseName({ name: 'Dash (Xing)', ownerName: 'Xing' })).toBe('Dash');
+    expect(botGroupMemberBaseName({ name: 'Dash', ownerName: 'Xing' })).toBe('Dash');
+    expect(botGroupMemberBaseName({ name: ' (Xing)', ownerName: 'Xing' })).toBe('(Xing)');
+  });
+  it('keeps resolving a typed short name after the display name gains the suffix', () => {
+    for (const name of ['Dash', 'Dash (Xing)']) {
+      expect(resolveBotGroupMentions('@Dash please look', { members: composerMembers(name), allLabels: ['all'] }).botIds).toEqual(['b1']);
+    }
+    expect(resolveBotGroupMentions('@Dash (Xing) please look', { members: composerMembers('Dash (Xing)'), allLabels: ['all'] }).botIds).toEqual(['b1']);
   });
 });

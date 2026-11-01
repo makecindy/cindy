@@ -44,6 +44,14 @@ export function chatGroupMemberName(member: ChatGroupNamedMember, members: reado
   return `${member.name} (${owner})`;
 }
 
+/** The member's own name without the 「 (主人昵称)」 suffix `chatGroupMemberName` may have added. */
+export function botGroupMemberBaseName(member: Pick<BotGroupMemberView, 'name' | 'ownerName'>): string {
+  const name = member.name.trim();
+  const owner = member.ownerName?.trim();
+  const suffix = owner ? ` (${owner})` : '';
+  return suffix && name.endsWith(suffix) && name.length > suffix.length ? name.slice(0, -suffix.length) : name;
+}
+
 /** Only active members can be mentioned, speak, or keep a group sendable. */
 export function isActiveBotGroupMember(member: Pick<BotGroupMemberView, 'status'>): boolean {
   return member.status === 'active';
