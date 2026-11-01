@@ -589,15 +589,35 @@ export function classifyCodexError(error: {
     );
   const message = redactSensitiveText(rawMessage);
   const signals = extractNonSecretErrorSignals(rawMessage);
+  const codexInfoDetails =
+    error?.codexErrorInfo && typeof error.codexErrorInfo === 'object' && !Array.isArray(error.codexErrorInfo)
+      ? Object.values(error.codexErrorInfo)[0]
+      : undefined;
+  const codexInfoStatus =
+    codexInfoDetails && typeof codexInfoDetails === 'object' && !Array.isArray(codexInfoDetails)
+      && typeof (codexInfoDetails as { httpStatusCode?: unknown }).httpStatusCode === 'number'
+      ? (codexInfoDetails as { httpStatusCode: number }).httpStatusCode
+      : undefined;
   const errorStatus =
-    signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+    signals.errorStatus ?? codexInfoStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
   const errorInfoTag = codexErrorInfoTag(error?.codexErrorInfo);
-  const isCapacityError =
-    parseOverloadError(message, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
   const additionalDetails =
     typeof error?.additionalDetails === 'string' ? error.additionalDetails : '';
+  const overload = parseOverloadError(message, errorStatus, errorInfoTag);
+  // Codex's nested serverOverloaded response uses these 503 codes (see app-server/protocol.ts).
+  const nestedCapacityMarker =
+    /\b(?:server[_\s-]+is[_\s-]+overloaded|server[_\s-]+overloaded|serveroverloaded|selected model is at capacity|slow[_\s-]+down)\b/i.test(
+      additionalDetails,
+    );
+  const nestedOverloadMarker = nestedCapacityMarker || /\boverloaded_error\b/i.test(additionalDetails);
+  // responseTooManyFailedAttempts means app-server has already exhausted its own sampling
+  // retry budget. Preserve the overload classification for the UI, but do not start another
+  // Codex turn replay on top of those five attempts.
+  const samplingRetriesExhausted = errorInfoTag === 'responseTooManyFailedAttempts';
+  const isCapacityError = !samplingRetriesExhausted && (overload?.kind === 'capacity' || nestedCapacityMarker);
+  const isUpstreamOverload = overload !== null || nestedOverloadMarker;
   const compactClassifyText = additionalDetails ? `${message}\n${additionalDetails}` : message;
-  const reason = isCapacityError
+  const reason = isUpstreamOverload
     ? UPSTREAM_OVERLOAD_REASON
     : isRemoteCompactEncryptedContentError(compactClassifyText)
       ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON

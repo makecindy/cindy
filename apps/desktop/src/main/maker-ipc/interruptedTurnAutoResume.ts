@@ -200,6 +200,9 @@ export function shouldPreserveRuntimeFallbackAutoResume(input: {
 }
 
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {
+  // The Codex app-server reports this tag after its sampling retry budget is exhausted. Replaying
+  // the same interrupted turn here would start another full sampling retry cycle (issue #8309).
+  if (signals.codexErrorInfo === 'responseTooManyFailedAttempts') return false;
   // This is a deliberate exception to the broad 503/network allowlist. Check it
   // first so a future stable reason cannot accidentally re-enable auto-resume.
   if (isOAuthAccountPoolUnavailableError(signals)) return false;

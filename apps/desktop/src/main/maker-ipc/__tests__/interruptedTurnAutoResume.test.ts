@@ -390,6 +390,24 @@ describe('isInterruptedTurnError', () => {
     expect(isInterruptedTurnError({ message: 'upstream busy', errorStatus: 529 })).toBe(true);
   });
 
+  /**
+   * #8309 regression / unit: the Desktop coordinator consumes the Codex terminal error signal
+   * through this production classifier. Existing cases covered retryable overloads and generic
+   * stream disconnects separately, but not a disconnect explicitly marked as exhausted by the
+   * app-server. The smallest failing input must stop host auto-resume even when overload is known.
+   */
+  it('does not auto-resume after Codex reports its sampling retries exhausted', () => {
+    expect(isInterruptedTurnError({
+      message: 'stream disconnected before completion',
+      reason: 'upstream-overload',
+      codexErrorInfo: 'responseTooManyFailedAttempts',
+    })).toBe(false);
+    expect(isInterruptedTurnError({
+      message: 'stream disconnected before completion',
+      codexErrorInfo: 'responseTooManyFailedAttempts',
+    })).toBe(false);
+  });
+
   // 确定性失败必须留在门外:重试它们只会反复烧额度并反复报同一个错。
   it('still rejects deterministic failures after widening', () => {
     for (const [label, signals] of [
