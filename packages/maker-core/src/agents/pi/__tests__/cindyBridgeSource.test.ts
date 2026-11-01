@@ -2726,6 +2726,8 @@ it('passes through inner tools that legitimately declare an args parameter, repe
     { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
     // 第三方信封 MCP 的内层工具合法声明 args 参数(数组): 与双包同形, 必须按 schema 放行。
     { name: 'run', inputSchema: { type: 'object', properties: { args: { type: 'array' } }, required: ['args'] } },
+    // 宽松 schema 内层工具(无 properties): 判定不了是否接受 args → 无可靠判据, 放行不误拦。
+    { name: 'eval', inputSchema: { type: 'object' } },
   ]);
   gateway.register({ registerTool: () => undefined });
   await gateway.listResult({ server: 'acme_tools', tool: 'call_tool' });
@@ -2739,10 +2741,19 @@ it('passes through inner tools that legitimately declare an args parameter, repe
     name: 'call_tool',
     arguments: { name: 'run', args: { args: ['--version'] } },
   });
-  // 信封 name 查无此工具: 先代拉内层 list_tools(本 fixture 无内层列表 → 解析失败回退启发式),
-  // acme 暴露了 run(非两入口) → 放行给服务端报 UNKNOWN_TOOL。
-  await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  // 宽松内层 schema(无 properties) + args 参数: 判定不了 → 启发式放行, 连续两次透传。
+  const looseCall = { server: 'acme_tools', tool: 'call_tool', args: { name: 'eval', args: { args: { code: '1+1' } } } };
+  await gateway.executeCall(looseCall);
+  await gateway.executeCall(looseCall);
   expect(requests).toHaveLength(4);
+  expect(requests[3].params).toEqual({
+    name: 'call_tool',
+    arguments: { name: 'eval', args: { args: { code: '1+1' } } },
+  });
+  // 信封 name 查无此工具: 先代拉内层 list_tools(本 fixture 无内层列表 → 解析失败回退启发式),
+  // acme 暴露了 run/eval(非两入口) → 放行给服务端报 UNKNOWN_TOOL。
+  await gateway.executeCall({ server: 'acme_tools', tool: 'call_tool', args: { name: 'nope', args: { args: { x: 1 } } } });
+  expect(requests).toHaveLength(6);
 });
 
 it('probes the inner list_tools of a third-party two-entry gateway and passes legal args params', async () => {

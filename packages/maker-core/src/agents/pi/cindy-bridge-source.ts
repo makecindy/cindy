@@ -3163,6 +3163,20 @@ function schemaHint(schema: Record<string, unknown>): string {
   return rendered.length <= 16_000 ? rendered : rendered.slice(0, 15_999) + '…';
 }
 
+/**
+ * 判断工具 schema 是否声明了名为 args 的参数。返回:
+ * - true/false  properties 明确声明/未声明 args
+ * - null        无法判定 — properties 缺失/为空(参数可能靠 $ref/allOf 组合声明),
+ *               调用方按「无可靠判据」处理, 宁漏不误拦
+ */
+function schemaDeclaresArgs(schema: { properties?: Record<string, unknown> } | null | undefined): boolean | null {
+  const props = schema?.properties;
+  if (props == null || typeof props !== 'object' || Object.keys(props).length === 0) {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(props, 'args');
+}
+
 class CindyMcpGateway {
   // Older Pi ignores execute-result isError but supports tool_result overrides.
   // Weak identities keep the status private without retaining completed calls.
@@ -3564,8 +3578,8 @@ class CindyMcpGateway {
    * 返回:
    * - 'missing'          内层列表里没有这个工具 → 放行, 服务端会报 UNKNOWN_TOOL
    * - {declaresArgs}     拿到了内层 schema → 按 args 参数判定
-   * - 'schemaless'       找到工具但没带 schema (Cindy registry 的 list_tools 只给名字+简介),
-   *                      或返回的是类目概览 → 调用方回退两入口形状启发式
+   * - 'schemaless'       找到工具但没带可用 schema (Cindy registry 的 list_tools 只给名字+简介,
+   *                      或返回的是类目概览, 或 properties 缺失/为空判定不了) → 调用方回退两入口形状启发式
    * - null               拉取/解析失败(不缓存, 下次重试) → 同上回退
    */
   private async probeInnerToolSchema(entry: ConnectedMcpTool, innerName: string, signal?: AbortSignal):
@@ -3604,13 +3618,10 @@ class CindyMcpGateway {
     if (listing.kind === 'schemaless') return 'schemaless';
     const match = listing.tools.find((tool) => tool?.name === innerName);
     if (!match) return 'missing';
-    const schema = (match.inputSchema ?? match.parameters ?? match.schema) as
-      { properties?: Record<string, unknown> } | undefined;
-    if (!schema || typeof schema !== 'object') return 'schemaless';
-    return {
-      declaresArgs: schema.properties != null
-        && Object.prototype.hasOwnProperty.call(schema.properties, 'args'),
-    };
+    const declared = schemaDeclaresArgs((match.inputSchema ?? match.parameters ?? match.schema) as
+      { properties?: Record<string, unknown> } | undefined);
+    if (declared === null) return 'schemaless';
+    return { declaresArgs: declared };
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
@@ -3810,8 +3821,8 @@ class CindyMcpGateway {
       if (entrySelf) {
         verdict = true; // name 缺失/填了入口名: 不存在合法形状
       } else if (innerTool !== null) {
-        verdict = !(innerSchema?.properties != null
-          && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args'));
+        const declared = schemaDeclaresArgs(innerSchema);
+        verdict = declared === null ? null : !declared; // schema 宽松判定不了 → 启发式放行
       } else if (nestedArgsPlain) {
         const probed = await this.probeInnerToolSchema(resolved.tool, innerName, signal);
         if (probed === 'missing') verdict = false; // 内层列表里没有 → 服务端 UNKNOWN_TOOL
