@@ -10,6 +10,7 @@ export const {
   presentFilesMatchSnapshotTree,
   checkoutMissingSnapshotFiles,
   releaseSnapshotRef,
+  listSnapshotRefs,
   snapshotTreePaths,
   discardableWorktreePaths,
   captureWorktreeContent,

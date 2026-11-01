@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import type { GitExecOpts } from "./gitTypes.js";
 import fs from "node:fs/promises";
 
 import os from "node:os";
@@ -7,6 +9,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import type { WorktreeManagerPorts } from "./managerPorts.js";
 import type { WorktreeRecycleRecord } from "./recycleTypes.js";
+
+export const SNAPSHOT_REF_PREFIX = "refs/cindy/worktree-recovery/";
 
 /** HEAD or the index moved while a snapshot was being captured. */
 export class WorktreeChangedDuringSnapshotError extends Error {
@@ -250,17 +254,43 @@ export function createWorktreeContentSnapshots(
       NonNullable<WorktreeRecycleRecord["snapshot"]>,
       "ref" | "commit"
     >,
+    options?: Pick<GitExecOpts, "timeoutMs" | "deadlineAtMs">,
   ): Promise<boolean> {
-    if (!snapshot.ref.startsWith("refs/cindy/worktree-recovery/")) return false;
+    if (!snapshot.ref.startsWith(SNAPSHOT_REF_PREFIX)) return false;
     try {
       await gitExec(
         ["update-ref", "-d", snapshot.ref, snapshot.commit],
         baseRepo,
+        options,
       );
       return true;
     } catch {
       return false;
     }
+  }
+
+  /** Existing snapshot refs and the commits they point to, read with a single Git process. */
+  async function listSnapshotRefs(
+    baseRepo: string,
+    options?: Pick<GitExecOpts, "timeoutMs" | "deadlineAtMs">,
+  ): Promise<Map<string, string>> {
+    const { stdout } = await gitExec(
+      [
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)",
+        SNAPSHOT_REF_PREFIX,
+      ],
+      baseRepo,
+      options,
+    );
+    const refs = new Map<string, string>();
+    let scanned = 0;
+    for (const line of stdout.split("\n")) {
+      if (++scanned % 128 === 0) await setImmediate();
+      const [ref, commit] = line.trim().split("\0");
+      if (ref && commit) refs.set(ref, commit);
+    }
+    return refs;
   }
 
   async function snapshotTreePaths(
@@ -459,6 +489,7 @@ export function createWorktreeContentSnapshots(
     presentFilesMatchSnapshotTree,
     checkoutMissingSnapshotFiles,
     releaseSnapshotRef,
+    listSnapshotRefs,
     snapshotTreePaths,
     discardableWorktreePaths,
     captureWorktreeContent,

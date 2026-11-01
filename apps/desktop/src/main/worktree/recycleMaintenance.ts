@@ -1,9 +1,13 @@
+import { setImmediate } from 'node:timers/promises';
+import type { WorktreeSessionReference } from '@cindy/worktree-core/managerPorts';
+import { SNAPSHOT_REF_PREFIX } from '@cindy/worktree-core/contentSnapshot';
 import { app } from 'electron';
 
 import { getDbClient } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
   listRecycleRecords,
+  listRecycleRecordsWithHistory,
   readRecycleRecord,
   watchRecycleJournal,
   worktreeGeneration,
@@ -14,11 +18,14 @@ import * as store from './worktreeStore';
 import { physicalWorktreeKey } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
 import { retryPendingWorktreeRuntimeLeaseReleases } from './runtimeLeases';
-import { gitExec } from './gitExec';
-import { releaseSnapshotRef } from './contentSnapshot';
+
+import { releaseSnapshotRef, listSnapshotRefs } from './contentSnapshot';
 
 import { createWorktreeRecycleMaintenance } from '@cindy/worktree-core/recycleMaintenance';
 export type { WorktreeMaintenanceOptions } from '@cindy/worktree-core/recycleMaintenance';
+
+const SNAPSHOT_CLEANUP_BUDGET_MS = 5_000;
+const SNAPSHOT_GIT_TIMEOUT_MS = 1_000;
 export const {
   WorktreeRecycleMaintenance,
   startWorktreeRecycleMaintenance,
@@ -39,67 +46,87 @@ export const {
   retryPendingWorktreeRuntimeLeaseReleases,
   userDataRoot: () => app.getPath('userData'),
   getReferenceSource: getDbClient,
+  releaseObsoleteRecoverySnapshots,
 });
 export type WorktreeRecycleMaintenance = InstanceType<typeof WorktreeRecycleMaintenance>;
 
-/** Startup-only cleanup for snapshot refs that no remaining task can restore. */
 export async function releaseObsoleteRecoverySnapshots(
-  readRows: () => Promise<
-    ReadonlyArray<{ id: string; status?: string | null; source?: string | null }>
-  >,
+  readRows: () => Promise<readonly WorktreeSessionReference[]>,
   canContinue: () => boolean = () => true,
 ): Promise<number> {
-  if (!canContinue()) return 0;
-  const records = await listRecycleRecords();
-  const copies = new Map<
-    string,
-    { baseRepo: string; commit: string; restored: boolean; removed: boolean; owners: Set<string> }
-  >();
+  const records = await listRecycleRecordsWithHistory();
+  if (!records || !canContinue()) return 0;
+  // History keeps an older copy of the same record, so decide per ref across all copies.
+  const copies = new Map<string, {
+    baseRepo: string; commit: string; restored: boolean; removed: boolean; owners: Set<string>;
+  }>();
+  let scanned = 0;
   for (const record of records) {
-    const snapshot = record.snapshot;
-    if (!snapshot?.ref.startsWith('refs/cindy/worktree-recovery/')) continue;
-    let copy = copies.get(snapshot.ref);
+    if (++scanned % 128 === 0) {
+      await setImmediate();
+      if (!canContinue()) return 0;
+    }
+    if (!record.snapshot?.ref.startsWith(SNAPSHOT_REF_PREFIX)) continue;
+    let copy = copies.get(record.snapshot.ref);
     if (!copy) {
-      copy = {
-        baseRepo: record.meta.baseRepo,
-        commit: snapshot.commit,
-        restored: false,
-        removed: true,
-        owners: new Set(),
-      };
-      copies.set(snapshot.ref, copy);
+      copy = { baseRepo: record.meta.baseRepo, commit: record.snapshot.commit,
+        restored: false, removed: true, owners: new Set() };
+      copies.set(record.snapshot.ref, copy);
     }
     copy.restored ||= record.phase === 'restored';
     copy.removed &&= record.phase === 'removed';
     copy.owners.add(record.meta.sessionId);
   }
-  const rows = [...copies.values()].some((copy) => copy.removed && !copy.restored)
-    ? await readRows()
-    : [];
-  const deleted = new Map<string, boolean>();
-  for (const row of rows)
-    deleted.set(
-      row.id,
-      (deleted.get(row.id) ?? true) && row.source !== 'bot' && row.status === 'deleted',
-    );
-  let released = 0;
+  let needsOwners = false;
+  for (const copy of copies.values()) {
+    if (++scanned % 128 === 0) await setImmediate();
+    if (!copy.restored && copy.removed) { needsOwners = true; break; }
+  }
+  if (!canContinue()) return 0;
+  const rows = needsOwners ? await readRows() : [];
+  // All databases must agree. A missing owner remains unknown, never deleted.
+  const deletedOwners = new Map<string, boolean>();
+  for (const row of rows) {
+    const id = row.id;
+    deletedOwners.set(id, (deletedOwners.get(id) ?? true) && row.source !== 'bot' && row.status === 'deleted');
+    if (++scanned % 128 === 0) {
+      await setImmediate();
+      if (!canContinue()) return 0;
+    }
+  }
+  const byRepo = new Map<string, Array<{ ref: string; commit: string }>>();
   for (const [ref, copy] of copies) {
-    if (!canContinue()) break;
+    if (++scanned % 128 === 0) {
+      await setImmediate();
+      if (!canContinue()) return 0;
+    }
     let obsolete = copy.restored;
-    if (!obsolete && copy.removed)
-      obsolete = [...copy.owners].every((owner) => deleted.get(owner) === true);
+    if (!obsolete && copy.removed) {
+      obsolete = true;
+      for (const owner of copy.owners) {
+        if (++scanned % 128 === 0) await setImmediate();
+        if (deletedOwners.get(owner) !== true) { obsolete = false; break; }
+      }
+    }
     if (!obsolete) continue;
-    const { stdout } = await gitExec(
-      ['for-each-ref', '--format=%(refname)%00%(objectname)', ref],
-      copy.baseRepo,
-    );
-    const [existingRef, existingCommit] = stdout.trim().split('\0');
-    if (
-      existingRef === ref &&
-      existingCommit === copy.commit &&
-      (await releaseSnapshotRef(copy.baseRepo, { ref, commit: copy.commit }))
-    )
-      released++;
+    let candidates = byRepo.get(copy.baseRepo);
+    if (!candidates) { candidates = []; byRepo.set(copy.baseRepo, candidates); }
+    candidates.push({ ref, commit: copy.commit });
+  }
+  // Do not budget the evidence scan: a partial journal must never authorize deletion.
+  // The existing Git helper may spend its bounded process-tree cleanup grace after timeout.
+  const deadlineAtMs = performance.now() + SNAPSHOT_CLEANUP_BUDGET_MS;
+  const gitOptions = { timeoutMs: SNAPSHOT_GIT_TIMEOUT_MS, deadlineAtMs };
+  let released = 0;
+  for (const [baseRepo, candidates] of byRepo) {
+    if (!canContinue() || performance.now() >= deadlineAtMs) break;
+    let existing: Map<string, string>;
+    try { existing = await listSnapshotRefs(baseRepo, gitOptions); } catch { continue; }
+    for (const candidate of candidates) {
+      if (++scanned % 128 === 0) await setImmediate();
+      if (!canContinue() || performance.now() >= deadlineAtMs) return released;
+      if (existing.get(candidate.ref) === candidate.commit && await releaseSnapshotRef(baseRepo, candidate, gitOptions)) released++;
+    }
   }
   return released;
 }

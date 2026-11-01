@@ -1,6 +1,7 @@
 import { MAX_RECYCLE_FAILURES, recyclePolicy } from "./recyclePolicy.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { hasLiveSessionReference, pathKey } from "./liveSessionRefs.js";
 import type {
   WorktreeManagerPorts,
@@ -13,6 +14,7 @@ import type { createWorktreeRuntimeLeases } from "./runtimeLeases.js";
 
 export interface WorktreeMaintenanceOptions {
   isReady(): boolean;
+  onReady?(): Promise<void>;
   recycleCurrentSession(sessionId: string, status: string): Promise<void>;
   onAttemptComplete?(): Promise<void>;
 }
@@ -44,6 +46,10 @@ export type WorktreeMaintenancePorts = Pick<
     getReferenceSource(): {
       readLocalWorktreeReferences?(): Promise<WorktreeSessionReference[]>;
     };
+    releaseObsoleteRecoverySnapshots?(
+      readRows: () => Promise<WorktreeSessionReference[]>,
+      canContinue: () => boolean,
+    ): Promise<number>;
   };
 
 export function createWorktreeRecycleMaintenance(
@@ -63,11 +69,13 @@ export function createWorktreeRecycleMaintenance(
     retryPendingWorktreeRuntimeLeaseReleases,
     userDataRoot,
     getReferenceSource,
+    releaseObsoleteRecoverySnapshots,
   } = ports;
   let maintenance: WorktreeRecycleMaintenance | null = null;
   let stopping = Promise.resolve();
   const MAX_ATTEMPTS = 8;
   const EVENT_COALESCE_MS = 100;
+  const STARTUP_DELAY_MS = 30_000;
   const retryDelay = (attempt: number): number =>
     Math.min(30 * 60_000, 5_000 * 2 ** Math.min(attempt, 9));
 
@@ -84,6 +92,7 @@ export function createWorktreeRecycleMaintenance(
     private watchRetryAt = 0;
     private scanFailures = 0;
     private initialPass = true;
+    private startAt: number | null = null;
     private readonly wakeIds = new Set<string>();
     private readonly attempts = new Map<
       string,
@@ -92,8 +101,9 @@ export function createWorktreeRecycleMaintenance(
 
     constructor(public options: WorktreeMaintenanceOptions) {}
 
-    start(): Promise<void> {
+    start(delayMs = 0): Promise<void> {
       if (this.stopped) return Promise.resolve();
+      this.startAt ??= Date.now() + delayMs;
       this.unsubscribe ??= subscribeWorktreeRecycleEvents((event) => {
         if (event.opportunity) this.wakeIds.add(event.resourceId);
         this.changed();
@@ -144,6 +154,10 @@ export function createWorktreeRecycleMaintenance(
 
     run(): Promise<void> {
       if (this.stopped) return Promise.resolve();
+      if (this.startAt !== null && Date.now() < this.startAt) {
+        this.schedule(this.startAt);
+        return Promise.resolve();
+      }
       if (this.running) {
         this.dirty = true;
         return this.running;
@@ -247,8 +261,30 @@ export function createWorktreeRecycleMaintenance(
 
     private async runPass(): Promise<void> {
       if (!this.options.isReady()) return;
+      await this.options.onReady?.();
+      if (this.stopped || !this.options.isReady()) return;
       await this.ensureWatcher();
       if (this.stopped) return;
+      if (this.initialPass && releaseObsoleteRecoverySnapshots) {
+        try {
+          const db = getReferenceSource();
+          const readRows = db.readLocalWorktreeReferences?.bind(db);
+          if (readRows) {
+            await releaseObsoleteRecoverySnapshots(
+              readRows,
+              () =>
+                !this.stopped &&
+                this.options.isReady() &&
+                getReferenceSource() === db,
+            );
+          }
+        } catch (error) {
+          log.warn("worktree recovery snapshot release postponed", {
+            code: (error as NodeJS.ErrnoException).code ?? "unavailable",
+          });
+        }
+        if (this.stopped || !this.options.isReady()) return;
+      }
       let pendingLeaseReleases = 0;
       try {
         pendingLeaseReleases = await retryPendingWorktreeRuntimeLeaseReleases();
@@ -310,6 +346,17 @@ export function createWorktreeRecycleMaintenance(
       let attempted = false;
       try {
         const rows = await db.readLocalWorktreeReferences();
+        const rowsByOwner = new Map<string, WorktreeSessionReference[]>();
+        let scanned = 0;
+        for (const row of rows) {
+          let owned = rowsByOwner.get(row.id);
+          if (!owned) {
+            owned = [];
+            rowsByOwner.set(row.id, owned);
+          }
+          owned.push(row);
+          if (++scanned % 128 === 0) await setImmediate();
+        }
         for (const record of records) {
           if (
             this.stopped ||
@@ -337,9 +384,7 @@ export function createWorktreeRecycleMaintenance(
               (!wakeIds.has(record.id) && latest.nextAttemptAt > Date.now())
             )
               continue;
-            const ownerRows = rows.filter(
-              (row) => row.id === record.meta.sessionId,
-            );
+            const ownerRows = rowsByOwner.get(record.meta.sessionId) ?? [];
             // Unknown is not an orphan, including after switching the selected account.
             if (
               !ownerRows.length ||
@@ -409,7 +454,7 @@ export function createWorktreeRecycleMaintenance(
   ): void {
     maintenance ??= new WorktreeRecycleMaintenance(options);
     maintenance.options = options;
-    void maintenance.start();
+    void maintenance.start(STARTUP_DELAY_MS);
   }
 
   function stopWorktreeRecycleMaintenance(): Promise<void> {

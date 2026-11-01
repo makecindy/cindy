@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 
 import { watch } from "node:fs";
@@ -262,7 +263,49 @@ export function createWorktreeRecycleJournal(
     }
     return records;
   }
+  async function listRecycleRecordsWithHistory(): Promise<
+    WorktreeRecycleRecord[] | null
+  > {
+    const root = recycleJournalRoot();
+    const files: Array<{ file: string; id: string }> = [];
+    let scanned = 0;
+    for (const [directory, pattern] of [
+      [root, /^[a-f0-9]{64}\.json$/],
+      [path.join(root, "history"), /^[a-f0-9]{64}-[a-f0-9]{64}\.json$/],
+    ] as const) {
+      let names: string[];
+      try {
+        names = await fs.readdir(directory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      for (const name of names) {
+        if (++scanned % 128 === 0) await setImmediate();
+        if (pattern.test(name))
+          files.push({
+            file: path.join(directory, name),
+            id: name.slice(0, 64),
+          });
+      }
+    }
+    const records: WorktreeRecycleRecord[] = [];
+    for (const { file, id } of files) {
+      try {
+        records.push(parseRecord(await fs.readFile(file, "utf8"), id));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        log.warn("worktree recycle sweep skipped: unreadable record", {
+          resourceId: id,
+        });
+        return null;
+      }
+    }
+    return records;
+  }
+
   return {
+    listRecycleRecordsWithHistory,
     recycleJournalRoot,
     worktreeGeneration,
     readRecycleRecord,
