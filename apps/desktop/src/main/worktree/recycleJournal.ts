@@ -26,5 +26,6 @@ export const {
   watchRecycleJournal,
   newRecycleRecord,
   listRecycleRecords,
+  pruneUnreferencedRecoveryArchives,
   listRecycleRecordsWithHistory,
 } = service;

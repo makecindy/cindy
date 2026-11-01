@@ -50,6 +50,9 @@ export type WorktreeMaintenancePorts = Pick<
       readRows: () => Promise<WorktreeSessionReference[]>,
       canContinue: () => boolean,
     ): Promise<number>;
+    retireRecoveryArchives?(
+      records: readonly WorktreeRecycleRecord[],
+    ): Promise<boolean>;
   };
 
 export function createWorktreeRecycleMaintenance(
@@ -70,6 +73,7 @@ export function createWorktreeRecycleMaintenance(
     userDataRoot,
     getReferenceSource,
     releaseObsoleteRecoverySnapshots,
+    retireRecoveryArchives,
   } = ports;
   let maintenance: WorktreeRecycleMaintenance | null = null;
   let stopping = Promise.resolve();
@@ -295,7 +299,10 @@ export function createWorktreeRecycleMaintenance(
         pendingLeaseReleases = 1;
       }
       if (pendingLeaseReleases > 0) this.schedule(Date.now() + retryDelay(1));
-      const records = await listRecycleRecords();
+      let records = await listRecycleRecords();
+      if (this.initialPass && (await retireRecoveryArchives?.(records))) {
+        records = await listRecycleRecords();
+      }
       const wakeIds = new Set(this.wakeIds);
       this.wakeIds.clear();
       // A resource may have been released while Cindy was closed: recheck waits

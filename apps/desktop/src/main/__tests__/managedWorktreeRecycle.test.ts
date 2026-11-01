@@ -24,13 +24,16 @@ vi.mock('../worktree/runtimeLeases', async (original) => ({
   ...await original<typeof import('../worktree/runtimeLeases')>(),
   readWorktreeRuntimePaths: vi.fn(async () => state.runtimes),
 }));
-vi.mock('../worktree/contentSnapshot', () => ({
+vi.mock('../worktree/contentSnapshot', async (original) => ({
+  ...await original<typeof import('../worktree/contentSnapshot')>(),
   captureWorktreeContent: snapshot, worktreeContentMatches: baselineMatches,
   worktreeStagedContentMatches: vi.fn(async () => true), releaseSnapshotRef: vi.fn(async () => true),
   // Path lists are covered with real Git; here a resumed removal checks timestamps only.
   discardableWorktreePaths: vi.fn(async () => null), snapshotTreePaths: vi.fn(async () => new Set()),
 }));
-vi.mock('../worktree/gitExec', () => ({ gitExec: git }));
+vi.mock('../worktree/gitExec', async (original) => ({
+  ...await original<typeof import('../worktree/gitExec')>(), gitExec: git,
+}));
 
 import { checkpointWorktreeForReuse, recycleManagedWorktree, requestWorktreeRecycle } from '../worktree/managedRecycle';
 import { pruneUnreferencedRecoveryArchives, readRecycleRecord, writeRecycleRecord } from '../worktree/recycleJournal';

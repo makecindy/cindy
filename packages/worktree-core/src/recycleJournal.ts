@@ -304,7 +304,51 @@ export function createWorktreeRecycleJournal(
     return records;
   }
 
+  const archiveNamePattern = /^[a-f0-9-]+\.tar\.gz\.enc$/;
+  /** Older clients may still be writing an archive in a shared profile; their writes finish well within this. */
+  const ORPHAN_ARCHIVE_MIN_AGE_MS = 2 * 60 * 60_000;
+
+  /**
+   * Delete recovery archives no record points to. Older clients left one per interrupted attempt;
+   * its key lived only in the unsaved record, so nothing can ever decrypt it. Any unreadable
+   * record skips the sweep, since it might reference an archive.
+   */
+  async function pruneUnreferencedRecoveryArchives(
+    now = Date.now(),
+  ): Promise<number> {
+    const root = recycleJournalRoot();
+    let names: string[];
+    try {
+      names = await fs.readdir(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    const archives = names.filter((name) => archiveNamePattern.test(name));
+    if (archives.length === 0) return 0;
+    const records = await listRecycleRecordsWithHistory();
+    if (!records) return 0;
+    const referenced = new Set<string>();
+    for (const record of records)
+      if (record.archive?.file) referenced.add(record.archive.file);
+    let removed = 0;
+    for (const name of archives) {
+      if (referenced.has(name)) continue;
+      const file = path.join(root, name);
+      try {
+        if (now - (await fs.stat(file)).mtimeMs < ORPHAN_ARCHIVE_MIN_AGE_MS)
+          continue;
+        await fs.rm(file, { force: true });
+        removed++;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return removed;
+  }
+
   return {
+    pruneUnreferencedRecoveryArchives,
     listRecycleRecordsWithHistory,
     recycleJournalRoot,
     worktreeGeneration,

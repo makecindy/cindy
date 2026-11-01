@@ -27,4 +27,6 @@
 
 有限重试治理不依赖归档实现的 worker 拆分，可独立合入。ASAR 物理读取与 worker 生命周期修复负责单次执行的终止请求；本策略负责执行失败后是否还应继续。只合前者仍可能反复重试，只有后者不能修复底层 ASAR 校验或终止阻塞 I/O；两者合入才能覆盖这两类故障，不要求合并顺序。
 
-本策略不清理旧 archive/history/recovery ref，也不把恢复证据当作可丢弃缓存；恢复副本容量与保留期限需要独立数据保留策略。
+重试预算本身不授权清理恢复证据。Desktop 的启动维护另行执行旧归档退役：完整读取当前与 history 记录，仅清理无人引用且超过两小时的旧 archive；任何记录不可读则跳过清理。旧客户端因归档失败暂停的记录可获得一次持久化标记的新预算，目录身份／位置异常、用户保留以及新格式快照记录不获得此例外。Terminal 仍保留加密归档，不接入该退役入口。
+
+history 不按容量或期限删除；recovery ref 只在恢复完成，或所有副本的回收记录均为 removed 且所有 owner 任务都确认删除时清理，未知 owner 保留。实现见 `apps/desktop/src/main/worktree/recycleMaintenance.ts` 和 `packages/worktree-core/src/recycleJournal.ts`，回归见 `worktreeRecycleMaintenance.test.ts`、`managedWorktreeRecycle.test.ts`。恢复证据不作为可丢弃缓存。

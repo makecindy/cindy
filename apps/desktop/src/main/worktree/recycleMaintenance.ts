@@ -1,3 +1,4 @@
+import { recyclePolicy } from './recyclePolicy';
 import { setImmediate } from 'node:timers/promises';
 import type { WorktreeSessionReference } from '@cindy/worktree-core/managerPorts';
 import { SNAPSHOT_REF_PREFIX } from '@cindy/worktree-core/contentSnapshot';
@@ -7,6 +8,9 @@ import { getDbClient } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
   listRecycleRecords,
+  pruneUnreferencedRecoveryArchives,
+  writeRecycleRecord,
+  type WorktreeRecycleRecord,
   listRecycleRecordsWithHistory,
   readRecycleRecord,
   watchRecycleJournal,
@@ -15,7 +19,7 @@ import {
 import { recycleManagedWorktree } from './managedRecycle';
 import { loadLiveSessionPathKeys } from './liveSessionRefs';
 import * as store from './worktreeStore';
-import { physicalWorktreeKey } from './resourceLock';
+import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { subscribeWorktreeRecycleEvents } from './recycleEvents';
 import { retryPendingWorktreeRuntimeLeaseReleases } from './runtimeLeases';
 
@@ -24,6 +28,23 @@ import { releaseSnapshotRef, listSnapshotRefs } from './contentSnapshot';
 import { createWorktreeRecycleMaintenance } from '@cindy/worktree-core/recycleMaintenance';
 export type { WorktreeMaintenanceOptions } from '@cindy/worktree-core/recycleMaintenance';
 
+/** Paused for the directory's identity or location, not for the old archive flow: never retried. */
+const unsafeResourceReasons = new Set([
+  'legacy-quarantine-needs-review', 'directory-replaced', 'unmanaged-path', 'redirected-worktree-parent',
+]);
+
+/**
+ * Older clients paused requests after archive failures (timeouts, a disk filled by archives,
+ * Windows EPERM/EBUSY/ENAMETOOLONG while packing). None of that work exists any more, so each
+ * such request gets one fresh failure budget; a fault that persists pauses it again.
+ */
+function grantsLegacyArchiveRetry(record: WorktreeRecycleRecord): boolean {
+  return !record.legacyArchiveRetry && !record.snapshot?.untracked
+    && ['pending', 'snapshotted', 'removing'].includes(record.phase)
+    && recyclePolicy(record).state === 'paused' && record.reason !== undefined && !unsafeResourceReasons.has(record.reason);
+}
+
+const log = createLogger('worktreeRecycleMaintenance');
 const SNAPSHOT_CLEANUP_BUDGET_MS = 5_000;
 const SNAPSHOT_GIT_TIMEOUT_MS = 1_000;
 export const {
@@ -35,7 +56,7 @@ export const {
 } = createWorktreeRecycleMaintenance({
   store,
   physicalWorktreeKey,
-  log: createLogger('worktreeRecycleMaintenance'),
+  log,
   loadLiveSessionPathKeys,
   recycleManagedWorktree,
   listRecycleRecords,
@@ -47,6 +68,7 @@ export const {
   userDataRoot: () => app.getPath('userData'),
   getReferenceSource: getDbClient,
   releaseObsoleteRecoverySnapshots,
+  retireRecoveryArchives,
 });
 export type WorktreeRecycleMaintenance = InstanceType<typeof WorktreeRecycleMaintenance>;
 
@@ -129,4 +151,30 @@ export async function releaseObsoleteRecoverySnapshots(
     }
   }
   return released;
+}
+
+async function retireRecoveryArchives(records: readonly WorktreeRecycleRecord[]): Promise<boolean> {
+  let granted = false;
+  try {
+    const pruned = await pruneUnreferencedRecoveryArchives();
+    if (pruned > 0) log.info('removed unreferenced worktree recovery archives', { count: pruned });
+    for (const candidate of records) {
+      if (!grantsLegacyArchiveRetry(candidate)) continue;
+      await withWorktreeResourceLock(candidate.meta.path, async () => {
+        const record = await readRecycleRecord(candidate.meta.path);
+        if (!record || record.id !== candidate.id || record.generation !== candidate.generation
+          || !grantsLegacyArchiveRetry(record)) return;
+        record.retryPolicy = { state: 'retrying', failures: 0, failedWorkMs: 0 };
+        record.reason = undefined;
+        record.attempts = 0;
+        record.nextAttemptAt = 0;
+        record.legacyArchiveRetry = true;
+        await writeRecycleRecord(record);
+        granted = true;
+      });
+    }
+  } catch (error) {
+    log.warn('worktree recovery archive retirement postponed', { code: (error as NodeJS.ErrnoException).code ?? 'unavailable' });
+  }
+  return granted;
 }

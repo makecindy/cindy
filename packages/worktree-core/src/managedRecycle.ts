@@ -294,12 +294,14 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
           await writeRecycleRecord(record);
           return false;
         };
-        const canRemove = async (): Promise<boolean> => {
+        const ownerAllowsRemoval = async (): Promise<boolean> => {
           if (!legacyGuardHeld()) return false;
           if (!options.canRemove || !(await options.canRemove())) return false;
           const current = store.get(meta.sessionId);
-          if (current && worktreeGeneration(current) !== record.generation)
-            return false;
+          return !current || worktreeGeneration(current) === record.generation;
+        };
+        const canRemove = async (): Promise<boolean> => {
+          if (!(await ownerAllowsRemoval())) return false;
           const refs = await loadLiveSessionPathKeys({
             contextPath: meta.path,
             excludeSessionId: meta.sessionId,
@@ -313,16 +315,24 @@ export function createManagedWorktreeRecycle(ports: ManagedRecyclePorts) {
         try {
           if (meta.quarantinePath)
             return defer("legacy-quarantine-needs-review");
-          if (!(await canRemove()))
+          if (!(await ownerAllowsRemoval()))
             return defer("referenced-or-runtime-unavailable");
           const identity = await directoryIdentity(meta.path);
           if (identity === null) {
+            // No directory remains to delete; retain other owners' registrations.
             record.phase = "removed";
+            record.reason = undefined;
             await writeRecycleRecord(record);
+            await gitExec(["worktree", "prune"], meta.baseRepo).catch(
+              () => undefined,
+            );
             await options.onRemoved?.();
-            await unregisterResource(meta);
+            if (await canRemove()) await unregisterResource(meta);
+            else await store.del(meta.sessionId);
             return true;
           }
+          if (!(await canRemove()))
+            return defer("referenced-or-runtime-unavailable");
           if (record.directoryIdentity && identity !== record.directoryIdentity)
             return defer("directory-replaced");
           if (

@@ -41,4 +41,6 @@ export interface WorktreeRecycleRecord {
   /** Temporary checkout used to repair a partially removed worktree. */
   restoreCheckoutPath?: string;
   archive?: WorktreeRecoveryArchive;
+  /** One fresh retry budget for an older client’s archive failure. */
+  legacyArchiveRetry?: true;
 }
