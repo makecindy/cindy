@@ -8112,6 +8112,19 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     if (pendingQueueCount > 0) cancelMessageEdit();
   }, [cancelMessageEdit, messageEditing, pendingQueueCount]);
 
+  /** 把若干文档按顺序合并写进指定任务的草稿库(跳过空文档),用于页面已不在前台的收尾。 */
+  function persistMessageEditDraft(draftSessionId: string, documents: ComposerDocument[]) {
+    const nodes: ComposerDocument['nodes'] = [];
+    for (const item of documents) {
+      if (!composerDocumentHasContent(item)) continue;
+      if (nodes.length > 0) nodes.push({ type: 'text', text: '\n\n' });
+      nodes.push(...item.nodes);
+    }
+    const merged = normalizeComposerDocument({ version: 1, nodes });
+    saveComposerDraft(draftSessionId, composerDocumentProjectedText(merged));
+    saveComposerDocumentDraft(draftSessionId, merged);
+  }
+
   async function submitMessageEdit(documentOverride?: ComposerDocument) {
     const editing = messageEditingRef.current;
     if (!editing || messageEditSubmittingRef.current || sendInFlightRef.current) return;
@@ -8160,6 +8173,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // applySessionPatch 按显式 sessionId 写分片,即使用户已切走也要执行。
       remoteSessionStore.applySessionPatch(deviceId, sessionId, updated);
       if (!stillCurrent()) {
+        // 旧回合已在被控端软删,用户在提交途中离开了任务:替代消息与暂存草稿都要落到
+        // 该任务自己的草稿里(回来时可见),不能因页面不在前台就丢掉。
+        persistMessageEditDraft(sessionId, [document, editing.stashedDocument]);
         remoteSessionStore.invalidateSessionMessageWindow(sessionId, deviceId);
         return;
       }
@@ -8169,9 +8185,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       setMessageEditing(null);
       // 旧回合已在被控端软删:先让替代消息进入持久发件箱,再刷新消息窗口;
       // 同步只是尽力而为,失败不得打断重发与草稿恢复。
-      await send({ documentOverride: document, messageEditResend: true });
+      const accepted = await send({ documentOverride: document, messageEditResend: true });
       await requestSync({ reason: 'rewind-commit', replaceMessages: true }).catch(() => undefined);
-      if (outboxSessionAliveRef.current !== sessionId) return;
+      if (outboxSessionAliveRef.current !== sessionId) {
+        // 离开任务后 send 已清空该任务的草稿:把暂存草稿写回它自己的存储。
+        // 重发没来得及受理时,编辑内容也一并留在该任务草稿里。
+        persistMessageEditDraft(sessionId, [
+          accepted === true ? (readComposerDocumentDraftSync(sessionId) ?? emptyComposerDocument()) : document,
+          editing.stashedDocument,
+        ]);
+        return;
+      }
       // 一律合并:等待期间用户新输入的内容不能被暂存草稿覆盖;重发成功时输入框为空,等价于恢复;
       // 重发没被受理时编辑内容仍在输入框,原草稿接在后面。
       restoreMessageEditStash(editing, 'merge');
