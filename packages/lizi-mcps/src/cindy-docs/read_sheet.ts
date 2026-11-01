@@ -183,54 +183,70 @@ function normalizeCell(value) {
 }
 
 (async () => {
-  await assertSafeXlsxArchive(workerData.archive);
-  const workbook = new ExcelJS.Workbook();
-  // 主线程通过受限文件句柄只读取一次；worker 解析同一份已经过大小与 ZIP
-  // 边界校验的字节，不能再按路径重开一个可能已被替换的文件。
-  await workbook.xlsx.load(Buffer.from(workerData.archive));
-  const sheetNames = workbook.worksheets.map((ws) => ws.name);
-  if (sheetNames.length === 0) {
-    return parentPort.postMessage({
-      rows: [],
-      totalRows: 0,
-      totalColumns: 0,
-      startColumn: workerData.startColumn,
-      endColumn: workerData.startColumn - 1,
-      sheetNames,
-    });
-  }
-  let worksheet = workbook.worksheets[0];
-  if (typeof workerData.sheetSelector === 'number') worksheet = workbook.worksheets[workerData.sheetSelector - 1];
-  else if (typeof workerData.sheetSelector === 'string' && workerData.sheetSelector.length > 0) {
-    worksheet = workbook.worksheets.find((ws) => ws.name === workerData.sheetSelector);
-  }
-  if (!worksheet) {
-    const error = new Error('SHEET_NOT_FOUND');
-    error.code = 'SHEET_NOT_FOUND';
-    error.available = sheetNames;
-    throw error;
-  }
-  const totalRows = Math.max(worksheet.rowCount || 0, worksheet.actualRowCount || 0);
-  const totalColumns = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
-  const rows = [];
-  const firstRow = workerData.startRow;
-  const lastRow = Math.min(totalRows, firstRow + workerData.maxRows - 1);
-  const firstColumn = workerData.startColumn;
-  const lastColumn = Math.min(totalColumns, firstColumn + workerData.maxColumns - 1);
-  for (let r = firstRow; r <= lastRow; r += 1) {
-    const row = worksheet.getRow(r);
-    const cells = [];
-    for (let c = firstColumn; c <= lastColumn; c += 1) cells.push(normalizeCell(row.getCell(c).value));
-    rows.push(cells);
-  }
-  parentPort.postMessage({
-    rows,
-    totalRows,
-    totalColumns,
-    startColumn: firstColumn,
-    endColumn: Math.max(firstColumn - 1, lastColumn),
-    sheetName: worksheet.name,
-    sheetNames,
+  parentPort.on('message', async (task) => {
+    try {
+      await assertSafeXlsxArchive(task.archive);
+      const workbook = new ExcelJS.Workbook();
+      // 主线程通过受限文件句柄只读取一次；worker 解析同一份已经过大小与 ZIP
+      // 边界校验的字节，不能再按路径重开一个可能已被替换的文件。
+      await workbook.xlsx.load(Buffer.from(task.archive));
+      const sheetNames = workbook.worksheets.map((ws) => ws.name);
+      if (sheetNames.length === 0) {
+        return parentPort.postMessage({
+          id: task.id,
+          rows: [],
+          totalRows: 0,
+          totalColumns: 0,
+          startColumn: task.startColumn,
+          endColumn: task.startColumn - 1,
+          sheetNames,
+        });
+      }
+      let worksheet = workbook.worksheets[0];
+      if (typeof task.sheetSelector === 'number') worksheet = workbook.worksheets[task.sheetSelector - 1];
+      else if (typeof task.sheetSelector === 'string' && task.sheetSelector.length > 0) {
+        worksheet = workbook.worksheets.find((ws) => ws.name === task.sheetSelector);
+      }
+      if (!worksheet) {
+        const error = new Error('SHEET_NOT_FOUND');
+        error.code = 'SHEET_NOT_FOUND';
+        error.available = sheetNames;
+        throw error;
+      }
+      const totalRows = Math.max(worksheet.rowCount || 0, worksheet.actualRowCount || 0);
+      const totalColumns = Math.max(worksheet.columnCount || 0, worksheet.actualColumnCount || 0);
+      const rows = [];
+      const firstRow = task.startRow;
+      const lastRow = Math.min(totalRows, firstRow + task.maxRows - 1);
+      const firstColumn = task.startColumn;
+      const lastColumn = Math.min(totalColumns, firstColumn + task.maxColumns - 1);
+      for (let r = firstRow; r <= lastRow; r += 1) {
+        const row = worksheet.getRow(r);
+        const cells = [];
+        for (let c = firstColumn; c <= lastColumn; c += 1) cells.push(normalizeCell(row.getCell(c).value));
+        rows.push(cells);
+      }
+      parentPort.postMessage({
+        id: task.id,
+        rows,
+        totalRows,
+        totalColumns,
+        startColumn: firstColumn,
+        endColumn: Math.max(firstColumn - 1, lastColumn),
+        sheetName: worksheet.name,
+        sheetNames,
+      });
+    } catch (error) {
+      parentPort.postMessage({
+        id: task.id,
+        error: {
+          code: error.code,
+          message: String(error.message || error),
+          hint: error.hint,
+          available: error.available,
+        },
+      });
+    }
   });
 })().catch((error) => parentPort.postMessage({ error: {
   code: error.code,
@@ -240,6 +256,38 @@ function normalizeCell(value) {
 } }));
 `;
 
+let activeWorker: Worker | null = null;
+let workerIdleTimer: NodeJS.Timeout | undefined;
+let nextTaskId = 0;
+let workerQueue: Promise<unknown> = Promise.resolve();
+
+function terminateActiveWorker(): void {
+  if (workerIdleTimer) {
+    clearTimeout(workerIdleTimer);
+    workerIdleTimer = undefined;
+  }
+  if (activeWorker) {
+    void activeWorker.terminate();
+    activeWorker = null;
+  }
+}
+
+function getActiveWorker(): Worker {
+  if (!activeWorker) {
+    const requireFromHere = createRequire(import.meta.url);
+    activeWorker = new Worker(XLSX_WORKER_SOURCE, {
+      eval: true,
+      workerData: {
+        jszipPath: requireFromHere.resolve(READ_SHEET_RUNTIME_PACKAGES[0]),
+        exceljsPath: requireFromHere.resolve(READ_SHEET_RUNTIME_PACKAGES[1]),
+      },
+      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
+    });
+    activeWorker.unref();
+  }
+  return activeWorker;
+}
+
 function readXlsxInWorker(
   archive: Buffer,
   sheetSelector: string | number | undefined,
@@ -248,72 +296,108 @@ function readXlsxInWorker(
   startColumn: number,
   maxColumns: number,
 ): Promise<SheetRead> {
-  return new Promise((resolve, reject) => {
-    // readInputFileWithinLimit 使用独占 ArrayBuffer；转移所有权可避免在主进程
-    // 与 worker 间再复制一份最多 32 MB 的工作簿。
-    const archiveBuffer = archive.buffer as ArrayBuffer;
-    const archiveView = new Uint8Array(
-      archiveBuffer,
-      archive.byteOffset,
-      archive.byteLength,
-    );
-    const worker = new Worker(XLSX_WORKER_SOURCE, {
-      eval: true,
-      workerData: {
+  // readInputFileWithinLimit 使用独占 ArrayBuffer；转移所有权可避免在主进程
+  // 与 worker 间再复制一份最多 32 MB 的工作簿。
+  const archiveBuffer = archive.buffer as ArrayBuffer;
+  const archiveView = new Uint8Array(
+    archiveBuffer,
+    archive.byteOffset,
+    archive.byteLength,
+  );
+  const taskId = ++nextTaskId;
+
+  const run = (): Promise<SheetRead> => new Promise((resolve, reject) => {
+    if (workerIdleTimer) {
+      clearTimeout(workerIdleTimer);
+      workerIdleTimer = undefined;
+    }
+    const worker = getActiveWorker();
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+
+    const cleanup = (): void => {
+      if (timer) clearTimeout(timer);
+      worker.off('message', onMessage);
+      worker.off('error', onError);
+      worker.off('exit', onExit);
+    };
+
+    const finish = (fn: () => void, terminate = false): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (terminate) {
+        terminateActiveWorker();
+      } else {
+        if (workerIdleTimer) clearTimeout(workerIdleTimer);
+        workerIdleTimer = setTimeout(() => {
+          terminateActiveWorker();
+        }, 15_000);
+        workerIdleTimer.unref?.();
+      }
+      fn();
+    };
+
+    timer = setTimeout(() => {
+      finish(() => reject(new DocsPathError(
+        'READ_TIMEOUT',
+        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
+        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
+      )), true);
+    }, XLSX_READ_TIMEOUT_MS);
+
+    const onMessage = (message: { id: number; error?: { code?: string; message?: string; hint?: string; available?: string[] } } & SheetRead) => {
+      if (message.id !== taskId) return;
+      if (message.error) {
+        const isSheetNotFound = message.error.code === 'SHEET_NOT_FOUND';
+        // 资源边界超限或未知错误时彻底回收 worker，避免内存碎片残留
+        const terminate = !isSheetNotFound;
+        if (isSheetNotFound) {
+          finish(() => reject(new DocsPathError(
+            'SHEET_NOT_FOUND',
+            `找不到工作表: ${String(sheetSelector)}`,
+            `这个文件里的工作表是:${message.error?.available?.join(' / ') || '未知'}。请换一个名称或序号。`,
+          )), terminate);
+        } else if (message.error.code === 'FILE_TOO_LARGE') {
+          finish(() => reject(new DocsPathError(
+            'FILE_TOO_LARGE',
+            message.error?.message || '工作簿资源边界超限',
+            message.error?.hint || '这个工作簿触发了安全边界,请拆分或重新保存为普通 .xlsx 后再试。',
+          )), terminate);
+        } else {
+          finish(() => reject(Object.assign(new Error(message.error?.message || '读取工作簿失败'), { code: message.error?.code })), terminate);
+        }
+        return;
+      }
+      finish(() => resolve(message));
+    };
+
+    const onError = (error: Error) => finish(() => reject(error), true);
+    const onExit = (code: number) => {
+      if (code !== 0) finish(() => reject(new Error(`工作簿解析进程退出(${code})`)), true);
+    };
+
+    worker.on('message', onMessage);
+    worker.on('error', onError);
+    worker.on('exit', onExit);
+
+    worker.postMessage(
+      {
+        id: taskId,
         archive: archiveView,
         sheetSelector,
         startRow,
         maxRows,
         startColumn,
         maxColumns,
-        jszipPath: createRequire(import.meta.url).resolve(READ_SHEET_RUNTIME_PACKAGES[0]),
-        exceljsPath: createRequire(import.meta.url).resolve(READ_SHEET_RUNTIME_PACKAGES[1]),
       },
-      transferList: [archiveBuffer],
-      resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 16 },
-    });
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    const finish = (fn: () => void): void => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      fn();
-      void worker.terminate();
-    };
-    timer = setTimeout(() => {
-      finish(() => reject(new DocsPathError(
-        'READ_TIMEOUT',
-        `读取工作簿超时(${XLSX_READ_TIMEOUT_MS}ms)`,
-        '这个工作簿解析时间过长,为保护 Cindy 已终止读取。请先拆分或重新保存文件。',
-      )));
-    }, XLSX_READ_TIMEOUT_MS);
-    worker.once('message', (message: { error?: { code?: string; message?: string; hint?: string; available?: string[] } } & SheetRead) => {
-      if (message.error) {
-        if (message.error.code === 'SHEET_NOT_FOUND') {
-          finish(() => reject(new DocsPathError(
-            'SHEET_NOT_FOUND',
-            `找不到工作表: ${String(sheetSelector)}`,
-            `这个文件里的工作表是:${message.error?.available?.join(' / ') || '未知'}。请换一个名称或序号。`,
-          )));
-        } else if (message.error.code === 'FILE_TOO_LARGE') {
-          finish(() => reject(new DocsPathError(
-            'FILE_TOO_LARGE',
-            message.error?.message || '工作簿资源边界超限',
-            message.error?.hint || '这个工作簿触发了安全边界,请拆分或重新保存为普通 .xlsx 后再试。',
-          )));
-        } else {
-          finish(() => reject(Object.assign(new Error(message.error?.message || '读取工作簿失败'), { code: message.error?.code })));
-        }
-        return;
-      }
-      finish(() => resolve(message));
-    });
-    worker.once('error', (error) => finish(() => reject(error)));
-    worker.once('exit', (code) => {
-      if (code !== 0) finish(() => reject(new Error(`工作簿解析进程退出(${code})`)));
-    });
+      [archiveBuffer],
+    );
   });
+
+  const queued = workerQueue.then(run, run);
+  workerQueue = queued.catch(() => {});
+  return queued;
 }
 
 async function readXlsx(
