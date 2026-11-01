@@ -516,6 +516,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const handleMoveToProjectBrowse = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'browseProject' });
   }, [onMoveSession, session.id]);
+  const handleMoveToNewProject = useCallback(() => {
+    onMoveSession?.(session.id, { kind: 'newProject' });
+  }, [onMoveSession, session.id]);
   const handleMoveToDialogue = useCallback(() => {
     onMoveSession?.(session.id, { kind: 'dialogue' });
   }, [onMoveSession, session.id]);
@@ -584,6 +587,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       isDialogue={session.workspaceKind === 'dialogue'}
       onSelectProject={handleMoveToProjectSelect}
       onBrowseProject={handleMoveToProjectBrowse}
+      onNewProject={handleMoveToNewProject}
       onMoveToDialogue={handleMoveToDialogue}
     />
   ) : null;

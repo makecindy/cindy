@@ -2618,6 +2618,13 @@
       "storage": {
         "dialogueDirectoryTitle": "言談工作區",
         "dialogueDirectoryDescription": "僅用於新開差事，舊卷仍居原處。",
+        "projectsRootTitle": "新案存放處",
+        "projectsRootInferred": "薦",
+        "projectsRootDefault": "常例",
+        "projectsRootChoose": "易目錄",
+        "projectsRootReset": "復薦處",
+        "projectsRootDescription": "於差事中立新案時，案之卷匣置於此。未設則依汝舊案所在薦之。",
+        "projectsRootFailed": "新案存放處更之未成",
         "dialogueDirectoryOpen": "啟目錄",
         "dialogueDirectoryChoose": "易目錄",
         "dialogueDirectoryReset": "復預設處",
@@ -14448,6 +14455,26 @@
           "cancel": "罷"
         }
       },
+      "newProjectDialog": {
+        "title": "立新案",
+        "description": "立一新案之卷匣，並移此差事入新案。",
+        "descriptionMoveFiles": "立一新案之卷匣，徙此差事之檔入內，並移差事入新案。",
+        "nameLabel": "案名",
+        "namePlaceholder": "如 my-app",
+        "targetPath": "將立 {{path}}",
+        "location": "所在",
+        "locationInferred": "依汝舊案所在薦之",
+        "locationWillCreate": "此卷匣尚無，允之即立",
+        "changeLocation": "易…",
+        "remember": "後立新案皆置於此",
+        "cancel": "罷",
+        "create": "立案",
+        "nameTaken": "已有同名卷匣，另擇一名",
+        "nameInvalid": "名中不可含 \\ / : * ? \" < > |，亦不可以句點或空格收尾",
+        "loadFailed": "案之所在讀之未成",
+        "failed": "立案未成",
+        "done": "新案已立，差事已移入"
+      },
       "sessionMenu": {
         "moreActions": "餘者",
         "rename": "易名",
@@ -14461,6 +14488,7 @@
         "moveToProject": "移差事",
         "moveToProjectHeading": "此機之案",
         "browseProjectFolder": "擇案之卷匣",
+        "newProject": "立新案…",
         "moveToDialogue": "移至言談",
         "noProjects": "近無案",
         "moveToProjectDone": "已移至案",

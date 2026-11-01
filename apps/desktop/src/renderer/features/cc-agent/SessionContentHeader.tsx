@@ -74,6 +74,7 @@ import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { MENU_ITEM_CLASS } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
 import { sessionMoveFailureFeedback } from '../../../shared/worktreeMoveGuardError';
+import { NewProjectFromTaskDialog } from './sidebar/NewProjectFromTaskDialog';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
@@ -375,6 +376,11 @@ export function SessionContentHeader({
    * 与 CCAgentSidebarUpper.handleMoveSession 同款守卫(远程不支持 / 执行中 /
    * 被 IM 接管中拦截)与乐观更新 + 失败回滚;不含 sidebar 的目标项目节点自动
    * 展开(collapse 是 CCAgentSidebarUpper 实例内 state,header 拿不到)。 */
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const closeNewProjectDialog = useCallback((open: boolean) => {
+    if (!open) setNewProjectOpen(false);
+  }, []);
+
   const handleMoveSession = useCallback(
     async (target: SessionMoveTarget) => {
       if (session.remoteHostId || session.deviceLinkDeviceId) {
@@ -407,6 +413,11 @@ export function SessionContentHeader({
         }
       } catch {
         // resolveSession 失败时不阻断移动；它只是 IM 接管保护的额外检查。
+      }
+
+      if (target.kind === 'newProject') {
+        setNewProjectOpen(true);
+        return;
       }
 
       let targetWorkingDir = target.kind === 'project' ? target.workingDir : undefined;
@@ -764,6 +775,7 @@ export function SessionContentHeader({
                     void handleMoveSession({ kind: 'project', workingDir })
                   }
                   onBrowseProject={() => void handleMoveSession({ kind: 'browseProject' })}
+                  onNewProject={() => void handleMoveSession({ kind: 'newProject' })}
                   onMoveToDialogue={() => void handleMoveSession({ kind: 'dialogue' })}
                 />
               )
@@ -777,6 +789,18 @@ export function SessionContentHeader({
       <TaskMigrationStatus session={session} />
 
       {tagEditorOpen && <TaskTagEditor session={session} onClose={() => setTagEditorOpen(false)} />}
+
+      {newProjectOpen && (
+        <NewProjectFromTaskDialog
+          sessionId={session.id}
+          onOpenChange={closeNewProjectDialog}
+          onCreated={(result) => {
+            patchLocal(session.id, { workingDir: result.workingDir, workspaceKind: 'project' });
+            void recentWorkdirsStore.forceRefresh().catch(() => undefined);
+            toast.success(t('ccAgent.sidebar.newProjectDialog.done'));
+          }}
+        />
+      )}
 
       {/* 导出 .cshare 弹窗:仅打开时挂载,与 SessionItem 同款。 */}
       {shareExportOpen && (

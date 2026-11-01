@@ -2648,6 +2648,13 @@
       "storage": {
         "dialogueDirectoryTitle": "Chat-Arbeitsbereich",
         "dialogueDirectoryDescription": "Nur für neue Sitzungen. Vorhandene Dateien bleiben an ihrem bisherigen Speicherort.",
+        "projectsRootTitle": "Speicherort für neue Projekte",
+        "projectsRootInferred": "Vorgeschlagen",
+        "projectsRootDefault": "Standard",
+        "projectsRootChoose": "Verzeichnis ändern",
+        "projectsRootReset": "Vorgeschlagenen Speicherort wiederherstellen",
+        "projectsRootDescription": "Hier werden Projektordner angelegt, wenn du aus einer Sitzung ein Projekt erstellst. Ohne Einstellung wird ein Ort anhand deiner vorhandenen Projekte vorgeschlagen.",
+        "projectsRootFailed": "Speicherort für neue Projekte konnte nicht aktualisiert werden",
         "dialogueDirectoryOpen": "Verzeichnis öffnen",
         "dialogueDirectoryChoose": "Verzeichnis ändern",
         "dialogueDirectoryReset": "Standardspeicherort wiederherstellen",
@@ -14515,6 +14522,26 @@
           "cancel": "Abbrechen"
         }
       },
+      "newProjectDialog": {
+        "title": "Neues Projekt",
+        "description": "Erstellt einen Projektordner und verschiebt diese Sitzung in das neue Projekt.",
+        "descriptionMoveFiles": "Erstellt einen Projektordner, verschiebt die Dateien dieser Sitzung dorthin und verschiebt die Sitzung in das neue Projekt.",
+        "nameLabel": "Projektname",
+        "namePlaceholder": "z. B. my-app",
+        "targetPath": "Erstellt {{path}}",
+        "location": "Speicherort",
+        "locationInferred": "Vorgeschlagen anhand deiner vorhandenen Projekte",
+        "locationWillCreate": "Dieser Ordner existiert noch nicht und wird erstellt",
+        "changeLocation": "Ändern…",
+        "remember": "Diesen Speicherort für neue Projekte verwenden",
+        "cancel": "Abbrechen",
+        "create": "Projekt erstellen",
+        "nameTaken": "Ein Ordner mit diesem Namen existiert bereits",
+        "nameInvalid": "Der Name darf \\ / : * ? \" < > | nicht enthalten und nicht mit Punkt oder Leerzeichen enden",
+        "loadFailed": "Projektspeicherort konnte nicht geladen werden",
+        "failed": "Projekt konnte nicht erstellt werden",
+        "done": "Projekt erstellt und Sitzung verschoben"
+      },
       "sessionMenu": {
         "moreActions": "Weitere Aktionen",
         "rename": "Umbenennen",
@@ -14528,6 +14555,7 @@
         "moveToProject": "Aufgabe verschieben",
         "moveToProjectHeading": "Projekte auf diesem Computer",
         "browseProjectFolder": "Projektordner auswählen",
+        "newProject": "Neues Projekt…",
         "moveToDialogue": "In Chat verschieben",
         "noProjects": "Keine zuletzt verwendeten Projekte",
         "moveToProjectDone": "In Projekt verschoben",

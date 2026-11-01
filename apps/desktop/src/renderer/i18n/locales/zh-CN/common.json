@@ -2618,6 +2618,13 @@
       "storage": {
         "dialogueDirectoryTitle": "对话工作区",
         "dialogueDirectoryDescription": "仅用于新建任务，已有文件保持原位置。",
+        "projectsRootTitle": "新项目存放位置",
+        "projectsRootInferred": "推荐",
+        "projectsRootDefault": "默认",
+        "projectsRootChoose": "更改目录",
+        "projectsRootReset": "恢复推荐位置",
+        "projectsRootDescription": "在任务里新建项目时，项目文件夹放在这里。未设置时，按你现有项目所在的文件夹推荐。",
+        "projectsRootFailed": "无法更新新项目存放位置",
         "dialogueDirectoryOpen": "打开目录",
         "dialogueDirectoryChoose": "更改目录",
         "dialogueDirectoryReset": "恢复默认位置",
@@ -14415,6 +14422,26 @@
           "cancel": "取消"
         }
       },
+      "newProjectDialog": {
+        "title": "新建项目",
+        "description": "新建一个项目文件夹，并把这个任务移到新项目。",
+        "descriptionMoveFiles": "新建一个项目文件夹，把这个任务里的文件搬进去，并把任务移到新项目。",
+        "nameLabel": "项目名称",
+        "namePlaceholder": "例如 my-app",
+        "targetPath": "将创建 {{path}}",
+        "location": "位置",
+        "locationInferred": "根据你现有的项目推荐",
+        "locationWillCreate": "这个文件夹还不存在，确认后会自动创建",
+        "changeLocation": "更改…",
+        "remember": "以后新建项目都放这里",
+        "cancel": "取消",
+        "create": "新建项目",
+        "nameTaken": "已有同名文件夹，换一个名称",
+        "nameInvalid": "名称不能包含 \\ / : * ? \" < > |，也不能以点或空格结尾",
+        "loadFailed": "无法读取项目位置",
+        "failed": "新建项目失败",
+        "done": "已新建项目并移入任务"
+      },
       "sessionMenu": {
         "moreActions": "更多",
         "rename": "重命名",
@@ -14428,6 +14455,7 @@
         "moveToProject": "移动任务",
         "moveToProjectHeading": "当前电脑的项目",
         "browseProjectFolder": "选择项目文件夹",
+        "newProject": "新建项目…",
         "moveToDialogue": "移到对话",
         "noProjects": "暂无最近项目",
         "moveToProjectDone": "已移动到项目",

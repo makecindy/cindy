@@ -825,6 +825,10 @@ import {
   withSendToSessionLock,
 } from './maker-ipc/register.js';
 import { moveSessionProjectFromHost } from './mcp-integrations/moveSession.js';
+import {
+  createLocalProjectFromTaskHandlers,
+  createProjectsRootSettingsHandlers,
+} from './createProjectFromTaskHost.js';
 import { cleanupActiveReviewArtifactSnapshots } from './reviewer/reviewArtifactSnapshot.js';
 import { MAKER_INVOKE as MAKER_IPC_INVOKE, MAKER_PUSH, MAKER_SEND } from './maker-ipc/channels.js';
 import {
@@ -8878,6 +8882,52 @@ const registerIpcHandlers = () => {
           if (isIpcError(error)) throw error;
           dbClientLog.warn('dialogue workspace settings request failed', { action });
           throwIpcError('INTERNAL', 'dialogue workspace settings request failed');
+        }
+      });
+    }
+
+    // Projects root and "new project from task": native pickers stay on this computer (not in device-link).
+    const chooseProjectsFolder = async () => {
+      const options: Electron.OpenDialogOptions = {
+        title: t('settings.about.storage.projectsRootChoose'),
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+      const result =
+        ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    };
+    const projectsRootHandlers = createProjectsRootSettingsHandlers({ chooseDirectory: chooseProjectsFolder });
+    for (const action of ['get', 'choose', 'reset'] as const) {
+      ipcMain.handle('projects-root:' + action, async (event) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectsRootHandlers[action]();
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('projects root settings request failed', { action });
+          throwIpcError('INTERNAL', 'projects root settings request failed');
+        }
+      });
+    }
+    const projectFromTaskHandlers = createLocalProjectFromTaskHandlers({
+      isSessionBusy: (id) => isSessionInTurn(id) || isSessionTurnPendingCompletion(id),
+      chooseDirectory: chooseProjectsFolder,
+    });
+    for (const action of ['prepare', 'chooseParent', 'create'] as const) {
+      ipcMain.handle('create-project-from-task:' + action, async (event, input: unknown) => {
+        assertTrustedAppRendererEvent(event);
+        try {
+          return await projectFromTaskHandlers[action](input);
+        } catch (error) {
+          if (isIpcError(error)) throw error;
+          dbClientLog.warn('create project from task failed', {
+            action,
+            code: (error as NodeJS.ErrnoException)?.code,
+          });
+          throwIpcError('INTERNAL', 'create project from task failed');
         }
       });
     }
