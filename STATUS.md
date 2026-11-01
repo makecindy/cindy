@@ -10,6 +10,16 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Diagnosis: qwen3-8b `skill_view` loop (ROADMAP 2.2b-4) (`unverified` fix, diagnosis only)
+
+**Evidence:** the owner pasted one `skill_view` call's input and output from the looping Qwen turn. Call: `{"name": "superpowers:using-superpowers"}`. Skill path: `~/.hermes-cindy/plugins/superpowers/skills/using-superpowers`. The skill body requires invoking skills "BEFORE any response including clarifying questions" when there is "even a 1% chance" one applies, and lists 14 sibling skills.
+
+**Reading:** a small model treats that as an unconditional loop: view the skill, be told to view skills first, view again. Cindy's 12-call loop guard then stops the turn. Gemma 26B follows the same instruction once and then answers (the owner's screenshot shows "Using `superpowers:systematic-debugging`..."). The plugin's skill list and instructions also add to the large per-turn prompt (35k tokens after one short Gemma turn).
+
+**Not done:** no code or config change. Disabling or scoping the plugin is an owner decision. Per AGENTS.md it must go through Hermes's own plugin commands or daemon RPCs, never a hand edit of `~/.hermes-cindy/config.yaml`.
+
+---
+
 ## 2026-11-01 — Defect Fix: Hermes context banner uses the serving endpoint's limit (`unit-tested`)
 
 **Owner repro:** new Hermes chat on `google/gemma-4-26b-a4b-qat` (LM Studio, loaded at 262,144). After one turn (35.4k tokens) the banner said "Context is 108% full". The footer ring said 17%. `~/.cindy-harness/providers.yaml` already had `lmstudio-local.capabilities.contextLength: 262144`, and `routing.yaml` had `chat.default: ollama-offline`.
