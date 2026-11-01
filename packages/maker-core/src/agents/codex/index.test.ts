@@ -4164,18 +4164,26 @@ describe('CodexAgent capability routing', () => {
 // #8359: a guest bound to a project is confined by Codex's own sandbox, not by
 // the model following instructions; Full access cannot lift it.
 describe('CodexAgent confined guest workspace', () => {
+  // Real directories: on Windows the project root is resolved at start.
+  const guestProject = async () => {
+    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-guest-project-'));
+    tempRoots.push(project);
+    return project;
+  };
+
   it('starts in the project-only profile even when the teammate is on Full access', async () => {
+    const project = await guestProject();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
     const handle = await agent.startSession({
-      sessionId: 'guest-confined', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      sessionId: 'guest-confined', model: 'gpt-6-luna', workingDir: project,
       permissionMode: 'bypassPermissions', workspaceConfinement: 'project',
     });
     const [, params] = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)!;
     const config = (params as { config: Record<string, unknown> }).config;
     expect(config).toMatchObject({ default_permissions: 'cindy-guest-project' });
     expect(config['permissions.cindy-guest-project']).toMatchObject({
-      filesystem: { ':root': 'deny', ':tmpdir': 'deny', '/work/client-a': { '.': 'write' } },
+      filesystem: { ':root': 'deny', ':tmpdir': 'deny', [project]: { '.': 'write' } },
       network: { enabled: false },
     });
     expect(Object.hasOwn(config, 'sandbox_mode')).toBe(false);
@@ -4183,10 +4191,11 @@ describe('CodexAgent confined guest workspace', () => {
   });
 
   it('keeps the project profile on guest turns instead of the disk-wide read-only sandbox', async () => {
+    const project = await guestProject();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
     const handle = await agent.startSession({
-      sessionId: 'guest-confined-turn', model: 'gpt-6-luna', workingDir: '/work/client-a',
+      sessionId: 'guest-confined-turn', model: 'gpt-6-luna', workingDir: project,
       permissionMode: 'auto', workspaceConfinement: 'project',
     });
     const policy: TurnPermissionPolicy = {
@@ -4204,8 +4213,7 @@ describe('CodexAgent confined guest workspace', () => {
   // Windows sandboxes cannot narrow reads: the guest gets no shell, only the
   // host-checked project tools (run on the Windows CI shards).
   it.skipIf(process.platform !== 'win32')('replaces the shell with project tools on Windows', async () => {
-    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-guest-project-'));
-    tempRoots.push(project);
+    const project = await guestProject();
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, undefined, { userAgent: 'codex/0.156.0' });
     const handle = await agent.startSession({
@@ -4222,9 +4230,7 @@ describe('CodexAgent confined guest workspace', () => {
   });
 
   it('refuses to start when the app-server cannot enforce permission profiles', async () => {
-    // A real directory: on Windows the project root is resolved before the version gate.
-    const project = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-guest-old-'));
-    tempRoots.push(project);
+    const project = await guestProject();
     const agent = new CodexAgent(createDeps());
     installFakeHost(agent, undefined, { userAgent: 'codex/0.140.0' });
     await expect(agent.startSession({
