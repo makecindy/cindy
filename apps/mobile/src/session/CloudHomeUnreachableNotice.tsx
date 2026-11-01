@@ -16,12 +16,14 @@ import type { MobileOutboxConnectionState } from './sessionOutbox';
 export const CLOUD_HOME_UNREACHABLE_AFTER_MS = 15_000;
 
 /**
- * A message of this chat has not been handed to the main computer yet, and only because that computer
- * is unreachable: the phone is connected, but presence says it is offline or it stopped answering.
- * Messages the computer already took (awaiting history confirmation or cleanup), messages stopped on their
- * own failure (`failed`: rejected upload, enqueue or clear boundary — retry/delete is the fix), and holds
- * for the phone's own sync or reconnect do not count — switching computers would not help with those.
- * A retryable connection error keeps its state, so a message retrying against the offline computer still counts.
+ * The message the chat is stuck on (the session's FIFO head, the only one delivery dispatches) has not been
+ * handed to the main computer yet, and only because that computer is unreachable: the phone is connected,
+ * but presence says it is offline or it stopped answering.
+ * Messages the computer already took (awaiting history confirmation or cleanup) do not count, and neither
+ * does a head that is stopped on its own (`failed`, suspended, cancelling, awaiting confirmation) — it blocks
+ * every message behind it, and switching computers would not help. A retryable connection error keeps the
+ * state, so a head retrying against the offline computer still counts. Holds for the phone's own sync or
+ * reconnect are excluded by the connection check. Records must keep the store's FIFO order.
  */
 export function isMessageWaitingForCloudHome(
   records: readonly Pick<DurableOutboxRecord, 'deviceId' | 'item' | 'state' | 'retrySafe' | 'historyConfirmed' | 'cleanupOutcome' | 'cancelRequested' | 'suspended'>[],
@@ -29,8 +31,9 @@ export function isMessageWaitingForCloudHome(
   connection: Pick<MobileOutboxConnectionState, 'relayOnline' | 'targetAvailable' | 'deviceUnresponsive'>,
 ): boolean {
   if (!connection.relayOnline || (connection.targetAvailable !== false && !connection.deviceUnresponsive)) return false;
-  return records.some(record => record.deviceId === target.deviceId && record.item.sessionId === target.sessionId
-    && !isDurableOutboxHandedOff(record) && record.state !== 'failed' && !record.cancelRequested && !record.suspended);
+  const head = records.find(record => record.deviceId === target.deviceId && record.item.sessionId === target.sessionId
+    && record.cleanupOutcome === undefined && !isDurableOutboxHandedOff(record));
+  return !!head && (head.state === 'queued' || head.state === 'sending') && !head.cancelRequested && !head.suspended;
 }
 
 /** True once `waiting` has held continuously for `afterMs` (a message cannot reach the computer). */

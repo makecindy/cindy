@@ -53,6 +53,12 @@ it('counts only a message the main computer has not taken, held because that com
   expect(isMessageWaitingForCloudHome([record({ cleanupOutcome: 'accepted' })], target, offline)).toBe(false);
   // Stopped on its own failure: not held by the computer, offering a switch would not help.
   expect(isMessageWaitingForCloudHome([record({ state: 'failed' })], target, offline)).toBe(false);
+  // Only the FIFO head counts: a message queued behind a stopped head is blocked by that head.
+  expect(isMessageWaitingForCloudHome([record({ state: 'failed' }), record()], target, offline)).toBe(false);
+  expect(isMessageWaitingForCloudHome([record({ suspended: true }), record()], target, offline)).toBe(false);
+  expect(isMessageWaitingForCloudHome([record({ state: 'confirming' }), record()], target, offline)).toBe(false);
+  // A head already taken by the computer does not hide the next message waiting behind it.
+  expect(isMessageWaitingForCloudHome([record({ state: 'host-owned', historyConfirmed: true }), record()], target, offline)).toBe(true);
   // Drafts, cancellations and other chats.
   expect(isMessageWaitingForCloudHome([record({ suspended: true }), record({ cancelRequested: true })], target, offline)).toBe(false);
   expect(isMessageWaitingForCloudHome([record({ item: { sessionId: 's2' } as never })], target, offline)).toBe(false);
