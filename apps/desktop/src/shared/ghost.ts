@@ -4,7 +4,7 @@ import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-protocol';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
-import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult } from '@cindy/device-link';
+import { parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
   type GhostRecommendation,
   GHOST_LOCALES,
@@ -7761,6 +7761,44 @@ export function isGhostCardLinkAllowed(url: string): boolean {
  */
 export const GHOST_CARD_SPAWN_SEP = '::sp';
 
+/**
+ * 卡片排在本轮末尾:插件在卡内 div 上标 `data-ghost-placement="turn-end"`,
+ * 宿主把这张卡排到这一轮的最后(「已更改 N 个文件」卡之后),而不是调用发生的位置。
+ * 适合等用户拍板的卡(如「要发 PR 吗」)。只读净化后的 html:净化器只放行这一个值,
+ * 正文里的引号已转义,不会误中。
+ */
+export function isTurnEndGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-placement="turn-end"');
+}
+
+/**
+ * 卡片铺满消息列:插件在卡内 div 上标 `data-ghost-width="full"`,宿主取消默认的 460px 上限,
+ * 与「已更改 N 个文件」等宿主卡同宽。同样只读净化后的 html。
+ */
+export function isFullWidthGhostCardHtml(html: string): boolean {
+  return html.includes(' data-ghost-width="full"');
+}
+
+/**
+ * 卡内模型下拉框:插件在动作按钮上标 `data-ghost-model-select`(值 = 当前模型的 JSON,可空),
+ * 宿主点击时在按钮下方弹出模型选择器,选中结果随 card-action 的 modelSelection 回传。
+ * 净化器把它紧跟在 data-ghost-action 之后输出,这里据此确认该动作确实声明了下拉框。
+ */
+export function ghostCardDeclaresModelSelect(html: string, actionId: string): boolean {
+  return GHOST_CARD_ACTION_ID_RE.test(actionId) &&
+    html.includes(` data-ghost-action="${actionId}" data-ghost-model-select="`);
+}
+
+/**
+ * 卡内图标位:插件在 span / div 上标 `data-ghost-icon="<名字>"`,宿主换成 App 里同一个
+ * Lucide 图标(跟随主题颜色),与 App 其它地方统一。不认识的宿主保留插件写在里面的兜底图形。
+ */
+export const GHOST_CARD_ICONS = ['settings'] as const;
+export type GhostCardIconName = (typeof GHOST_CARD_ICONS)[number];
+export function isGhostCardIconName(value: string): value is GhostCardIconName {
+  return (GHOST_CARD_ICONS as readonly string[]).includes(value);
+}
+
 /** 取衍生卡的根 callId(非衍生卡原样返回)。 */
 export function ghostCardRootCallId(callId: string): string {
   const i = callId.indexOf(GHOST_CARD_SPAWN_SEP);
@@ -7782,6 +7820,12 @@ export const GHOST_CARD_REOPEN_WINDOW_MS = 600_000;
  * 声明忽略。
  */
 export const GHOST_CARD_ID_KEY = 'xdt_card_id';
+
+/**
+ * 卡片声明了排到本轮末尾(isTurnEndGhostCardHtml)时,主机在同一结果里加 `true`。
+ * 手机端据此在列表里把这张卡排到本轮最后——它取卡是异步的,排序时还看不到卡片 html。
+ */
+export const GHOST_CARD_TURN_END_KEY = 'xdt_card_turn_end';
 
 /**
  * notify 槽的提示语气(→ 主机 Toast 的 variant;缺省 'info')。
@@ -8892,6 +8936,11 @@ export type GhostPipeEventPush =
       mailAttachment?: { path: string; filename: string; bytes: number; sha256: string; contentId?: string };
       /** Passive editor update: no user-action token, no Agent continuation. */
       formChange?: boolean;
+      /**
+       * 用户在卡内模型下拉框(data-ghost-model-select)里选中的模型。宿主已核对该动作
+       * 确实声明了下拉框、且这个模型当前可用;别的按钮永远没有此字段。
+       */
+      modelSelection?: PluginModelSelection;
       /**
        * 主机铸造的衍生卡位(`<根callId>::sp<序>`,见 GHOST_CARD_SPAWN_SEP)。
        * 对它 card-update = 原卡下方长出新卡(原卡保留,母卡按钮可反复点);

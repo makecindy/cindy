@@ -13982,6 +13982,22 @@
       "cancelTitle": "Arrêter d'attendre et supprimer ce message"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI réussie",
+        "ciFailed": "CI en échec",
+        "ciRunning": "CI en cours",
+        "threadsOpen": "Fils de revue ouverts : {{count}}",
+        "threadsNone": "Aucun fil de revue ouvert",
+        "mergeReady": "Prête à fusionner",
+        "mergeConflict": "Conflits à résoudre",
+        "mergeBehind": "En retard sur la branche de base",
+        "mergeApproval": "En attente d’approbation",
+        "mergeChanges": "Modifications demandées",
+        "mergeWaiting": "En attente de fusion",
+        "merged": "Fusionnée",
+        "closed": "Fermée",
+        "draft": "Brouillon"
+      },
       "verb": "Plugin utilisé",
       "cardRunning": "Le plugin dessine",
       "cardDone": "Terminé",
@@ -13995,6 +14011,7 @@
       "collapseFields": "Réduire",
       "formSyncFailed": "Les modifications de la carte n'ont pas été synchronisées. Vérifiez la connexion et continuez la modification ; le message n'a pas été envoyé.",
       "linkOpenFailed": "Impossible d'ouvrir le lien",
+      "modelSelectFailed": "Le modèle n'a pas été changé. Choisissez-le à nouveau.",
       "mailPreview": "Aperçu de l'e-mail",
       "mailEnlarge": "Agrandir l'aperçu",
       "mailInsertImage": "Insérer dans le message",
@@ -16219,6 +16236,9 @@
       "importFailed": "Échec de l'importation du skill"
     },
     "builtIn": {
+      "pr": {
+        "description": "Démarre le travail sur une nouvelle branche, ouvre une pull request GitHub, puis corrige la CI et les retours de revue en arrière-plan jusqu’à la fusion."
+      },
       "official": "Officiel",
       "officialDetail": "Inclus et maintenu par Cindy.",
       "skillCreator": {

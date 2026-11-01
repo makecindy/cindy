@@ -339,5 +339,22 @@
     "purpose": "确认交互页之权柄",
     "updateHost": "请更新行事之机上之 Cindy，再于此确认。文字工具仍可用。",
     "failed": "交互之页未能启，请察连接与法器之版后再试。"
+  },
+  "openLinkHost": "启 {{host}}",
+  "prStatus": {
+    "ciPassed": "CI 已过",
+    "ciFailed": "CI 未过",
+    "ciRunning": "CI 运行中",
+    "threadsOpen": "{{count}} 条意见待理",
+    "threadsNone": "无待理之意见",
+    "mergeReady": "可合并",
+    "mergeConflict": "有冲突",
+    "mergeBehind": "须同步目标分支",
+    "mergeApproval": "待批",
+    "mergeChanges": "须修改",
+    "mergeWaiting": "待合并",
+    "merged": "已合并",
+    "closed": "已闭",
+    "draft": "草稿"
   }
 }

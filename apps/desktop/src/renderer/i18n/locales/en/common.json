@@ -13855,6 +13855,22 @@
       "cancelTitle": "Stop waiting and remove this message"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI passed",
+        "ciFailed": "CI failed",
+        "ciRunning": "CI running",
+        "threadsOpen": "Open review threads: {{count}}",
+        "threadsNone": "No open review threads",
+        "mergeReady": "Ready to merge",
+        "mergeConflict": "Has conflicts",
+        "mergeBehind": "Behind the base branch",
+        "mergeApproval": "Waiting for approval",
+        "mergeChanges": "Changes requested",
+        "mergeWaiting": "Waiting to merge",
+        "merged": "Merged",
+        "closed": "Closed",
+        "draft": "Draft"
+      },
       "verb": "Used plugin",
       "cardRunning": "Plugin is drawing",
       "cardDone": "Done",
@@ -13868,6 +13884,7 @@
       "collapseFields": "Collapse",
       "formSyncFailed": "Card edits have not synced. Check the connection and continue editing; the message has not been sent.",
       "linkOpenFailed": "Failed to open link",
+      "modelSelectFailed": "The model wasn't changed. Please choose again.",
       "mailPreview": "Email preview",
       "mailEnlarge": "Enlarge preview",
       "mailInsertImage": "Insert into message",
@@ -16047,6 +16064,9 @@
       },
       "pluginCreator": {
         "description": "Create, edit, debug, and package Cindy plugins, or publish them when requested."
+      },
+      "pr": {
+        "description": "Start work on a fresh branch, open a GitHub pull request, then fix CI and review feedback in the background until it is merged."
       }
     },
     "common": {

@@ -13789,6 +13789,22 @@
       "cancelTitle": "대기를 중단하고 이 메시지를 삭제"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 통과",
+        "ciFailed": "CI 실패",
+        "ciRunning": "CI 실행 중",
+        "threadsOpen": "처리할 리뷰 의견 {{count}}개",
+        "threadsNone": "처리할 리뷰 의견 없음",
+        "mergeReady": "병합 가능",
+        "mergeConflict": "충돌 있음",
+        "mergeBehind": "기준 브랜치 동기화 필요",
+        "mergeApproval": "승인 대기 중",
+        "mergeChanges": "수정 요청됨",
+        "mergeWaiting": "병합 대기 중",
+        "merged": "병합됨",
+        "closed": "닫힘",
+        "draft": "초안"
+      },
       "verb": "플러그인 호출",
       "cardRunning": "플러그인이 그리는 중",
       "cardDone": "완료",
@@ -13802,6 +13818,7 @@
       "collapseFields": "접기",
       "formSyncFailed": "카드 변경 사항이 동기화되지 않았습니다. 연결을 확인한 후 편집을 계속하세요. 메시지는 전송되지 않았습니다.",
       "linkOpenFailed": "링크를 열지 못했습니다",
+      "modelSelectFailed": "모델을 바꾸지 못했습니다. 다시 선택하세요.",
       "mailPreview": "메일 미리보기",
       "mailEnlarge": "확대 보기",
       "mailInsertImage": "본문에 삽입",
@@ -15980,6 +15997,9 @@
       },
       "pluginCreator": {
         "description": "Cindy 플러그인을 생성, 수정, 디버깅, 패키징하고 요청에 따라 게시합니다."
+      },
+      "pr": {
+        "description": "최신 코드에서 작업을 시작해 GitHub PR을 올리고, 병합될 때까지 CI와 리뷰 피드백을 백그라운드에서 수정합니다."
       }
     },
     "common": {

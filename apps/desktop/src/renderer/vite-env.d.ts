@@ -1500,6 +1500,8 @@ interface ElectronAPI {
       prompt?: string,
       formValues?: Record<string, string>,
       formChange?: boolean,
+      /** 卡内模型下拉框(data-ghost-model-select)选中的模型。 */
+      modelSelection?: import('@cindy/device-link').PluginModelSelection,
     ) => Promise<{ ok: boolean }>;
     /** 订阅槽①:用户消息被意识钩子拦下(renderer 把乐观气泡原地降级为被拦态;
      *  没有既有气泡时用 text 补渲一条——排队消息被拦不无声蒸发)。 */

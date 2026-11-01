@@ -13789,6 +13789,22 @@
       "cancelTitle": "待機をやめてこのメッセージを削除"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 成功",
+        "ciFailed": "CI 失敗",
+        "ciRunning": "CI 実行中",
+        "threadsOpen": "未解決のレビュー {{count}} 件",
+        "threadsNone": "未解決のレビューなし",
+        "mergeReady": "マージ可能",
+        "mergeConflict": "コンフリクトあり",
+        "mergeBehind": "ベースブランチとの同期が必要",
+        "mergeApproval": "承認待ち",
+        "mergeChanges": "修正依頼あり",
+        "mergeWaiting": "マージ待ち",
+        "merged": "マージ済み",
+        "closed": "クローズ済み",
+        "draft": "下書き"
+      },
       "verb": "プラグイン呼び出し",
       "cardRunning": "プラグインが描画中",
       "cardDone": "完了",
@@ -13802,6 +13818,7 @@
       "collapseFields": "折りたたむ",
       "formSyncFailed": "カードの変更を同期できませんでした。接続を確認して編集を続けてください。メッセージは未送信です。",
       "linkOpenFailed": "リンクを開けませんでした",
+      "modelSelectFailed": "モデルを変更できませんでした。もう一度選択してください。",
       "mailPreview": "メールプレビュー",
       "mailEnlarge": "拡大表示",
       "mailInsertImage": "本文に挿入",
@@ -15980,6 +15997,9 @@
       },
       "pluginCreator": {
         "description": "Cindy のプラグインを作成・編集・デバッグ・パッケージ化し、必要に応じて公開します。"
+      },
+      "pr": {
+        "description": "最新のコードで作業を始めて GitHub の PR を作成し、マージされるまで CI とレビュー指摘をバックグラウンドで修正します。"
       }
     },
     "common": {

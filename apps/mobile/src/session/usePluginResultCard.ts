@@ -40,7 +40,7 @@ export function useSessionPluginResource(deviceId: string | undefined, sessionId
       const expected = ++generation;
       const valid = () => !disposed && current.current === binding && generation === expected && AppState.currentState === 'active';
       try {
-        const read = (next: string) => getRemoteResource(invoke, { deviceId, deviceName: deviceId }, { collectionId, kind, id: JSON.stringify([sessionId, next]) }, undefined, collectionId === 'plugin-results' ? ['plugin-card-actions', 'plugin-card-forms'] : []);
+        const read = (next: string) => getRemoteResource(invoke, { deviceId, deviceName: deviceId }, { collectionId, kind, id: JSON.stringify([sessionId, next]) }, undefined, collectionId === 'plugin-results' ? ['plugin-card-actions', 'plugin-card-forms', 'plugin-card-rich'] : []);
         let next = callId, resource = await read(next);
         if (followMailReplacement) {
           const identity = (blocks: RemoteResourceBlock[] | undefined) => {

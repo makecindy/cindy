@@ -343,5 +343,22 @@
     "purpose": "Revisar permissões de páginas interativas",
     "updateHost": "Atualize a Cindy no computador de execução para confirmar aqui. As ferramentas de texto continuam disponíveis.",
     "failed": "Não foi possível ativar as páginas interativas. Verifique a conexão e a versão do plugin e tente novamente."
+  },
+  "openLinkHost": "Abrir {{host}}",
+  "prStatus": {
+    "ciPassed": "CI aprovada",
+    "ciFailed": "CI falhou",
+    "ciRunning": "CI em execução",
+    "threadsOpen": "Tópicos de revisão abertos: {{count}}",
+    "threadsNone": "Nenhum tópico de revisão aberto",
+    "mergeReady": "Pronta para mesclar",
+    "mergeConflict": "Tem conflitos",
+    "mergeBehind": "Atrás do branch base",
+    "mergeApproval": "Aguardando aprovação",
+    "mergeChanges": "Alterações solicitadas",
+    "mergeWaiting": "Aguardando mesclagem",
+    "merged": "Mesclada",
+    "closed": "Fechada",
+    "draft": "Rascunho"
   }
 }

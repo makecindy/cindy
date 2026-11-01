@@ -499,6 +499,24 @@ describe('message render shared model', () => {
     expect(media.tools.map((tool) => tool.source.clientId)).toEqual(['gen-1', 'gen-2']);
   });
 
+  // The phone fetches a card's HTML only after the list is built, so the host's tool-result hint
+  // decides placement: a turn-end card (the PR question) follows the turn's reply, like desktop.
+  it('moves turn-end plugin cards after the reply, before the next user message', () => {
+    const turn = (id: string, at0: number) => [
+      message({ kind: 'user', source: source(`${id}-user`, 'go', at0), body: 'go', label: 'user' }),
+      message({ kind: 'tool', source: source(`${id}-pr`, { toolName: 'ghost_call', input: {} }, at0 + 1), label: 'ghost_call', body: '',
+        cardIds: [`${id}-card`, `${id}-other`], turnEndCardIds: [`${id}-card`] }),
+      message({ kind: 'assistant', source: source(`${id}-reply`, 'done', at0 + 2), body: 'done', label: 'assistant' }),
+    ];
+    const items = buildMessageRenderItems([...turn('a', 1), ...turn('b', 10)]);
+    const cards = (item: MessageRenderItem<FixtureMessage>) =>
+      item.type === 'tool_media' ? item.tools.flatMap((tool) => tool.cardIds ?? []) : [];
+    expect(items.map((item) => [item.type, ...cards(item)])).toEqual([
+      ['message'], ['work_group'], ['tool_media', 'a-other'], ['message'], ['tool_media', 'a-card'],
+      ['message'], ['work_group'], ['tool_media', 'b-other'], ['message'], ['tool_media', 'b-card'],
+    ]);
+  });
+
   it('does not emit tool_media when tools carry no media or only empty urls', () => {
     const items = buildMessageRenderItems([
       message({

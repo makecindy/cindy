@@ -51,6 +51,10 @@ export type PrStatusResult =
       unresolvedCount: number | null;
       /** Missing on older hosts; null means unavailable, not zero. */
       checks?: PrChecksSummary | null;
+      /** GitHub mergeStateStatus (CLEAN / DIRTY / BEHIND / BLOCKED …). Missing on older hosts. */
+      mergeState?: string | null;
+      /** GitHub reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED). Missing on older hosts. */
+      reviewDecision?: string | null;
     }
   | {
       ok: false;
@@ -68,6 +72,45 @@ export type PrStatusResult =
  */
 export type PrStatusFailureReason =
   'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';
+
+export type PrStatusItemTone = 'good' | 'bad' | 'wait';
+export type PrStatusItemKey =
+  | 'ciPassed' | 'ciFailed' | 'ciRunning' | 'threadsOpen' | 'threadsNone'
+  | 'merged' | 'closed' | 'draft'
+  | 'mergeConflict' | 'mergeBehind' | 'mergeReady' | 'mergeChanges' | 'mergeApproval' | 'mergeWaiting';
+
+/**
+ * 插件卡片 PR 状态位的条目(CI、未解决意见、能否合并),桌面与手机共用同一套取舍;
+ * 文案由各端按 key 翻译。旧版宿主不带合并字段时省掉合并一项,不猜。
+ */
+export function prStatusItemKeys(
+  status: Extract<PrStatusResult, { ok: true }>,
+): Array<{ tone: PrStatusItemTone; key: PrStatusItemKey; count?: number }> {
+  const items: Array<{ tone: PrStatusItemTone; key: PrStatusItemKey; count?: number }> = [];
+  const checks = status.checks;
+  if (checks && checks.total > 0) {
+    if (checks.failed > 0) items.push({ tone: 'bad', key: 'ciFailed' });
+    else if (checks.pending > 0) items.push({ tone: 'wait', key: 'ciRunning' });
+    else items.push({ tone: 'good', key: 'ciPassed' });
+  }
+  if (status.unresolvedCount !== null) {
+    items.push(status.unresolvedCount > 0
+      ? { tone: 'wait', key: 'threadsOpen', count: status.unresolvedCount }
+      : { tone: 'good', key: 'threadsNone' });
+  }
+  if (status.status === 'merged') items.push({ tone: 'good', key: 'merged' });
+  else if (status.status === 'closed') items.push({ tone: 'wait', key: 'closed' });
+  else if (status.status === 'draft') items.push({ tone: 'wait', key: 'draft' });
+  else if (status.mergeState !== undefined || status.reviewDecision !== undefined) {
+    if (status.mergeState === 'DIRTY') items.push({ tone: 'bad', key: 'mergeConflict' });
+    else if (status.mergeState === 'BEHIND') items.push({ tone: 'wait', key: 'mergeBehind' });
+    else if (status.mergeState === 'CLEAN') items.push({ tone: 'good', key: 'mergeReady' });
+    else if (status.reviewDecision === 'CHANGES_REQUESTED') items.push({ tone: 'wait', key: 'mergeChanges' });
+    else if (status.reviewDecision === 'REVIEW_REQUIRED') items.push({ tone: 'wait', key: 'mergeApproval' });
+    else items.push({ tone: 'wait', key: 'mergeWaiting' });
+  }
+  return items;
+}
 
 /** 只对最近的几条 PR 引用查状态(徽标也只展示这几条)。 */
 export const MAX_STATUS_QUERIES = 3;

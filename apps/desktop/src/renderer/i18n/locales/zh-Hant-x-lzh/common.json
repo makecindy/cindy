@@ -13813,6 +13813,22 @@
       "cancelTitle": "罷候並除此訊"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 已過",
+        "ciFailed": "CI 未過",
+        "ciRunning": "CI 運行中",
+        "threadsOpen": "{{count}} 條意見待理",
+        "threadsNone": "無待理之意見",
+        "mergeReady": "可合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "須同步目標分支",
+        "mergeApproval": "待批",
+        "mergeChanges": "須修改",
+        "mergeWaiting": "待合併",
+        "merged": "已合併",
+        "closed": "已閉",
+        "draft": "草稿"
+      },
       "verb": "呼法器",
       "cardRunning": "法器繪製",
       "cardDone": "已畢",
@@ -13826,6 +13842,7 @@
       "collapseFields": "收",
       "formSyncFailed": "卡之修改尚未同步，請察連線後續修；訊尚未遣。",
       "linkOpenFailed": "連結未能啟",
+      "modelSelectFailed": "模型未易，請復擇",
       "mailPreview": "郵件先覽",
       "mailEnlarge": "放大覽",
       "mailInsertImage": "插入文中",
@@ -16003,6 +16020,9 @@
       "importFailed": "納技藝未成"
     },
     "builtIn": {
+      "pr": {
+        "description": "開新分支以始其事，於 GitHub 發 PR，後臺修 CI 與審閱之見，至於合併。"
+      },
       "official": "官方",
       "officialDetail": "Cindy 隨應用程式附之，並自行維護。",
       "skillCreator": {

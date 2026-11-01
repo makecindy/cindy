@@ -13788,6 +13788,22 @@
       "cancelTitle": "取消等待並移除這條訊息"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI 通過",
+        "ciFailed": "CI 未通過",
+        "ciRunning": "CI 執行中",
+        "threadsOpen": "{{count}} 則意見待處理",
+        "threadsNone": "沒有待處理意見",
+        "mergeReady": "可以合併",
+        "mergeConflict": "有衝突",
+        "mergeBehind": "需要同步目標分支",
+        "mergeApproval": "等待核准",
+        "mergeChanges": "需要修改",
+        "mergeWaiting": "等待合併",
+        "merged": "已合併",
+        "closed": "已關閉",
+        "draft": "草稿"
+      },
       "verb": "呼叫插件",
       "cardRunning": "插件繪製中",
       "cardDone": "已完成",
@@ -13801,6 +13817,7 @@
       "collapseFields": "收起",
       "formSyncFailed": "卡片修改尚未同步，請檢查連線後繼續編輯；訊息尚未傳送。",
       "linkOpenFailed": "連結開啟失敗",
+      "modelSelectFailed": "模型沒有換成，請重新選擇",
       "mailPreview": "郵件預覽",
       "mailEnlarge": "放大檢視",
       "mailInsertImage": "插入內文",
@@ -15980,6 +15997,9 @@
       },
       "pluginCreator": {
         "description": "建立、修改、偵錯與打包 Cindy 插件，也可按需發佈。"
+      },
+      "pr": {
+        "description": "在最新程式碼上開工、發 GitHub PR，並在背景修復 CI 與審查意見，直到合併。"
       }
     },
     "common": {

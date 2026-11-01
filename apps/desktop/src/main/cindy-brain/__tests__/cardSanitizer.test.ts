@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
-import { GHOST_CARD_HTML_MAX_BYTES } from '../../../shared/ghost';
+import { GHOST_CARD_HTML_MAX_BYTES, ghostCardDeclaresModelSelect } from '../../../shared/ghost';
 import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
@@ -384,6 +384,73 @@ describe('sanitizeGhostCardHtml · 交互卡按钮(v2,data-ghost-action)', () =>
     const oversize = ok(`<button data-ghost-action="p1" data-ghost-prompt="${'长'.repeat(129)}">点</button>`);
     expect(oversize).not.toContain('data-ghost-prompt');
     expect(oversize).toContain('data-ghost-action="p1"');
+  });
+});
+
+// PR 卡片的「跟进中」要持续几天,卡内不能留动画源码;宿主按这个标记播统一光环。
+describe('sanitizeGhostCardHtml · 在线指示(data-ghost-live)', () => {
+  it('span / div 上保留为空值属性,其它标签与属性值都不放行', () => {
+    expect(ok('<span data-ghost-live="anything">x</span><div data-ghost-live>y</div>')).toBe(
+      '<span data-ghost-live="">x</span><div data-ghost-live="">y</div>',
+    );
+    expect(ok('<button data-ghost-live>z</button>')).not.toContain('data-ghost-live');
+  });
+});
+
+// 手机端按这两个提示画主按钮和开关;只认 button 上的固定写法。
+describe('sanitizeGhostCardHtml · 手机呈现提示(data-ghost-primary / data-ghost-toggle)', () => {
+  it('button 上放行,其它值和标签只丢属性', () => {
+    expect(ok('<button data-ghost-action="a" data-ghost-primary="x" data-ghost-toggle="on">x</button>'))
+      .toBe('<button data-ghost-primary="" data-ghost-toggle="on" data-ghost-action="a" type="button">x</button>');
+    expect(ok('<div data-ghost-live-label="跟进中">x</div><b data-ghost-live-label="x">y</b>')).toBe('<div data-ghost-live-label="跟进中">x</div><b>y</b>');
+    expect(ok('<button data-ghost-toggle="maybe">a</button><div data-ghost-primary data-ghost-toggle="on">b</div>'))
+      .toBe('<button type="button">a</button><div>b</div>');
+  });
+});
+
+// 图标位:宿主换成 App 里的同名图标;只认登记过的名字,其它值只丢属性、保留插件的兜底图形。
+describe('sanitizeGhostCardHtml · 图标位(data-ghost-icon)', () => {
+  it('span / div 上只放行登记的图标名', () => {
+    expect(ok('<span data-ghost-icon="settings"><b>x</b></span>')).toBe('<span data-ghost-icon="settings"><b>x</b></span>');
+    expect(ok('<span data-ghost-icon="rocket">a</span><button data-ghost-icon="settings">b</button>'))
+      .toBe('<span>a</span><button type="button">b</button>');
+  });
+});
+
+// 模型下拉框:宿主据此在按钮下方弹模型列表,并凭紧跟动作的这段字面量核对动作确实声明了下拉框。
+describe('sanitizeGhostCardHtml · 模型下拉框(data-ghost-model-select)', () => {
+  it('只挂在有动作的 button 上,值只留合格的模型选择', () => {
+    const route = { agentKind: 'cc', providerId: 'anthropic', model: 'm', effort: 'low', fastMode: false };
+    const enc = (v: unknown) => JSON.stringify(v).replace(/"/g, '&quot;');
+    const html = ok(`<button data-ghost-model-select="${enc(route)}" data-ghost-action="pick">x</button>`);
+    expect(html).toBe(`<button data-ghost-action="pick" data-ghost-model-select="${enc(route)}" type="button">x</button>`);
+    expect(ghostCardDeclaresModelSelect(html, 'pick')).toBe(true);
+    expect(ghostCardDeclaresModelSelect(html, 'pic')).toBe(false);
+    for (const bad of ['{bad', enc({ ...route, extra: 1 })]) {
+      expect(ok(`<button data-ghost-action="a" data-ghost-model-select="${bad}">x</button>`))
+        .toBe('<button data-ghost-action="a" data-ghost-model-select="" type="button">x</button>');
+    }
+    expect(ok('<button data-ghost-model-select="">x</button><div data-ghost-action="a" data-ghost-model-select="">y</div>'))
+      .toBe('<button type="button">x</button><div data-ghost-action="a">y</div>');
+  });
+});
+
+// 宿主把标题栏的 PR 状态填进这个位置;只认 owner/repo#编号,别的值连同它可能夹带的内容都只丢属性。
+describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
+  it('div 上放行 owner/repo#编号,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>')).toBe('<div data-ghost-pr-status="Octo/repo.js#42">CI</div>');
+    expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
+      .toBe('<div>a</div><div>b</div><span>c</span>');
+  });
+});
+
+// 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。
+describe('sanitizeGhostCardHtml · 位置与宽度声明(data-ghost-placement / data-ghost-width)', () => {
+  it('只在 div 上放行 turn-end / full,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-placement=" turn-end " data-ghost-width="full">x</div>'))
+      .toBe('<div data-ghost-placement="turn-end" data-ghost-width="full">x</div>');
+    expect(ok('<div data-ghost-placement="top" data-ghost-width="100%">x</div><span data-ghost-placement="turn-end" data-ghost-width="full">y</span>'))
+      .toBe('<div>x</div><span>y</span>');
   });
 });
 

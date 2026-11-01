@@ -18,8 +18,10 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_HTML_MAX_BYTES,
   GHOST_CARD_PROMPT_PLACEHOLDER_MAX_LEN,
+  isGhostCardIconName,
   isGhostCardLinkAllowed,
 } from '../../shared/ghost.js';
+import { isPluginModelPickerRoute as isPluginModelSelection } from '../../shared/pluginModelPicker.js';
 
 /** 允许保留(含子树)的标签。仅结构/排版/图片 + 交互按钮(v2,零脚本:
  *  点击由宿主受信桥委托,见 GhostToolCard.attachClickBridge);无脚本载体。
@@ -86,6 +88,9 @@ export type SanitizeCardResult =
   | { ok: true; html: string; animatedHtml?: string }
   | { ok: false; reason: string };
 
+/** PR 状态位的值:owner/repo#编号(GitHub 允许的名字字符)。 */
+const GHOST_CARD_PR_STATUS_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}#[1-9]\d{0,8}$/;
+
 /** @keyframes 体内允许的属性(合成器动画白名单;其余出现即动画版作废)。 */
 const KEYFRAME_ALLOWED_PROPS = new Set(['transform', 'opacity', 'animation-timing-function']);
 
@@ -143,6 +148,19 @@ function escapeText(s: string): string {
 
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 模型下拉框的当前值:只留合格的模型选择(按固定字段重新序列化),否则为空。 */
+function modelSelectValue(raw: string): string {
+  if (!raw || raw.length > 1024) return '';
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isPluginModelSelection(value)) return '';
+    const { agentKind, providerId, model, effort, fastMode } = value;
+    return JSON.stringify({ agentKind, providerId, model, effort, fastMode });
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -281,6 +299,29 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
       if (AUDIO_DURATION_RE.test(dur)) parts.push(` data-ghost-audio-duration="${dur}"`);
     }
   }
+  // 在线指示(data-ghost-live):空值属性,只挂 span / div。宿主给它播统一的呼吸光环
+  // (transform + opacity,卡片不可见时暂停),卡内仍零动画源码,历史卡照样静态存档。
+  if ((tag === 'span' || tag === 'div') && attrs['data-ghost-live'] !== undefined) parts.push(' data-ghost-live=""');
+  // 图标位(data-ghost-icon):只挂 span / div、只认 GHOST_CARD_ICONS 里的名字,宿主换成 App 的同名图标。
+  const icon = tag === 'span' || tag === 'div' ? (attrs['data-ghost-icon'] ?? '').trim() : '';
+  if (isGhostCardIconName(icon)) parts.push(` data-ghost-icon="${icon}"`);
+  // 位置声明(data-ghost-placement):只挂 div、只认 turn-end,宿主据此把卡排到本轮末尾
+  // (isTurnEndGhostCardHtml)。其它值只丢属性。
+  if (tag === 'div' && attrs['data-ghost-placement']?.trim() === 'turn-end') parts.push(' data-ghost-placement="turn-end"');
+  // 宽度声明(data-ghost-width):只挂 div、只认 full,宿主据此让卡铺满消息列(isFullWidthGhostCardHtml)。
+  if (tag === 'div' && attrs['data-ghost-width']?.trim() === 'full') parts.push(' data-ghost-width="full"');
+  // PR 状态位(data-ghost-pr-status="owner/repo#123"):只挂 div。宿主用标题栏同一份 PR 状态实时
+  // 替换其内容(ghostCardPrStatus);插件写在里面的是兜底快照。值不合格只丢属性。
+  const prStatus = tag === 'div' ? (attrs['data-ghost-pr-status'] ?? '').trim() : '';
+  if (GHOST_CARD_PR_STATUS_RE.test(prStatus)) parts.push(` data-ghost-pr-status="${escapeAttr(prStatus)}"`);
+  // 手机端呈现提示(只挂 button):data-ghost-primary 画成主按钮;data-ghost-toggle="on|off"
+  // 画成原生开关。电脑端不读,卡内样式照旧由插件决定。
+  if (tag === 'button' && attrs['data-ghost-primary'] !== undefined) parts.push(' data-ghost-primary=""');
+  // data-ghost-live-label:持续状态的名字(如「跟进中」),手机端画成带呼吸点的状态;只挂 div / span。
+  const liveLabel = tag === 'div' || tag === 'span' ? (attrs['data-ghost-live-label'] ?? '').trim() : '';
+  if (liveLabel && liveLabel.length <= 64) parts.push(` data-ghost-live-label="${escapeAttr(liveLabel)}"`);
+  const toggle = tag === 'button' ? (attrs['data-ghost-toggle'] ?? '').trim() : '';
+  if (toggle === 'on' || toggle === 'off') parts.push(` data-ghost-toggle="${toggle}"`);
   // 交互卡(v2):data-ghost-action 声明可点区域(任意允许标签都可挂)。
   // 值过 GHOST_CARD_ACTION_ID_RE 才落地——不合法只丢这条属性(元素与文字
   // 保留,只是点不动),不牵连整个元素。点击由宿主受信桥委托回传,卡内零脚本。
@@ -288,6 +329,11 @@ function sanitizeAttrs(tag: string, attrs: ParsedAttrs, opts: CssOpts): string |
   const actionValid = GHOST_CARD_ACTION_ID_RE.test(action);
   if (actionValid) {
     parts.push(` data-ghost-action="${escapeAttr(action)}"`);
+    // data-ghost-model-select:点击由宿主在按钮下方弹模型下拉框,选中结果随 card-action 回传
+    // (ghostCardDeclaresModelSelect 依赖它紧跟在动作之后)。值 = 当前模型 JSON,不合格只清空值。
+    if (tag === 'button' && attrs['data-ghost-model-select'] !== undefined) {
+      parts.push(` data-ghost-model-select="${escapeAttr(modelSelectValue(attrs['data-ghost-model-select']))}"`);
+    }
     if (attrs['data-ghost-submit'] === 'true') parts.push(' data-ghost-submit="true"');
     // data-ghost-prompt:该动作需要用户输入文字(宿主点击时弹输入框收集,
     // 文字随 card-action 的 prompt 字段回传)。属性值 = 输入框占位文案

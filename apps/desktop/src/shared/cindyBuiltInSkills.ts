@@ -1,11 +1,13 @@
 export const CINDY_SKILL_CREATOR_NAME = 'cindy-skill-creator';
 export const CINDY_LEARN_NAME = 'learn';
 export const CINDY_PLUGIN_CREATOR_NAME = 'cindy-plugin-creator';
+export const CINDY_PR_NAME = 'pr';
 
 export const CINDY_BUILT_IN_SKILL_NAMES = [
   CINDY_SKILL_CREATOR_NAME,
   CINDY_LEARN_NAME,
   CINDY_PLUGIN_CREATOR_NAME,
+  CINDY_PR_NAME,
 ] as const;
 
 export const CINDY_LEARN_SOURCE_DESCRIPTION =

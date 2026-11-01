@@ -341,5 +341,22 @@
     "purpose": "Review interactive page permissions",
     "updateHost": "Update Cindy on the execution computer to confirm here. Text tools remain available.",
     "failed": "Could not enable interactive pages. Check the connection and plugin version, then try again."
+  },
+  "openLinkHost": "Open {{host}}",
+  "prStatus": {
+    "ciPassed": "CI passed",
+    "ciFailed": "CI failed",
+    "ciRunning": "CI running",
+    "threadsOpen": "Open review threads: {{count}}",
+    "threadsNone": "No open review threads",
+    "mergeReady": "Ready to merge",
+    "mergeConflict": "Has conflicts",
+    "mergeBehind": "Behind the base branch",
+    "mergeApproval": "Waiting for approval",
+    "mergeChanges": "Changes requested",
+    "mergeWaiting": "Waiting to merge",
+    "merged": "Merged",
+    "closed": "Closed",
+    "draft": "Draft"
   }
 }

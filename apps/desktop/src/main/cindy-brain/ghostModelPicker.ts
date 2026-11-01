@@ -22,6 +22,18 @@ export function getPluginModelPickerAgents(): readonly string[] {
   return agentProvider();
 }
 
+/**
+ * 选择器只发给用户看得见的应用窗口:优先当前聚焦的那个。预热的隐藏窗口也是应用窗口,
+ * 发给它们时选择器看不见,插件只能等到超时(表现为「点了没反应」)。
+ */
+export function chooseModelPickerWindow<W>(
+  focused: W | null,
+  all: readonly W[],
+  usable: (win: W) => boolean,
+): W | undefined {
+  return focused && usable(focused) ? focused : all.find(usable);
+}
+
 type AgentBinaryStatus = (agent: string) => Promise<{ binaryReady?: boolean } | null | undefined>;
 let agentBinaryStatus: AgentBinaryStatus = async () => null;
 

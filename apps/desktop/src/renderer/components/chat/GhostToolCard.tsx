@@ -44,6 +44,9 @@ import { ImageLightbox } from './ImageLightbox';
 import { mailCardFooterHtml, updateMailCardDocument } from './mailCardFooter';
 import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
+import { GhostCardModelSelect } from './GhostCardModelSelect';
+import { isPluginModelSelection } from '@cindy/device-link';
+import type { PluginTaskRoute } from '../../../shared/pluginTasks';
 import { toast } from '@/lib/toast';
 import { registerMedia } from '@/lib/mediaPlaybackBus';
 import {
@@ -62,6 +65,10 @@ import {
 } from '@/cindy-brain/ghostCardStore';
 import { useGhostCardThemeVars } from '@/cindy-brain/useGhostCardThemeVars';
 import { alignFrameWithGate } from '@/lib/hiddenAnimationGate';
+import { startGhostCardLiveIndicators } from '@/cindy-brain/ghostCardLive';
+import { fillGhostCardPrStatus, readPrStatusSlotKey } from '@/cindy-brain/ghostCardPrStatus';
+import { fillGhostCardIcons } from '@/cindy-brain/ghostCardIcons';
+import { usePrStatus } from '@/contexts/PrRefsContext';
 import {
   extractGhostCardGallerySrcs,
   ghostCardGalleryId,
@@ -70,6 +77,7 @@ import {
   GHOST_CARD_ACTION_INFLIGHT_MS,
   GHOST_CARD_HEIGHT_MAX,
   GHOST_CARD_HEIGHT_MIN,
+  isFullWidthGhostCardHtml,
   isGhostCardLinkAllowed,
 } from '@/../shared/ghost';
 
@@ -208,6 +216,8 @@ function GhostCardCanvas({
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const liveDisposeRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => liveDisposeRef.current?.(), []);
   const formFields = useMemo(() => readGhostCardForm(html), [html]);
   const mail = useMemo(() => readMailCard(html), [html]);
   useEffect(() => {
@@ -276,6 +286,12 @@ function GhostCardCanvas({
     left: number;
   } | null>(null);
   const [promptText, setPromptText] = useState('');
+  // data-ghost-model-select 类动作的模型下拉框(锚在被点按钮下方,选中后随 card-action 回传)。
+  const [modelAsk, setModelAsk] = useState<{
+    actionId: string;
+    initial: PluginTaskRoute | null;
+    rect: { top: number; left: number; width: number; height: number };
+  } | null>(null);
   // 弹面板那颗按钮的引用:发送时对它上锁(防连点),与普通按钮同一套锁。
   const promptSourceElRef = useRef<HTMLElement | null>(null);
   // data-ghost-link 外链确认框(卡片交互 v3):卡内声明式外链点击后先弹宿主
@@ -308,6 +324,14 @@ function GhostCardCanvas({
   const settledOnceRef = useRef(false);
   const pendingSettleRef = useRef(false);
   const renderedCardHtml = running && animatedHtml ? animatedHtml : html;
+  // PR 状态位:用标题栏同一份状态(随它定时刷新)替换插件的兜底快照。
+  const prSlotKey = useMemo(() => readPrStatusSlotKey(renderedCardHtml), [renderedCardHtml]);
+  const prStatus = usePrStatus(sessionId ?? '', prSlotKey ?? '');
+  const prStatusRef = useRef(prStatus);
+  prStatusRef.current = prStatus;
+  const fillPrStatus = useCallback((doc: Document) => {
+    if (prSlotKey) fillGhostCardPrStatus(doc, (key) => (key === prSlotKey ? prStatusRef.current : undefined), t);
+  }, [prSlotKey, t]);
   const gallerySrcs = useMemo(
     () => extractGhostCardGallerySrcs(renderedCardHtml),
     [renderedCardHtml],
@@ -460,6 +484,14 @@ function GhostCardCanvas({
     // 还看不到这个 iframe。走闸门自己的入口,由它登记进共享的恢复集合 —— 自行 pause
     // 而不登记的话,窗口切回来时统一恢复路径不会 play 它们,这张卡的动画会永久停住。
     alignFrameWithGate(doc);
+    // 在线指示每份文档只挂一次(量高会让本回调对同一文档重跑);换新文档先清旧光环。
+    if (doc.documentElement.dataset.xdtLiveBridged !== '1' && iframeRef.current) {
+      doc.documentElement.dataset.xdtLiveBridged = '1';
+      liveDisposeRef.current?.();
+      liveDisposeRef.current = startGhostCardLiveIndicators(doc, iframeRef.current);
+    }
+    fillPrStatus(doc);
+    fillGhostCardIcons(doc);
     const imgs = doc.querySelectorAll<HTMLImageElement>('img[src^="cindy-media://"]');
     let galleryImageIndex = 0;
     imgs.forEach((img) => {
@@ -570,6 +602,27 @@ function GhostCardCanvas({
           }).then(result => { if (mailSubmit || !result.ok) unlock(); }).catch(unlock);
           return;
         }
+        // data-ghost-model-select 类动作:在按钮下方弹模型下拉框,选中后才派发。
+        if (el.dataset.ghostModelSelect !== undefined) {
+          const anchor = anchorRef.current;
+          const iframeEl = iframeRef.current;
+          if (!anchor || !iframeEl) return;
+          iframeEl.blur();
+          const o = anchor.getBoundingClientRect();
+          const f = iframeEl.getBoundingClientRect();
+          const r = el.getBoundingClientRect();
+          let initial: PluginTaskRoute | null = null;
+          try {
+            const value: unknown = JSON.parse(el.dataset.ghostModelSelect || 'null');
+            if (isPluginModelSelection(value)) initial = value;
+          } catch { /* 没有当前值:从空白选择开始 */ }
+          setModelAsk({
+            actionId,
+            initial,
+            rect: { top: f.top - o.top + r.top, left: f.left - o.left + r.left, width: r.width, height: r.height },
+          });
+          return;
+        }
         // data-ghost-prompt 类动作:先弹宿主输入框收集文字,发送时才派发
         // (与老基座 imgPrompt popover 同体验;零输入直发会被上游拒)。
         if (el.dataset.ghostPrompt !== undefined) {
@@ -626,7 +679,7 @@ function GhostCardCanvas({
       });
     });
     measureHeight();
-  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId]);
+  }, [measureHeight, callId, lockActionEl, bindAudioSlot, allowExternalLinks, html, sessionId, fillPrStatus]);
 
   const cardSrcDoc = buildCardSrcDoc(renderedCardHtml, themeVars);
   const initialMailDocument = useRef(cardSrcDoc);
@@ -645,6 +698,14 @@ function GhostCardCanvas({
     // 含 themeVars:主题切换重建 srcDoc 后同样要重挂点击桥并重测。
     attachClickBridge();
   }, [html, animatedHtml, running, themeVars, attachClickBridge]);
+
+  // 标题栏的 PR 状态刷新时重填当前文档(换行可能改变高度,随后重测)。
+  useEffect(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc?.body || !prSlotKey) return;
+    fillPrStatus(doc);
+    measureHeight();
+  }, [prStatus, prSlotKey, fillPrStatus, measureHeight]);
 
   // 权威实测的高度提交落地后才放开缓动开关:依赖 measuredHeight = 只在
   // 新高度**已渲染提交**的那次 commit 之后翻闸——若挂在"每次渲染后跑",
@@ -800,6 +861,18 @@ function GhostCardCanvas({
           onTextChange={setPromptText}
           onSubmit={submitPrompt}
           onCancel={() => setPromptAsk(null)}
+        />
+      ) : null}
+      {modelAsk ? (
+        <GhostCardModelSelect
+          rect={modelAsk.rect}
+          initial={modelAsk.initial}
+          onSelect={(route) => {
+            void window.electronAPI?.ghosts?.dispatchCardAction?.(callId, modelAsk.actionId, undefined, undefined, undefined, route)
+              ?.then((r) => { if (!r.ok) toast.error(t('chat.ghostCall.modelSelectFailed')); })
+              .catch(() => toast.error(t('chat.ghostCall.modelSelectFailed')));
+          }}
+          onClose={() => setModelAsk(null)}
         />
       ) : null}
       {linkAsk ? (
@@ -965,7 +1038,11 @@ export function GhostToolCard({
   return (
     <div
       className="flex min-w-0 flex-col"
-      style={{ maxWidth: mail || legacyMail ? 'min(100%, max(480px, 75%))' : CARD_MAX_WIDTH }}
+      style={{
+        maxWidth: mail || legacyMail
+          ? 'min(100%, max(480px, 75%))'
+          : isFullWidthGhostCardHtml(html) ? '100%' : CARD_MAX_WIDTH,
+      }}
       aria-label={ariaTitle}
       data-mail-call-id={mail ? callId : undefined}
     >

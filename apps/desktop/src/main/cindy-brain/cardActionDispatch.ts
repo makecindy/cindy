@@ -23,11 +23,14 @@ import {
   GHOST_CARD_ACTION_ID_RE,
   GHOST_CARD_ACTION_PROMPT_MAX_LEN,
   GHOST_CARD_SPAWN_SEP,
+  ghostCardDeclaresModelSelect,
   ghostCardRootCallId,
   type GhostPipeEventPush,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { isGhostOwnerScopeUsable, type GhostOwnerScope } from './ghostOwnerScope.js';
+import { isPluginModelPickerRoute } from '../../shared/pluginModelPicker.js';
+import type { PluginTaskRoute } from '../../shared/pluginTasks.js';
 
 export interface CardActionDispatchDeps {
   /** 内存卡片服务:in-flight + 宽限窗内的条目(归属 + 会话;命中最快)。 */
@@ -61,6 +64,8 @@ export interface CardActionDispatchDeps {
   onActivityStart?(key: string, sessionId: string): void;
   ownerScope?: GhostOwnerScope;
   now?(): number;
+  /** 卡内模型下拉框选中的模型当前是否可用(与 cindy.pickModel 同一判据)。 */
+  isModelRouteAvailable?(route: PluginTaskRoute): Promise<boolean>;
   pickMailAttachment?(inline: boolean, sessionId: string): Promise<PreparedMailAttachment | null>;
   prepareMailUpload?: typeof prepareMailAttachmentUpload;
   log?: {
@@ -88,7 +93,10 @@ export class GhostCardActionDispatcher {
    * (IPC 层对 renderer 恒可回,reason 仅诊断)。prompt 仅 data-ghost-prompt
    * 类动作有(宿主输入框收集的用户文字),可选;非法形状整次拒。
    */
-  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string, formValues?: unknown, change = false, upload?: MailAttachmentUpload): Promise<CardActionResult> {
+  async dispatch(callId: unknown, actionId: unknown, prompt?: unknown, mobilePageId?: string, formValues?: unknown, change = false, upload?: MailAttachmentUpload, modelSelection?: unknown): Promise<CardActionResult> {
+    if (modelSelection !== undefined && (change || mobilePageId || !isPluginModelPickerRoute(modelSelection))) {
+      return { ok: false, reason: 'bad-model-selection' };
+    }
     const fields = formValues === undefined ? undefined : parseGhostCardFormValues(formValues);
     if (fields === null || (change && !fields)) return { ok: false, reason: 'bad-form-values' };
     if (typeof callId !== 'string' || callId.length === 0 || callId.length > MAX_CALL_ID_LEN) {
@@ -186,6 +194,21 @@ export class GhostCardActionDispatcher {
       this.deps.log?.warn('card-action rejected: no card capability', { ghostId, callId });
       return { ok: false, reason: 'no-card-slot' };
     }
+    let selectedModel: PluginTaskRoute | undefined;
+    if (modelSelection !== undefined) {
+      // 只有声明了模型下拉框的按钮才收模型;模型须当前可用(同 cindy.pickModel 的确认判据)。
+      const stored = await this.deps.resolvePersistedCard(callId);
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (stored?.ghostId !== ghostId || !stored.html || !ghostCardDeclaresModelSelect(stored.html, actionId)) {
+        return { ok: false, reason: 'no-model-select' };
+      }
+      const route = { ...(modelSelection as PluginTaskRoute) };
+      let available = false;
+      try { available = await this.deps.isModelRouteAvailable?.(route) ?? false; } catch { /* 视为不可用 */ }
+      if (!ownerUsable()) return rejectStaleOwner(ghostId);
+      if (!available) return { ok: false, reason: 'model-unavailable' };
+      selectedModel = route;
+    }
 
     // 重开被点卡的更新窗口(意识仍可原地换它,向后兼容),并铸一个衍生卡位:
     // 新结果画到 spawnCallId = 原卡下方长出新卡,母卡(四宫格+按钮)原封不动。
@@ -244,6 +267,7 @@ export class GhostCardActionDispatcher {
         ...(promptText !== undefined ? { prompt: promptText } : {}),
         ...(deliveryFields ? { formValues: deliveryFields } : {}),
         ...(mailAttachment ? { mailAttachment } : {}),
+        ...(selectedModel ? { modelSelection: selectedModel } : {}),
         spawnCallId,
         ts: this.now(),
       });

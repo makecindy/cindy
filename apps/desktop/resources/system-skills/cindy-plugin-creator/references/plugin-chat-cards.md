@@ -49,6 +49,14 @@ cindy.onHostMessage(async function (msg) {
   `data-ghost-prompt="占位文案"`(≤128 字,可空串)。用户点击时主机弹标准输入框
   收集文字(textarea,回车发送/Esc 取消),card-action 事件多带 `prompt` 字段
   (≤2000 字)——输入交互由主机代管;
+- **App 图标**:`span` / `div` 加 `data-ghost-icon="settings"`,主机换成 App 里同一个设置图标(Lucide,
+  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前只登记了 `settings`;位置里写一个兜底图形,
+  旧版客户端会照常显示它;
+- **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
+  (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
+  属性转义;没有当前值写空串)。新版电脑端点击时在按钮正下方弹出 Cindy 的模型列表,选中后
+  card-action 多带 `modelSelection`(主机已核对它当前可用)。手机和旧版客户端照常派发不带
+  `modelSelection` 的动作,这时请自己调用 `cindy.pickModel({ initial, mobilePageId })` 兜底;
 - **可编辑文本表单**:一张卡至多声明一个 div，其 `data-ghost-form` 属性为经 HTML 属性转义的
   JSON 字段数组，每项 `{name,label,value,multiline?,row?,collapsed?,kind?}`；1–16 项、字段名唯一、label ≤128 字、value ≤16000 字。
   div 内保留纯文本预览供旧客户端使用。宿主在卡片顶部用标准控件渲染；卡内仍零脚本，禁止用它收集凭证。
@@ -76,6 +84,30 @@ cindy.onHostMessage(async function (msg) {
   已落库的 GLB 地址,整串精确匹配才生效),用户点击该图 = 应用内 3D 查看器直接加载
   这个模型(可旋转/缩放),不再是普通看大图。适合"3D 生成完成卡":预览 + 模型一次
   到位,结果里就别再重复下发预览图;不合法的值只丢属性(图退化为看大图);
+- **在线指示**:给 `span` / `div` 加空值属性 `data-ghost-live`,主机给它播统一的呼吸光环
+  (向外扩散 + 淡出,只用 transform / opacity)。用于跟进中、监听中这类持续好几天的状态:
+  卡片调用结束后只存静态版、自绘动画会被剥掉,这个光环由主机驱动,卡片滚出视口或窗口
+  隐藏时暂停,系统开了减弱动效时不播。元素本身画成光环的样子(如圆点外一圈同色半透明圆),
+  不要在上面放文字。
+- **排到本轮末尾**:卡内任一 `div` 加 `data-ghost-placement="turn-end"`(只认这个值),
+  主机把这张卡排到这一轮对话的最后,在「已更改 N 个文件」卡之后,而不是调用发生的位置。
+  适合等用户拍板的卡(如「要发 PR 吗」)。卡片的每个状态都带上同一个声明,换状态时才不会跳位置。
+- **铺满消息列**:卡内任一 `div` 加 `data-ghost-width="full"`(只认这个值),主机取消默认的
+  460px 上限,卡片和「已更改 N 个文件」卡一样宽。按宽版排版:标题行左边图标和文字、右边按钮,
+  并给按钮组加 `flex-wrap`,窄窗口和手机上能自动换到下一行。
+- **PR 状态位**:`div` 加 `data-ghost-pr-status="owner/repo#123"`,主机用任务标题栏同一份 PR 状态
+  (检查、未解决意见、能否合并)实时替换这个 `div` 的内容,并随标题栏定时刷新。`div` 里写你自己的
+  状态快照作兜底:旧版主机、手机,或这条 PR 不在本任务的 PR 列表里时原样显示。
+- **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
+  - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
+  - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,
+    手机画成原生开关,点一下照常触发这个按钮的动作;
+  - 持续状态(如「跟进中」)所在的 `div` / `span` 加 `data-ghost-live-label="状态名"`,手机画成
+    带呼吸点的状态;
+  - 卡片的外链(`card.externalLinks` 声明后的 `<a href>`)在手机上显示为「打开 <域名>」,
+    正文里不再插入链接地址。
+  - `data-ghost-pr-status` 位在手机上同样用电脑端的 PR 状态填写,查不到时显示你写的快照。
+  - 声明了 `data-ghost-placement="turn-end"` 的卡,手机端也排到本轮回复之后。
 - **卡内音频播放器**:`<div data-ghost-audio="cindy-media://blobs/<指纹>.mp3">`
   (仅挂 div;mp3/wav/m4a,你名下已落库的地址,整串精确匹配)。主机会**清空该
   div 的子树**、注入与基座音频卡同款的标准播放器行(播放/暂停 + 进度 scrub +
@@ -93,7 +125,7 @@ cindy.onHostMessage(async function (msg) {
   加载后主机会按实际内容高度自动收敛并记住(同一夹取区间,历史回放零动画),
   所以图片按自然比例放即可,**不要固定高度 + object-fit:cover 裁切作品**;
   推荐通栏出血写法 `width:100%;height:auto`(宽度撑满卡片,文字区自己
-  加内边距);卡片宽约 460px(画布内宽 458)、高度上限 900px,**单主体大图
+  加内边距);卡片宽约 460px(画布内宽 458;声明铺满消息列的卡随列宽变化)、高度上限 900px,**单主体大图
   优先,别在卡内摆多图对比**(缩小了看不清,对比类展示放面板);
 - **height 尽量报准**:估计值和真实内容差得越多,用户第一眼看到的收敛跳动
   越明显。放单张大图时用 cindy-request 返回的 width/height 按比例算:
@@ -128,6 +160,7 @@ cindy.onHostMessage(async function (msg) {
     // msg.callId = 被点那张卡的归因号(和当初 tool-call 同值);
     // msg.actionId = 你在 data-ghost-action 里写的动作 id;
     // msg.prompt = 用户输入的文字(仅 data-ghost-prompt 类按钮有,非空才带);
+    // msg.modelSelection = 卡内模型下拉框选中的模型(仅 data-ghost-model-select 类按钮,新版电脑端);
     // msg.spawnCallId = 主机铸的**衍生卡位**:画到它 = 原卡下方长出新卡。
     // 声明 agent 后还会收到 msg.sessionId 与 msg.userActionToken；后者是
     // 绑定本插件+本会话、两分钟有效且只能使用一次的 Agent 通行票(见 §4.11)。

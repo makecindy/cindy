@@ -873,6 +873,10 @@ const AUDIO_IN_CARD_HOIST_KEY = "xdt_audio_in_card";
  *  永远收不到生成图,只能追问一次让模型手动补发。 */
 const IMAGES_IN_CARD_HOIST_KEY = "xdt_images_in_card";
 
+/** 卡片排到本轮末尾的令牌(布尔 true 才上提;host 按卡片声明注入):手机端据此
+ *  把卡片排到本轮最后,桌面渲染层直接读卡片 html,不看它。 */
+const CARD_TURN_END_HOIST_KEY = "xdt_card_turn_end";
+
 function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (!result || typeof result !== "object" || Array.isArray(result)) return {};
   const out: Record<string, unknown> = {};
@@ -893,7 +897,7 @@ function hoistMediaFields(result: unknown): Record<string, unknown> {
   if (audioTracks) out[AUDIO_TRACKS_HOIST_KEY] = audioTracks;
   // 入卡令牌(布尔;意识把媒体画进了自己的卡片时置 true):桌面渲染层据此
   // 跳过基座渲染防双份;手机端无卡片体系,忽略令牌照常渲染基座。
-  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY]) {
+  for (const key of [AUDIO_IN_CARD_HOIST_KEY, IMAGES_IN_CARD_HOIST_KEY, CARD_TURN_END_HOIST_KEY]) {
     if ((result as Record<string, unknown>)[key] === true) {
       out[key] = true;
     }

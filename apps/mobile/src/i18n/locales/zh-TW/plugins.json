@@ -341,5 +341,22 @@
     "purpose": "確認互動頁面權限",
     "updateHost": "請更新執行電腦上的 Cindy，再在此確認。文字工具仍可使用。",
     "failed": "互動頁面未能啟用，請檢查連線和插件版本後重試。"
+  },
+  "openLinkHost": "開啟 {{host}}",
+  "prStatus": {
+    "ciPassed": "CI 通過",
+    "ciFailed": "CI 未通過",
+    "ciRunning": "CI 執行中",
+    "threadsOpen": "{{count}} 則意見待處理",
+    "threadsNone": "沒有待處理意見",
+    "mergeReady": "可以合併",
+    "mergeConflict": "有衝突",
+    "mergeBehind": "需要同步目標分支",
+    "mergeApproval": "等待核准",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合併",
+    "merged": "已合併",
+    "closed": "已關閉",
+    "draft": "草稿"
   }
 }

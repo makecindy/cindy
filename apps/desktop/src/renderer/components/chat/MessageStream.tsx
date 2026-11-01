@@ -374,7 +374,7 @@ import { GhostFulfillmentContext } from './GhostSummonCard';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
-import { isGhostCallToolName } from '@/../shared/ghost';
+import { isGhostCallToolName, isTurnEndGhostCardHtml } from '@/../shared/ghost';
 import { ChatVideoView } from './ChatVideoView';
 import { ChatAudioCard } from './ChatAudioCard';
 import { ChatSoundEffectCard } from './ChatSoundEffectCard';
@@ -1815,6 +1815,14 @@ export function buildRenderItems(
   // 卡槽③:当前 segment 内累计的意识卡片(与 tool_media 同节奏 flush,
   // 每张卡各自锚定自己的 ghost_call clientId,不像媒体那样按段合并)。
   let pendingSegmentGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
+  // 声明 turn-end 的卡(isTurnEndGhostCardHtml)不跟段走,攒到本轮末尾、排在改动卡之后。
+  let pendingTurnEndGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
+  const queueGhostCardItem = (
+    item: Extract<RenderItem, { type: 'ghost_card' }>,
+    html: string,
+  ): void => {
+    (isTurnEndGhostCardHtml(html) ? pendingTurnEndGhostCards : pendingSegmentGhostCards).push(item);
+  };
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
   const sessionLiveCards = opts?.sessionId
@@ -1882,6 +1890,11 @@ export function buildRenderItems(
   };
 
   let turnStartIdx = 0;
+  const flushTurnEnd = (lo: number, hi: number): void => {
+    flushTurnChanges(lo, hi);
+    for (const gc of pendingTurnEndGhostCards) items.push(gc);
+    pendingTurnEndGhostCards = [];
+  };
   const flushTurnChanges = (lo: number, hi: number): void => {
     if (hi <= lo) return;
     const anchorClientId = messages[lo]?.clientId;
@@ -2028,7 +2041,7 @@ export function buildRenderItems(
     // so the preceding turn's file-change card stays above them.
     if (isRenderTurnBoundary(msg)) {
       flushSegment();
-      flushTurnChanges(turnStartIdx, i);
+      flushTurnEnd(turnStartIdx, i);
       turnStartIdx = i;
     }
 
@@ -2163,7 +2176,7 @@ export function buildRenderItems(
                   ? resultTsByToolUseId.get(msg.toolUseId)
                   : undefined,
             };
-            pendingSegmentGhostCards.push(cardItem);
+            queueGhostCardItem(cardItem, entry.html);
             ghostCardItemByCallId.set(cardId, cardItem);
           }
           return;
@@ -2204,7 +2217,7 @@ export function buildRenderItems(
           toolCall: msg,
           settled: false,
         };
-        pendingSegmentGhostCards.push(liveCardItem);
+        queueGhostCardItem(liveCardItem, liveEntry.html);
         ghostCardItemByCallId.set(live.callId, liveCardItem);
       };
       // 媒体收集:结果带 xdt_anchor_card_id(ghost_call 的"提交开卡 → 轮询出
@@ -2367,8 +2380,8 @@ export function buildRenderItems(
   // Flush trailing segment — important for streaming, where the turn often
   // ends mid-segment (no closing text yet).
   flushSegment();
-  // 末尾 turn 的产出文件卡(没有后续 user 边界触发)。
-  flushTurnChanges(turnStartIdx, messages.length);
+  // 末尾 turn 的改动卡 / 产出文件卡 / 排在本轮末尾的插件卡(没有后续 user 边界触发)。
+  flushTurnEnd(turnStartIdx, messages.length);
 
   if (taskUpdates) {
     // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含

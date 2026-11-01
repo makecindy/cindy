@@ -343,5 +343,22 @@
     "purpose": "Vérifier les autorisations des pages interactives",
     "updateHost": "Mettez à jour Cindy sur l'ordinateur d'exécution pour confirmer ici. Les outils de texte restent disponibles.",
     "failed": "Impossible d'activer les pages interactives. Vérifiez la connexion et la version du plugin, puis réessayez."
+  },
+  "openLinkHost": "Ouvrir {{host}}",
+  "prStatus": {
+    "ciPassed": "CI réussie",
+    "ciFailed": "CI en échec",
+    "ciRunning": "CI en cours",
+    "threadsOpen": "Fils de revue ouverts : {{count}}",
+    "threadsNone": "Aucun fil de revue ouvert",
+    "mergeReady": "Prête à fusionner",
+    "mergeConflict": "Conflits à résoudre",
+    "mergeBehind": "En retard sur la branche de base",
+    "mergeApproval": "En attente d’approbation",
+    "mergeChanges": "Modifications demandées",
+    "mergeWaiting": "En attente de fusion",
+    "merged": "Fusionnée",
+    "closed": "Fermée",
+    "draft": "Brouillon"
   }
 }

@@ -13982,6 +13982,22 @@
       "cancelTitle": "Dejar de esperar y eliminar este mensaje"
     },
     "ghostCall": {
+      "prStatus": {
+        "ciPassed": "CI superada",
+        "ciFailed": "CI fallida",
+        "ciRunning": "CI en curso",
+        "threadsOpen": "Hilos de revisión abiertos: {{count}}",
+        "threadsNone": "Sin hilos de revisión abiertos",
+        "mergeReady": "Lista para fusionar",
+        "mergeConflict": "Tiene conflictos",
+        "mergeBehind": "Por detrás de la rama base",
+        "mergeApproval": "Esperando aprobación",
+        "mergeChanges": "Cambios solicitados",
+        "mergeWaiting": "Esperando la fusión",
+        "merged": "Fusionada",
+        "closed": "Cerrada",
+        "draft": "Borrador"
+      },
       "verb": "Complemento utilizado",
       "cardRunning": "El complemento está dibujando",
       "cardDone": "Listo",
@@ -13995,6 +14011,7 @@
       "collapseFields": "Contraer",
       "formSyncFailed": "Las ediciones de la tarjeta no se han sincronizado. Verifique la conexión y continúe editando; el mensaje no ha sido enviado.",
       "linkOpenFailed": "No se pudo abrir el enlace",
+      "modelSelectFailed": "No se cambió el modelo. Vuelve a elegirlo.",
       "mailPreview": "Vista previa de correo electrónico",
       "mailEnlarge": "Ampliar vista previa",
       "mailInsertImage": "Insertar en mensaje",
@@ -16219,6 +16236,9 @@
       "importFailed": "No se pudo importar el Skill"
     },
     "builtIn": {
+      "pr": {
+        "description": "Empieza el trabajo en una rama nueva, abre un pull request en GitHub y luego corrige la CI y los comentarios de revisión en segundo plano hasta que se fusione."
+      },
       "official": "Oficial",
       "officialDetail": "Incluido y mantenido por Cindy.",
       "skillCreator": {
