@@ -28,9 +28,18 @@ function agentRunsOnOtherDevice(body: SessionOpenBody): boolean {
  */
 export function admitHermesSessionOpenBody(body: SessionOpenBody): SessionOpenBody | null {
   if (body.agentKind !== 'hermes') return null;
+  const rawModel = body.model?.trim() || 'hermes-default';
+  const normalizedModel =
+    rawModel.startsWith('xai/') ||
+    rawModel.startsWith('claude-') ||
+    rawModel.startsWith('gpt-') ||
+    rawModel.startsWith('chatgpt/') ||
+    rawModel.includes('grok')
+      ? 'hermes-default'
+      : rawModel;
   return {
     ...body,
-    model: body.model?.trim() || 'hermes-default',
+    model: normalizedModel,
     providerId: null,
     effort: '',
     fastMode: false,

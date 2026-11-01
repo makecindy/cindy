@@ -55,10 +55,28 @@ rules:
         baseUrl: 'http://127.0.0.1:1234/v1',
       });
 
-      // Resolve by provider/model prefix
+      // Resolve by provider/model prefix (including slash in model name)
       const routeByPrefix = resolveModelRoute('lmstudio-local/other-model', { harnessDir: tmpDir });
       expect(routeByPrefix).toEqual({
         model: 'other-model',
+        provider: 'custom',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+      });
+
+      const routeWithSlashInModel = resolveModelRoute('lmstudio-local/google/gemma-4-26b-a4b-qat', { harnessDir: tmpDir });
+      expect(routeWithSlashInModel).toEqual({
+        model: 'google/gemma-4-26b-a4b-qat',
+        provider: 'custom',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+      });
+
+      // Resolve by discovered endpoint models without provider prefix
+      const routeByDiscovery = resolveModelRoute('google/gemma-4-26b-a4b-qat', {
+        harnessDir: tmpDir,
+        endpointModels: new Map([['lmstudio-local', ['google/gemma-4-26b-a4b-qat']]]),
+      });
+      expect(routeByDiscovery).toEqual({
+        model: 'google/gemma-4-26b-a4b-qat',
         provider: 'custom',
         baseUrl: 'http://127.0.0.1:1234/v1',
       });

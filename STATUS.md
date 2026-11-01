@@ -10,6 +10,29 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — Defect Fix: Hermes UI model synchronization, multi-segment route resolution, and foreign model sanitization (`unit-tested`)
+
+**Outcome:**
+1. `apps/desktop/src/renderer/components/new-chat/ChatInput.tsx`: mapped `agentKind === 'hermes'` to `vendor = 'hermes'` in `syncSessionDraftModelPrefs` so Hermes preferences update correctly, and bypassed the context window guard for Hermes-to-Hermes switches to eliminate bogus `10470% full` blocks on model selection.
+2. `apps/desktop/src/renderer/state/newMakerDraft.ts` + `apps/desktop/src/main/localDb/sessionOpening.ts`: added foreign model sanitization (`xai/`, `claude-`, `gpt-`, `chatgpt/`, `grok`) on drafts and provisional session openings so Hermes sessions cannot be initialized with foreign engine models.
+3. `apps/desktop/src/main/maker-ipc/register.ts`: in `bootstrapSession`, synchronized `sessions.model` in SQLite DB if it drifted from `o.model` and broadcast `broadcastSessionPatched(o.id, { model: o.model })`.
+4. `packages/maker-core/src/providers/discovery.ts` + `packages/maker-core/src/providers/model-route-resolver.ts`: cached online local endpoint models in `discovery.ts` (`getLatestDiscoveredModels`); enhanced `model-route-resolver.ts` to support multi-segment model paths with slashes (e.g. `lmstudio-local/google/gemma-4-26b-a4b-qat`) and match discovered endpoint models dynamically so ANY local model from LM Studio / Ollama routes to `--provider custom --base-url <url> -m <model>`.
+5. `packages/maker-core/src/providers/__tests__/model-route-resolver.test.ts`: added tests covering multi-segment model routes and dynamic discovery route resolution (3/3 passing).
+6. `apps/desktop/src/renderer/features/cc-agent/HermesSessionModelLabel.tsx`: added foreign model normalization so the top header never displays Grok or Claude for a Hermes session.
+7. `apps/desktop/src/renderer/components/new-chat/ModelSelector.tsx`: exported `isForeignHermesModelId`; guarded "Set as Hermes home default" action and fell back `currentModel` in the composer trigger pill to `hermes-default` if a legacy foreign model was stored, preventing "Model Details Unavailable".
+8. Repaired session `d74fb888-ccbe-4a17-94dc-13672998a788` in local SQLite DB by updating `model = 'qwen3-8b'` (backed up to `cindy-local-v1.db.bak-20261101-session-fix`).
+9. Dev app cleanly restarted with `pnpm restart:desktop:remote --region=global` and verified running.
+
+**Mutation checks (2):**
+- In `packages/maker-core/src/providers/model-route-resolver.ts`, removing `options.endpointModels` matching failed `model-route-resolver.test.ts` (`expected null to deeply equal { model: 'google/gemma-4-26b-a4b-qat', provider: 'custom', ... }`); restored byte-identical.
+- In `apps/desktop/src/renderer/features/cc-agent/HermesSessionModelLabel.tsx`, changing foreign model check fallback from `'hermes-default'` to `model` failed `hermesSessionModelLabel.test.tsx` when tested with `'xai/grok-4.6'`; restored byte-identical.
+
+**Not claimed:** final visual verification of the newly started turn by the owner in the running desktop UI is pending.
+
+**Gates (Node 22, proxy vars unset, `CODEBUDDY_BROKERED_FS_HOOK_ENABLED=0`):** `(pnpm typecheck && pnpm test:runner && pnpm test:unit:related && pnpm check:test-hygiene); echo "EXIT=$?"` → **`EXIT=0`**.
+
+---
+
 ## 2026-11-01 — Wire Cindy UI model picker selections to Hermes agent turns (`unit-tested`)
 
 **Outcome:**

@@ -8939,6 +8939,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         await ensureHermesRuntimeReady();
         assertAccess?.();
       }
+      if (o.id && o.model) {
+        const snapshot = getCurrentDbClientSnapshot();
+        if (snapshot) {
+          const [row] = await snapshot.client.drizzle
+            .select({ model: sessions.model })
+            .from(sessions)
+            .where(eq(sessions.id, o.id))
+            .limit(1);
+          if (row && row.model !== o.model) {
+            await snapshot.client.drizzle
+              .update(sessions)
+              .set({ model: o.model })
+              .where(eq(sessions.id, o.id));
+            broadcastSessionPatched(o.id, { model: o.model });
+          }
+        }
+      }
     }
     await applyPersistedCindyMakeMarker(o, readSessionSource);
     assertAccess?.();

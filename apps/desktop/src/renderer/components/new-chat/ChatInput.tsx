@@ -6725,7 +6725,14 @@ export function ChatInput({
           initialProviderId,
         });
       if (!remoteDeviceId) {
-        const vendor = agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
+        const vendor =
+          agentKind === 'hermes'
+            ? 'hermes'
+            : agentKind === 'codex'
+              ? 'codex'
+              : agentKind === 'pi'
+                ? 'pi'
+                : 'cc';
         if (modelOnly) {
           // 只保护新建默认的模型 / 来源 / 其思考档；按 (引擎, 模型) 跨来源共享的档位与 Fast 预设
           // 是独立的既有行为，下面照常记录。
@@ -6927,6 +6934,8 @@ export function ChatInput({
       // Same-harness Codex preserves native history and owns downshift compaction.
       // Keep authoritative recovery confirmations and cross-harness handoffs intact.
       if (runtimeAgentKind === 'codex' && targetAgentKind === 'codex' && !requireDestructiveConfirmation) return true;
+      // Hermes manages its own context and has no BYOM catalog context window entries.
+      if (runtimeAgentKind === 'hermes' && targetAgentKind === 'hermes' && !requireDestructiveConfirmation) return true;
       const targetRouteProviderId =
         targetProviderId !== undefined && targetAgentKind
           ? effectiveSourceIdForModel(

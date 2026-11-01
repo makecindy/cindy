@@ -201,6 +201,17 @@ export function modelTagDensityForWidth(width: number | null): ModelTagDensity {
 // (它从 './ModelSelector' import categorize / CATEGORY_LABEL_KEY / ModelCategory 做跨厂商确认弹窗)。
 export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwitch';
 
+export function isForeignHermesModelId(modelId: string | null | undefined): boolean {
+  if (typeof modelId !== 'string') return false;
+  return (
+    modelId.startsWith('xai/') ||
+    modelId.startsWith('claude-') ||
+    modelId.startsWith('gpt-') ||
+    modelId.startsWith('chatgpt/') ||
+    modelId.includes('grok')
+  );
+}
+
 /**
  * 【非当前选中】模型行的 effort/fast 全局预设读写器,由调用方按设备边界注入(ModelSelector 本身
  * 不耦合具体存储)。
@@ -1332,10 +1343,15 @@ function ModelSelectorContentView({
   );
   const browseSwitchPendingRef = useRef(false);
   // Hermes: 把会话当前模型钉成 Hermes home 默认(config.yaml),新会话照常跟随。
+  const isForeignHermesModel = isForeignHermesModelId(modelId);
+  const effectiveHermesModel = isForeignHermesModel ? undefined : modelId;
   const [hermesDefaultSetting, setHermesDefaultSetting] = useState(false);
   const handleSetHermesHomeDefault = async () => {
     if (hermesDefaultSetting || !hermesCatalog.provider) return;
-    const model = modelId && modelId !== 'hermes-default' ? modelId : hermesCatalog.homeModel;
+    const model =
+      effectiveHermesModel && effectiveHermesModel !== 'hermes-default'
+        ? effectiveHermesModel
+        : hermesCatalog.homeModel;
     if (!model) return;
     setHermesDefaultSetting(true);
     try {
@@ -4028,8 +4044,8 @@ function ModelSelectorContentView({
                 interactionDisabled ||
                 hermesDefaultSetting ||
                 !hermesCatalog.provider ||
-                !modelId ||
-                modelId === 'hermes-default'
+                !effectiveHermesModel ||
+                effectiveHermesModel === 'hermes-default'
               }
               onClick={() => void handleSetHermesHomeDefault()}
               className={cn(
@@ -4044,8 +4060,8 @@ function ModelSelectorContentView({
                   ? t('newChat.modelSelector.setHermesHomeDefaultSaving')
                   : t('newChat.modelSelector.setHermesHomeDefault', {
                       model:
-                        modelId && modelId !== 'hermes-default'
-                          ? modelId
+                        effectiveHermesModel && effectiveHermesModel !== 'hermes-default'
+                          ? effectiveHermesModel
                           : hermesCatalog.homeModel ?? '',
                     })}
               </span>
@@ -4377,7 +4393,8 @@ export function ModelSelector({
   const routeModel = routeProvider && agentKind ? getModel(routeProvider, modelId, agentKind) : undefined;
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
-    : visibleModels.find((m) => m.id === modelId);
+    : (visibleModels.find((m) => m.id === modelId)
+      ?? (agentKind === 'hermes' && isForeignHermesModelId(modelId) ? visibleModels.find((m) => m.id === 'hermes-default') : undefined));
   // Wire IDs can differ from catalog IDs during a switch. Resolve display metadata
   // through the existing alias lookup without changing routing/capability decisions.
   const displayProvider = agentKind

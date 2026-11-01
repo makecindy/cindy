@@ -10,6 +10,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { getLatestDiscoveredModels } from './discovery.js';
 import { loadProvidersFile, type ProviderFileEntry } from './providers-file.js';
 import { loadRoutingFile } from './routing-file.js';
 
@@ -23,6 +24,7 @@ export interface ResolvedModelRoute {
 export interface ModelRouteResolverOptions {
   harnessDir?: string;
   env?: Record<string, string | undefined>;
+  endpointModels?: Map<string, string[]> | Record<string, string[]>;
 }
 
 export function normalizeBaseUrl(url: string): string {
@@ -71,14 +73,30 @@ export function resolveModelRoute(
     }
   }
 
-  // 3. Match format "<providerId>/<modelId>" (e.g. "lmstudio-local/qwen3-8b")
-  if (!targetProviderId && trimmed.includes('/')) {
-    const slashIdx = trimmed.indexOf('/');
-    const prefix = trimmed.slice(0, slashIdx);
-    const suffix = trimmed.slice(slashIdx + 1);
-    if (providerMap.has(prefix)) {
-      targetProviderId = prefix;
-      targetModel = suffix;
+  // 3. Match format "<providerId>/<modelId>" (e.g. "lmstudio-local/qwen3-8b" or "lmstudio-local/google/gemma-4-26b-a4b-qat")
+  if (!targetProviderId) {
+    for (const pId of providerMap.keys()) {
+      if (trimmed.startsWith(`${pId}/`)) {
+        targetProviderId = pId;
+        targetModel = trimmed.slice(pId.length + 1);
+        break;
+      }
+    }
+  }
+
+  // 4. Match against discovered models from local endpoints (or injected endpointModels)
+  if (!targetProviderId) {
+    const discovered = options?.endpointModels
+      ? (options.endpointModels instanceof Map
+          ? options.endpointModels
+          : new Map(Object.entries(options.endpointModels)))
+      : getLatestDiscoveredModels();
+    for (const [pId, models] of discovered.entries()) {
+      if (providerMap.has(pId) && models.includes(trimmed)) {
+        targetProviderId = pId;
+        targetModel = trimmed;
+        break;
+      }
     }
   }
 

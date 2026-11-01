@@ -89,7 +89,25 @@ export async function probeEndpoint(entry: ProviderFileEntry, options: Discovery
   }
 }
 
+let latestDiscoveredEndpointModels = new Map<string, string[]>();
+
+export function getLatestDiscoveredModels(): Map<string, string[]> {
+  return latestDiscoveredEndpointModels;
+}
+
+export function setLatestDiscoveredModels(models: Map<string, string[]>): void {
+  latestDiscoveredEndpointModels = models;
+}
+
 /** Probe all entries in parallel; result order follows `entries`. */
-export function discoverEndpoints(entries: ProviderFileEntry[], options: DiscoveryOptions = {}): Promise<EndpointProbe[]> {
-  return Promise.all(entries.map((e) => probeEndpoint(e, options)));
+export async function discoverEndpoints(entries: ProviderFileEntry[], options: DiscoveryOptions = {}): Promise<EndpointProbe[]> {
+  const probes = await Promise.all(entries.map((e) => probeEndpoint(e, options)));
+  const map = new Map<string, string[]>();
+  for (const probe of probes) {
+    if (probe.status === 'online' && probe.models.length > 0) {
+      map.set(probe.id, probe.models);
+    }
+  }
+  latestDiscoveredEndpointModels = map;
+  return probes;
 }

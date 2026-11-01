@@ -385,8 +385,20 @@ function sanitize(raw: unknown): NewMakerDraft {
     // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
     // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
     const legacyPlanPermission = p.permissionMode === 'plan';
+    let model = typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model;
+    // Hermes 不认 CC/Codex 遗留的前缀模型或其它厂商非 Hermes 命名
+    if (
+      v === 'hermes' &&
+      (model.startsWith('xai/') ||
+        model.startsWith('claude-') ||
+        model.startsWith('gpt-') ||
+        model.startsWith('chatgpt/') ||
+        model.includes('grok'))
+    ) {
+      model = fallback.model;
+    }
     return {
-      model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
+      model,
       effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
       permissionMode:
         typeof p.permissionMode === 'string' && !legacyPlanPermission
