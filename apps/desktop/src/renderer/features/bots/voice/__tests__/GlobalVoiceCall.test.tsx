@@ -94,6 +94,7 @@ beforeEach(() => {
       if (channel === 'voice-conversation:call-command') deliver(payload as VoiceCallCommand);
     },
     onActiveChange: () => {},
+    leaseHeld: () => false,
   });
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,

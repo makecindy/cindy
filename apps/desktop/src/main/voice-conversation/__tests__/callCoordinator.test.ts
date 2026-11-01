@@ -29,12 +29,19 @@ const status = (open = true): VoiceCallStatus => ({
 });
 
 const send = vi.fn();
+let leaseHeld = false;
 const onActiveChange = vi.fn();
 let coordinator: VoiceCallCoordinator;
 beforeEach(() => {
   vi.clearAllMocks();
+  leaseHeld = false;
   coordinator = new VoiceCallCoordinator();
-  coordinator.configure({ hostSender: () => HOST, send, onActiveChange });
+  coordinator.configure({
+    hostSender: () => HOST,
+    send,
+    onActiveChange,
+    leaseHeld: () => leaseHeld,
+  });
   coordinator.publish(HOST, { ready: true });
 });
 
@@ -77,6 +84,18 @@ it('holds the line from an accepted start through the host bringing the call up'
   vi.useRealTimers();
 });
 
+// Review round 6: the closing frame frees the line while the old call still holds
+// the microphone lease, so a replacement start would be confirmed and then hit busy.
+it('refuses a start while the closing call still holds the voice lease', () => {
+  const start = { type: 'start', sessionId: 's', bot: { id: 'b', name: 'B' } } as const;
+  coordinator.publish(HOST, { status: status(true) });
+  coordinator.publish(HOST, { status: status(false) }); // closing, resources unwinding
+  leaseHeld = true;
+  expect(coordinator.command(start)).toBe(false);
+  leaseHeld = false;
+  expect(coordinator.command(start)).toBe(true);
+});
+
 it('releases a start the host never reacted to, but not one it acknowledged', () => {
   vi.useFakeTimers();
   const start = { type: 'start', sessionId: 's', bot: { id: 'b', name: 'B' } } as const;
@@ -91,7 +110,7 @@ it('releases a start the host never reacted to, but not one it acknowledged', ()
 it('refuses a start until the host listens and again after it is gone', () => {
   const start = { type: 'start', sessionId: 's', bot: { id: 'b', name: 'B' } } as const;
   const fresh = new VoiceCallCoordinator();
-  fresh.configure({ hostSender: () => HOST, send, onActiveChange });
+  fresh.configure({ hostSender: () => HOST, send, onActiveChange, leaseHeld: () => leaseHeld });
   expect(fresh.command(start)).toBe(false);
   expect(send).not.toHaveBeenCalled();
   fresh.publish(HOST, { ready: true });
@@ -124,7 +143,12 @@ it('clears a call whose main window is gone but not when another window closes',
   coordinator.windowGone(3);
   expect(onActiveChange).toHaveBeenCalledTimes(1);
   // The destroyed window no longer resolves as the host.
-  coordinator.configure({ hostSender: () => null, send, onActiveChange });
+  coordinator.configure({
+    hostSender: () => null,
+    send,
+    onActiveChange,
+    leaseHeld: () => leaseHeld,
+  });
   coordinator.windowGone(HOST);
   expect(onActiveChange).toHaveBeenLastCalledWith(false);
   expect(send).toHaveBeenLastCalledWith(OTHER, 'voice-conversation:call-status-changed', {

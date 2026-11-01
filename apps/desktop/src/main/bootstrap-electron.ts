@@ -1204,6 +1204,7 @@ import {
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
+import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
@@ -1288,6 +1289,7 @@ voiceCallCoordinator.configure({
     if (target && !target.isDestroyed()) target.send(channel, payload);
   },
   onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
+  leaseHeld: hasVoiceConversationLease,
 });
 initBotAutonomy();
 

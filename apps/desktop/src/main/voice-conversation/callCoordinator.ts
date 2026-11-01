@@ -26,6 +26,8 @@ type Deps = {
   hostSender(): number | null;
   send(sender: number, channel: string, payload: unknown): void;
   onActiveChange(active: boolean): void;
+  /** The microphone/speech lease, which outlives the closing frame while resources unwind. */
+  leaseHeld(): boolean;
 };
 
 /**
@@ -70,7 +72,9 @@ export class VoiceCallCoordinator {
     if (host === null || !this.hostReady) return false;
     // The call in progress keeps the line; a second one never replaces it.
     if (command.type === 'start') {
-      if (this.line !== 'free') return false;
+      // The lease is the real resource: a closing call frees the line before its
+      // capture and speech have been released, and a start then would only hit busy.
+      if (this.line !== 'free' || this.deps?.leaseHeld()) return false;
       // Hold the line now: the host only publishes after it renders, and a second
       // window could otherwise be told it got the line in that gap.
       this.line = 'starting';
