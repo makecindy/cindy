@@ -1833,6 +1833,7 @@ export class AgentIslandService {
   private isCompletionEventSilenced(sessionId: string, event: AgentEvent): boolean {
     if (!isCompletionDoneEvent(event)) return false;
     return event.agentMeta?.botTaskCoordination === true
+      || event.agentMeta?.botPrivateReply === true
       || this.isGroupLaneEvent(sessionId, event)
       || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
   }

@@ -198,7 +198,7 @@ vi.mock('../../../maker-host/index.js', () => ({
   validateBotCapabilityAdditions: h.validateCapabilityAdditions,
   getMaker: () => ({ getSession: h.getSession, listAgentSkills: async () => ({ skills: [{ name: 'release-check', description: 'Release checklist', enabled: true }] }) }),
   getPluginRegistry: () => ({
-    getPlugins: () => ['memory', 'xdt_helper', 'contacts', 'lsp'].map((id) => ({ id, name: id, description: id })),
+    getPlugins: () => ['memory', 'xdt_helper', 'calendar', 'lsp'].map((id) => ({ id, name: id, description: id })),
     getEnableState: async () => ({ effectiveEnabled: true }),
   }),
   isBotToolsetAvailable: () => h.toolsetsAvailable,
@@ -2642,8 +2642,8 @@ describe('Bot canonical Session lifecycle', () => {
   });
 
   it.each([
-    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
-    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'contacts'] },
+    { versioned: false, selected: true, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'calendar'] },
+    { versioned: false, selected: false, mode: 'inherit', expectedMcp: ['docs', 'mail'], expectedTools: ['browser', 'calendar'] },
     { versioned: true, selected: false, mode: 'allowlist', expectedMcp: [], expectedTools: [] },
     { versioned: true, selected: true, mode: 'allowlist', expectedMcp: ['docs'], expectedTools: ['browser'] },
   ])('keeps stored capability selections consistent in settings and runtime: %j', async (entry) => {
@@ -2669,7 +2669,7 @@ describe('Bot canonical Session lifecycle', () => {
     await hydrateBotProfileRuntime(opts, {
       listSkills: async () => [],
       listMcpServers: async () => ['docs', 'mail'].map(name => ({ name, source: 'custom', available: true })),
-      listToolsets: async () => ['browser', 'contacts'].map(id => ({ id, name: id, available: true })),
+      listToolsets: async () => ['browser', 'calendar'].map(id => ({ id, name: id, available: true })),
     });
     expect(opts.botRuntimeProfile).toMatchObject({
       mcpPolicy: { mode: 'allowlist', configured: entry.expectedMcp },
@@ -3086,7 +3086,7 @@ describe('Bot canonical Session lifecycle', () => {
       });
       let available = true;
       const kind = scenario.startsWith('toolset') ? 'toolset' as const : scenario as 'skill' | 'mcp';
-      const id = kind === 'skill' ? 'release-check' : kind === 'toolset' ? 'contacts' : 'shared-docs';
+      const id = kind === 'skill' ? 'release-check' : kind === 'toolset' ? 'calendar' : 'shared-docs';
       const field = kind === 'skill' ? 'skills' : kind === 'toolset' ? 'toolsets' : 'mcpServers';
       const patch = (ids: string[]) => kind === 'skill' ? { skills: ids } : { capabilities: { [field]: ids } };
       const listAgentSkills = vi.fn(async (_agentKind: AgentKind, opts: { forceReload?: boolean }) => ({
@@ -3253,7 +3253,7 @@ describe('Bot canonical Session lifecycle', () => {
     // The profile changes during the current Claude turn; it has not applied a switch yet.
     chain = [{ ...chain[0]!, harness: 'codex', model: 'codex-x' }];
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChain: chain } });
-    for (const [kind, id] of [['mcp', 'events'], ['skill', 'route-skill'], ['toolset', 'contacts']] as const) {
+    for (const [kind, id] of [['mcp', 'events'], ['skill', 'route-skill'], ['toolset', 'calendar']] as const) {
       await expect(service.list({ ...input, kind })).resolves.toMatchObject({
         capabilities: expect.arrayContaining([expect.objectContaining({ id, available: false })]),
       });
@@ -3486,7 +3486,7 @@ describe('Bot canonical Session lifecycle', () => {
       .resolves.toMatchObject({ ok: true, joined: false });
   });
 
-  it.each(['contacts'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
+  it.each(['calendar'])('rejects gated %s despite registry enablement and keeps joined references removable', async (id) => {
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
     const input = { callerSessionId: created.session.id, kind: 'toolset' as const, id };
     await expect(findBotCapabilities(input)).resolves.toMatchObject({
@@ -3575,7 +3575,7 @@ describe('Bot canonical Session lifecycle', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it.each([['browser', 'cindy_browser'], ['scheduler', 'cindy_scheduler'], ['contacts', 'cindy_contacts']])('mounts the selected %s toolset into the actual MCP policy', async (toolset, server) => {
+  it.each([['browser', 'cindy_browser'], ['scheduler', 'cindy_scheduler']])('mounts the selected %s toolset into the actual MCP policy', async (toolset, server) => {
     await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { toolsets: [toolset], toolsetMode: 'allowlist' } });
     const created = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 2 });
     const opts: MakerSessionCreateOpts = { id: created.session.id, agentKind: 'codex', workingDir: created.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' };
@@ -3604,7 +3604,7 @@ describe('Bot canonical Session lifecycle', () => {
       capabilities: {
         mcpServers: ['docs'],
         mcpMode: 'allowlist',
-        toolsets: ['contacts'],
+        toolsets: ['calendar'],
         toolsetMode: 'allowlist',
       },
     });
@@ -3630,8 +3630,8 @@ describe('Bot canonical Session lifecycle', () => {
           generation: mcpGeneration,
         }],
         listToolsets: async () => [{
-          id: 'contacts',
-          name: 'Contacts',
+          id: 'calendar',
+          name: 'Calendar',
           available: true,
           version: toolsetVersion,
         }],
@@ -3641,7 +3641,7 @@ describe('Bot canonical Session lifecycle', () => {
     await markBotProfileRuntimeApplied(first!);
     await expect(hydrate('http:1000', '1.0.0')).resolves.toMatchObject({
       resolvedMcpServers: ['docs'],
-      resolvedToolsets: ['contacts'],
+      resolvedToolsets: ['calendar'],
       runtimeEpochChanged: false,
     });
     await expect(hydrate('http:1001', '1.0.0')).resolves.toMatchObject({
@@ -3651,7 +3651,7 @@ describe('Bot canonical Session lifecycle', () => {
     });
     await expect(hydrate('http:1000', '2.0.0')).resolves.toMatchObject({
       sessionId: created.session.id,
-      resolvedToolsets: ['contacts'],
+      resolvedToolsets: ['calendar'],
       runtimeEpochChanged: true,
     });
   });

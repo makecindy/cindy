@@ -3214,6 +3214,7 @@ describe('GhostManager · install', () => {
       locales: {
         en: 'locales/en.json',
         'zh-CN': 'locales/zh-CN.json',
+        'zh-TW': 'locales/zh-TW.json',
       },
     };
     const locale = (name: string, description: string, toolDescription: string) =>
@@ -3225,6 +3226,7 @@ describe('GhostManager · install', () => {
     const cindy = await makeCindy('localized.cindy', manifest, {
       'locales/en.json': locale('English name', 'English description', 'English tool'),
       'locales/zh-CN.json': locale('中文名称', '中文说明', '中文工具'),
+      'locales/zh-TW.json': locale('繁體名稱', '繁體說明', '繁體工具'),
     });
     const result = await manager.install(cindy);
     expect(result).toMatchObject({
@@ -3238,6 +3240,22 @@ describe('GhostManager · install', () => {
       },
     });
 
+    // PR #8210: approved manifest snapshots must select the modern Chinese resource
+    // for classical UI editions; app-context mapping alone does not cover this path.
+    for (const [requested, name, description, toolDescription] of [
+      ['zh-Hant-x-lzh', '繁體名稱', '繁體說明', '繁體工具'],
+      ['zh-Hans-x-lzh', '中文名称', '中文说明', '中文工具'],
+    ]) {
+      hostLocale = requested;
+      expect(manager.list()[0].manifest).toMatchObject({
+        name, description, resolvedLocale: requested,
+        tools: [{ name: 'do_thing', description: toolDescription }],
+      });
+      expect(await manager.inspect(cindy)).toMatchObject({
+        manifest: { name, description, tools: [{ name: 'do_thing', description: toolDescription }] },
+        canonicalManifest: { name: 'Base name', description: 'Base description' },
+      });
+    }
     hostLocale = 'ja';
     expect(manager.list()[0].manifest).toMatchObject({
       name: 'English name',

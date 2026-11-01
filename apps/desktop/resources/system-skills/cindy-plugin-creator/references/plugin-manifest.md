@@ -101,7 +101,7 @@ Desktop 信任来源已经完成的版本选择，不再按 `minCindyVersion` �
 
 插件语言**只跟随 Cindy 宿主当前语言**。不要读取 `navigator.language`、操作系统语言或
 浏览器偏好，也不要在插件内保存另一份语言选择。宿主当前支持
-`zh-CN / en / ja / ko`；插件没提供宿主当前语言时固定使用英文，因此只要声明
+`zh-CN / zh-TW / en / ja / ko / es / fr / de / pt-PT / pt-BR`；插件没提供宿主当前语言时固定使用英文，因此只要声明
 `locales` 就必须提供 `en`。
 
 locale JSON 覆盖清单中已有的可本地化字段。**翻译是可选项**：提供的条目必须合法，

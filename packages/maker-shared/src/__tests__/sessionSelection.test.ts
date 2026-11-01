@@ -157,7 +157,7 @@ describe('mobile session selection', () => {
 
     expect(summary.candidates).toEqual([]);
     expect(isMobileSessionBulkActionAvailable(summary)).toBe(false);
-    expect(mobileSessionBulkActionButtonLabel(summary)).toBe('恢复');
+    expect(mobileSessionBulkActionButtonLabel(summary)).toBe('取消归档');
   });
 
   it('only exposes executable bulk actions for the mobile action bar', () => {

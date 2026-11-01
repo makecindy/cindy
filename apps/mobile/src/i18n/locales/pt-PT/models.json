@@ -69,6 +69,7 @@
     "titleHost": "Executar novamente o Agent em «{{host}}»?",
     "titleHostUnnamed": "Executar novamente o Agent no computador da sessão?",
     "message": "O registo da conversa no outro computador não pode ser transferido, pelo que a conversa continua a partir de um resumo de transição. O raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
+    "messageNativeHistory": "O registo completo da conversa é copiado e continua de onde parou. Se não puder ser restaurado, a conversa continua a partir de um resumo de transição, e o raciocínio e detalhes semelhantes podem não ser transferidos na íntegra. Entra em vigor quando enviar a próxima mensagem.",
     "confirm": "Mudar de computador",
     "cancel": "Manter como está"
   },

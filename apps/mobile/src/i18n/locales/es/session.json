@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "Administrar enlaces de PR",
+    "hint": "Hasta 3 en el encabezado; los PR fijados aparecen primero",
+    "empty": "Pega un enlace de PR de GitHub para agregarlo",
+    "removed": "Enlaces quitados: {{count}}",
+    "legacy": "Referencias sin confirmar: {{count}}",
+    "addLabel": "Agregar enlace de PR",
+    "add": "Agregar PR",
+    "loading": "Cargando…",
+    "restore": "Restaurar PR",
+    "pin": "Fijar en el encabezado",
+    "unpin": "Dejar de fijar PR",
+    "pinLimit": "Fija hasta 3 PR",
+    "reorderHint": "Usa Alt+↑/↓ para reordenar dentro del grupo de fijados o no fijados.",
+    "dragHandle": "Arrastra para reordenar {{repo}} #{{number}}",
+    "remove": "Quitar enlace de PR",
+    "errors": {
+      "duplicate": "Este PR ya está enlazado. Restaura los enlaces quitados desde la lista",
+      "notFound": "No se encontró el PR o se denegó el acceso",
+      "invalidUrl": "Ingresa un enlace de PR de GitHub válido",
+      "reorderFailed": "No se guardó el orden. Inténtalo de nuevo.",
+      "verifyFailed": "No se pudo verificar el PR; revisa el inicio de sesión y el acceso a GitHub",
+      "unsupported": "La versión de esta computadora no permite administrar enlaces de PR",
+      "failed": "No se pudieron actualizar los enlaces de PR"
+    },
+    "moveUp": "Mover arriba"
+  },
   "paneResize": {
     "label": "Ancho de columna",
     "hint": "Arrastre hacia la izquierda o hacia la derecha para ajustar el ancho de las columnas."
@@ -197,7 +224,7 @@
       },
       "actionCopy": {
         "pending": "Primero maneje la solicitud pendiente; el área de entrada se restaurará después.",
-        "archived": "Esta sesión está archivada. Restáuralo antes de enviar más mensajes.",
+        "archived": "Esta sesión está archivada. Al enviar un mensaje, se desarchiva automáticamente.",
         "deleted": "Esta sesión se eliminó y no se puede modificar.",
         "queuePaused": "La cola está en pausa. Reanúdala desde su panel."
       }
@@ -441,7 +468,7 @@
     "copyLinkAction": "Copiar enlace de la sesión",
     "unpin": "Desfijar",
     "pin": "Fijar",
-    "restore": "Restaurar",
+    "restore": "Desarchivar",
     "archive": "Archivar",
     "deleteAction": "Eliminar sesión",
     "deleteConversation": "Eliminar sesión",
@@ -780,5 +807,17 @@
     "confirm": "Cambiar",
     "remember": "Cambia y hazlo automáticamente a partir de ahora (solo esta tarea)",
     "cancel": "Cancelar"
+  },
+  "messageEdit": {
+    "editing": "Editando mensaje",
+    "discard": "Descartar edición del mensaje",
+    "stopTimeout": "Se agotó el tiempo de espera para detener la tarea. Vuelve a intentarlo",
+    "queueNotEmpty": "Esta sesión tiene mensajes en cola. Envíalos o elimínalos antes de editar",
+    "notLast": "Hay un mensaje más reciente en esta sesión. Este ya no es el último y no se puede editar",
+    "failed": "No se pudo editar y reenviar. Vuelve a intentarlo",
+    "noPriorAssistant": "No hay ninguna respuesta de la IA antes de este mensaje y la versión de Cindy del ordenador aún no puede editarlo. Actualiza Cindy en el ordenador y vuelve a intentarlo.",
+    "uploadsPending": "Todavía se están subiendo archivos adjuntos. Espera a que terminen antes de editar el mensaje.",
+    "rollbackHint": "Al enviar, se desharán los cambios en {{count}} archivo(s) del último turno",
+    "conversationOnlyHint": "Al enviar, no se restaurarán los archivos del proyecto; los cambios anteriores se conservarán"
   }
 }

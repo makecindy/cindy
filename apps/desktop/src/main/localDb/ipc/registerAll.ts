@@ -43,6 +43,7 @@ import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
+import { replyToEnsureReady, type EnsureReadyReply } from '../ensureReadyReply.js';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
 import { reconcileGeneratedImageRecovery } from '../../cindy-media/generatedImageRecovery';
 import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
@@ -205,57 +206,12 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', async (_e, userId: unknown) => {
-    const startedAt = performance.now();
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.recv',
-        userId: typeof userId === 'string' ? userId : `<${typeof userId}>`,
-      }),
-    );
-    if (typeof userId !== 'string' || !userId) {
-      log.warn(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.reject',
-          reason: 'invalid userId',
-        }),
-      );
-      const result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message: 'invalid userId' },
-      } as const;
-      recordDesktopDevLocalDbStartupResult(result);
-      return result;
-    }
-    let result;
-    try {
-      result = await runEnsureReady(userId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error(
-        JSON.stringify({
-          event: 'localDb.ipc.ensure-ready.failed',
-          userId,
-          error: message,
-        }),
-      );
-      result = {
-        ready: false,
-        error: { code: 'DB_INIT_FAILED', message },
-      } as const;
-    }
-    recordDesktopDevLocalDbStartupResult(result);
-    log.info(
-      JSON.stringify({
-        event: 'localDb.ipc.ensure-ready.done',
-        userId,
-        ready: result.ready,
-        elapsedMs: Math.round(performance.now() - startedAt),
-        ...(result.ready ? {} : { error: result.error }),
-      }),
-    );
-    return result;
-  });
+  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown) =>
+    replyToEnsureReady(userId, {
+      run: (id) => runEnsureReady(id) as Promise<EnsureReadyReply>,
+      record: recordDesktopDevLocalDbStartupResult as (result: EnsureReadyReply) => void,
+      log,
+    }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
     resolveContextWindow: opts.resolveContextWindow,

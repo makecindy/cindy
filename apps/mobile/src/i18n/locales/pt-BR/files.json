@@ -102,6 +102,7 @@
     "fetchAvFailed": "Falha ao buscar: {{detail}}",
     "fetchPdfFailed": "Falha ao buscar PDF: {{detail}}",
     "fetchingPdf": "Buscando PDF no seu computador…",
+    "androidPdfHint": "No Android, ainda não é possível visualizar PDFs dentro do Cindy. Toque em \"Exportar / Compartilhar\" abaixo e escolha um leitor de PDF.",
     "unsupportedType": "Ainda não é possível visualizar este tipo no celular",
     "oversize": "O arquivo excede o limite de prévia ({{size}}); baixe o original para visualizá-lo",
     "oversizeUnknown": "grande demais",

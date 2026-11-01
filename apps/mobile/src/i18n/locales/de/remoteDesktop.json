@@ -90,7 +90,7 @@
   "controlling": "Steuerung aktiv",
   "viewOnly": "Nur ansehen",
   "upgrade": "Cindy auf dem Computer aktualisieren, um den Remotedesktop zu nutzen.",
-  "disabled": "Aktiviere auf dem Computer Remotedesktop unter Einstellungen → Remoteverbindung.",
+  "disabled": "Remotedesktop ist auf diesem Computer ausgeschaltet.\nÖffne auf diesem Computer Cindy → Einstellungen → Remote-Verbindung und aktiviere „Remotedesktop erlauben“. Kehre dann hierher zurück, um zu prüfen und dich erneut zu verbinden.",
   "busy": "Ein anderes Gerät oder ein Agent nutzt den Computer. Beende die Steuerung auf dem anderen Gerät oder warte, bis der Agent fertig ist.",
   "connectionBusy": "Ein anderes Gerät ist mit diesem Remotedesktop verbunden. Beende den Remotedesktop auf diesem Gerät und versuche erneut, dich zu verbinden.",
   "connectionError": "Verbindung beendet. Prüfe, ob der Computer online ist, und verbinde dich erneut.",

@@ -1,4 +1,5 @@
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 
 /**
  * 隐藏的本地用户 override（规则 20）：键缺失 = 系统默认“显示确认”；用户勾选
@@ -52,6 +53,26 @@ export async function confirmAgentSwitchRisk({
     dontShowAgainKey: AGENT_SWITCH_CONFIRMATION_OVERRIDE_KEY,
     dontShowAgainLabel: copy.dontShowAgainLabel,
   });
+}
+
+/**
+ * 手动换电脑确认弹窗的说明文案 key(provider-groups.md §6.2):同引擎且来源、目标都不是分享时优先接续
+ * 原生记录;跨引擎和分享中转只能走交接摘要。只决定文案;实际能否恢复仍由 sessionAgentSwitchHandler
+ * 判定,失败时回退摘要。
+ */
+export function relocationDescriptionKey(input: {
+  fromAgent: string | null | undefined;
+  toAgent: string;
+  fromAgentDeviceId: string | null | undefined;
+  toAgentDeviceId: string | null | undefined;
+}) {
+  const keepsNativeHistory =
+    input.fromAgent === input.toAgent &&
+    !isProviderShareAgentDeviceId(input.fromAgentDeviceId) &&
+    !isProviderShareAgentDeviceId(input.toAgentDeviceId);
+  return keepsNativeHistory
+    ? ('newChat.chatInput.agentRelocation.descriptionNativeHistory' as const)
+    : ('newChat.chatInput.agentRelocation.description' as const);
 }
 
 export interface AgentSwitchResponseFreshness {

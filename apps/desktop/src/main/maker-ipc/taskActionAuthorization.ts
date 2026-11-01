@@ -29,6 +29,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'unarchive_sessions',
   'rename_sessions',
   'move_session',
+  'manage_session_prs',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
@@ -106,6 +107,7 @@ const denied = (errorCode = 'TASK_ACTION_AUTHORIZATION_REQUIRED'): Decision => (
   message:
     'The host could not admit this action for the current turn. Prepare the target, action and content for the owner instead of retrying.',
 });
+
 
 export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now', 'schedule_set_pre_run_hook',
@@ -235,7 +237,7 @@ export function createTaskActionAuthorizer(deps: {
         ? TASK_ACTION_TOOLS.has(call.tool) || HELPER_AUTOMATION_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_scheduler' ? SCHEDULER_TASK_ACTION_TOOLS.has(call.tool)
         : call.server === 'cindy_orca' && ORCA_TASK_ACTION_TOOLS.has(call.tool);
-    if (!protectedAction) return { ok: true };
+    if (!protectedAction || (call.tool === 'manage_session_prs' && (call.args as Record<string, unknown>)?.action === 'list')) return { ok: true };
     const scope = await deps.capture(call);
     if (!scope) return { ok: true }; // ordinary user-delegated Agent task, unchanged
     if (!call.sessionId) return denied();

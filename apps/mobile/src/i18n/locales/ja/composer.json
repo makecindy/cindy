@@ -99,6 +99,7 @@
     "incomplete": "音声入力が完了しませんでした。もう一度お試しください。",
     "missingRefinerTargetProvider": "音声の推敲を利用できません。{{appName}} にもう一度ログインしてから再試行してください。",
     "emptyTranscript": "音声認識でテキストを取得できませんでした。もう一度録音してください。",
+    "speakerFiltered": "他の人の声を除外しました",
     "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
     "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",

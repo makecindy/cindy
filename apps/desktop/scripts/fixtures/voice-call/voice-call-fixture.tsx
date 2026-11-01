@@ -119,11 +119,57 @@ function Fixture({
           },
         ]),
   ];
+  const elsewhere = mode === 'elsewhere';
+  const toolbar = (
+    <CompanionVoiceToolbar
+      bot={{ id: 'fixture', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }}
+      state={{
+        phase:
+          failed || speechError
+            ? 'error'
+            : reading
+              ? 'speaking'
+              : mode === 'thinking'
+                ? 'thinking'
+                : 'listening',
+        transcript: failed || empty || speechError ? '' : '听起来不错。',
+        unsent: failed ? '还有一个想法，请先记下来。' : '',
+        level: 0.2,
+        error: failed ? 'send' : speechError,
+        muted,
+        microphonePending: false,
+        microphoneError: false,
+        speakerFiltered: false,
+        exitCountdown: countdown ? { reason: 'idle', secondsRemaining: 10 } : null,
+        callRecord: call,
+      }}
+      loading={false}
+      blocked={false}
+      configurationError={false}
+      titleRef={titleRef}
+      onResume={forbid('resume')}
+      onMute={() => setMuted(!muted)}
+      onInterrupt={() => setReading(false)}
+      onSend={forbid('send')}
+      onCancelExit={() => setCountdown(false)}
+      onClose={() => setLive(false)}
+      onConfigure={forbid('configure')}
+      onOpenTask={() => setFocused(true)}
+      questionElsewhere={elsewhere}
+      onOpenConversation={elsewhere ? () => undefined : undefined}
+    />
+  );
   return (
     // Reserve sidebar space without mounting the app: alignment belongs to
     // the conversation column, not the full window.
     <div className={sidebar ? 'pl-[240px]' : undefined}>
       <main className="mx-auto flex h-screen max-w-[720px] flex-col gap-6 overflow-hidden p-4">
+        {/* Off its task the bar sits above the routed content, as VoiceCallFloatingSlot does. */}
+        {live && elsewhere && (
+          <div data-voice-placement="top" className="companion-voice-floating-slot -mx-4 -mt-4">
+            {toolbar}
+          </div>
+        )}
         <div data-fixture-timeline className="min-h-0 flex-1 overflow-y-auto space-y-3">
           {empty && <p className="text-13 text-[var(--text-primary)]">这是通话之前的消息。</p>}
           {visibleVoiceCallMessages(messages, live ? 'fixture' : null).map((message) =>
@@ -137,41 +183,7 @@ function Fixture({
           )}
         </div>
         <div className="shrink-0 flex flex-col items-center gap-3">
-          {live && (
-            <CompanionVoiceToolbar
-              bot={{ id: 'fixture', name: 'Cindy', avatar: 'cindy://avatar/preset/cindy' }}
-              state={{
-                phase: failed || speechError
-                  ? 'error'
-                  : reading
-                    ? 'speaking'
-                    : mode === 'thinking'
-                      ? 'thinking'
-                      : 'listening',
-                transcript: failed || empty || speechError ? '' : '听起来不错。',
-                unsent: failed ? '还有一个想法，请先记下来。' : '',
-                level: 0.2,
-                error: failed ? 'send' : speechError,
-                muted,
-                microphonePending: false,
-                microphoneError: false,
-                exitCountdown: countdown ? { reason: 'idle', secondsRemaining: 10 } : null,
-                callRecord: call,
-              }}
-              loading={false}
-              blocked={false}
-              configurationError={false}
-              titleRef={titleRef}
-              onResume={forbid('resume')}
-              onMute={() => setMuted(!muted)}
-              onInterrupt={() => setReading(false)}
-              onSend={forbid('send')}
-              onCancelExit={() => setCountdown(false)}
-              onClose={() => setLive(false)}
-              onConfigure={forbid('configure')}
-              onOpenTask={() => setFocused(true)}
-            />
-          )}
+          {live && !elsewhere && toolbar}
           <div
             data-fixture-composer
             className="h-20 w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"

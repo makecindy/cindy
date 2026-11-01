@@ -471,6 +471,16 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   harness）会被测试拦下，不会静默失效。Claude 的 `skillOverrides` 与 `deniedMcpServers` 都只按名字
   匹配，分不清来源，同名的用户／项目 Skill 或 MCP 会被一起关掉；路由表只写 harness 专属名字（如
   `artifact-*`、带命名空间的插件 Skill、`claude.ai ` 前缀的账号连接器），`design` 这类通用名不关。
+  唯一例外是 `user-mcp` 来源：用户在 harness 自己的配置里注册的、与 Cindy 能力同一引擎的服务器
+  （`~/.claude.json` 里的 `cua-driver`／`cua` 对应 `cindy_computer`），无条件按名 `disabled` 并指向
+  替代能力——Cindy 的 Computer Use 开关是 Agent 能否操作这台电脑的唯一总闸，原始驱动服务器恰恰在它
+  关着时绕过它；不得用它关掉无关的用户服务器。桌面键鼠的另一条绕行路径（shell 模拟
+  按键：osascript keystroke／cliclick／CGEvent／cua-driver CLI）由
+  `packages/maker-core/src/agents/shared/desktop-input-shell.ts` 一份判定覆盖：Claude PreToolUse
+  守卫直接拒绝（完全访问档同样生效，仅本地运行时：SSH 远端的本地钩子不会跨 RPC 生效，远端桌面
+  工具不受影响）；Ask／Auto 档由共用审阅策略（`continuation-policy.ts`，写明只针对运行 Cindy 的这台
+  电脑）让 reviewer 拦下。Codex 完全访问档（`approvalPolicy: never`，宿主没有拦截点）与 Pi 完全访问档
+  （非退化红线）不加拦截。
 - Cindy 的目标模式由 `goal-host` 统一管理续跑、预算与暂停／恢复。Codex 创建和恢复线程时
   使用会话级 `features.goals=false`，避免模型另建原生目标，形成绕过宿主调度与来源标记的
   第二套循环；不写用户的全局 Codex 配置。不能仅把无来源事件改判为目标事件，否则用户
@@ -661,6 +671,21 @@ xAI 登录代次，派发前与响应完成后均复查，订阅退出或换号�
 自定义阶段另有最多 40 秒，共用取消信号。宿主守卫为 81 秒，必须小于 Core 的 delegate 硬上限。
 恢复辅助模型默认设置会移除自定义兜底，不扩展自动链，也不改写已有配置。
 
+Cindy 代审的完整动作预算与静态解析预算分离：同步 shell/path 分类仍限 4096 字符，
+更长动作跳过静态分类，最多 131072 字符的完整证据交给模型，不截去命令中段或文件正文。
+超过完整预算走现有人工确认，不把审核容量限制当成风险拒绝。此前被拒动作的历史预算仍为 4096。
+
+Codex 原生 exec/patch 审批回复只有决定枚举，`decline` 会被原生归为用户拒绝。
+Cindy 在返回拒绝前，通过已有 `turn/steer` 向对应 thread 和 expectedTurnId 送入有界的
+宿主结果（工具 item id、拒绝来源与原因），不修改二进制、审批协议或全局 system prompt。
+该反馈不经过用户发送入口，不更新用户授权或能力选择；不包含整条命令。原生工具结果的通用
+拒绝文本仍可能保留，以宿主反馈为具体原因。反馈失败／回执超时只报告未确认，不重发、
+不开新轮次、不重放动作；结束、停止或关闭后不补发。工具卡按 thread/turn/item 对齐原因，
+没有原因的空失败结果只报告未知，不推断为用户拒绝。回归见 `auto-review-decision.test.ts`、
+`autoPermissionReviewer.test.ts`、Codex `index.test.ts` 与 `native-auto-review-policy.native.test.ts`
+的 long-command denial 用例；后者用未修改的 Codex 和本地模拟模型核对后续请求中的真实反馈，
+不代表真实审核模型的判定质量。
+
 ### Auto 模式的同范围自动跟进
 
 用户授权完成一项工作时，可以通过定时任务在原目标与操作范围内继续跟进；延后执行、
@@ -713,8 +738,7 @@ translator、event loop、model 映射、usage 计量这些路径上的改动，
 ### 3.1 缓存率（Anthropic prompt cache）
 
 命中依赖**请求前缀逐字节稳定**。system prompt 由多段按固定顺序拼接（SDK preset →
-`MAKER_SYSTEM_PROMPT_APPEND` → makerMemoryRules → contactsRules（智能通讯录两态段，
-与同一次 build 的 MCP 注册同点求值、单次 build 内恒定；remote 会话缺省）→ host `runtimeConfig.systemPrompt` →
+`MAKER_SYSTEM_PROMPT_APPEND` → makerMemoryRules → host `runtimeConfig.systemPrompt` →
 per-workdir MEMORY.md index 快照 → per-call userPrompt，见 `claude-code/index.ts`）。禁止：
 
 - 往稳定前缀里塞每轮都变的内容（时间戳、随机文案、易变计数器）；随机／易变内容只能

@@ -98,10 +98,6 @@ import {
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
 import {
-  autoRegisterTelegramSpeaker,
-  resetTelegramSpeakerRegistrationCache,
-} from '../im/telegram/contactsAutoRegister.js';
-import {
   groupLaneOf,
   recordGroupMessage,
   resetGroupContextCursors,
@@ -1630,7 +1626,6 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       drainLanePendingBehavior(lane);
       if (lane.config.provider === 'telegram') {
         resetGroupContextCursorsSafely();
-        resetTelegramSpeakerRegistrationCache();
       }
     }
     persistLaneBinding(lane, view);
@@ -2600,25 +2595,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             log.warn('group.message ignored: Telegram binding principal is unavailable');
             return;
           }
-          const inserted = await recordGroupMessage(msg.payload, ownerId);
-          if (
-            inserted &&
-            expectedProvider === 'telegram' &&
-            msg.payload.author.id !== undefined &&
-            msg.payload.author.isBot !== true
-          ) {
-            autoRegisterTelegramSpeaker(
-              {
-                id: msg.payload.author.id,
-                name: msg.payload.author.name,
-                ...(msg.payload.author.username !== undefined
-                  ? { username: msg.payload.author.username }
-                  : {}),
-                isOwner: msg.payload.author.id === ownerId,
-              },
-              { chatName: msg.payload.chatName },
-            );
-          }
+          await recordGroupMessage(msg.payload, ownerId);
         })().catch((err) => log.warn(`group window record failed: ${String(err)}`)),
       );
       return;
@@ -3311,7 +3288,6 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         // 普通账号边界只清内存热缓存；明确删除账号数据时才清官方群 durable cursor。
         await resetGroupContextCursors({ clearPersisted: false });
-        resetTelegramSpeakerRegistrationCache();
         notifySlackToolProviderEnabledIfChanged();
         notifyStatus(toView());
       })();

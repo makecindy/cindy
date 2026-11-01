@@ -47,6 +47,7 @@ import {
   prepareMobileQueuedSessionReferences,
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
+import { unarchiveSessionAfterSend, type SessionPatchInvoke } from "./unarchiveAfterSend";
 import { cacheOutboxHistory } from "./outboxHistoryCache";
 import { validateOutboxResourceBinding } from './outboxResourceBinding';
 import { findRemoteHistoryView } from "./remoteHistoryViews";
@@ -113,6 +114,17 @@ export function MobileOutboxBridge() {
       guard();
       const result = await latest.current.link.invoke(deviceId, channel, args, {
         preSend: guard,
+      });
+      guard();
+      return result as never;
+    };
+    const ownerInvoke: SessionPatchInvoke = async (deviceId, channel, args, options) => {
+      guard();
+      const result = await latest.current.link.invoke(deviceId, channel, args, {
+        preSend: () => {
+          guard();
+          options?.preSend?.();
+        },
       });
       guard();
       return result as never;
@@ -291,7 +303,8 @@ export function MobileOutboxBridge() {
           guard();
         }
       },
-      enqueue: (r) => maker(r).input.enqueue(
+      enqueue: async (r) => {
+        const projection = await maker(r).input.enqueue(
           r.item.sessionId,
           r.prepared!,
           {
@@ -300,7 +313,17 @@ export function MobileOutboxBridge() {
               ? { expectedClearBoundaryMs: r.clearBoundaryMs }
               : {}),
           },
-        ),
+        );
+        // 电脑已接收这条消息(离线时是重连后才送达):在已归档任务里发消息即取消归档。
+        // 绑账号归属而不绑这条待发记录:消息对账后记录会被清走,取消归档不能随之失效。
+        void unarchiveSessionAfterSend(
+          r.item.sessionId,
+          r.deviceId,
+          ownerInvoke,
+          () => createMobileMakerTransport({ deviceId: r.deviceId, invoke: ownerInvoke }).getSession(r.item.sessionId),
+        );
+        return projection;
+      },
       cancel: async (r) => {
         const result = await invokeOwned(r)<{
           inputDeliveryCancelled?: boolean;

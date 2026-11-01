@@ -84,7 +84,7 @@ function existingHarness(args = 'target') {
   const bindings = {
     setError: vi.fn(), setGoalError: vi.fn(), t: (key: string) => key,
     isRemoteSessionMissing: () => false, readSessionRowNow: () => session, goalBusy: false, setGoalBusy: vi.fn(),
-    executeMobileGoalCommand, sessionId: 'existing-task', deviceId: 'host', deviceIdRef: { current: 'host' },
+    executeMobileGoalCommand, unarchiveSessionAfterSend: vi.fn(), sessionId: 'existing-task', deviceId: 'host', deviceIdRef: { current: 'host' },
     params: {} as Record<string, string | string[] | undefined>,
     outboxSessionAliveRef: { current: 'existing-task' }, getMobileAuthOwner: () => ({}), isMobileAuthOwnerCurrent: () => true,
     maker: { goal: { set: vi.fn(async () => {}), clear: vi.fn(async () => {}), getStatus: vi.fn(async () => ({ status: 'active', objective: 'target' })) } },
@@ -94,7 +94,7 @@ function existingHarness(args = 'target') {
     composerInputRef: { current: {} },
     composerDocumentsEqual: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
     applyComposerDocument: vi.fn(), normalizeComposerDocument, humanizeRemoteError,
-    composerDraftHydrated: true, voiceState: 'idle', slashCommandsRef: { current: [] }, queueEditingRef: { current: null },
+    composerDraftHydrated: true, voiceState: 'idle', slashCommandsRef: { current: [] }, queueEditingRef: { current: null }, messageEditingRef: { current: null }, messageEditSubmittingRef: { current: false },
     composerDocumentProjectedText, serializeComposerDocument, reconcileComposerProjectedText, emptyComposerDocument,
     canUseComposer: true, attachments: [] as unknown[], attachmentsRef: { current: [] as unknown[] }, pendingUploads: [],
     sendInFlightRef: { current: false }, sending: false, setSending: vi.fn((_sending: boolean) => {}), currentSession: session,

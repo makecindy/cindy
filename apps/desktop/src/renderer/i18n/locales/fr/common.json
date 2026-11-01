@@ -1245,7 +1245,6 @@
     "clipboardSyncSkipped": "Ce format n'est pas pris en charge par la synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncTooLarge": "Le contenu dépasse la taille maximale de synchronisation du presse-papiers et a été ignoré.",
     "clipboardSyncPermission": "La synchronisation du presse-papiers nécessite l'accès au collage. Autorisez-le, puis revenez à cette fenêtre pour reprendre.",
-    "clipboardSyncWaiting": "Le presse-papiers de l'ordinateur distant n'est pas disponible pour le moment (il est peut-être verrouillé). La synchronisation reprendra automatiquement.",
     "lockingOnExit": "Verrouillage de l'ordinateur…",
     "idleLock": "Déconnecter et verrouiller en cas d'inactivité",
     "idleNever": "Jamais",
@@ -1365,6 +1364,20 @@
       "lock-corrupt": "Le verrou de maintenance des données locales est endommagé ; Cindy ne peut donc pas confirmer s'il est encore utilisé. Redémarrez votre ordinateur, puis rouvrez Cindy. Si le problème persiste, contactez le support. Ne supprimez pas les fichiers de la base de données.",
       "lock-unreadable": "Le verrou de maintenance des données locales n'a pas pu être lu ou enregistré. Vérifiez l'accès au répertoire de données, puis rouvrez-les une fois l'accès rétabli. Contactez le support si le problème persiste.",
       "recovery-busy": "Une autre instance de Cindy vérifie le verrou de maintenance des données locales. Rouvrez les données locales dans un instant."
+    },
+    "passiveCorrupt": {
+      "title": "Impossible de récupérer la base de données partagée",
+      "description": "Cindy s'exécute en mode lecture seule ou partagé et ne récupérera ni ne modifiera automatiquement cette base de données partagée. Si une autre instance utilise les mêmes userData, fermez-la et réessayez, ou démarrez avec --isolated."
+    },
+    "corrupt": {
+      "title": "Impossible d'ouvrir la base de données locale",
+      "description": "La base de données locale est peut-être endommagée, ou utilisée par une autre instance de Cindy partageant les mêmes données. Si une autre instance est ouverte, fermez-la et réessayez. Si le problème persiste, aucune sauvegarde utilisable n'a pu la restaurer automatiquement ; copiez les détails techniques et transmettez-les à l'équipe pour obtenir de l'aide à la récupération de vos données.",
+      "copy": "Copier les détails techniques"
+    },
+    "initFailed": {
+      "title": "Échec du démarrage de la base de données locale",
+      "description": "La base de données locale n'a pas pu démarrer. Réessayez d'abord. Si l'échec persiste, transmettez les détails techniques ci-dessous à l'équipe.",
+      "retry": "Réessayer le démarrage de la base de données"
     },
     "databaseCleanup": {
       "interruptedTitle": "Le nettoyage de la base de données a été interrompu",
@@ -4945,9 +4958,6 @@
         "title": "Participation aux groupes",
         "hint": "Les groupes vus par le bot apparaissent ici. « Actif » = il lit chaque message et décide lui-même d'intervenir ou non (chaque message consomme des jetons).",
         "empty": "Aucun groupe pour l'instant. Ajoutez le bot à un groupe : il apparaîtra ici dès que quelqu'un parlera.",
-        "contactsOn": "Les personnes qui parlent dans les groupes sont ajoutées automatiquement aux Contacts intelligents (l'interrupteur principal est activé).",
-        "contactsOff": "Les Contacts intelligents sont désactivés : les personnes qui parlent dans les groupes ne seront pas mémorisées automatiquement.",
-        "contactsEnable": "Activer",
         "error": {
           "load": "Impossible de charger les groupes Telegram. Vérifiez la connexion et réessayez.",
           "save": "Le mode du groupe n'a pas été enregistré. Le dernier mode confirmé a été restauré.",
@@ -5475,7 +5485,6 @@
         "title": "Utiliser mes connexions du navigateur",
         "description": "L'Agent ouvrira les sites avec les comptes auxquels vous êtes connecté dans Chrome, Edge ou Brave.",
         "toggleAria": "Utiliser mes connexions du navigateur",
-        "unavailableEmbedded": "S'applique uniquement au navigateur autonome. Le désactiver supprime les fichiers de connexion copiés.",
         "confirmTitle": "Autoriser l'Agent à utiliser vos connexions du navigateur ?",
         "confirmDescription": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
         "confirmDescriptionMac": "L'Agent pourra ouvrir des sites avec les comptes auxquels vous êtes connecté, y compris la messagerie, les espaces de stockage cloud et les consoles professionnelles. La lecture des fichiers de connexion de Chrome nécessite également l'accès complet au disque. Vous pouvez désactiver cette option à tout moment ; la copie sera alors supprimée.",
@@ -5807,10 +5816,6 @@
         "ssh": {
           "name": "Commandes SSH",
           "description": "Exécuter des commandes sur des ordinateurs distants via les connexions SSH configurées."
-        },
-        "contacts": {
-          "name": "Contacts intelligents",
-          "description": "Rechercher et gérer les fiches de contact et l'historique des interactions."
         }
       }
     },
@@ -6303,9 +6308,6 @@
             "title": "Participation aux groupes",
             "hint": "Les groupes vus par le bot officiel apparaissent ici. Le mode Actif s'applique uniquement à chaque message de votre compte associé ; les autres membres ajoutent du contexte local mais ne peuvent pas déclencher de tâches.",
             "empty": "Aucun groupe pour l'instant. Ajoutez le bot à un groupe et envoyez un message depuis votre compte associé.",
-            "contactsOn": "Les autres personnes qui s'expriment dans les groupes sont ajoutées automatiquement aux Contacts intelligents.",
-            "contactsOff": "Les Contacts intelligents sont désactivés : les autres membres des groupes ne seront pas mémorisés automatiquement.",
-            "contactsEnable": "Activer",
             "error": {
               "load": "Impossible de charger les groupes Telegram. Vérifiez la connexion et réessayez.",
               "save": "Le mode de groupe n'a pas été enregistré. Le dernier mode confirmé a été rétabli.",
@@ -7596,6 +7598,20 @@
         "unknownPublisher": "Éditeur inconnu",
         "unknownReviewerDetail": "Le paquet affirme avoir passé une revue, mais cette version de Cindy ne reconnaît pas la clé du relecteur : il n'est donc pas affiché comme ayant passé la revue."
       },
+      "controlPoints": {
+        "title": "Vérifications avant exécution",
+        "description": "Ce plugin peut vérifier les automatisations ou routines avant leur exécution. Il peut ignorer ou arrêter une exécution, jamais l’approuver à ta place.",
+        "titleWithStartTask": "Quand ce plugin intervient",
+        "descriptionWithStartTask": "Il n’intervient que dans les tâches où tu l’as choisi : avant une exécution, il peut seulement l’ignorer ou l’arrêter ; pour une nouvelle tâche, il choisit un modèle une seule fois, pour le premier message. Il n’approuve jamais rien à ta place.",
+        "usage": "Pour l’utiliser, choisis-le dans Vérification préalable en modifiant une automatisation ou une routine.",
+        "usageStartTask": "Pour l’utiliser, choisissez un modèle qu’il propose dans le sélecteur de modèles d’une nouvelle tâche.",
+        "points": {
+          "will-schedule-run": "Avant l’exécution d’une automatisation",
+          "will-routine-run": "Avant l’exécution d’une routine d’un coéquipier",
+          "will-start-task": "Au démarrage d’une nouvelle tâche"
+        },
+        "inactive": "Pas encore disponible. Autorise-le lors de la mise à jour ou de la réinstallation de ce plugin."
+      },
       "perm": {
         "mail": "Utiliser les brouillons d'e-mail et les cartes d'envoi",
         "mailDetail": "Modifier et synchroniser des brouillons dans une carte, avec confirmation et compte à rebours d'annulation avant l'envoi.",
@@ -7665,6 +7681,12 @@
         "subscribeHooksDetail": "Vérifie chaque message avant l'envoi : il peut le bloquer ou en réécrire le texte avant qu'il parte ; les messages bloqués peuvent être modifiés et renvoyés.",
         "subscribeAssistantReply": "Peut lire et réécrire les réponses de l'IA",
         "subscribeAssistantReplyDetail": "Traite chaque réponse de l'IA une fois terminée : il peut en peaufiner ou réécrire le texte (en le remplaçant directement, sans conserver l'original), ou remplacer la bulle de réponse par sa propre carte (dans ce cas, le texte original est conservé et consultable d'un simple toucher).",
+        "subscribeScheduleRun": "Peut vérifier les automatisations choisies avant leur exécution",
+        "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
+        "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "subscribeStartTask": "Peut choisir le modèle des nouvelles tâches",
+        "subscribeStartTaskDetail": "Lorsqu’une nouvelle tâche utilise un modèle qu’il propose, il lit le premier message et choisit l’un de vos modèles connectés. Il choisit une seule fois ; le modèle ne change pas pendant la tâche.",
         "card": "Affiche des cartes de message",
         "cardExternalLink": "Les cartes peuvent déclarer des liens externes qui ouvrent votre navigateur après confirmation",
         "cardExternalLinkDetail": "Cliquer sur un lien de carte affiche une boîte de dialogue de confirmation ; l'URL ne s'ouvre dans le navigateur du système qu'après votre approbation. Seules les adresses http/https sont autorisées.",
@@ -7855,6 +7877,22 @@
         "reveal": "Afficher dans la liste des tâches",
         "revealed": "Tâche affichée dans la liste des tâches",
         "revealFailed": "Impossible d'afficher la tâche dans la liste des tâches"
+      },
+      "handoff": {
+        "title": "Fichiers transmis à ce plugin dans les conversations",
+        "description": "Copies des fichiers que vous avez transmis à ce plugin dans les conversations. Chaque copie est supprimée automatiquement après 7 jours sans utilisation.",
+        "empty": "Aucun fichier n'a encore été transmis à ce plugin dans une conversation.",
+        "loadFailed": "Impossible de charger la liste des fichiers. Réessayez plus tard.",
+        "refresh": "Actualiser",
+        "openInFinder": "Ouvrir dans le Finder",
+        "openInExplorer": "Ouvrir dans l'Explorateur de fichiers",
+        "meta": "{{size}} · Transmis le {{handedAt}} · Supprimé automatiquement le {{expiresAt}}",
+        "delete": "Supprimer",
+        "deleteNamed": "Supprimer {{name}}",
+        "deleteTitle": "Supprimer ce fichier ?",
+        "deleteDescription": "Après suppression, le plugin et les pages ouvertes ne pourront plus utiliser « {{name}} ». Cette action est irréversible.",
+        "deleteFailed": "Impossible de supprimer le fichier. Réessayez plus tard.",
+        "cancel": "Annuler"
       },
       "library": {
         "title": "Bibliothèque persistante",
@@ -8352,188 +8390,6 @@
         "title": "Supprimer « {{name}} » ?",
         "message": "Les nouvelles sessions ne chargeront plus ce MCP.",
         "confirm": "Supprimer"
-      }
-    },
-    "contacts": {
-      "title": "Contacts intelligents",
-      "description": "Un annuaire de personnes et d'organisations conçu pour les Agents : résolution d'identité multiplateforme (e-mail / Feishu / Slack / identifiant GitHub → de qui s'agit-il), contexte relationnel et historique d'événements datés. Les Agents collectent des fiches au fil de leur travail ; celles dont la fiabilité est faible arrivent dans une file d'attente que vous validez. Par défaut, les données restent sur cet appareil, avec une synchronisation entre appareils en option ; les recherches et l'organisation sont traitées par votre propre modèle.",
-      "enable": {
-        "label": "Activer les Contacts intelligents",
-        "description": "Une fois activé, les Agents peuvent rechercher et collecter automatiquement des informations de contact (les fiches incertaines sont mises en attente de validation). La désactivation n'empêche pas de consulter ni de gérer ici les données existantes.",
-        "toggleAria": "Activer/désactiver les Contacts intelligents"
-      },
-      "sync": {
-        "label": "Synchroniser entre mes appareils",
-        "description": "Activez cette option une fois sur chaque ordinateur à inclure. Les appareils en ligne se synchronisent automatiquement, en connexion directe sur le même réseau local si possible, sinon via un relais chiffré de bout en bout. La comparaison est effectuée par programme, sans modèle ni consommation de jetons.",
-        "toggleAria": "Activer/désactiver la synchronisation des contacts entre appareils",
-        "syncNow": "Synchroniser maintenant",
-        "onlineDevices_one": "{{count}} autre appareil en ligne",
-        "onlineDevices_other": "{{count}} autres appareils en ligne",
-        "route": {
-          "lan": "Réseau local",
-          "relay": "Relais chiffré"
-        },
-        "status": {
-          "loading": "Lecture de l'état de synchronisation…",
-          "signInRequired": "Connectez-vous à votre compte Cindy pour synchroniser vos appareils",
-          "off": "Synchronisation désactivée",
-          "waiting": "En attente d'un autre ordinateur en ligne avec la synchronisation activée",
-          "syncing": "Synchronisation sécurisée en cours…",
-          "ready": "Prêt : les appareils se synchroniseront dès qu'ils seront en ligne",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "Le stockage sécurisé du système est indisponible : la clé de l'appareil ne peut pas être protégée",
-          "peer-identity-changed": "L'identité d'un appareil a changé ; la synchronisation est suspendue pour protéger vos données",
-          "sync-failed": "Échec de la synchronisation ; nouvelle tentative dès qu'un appareil sera en ligne"
-        },
-        "toast": {
-          "enabled": "Synchronisation entre appareils activée",
-          "disabled": "Synchronisation entre appareils désactivée"
-        },
-        "onlineDevices_many": "{{count}} autres appareils en ligne"
-      },
-      "stats": "{{people}} personnes / {{orgs}} organisations / {{groups}} groupes",
-      "kind": {
-        "person": "Personne",
-        "org": "Organisation"
-      },
-      "filters": {
-        "all": "Tous",
-        "person": "Personnes",
-        "org": "Organisations",
-        "pending": "En attente"
-      },
-      "list": {
-        "searchPlaceholder": "Rechercher un nom / e-mail / mot-clé",
-        "newAria": "Nouveau contact",
-        "newNamePlaceholder": "Nom ou organisation",
-        "newKindAria": "Changer de type (personne / organisation)",
-        "newConfirm": "Créer",
-        "groupFilterAria": "Filtrer par groupe",
-        "groupFilterAll": "Tous les groupes",
-        "loadMore": "Charger plus",
-        "noResults": "Aucun contact correspondant",
-        "empty": "Vos contacts sont vides. Une fois la fonction activée, les Agents collecteront des fiches au fil de leur travail, ou cliquez sur + pour en ajouter une manuellement."
-      },
-      "detail": {
-        "empty": "Sélectionnez un contact à gauche pour afficher sa fiche",
-        "pendingBanner": "Cette fiche a été collectée par un Agent avec une faible fiabilité. Veuillez la vérifier.",
-        "pendingConfirm": "Confirmer",
-        "pendingDiscard": "Rejeter",
-        "nameAria": "Nom affiché",
-        "deleteAria": "Supprimer le contact",
-        "summaryPlaceholder": "Résumé en une ligne",
-        "identities": "Identités",
-        "identityRemoveAria": "Retirer l'identité {{value}}",
-        "identityPlatformAria": "Plateforme",
-        "identityValuePlaceholder": "E-mail / identifiant de plateforme / pseudo",
-        "identityAddAria": "Ajouter une identité",
-        "narrative": "Relation et contexte",
-        "narrativePlaceholder": "Votre relation, l'historique de collaboration et le contexte (Markdown)",
-        "agentNotes": "Instructions pour les Agents",
-        "agentNotesPlaceholder": "ex. : C'est l'adresse personnelle du patron. Ne jamais l'utiliser pour un envoi groupé",
-        "events": "Chronologie",
-        "eventsEmpty": "Aucun événement",
-        "eventDeleteAria": "Supprimer l'événement",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "Ce qui s'est passé",
-        "eventAddAria": "Ajouter un événement",
-        "groups": "Groupes",
-        "groupRemoveAria": "Retirer du groupe {{name}}",
-        "groupAddAria": "Ajouter à un groupe",
-        "groupAddPlaceholder": "Ajouter à un groupe…",
-        "discardChanges": "Annuler les modifications",
-        "save": "Enregistrer",
-        "identitiesEmpty": "Aucune identité",
-        "relations": "Liens",
-        "relationsEmpty": "Aucun lien pour le moment (organisations / personnes liées)",
-        "relationAddAria": "Ajouter un lien",
-        "relationRemoveAria": "Retirer le lien avec {{name}}",
-        "relationVerbPlaceholder": "travaille chez / famille…",
-        "relationTargetAria": "Choisir le contact lié",
-        "relationTargetPlaceholder": "Choisir une personne ou une organisation…",
-        "relationNotePlaceholder": "Note (fonction…)"
-      },
-      "deleteConfirm": {
-        "title": "Supprimer « {{name}} » ?",
-        "description": "Toutes les identités, tous les événements de la chronologie et toutes les appartenances à des groupes seront supprimés. Cette action est irréversible.",
-        "confirm": "Supprimer",
-        "cancel": "Annuler"
-      },
-      "toast": {
-        "enabled": "Contacts intelligents activés",
-        "disabled": "Contacts intelligents désactivés",
-        "codexRefreshDeferred": "Paramètre enregistré, mais Codex est occupé : il s'appliquera aux sessions Codex après le redémarrage de l'application",
-        "toggleFailed": "Impossible de modifier l'état des Contacts intelligents",
-        "created": "« {{name}} » créé",
-        "createFailed": "Impossible de créer le contact",
-        "deleted": "« {{name}} » supprimé",
-        "deleteFailed": "Impossible de supprimer le contact",
-        "saved": "Enregistré",
-        "saveFailed": "Échec de l'enregistrement",
-        "confirmFailed": "Impossible de confirmer la fiche",
-        "identityAddFailed": "Impossible d'ajouter l'identité",
-        "identityRemoveFailed": "Impossible de retirer l'identité",
-        "eventAddFailed": "Impossible d'ajouter l'événement",
-        "eventDeleteFailed": "Impossible de supprimer l'événement",
-        "groupAddFailed": "Impossible d'ajouter au groupe",
-        "groupRemoveFailed": "Impossible de retirer du groupe",
-        "relationAddFailed": "Impossible d'ajouter le lien",
-        "relationRemoveFailed": "Impossible de retirer le lien"
-      },
-      "manage": "Gérer",
-      "manager": {
-        "title": "Contacts intelligents",
-        "closeAria": "Fermer"
-      },
-      "merge": {
-        "button": "Fusionner un doublon",
-        "buttonAria": "Fusionner un contact en doublon",
-        "hint": "Choisissez un doublon pour fusionner ses identités, événements et liens dans « {{target}} », puis le supprimer.",
-        "searchPlaceholder": "Rechercher des doublons…",
-        "confirmTitle": "Fusionner « {{source}} » dans « {{target}} » ?",
-        "confirmDescription": "Toutes les identités, tous les événements, liens et groupes de « {{source}} » seront transférés, et sa fiche supprimée. Cette action est irréversible.",
-        "confirm": "Fusionner",
-        "success": "« {{source}} » fusionné dans « {{target}} »",
-        "failed": "Échec de la fusion"
-      },
-      "import": {
-        "title": "Importer des contacts",
-        "button": "Importer",
-        "pickHint": "Import groupé depuis une source externe. Les fiches dont l'e-mail ou le téléphone correspond à une fiche existante sont fusionnées automatiquement (sans doublon) ; les noms similaires sont placés dans une liste de vérification manuelle.",
-        "sourceSystem": "Contacts du système",
-        "sourceSystemDesc": "Lecture seule ; nécessite une autorisation système à la première utilisation",
-        "sourceVcf": "Fichier vCard",
-        "sourceVcfDesc": ".vcf (format standard d'export de contacts)",
-        "emptySource": "Aucun contact importable dans cette source",
-        "permissionDenied": "Accès aux contacts refusé : autorisez-le dans Réglages Système → Confidentialité et sécurité → Automatisation",
-        "systemReadFailed": "Impossible de lire les contacts du système",
-        "vcfParseFailed": "Impossible d'analyser le fichier vCard",
-        "selectedCount": "{{checked}} / {{total}} sélectionné(s)",
-        "groupPlaceholder": "Ajouter à un groupe après l'import (facultatif ; créé s'il n'existe pas)",
-        "run": "Importer {{count}}",
-        "running": "Import en cours…",
-        "failed": "Échec de l'import",
-        "doneSummary": "Import terminé : {{created}} créé(s), {{enriched}} fusionné(s) dans des fiches existantes, {{orgs}} organisation(s) créée(s).",
-        "needsReview": "{{count}} fiche(s) ont un nom similaire à des fiches existantes et n'ont pas été importées. Veuillez vérifier : {{names}}",
-        "identityConflicts": "{{count}} fiche(s) avaient des identités déjà attribuées à d'autres contacts ({{names}}) et n'ont pas été fusionnées. Vérifiez-les dans le gestionnaire pour décider de les fusionner ou non",
-        "relationErrors": "Impossible de créer {{count}} lien(s) d'emploi ({{names}})",
-        "skipped": "{{count}} fiche(s) ignorée(s) (non valides ou en échec)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "Cette identité appartient déjà à un autre contact. Modifiez d'abord cette fiche ou fusionnez-les.",
-        "PERMISSION_DENIED": "Accès aux contacts non autorisé. Autorisez-le dans Réglages Système > Confidentialité et sécurité > Automatisation.",
-        "UNSUPPORTED_CAPABILITY": "Cette action n'est pas prise en charge sur cette plateforme.",
-        "NOT_FOUND": "La cible n'existe plus.",
-        "ALREADY_EXISTS": "Un élément portant le même nom ou le même contenu existe déjà.",
-        "INVALID_PARAMS": "Saisie non valide. Vérifiez et réessayez.",
-        "INTERNAL": "Échec de l'opération. Veuillez réessayer plus tard."
-      },
-      "guide": {
-        "hint": "Laissez l'IA vous aider à ajouter des fiches de contact, valider les fiches en attente et nettoyer les doublons.",
-        "cta": "Gérer les contacts avec l'IA",
-        "managementPrompt": "Aide-moi à gérer mes Contacts intelligents. Vérifie d'abord l'état actuel et les outils déjà disponibles, puis guide-moi pour ajouter des contacts utiles, vérifier les doublons et traiter les fiches en attente. Demande-moi avant toute écriture, fusion ou suppression."
       }
     },
     "remotePermission": {
@@ -11601,6 +11457,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Ouvrir la conversation",
+      "inCallWith": "En appel avec {{name}}",
       "showDetails": "Afficher la transcription de l'appel",
       "hideDetails": "Masquer la transcription de l'appel",
       "transcriptTitle": "Transcription en cours",
@@ -11669,6 +11527,7 @@
       "unsent": "Non envoyé · sélectionnez le texte pour le copier",
       "hint": "Faites une pause pour envoyer. Les réponses sont lues à voix haute par une voix IA. Parlez à tout moment pour interrompre.",
       "status": {
+        "questionElsewhere": "Une question attend dans la tâche · l’appel continue",
         "idle": "Prêt quand vous l'êtes",
         "connecting": "Connexion à la reconnaissance vocale…",
         "listening": "À l'écoute",
@@ -11684,6 +11543,7 @@
         "muted": "Micro désactivé · Vous pouvez toujours écouter"
       },
       "errors": {
+        "busy": "La voix est utilisée par un autre appel, une lecture, un aperçu ou une dictée. Terminez-le et réessayez.",
         "connection": "Connexion vocale interrompue. Votre texte non envoyé est conservé ci-dessous.",
         "microphone": "Le micro s'est arrêté. Vérifiez son autorisation et sa connexion, puis reprenez.",
         "send": "Ce message n'a pas été accepté. Votre texte est conservé ci-dessous.",
@@ -12571,6 +12431,7 @@
         "titleLocal": "Exécuter à nouveau l'Agent sur cet ordinateur ?",
         "titleOther": "Exécuter l'Agent sur « {{device}} » ?",
         "description": "L'historique de la conversation sur l'autre ordinateur ne peut pas être transféré : elle reprend donc à partir d'un résumé de transfert. La réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
+        "descriptionNativeHistory": "L'historique complet de la conversation est copié et elle reprend là où elle en était. S'il ne peut pas être restauré, elle reprend à partir d'un résumé de transfert, et la réflexion et les détails similaires peuvent ne pas être entièrement conservés. Prend effet à l'envoi du prochain message.",
         "confirm": "Changer d'ordinateur",
         "cancel": "Ne rien changer"
       }
@@ -12820,6 +12681,7 @@
     "cindyServiceUnavailable": "Le service vocal Cindy est indisponible. Vérifiez votre réseau ou changez de source de service.",
     "asrServiceUnavailable": "Impossible de se connecter au service de reconnaissance vocale. Vérifiez votre réseau et réessayez.",
     "emptyTranscript": "Une voix a été détectée, mais aucun texte n'a été reconnu. Veuillez réessayer.",
+    "speakerFiltered": "Voix d'une autre personne ignorée",
     "connectionInterrupted": "La connexion vocale a été interrompue. Vérifiez votre réseau et réessayez.",
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",
@@ -12845,6 +12707,14 @@
     "verificationFailed": "Cindy n'a pas pu confirmer le rétablissement de la connexion ChatGPT. Vérifiez à nouveau."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "a choisi pour cette tâche",
+      "kept": {
+        "no-opinion": "{{plugin}} n’a pas changé de modèle cette fois ; cette tâche utilise",
+        "failed": "{{plugin}} n’a pas répondu à temps ; cette tâche utilise",
+        "unavailable-route": "{{plugin}} a choisi un modèle indisponible ; cette tâche utilise"
+      }
+    },
     "imageDelivery": {
       "stored": "Image transmise",
       "failed": "Échec de la transmission de l'image. Réessayez de transférer l'image existante.",
@@ -14840,6 +14710,7 @@
           "hint": "Jusqu’à 3 dans l’en-tête ; les PR épinglées apparaissent en premier",
           "empty": "Collez un lien de PR GitHub pour l’ajouter",
           "removed": "Supprimées : {{count}}",
+          "legacy": "Références non confirmées : {{count}}",
           "addLabel": "Ajouter un lien de PR",
           "add": "Ajouter une PR",
           "loading": "Chargement…",
@@ -15172,6 +15043,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Automatisations à importer dans {{projectName}}",
+        "review": "Vérifier l’importation",
+        "title": "Importer les automatisations du dépôt",
+        "description": "Source : {{workingDir}}. Vérifiez les définitions ci-dessous. L’importation applique ces modifications et active les nouvelles automatisations, qui peuvent exécuter des commandes et lancer des Agents avec un accès complet. Importez uniquement du contenu de confiance.",
+        "accept": "Confirmer l’importation",
+        "removed": "Suppressions prévues : {{names}}"
+      },
       "toast": {
         "summary": "{{inserted}} ajoutées · {{updated}} mises à jour · {{deleted}} supprimées",
         "installed": "Automatisation de projet installée pour {{projectName}} ({{summary}})",
@@ -15346,6 +15225,7 @@
         "timeout": "Délai d'expiration (secondes, facultatif)",
         "timeoutPlaceholder": "Aucun délai",
         "capabilities": {
+          "github_read": "Lire GitHub",
           "jira_read": "Lire Jira",
           "jira_comment": "Commenter dans Jira",
           "sessions_dispatch": "Répartir des sessions",
@@ -15357,6 +15237,7 @@
         "capabilitiesSearch": "Rechercher des capacités",
         "capabilitiesEmpty": "Aucune capacité correspondante",
         "capabilityDescs": {
+          "github_read": "Lire les PR, la CI, les revues et les changements observés sans associer de tâche",
           "jira_read": "Lire les issues Jira (obtention par clé / recherche JQL)",
           "jira_comment": "Ajouter des commentaires aux issues Jira",
           "sessions_dispatch": "Créer ou réveiller des sessions {{appName}} et leur transmettre des messages",
@@ -15451,6 +15332,25 @@
         },
         "browse": "Choisir un fichier de script (ou le faire glisser sur le champ)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Vérifier avec",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Avant chaque exécution, Cindy consulte le plugin choisi. Il peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place ce qui demande ta confirmation.",
+        "choose": "Choisir un plugin",
+        "unavailable": "Plugin indisponible",
+        "unavailableHint": "Ce plugin n’est plus disponible. Tant que tu n’en choisis pas un autre, le réglage « Si le plugin échoue » s’applique.",
+        "hint": "Le plugin peut laisser l’exécution se faire, ignorer celle-ci ou l’arrêter. Il ne peut jamais approuver à ta place.",
+        "empty": "Aucun plugin ne peut encore vérifier les exécutions. Installe un plugin compatible avec les vérifications préalables et autorise-le lors de l’installation ou de la mise à jour.",
+        "onFailureLabel": "Si le plugin échoue",
+        "onFailure": {
+          "allow": "Exécuter normalement",
+          "skip": "Ignorer cette exécution",
+          "block": "Arrêter et marquer comme échouée"
+        }
+      },
       "validation": {
         "nameRequired": "Le nom est obligatoire",
         "promptRequired": "Le prompt est obligatoire",
@@ -15463,6 +15363,7 @@
         "modelUnavailable": "Le modèle {{model}} n'est plus disponible. Sélectionnez un autre modèle.",
         "reasoningInvalid": "Le raisonnement doit être l'une des valeurs suivantes : {{values}}",
         "preRunHookCommandRequired": "Saisissez la commande de vérification préalable",
+        "preRunPluginRequired": "Choisis un plugin pour la vérification préalable",
         "templateParamRequired": "Saisissez {{label}}",
         "templateApplyFailed": "Impossible d'appliquer le modèle. Vérifiez les paramètres et réessayez."
       }
@@ -15950,6 +15851,7 @@
       "titleRevealPath": "Autoriser l'Agent à recevoir le chemin local de ce fichier multimédia ?",
       "count": "{{count}} fichiers",
       "descriptionAttachments": "Les fichiers ci-dessous se trouvent en dehors du répertoire de travail de cette session. Si vous l'autorisez, ils seront transmis à ce plugin (il ne reçoit que des empreintes de contenu, jamais les chemins).",
+      "descriptionHandoff": "Les fichiers ci-dessous se trouvent hors du répertoire de travail de cette session. Si vous autorisez, le plugin en reçoit des copies (jamais leurs chemins) ; les copies sont supprimées automatiquement après 7 jours sans utilisation.",
       "descriptionDir": "Le répertoire ou fichier ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ses fichiers seront transmis à ce plugin pour envoi (il ne reçoit qu'un ticket à usage unique, jamais les chemins).",
       "descriptionSaveDir": "Le répertoire ci-dessous se trouve en dehors du répertoire de travail de cette session. Si vous l'autorisez, ce plugin pourra y enregistrer des fichiers téléchargés (les fichiers existants ne sont jamais écrasés).",
       "descriptionRevealPath": "Le chemin n'est renvoyé à l'Agent actuel qu'après votre autorisation et sera ajouté à l'historique de la conversation ; les appareils associés peuvent synchroniser cet historique. Cela n'accorde à aucun plugin l'accès au fichier.",
@@ -17789,6 +17691,7 @@
     "sessionModeFresh": "Nouvelle session à chaque déclenchement (isoler le contexte)",
     "sessionModeHint": "Le mode persistant conserve une seule conversation pour la routine. Le mode nouvelle session crée puis ferme une conversation isolée à chaque déclenchement.",
     "quietHint": "Signaler uniquement les changements ou les problèmes. Désactivez pour les rappels et les messages planifiés.",
+    "checkSource": "Vérifier avec",
     "checkCommand": "Commande de vérification préalable",
     "checkHint": "Facultatif. Vérifie sur l'ordinateur avant chaque exécution : le code de sortie 2 ignore l'exécution, 0 la poursuit, les erreurs restent visibles. Videz le champ pour la retirer.",
     "timeoutMs": "Délai de vérification (ms, vide pour aucune limite)",
@@ -17857,6 +17760,14 @@
       "pendingTurns_many": "{{count}} échanges",
       "lastLearned_many": "{{count}} modifications",
       "readTurns_many": "{{count}} échanges lus"
+    },
+    "remote": {
+      "pause": "Suspendre la routine",
+      "resume": "Reprendre la routine",
+      "addSchedule": "Ajouter un horaire",
+      "addInterval": "Ajouter un intervalle",
+      "addEvent": "Ajouter un déclencheur d’événement",
+      "filterField": "Champ de filtre"
     }
   },
   "cindyMakeDoctor": {

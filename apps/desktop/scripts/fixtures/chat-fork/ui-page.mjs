@@ -9,23 +9,33 @@ export default {
   cases: {
     default: { about: 'Task using a shared model: fork from a user message or an assistant reply' },
     ssh: { about: 'SSH workspaces still hide the unsupported fork action' },
-    companion: { about: 'Completed companion replies retain read-aloud and stop in the compact bubble toolbar' },
-    'companion-narrow': { about: 'Reply, read-aloud and more fit beside a long reply at 320 px', viewport: { width: 320, height: 520 } },
+    companion: { about: 'Completed companion replies retain read-aloud and stop in the persistent message footer' },
+    'companion-narrow': { about: 'Reply, read-aloud and more remain accessible below a long reply at 320 px', viewport: { width: 320, height: 520 } },
     'companion-thread': { about: '2026-10-29: native private reply in a 320px topic retains full width and accessible actions below', viewport: { width: 640, height: 520 } },
   },
   async check(page, ui) {
     if (ui.case.startsWith('companion')) {
-      if (ui.case === 'companion-thread') {
-        const layout = await page.locator('[data-bot-reply-bubble]').evaluate(el => {
-          const bubble = el.getBoundingClientRect(), row = el.parentElement.getBoundingClientRect();
-          const actions = el.querySelector('.chat-bubble-toolbar').getBoundingClientRect();
-          return { unused: row.width - bubble.width, inside: actions.left >= bubble.left && actions.right <= bubble.right };
-        });
-        assert.ok(layout.unused < 10 && layout.inside, 'private topic uses its column without hiding message actions');
-      }
-      await page.locator('[data-bot-reply-bubble]').hover();
       const read = page.getByRole('button', { name: await ui.t('bots.voiceMode.readAloud'), exact: true });
       assert.equal(await read.count(), 1);
+      if (ui.case === 'companion-thread') {
+        // Private-message actions now live below the bubble, not inside the
+        // group-chat floating toolbar. Locate the real footer by its accessible action.
+        const layout = await read.evaluate(button => {
+          const footer = button.parentElement;
+          const message = footer.parentElement;
+          const bubble = message.querySelector('[data-bot-reply-bubble]').getBoundingClientRect();
+          const row = message.getBoundingClientRect(), actions = footer.getBoundingClientRect();
+          return {
+            unused: row.width - bubble.width,
+            below: actions.top >= bubble.bottom,
+            inside: actions.left >= row.left && actions.right <= row.right,
+            inViewport: actions.left >= 0 && actions.right <= window.innerWidth && actions.bottom <= window.innerHeight,
+          };
+        });
+        assert.ok(layout.unused < 10 && layout.inside && layout.below && layout.inViewport,
+          'private topic uses its column with accessible message actions below the bubble');
+      }
+      await page.locator('[data-bot-reply-bubble]').hover();
       await read.click();
       const stop = page.getByRole('button', { name: await ui.t('bots.voiceMode.stopReadAloud'), exact: true });
       assert.equal(await stop.getAttribute('aria-pressed'), 'true');

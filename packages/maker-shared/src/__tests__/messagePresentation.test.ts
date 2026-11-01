@@ -99,6 +99,7 @@ describe('messagePresentation', () => {
     expect(buildMessageActionBarPresentation({
       align: 'user',
       canCopy: true,
+      canEdit: true,
       canFork: true,
       hasMoreActions: true,
       hasTime: true,
@@ -108,7 +109,8 @@ describe('messagePresentation', () => {
       align: 'right',
       buttonSize: 24,
       iconSize: 14,
-      items: ['time', 'copy', 'fork', 'more'],
+      // Desktop user row: [time][copy][fork][edit][more]; edit only on the last user message.
+      items: ['time', 'copy', 'fork', 'edit', 'more'],
     });
 
     expect(buildMessageActionBarPresentation({

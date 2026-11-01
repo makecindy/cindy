@@ -137,7 +137,7 @@ function hasExecutionComputerFile(message: AppRpc): boolean {
     if (--budget < 0 || depth > 24 || !value || typeof value !== 'object') return false;
     const object = value as Record<string, unknown>;
     if (object.type === 'resource_link' && typeof object.uri === 'string'
-      && /^(?:cindy-media:|library:)/i.test(object.uri)) return true;
+      && /^(?:cindy-media:|library:|handoff:)/i.test(object.uri)) return true;
     return Object.values(object).some((child) => visit(child, depth + 1));
   };
   return visit(message.params, 0) || visit(message.result, 0);

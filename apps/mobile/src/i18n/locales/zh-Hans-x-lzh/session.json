@@ -1,4 +1,31 @@
 {
+  "githubPrs": {
+    "title": "掌 PR 链接",
+    "hint": "顶列至多示 3 个，固定之 PR 居先",
+    "empty": "贴 GitHub PR 链接即可增之",
+    "removed": "已除 {{count}} 个",
+    "legacy": "待认旧引：{{count}}",
+    "addLabel": "增 PR 链接",
+    "add": "增 PR",
+    "loading": "方读…",
+    "restore": "复 PR",
+    "pin": "固于顶列",
+    "unpin": "解固",
+    "pinLimit": "至多固 3 个 PR",
+    "reorderHint": "按 Alt+↑/↓ 于已固或未固之组内调序。",
+    "dragHandle": "拖而排序 {{repo}} #{{number}}",
+    "remove": "除 PR",
+    "errors": {
+      "duplicate": "此 PR 已关联；已除之链接可于清单中复之",
+      "notFound": "寻此 PR 不得，或无访问之权柄",
+      "invalidUrl": "请输有效之 GitHub PR 链接",
+      "reorderFailed": "顺序未存，请再试",
+      "verifyFailed": "不能验 PR，请察 GitHub 登录与访问权柄",
+      "unsupported": "此机之版本暂不支持掌 PR 链接",
+      "failed": "不能更 PR 链接"
+    },
+    "moveUp": "上移"
+  },
   "paneResize": {
     "label": "分栏之宽",
     "hint": "左右拖之，可调两栏之宽"
@@ -197,7 +224,7 @@
       },
       "actionCopy": {
         "pending": "请先理待处之请求，毕后输入区自复。",
-        "archived": "差事已封存，复之方可续遣。",
+        "archived": "差事已封存，遣之则自解封存。",
         "deleted": "差事已删，不可再为。",
         "queuePaused": "队列已暂停，可于队列面板续行。"
       }
@@ -440,7 +467,7 @@
     "copyLinkAction": "录差事链接",
     "unpin": "去置顶",
     "pin": "居首",
-    "restore": "复",
+    "restore": "解封存",
     "archive": "封存",
     "deleteAction": "删差事",
     "deleteConversation": "删差事",
@@ -775,5 +802,17 @@
     "confirm": "改之",
     "remember": "改之，此后自动改（仅此差事）",
     "cancel": "罢"
+  },
+  "messageEdit": {
+    "editing": "方修此讯",
+    "discard": "弃此讯之修改",
+    "stopTimeout": "候差事停止逾时，请稍后再试",
+    "queueNotEmpty": "差事有排队之讯，请先遣出或移除，再修",
+    "notLast": "差事中已有更新之讯，此条非末条，不能修而重遣",
+    "failed": "修而重遣未成，请再试",
+    "noPriorAssistant": "此讯之前尚无 AI 之复，电脑端今版未能修之；请更新电脑端 Cindy 再试。",
+    "uploadsPending": "尚有附件上传，待其毕，再修此讯。",
+    "rollbackHint": "遣之，将撤上一轮对 {{count}} 卷之改动",
+    "conversationOnlyHint": "遣之不复原案中之卷，上一轮之卷改动仍存"
   }
 }

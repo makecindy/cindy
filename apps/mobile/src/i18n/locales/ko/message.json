@@ -162,6 +162,7 @@
     "mediaErrorLine": "오류: {{message}}",
     "mediaDeviceLinkHint": "열기 전에 휴대폰이 원격 기기에 이 미디어 업로드를 요청합니다.",
     "controlDelete": "메시지 삭제",
+    "controlEdit": "편집",
     "controlRewind": "여기로 돌아가기",
     "controlFork": "여기서 새 세션 시작",
     "markdownDocAriaLabel": "메시지 본문",
@@ -261,6 +262,14 @@
     "waitingMessage": "전송 대기 중인 메시지:{{text}}"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}}이(가) 이 작업에 {{model}}을(를) 선택했습니다",
+      "kept": {
+        "no-opinion": "{{plugin}}이(가) 이번에는 모델을 바꾸지 않아 이 작업은 {{model}}을(를) 사용합니다",
+        "failed": "{{plugin}}이(가) 제때 응답하지 않아 이 작업은 {{model}}을(를) 사용합니다",
+        "unavailable-route": "{{plugin}}이(가) 고른 모델을 쓸 수 없어 이 작업은 {{model}}을(를) 사용합니다"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "컨텍스트를 정리하고 계속합니다",
       "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",

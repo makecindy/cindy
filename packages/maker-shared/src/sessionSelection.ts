@@ -122,7 +122,7 @@ function isBulkActionCandidate(
 function bulkActionLabel(action: MobileSessionBulkAction): string {
   if (action === 'archive') return '归档';
   if (action === 'pin') return '置顶';
-  if (action === 'restore') return '恢复';
+  if (action === 'restore') return '取消归档';
   if (action === 'unpin') return '取消置顶';
   return '删除';
 }

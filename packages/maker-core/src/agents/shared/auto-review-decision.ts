@@ -4,6 +4,7 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_RE
 
 import {
   MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  MAX_AUTO_REVIEW_STATIC_TEXT_CHARS,
   reviewAction,
   type ReviewableAction,
   type ReviewVerdict,
@@ -199,7 +200,7 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
-/** Model-visible text on the rejected tool result, never an extra conversation message. */
+/** Denial provenance for tool results and Codex's same-turn host feedback. */
 export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
   const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
     : source === 'user' ? 'User denied this tool call via Cindy'
@@ -450,6 +451,8 @@ export type LocalAutoReviewTier = Exclude<ReviewVerdict, 'prompt'> | 'needs-revi
 export function classifyLocalAutoReviewTier(
   request: AutoReviewRequest,
 ): LocalAutoReviewTier {
+  // Large payloads bypass synchronous parsing, not permission review.
+  if (getAutoReviewActionTextLength(request.action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return 'needs-review';
   const verdict = reviewAction(
     request.action,
     request.workspaceRoots,
@@ -498,7 +501,7 @@ function fileChangeWithoutPaths(description: string): boolean {
 
 function oversizedReviewEvidence(action: ReviewableAction): string | null {
   return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
-    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    ? 'This action is too large for automatic review in full, so it needs your confirmation.'
     : null;
 }
 
@@ -513,7 +516,7 @@ function oversizedReviewEvidence(action: ReviewableAction): string | null {
  * 安全边界不降低（未经用户点头仍然不会执行），但用户至少知道该点头还是拒绝。
  *
  * 与「模型判定危险」的 `block` 仍然严格区分：那个继续静默，因为 Auto 的本意
- * 就是不打扰；模型 ask 与 unavailable 才交用户。
+ * 就是不打扰；模型 ask、完整证据超出预算与 unavailable 才交用户。
  */
 export async function resolveAutoReviewDecision(
   request: AutoReviewRequest,
@@ -527,11 +530,11 @@ export async function resolveAutoReviewDecision(
   // Outside Auto, only establish whether Host trust can skip confirmation.
   // A delegated request must use the existing human approval path, never AI.
   if (hostShortcutOnly) return { verdict: 'ask' };
-  // Bound untrusted input before the static classifier's command/path parsers,
-  // not merely before the model request. Neither may inspect an oversized action.
+  // Never review a truncated action or deny routine work merely for its length.
+  // Beyond the complete model-review budget, retain the existing confirmation path.
   const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
   if (oversizedEvidenceReason) {
-    return { verdict: 'block', reason: oversizedEvidenceReason };
+    return { verdict: 'ask', reason: oversizedEvidenceReason };
   }
   const localTier = classifyLocalAutoReviewTier(request);
   // The registered task can constrain reads as well as writes. No delegated
@@ -649,11 +652,11 @@ export function createAutoReviewActionContext() {
       blocked = [];
     },
     record(action: ReviewableAction, decision: AutoReviewDecision): void {
-      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) return;
+      if (decision.verdict !== 'block' || getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) return;
       const snapshot = JSON.parse(JSON.stringify(action)) as ReviewableAction;
       const key = JSON.stringify(snapshot);
       blocked = [...blocked.filter((item) => JSON.stringify(item) !== key), snapshot].slice(-3);
-      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) blocked.shift();
+      while (blocked.length && JSON.stringify(blocked).length > MAX_AUTO_REVIEW_STATIC_TEXT_CHARS) blocked.shift();
     },
     get precedingBlockedActions(): readonly ReviewableAction[] { return preceding; },
   };

@@ -24,7 +24,7 @@ export function BotGroupSidebarAvatar({
   /** `panel`: the same mark on a page surface (group settings), outlined in that surface. */
   surface?: 'sidebar' | 'panel';
 }) {
-  const frameClass = compact ? 'h-12 w-12' : 'h-11 w-11';
+  const frameClass = compact ? 'h-9 w-9' : 'h-11 w-11';
   const outline = surface === 'panel' ? 'border-[var(--surface)]'
     : selected ? 'border-sidebar' : 'border-sidebar group-hover:border-sidebar-item-hover';
   const [first, second] = members;
@@ -81,7 +81,7 @@ export function BotGroupSidebarAvatar({
         size="xs"
         className={cn(
           'absolute',
-          compact ? 'left-0 top-0 size-[34px] text-14' : 'left-0 top-0 size-[30px] text-14',
+          compact ? 'left-0 top-0 size-[26px] text-12' : 'left-0 top-0 size-[30px] text-14',
         )}
       />
       <span
@@ -94,7 +94,7 @@ export function BotGroupSidebarAvatar({
         <BotAvatar
           bot={first}
           size="xs"
-          className={compact ? 'size-[34px] text-14' : 'size-[30px] text-14'}
+          className={compact ? 'size-[26px] text-12' : 'size-[30px] text-14'}
         />
       </span>
     </span>

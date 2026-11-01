@@ -6,6 +6,32 @@ import { createXdtHelperMcpServer } from "../lizi_xdtHelperMcpServer.js";
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, real MCP wire: three harness contexts discover one shared capability.
+// A read must never dispatch an association write; shared guests cannot use it.
+it('exposes GitHub to all harnesses without implicit association', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    const call = vi.fn(async () => ({ ok: true, state: 'open', head_sha: 'abc' }));
+    const server = createXdtHelperMcpServer({ github: { call }, resolveSurface: async () => restricted ? 'restricted' : 'default' },
+      { agentKind, workingDir: '/fixture', sessionId: 'current' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'github-read-test', version: '1' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+      expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'github' })]));
+      const tools = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'github' } }));
+      expect(tools.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'get_pr_status' }), expect.objectContaining({ name: 'manage_session_prs' })]));
+      const result = parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_pr_status', args: { pr: { repo: 'o/r', number: 1 } } } }));
+      expect(result).toMatchObject({ ok: true, head_sha: 'abc' });
+      expect(call).toHaveBeenCalledExactlyOnceWith('current', 'get_pr_status', { pr: { repo: 'o/r', number: 1 } });
+      restricted = true;
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'get_pr_status', args: { pr: { repo: 'o/r', number: 1 } } } }))).toMatchObject({ ok: false });
+      expect(call).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
 function parsePayload(result: unknown): Record<string, unknown> {
   const content = (
     result as { content?: Array<{ type: string; text?: string }> }

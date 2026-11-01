@@ -2008,9 +2008,13 @@ describe('BotGroupChatView', () => {
       });
       await send.resolve({ ok: true, messageId: 'u2' });
       pushMessages();
-      await waitFor(() => expect(outboxItems()).toHaveLength(0));
-      expect(screen.getAllByAltText('photo.png')).toHaveLength(1);
-      expect(screen.getByAltText('photo.png').getAttribute('src')).toContain('photo.png');
+      // The outbox can settle before the composer's attachment tray commits its
+      // clear. Wait for the complete handoff; a second timeline image must still fail.
+      await waitFor(() => {
+        expect(outboxItems()).toHaveLength(0);
+        expect(screen.getAllByAltText('photo.png')).toHaveLength(1);
+        expect(screen.getByAltText('photo.png').getAttribute('src')).toContain('photo.png');
+      });
 
       mocks.getBotGroup.mockResolvedValue({
         ok: true,

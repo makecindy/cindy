@@ -1,3 +1,4 @@
+import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
 import { groupSettingsVisualFixture } from './groupSettingsVisualFixture';
 import { sessionImportVisualFixture } from './sessionImportVisualFixture';
@@ -222,6 +223,8 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  const github = githubPrVisualFixture(channel, args[0]);
+  if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);
   if (mask !== undefined) return mask as T;
   const groupSettings = groupSettingsVisualFixture(channel, args[0]);
@@ -569,6 +572,8 @@ function catalogSession(row: UiMockSessionRow): RemoteSession {
 }
 
 function visualMockSession(id: string): RemoteSession {
+  if (id === 'visual-teammate-b2b') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy · 内部通讯',
+    companion: { id: 'visual-bot-b2b', role: 'canonical' } };
   if (id === 'visual-teammate-process') return { ...visualMockSession('ui-mock-rich-answer'), id, source: 'bot', title: 'Cindy' };
   if (id === VISUAL_MAIL_DRAFT_SESSION_ID) return { ...visualMockSession('ui-mock-rich-answer'), id, title: '回复试玩反馈' };
   if (id === VISUAL_TEAMMATE_SESSION_ID || id.startsWith(`${VISUAL_TEAMMATE_SESSION_ID}:`)
@@ -596,6 +601,23 @@ function sessionFromShared(
 }
 
 function visualMockMessages(sessionId: string): RemoteMessage[] {
+  if (sessionId === 'visual-teammate-b2b') {
+    const trace = (direction: 'received' | 'sent', sequence: number) => ({ botDirectMessage: {
+      v: 1, threadId: 'visual-b2b-thread', viewerBotId: 'visual-bot-b2b', peerBotId: 'visual-bot-lizi',
+      peerBotName: 'LiZi', direction, sequence, preview: sequence === 1 ? '请核对版式。' : '已核对，入口左对齐。',
+    } });
+    return [
+      message(sessionId, 'b2b-received', 'assistant', '', -90000, { agentMeta: trace('received', 1) }),
+      message(sessionId, 'bot-dm:visual-b2b-thread:delivery', 'user', '[UI_ACTION_TRIGGER]请核对版式。', -89000),
+      message(sessionId, 'b2b-thinking', 'thinking', { text: '核对版式', durationMs: 1000 }, -80000, { agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-send', 'tool_use', { toolName: 'mcp:cindy_helper:send_to_agent', toolUseId: 'b2b-send', input: { target_id: 'visual-bot-lizi', message: '已核对，入口左对齐。' } }, -75000, { agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-sent', 'assistant', '', -70000, { agentMeta: trace('sent', 2) }),
+      message(sessionId, 'b2b-send-result', 'tool_result', { ok: true, accepted: true }, -69000, { toolUseId: 'b2b-send', agentMeta: { botPrivateReply: true } }),
+      message(sessionId, 'b2b-internal', 'assistant', 'B2B-INTERNAL-HIDDEN', -65000, { agentMeta: { botPrivateReply: true, assistantPhase: 'final_answer', turnCompleted: true } }),
+      message(sessionId, 'b2b-owner', 'user', '把核对结果告诉我。', -30000),
+      message(sessionId, 'b2b-owner-answer', 'assistant', '入口已经左对齐，完整往来可以点开查看。', -20000, { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+    ];
+  }
   if (sessionId === VISUAL_MAIL_DRAFT_SESSION_ID) return [
     message(sessionId, 'mail-draft-user', 'user', '帮我回复 Avery，说两个问题都记下了，约下周二或周三下午通话。', -60000),
     message(sessionId, 'mail-draft-call', 'tool_use', { toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'google-gmail', tool: 'gmail_run' }, toolUseId: 'mail-draft-call' }, -50000),
@@ -649,7 +671,7 @@ function visualMockMessages(sessionId: string): RemoteMessage[] {
         role: row.role,
         content: streaming ? { text: row.content, isStreaming: true } : row.content,
         toolUseId: row.toolUseId,
-        agentMeta: streaming ? { isStreaming: true } : null,
+        agentMeta: streaming ? { isStreaming: true } : row.agentMeta ?? null,
         createdAt: new Date(row.createdAt).toISOString(),
       } as RemoteMessage;
     });
@@ -949,6 +971,7 @@ function visualMockFileBrowserEntries() {
     { type: 'file', name: 'README.md', relPath: 'README.md', size: 4820, mtimeMs: NOW - 900_000 },
     { type: 'file', name: 'visual-report.md', relPath: 'visual-report.md', size: 78, mtimeMs: NOW - 300_000 },
     { type: 'file', name: 'chart.png', relPath: 'chart.png', size: 48_112, mtimeMs: NOW - 240_000 },
+    { type: 'file', name: 'quarterly-report.pdf', relPath: 'quarterly-report.pdf', size: 248_000, mtimeMs: NOW - 180_000 },
     { type: 'file', name: 'demo.mp4', relPath: 'demo.mp4', size: 4_820_000, mtimeMs: NOW - 120_000 },
   ];
 }

@@ -162,6 +162,7 @@
     "mediaErrorLine": "Erro: {{message}}",
     "mediaDeviceLinkHint": "Antes de abrir, seu celular solicita ao dispositivo remoto o upload desta mídia.",
     "controlDelete": "Excluir mensagem",
+    "controlEdit": "Editar",
     "controlRewind": "Voltar até aqui",
     "controlFork": "Iniciar nova sessão daqui",
     "markdownDocAriaLabel": "Corpo da mensagem",
@@ -262,6 +263,14 @@
     "imagesNotUploaded_many": "{{count}} imagens não foram enviadas"
   },
   "systemCard": {
+    "pluginModelRoute": {
+      "routed": "{{plugin}} escolheu {{model}} para esta tarefa",
+      "kept": {
+        "no-opinion": "{{plugin}} não mudou o modelo desta vez; esta tarefa usa {{model}}",
+        "failed": "{{plugin}} não respondeu a tempo; esta tarefa usa {{model}}",
+        "unavailable-route": "{{plugin}} escolheu um modelo indisponível; esta tarefa usa {{model}}"
+      }
+    },
     "contextRebuild": {
       "labelOverflow": "Contexto reorganizado, continuando",
       "labelTimeout": "O último turno não teve resposta; contexto reorganizado para continuar",

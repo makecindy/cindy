@@ -1228,7 +1228,6 @@
     "clipboardSyncSkipped": "This format is not supported for clipboard sync and was skipped.",
     "clipboardSyncTooLarge": "Content exceeds the clipboard sync size limit and was skipped.",
     "clipboardSyncPermission": "Clipboard sync needs paste access. Allow it, then return to this window to resume.",
-    "clipboardSyncWaiting": "The remote computer’s clipboard is not available right now (it may be locked). Sync resumes automatically.",
     "lockingOnExit": "Locking computer…",
     "idleLock": "Disconnect and lock when idle",
     "idleNever": "Never",
@@ -1348,6 +1347,10 @@
       "lock-unreadable": "The local data maintenance lock could not be read or saved. Check access to the data directory, then reopen it after access is restored. Contact support if this continues.",
       "recovery-busy": "Another Cindy instance is checking the local data maintenance lock. Reopen the local data shortly."
     },
+    "passiveCorrupt": {
+      "title": "Shared database can't be recovered",
+      "description": "Cindy is running in read-only / shared mode and will not automatically recover or modify this shared database. If another instance uses the same userData, close it and retry, or start with --isolated."
+    },
     "databaseCleanup": {
       "interruptedTitle": "Database Cleanup Was Interrupted",
       "interruptedDescription": "Database cleanup stopped unexpectedly. Restart Cindy so it can recover safely from the saved maintenance state.",
@@ -1362,6 +1365,16 @@
     "preparing": {
       "description": "Your local data was upgraded by a newer version of Cindy and can't be opened by this version. Fetching the new version, please wait…",
       "progress": "{{progress}}% downloaded"
+    },
+    "initFailed": {
+      "title": "Local database failed to start",
+      "description": "The local database couldn't start. Try again first. If it keeps failing, share the technical details below with the team.",
+      "retry": "Retry Starting Database"
+    },
+    "corrupt": {
+      "title": "Local database can't be opened",
+      "description": "The local database may be damaged, or it may be in use by another Cindy instance sharing the same data. If another instance is open, close it and retry. If the problem persists, no usable backup could restore it automatically; copy the technical details and share them with the team to get help recovering your data.",
+      "copy": "Copy Technical Details"
     },
     "noUpdate": {
       "title": "Local data can't be opened right now",
@@ -4892,9 +4905,6 @@
         "title": "Group participation",
         "hint": "Groups the bot has seen appear here. \"Active\" = it reads every message and decides on its own whether to chime in (each message costs tokens).",
         "empty": "No groups yet. Add the bot to a group and it will appear here once someone speaks.",
-        "contactsOn": "People who speak in groups are auto-added to Smart Contacts (master switch is on).",
-        "contactsOff": "Smart Contacts is off — people who speak in groups won't be remembered automatically.",
-        "contactsEnable": "Turn on",
         "error": {
           "load": "Telegram groups could not be loaded. Check the connection and retry.",
           "save": "The group mode was not saved. The last confirmed mode was restored.",
@@ -5420,7 +5430,6 @@
         "title": "Use my browser logins",
         "description": "The agent will open sites with your signed-in Chrome, Edge, or Brave accounts.",
         "toggleAria": "Use my browser logins",
-        "unavailableEmbedded": "Only applies to the standalone browser. Switching it off deletes the copied login files.",
         "confirmTitle": "Let the agent use your browser logins?",
         "confirmDescription": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. You can turn it off anytime; the copy will be deleted.",
         "confirmDescriptionMac": "The agent will be able to open sites with your signed-in accounts, including email, cloud drives, and work consoles. Reading Chrome’s login files also needs Full Disk Access. You can turn this off anytime; the copy will be deleted.",
@@ -5752,10 +5761,6 @@
         "ssh": {
           "name": "SSH commands",
           "description": "Run commands on remote computers through configured SSH connections."
-        },
-        "contacts": {
-          "name": "Smart Contacts",
-          "description": "Find and manage contact profiles and interaction history."
         }
       }
     },
@@ -6241,9 +6246,6 @@
             "title": "Group participation",
             "hint": "Groups seen by the official bot appear here. Active mode applies to every message from your linked account only; other members add local context but cannot trigger tasks.",
             "empty": "No groups yet. Add the bot to a group and send a message from your linked account.",
-            "contactsOn": "Other people who speak in groups are auto-added to Smart Contacts.",
-            "contactsOff": "Smart Contacts is off, so other group members will not be remembered automatically.",
-            "contactsEnable": "Turn on",
             "error": {
               "load": "Telegram groups could not be loaded. Check the connection and retry.",
               "save": "The group mode was not saved. The last confirmed mode was restored.",
@@ -7529,6 +7531,20 @@
         "unknownPublisher": "Unknown publisher",
         "unknownReviewerDetail": "The package claims a review, but this Cindy version does not recognize the reviewer key, so it is not shown as reviewed."
       },
+      "controlPoints": {
+        "title": "Pre-run checks",
+        "description": "This plugin can check automations or routines before they run. It can skip or stop a run, never approve one for you.",
+        "titleWithStartTask": "When this plugin steps in",
+        "descriptionWithStartTask": "It only steps in for tasks where you chose it: before a run it can only skip or stop that run, and for a new task it picks a model once, for the first message. It can never approve anything for you.",
+        "usage": "To use it, choose it under Pre-run check when editing an automation or routine.",
+        "usageStartTask": "To use it, choose a model it provides in a new task’s model picker.",
+        "points": {
+          "will-schedule-run": "Before an automation runs",
+          "will-routine-run": "Before a teammate routine runs",
+          "will-start-task": "When a new task starts"
+        },
+        "inactive": "Not available yet. Allow it when you update or reinstall this plugin."
+      },
       "perm": {
         "mail": "Use mail drafts and send cards",
         "mailDetail": "Edit and sync drafts in a card, with confirmation and an undo countdown before sending.",
@@ -7598,6 +7614,12 @@
         "subscribeHooksDetail": "Reviews each message before sending: it may block it or rewrite the text before it goes out; blocked messages can be edited and resent.",
         "subscribeAssistantReply": "Can read and rewrite the AI's replies",
         "subscribeAssistantReplyDetail": "Processes each AI reply after it completes: it may polish or rewrite the text (replacing it directly, without keeping the original), or replace the reply bubble with its own rendered card (in that case the original text is kept and can be viewed with one tap).",
+        "subscribeScheduleRun": "Can check chosen automations before they run",
+        "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
+        "subscribeRoutineRun": "Can check chosen teammate routines before they run",
+        "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
+        "subscribeStartTask": "Can choose the model for new tasks",
+        "subscribeStartTaskDetail": "When a new task uses a model it provides, it reads the first message and picks one of your connected models. It decides once; the model doesn’t change during the task.",
         "card": "Renders message cards",
         "cardExternalLink": "Cards may declare external links that open your browser after confirmation",
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
@@ -7788,6 +7810,22 @@
         "reveal": "Show in Task List",
         "revealed": "Task shown in the task list",
         "revealFailed": "Could not show the task in the task list"
+      },
+      "handoff": {
+        "title": "Files handed to this plugin in chats",
+        "description": "Copies of files you handed to this plugin in chats. Each copy is deleted automatically after 7 days without use.",
+        "empty": "No files have been handed to this plugin in chats yet.",
+        "loadFailed": "Couldn't load the file list. Try again later.",
+        "refresh": "Refresh",
+        "openInFinder": "Open in Finder",
+        "openInExplorer": "Open in File Explorer",
+        "meta": "{{size}} · Handed over {{handedAt}} · Deleted automatically {{expiresAt}}",
+        "delete": "Delete",
+        "deleteNamed": "Delete {{name}}",
+        "deleteTitle": "Delete this file?",
+        "deleteDescription": "After deletion, the plugin and any open pages can no longer use “{{name}}”. This can't be undone.",
+        "deleteFailed": "Couldn't delete the file. Try again later.",
+        "cancel": "Cancel"
       },
       "library": {
         "title": "Durable library",
@@ -8285,187 +8323,6 @@
         "title": "Delete \"{{name}}\"?",
         "message": "New sessions will no longer load this MCP.",
         "confirm": "Delete"
-      }
-    },
-    "contacts": {
-      "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data stays on this device by default, with optional device sync; lookups and organizing are processed through your own model.",
-      "enable": {
-        "label": "Enable Smart Contacts",
-        "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
-        "toggleAria": "Toggle Smart Contacts"
-      },
-      "sync": {
-        "label": "Sync across my devices",
-        "description": "Enable once on each desktop you want to include. Online devices sync automatically, connecting directly on the same local network when possible or using end-to-end encrypted relay data. Comparison is programmatic, with no model or token usage.",
-        "toggleAria": "Toggle contact device sync",
-        "syncNow": "Sync now",
-        "onlineDevices_one": "{{count}} other device online",
-        "onlineDevices_other": "{{count}} other devices online",
-        "route": {
-          "lan": "Local network",
-          "relay": "Encrypted relay"
-        },
-        "status": {
-          "loading": "Reading sync status…",
-          "signInRequired": "Sign in to your Cindy account to sync between devices",
-          "off": "Sync is off",
-          "waiting": "Waiting for another sync-enabled desktop to come online",
-          "syncing": "Syncing securely…",
-          "ready": "Ready — devices will sync when they come online",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "System secure storage is unavailable, so the device key cannot be protected",
-          "peer-identity-changed": "A device identity changed; sync is paused to protect your data",
-          "sync-failed": "Sync failed and will retry when a device is next online"
-        },
-        "toast": {
-          "enabled": "Device sync enabled",
-          "disabled": "Device sync disabled"
-        }
-      },
-      "stats": "{{people}} people / {{orgs}} orgs / {{groups}} groups",
-      "kind": {
-        "person": "Person",
-        "org": "Organization"
-      },
-      "filters": {
-        "all": "All",
-        "person": "People",
-        "org": "Orgs",
-        "pending": "Pending"
-      },
-      "list": {
-        "searchPlaceholder": "Search name / email / keyword",
-        "newAria": "New contact",
-        "newNamePlaceholder": "Name or organization",
-        "newKindAria": "Toggle type (person / organization)",
-        "newConfirm": "Create",
-        "groupFilterAria": "Filter by group",
-        "groupFilterAll": "All groups",
-        "loadMore": "Load more",
-        "noResults": "No matching contacts",
-        "empty": "Your contacts are empty. Once enabled, agents will collect entries as they work — or click + to add one manually."
-      },
-      "detail": {
-        "empty": "Select a contact on the left to view its profile",
-        "pendingBanner": "This entry was collected by an agent with low confidence. Please review it.",
-        "pendingConfirm": "Confirm",
-        "pendingDiscard": "Discard",
-        "nameAria": "Display name",
-        "deleteAria": "Delete contact",
-        "summaryPlaceholder": "One-line summary",
-        "identities": "Identities",
-        "identityRemoveAria": "Remove identity {{value}}",
-        "identityPlatformAria": "Platform",
-        "identityValuePlaceholder": "Email / platform id / handle",
-        "identityAddAria": "Add identity",
-        "narrative": "Relationship & background",
-        "narrativePlaceholder": "Your relationship, collaboration history, and background (Markdown)",
-        "agentNotes": "Instructions for agents",
-        "agentNotesPlaceholder": "e.g. This is the boss’s personal email — never mass-mail it",
-        "events": "Timeline",
-        "eventsEmpty": "No events yet",
-        "eventDeleteAria": "Delete event",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "What happened",
-        "eventAddAria": "Add event",
-        "groups": "Groups",
-        "groupRemoveAria": "Remove from group {{name}}",
-        "groupAddAria": "Add to group",
-        "groupAddPlaceholder": "Add to group…",
-        "discardChanges": "Discard changes",
-        "save": "Save",
-        "identitiesEmpty": "No identities yet",
-        "relations": "Connections",
-        "relationsEmpty": "No connections yet (organizations / related people)",
-        "relationAddAria": "Add connection",
-        "relationRemoveAria": "Remove connection with {{name}}",
-        "relationVerbPlaceholder": "works at / family…",
-        "relationTargetAria": "Choose related contact",
-        "relationTargetPlaceholder": "Choose a person or org…",
-        "relationNotePlaceholder": "Note (title…)"
-      },
-      "deleteConfirm": {
-        "title": "Delete \"{{name}}\"?",
-        "description": "All identities, timeline events, and group memberships will be deleted. This cannot be undone.",
-        "confirm": "Delete",
-        "cancel": "Cancel"
-      },
-      "toast": {
-        "enabled": "Smart Contacts enabled",
-        "disabled": "Smart Contacts disabled",
-        "codexRefreshDeferred": "Setting saved, but Codex is busy — it will apply to Codex sessions after the app restarts",
-        "toggleFailed": "Failed to toggle Smart Contacts",
-        "created": "Created \"{{name}}\"",
-        "createFailed": "Failed to create contact",
-        "deleted": "Deleted \"{{name}}\"",
-        "deleteFailed": "Failed to delete contact",
-        "saved": "Saved",
-        "saveFailed": "Failed to save",
-        "confirmFailed": "Failed to confirm entry",
-        "identityAddFailed": "Failed to add identity",
-        "identityRemoveFailed": "Failed to remove identity",
-        "eventAddFailed": "Failed to add event",
-        "eventDeleteFailed": "Failed to delete event",
-        "groupAddFailed": "Failed to add to group",
-        "groupRemoveFailed": "Failed to remove from group",
-        "relationAddFailed": "Failed to add connection",
-        "relationRemoveFailed": "Failed to remove connection"
-      },
-      "manage": "Manage",
-      "manager": {
-        "title": "Smart Contacts",
-        "closeAria": "Close"
-      },
-      "merge": {
-        "button": "Merge duplicate",
-        "buttonAria": "Merge duplicate contact",
-        "hint": "Pick a duplicate to merge its identities, events, and connections into \"{{target}}\", then delete it.",
-        "searchPlaceholder": "Search duplicates…",
-        "confirmTitle": "Merge \"{{source}}\" into \"{{target}}\"?",
-        "confirmDescription": "All identities, events, connections, and groups of \"{{source}}\" will be moved over, and its profile deleted. This cannot be undone.",
-        "confirm": "Merge",
-        "success": "Merged \"{{source}}\" into \"{{target}}\"",
-        "failed": "Merge failed"
-      },
-      "import": {
-        "title": "Import contacts",
-        "button": "Import",
-        "pickHint": "Bulk import from an external source. Entries whose email/phone matches an existing profile are merged automatically (no duplicates); similar names go to a manual review list.",
-        "sourceSystem": "System Contacts",
-        "sourceSystemDesc": "Read-only; requires system permission on first use",
-        "sourceVcf": "vCard file",
-        "sourceVcfDesc": ".vcf (standard contacts export format)",
-        "emptySource": "No importable contacts in this source",
-        "permissionDenied": "Contacts access denied — allow it in System Settings → Privacy & Security → Automation",
-        "systemReadFailed": "Failed to read system contacts",
-        "vcfParseFailed": "Failed to parse the vCard file",
-        "selectedCount": "{{checked}} / {{total}} selected",
-        "groupPlaceholder": "Add to group after import (optional; created if missing)",
-        "run": "Import {{count}}",
-        "running": "Importing…",
-        "failed": "Import failed",
-        "doneSummary": "Import finished: {{created}} created, {{enriched}} merged into existing profiles, {{orgs}} organizations created.",
-        "needsReview": "{{count}} entries have names similar to existing profiles and were not imported — please review: {{names}}",
-        "identityConflicts": "{{count}} record(s) had identities already owned by other contacts ({{names}}) and were not merged — review them in the manager to decide whether to merge",
-        "relationErrors": "{{count}} employment relation(s) could not be created ({{names}})",
-        "skipped": "{{count}} entries skipped (invalid or failed)."
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "This identity already belongs to another contact. Update that profile or merge first.",
-        "PERMISSION_DENIED": "Contacts access not authorized. Allow it in System Settings > Privacy & Security > Automation.",
-        "UNSUPPORTED_CAPABILITY": "This action is not supported on this platform.",
-        "NOT_FOUND": "The target no longer exists.",
-        "ALREADY_EXISTS": "An item with the same name or content already exists.",
-        "INVALID_PARAMS": "Invalid input. Please check and try again.",
-        "INTERNAL": "Operation failed. Please try again later."
-      },
-      "guide": {
-        "hint": "Let AI help add contact profiles, review pending entries, and clean up duplicates.",
-        "cta": "Manage Contacts with AI",
-        "managementPrompt": "Help me manage my Smart Contacts. First check the current state and the tools already available, then guide me through adding useful contacts, reviewing duplicates, and handling pending entries. Ask me before any write, merge, or deletion."
       }
     },
     "remotePermission": {
@@ -11506,6 +11363,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "Open conversation",
+      "inCallWith": "In a call with {{name}}",
       "showDetails": "Show call transcript",
       "hideDetails": "Hide call transcript",
       "transcriptTitle": "Current transcription",
@@ -11574,6 +11433,7 @@
       "unsent": "Not sent · select the text to copy it",
       "hint": "Pause to send. Replies are read aloud with an AI voice. Speak at any time to interrupt.",
       "status": {
+        "questionElsewhere": "A question is waiting in the task · call continues",
         "idle": "Ready when you are",
         "connecting": "Connecting to speech recognition…",
         "listening": "Listening",
@@ -11589,6 +11449,7 @@
         "muted": "Microphone off · You can still listen"
       },
       "errors": {
+        "busy": "Voice is in use by another call, read-aloud, preview or dictation. End it and try again.",
         "connection": "Voice connection interrupted. Your unsent text is kept below.",
         "microphone": "Microphone stopped. Check its permission and connection, then resume.",
         "send": "This message was not accepted. Your text is kept below.",
@@ -12475,6 +12336,7 @@
         "titleLocal": "Run the Agent on this computer again?",
         "titleOther": "Run the Agent on “{{device}}”?",
         "description": "The conversation record on the other computer can’t be moved over, so it continues from a handoff summary. Thinking and similar details may not carry over completely. Takes effect when you send the next message.",
+        "descriptionNativeHistory": "The full conversation record is copied over and continues from where it left off. If it can’t be restored, it continues from a handoff summary instead, and thinking and similar details may not carry over completely. Takes effect when you send the next message.",
         "confirm": "Switch computer",
         "cancel": "Keep as is"
       }
@@ -12718,6 +12580,7 @@
     "cindyServiceUnavailable": "The Cindy voice service is unavailable. Check your network or switch service source.",
     "asrServiceUnavailable": "Voice recognition service failed to connect. Check your network and try again.",
     "emptyTranscript": "Speech was detected, but no text was recognized. Please try again.",
+    "speakerFiltered": "Ignored someone else's voice",
     "connectionInterrupted": "The voice connection was interrupted. Check your network and try again.",
     "recognitionStalled": "Voice recognition stopped returning results. Try again.",
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
@@ -12743,6 +12606,14 @@
     "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "chose for this task",
+      "kept": {
+        "no-opinion": "{{plugin}} kept your choice for this task:",
+        "failed": "{{plugin}} didn’t answer in time, so this task uses",
+        "unavailable-route": "{{plugin}} chose a model you can’t use, so this task uses"
+      }
+    },
     "teammateProcess": {"record":"Activity","operations":"Activity log","elapsed":"Working for {{duration}}","took":"Took {{duration}}","processing":"Working","worked":"Activity","thinking":"Thinking","thought":"Thought","failed_one":"{{count}} call failed","failed_other":"{{count}} calls failed","separator":", ","actions":{"running":{"read":"Reading files","edit":"Editing files","search":"Searching","web":"Browsing the web","command":"Running commands","tools":"Using tools","delegate":"Delegating work","plan":"Updating the plan"},"done":{"read":"Read files","edit":"Edited files","search":"Searched","web":"Browsed the web","command":"Ran commands","tools":"Used tools","delegate":"Delegated work","plan":"Updated the plan"}}},
     "imageDelivery": {
       "stored": "Image delivered",
@@ -14666,6 +14537,7 @@
           "hint": "Up to 3 in the header; pinned PRs appear first",
           "empty": "Paste a GitHub PR link to add it",
           "removed": "Removed: {{count}}",
+          "legacy": "Unconfirmed references: {{count}}",
           "addLabel": "Add PR Link",
           "add": "Add PR",
           "loading": "Loading…",
@@ -14995,6 +14867,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "Repository automations found in {{projectName}}",
+        "review": "Review Import",
+        "title": "Import Repository Automations",
+        "description": "Source: {{workingDir}}. Review the definitions below. Importing applies these changes and enables new automations, which can run commands and start Agents with full access. Import only content you trust.",
+        "accept": "Confirm Import",
+        "removed": "Will remove: {{names}}"
+      },
       "toast": {
         "summary": "added {{inserted}} · updated {{updated}} · removed {{deleted}}",
         "installed": "Project automation installed for {{projectName}} ({{summary}})",
@@ -15169,6 +15049,7 @@
         "timeout": "Timeout (seconds, optional)",
         "timeoutPlaceholder": "No timeout",
         "capabilities": {
+          "github_read": "Read GitHub",
           "jira_read": "Read Jira",
           "jira_comment": "Comment on Jira",
           "sessions_dispatch": "Dispatch sessions",
@@ -15180,6 +15061,7 @@
         "capabilitiesSearch": "Search capabilities",
         "capabilitiesEmpty": "No matching capabilities",
         "capabilityDescs": {
+          "github_read": "Read PR status, CI, reviews and observed changes; queries do not link tasks",
           "jira_read": "Read Jira issues (get by key / JQL search)",
           "jira_comment": "Add comments to Jira issues",
           "sessions_dispatch": "Create or wake {{appName}} sessions and deliver messages",
@@ -15274,6 +15156,25 @@
         },
         "browse": "Choose a script file (or drag one onto the input)"
       },
+      "preRunPlugin": {
+        "sourceLabel": "Check with",
+        "source": {
+          "script": "Script",
+          "plugin": "Plugin"
+        },
+        "tooltip": "Before each run, Cindy asks the plugin you choose. It can let the run go ahead, skip this run, or stop it. It can never approve anything that needs your confirmation.",
+        "choose": "Choose a plugin",
+        "unavailable": "Unavailable plugin",
+        "unavailableHint": "This plugin is no longer available. Until you choose another one, runs follow “If the plugin fails”.",
+        "hint": "The plugin can let the run go ahead, skip this run, or stop it. It can never approve anything for you.",
+        "empty": "No plugin can check runs yet. Install a plugin that supports pre-run checks and allow it when you install or update it.",
+        "onFailureLabel": "If the plugin fails",
+        "onFailure": {
+          "allow": "Run as usual",
+          "skip": "Skip this run",
+          "block": "Stop and mark as failed"
+        }
+      },
       "validation": {
         "nameRequired": "Name is required",
         "promptRequired": "Prompt is required",
@@ -15286,6 +15187,7 @@
         "modelUnavailable": "Model {{model}} is no longer available. Select another model.",
         "reasoningInvalid": "Reasoning must be one of {{values}}",
         "preRunHookCommandRequired": "Enter the pre-run check command",
+        "preRunPluginRequired": "Choose a plugin for the pre-run check",
         "templateParamRequired": "Enter {{label}}",
         "templateApplyFailed": "Could not apply the template. Check the parameters and try again."
       }
@@ -15772,6 +15674,7 @@
       "titleRevealPath": "Allow the Agent to receive this media file's local path?",
       "count": "{{count}} files",
       "descriptionAttachments": "The files below are outside this session's working directory. If you allow, they will be handed to this plugin (it only receives content fingerprints, never paths).",
+      "descriptionHandoff": "The files below are outside this session's working directory. If you allow, the plugin receives copies of them (never their paths); the copies are deleted automatically after 7 days without use.",
       "descriptionDir": "The directory/file below is outside this session's working directory. If you allow, its files will be handed to this plugin for upload (it only receives a one-time ticket, never paths).",
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
@@ -17594,6 +17497,7 @@
     "sessionModeFresh": "New session each trigger (isolate context)",
     "sessionModeHint": "Persistent keeps one routine conversation. New session creates and closes an isolated conversation for each trigger.",
     "quietHint": "Report changes or problems only. Turn off for reminders and scheduled messages.",
+    "checkSource": "Check with",
     "checkCommand": "Pre-run check command",
     "checkHint": "Optional. Checks on the computer before each run: exit 2 skips the run, exit 0 continues, errors stay visible. Clear to remove.",
     "timeoutMs": "Check timeout (ms, blank for no limit)",
@@ -17659,6 +17563,14 @@
         "skillDisabled": "Disabled skill “{{title}}”",
         "skillMerged": "Merged skill “{{title}}” into “{{into}}” and disabled it"
       }
+    },
+    "remote": {
+      "pause": "Pause Routine",
+      "resume": "Resume Routine",
+      "addSchedule": "Add Schedule",
+      "addInterval": "Add Interval",
+      "addEvent": "Add Event Trigger",
+      "filterField": "Filter Field"
     }
   },
   "cindyMakeDoctor": {

@@ -1216,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暫不支援剪貼簿同步，已略過",
     "clipboardSyncTooLarge": "內容超出剪貼簿同步大小限制，已略過",
     "clipboardSyncPermission": "剪貼簿同步需要貼上權限，授權後回到視窗即可恢復",
-    "clipboardSyncWaiting": "遠端電腦的剪貼簿暫時無法存取（可能已鎖定螢幕），解鎖後會自動繼續同步。",
     "lockingOnExit": "正在鎖定電腦…",
     "idleLock": "閒置後中斷並鎖定螢幕",
     "idleNever": "永不",
@@ -1335,6 +1334,10 @@
       "lock-unreadable": "無法讀取或儲存本機資料的維護鎖。請檢查資料目錄的存取權限；恢復存取後重新開啟。若仍失敗，請聯絡支援人員。",
       "recovery-busy": "另一個 Cindy 執行個體正在檢查本機資料的維護鎖。請稍後重新開啟。"
     },
+    "passiveCorrupt": {
+      "title": "共享資料庫無法復原",
+      "description": "目前以唯讀／共享模式執行，Cindy 不會自動復原或修改該共享資料庫。若另有執行個體使用同一份 userData，請先關閉後重試；也可改用 --isolated 啟動。"
+    },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中斷",
       "interruptedDescription": "資料庫清理異常中斷。請重新啟動 Cindy，系統會根據維護記錄安全復原。",
@@ -1349,6 +1352,16 @@
     "preparing": {
       "description": "本地資料已由更新版本的 Cindy 升級，當前版本無法開啟。正在獲取新版本，請稍候…",
       "progress": "已下載 {{progress}}%"
+    },
+    "initFailed": {
+      "title": "本地資料庫啟動失敗",
+      "description": "本地資料庫未能正常啟動。請先重試；若持續失敗，請將下方技術細節回報給開發團隊。",
+      "retry": "重試啟動資料庫"
+    },
+    "corrupt": {
+      "title": "本地資料庫無法開啟",
+      "description": "本地資料庫可能已損毀，也可能正被共用同一份資料的其他 Cindy 實例佔用。若已開啟其他實例，請先關閉後重試；若仍失敗，代表沒有可用備份能夠自動復原，請複製技術細節並回報給開發團隊，以取得資料復原協助。",
+      "copy": "複製技術細節"
     },
     "noUpdate": {
       "title": "本地資料暫時無法開啟",
@@ -4849,9 +4862,6 @@
         "title": "群聊參與模式",
         "hint": "bot 進過的群會出現在這裡。「全響應」= 每條訊息都看，bot 自己判斷要不要插話（每條都會消耗 token）。",
         "empty": "還沒有群。把 bot 拉進群、有人說話後就會出現在這裡。",
-        "contactsOn": "群裡說話的人會自動記入智慧通訊錄（總開關已開啟）。",
-        "contactsOff": "智慧通訊錄未開啟，群裡說話的人不會被自動記住。",
-        "contactsEnable": "開啟",
         "error": {
           "load": "未能讀取 Telegram 群列表，請檢查連線後重試。",
           "save": "群參與模式未儲存，已恢復上次確認的模式。",
@@ -5377,7 +5387,6 @@
         "title": "使用我的瀏覽器登入態",
         "description": "Agent 會用你在 Chrome、Edge 或 Brave 裡已登入的身分造訪網站。",
         "toggleAria": "使用我的瀏覽器登入態",
-        "unavailableEmbedded": "只對獨立瀏覽器生效。關閉後會刪除已複製的登入檔。",
         "confirmTitle": "允許 Agent 使用你的瀏覽器登入態？",
         "confirmDescription": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。可以隨時關掉，拷貝會被刪除。",
         "confirmDescriptionMac": "Agent 將能以你已登入的身分開啟網頁，包括信箱、雲端硬碟和公司後台。讀取 Chrome 登入檔還需要「完全磁碟存取權」。可以隨時關掉，拷貝會被刪除。",
@@ -5709,10 +5718,6 @@
         "ssh": {
           "name": "SSH 遠端命令",
           "description": "透過本機設定的 SSH 連線在遠端電腦上執行命令。"
-        },
-        "contacts": {
-          "name": "智慧通訊錄",
-          "description": "查詢、整理聯絡人資料與往來記錄。"
         }
       }
     },
@@ -6198,9 +6203,6 @@
             "title": "群聊參與模式",
             "hint": "官方 bot 見過的群會出現在這裡。「全響應」僅對已繫結帳號的每條發言生效；其他成員只進入本機群聊上下文，不會觸發任務。",
             "empty": "還沒有群。把 bot 拉進群，並用已繫結帳號發一條訊息後就會出現在這裡。",
-            "contactsOn": "群裡其他發言人會自動記入智慧通訊錄。",
-            "contactsOff": "智慧通訊錄未開啟，群裡其他成員不會被自動記住。",
-            "contactsEnable": "開啟",
             "error": {
               "load": "未能讀取 Telegram 群列表，請檢查連線後重試。",
               "save": "群參與模式未儲存，已恢復上次確認的模式。",
@@ -7486,6 +7488,20 @@
         "unknownPublisher": "未知釋出者",
         "unknownReviewerDetail": "包裡帶有稽核宣告，但當前 Cindy 不認識這把稽核公鑰，因此不會顯示為已稽核。"
       },
+      "controlPoints": {
+        "title": "執行前檢查",
+        "description": "這個插件可以在自動化或例行任務執行前做檢查：只能跳過或停止這次執行，不能替你核准。",
+        "titleWithStartTask": "插件介入的時機",
+        "descriptionWithStartTask": "只在你選了它的任務裡介入：執行前只能跳過或停止這次執行，開新任務時只為第一則訊息選一次模型。都不能替你核准。",
+        "usage": "使用方式：編輯自動化或例行任務時，在「前置檢查」裡選它。",
+        "usageStartTask": "使用方式：在新任務的模型選擇器裡選它提供的模型。",
+        "points": {
+          "will-schedule-run": "自動化執行前",
+          "will-routine-run": "夥伴的例行任務執行前",
+          "will-start-task": "開新任務時"
+        },
+        "inactive": "還不能使用。更新或重新安裝這個插件時允許即可。"
+      },
       "perm": {
         "mail": "使用郵件草稿與傳送卡片",
         "mailDetail": "可在卡片中編輯和同步草稿，並在傳送前提供確認與撤銷倒數。",
@@ -7555,6 +7571,12 @@
         "subscribeHooksDetail": "傳送前先經它審閱：可攔下訊息，也可能改寫正文後再發出；被攔的訊息可編輯後重發。",
         "subscribeAssistantReply": "可讀取並重寫 AI 的回覆",
         "subscribeAssistantReplyDetail": "AI 每輪迴復完成後先經它處理：可潤色改寫正文(直接替換，不留原文)，或用自繪卡片替換回復氣泡(卡片替換時原文保留，可一鍵檢視)。",
+        "subscribeScheduleRun": "可在你選定的自動化執行前做檢查",
+        "subscribeScheduleRunDetail": "在「前置檢查」裡選了它的自動化，執行前會先詢問它。它看得到這項自動化的名稱和指令，可以讓這次跳過或停止，但不能替你核准。",
+        "subscribeRoutineRun": "可在你選定的夥伴例行任務執行前做檢查",
+        "subscribeRoutineRunDetail": "在「前置檢查」裡選了它的例行任務，每次觸發後會先詢問它。它看得到例行任務的指令和觸發它的事件內容，可以讓這次跳過或停止，但不能替你核准。",
+        "subscribeStartTask": "可為新任務選模型",
+        "subscribeStartTaskDetail": "新任務選了它提供的模型時，它會看第一則訊息，從你已連接的模型裡選一個。只選一次，任務中途不會換模型。",
         "card": "渲染訊息卡片",
         "cardExternalLink": "卡片內可宣告外鏈，經你確認後開啟瀏覽器",
         "cardExternalLinkDetail": "卡片中的連結點選後會彈出確認框，你同意後才會在系統瀏覽器中開啟；僅限 http/https 地址。",
@@ -7745,6 +7767,22 @@
         "reveal": "顯示到任務列表",
         "revealed": "任務已顯示到任務列表",
         "revealFailed": "未能將任務顯示到任務列表"
+      },
+      "handoff": {
+        "title": "對話中交給插件的檔案",
+        "description": "這些是你在對話中交給該插件的檔案副本，7 天未使用後自動刪除。",
+        "empty": "還沒有在對話中交給該插件的檔案。",
+        "loadFailed": "無法讀取檔案列表，請稍後再試。",
+        "refresh": "重新整理",
+        "openInFinder": "在 Finder 中開啟",
+        "openInExplorer": "在檔案總管中開啟",
+        "meta": "{{size}} · 交出於 {{handedAt}} · {{expiresAt}} 自動刪除",
+        "delete": "刪除",
+        "deleteNamed": "刪除 {{name}}",
+        "deleteTitle": "刪除這個檔案？",
+        "deleteDescription": "刪除後，插件和已開啟的頁面都無法再使用「{{name}}」，且無法復原。",
+        "deleteFailed": "刪除失敗，請稍後再試。",
+        "cancel": "取消"
       },
       "library": {
         "title": "持久作品庫",
@@ -8242,186 +8280,6 @@
         "title": "刪除 “{{name}}”？",
         "message": "刪除後新建或重啟的 Agent 會話將不再載入該 MCP。",
         "confirm": "刪除"
-      }
-    },
-    "contacts": {
-      "title": "智慧通訊錄",
-      "description": "為 Agent 建立的人物與組織檔案庫：跨平臺身份反查(電子郵件 / 飛書 / Slack / GitHub id → 這是誰)、關係背景與帶日期的事件記錄。Agent 在工作中自動沉澱，低置信條目進入待確認佇列由你裁決。資料預設只儲存在本機，也可由你開啟裝置間同步；查詢與整理會經由你自己的模型處理。",
-      "enable": {
-        "label": "啟用智慧通訊錄",
-        "description": "開啟後 Agent 可以查詢並自動採集人物資訊(不確定的條目會進入待確認)。關閉不影響在此瀏覽和管理已有資料。",
-        "toggleAria": "切換智慧通訊錄"
-      },
-      "sync": {
-        "label": "在我的裝置之間同步",
-        "description": "在需要參與的每臺桌面裝置上開啟一次。裝置線上時自動同步；同一區域網優先直連，否則傳送端到端加密的中轉資料。純程式比對，不呼叫模型，也不產生 token 消耗。",
-        "toggleAria": "切換通訊錄裝置同步",
-        "syncNow": "立即同步",
-        "onlineDevices_other": "{{count}} 臺其他裝置線上",
-        "route": {
-          "lan": "區域網直連",
-          "relay": "加密中轉"
-        },
-        "status": {
-          "loading": "正在讀取同步狀態…",
-          "signInRequired": "登入 Cindy 帳號後可在裝置間同步",
-          "off": "同步已關閉",
-          "waiting": "等待其他已開啟同步的桌面裝置上線",
-          "syncing": "正在安全同步…",
-          "ready": "已準備好，裝置上線後會自動同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "系統安全儲存不可用，無法保護裝置私鑰",
-          "peer-identity-changed": "裝置身份發生變化，已暫停同步以保護資料",
-          "sync-failed": "同步失敗，將在裝置下次線上時重試"
-        },
-        "toast": {
-          "enabled": "裝置同步已開啟",
-          "disabled": "裝置同步已關閉"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 組織 / {{groups}} 分組",
-      "kind": {
-        "person": "人物",
-        "org": "組織"
-      },
-      "filters": {
-        "all": "全部",
-        "person": "人物",
-        "org": "組織",
-        "pending": "待確認"
-      },
-      "list": {
-        "searchPlaceholder": "搜尋姓名 / 電子郵件 / 關鍵詞",
-        "newAria": "新建聯絡人",
-        "newNamePlaceholder": "姓名或組織名",
-        "newKindAria": "切換型別(人物 / 組織)",
-        "newConfirm": "建立",
-        "groupFilterAria": "按分組篩選",
-        "groupFilterAll": "全部分組",
-        "loadMore": "載入更多",
-        "noResults": "沒有匹配的聯絡人",
-        "empty": "通訊錄還是空的。開啟後 Agent 會在工作中自動沉澱，也可以點右上角 + 手動新增。"
-      },
-      "detail": {
-        "empty": "在左側選擇一個聯絡人檢視檔案",
-        "pendingBanner": "這是 Agent 低置信採集的條目，請確認是否入冊。",
-        "pendingConfirm": "確認入冊",
-        "pendingDiscard": "丟棄",
-        "nameAria": "顯示名",
-        "deleteAria": "刪除檔案",
-        "summaryPlaceholder": "一行簡介",
-        "identities": "身份",
-        "identityRemoveAria": "移除身份 {{value}}",
-        "identityPlatformAria": "平臺",
-        "identityValuePlaceholder": "電子郵件 / 平臺 id / handle",
-        "identityAddAria": "新增身份",
-        "narrative": "關係與背景",
-        "narrativePlaceholder": "與你的關係、協作歷史、背景資訊(Markdown)",
-        "agentNotes": "給 Agent 的指令",
-        "agentNotesPlaceholder": "例如：這是老闆的私人電子郵件，勿群發",
-        "events": "事件記錄",
-        "eventsEmpty": "還沒有事件記錄",
-        "eventDeleteAria": "刪除事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "發生了什麼",
-        "eventAddAria": "新增事件",
-        "groups": "分組",
-        "groupRemoveAria": "從分組 {{name}} 移除",
-        "groupAddAria": "加入分組",
-        "groupAddPlaceholder": "加入分組…",
-        "discardChanges": "放棄修改",
-        "save": "儲存",
-        "identitiesEmpty": "還沒有身份記錄",
-        "relations": "關聯",
-        "relationsEmpty": "還沒有關聯(所屬組織 / 相關人物)",
-        "relationAddAria": "新增關聯",
-        "relationRemoveAria": "移除與 {{name}} 的關聯",
-        "relationVerbPlaceholder": "任職 / 家人…",
-        "relationTargetAria": "選擇關聯物件",
-        "relationTargetPlaceholder": "選擇人或組織…",
-        "relationNotePlaceholder": "備註(職位…)"
-      },
-      "deleteConfirm": {
-        "title": "刪除「{{name}}」？",
-        "description": "將同時刪除其全部身份、事件記錄與分組關係，不可恢復。",
-        "confirm": "刪除",
-        "cancel": "取消"
-      },
-      "toast": {
-        "enabled": "智慧通訊錄已啟用",
-        "disabled": "智慧通訊錄已關閉",
-        "codexRefreshDeferred": "開關已儲存，但 Codex 正忙：將在重啟應用後對 Codex 任務生效",
-        "toggleFailed": "切換智慧通訊錄失敗",
-        "created": "已建立「{{name}}」",
-        "createFailed": "建立失敗",
-        "deleted": "已刪除「{{name}}」",
-        "deleteFailed": "刪除失敗",
-        "saved": "已儲存",
-        "saveFailed": "儲存失敗",
-        "confirmFailed": "確認入冊失敗",
-        "identityAddFailed": "新增身份失敗",
-        "identityRemoveFailed": "移除身份失敗",
-        "eventAddFailed": "新增事件失敗",
-        "eventDeleteFailed": "刪除事件失敗",
-        "groupAddFailed": "加入分組失敗",
-        "groupRemoveFailed": "移出分組失敗",
-        "relationAddFailed": "新增關聯失敗",
-        "relationRemoveFailed": "移除關聯失敗"
-      },
-      "manage": "管理",
-      "manager": {
-        "title": "智慧通訊錄",
-        "closeAria": "關閉"
-      },
-      "merge": {
-        "button": "合併重複檔案",
-        "buttonAria": "合併重複檔案",
-        "hint": "選擇一份重複檔案，將其身份、事件、關聯併入「{{target}}」後刪除。",
-        "searchPlaceholder": "搜尋重複檔案…",
-        "confirmTitle": "把「{{source}}」併入「{{target}}」？",
-        "confirmDescription": "「{{source}}」的身份、事件、關聯、分組將全部遷入，其檔案隨後刪除，不可恢復。",
-        "confirm": "合併",
-        "success": "已把「{{source}}」併入「{{target}}」",
-        "failed": "合併失敗"
-      },
-      "import": {
-        "title": "匯入聯絡人",
-        "button": "匯入",
-        "pickHint": "從外部來源批次匯入。電子郵件/電話與已有檔案相同的會自動併入(不產生重複)；名字相似的會列入待人工確認清單。",
-        "sourceSystem": "系統通訊錄",
-        "sourceSystemDesc": "只讀拉取，首次需系統授權",
-        "sourceVcf": "vCard 檔案",
-        "sourceVcfDesc": ".vcf(通訊錄匯出的通用格式)",
-        "emptySource": "來源裡沒有可匯入的聯絡人",
-        "permissionDenied": "未獲通訊錄授權：請在 系統設定 → 隱私與安全性 → 自動化 中允許訪問",
-        "systemReadFailed": "讀取系統通訊錄失敗",
-        "vcfParseFailed": "解析 vCard 檔案失敗",
-        "selectedCount": "已選 {{checked}} / {{total}}",
-        "groupPlaceholder": "匯入後歸入分組(可選，不存在則建立)",
-        "run": "匯入 {{count}} 條",
-        "running": "匯入中…",
-        "failed": "匯入失敗",
-        "doneSummary": "匯入完成：新建 {{created}} 人，併入已有檔案 {{enriched}} 條，新建組織 {{orgs}} 個。",
-        "needsReview": "{{count}} 條與現有檔案名字相似，未自動匯入，請人工確認：{{names}}",
-        "identityConflicts": "{{count}} 條記錄的部分身份已屬於其他聯絡人（{{names}}），未併入——請在管理介面確認是否為同一人併合並",
-        "relationErrors": "{{count}} 條任職關係未能建立（{{names}}）",
-        "skipped": "{{count}} 條被跳過(無效或出錯)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "該身份已屬於另一個聯絡人，請改為更新既有檔案或先合併",
-        "PERMISSION_DENIED": "系統通訊錄訪問未授權，請在 系統設定 > 隱私與安全性 > 自動化 中允許",
-        "UNSUPPORTED_CAPABILITY": "當前平臺不支援此操作",
-        "NOT_FOUND": "目標不存在或已被刪除",
-        "ALREADY_EXISTS": "已存在同名或相同內容的條目",
-        "INVALID_PARAMS": "輸入無效，請檢查後重試",
-        "INTERNAL": "操作失敗，請稍後重試"
-      },
-      "guide": {
-        "hint": "讓 AI 幫你補充聯絡人檔案、處理待確認項並整理重複資訊。",
-        "cta": "讓 AI 幫你管理通訊錄",
-        "managementPrompt": "幫我管理智慧通訊錄。先檢查當前狀態和已有工具，再帶我補充聯絡人、整理重複項和待確認項；任何寫入、合併或刪除前先讓我確認。"
       }
     },
     "remotePermission": {
@@ -11459,6 +11317,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "開啟對話",
+      "inCallWith": "正在與 {{name}} 通話",
       "showDetails": "展開通話記錄",
       "hideDetails": "收起通話記錄",
       "transcriptTitle": "目前辨識文字",
@@ -11527,6 +11387,7 @@
       "unsent": "尚未傳送 · 可選取文字複製",
       "hint": "停頓後自動傳送，回覆由 AI 語音朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務裡有問題等你回答 · 仍在通話",
         "idle": "準備好就開始",
         "connecting": "正在連接語音辨識…",
         "listening": "正在聽",
@@ -11542,6 +11403,7 @@
         "muted": "麥克風已關閉 · 可以繼續收聽"
       },
       "errors": {
+        "busy": "語音正被其他通話、朗讀、試聽或聽寫占用，請結束後重試。",
         "connection": "語音連線中斷，未傳送的文字已保留。",
         "microphone": "麥克風已停止，請檢查權限和裝置連線後繼續。",
         "send": "這則訊息未被接收，文字已保留。",
@@ -12428,6 +12290,7 @@
         "titleLocal": "改回這台電腦執行 Agent？",
         "titleOther": "改到「{{device}}」上執行 Agent？",
         "description": "原來那台電腦上的對話記錄帶不過來，會整理成交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
+        "descriptionNativeHistory": "完整對話記錄會複製過去接著用；如果恢復不了，會改用交接摘要接上，思考內容等不能保證完美繼承。下一則訊息送出時生效。",
         "confirm": "換電腦執行",
         "cancel": "保持不變"
       }
@@ -12665,6 +12528,7 @@
     "cindyServiceUnavailable": "Cindy 官方語音服務暫不可用，請檢查網路或切換服務來源。",
     "asrServiceUnavailable": "語音識別服務連線失敗，請檢查網路或稍後重試。",
     "emptyTranscript": "檢測到了語音，但沒有識別出文字，請重試。",
+    "speakerFiltered": "已忽略其他人的聲音",
     "connectionInterrupted": "語音連線中斷了，請檢查網路後重試。",
     "recognitionStalled": "語音識別沒有繼續返回結果，請重試。",
     "transcriptKept": "{{message}}（識別出的文字已經保留，可以直接編輯）",
@@ -12690,6 +12554,14 @@
     "verificationFailed": "暫時無法確認 ChatGPT 登入是否已恢復，請重新檢測。"
   },
   "chat": {
+    "pluginModelRoute": {
+      "routed": "為這個任務選了",
+      "kept": {
+        "no-opinion": "{{plugin}} 這次沒有改模型，這個任務用",
+        "failed": "{{plugin}} 沒有及時回應，這個任務用",
+        "unavailable-route": "{{plugin}} 選的模型現在無法使用，這個任務用"
+      }
+    },
     "teammateProcess": {"record":"處理紀錄","operations":"操作記錄","elapsed":"已處理 {{duration}}","took":"用時 {{duration}}","processing":"正在處理","worked":"處理紀錄","thinking":"正在思考","thought":"已思考","failed_other":"{{count}} 次呼叫失敗","separator":"、","actions":{"running":{"read":"正在檢視檔案","edit":"正在編輯檔案","search":"正在尋找內容","web":"正在查閱網頁","command":"正在執行指令","tools":"正在使用工具","delegate":"正在委派工作","plan":"正在整理計畫"},"done":{"read":"檢視了檔案","edit":"編輯了檔案","search":"尋找了內容","web":"查閱了網頁","command":"執行了指令","tools":"使用了工具","delegate":"委派了工作","plan":"整理了計畫"}}},
     "imageDelivery": {
       "stored": "圖片已交付",
@@ -14600,6 +14472,7 @@
           "hint": "頂列最多顯示 3 個，固定的 PR 優先顯示",
           "empty": "貼上 GitHub PR 連結即可新增",
           "removed": "已移除 {{count}} 個",
+          "legacy": "未確認的歷史引用：{{count}}",
           "addLabel": "新增 PR 連結",
           "add": "新增 PR",
           "loading": "正在讀取…",
@@ -14929,6 +14802,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "專案「{{projectName}}」中發現待匯入的自動任務",
+        "review": "查看匯入內容",
+        "title": "匯入儲存庫自動任務",
+        "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增自動任務，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
+        "accept": "確認匯入",
+        "removed": "將刪除：{{names}}"
+      },
       "toast": {
         "summary": "新增 {{inserted}} · 更新 {{updated}} · 刪除 {{deleted}}",
         "installed": "專案「{{projectName}}」自動化已安裝（{{summary}}）",
@@ -15103,6 +14984,7 @@
         "timeout": "超時（秒，可選）",
         "timeoutPlaceholder": "不限制",
         "capabilities": {
+          "github_read": "讀取 GitHub",
           "jira_read": "讀取 Jira",
           "jira_comment": "評論 Jira",
           "sessions_dispatch": "派發任務",
@@ -15114,6 +14996,7 @@
         "capabilitiesSearch": "搜尋能力",
         "capabilitiesEmpty": "沒有匹配的能力",
         "capabilityDescs": {
+          "github_read": "讀取 PR、CI、評審與觀察到的變化；查詢不會關聯任務",
           "jira_read": "查詢與讀取 Jira 單（按 key 讀取 / JQL 搜尋）",
           "jira_comment": "向 Jira 單新增評論",
           "sessions_dispatch": "建立或喚醒 {{appName}} 任務並投遞訊息",
@@ -15208,6 +15091,25 @@
         },
         "browse": "選擇指令碼檔案（也可直接拖拽到輸入框）"
       },
+      "preRunPlugin": {
+        "sourceLabel": "檢查方式",
+        "source": {
+          "script": "腳本",
+          "plugin": "插件"
+        },
+        "tooltip": "每次執行前先詢問你選的插件：它可以放行、跳過這次或停止這次執行，不能替你核准任何需要你確認的事。",
+        "choose": "選擇插件",
+        "unavailable": "插件無法使用",
+        "unavailableHint": "這個插件已經無法使用。改選其他插件前，執行時依「插件出錯時」的設定處理。",
+        "hint": "插件可以放行、跳過這次或停止這次執行，不能替你核准任何事。",
+        "empty": "還沒有能做執行前檢查的插件。安裝支援執行前檢查的插件，並在安裝或更新時允許。",
+        "onFailureLabel": "插件出錯時",
+        "onFailure": {
+          "allow": "照常執行",
+          "skip": "跳過這次",
+          "block": "停止並記為失敗"
+        }
+      },
       "validation": {
         "nameRequired": "請填寫名稱",
         "promptRequired": "請填寫 Prompt",
@@ -15220,6 +15122,7 @@
         "modelUnavailable": "模型 {{model}} 已不可用，請重新選擇",
         "reasoningInvalid": "Reasoning 必須是 {{values}} 之一",
         "preRunHookCommandRequired": "請填寫前置檢查指令碼命令",
+        "preRunPluginRequired": "請為前置檢查選擇插件",
         "templateParamRequired": "請填寫{{label}}",
         "templateApplyFailed": "無法套用模板，請檢查參數後重試"
       }
@@ -15705,6 +15608,7 @@
       "titleRevealPath": "允許 Agent 取得這個媒體檔案的本機路徑？",
       "count": "{{count}} 個檔案",
       "descriptionAttachments": "以下檔案在當前任務的工作目錄之外。允許後，這些檔案會交給該插件處理(它只拿到內容指紋，拿不到路徑)。",
+      "descriptionHandoff": "以下檔案在目前任務的工作目錄之外。允許後，插件會收到這些檔案的副本（拿不到路徑），副本 7 天未使用後自動刪除。",
       "descriptionDir": "以下目錄/檔案在當前任務的工作目錄之外。允許後，其中的檔案會交給該插件上傳(它只拿到一次性票據，拿不到路徑)。",
       "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該插件可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
       "descriptionRevealPath": "該路徑只會在你允許後回傳給目前 Agent，並進入對話記錄；配對裝置可能同步該記錄。此操作不授予插件讀取檔案的權限。",
@@ -17526,6 +17430,7 @@
     "sessionModeFresh": "每次新建任務（隔離上下文）",
     "sessionModeHint": "沿用同一任務會在同一個例行任務的對話裡繼續；每次新建會為每次觸發建立一個獨立任務，執行結束後關閉。",
     "quietHint": "僅回報變化或問題。提醒和定時傳送可關閉此項。",
+    "checkSource": "檢查方式",
     "checkCommand": "前置檢查命令",
     "checkHint": "選填。在電腦上先檢查：結束代碼 2 跳過本次執行，0 繼續執行，異常仍會回報。清空可移除。",
     "timeoutMs": "檢查逾時（毫秒，留空不限時）",
@@ -17591,6 +17496,14 @@
         "skillDisabled": "停用了技能「{{title}}」",
         "skillMerged": "把技能「{{title}}」併入「{{into}}」並停用"
       }
+    },
+    "remote": {
+      "pause": "暫停例行任務",
+      "resume": "恢復例行任務",
+      "addSchedule": "新增定時條件",
+      "addInterval": "新增間隔條件",
+      "addEvent": "新增事件觸發器",
+      "filterField": "篩選欄位"
     }
   },
   "cindyMakeDoctor": {

@@ -14,9 +14,9 @@
  *    晚于远程会话首次渲染(remoteProjectsStore 显式处理的 origin-injection race),
  *    必须 useSyncExternalStore 订阅而非一次性读取。此前 MarkdownRenderer 等是每个
  *    消息实例各订阅一份,收敛到 provider 后整棵树只订阅一次。
- *  - **value 引用稳定**:按 [sessionId, workingDir, remoteHostId, deviceId] memo;
- *    一个会话生命周期内 value 至多变一次(deviceId 迟到注册),不会造成全体消费者
- *    反复重渲。TextLightbox 等 portal 组件不断 React Context 链,照常可消费。
+ *  - **value 引用稳定**:按 [sessionId, workingDir, remoteHostId, deviceId, ownerDeviceId]
+ *    memo;一个会话生命周期内 value 只在 deviceId 迟到注册、设备归属解析完成时变化,
+ *    不会造成全体消费者反复重渲。TextLightbox 等 portal 组件不断 React Context 链,照常可消费。
  */
 import { createContext, useContext, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 
@@ -38,12 +38,19 @@ export interface ChatSessionFileContextValue {
   workingDir: string;
   /** 文件来源判别(local / device / ssh)。 */
   origin: SessionFileOrigin;
+  /**
+   * 会话已确认在本机执行。origin 在远程归属注入前会暂时是 local,不能据此判定;
+   * 需要拿 workingDir 查本机文件系统的能力(如嵌入媒体的工作区搜索)以此为准。
+   * 只有 useChatSessionFileValue 在归属确认后给 true;缺省、聊天流外与归属未解析都按未确认处理。
+   */
+  localConfirmed?: boolean;
 }
 
 const DEFAULT_VALUE: ChatSessionFileContextValue = Object.freeze({
   sessionId: undefined,
   workingDir: '',
   origin: LOCAL_FILE_ORIGIN,
+  localConfirmed: false,
 });
 
 const ChatSessionFileContext = createContext<ChatSessionFileContextValue>(DEFAULT_VALUE);
@@ -64,23 +71,29 @@ export function useSessionFileOrigin(): SessionFileOrigin {
  * origin(deviceId 优先,见 resolveSessionFileOrigin)。构造出的 value 除了喂给
  * Provider,MessageStream 自身也用它取 galleryDeviceId —— 画廊与渲染改写必须同源,
  * 否则 ImageLightbox 的 src 匹配会失效。
+ *
+ * ownerDeviceId 是会话视图解析出的设备归属三态:字符串 = 远端设备,null = 已确认本机,
+ * undefined = 尚未解析(调用方不知道时也传 undefined)。只有 null 且 origin 为 local
+ * 时 localConfirmed 才为 true。
  */
 export function useChatSessionFileValue(
   sessionId: string | undefined,
   workingDir: string,
   remoteHostId: string | null | undefined,
+  ownerDeviceId?: string | null,
 ): ChatSessionFileContextValue {
   const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     sessionId ? getSessionDeviceId(sessionId) : undefined,
   );
-  return useMemo<ChatSessionFileContextValue>(
-    () => ({
+  return useMemo<ChatSessionFileContextValue>(() => {
+    const origin = resolveSessionFileOrigin(deviceId, remoteHostId);
+    return {
       sessionId,
       workingDir,
-      origin: resolveSessionFileOrigin(deviceId, remoteHostId),
-    }),
-    [sessionId, workingDir, remoteHostId, deviceId],
-  );
+      origin,
+      localConfirmed: ownerDeviceId === null && origin.kind === 'local',
+    };
+  }, [sessionId, workingDir, remoteHostId, deviceId, ownerDeviceId]);
 }
 
 /** 瘦 Provider:value 由 useChatSessionFileValue 构造(引用已稳定,直接透传)。 */

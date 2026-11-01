@@ -1216,7 +1216,6 @@
     "clipboardSyncSkipped": "此格式暫不支援剪貼簿同步，已略之",
     "clipboardSyncTooLarge": "內容逾剪貼簿同步之大小上限，已略之",
     "clipboardSyncPermission": "剪貼簿同步須貼上之權，授之後歸此視窗即復",
-    "clipboardSyncWaiting": "遠方之機的剪貼簿暫不能存取（或已鎖定螢幕），解鎖後將自動續同步。",
     "lockingOnExit": "方鎖定此機…",
     "idleLock": "閒置後斷連並鎖定螢幕",
     "idleNever": "永不",
@@ -1334,6 +1333,20 @@
       "lock-corrupt": "此機資料之維護鎖紀錄已損，暫不能確知是否仍有程式用之。請重啟電腦而後開 Cindy；若仍不能啟，請聯絡支援人員。切勿刪資料庫檔案。",
       "lock-unreadable": "不能讀存此機資料之維護鎖。請察資料目錄之存取權限；復存取後重啟。若仍未成，請聯絡支援人員。",
       "recovery-busy": "另一 Cindy 執行個體方察此機資料之維護鎖。請稍後重啟。"
+    },
+    "passiveCorrupt": {
+      "title": "共享資料庫不可復原",
+      "description": "今以唯讀／共享之式運行，Cindy 不自行復原或改動此共享資料庫。若另有實例共用同一 userData，請先關閉而重試，或改以 --isolated 啟動。"
+    },
+    "corrupt": {
+      "title": "本地資料庫不可開",
+      "description": "本地資料庫或已損毀，或為共用同一資料之他 Cindy 實例所佔。若他實例已開，請先關閉而重試；仍不可，則無可用備份能自動復原，請複製技術細節告知團隊，以求協助復原資料。",
+      "copy": "複製技術細節"
+    },
+    "initFailed": {
+      "title": "本地資料庫啟動失敗",
+      "description": "本地資料庫未能啟動。請先重試；若仍失敗，請將下列技術細節告知團隊。",
+      "retry": "重試啟動資料庫"
     },
     "databaseCleanup": {
       "interruptedTitle": "資料庫清理中輟",
@@ -4849,9 +4862,6 @@
         "title": "群議參與之式",
         "hint": "bot 曾入之群列於此。「全響應」= 每訊皆覽，bot 自度是否插言（每訊皆耗 token）。",
         "empty": "庭前尚寂，未見群聚。引 bot 入群，待有人發言，便現於此。",
-        "contactsOn": "群中發言者，將自記入智慧通訊錄（總開關已啟）。",
-        "contactsOff": "智慧通訊錄未啟，群中發言者不自記之。",
-        "contactsEnable": "啟",
         "error": {
           "load": "未能讀 Telegram 群列，請察連線後再試。",
           "save": "群參與之式未存，已復上回確認之式。",
@@ -5377,7 +5387,6 @@
         "title": "用我之瀏覽器登入態",
         "description": "Agent 將以君於 Chrome、Edge 或 Brave 中已登入之身分造訪網站。",
         "toggleAria": "用我之瀏覽器登入態",
-        "unavailableEmbedded": "僅於獨立瀏覽器生效。關之則刪已複製之登入檔。",
         "confirmTitle": "許 Agent 用君之瀏覽器登入態乎？",
         "confirmDescription": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。可隨時關之，拷貝即刪。",
         "confirmDescriptionMac": "Agent 將能以君已登入之身分開網頁，信箱、雲端硬碟與公司後台皆在其列。讀 Chrome 登入檔另需「完全磁碟存取權」。可隨時關之，拷貝即刪。",
@@ -5709,10 +5718,6 @@
         "ssh": {
           "name": "SSH 遠方命令",
           "description": "藉此機所設 SSH 連線，於遠方之機上執行命令。"
-        },
-        "contacts": {
-          "name": "慧通訊錄",
-          "description": "查詢、整理聯絡人資料與往來之錄。"
         }
       }
     },
@@ -6198,9 +6203,6 @@
             "title": "群議參與之式",
             "hint": "官方 bot 所見之群，皆列於此。「盡應」僅於已繫結名籍之每則發言生效；他成員唯入此機群議上下文，不觸發差事。",
             "empty": "群中尚無蹤跡。將 bot 拉入群中，以已繫結之名籍發一則訊，即見於此。",
-            "contactsOn": "群中他發言者，將自記入慧通訊錄。",
-            "contactsOff": "慧通訊錄未開，群中他成員不會自被記住。",
-            "contactsEnable": "啟",
             "error": {
               "load": "未能讀 Telegram 群列表，請察連線後再試。",
               "save": "群參與之式未存，已復前番所確認之式。",
@@ -7609,7 +7611,13 @@
         "mcpUi": "可於言談中示互動頁面",
         "mcpUiDomains": "頁面可連之網域：{{domains}}",
         "mcpAppOnly": "唯頁面可用",
-        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}"
+        "uiPageAccess": "頁面：{{pages}}；網域：{{domains}}；頁面可召之工具：{{tools}}",
+        "subscribeRoutineRun": "可於君所擇之同僚例行差事運行前行檢",
+        "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
+        "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
+        "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "subscribeStartTask": "可為新差事擇模型",
+        "subscribeStartTaskDetail": "新任務擇其所供之模型時，彼閱首條訊息，於汝已連之模型中擇一。唯擇一次，任務中途不易模型。"
       },
       "connections": {
         "confirmTitle": "增連線位址",
@@ -7745,6 +7753,22 @@
         "reveal": "顯於差事錄",
         "revealed": "差事已顯於差事錄",
         "revealFailed": "未能令差事顯於差事錄"
+      },
+      "handoff": {
+        "title": "對話中交予法器之卷",
+        "description": "此乃君於對話中交予此法器之卷之副本，七日不用則自刪。",
+        "empty": "對話中尚未交卷予此法器。",
+        "loadFailed": "卷之列表讀取未成，請稍後再試。",
+        "refresh": "重整",
+        "openInFinder": "於 Finder 中啟之",
+        "openInExplorer": "於檔案總管中啟之",
+        "meta": "{{size}} · 交於 {{handedAt}} · {{expiresAt}} 自刪",
+        "delete": "刪",
+        "deleteNamed": "刪 {{name}}",
+        "deleteTitle": "刪此卷乎？",
+        "deleteDescription": "刪之，則法器與已開之頁皆不得復用「{{name}}」，且不可復原。",
+        "deleteFailed": "刪除未成，請稍後再試。",
+        "cancel": "罷"
       },
       "library": {
         "title": "久藏之庫",
@@ -8192,6 +8216,20 @@
         "importing": "方納卷",
         "finished": "卷已理畢",
         "importFinished": "卷已納畢"
+      },
+      "controlPoints": {
+        "description": "此法器可於自動化或例行差事運行前行檢：僅能略過或止此番運行，不能代君准允。",
+        "inactive": "尚不可用。更新或重裝此法器時許之即可。",
+        "points": {
+          "will-routine-run": "同僚例行差事運行前",
+          "will-schedule-run": "自動化運行前",
+          "will-start-task": "開新差事時"
+        },
+        "title": "行前檢查",
+        "usage": "用法：編輯自動化或例行差事時，於「預檢」擇之。",
+        "descriptionWithStartTask": "僅於君所擇之差事介入：運行前僅能略過或止此番，開新差事時僅為首言擇模型一次。皆不能代君准允。",
+        "titleWithStartTask": "法器介入之時",
+        "usageStartTask": "用法：於新任務之模型擇器中，擇其所供之模型。"
       }
     },
     "mcp": {
@@ -8242,186 +8280,6 @@
         "title": "刪 “{{name}}” 乎？",
         "message": "刪之，則新開或重啟之 Agent 差事不再載此 MCP。",
         "confirm": "刪"
-      }
-    },
-    "contacts": {
-      "title": "智通名錄",
-      "description": "為 Agent 所立之人物與組織檔案庫：跨平臺身份反查(電子郵件 / 飛書 / Slack / GitHub id → 此為何人)、關係背景及帶日期之事件記錄。Agent 於工作中自動積存，低置信條目入待確認佇列，由君裁決。資料預設僅存此機，亦可由君開啟裝置間同步；查詢與整理經君自有之模型處理。",
-      "enable": {
-        "label": "啟智慧通訊錄",
-        "description": "啟之，則 Agent 可查詢並自動採集人物資訊(未確之條目入待確認)。關之，不礙於此瀏覽與管理既有資料。",
-        "toggleAria": "啟閉智通名錄"
-      },
-      "sync": {
-        "label": "於吾諸裝置間同步",
-        "description": "於每臺欲參與之桌面裝置上各啟一次。裝置線上時自動同步；同一區域網優先直連，否則傳端到端加密之中轉資料。純程式比對，不呼叫模型，亦不耗 token。",
-        "toggleAria": "啟閉名錄諸器同步",
-        "syncNow": "即刻同步",
-        "onlineDevices_other": "{{count}} 臺他機線上",
-        "route": {
-          "lan": "近網直連",
-          "relay": "密傳中轉"
-        },
-        "status": {
-          "loading": "方讀同步之狀…",
-          "signInRequired": "登門 Cindy 名籍後，可於裝置間同步",
-          "off": "同步已關",
-          "waiting": "候他臺已啟同步之桌面裝置上線",
-          "syncing": "方安全同步…",
-          "ready": "萬事俱備，只待裝置上線，即自同步",
-          "lastSuccess": "{{device}} · {{time}} · {{route}}"
-        },
-        "error": {
-          "secure-storage-unavailable": "系統安全儲存不可用，無從保護裝置私鑰",
-          "peer-identity-changed": "裝置身份有變，已暫停同步以護資料",
-          "sync-failed": "同步未成，將於裝置下次線上時再試"
-        },
-        "toast": {
-          "enabled": "裝置同步已啟",
-          "disabled": "裝置同步已關"
-        }
-      },
-      "stats": "{{people}} 人 / {{orgs}} 組織 / {{groups}} 組",
-      "kind": {
-        "person": "人物",
-        "org": "組織"
-      },
-      "filters": {
-        "all": "全",
-        "person": "人物",
-        "org": "組織",
-        "pending": "待確"
-      },
-      "list": {
-        "searchPlaceholder": "尋姓名 / 電子郵件 / 關鍵詞",
-        "newAria": "新立聯絡人",
-        "newNamePlaceholder": "姓名或組織名",
-        "newKindAria": "易類(人物 / 組織)",
-        "newConfirm": "立",
-        "groupFilterAria": "依分組篩選",
-        "groupFilterAll": "全分組",
-        "loadMore": "載更多",
-        "noResults": "無相合之聯絡人",
-        "empty": "通訊錄猶一卷素紙。啟之，Agent 將於工作中自動積存；亦可點右上角 + 親手增之。"
-      },
-      "detail": {
-        "empty": "於左側擇一聯絡人，以觀其檔",
-        "pendingBanner": "此乃 Agent 低置信採集之條目，請確認是否入冊。",
-        "pendingConfirm": "准入冊",
-        "pendingDiscard": "棄之",
-        "nameAria": "顯名",
-        "deleteAria": "刪檔",
-        "summaryPlaceholder": "一行簡介",
-        "identities": "名分",
-        "identityRemoveAria": "除身份 {{value}}",
-        "identityPlatformAria": "臺",
-        "identityValuePlaceholder": "電子郵件 / 平臺 id / handle",
-        "identityAddAria": "增身份",
-        "narrative": "交誼與來歷",
-        "narrativePlaceholder": "與君之關係、協作舊事、背景資訊(Markdown)",
-        "agentNotes": "予 Agent 之令",
-        "agentNotesPlaceholder": "如：此乃老闆之私人電子郵件，勿群發",
-        "events": "事件錄",
-        "eventsEmpty": "尚無往事",
-        "eventDeleteAria": "刪事件",
-        "eventDatePlaceholder": "2026-07-07",
-        "eventTextPlaceholder": "所發何事",
-        "eventAddAria": "增事件",
-        "groups": "組別",
-        "groupRemoveAria": "自分組 {{name}} 移除",
-        "groupAddAria": "入分組",
-        "groupAddPlaceholder": "入分組…",
-        "discardChanges": "棄修改",
-        "save": "存之",
-        "identitiesEmpty": "身份未詳",
-        "relations": "牽連",
-        "relationsEmpty": "尚無關聯(所屬組織 / 相關人物)",
-        "relationAddAria": "增關聯",
-        "relationRemoveAria": "除與 {{name}} 之關聯",
-        "relationVerbPlaceholder": "任職 / 家人…",
-        "relationTargetAria": "擇關聯之對象",
-        "relationTargetPlaceholder": "擇人或組織…",
-        "relationNotePlaceholder": "備註(職位…)"
-      },
-      "deleteConfirm": {
-        "title": "刪「{{name}}」乎？",
-        "description": "將併刪其全部身份、事件記錄與分組關係，不可復原。",
-        "confirm": "刪",
-        "cancel": "罷"
-      },
-      "toast": {
-        "enabled": "智慧通訊錄已啟",
-        "disabled": "智慧通訊錄已關",
-        "codexRefreshDeferred": "開關已存，然 Codex 正忙：將於重啟應用後，對 Codex 差事生效",
-        "toggleFailed": "切換智慧通訊錄未成",
-        "created": "已立「{{name}}」",
-        "createFailed": "立之未成",
-        "deleted": "已刪「{{name}}」",
-        "deleteFailed": "刪之未成",
-        "saved": "已存",
-        "saveFailed": "存之未成",
-        "confirmFailed": "確認入冊未成",
-        "identityAddFailed": "增身份未成",
-        "identityRemoveFailed": "除身份未成",
-        "eventAddFailed": "增事件未成",
-        "eventDeleteFailed": "刪事件未成",
-        "groupAddFailed": "入分組未成",
-        "groupRemoveFailed": "出分組未成",
-        "relationAddFailed": "增關聯未成",
-        "relationRemoveFailed": "除關聯未成"
-      },
-      "manage": "理",
-      "manager": {
-        "title": "智通名錄",
-        "closeAria": "闔"
-      },
-      "merge": {
-        "button": "併重複之檔",
-        "buttonAria": "併重複之檔",
-        "hint": "擇一份重複之檔，將其身份、事件、關聯併入「{{target}}」，而後刪之。",
-        "searchPlaceholder": "尋重複之檔…",
-        "confirmTitle": "以「{{source}}」併入「{{target}}」乎？",
-        "confirmDescription": "「{{source}}」之身份、事件、關聯、分組將盡數遷入，其檔隨即刪除，不可復原。",
-        "confirm": "併",
-        "success": "已以「{{source}}」併入「{{target}}」",
-        "failed": "合併未成"
-      },
-      "import": {
-        "title": "納聯絡人",
-        "button": "納",
-        "pickHint": "自外部來源批次匯入。電子郵件/電話與既有檔案相同者自動併入(不生重複)；名字相似者列入待人工確認之單。",
-        "sourceSystem": "系統通訊錄",
-        "sourceSystemDesc": "唯讀拉取，首次需系統授權",
-        "sourceVcf": "vCard 卷",
-        "sourceVcfDesc": ".vcf(通訊錄匯出之通用格式)",
-        "emptySource": "此源之中，未見可納之聯絡人。",
-        "permissionDenied": "未獲通訊錄授權：請於 系統設定 → 隱私與安全性 → 自動化 中允許存取",
-        "systemReadFailed": "讀取系統通訊錄未成",
-        "vcfParseFailed": "解析 vCard 卷未成",
-        "selectedCount": "已擇 {{checked}} / {{total}}",
-        "groupPlaceholder": "匯入後歸入分組(可選，無則立之)",
-        "run": "納 {{count}} 條",
-        "running": "方納…",
-        "failed": "匯入未成",
-        "doneSummary": "匯入既畢：新立 {{created}} 人，併入既有檔案 {{enriched}} 條，新立組織 {{orgs}} 個。濟濟一堂矣。",
-        "needsReview": "{{count}} 條與現存檔案名似，未自納，請親察：{{names}}",
-        "identityConflicts": "{{count}} 條記錄之部分身份已屬他人（{{names}}），未併入——請於管理介面確認是否同一人，再行合併",
-        "relationErrors": "{{count}} 條任職之係未能立（{{names}}）",
-        "skipped": "{{count}} 條見略(無效或出錯)。"
-      },
-      "ipcError": {
-        "IDENTITY_CONFLICT": "此身份已屬另一聯絡人，請改為更新既有檔案，或先合併",
-        "PERMISSION_DENIED": "系統通訊錄存取未獲授權，請於 系統設定 > 隱私與安全性 > 自動化 中允許",
-        "UNSUPPORTED_CAPABILITY": "此平臺不支援此操作",
-        "NOT_FOUND": "目標不存，或已刪除",
-        "ALREADY_EXISTS": "已有同名或同內容之條目",
-        "INVALID_PARAMS": "輸入無效，請檢查後再試",
-        "INTERNAL": "操作未成，請稍後再試"
-      },
-      "guide": {
-        "hint": "交由 AI 代君補全聯絡人之檔、處置待確認者、汰除重複，省君案牘之勞。",
-        "cta": "令 AI 助君理通訊錄",
-        "managementPrompt": "助吾理智慧通訊錄。先查當前之狀與既有工具，再引吾補聯絡人、整頓重複者與待確認者；凡寫入、合併或刪除，皆先請吾確認。"
       }
     },
     "remotePermission": {
@@ -11459,6 +11317,8 @@
       }
     },
     "voiceMode": {
+      "openConversation": "啟對話",
+      "inCallWith": "正與 {{name}} 通話",
       "showDetails": "展通話錄",
       "hideDetails": "收通話錄",
       "transcriptTitle": "今所辨之文",
@@ -11527,6 +11387,7 @@
       "unsent": "尚未遣 · 可選文錄之",
       "hint": "稍頓即自遣，回覆由 AI 之聲朗讀。隨時開口即可插話。",
       "status": {
+        "questionElsewhere": "任務有問待答 · 通話如故",
         "idle": "君備則始",
         "connecting": "方接語音辨識…",
         "listening": "方聆",
@@ -11542,6 +11403,7 @@
         "muted": "麥克風已闔 · 仍可聆聽"
       },
       "errors": {
+        "busy": "語音為他事所占，請畢之再試。",
         "connection": "語音連線中斷，未遣之文已留。",
         "microphone": "麥克風已止，請查權柄與裝置連線後再續。",
         "send": "此訊未獲接收，文已留。",
@@ -12428,6 +12290,7 @@
         "titleLocal": "改回此機執行 Agent？",
         "titleOther": "改於「{{device}}」執行 Agent？",
         "description": "原機之言談錄不能攜來，將撰為交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
+        "descriptionNativeHistory": "全本言談錄將抄錄而往以續；若不能復原，則改撰交接摘要以續，思考內容等不保其完美承續。下則訊遣出時生效。",
         "confirm": "換機執行",
         "cancel": "一仍其舊"
       }
@@ -12665,6 +12528,7 @@
     "cindyServiceUnavailable": "Cindy 官方聲服暫不可用，請察網路，或易其服源。",
     "asrServiceUnavailable": "識聲之服連線未成，請察網路，或稍後再試。",
     "emptyTranscript": "已聞其聲，而未識一字，請再試。",
+    "speakerFiltered": "他人之聲已略",
     "connectionInterrupted": "聲之連線中斷，請察網路後再試。",
     "recognitionStalled": "識聲不復有所回，請再試。",
     "transcriptKept": "{{message}}（所識之文已存，可徑修之）",
@@ -13840,6 +13704,14 @@
       "closeDescription": "將止而刪此番追問，主差事不受其擾。",
       "closeConfirm": "闔而刪之",
       "closeFailed": "刪追問未成，請稍後再試。"
+    },
+    "pluginModelRoute": {
+      "kept": {
+        "failed": "{{plugin}} 未及回應，此差事用",
+        "no-opinion": "{{plugin}} 此番未改模型，此差事用",
+        "unavailable-route": "{{plugin}} 所擇之模型今不可用，此差事用"
+      },
+      "routed": "為此差事擇用"
     }
   },
   "ccAgent": {
@@ -14633,6 +14505,7 @@
           "hint": "頂列至多示 3 個，固定之 PR 居先",
           "empty": "貼 GitHub PR 連結即可增之",
           "removed": "已除 {{count}} 個",
+          "legacy": "待認舊引：{{count}}",
           "addLabel": "增 PR 連結",
           "add": "增 PR",
           "loading": "方讀…",
@@ -14962,6 +14835,14 @@
       }
     },
     "projectAutomation": {
+      "import": {
+        "found": "專案「{{projectName}}」中發現待匯入的自動任務",
+        "review": "查看匯入內容",
+        "title": "匯入儲存庫自動任務",
+        "description": "來源：{{workingDir}}。請檢查下方設定。匯入會套用這些變更並啟用新增自動任務，它們可以執行命令、啟動具有完整存取權限的 Agent。請僅匯入你信任的內容。",
+        "accept": "確認匯入",
+        "removed": "將刪除：{{names}}"
+      },
       "toast": {
         "summary": "增 {{inserted}} · 更 {{updated}} · 刪 {{deleted}}",
         "installed": "案「{{projectName}}」之自運已裝（{{summary}}）",
@@ -15136,6 +15017,7 @@
         "timeout": "時限（秒，可略）",
         "timeoutPlaceholder": "不限",
         "capabilities": {
+          "github_read": "讀 GitHub",
           "jira_read": "讀 Jira",
           "jira_comment": "評 Jira",
           "sessions_dispatch": "派差事",
@@ -15147,6 +15029,7 @@
         "capabilitiesSearch": "尋能",
         "capabilitiesEmpty": "無相合之能",
         "capabilityDescs": {
+          "github_read": "讀 PR、CI、評議及所見之變；查詢不繫任務",
           "jira_read": "查讀 Jira 單（依 key 讀 / JQL 尋）",
           "jira_comment": "於 Jira 單增評",
           "sessions_dispatch": "立或喚 {{appName}} 差事，並遞訊",
@@ -15254,7 +15137,27 @@
         "reasoningInvalid": "Reasoning 須為 {{values}} 之一",
         "preRunHookCommandRequired": "請填預檢指令碼命令",
         "templateParamRequired": "請填{{label}}",
-        "templateApplyFailed": "範本不可套，請察參數而後再試"
+        "templateApplyFailed": "範本不可套，請察參數而後再試",
+        "preRunPluginRequired": "請為預檢擇一法器"
+      },
+      "preRunPlugin": {
+        "choose": "擇法器",
+        "empty": "尚無可行前檢之法器。請裝能行前檢之法器，并於安裝或更新時許之。",
+        "hint": "法器可放行、略此番或止此番運行，不能代君准允何事。",
+        "onFailure": {
+          "allow": "照常運行",
+          "block": "止之并錄為未成",
+          "skip": "略此番"
+        },
+        "onFailureLabel": "法器有失時",
+        "source": {
+          "plugin": "法器",
+          "script": "脚本"
+        },
+        "sourceLabel": "檢查之法",
+        "tooltip": "每番運行前先詢君所擇之法器：可放行、略此番或止此番運行，不能代君准允須君確認之事。",
+        "unavailable": "法器不可用",
+        "unavailableHint": "此法器已不可用。未改擇他器前，運行時依「法器有失時」之設處置。"
       }
     },
     "chips": {
@@ -15738,6 +15641,7 @@
       "titleRevealPath": "許 Agent 取此媒體卷於此機之路徑？",
       "count": "{{count}} 卷",
       "descriptionAttachments": "下列之卷在今差事之工作目錄外。許之，則交此法器處之(其唯得內容指紋，不得路徑)。",
+      "descriptionHandoff": "下列之卷在今差事之工作目錄外。許之，則此法器得其副本(不得路徑)，副本七日不用則自刪。",
       "descriptionDir": "下列目錄/卷在今差事之工作目錄外。許之，則其中之卷交此法器上呈(其唯得一次性票據，不得路徑)。",
       "descriptionSaveDir": "下列目錄在今差事之工作目錄外。許之，此法器可將取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路徑唯於君許之後返予今之 Agent，並入言談錄；配對之裝置或同步此錄。此舉不授法器讀卷之權柄。",
@@ -17624,6 +17528,15 @@
         "skillDisabled": "停技藝「{{title}}」",
         "skillMerged": "併技藝「{{title}}」入「{{into}}」而停之"
       }
+    },
+    "checkSource": "檢查之法",
+    "remote": {
+      "pause": "暫停例行差事",
+      "resume": "續行例行差事",
+      "addSchedule": "增定時條件",
+      "addInterval": "增間隔條件",
+      "addEvent": "增事件條件",
+      "filterField": "篩選欄位"
     }
   },
   "cindyMakeDoctor": {

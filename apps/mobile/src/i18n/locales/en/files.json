@@ -102,6 +102,7 @@
     "fetchAvFailed": "Fetch failed: {{detail}}",
     "fetchPdfFailed": "PDF fetch failed: {{detail}}",
     "fetchingPdf": "Fetching PDF from your computer…",
+    "androidPdfHint": "PDFs can't be previewed inside Cindy on Android yet. Tap \"Export / Share\" below and choose a PDF reader.",
     "unsupportedType": "This type can't be previewed on your phone yet",
     "oversize": "File exceeds the preview limit ({{size}}); download the original to view it",
     "oversizeUnknown": "too large",

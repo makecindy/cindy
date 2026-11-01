@@ -2767,6 +2767,8 @@ interface OrcaCollabService {
   sendToSession: (params: {
     /** Host-only script follow-up; preserves target authorization without treating script text as consent. */
     readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
+    /** Host-generated stable delivery ID for a script retry, not model-supplied metadata. */
+    deliveryClientId?: string;
     messagePurpose?: SessionMessagePurpose;
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
@@ -7511,6 +7513,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Full scheduled model selection, including bound Harness changes and template overrides.
       supportsScheduleModelSelection: true,
       supportsScheduleAgentDeviceSelection: true,
+      // Remote schedule_create checks workingDir on this computer before insert.
+      // Older peers accept maker:schedule:create without that check; callers must
+      // see this flag or refuse instead of storing a missing path.
+      supportsRemoteScheduleDirectoryCheck: true,
     };
   });
 
@@ -12981,6 +12987,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (params.files?.length || params.forceQueue || verifiedOwnerRequestText(params.autoReviewUserText) !== undefined || explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith(BOT_GROUP_CLIENT_ID_PREFIX) || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId) || agentSwitchPending.get(targetSessionId)) {
         lockStage = 'enqueue-queued-message';
         const qClientId = explicitClientId ?? createId();
+        const durableScriptDelivery = qClientId.startsWith('schedule-delivery:');
+        if (durableScriptDelivery) {
+          await inputCoordinator.ensureQueueRestored(targetSessionId);
+          const persisted = await getPersistedInputClientIds(targetSessionId, [qClientId]);
+          if (persisted.has(qClientId) || inputCoordinator.hasKnownClientId(targetSessionId, qClientId)) {
+            await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
+            return { ok: true as const, targetSessionId, agentKind: meta.agentKind,
+              wakeKind: 'queued' as const, queuedMessageId: qClientId, targetTitle: dbRow.title,
+              targetLastUserSendAt: dbRow.userSendAt !== null ? new Date(dbRow.userSendAt).toISOString() : null };
+          }
+        }
         await enqueueSendToSessionMessage({
           targetSessionId,
           message,
@@ -13001,6 +13018,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           inheritTargetPlanMode: params.inheritTargetPlanMode,
           taskActionDeliveryGuard: params.taskActionDeliveryGuard,
         });
+        if (durableScriptDelivery) await awaitAgentInputQueueSnapshotPersistence(targetSessionId);
         return {
           ok: true as const,
           targetSessionId,
@@ -18027,6 +18045,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return sendToSessionInternal({
         ...params,
+        ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
         ...(classification.delegatedContinuation || (params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION])
           ? { autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const } } : {}),

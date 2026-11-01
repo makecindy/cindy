@@ -37,6 +37,20 @@ it('keeps working prose through streaming metadata and tools, folding only after
 });
 
 describe('teammate final-result presentation', () => {
+  // Runtime regression: persisted private prose was lifted back into the owner chat on reload.
+  it.each([true, false])('keeps private prose out of the owner chat, including folded history (streaming=%s)', streaming => {
+    const trace = message('trace', 'assistant', '', { systemCardType: 'bot-direct-message' });
+    const internal = message('internal', 'assistant', 'Internal answer', {
+      botPrivateReply: true, assistantPhase: 'final_answer', turnCompleted: true,
+    });
+    const rows = [trace, internal, tool('audit'), message('owner', 'assistant', 'Owner answer', {
+      botPrivateReply: false, turnCompleted: true,
+    }), message('error', 'error', 'Action required')];
+    const result = botProcessItems(groupWorkRuns(rows, streaming), streaming);
+    expect(allKeys(result)).not.toContain('msg-internal');
+    expect(allKeys(result)).toEqual(expect.arrayContaining(['msg-trace', 'msg-owner', 'msg-error', 'tools-audit']));
+    expect(internal.message.content).toBe('Internal answer');
+  });
   // #6351: provider final_answer only closes a message, not a successful sample.
   // Failed output remains in the expandable work history rather than being lifted
   // beside the real answer; normal commentary is governed by the existing rules.

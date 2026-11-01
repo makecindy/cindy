@@ -13,6 +13,7 @@ import type { CreateScheduleInput, Schedule, ScheduleTemplate, ScheduleWorkspace
 import type { ProviderView } from '@cindy/model-providers';
 import { getDraft, getPersistedVendorModel } from '@/state/newMakerDraft';
 import { resolveNewTaskDefaultRoute } from '@/lib/draftModelCalibration';
+import { GHOST_CONTROL_POINTS } from '../../../../shared/ghost';
 import type { Session } from '@/lib/ccAgent.types';
 import {
   EFFORT_VALUES,
@@ -59,6 +60,9 @@ const DEFAULT_FORM: ScheduleFormState = {
   preRunHookEnabled: false,
   preRunHookCommand: '',
   preRunHookTimeoutSec: '',
+  preRunSource: 'script',
+  preRunPluginId: '',
+  preRunPluginOnFailure: GHOST_CONTROL_POINTS['will-schedule-run'].defaultOnFailure,
   notifyDesktop: true,
   notifyFeishu: false,
   notifyWecomGroup: false,
@@ -277,7 +281,12 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     targetSessionId: s.targetSessionId ?? '',
     persistentSession: !!s.persistentSession,
     silentWhenIdle: !!s.silentWhenIdle,
-    preRunHookEnabled: !!s.preRunHook?.command,
+    preRunHookEnabled: !!s.preRunHook?.command || !!s.preRunPlugin,
+    // 两者都有时(Agent 设的)界面显示插件;脚本保持原样直到用户改成脚本来源。
+    preRunSource: s.preRunPlugin ? 'plugin' : 'script',
+    preRunKeepScript: !!s.preRunPlugin && !!s.preRunHook?.command,
+    preRunPluginId: s.preRunPlugin?.pluginId ?? '',
+    preRunPluginOnFailure: s.preRunPlugin?.onFailure ?? GHOST_CONTROL_POINTS['will-schedule-run'].defaultOnFailure,
     preRunHookCommand: s.preRunHook?.command ?? '',
     preRunHookTimeoutSec: s.preRunHook?.timeoutMs
       ? String(Math.round(s.preRunHook.timeoutMs / 1000))
@@ -476,7 +485,10 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     }
     // script 模式保留已有前置检查;切换时命令留空不创建 hook,
     // 否则用户明明看不到该区块也点不到那个开关,却被挡在保存之外。
-    if (form.executionMode !== 'script' && form.preRunHookEnabled && !form.preRunHookCommand.trim()) {
+    if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource === 'plugin' && !form.preRunPluginId.trim()) {
+      return { key: 'scheduler.editor.validation.preRunPluginRequired' };
+    }
+    if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource !== 'plugin' && !form.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
     }
     return null;

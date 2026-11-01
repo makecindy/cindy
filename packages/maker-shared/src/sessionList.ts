@@ -390,7 +390,7 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
   if (searchQuery) return '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。';
   if (statusFilter === 'waiting') return '这里集中显示需要在手机端确认的权限、计划和问题。';
   if (statusFilter === 'automation') return '自动化生成的任务会按计划聚合，展开后可以进入单次运行。';
-  if (statusFilter === 'archived') return '长按归档任务可进入批量选择，然后恢复或删除。';
+  if (statusFilter === 'archived') return '长按归档任务可进入批量选择，然后取消归档或删除。';
   if (statusFilter === 'all') return '活跃、归档和自动化生成的任务会一起显示，适合快速查找。';
   return '点开任务继续控制，长按任务进入批量选择。';
 }

@@ -59,6 +59,7 @@ import {
   type GhostManifestLocaleResource,
   type GhostTrustInfo,
   type InstalledGhost,
+  declaredGhostControlPoints,
 } from '../../shared/ghost.js';
 import { verifyGhostZipSignatures, type GhostTrustRegistry } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
@@ -125,6 +126,13 @@ import {
   ghostManualLogicalPathForEntry,
 } from './ghostManualValidation.js';
 import { installedFileModeFromZip, isZipSymbolicLinkMode } from './ghostZipPermissions.js';
+
+/** receipt 里批准过、manifest 仍声明、当前 Host 也认识的控制节点。 */
+function approvedControlPointsProjection(receipt: Pick<GhostInstallReceipt, 'approvedControlPoints' | 'manifest'>) {
+  const approved = new Set(receipt.approvedControlPoints ?? []);
+  const points = declaredGhostControlPoints(receipt.manifest).filter((point) => approved.has(point));
+  return points.length > 0 ? { approvedControlPoints: points } : {};
+}
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -3015,6 +3023,7 @@ export class GhostManager {
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+          ...approvedControlPointsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
@@ -3966,6 +3975,8 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
@@ -3996,6 +4007,8 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
@@ -4173,6 +4186,7 @@ export class GhostManager {
           ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
+          ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
@@ -4301,6 +4315,8 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
@@ -4328,6 +4344,8 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      /** Control points whose permission row the user saw in this confirmation. */
+      approvedControlPoints?: readonly string[];
       observeCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedPackageSha256?: string;
@@ -4609,6 +4627,12 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...((opts.delegationCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.delegationCapabilityApproved === true)) &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        // 已批准节点随同一实例延续(仍声明的才保留，receipt 构造时按新 manifest 过滤)；
+        // 本次确认新显示的节点并入。换源归档(archiveId)不继承旧批准。
+        approvedControlPoints: [
+          ...(opts.approvedControlPoints ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedControlPoints ?? [] : []),
+        ],
         ...((opts.observeCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.observeCapabilityApproved === true)) &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         trust,
@@ -5025,6 +5049,8 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        // 随包种子由 Cindy 自己发布，声明的控制节点视为已随版本批准。
+        approvedControlPoints: approvedManifest.subscribe?.hooks ?? [],
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),

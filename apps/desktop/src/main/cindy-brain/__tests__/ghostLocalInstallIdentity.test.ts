@@ -9,7 +9,7 @@ import JSZip from 'jszip';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 import { findInstalledGhostForDeliveryTarget, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { assertGhostInstallConsent, confirmedUiCapability, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
+import { assertGhostInstallConsent, confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
 import { ghostInstallApprovalToken } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
@@ -55,7 +55,7 @@ describe('local root installation consent identity', () => {
       rejectBrokerWithoutDeclaredRedirectPort: vi.fn(), rejectUnauthorizedTokenBroker: vi.fn(),
       throwIpcError: (code: string) => { throw new Error(code); },
       throwInstallError: () => { throw new Error('install rejected'); },
-      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedUiCapability, confirmedTaskCapability,
+      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedUiCapability, confirmedTaskCapability, confirmedControlPoints,
       createWindowGhostInstallConsentPrompt: () => prompt,
       findInstalledGhostForDeliveryTarget, installedGhostStoragePart,
       withGhostInstallLock: async (_id: string, operation: () => unknown) => operation(),
@@ -201,7 +201,7 @@ it.each([false, true])('commits a shared archive with its exact digest (missing 
       installLocalPluginSharePackage: (file: string, options: Record<string, unknown>) => Promise<InstalledGhost>;
     }>({ functions: ['installLocalPluginSharePackage', 'installAndDock', 'installAndDockLocked'] });
     const install = factory({ confirmedUiCapability, getGhostManager: () => manager, captureGhostMutationOwner: () => 'owner', beginGhostMutation: () => () => {},
-      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability,
+      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints,
       withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
       rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
       throwInstallError: (value: { reason: string }) => { throw new Error(value.reason); },
@@ -275,7 +275,7 @@ it('keeps remote share installation separate from later page capability approval
       mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) });
     const callbacks = shareUiCallbacks({ confirmedUiCapability, getGhostManager: () => manager,
       captureGhostMutationOwner: () => 'owner', beginGhostMutation: () => () => {},
-      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability,
+      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints,
       withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
       rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
       throwInstallError: (value: { reason: string }) => { throw new Error(value.reason); },

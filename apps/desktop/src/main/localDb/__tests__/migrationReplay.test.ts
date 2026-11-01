@@ -70,6 +70,49 @@ function maxMigrationSeq(): number {
   return Math.max(...listMigrations(drizzleDir()).map((migration) => migration.seq));
 }
 
+// Migration tier: nonempty old data, explicit user choices, removals and a second startup.
+describeMigrationReplay('explicit PR association upgrade', () => {
+  it('preserves old links and durable observations across upgrade and reopen', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'cindy-pr-upgrade-'));
+    const staged = path.join(root, 'before'); mkdirSync(staged);
+    const filename = path.join(root, 'fixture.db');
+    let db = createBetterSqliteDatabase(filename);
+    try {
+      loadSqliteVec(db);
+      for (const migration of listMigrations(drizzleDir()).filter(m => m.seq < 141)) {
+        copyFileSync(migration.sqlPath, path.join(staged, migration.fileName));
+        if (migration.tsScriptPath) {
+          mkdirSync(path.join(staged, 'scripts'), { recursive: true });
+          copyFileSync(migration.tsScriptPath, path.join(staged, 'scripts', path.basename(migration.tsScriptPath)));
+        }
+      }
+      runMigrationReplay(db, { drizzleDir: staged });
+      db.prepare('INSERT INTO sessions (id,created_at,updated_at) VALUES (?,1,1)').run('fixture');
+      const insert = db.prepare(`INSERT INTO session_pr_refs
+        (id,session_id,owner,repo,pr_number,url,first_seen_at,last_seen_at,pinned,priority,manually_added,removed_at)
+        VALUES (?, 'fixture', 'example', 'repo', ?, ?, 1, 2, ?, ?, ?, ?)`);
+      insert.run('manual', 1, 'https://github.com/example/repo/pull/1', 0, 7, 1, null);
+      insert.run('pinned', 2, 'https://github.com/example/repo/pull/2', 1, 9, 0, null);
+      insert.run('legacy', 3, 'https://github.com/example/repo/pull/3', 0, 0, 0, null);
+      insert.run('removed', 4, 'https://github.com/example/repo/pull/4', 0, 3, 1, 42);
+      runMigrationReplay(db, { drizzleDir: drizzleDir() });
+      const read = () => db.prepare('SELECT id,association_source,priority,removed_at FROM session_pr_refs ORDER BY id').all();
+      const upgraded = read();
+      expect(upgraded).toEqual([
+        { id: 'legacy', association_source: 'legacy', priority: 0, removed_at: null },
+        { id: 'manual', association_source: 'explicit', priority: 7, removed_at: null },
+        { id: 'pinned', association_source: 'explicit', priority: 9, removed_at: null },
+        { id: 'removed', association_source: 'explicit', priority: 3, removed_at: 42 },
+      ]);
+      db.prepare('INSERT INTO github_observations (key,state,updated_at) VALUES (?,?,?)').run('fixture', '{"sequence":1}', 1);
+      db.close(); db = createBetterSqliteDatabase(filename); loadSqliteVec(db);
+      expect(runMigrationReplay(db, { drizzleDir: drizzleDir() }).applied).toHaveLength(0);
+      expect(read()).toEqual(upgraded);
+      expect(db.prepare('SELECT state FROM github_observations WHERE key = ?').pluck().get('fixture')).toBe('{"sequence":1}');
+    } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 function seedFixture(db: Database.Database, name: string): void {
   db.exec(readFileSync(path.join(__dirname, 'fixtures', name), 'utf-8'));
 }
@@ -119,7 +162,7 @@ describeMigrationReplay('migration replay', () => {
         db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
-          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
+          125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -187,6 +230,8 @@ describeMigrationReplay('migration replay', () => {
           priority: 0,
           manually_added: 0,
           removed_at: null,
+          association_source: 'legacy',
+          association_origin: null,
         });
       } finally {
         cleanup();
@@ -291,7 +336,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。

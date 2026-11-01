@@ -100,6 +100,14 @@ export function registerScheduleUpdateTool(
         .nullable()
         .optional()
         .describe('script 模式的脚本配置，语义见 schedule_create 同名字段。传 null = 清空（先/同时把 executionMode 切回 agent）；省略 = 不修改'),
+      preRunPlugin: z
+        .object({
+          pluginId: z.string().min(1).max(512),
+          onFailure: z.enum(['allow', 'skip', 'block']),
+        })
+        .nullable()
+        .optional()
+        .describe('插件前置检查，语义见 schedule_create 同名字段。传 null = 关闭；省略 = 不修改。只支持本机的定时任务。'),
       preRunHook: z
         .object({
           command: z.string().min(1),
@@ -149,6 +157,8 @@ export function registerScheduleUpdateTool(
             // 语义相反;先读后写又会覆盖别处同时改的超时。要求调用方显式给出:数值或
             // null(不限时),由一次写入完成。
             ? '改其它电脑上的 preRunHook 必须显式传 timeoutMs(数值,或 null 表示不限时;先用 schedule_get 读到当前值)'
+          : (patch as { preRunPlugin?: unknown }).preRunPlugin !== undefined
+            ? '插件前置检查只能在本机设置（插件装在各自的电脑上）'
           : (patch as { agentDeviceId?: string | null }).agentDeviceId !== undefined
             ? '其它电脑上的定时任务不能设运行位置 agentDeviceId'
           : Object.entries(patch).some(([key, value]) => value === null

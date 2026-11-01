@@ -27,6 +27,7 @@ export type SchedulerRemoteOp =
   | "list"
   | "get"
   | "list-runs"
+  | "create"
   | "update"
   | "pause"
   | "resume"

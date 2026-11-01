@@ -666,7 +666,6 @@ export function BotSettings({
                   if (!ok) return;
                   const toolSettings: Record<string, string> = {
                     browser: 'computer-use', computer: 'computer-use', android: 'computer-use',
-                    contacts: 'personalization&section=personalization.contacts',
                     ssh: 'remote-control&section=remoteControl.ssh',
                     slack: 'im-bot&section=imBot.cindy.slack', feishu_bot: 'im-bot', wechat: 'im-bot',
                   };

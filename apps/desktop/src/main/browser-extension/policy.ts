@@ -208,9 +208,30 @@ function validateParityPayload(action: string, payload: BrowserExtensionJobPaylo
     throw new Error('responseBody needs the request URL.');
   if (action === 'dialog' && payload.promptText != null && !str(payload.promptText, 16000))
     throw new Error('Invalid promptText.');
-  if (action === 'upload') {
-    // Paths let Chrome read the files itself through the debugger (no size bound from the transfer);
-    // bytes are the fallback when the debugger is not allowed. At least one, for the same files.
+  if (action === 'upload' && payload.op != null) {
+    // Files too large for one job arrive in pieces, under one transfer id.
+    if (!['begin', 'chunk', 'finish', 'abort'].includes(payload.op as string))
+      throw new Error('upload op must be begin, chunk, finish or abort.');
+    if (!str(payload.transfer, 64) || !payload.transfer) throw new Error('Invalid upload transfer.');
+    const chunkFiles = payload.chunkFiles as Array<{ name?: unknown; mimeType?: unknown }> | undefined;
+    if (
+      payload.op === 'begin' &&
+      (!Array.isArray(chunkFiles) ||
+        !chunkFiles.length ||
+        chunkFiles.length > 20 ||
+        chunkFiles.some((f) => !f || !str(f.name, 255) || !f.name || (f.mimeType != null && !str(f.mimeType, 200))))
+    )
+      throw new Error('upload begin needs 1–20 files with a name.');
+    if (
+      payload.op === 'chunk' &&
+      (!Number.isInteger(payload.file) ||
+        (payload.file as number) < 0 ||
+        (payload.file as number) > 19 ||
+        !str(payload.data, 6_000_000))
+    )
+      throw new Error('upload chunk needs a file index and at most about 4 MB of base64 data.');
+  } else if (action === 'upload') {
+    // Paths are for a build with Chrome's debugger; published extensions take the bytes.
     const files = payload.files as Array<{ name?: unknown; data?: unknown; mimeType?: unknown }> | undefined;
     const paths = payload.paths as unknown[] | undefined;
     if (files == null && paths == null) throw new Error('upload needs files or paths.');
@@ -275,9 +296,9 @@ export function validateBrowserExtensionJob(
   }
   if (
     payload.limit != null &&
-    (!Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 100)
+    (!Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > (action === 'snapshot' ? 500 : 100))
   ) {
-    throw new Error('Limit must be 1–100.');
+    throw new Error(`Limit must be 1–${action === 'snapshot' ? 500 : 100}.`);
   }
   if (
     payload.maxChars != null &&

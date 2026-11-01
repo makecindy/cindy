@@ -18,6 +18,13 @@
   margin-bottom: 10px;
 }
 
+.companion-voice-floating-slot {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: center;
+  padding: 8px 16px 0;
+}
+
 .companion-voice-toolbar {
   width: 100%;
   max-width: 520px;
