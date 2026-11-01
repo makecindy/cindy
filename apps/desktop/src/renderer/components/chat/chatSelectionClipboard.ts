@@ -262,6 +262,13 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
           const target = copies[index] as SVGElement;
           for (const attribute of ['style', 'class', 'color', 'bgcolor']) target.removeAttribute(attribute);
           const authored = (original as SVGElement).style;
+          // A vector can choose semantic ink on its root and let unpainted
+          // shapes inherit currentColor. Keep that authored ink, while neutral
+          // roles and host-inherited color remain destination-adaptive.
+          const ink = authored.getPropertyValue('color');
+          if (ink && !/^(?:currentcolor|var\(--(?:text-(?:primary|secondary|tertiary)|border-default)\))$/i.test(ink)) {
+            target.style.color = ink.startsWith('var(') ? styleOf(original).color : ink;
+          }
           for (const property of ['fill', 'stroke']) {
             const paint = authored.getPropertyValue(property);
             if (!paint) continue;

@@ -439,6 +439,32 @@ describe('chat selection clipboard', () => {
     expect(pasted.innerHTML).not.toContain('SourceTheme');
   });
 
+  // Review4434334651: real props.style.color colors currentColor shapes
+  // from the SVG root. Unit: retain semantic ink; neutral/host ink stays portable.
+  it.each(['success', 'warning', 'danger'] as const)('keeps explicit %s vector ink without copying neutral host color', role => {
+    const source = [
+      { id: 'semantic', kind: 'svg', props: { label: 'Semantic ink', viewBox: [0, 0, 20, 20],
+        style: { color: role }, shapes: [{ type: 'rect', width: 10, height: 10 }] } },
+      { id: 'neutral', kind: 'svg', props: { label: 'Neutral ink', viewBox: [0, 0, 20, 20],
+        style: { color: 'primary' }, shapes: [{ type: 'rect', width: 10, height: 10 }] } },
+      { id: 'inherited', kind: 'svg', props: { label: 'Inherited ink', viewBox: [0, 0, 20, 20],
+        shapes: [{ type: 'rect', width: 10, height: 10 }] } },
+    ].map((node, index) => JSON.stringify({ version: 1, seq: index + 1, op: 'create', ...node })).join('\n');
+    const { root, select, copy } = setup(<div style={{ color: 'white' }}><p>before ink</p>
+      <RichAnswer stateKey={'root-ink-' + role} source={source} complete renderMarkdown={text => <span>{text}</span>} />
+      <p>after ink</p></div>);
+    const original = root.querySelector('svg[aria-label="Semantic ink"]') as SVGElement;
+    expect(original.style.color).toBe({ success: 'var(--status-success)', warning: 'var(--warning-fg)', danger: 'var(--error-fg)' }[role]);
+    select();
+    const pasted = document.createElement('div');
+    pasted.innerHTML = copy().clipboardData.setData.mock.calls.find(([type]) => type === 'text/html')![1];
+    expect((pasted.querySelector('svg[aria-label="Semantic ink"]') as SVGElement).style.color).toBe(getComputedStyle(original).color);
+    for (const label of ['Neutral ink', 'Inherited ink']) {
+      expect((pasted.querySelector('svg[aria-label="' + label + '"]') as SVGElement).style.color).toBe('');
+    }
+    expect(pasted.innerHTML).not.toMatch(/color:\s*white|var\(--text-/);
+  });
+
   // Review #4334592398: RichAnswer role colors come from the host theme,
   // unlike Mermaid's drawing stylesheet. A dark-source/light-target paste
   // must inherit target ink while explicit semantic drawing colors survive.
