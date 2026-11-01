@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 49baccf631
+          ref: 49baccf63198224b6c7518f20375e71756f0dd7e
           lfs: true
       - name: Initialize CodeQL 2.27.3 with unchanged default queries
         uses: github/codeql-action/init@793b778da9c9275a0f276522b27cb5fc14bba279
