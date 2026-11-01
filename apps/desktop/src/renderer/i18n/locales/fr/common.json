@@ -8710,7 +8710,7 @@
     "completeSignIn": "Finaliser la connexion",
     "preparing": "Préparation de la connexion",
     "preparingSubtitle": "Chargement des méthodes disponibles pour cette région",
-    "unavailable": "Connexion indisponible",
+    "unavailable": "Connexion indisponible pour l'instant",
     "retry": "Réessayer",
     "browserWaiting": "Terminez dans votre navigateur",
     "browserCallback": {

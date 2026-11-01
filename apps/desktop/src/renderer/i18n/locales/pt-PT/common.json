@@ -8710,7 +8710,7 @@
     "completeSignIn": "Concluir início de sessão",
     "preparing": "A preparar o início de sessão",
     "preparingSubtitle": "A carregar os métodos disponíveis para esta região",
-    "unavailable": "Início de sessão indisponível",
+    "unavailable": "Início de sessão indisponível agora",
     "retry": "Tentar novamente",
     "browserWaiting": "Concluir a verificação no navegador",
     "browserCallback": {
