@@ -811,13 +811,37 @@ export function collectGhostCallsByUserTurn(
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   const users = messages.filter(m => m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger);
-  const userIds = new Set(users.map(m => m.clientId));
   const time = (m: ChatMessage) => Date.parse(m.createdAt ?? '');
   const compare = (a: ChatMessage, b: ChatMessage) =>
     time(a) - time(b) ||
     (typeof a.rowid === 'number' && Number.isFinite(a.rowid) &&
       typeof b.rowid === 'number' && Number.isFinite(b.rowid) ? a.rowid - b.rowid : 0);
   const timedUsers = users.filter(m => Number.isFinite(time(m))).sort(compare);
+  const timedOwner = (message: ChatMessage): string | null => {
+    // Upper bound in persisted order, independent of the display array.
+    let lo = 0;
+    let hi = timedUsers.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (compare(timedUsers[mid], message) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 ? timedUsers[lo - 1].clientId : null;
+  };
+  // Steers and synthetic inputs keep their own IDs in reply metadata, but
+  // belong to an existing visible turn. Missing inputs must remain unowned.
+  const userTurnOwners = new Map<string, string | null>();
+  let precedingUser: string | null = null;
+  for (const m of messages) {
+    if (m.role !== 'user') continue;
+    if (m.delivery !== 'steer' && !m.isSyntheticTrigger) {
+      precedingUser = m.clientId;
+      userTurnOwners.set(m.clientId, m.clientId);
+    } else {
+      userTurnOwners.set(m.clientId,
+        Number.isFinite(time(m)) && timedUsers.length ? timedOwner(m) : precedingUser);
+    }
+  }
   let currentUserClientId: string | null = null;
   for (const m of messages) {
     if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) {
@@ -831,17 +855,9 @@ export function collectGhostCallsByUserTurn(
     ) {
       let owner = currentUserClientId;
       if (m.replyToClientId) {
-        owner = userIds.has(m.replyToClientId) ? m.replyToClientId : null;
+        owner = userTurnOwners.get(m.replyToClientId) ?? null;
       } else if (Number.isFinite(time(m)) && timedUsers.length) {
-        // Upper bound in persisted order, independent of the display array.
-        let lo = 0;
-        let hi = timedUsers.length;
-        while (lo < hi) {
-          const mid = (lo + hi) >>> 1;
-          if (compare(timedUsers[mid], m) <= 0) lo = mid + 1;
-          else hi = mid;
-        }
-        owner = lo > 0 ? timedUsers[lo - 1].clientId : null;
+        owner = timedOwner(m);
       }
       if (!owner) continue;
       const input = m.toolInput as Record<string, unknown>;

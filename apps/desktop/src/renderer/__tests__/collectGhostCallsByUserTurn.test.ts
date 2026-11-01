@@ -58,6 +58,39 @@ describe('collectGhostCallsByUserTurn', () => {
     expect(collectGhostCallsByUserTurn([user('u2'), call]).size).toBe(0);
   });
 
+  it.each([
+    ['live', 'steer'], ['history', 'steer'],
+    ['live', 'synthetic'], ['history', 'synthetic'],
+  ] as const)('attributes a %s call replying to a %s input to its visible turn', (source, kind) => {
+    const data = { toolUseId: 'tool-1', toolName: 'mcp__cindy__ghost_call', input: { ghost_id: 'art', tool: 'run' } };
+    const agentMeta = { replyToClientId: 'continuation' };
+    const calls = source === 'live'
+      ? handleStreamEvent({ ...EMPTY_SESSION_STATE, messages: [] }, {
+          sessionId: 's1', type: 'tool_use', persistId: 'call', data, agentMeta,
+        }).messages
+      : makerChatStore.__mapServerMessagesForTest([{
+          id: 'tool-row', sessionId: 's1', clientId: 'call', role: 'tool_use',
+          content: data, toolUseId: 'tool-1', agentMeta,
+          createdAt: '2026-01-01T00:00:03.000Z',
+        }]);
+    const original = user('u1', { createdAt: '2026-01-01T00:00:00.000Z' });
+    const continuation = user('continuation', {
+      ...(kind === 'steer' ? { delivery: 'steer' } : { isSyntheticTrigger: true }),
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    const next = user('u2', { createdAt: '2026-01-01T00:00:02.000Z' });
+    // The late call must retain the continuation's turn even after a new user.
+    expect([...collectGhostCallsByUserTurn([original, continuation, next, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    expect([...collectGhostCallsByUserTurn([original, next, continuation, ...calls])])
+      .toEqual([['u1', new Set(['art'])]]);
+    expect(collectGhostCallsByUserTurn([next, continuation, ...calls]).size).toBe(0);
+    // Legacy untimed inputs still belong to their preceding visible boundary.
+    expect([...collectGhostCallsByUserTurn([
+      user('u1'), { ...continuation, createdAt: undefined }, user('u2'), ...calls,
+    ])]).toEqual([['u1', new Set(['art'])]]);
+  });
+
   it('uses persisted chronology for legacy calls reordered behind a newer user', () => {
     const at = (seconds: number) => new Date(seconds * 1000).toISOString();
     const oldUser = user('u1', { createdAt: at(1), rowid: 1 });
