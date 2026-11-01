@@ -10,6 +10,15 @@ was weaker, the weaker label is used and the roadmap row reflects it.
 
 ---
 
+## 2026-11-01 — ROADMAP 2.5b `live-proven`; Phase 2 closed apart from 2.4 polish (owner)
+
+- First attempt failed before the banner: after the 2.4c test the owner reloaded Gemma in LM Studio with LM Studio's default (small) context, and LM Studio rejected a ~13.7k-token Hermes request as too large. Not a Cindy defect; the owner reloaded Gemma with a large context and saved it as the model default.
+- Second attempt: `providers.yaml` `lmstudio-local.contextLength` temporarily 40000 (backup `providers.yaml.bak-test`). A new Gemma chat at 42.8k tokens showed "Context is 107% full (0 tokens left)" with "Summarise and continue (lmstudio-local/qwen3-8b)". The click opened "Hello (continued)", whose first message was "Summary of previous session "Hello" (summarised by lmstudio-local/qwen3-8b)", and Gemma answered from it.
+- Rows: 2.1 ✅, 2.2 ✅, 2.3 ✅, 2.5 ✅ `live-proven`. 2.4 ✅ for the safety rule; polish remains (named reason visible without "Error Details"; one-click alternative for discovered models).
+- Lesson for HANDOVER-level knowledge: LM Studio context length is per load; unloading and reloading without a saved per-model default silently shrinks it.
+
+---
+
 ## 2026-11-01 — Fail fast on a down local endpoint (2.4c) + correct provider label (1.9b-3c) (`unit-tested`)
 
 **Why:** owner quit LM Studio's window; its server kept running with no model. A Hermes turn on `google/gemma-4-26b-a4b-qat:2` showed "Working…" for minutes, then LM Studio's raw "HTTP 400: No models loaded". The cost panel labelled Gemma turns `deepseek/…`.
