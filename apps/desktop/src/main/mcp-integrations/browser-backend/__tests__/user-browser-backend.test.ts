@@ -655,6 +655,7 @@ describe('UserBrowserBackend · 读取与动作', () => {
       });
       // Review 2026-10-29: a batch over the extension's ~30 MB limit is refused before any file is read.
       const big = pathMod.join(root, 'big.bin');
+      const bigBytes = Buffer.alloc(9_000_000, 7);
       await fsp.writeFile(big, '');
       await fsp.truncate(big, 31_000_000);
       const jobsBefore = fake.jobs.length;
@@ -662,18 +663,51 @@ describe('UserBrowserBackend · 读取与动作', () => {
         await call(b, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' }),
       ).toMatchObject({ ok: false, message: expect.stringContaining('30 MB') });
       expect(fake.jobs.length).toBe(jobsBefore);
-      // 2026-10-30: newer extensions also get the checked paths, so Chrome reads the files through the
-      // debugger; the bytes go along only when they fit the transfer.
-      const newer = fakeControl({ version: '0.4.56' });
-      newer.responses.set('upload', () => ({ ok: true, files: [{ name: 'big.bin', size: 31_000_000 }] }));
+      // 2026-11-01: from 0.4.61 larger files go in pieces; Chrome's debugger is never needed.
+      await fsp.writeFile(big, bigBytes);
+      await fsp.appendFile(big, Buffer.alloc(22_000_000, 8));
+      const newer = fakeControl({ version: '0.4.61' });
+      newer.responses.set('upload', (payload) =>
+        payload.op === 'finish' ? { ok: true, files: [{ name: 'big.bin', size: 31_000_000 }] } : { ok: true });
       const nb = backend(newer.control, async () => [root]);
       await call(nb, { action: 'tabs' });
-      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' })).toMatchObject({ ok: true });
-      const bigJob = newer.jobs.at(-1)?.[1] as { paths?: string[]; files?: unknown };
-      expect(bigJob.files).toBeUndefined();
-      expect(bigJob.paths?.[0]).toMatch(/big\.bin$/);
+      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [big], inputRef: 'r9', __mcpSessionId: 's1' })).toMatchObject({
+        ok: true,
+        data: { files: [{ name: 'big.bin', size: 31_000_000 }] },
+      });
+      const steps = newer.jobs.filter(([kind]) => kind === 'upload').map(([, payload]) => payload);
+      expect(steps[0]).toMatchObject({ op: 'begin', ref: 'r9', chunkFiles: [{ name: 'big.bin' }] });
+      expect(steps.at(-1)).toMatchObject({ op: 'finish' });
+      const pieces = steps.filter((step) => step.op === 'chunk');
+      expect(pieces.length).toBe(8);
+      expect(new Set(steps.map((step) => step.transfer)).size).toBe(1);
+      expect(steps.some((step) => 'paths' in step)).toBe(false);
+      const rebuilt = Buffer.concat(pieces.map((step) => Buffer.from(step.data as string, 'base64')));
+      expect(rebuilt.length).toBe(31_000_000);
+      expect(rebuilt.equals(await fsp.readFile(big))).toBe(true);
+      // Small files still fit one job, without any path.
       await call(nb, { action: 'upload', targetId: 't1', paths: [file], __mcpSessionId: 's1' });
-      expect(newer.jobs.at(-1)?.[1]).toMatchObject({ files: [{ name: 'a.png', data: 'AQID' }], paths: [expect.stringMatching(/a\.png$/)] });
+      expect(newer.jobs.at(-1)?.[1]).toMatchObject({ files: [{ name: 'a.png', data: 'AQID' }] });
+      expect(newer.jobs.at(-1)?.[1]).not.toHaveProperty('paths');
+      // A piece the page refuses ends the transfer: the input stays as it was and memory is released.
+      const failing = fakeControl({ version: '0.4.61' });
+      failing.responses.set('upload', (payload) =>
+        payload.op === 'chunk' ? { ok: false, error: 'UPLOAD_EXPIRED', message: 'page changed' } : { ok: true });
+      const fb = backend(failing.control, async () => [root]);
+      await call(fb, { action: 'tabs' });
+      expect(await call(fb, { action: 'upload', targetId: 't1', paths: [big], __mcpSessionId: 's1' })).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('UPLOAD_EXPIRED'),
+      });
+      await vi.waitFor(() => expect(failing.jobs.at(-1)?.[1]).toMatchObject({ op: 'abort' }));
+      expect(failing.jobs.some(([, payload]) => payload.op === 'finish')).toBe(false);
+      // A file over the 1 GB bound is refused before any file is read.
+      const huge = pathMod.join(root, 'huge.bin');
+      await fsp.writeFile(huge, '');
+      await fsp.truncate(huge, 1024 * 1024 * 1024 + 1);
+      const beforeHuge = newer.jobs.length;
+      expect(await call(nb, { action: 'upload', targetId: 't1', paths: [huge], __mcpSessionId: 's1' })).toMatchObject({ ok: false });
+      expect(newer.jobs.length).toBe(beforeHuge);
       expect(
         await call(b, {
           action: 'upload',
@@ -810,29 +844,34 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
   });
 
-  it('按需调试:PDF 交给扩展;未授权时告诉模型请用户在已打开的说明页里确认', async () => {
-    const fake = fakeControl({ version: '0.4.43' });
-    let granted = false;
-    fake.responses.set('pdf', () =>
-      granted
-        ? { ok: true, mimeType: 'application/pdf', data: 'JVBERg==', bytes: 4 }
-        : { ok: false, error: 'DEBUGGER_NOT_ALLOWED', message: 'needs debugger', grantPageOpened: true },
-    );
+  it('快照:limit 传给扩展,新版扩展接受 frame,截断时说明后面还有内容', async () => {
+    const fake = fakeControl({ version: '0.4.61' });
+    fake.responses.set('snapshot', () => ({ ok: true, title: 'T', text: 'x', elements: '', truncated: true }));
     const b = backend(fake.control);
     await call(b, { action: 'tabs' });
-    expect(await call(b, { action: 'pdf', targetId: 't1' })).toMatchObject({
-      ok: false,
-      message: expect.stringContaining('已在用户的 Chrome 里打开说明页'),
-    });
-    expect(fake.jobs.at(-1)).toEqual([
-      'pdf',
-      { url: 'https://example.test/a', browser: 'client-aaaaaaaa', tabId: 7 },
-    ]);
-    granted = true;
-    expect(await call(b, { action: 'pdf', targetId: 't1' })).toMatchObject({
-      ok: true,
-      data: { mimeType: 'application/pdf', data: 'JVBERg==' },
-    });
+    const result = await call(b, { action: 'snapshot', targetId: 't1', limit: 200, frame: 'iframe' });
+    expect(fake.jobs.at(-1)?.[1]).toMatchObject({ limit: 200 });
+    expect(result).toMatchObject({ ok: true, data: { truncated: true } });
+    const data = result.data as { note?: string; frameNote?: string };
+    expect(data.note).toContain('selector');
+    expect(data.frameNote).toContain('iframe');
+    const older = fakeControl({ version: '0.4.60' });
+    const ob = backend(older.control);
+    await call(ob, { action: 'tabs' });
+    expect(await call(ob, { action: 'snapshot', targetId: 't1', frame: 'iframe' })).toMatchObject({ ok: false });
+  });
+
+  it('调试接口:Chrome 不允许按需申请,能力表如实报告,扩展拒绝时不让用户去找开启入口', async () => {
+    const fake = fakeControl({ version: '0.4.61' });
+    expect(userBrowserCapabilities(fake.control)).toMatchObject({ pdf: false, rawProtocol: false, upload: true });
+    for (const error of ['DEBUGGER_NOT_ALLOWED', 'DEBUGGER_UNAVAILABLE']) {
+      fake.responses.set('pdf', () => ({ ok: false, error, message: 'needs debugger', grantPageOpened: true }));
+      const b = backend(fake.control);
+      await call(b, { action: 'tabs' });
+      const refused = await call(b, { action: 'pdf', targetId: 't1' });
+      expect(refused).toMatchObject({ ok: false, message: expect.stringContaining('Cindy 专用浏览器') });
+      expect(refused.message).not.toContain('开启」');
+    }
   });
 
   it('配方协议会话:按需接上调试,事件随结果回传,结束即断开', async () => {
