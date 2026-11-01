@@ -144,6 +144,8 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
 import { t } from '../i18n.js';
+import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
+import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
@@ -1089,6 +1091,10 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      machineDirectory: {
+        listDevices: async () => (await handleListDevices(deviceDirectoryDeps())).devices,
+        invokeStatus: (deviceId: string) => invokeDeviceValue(remoteInvoke, deviceId, MACHINE_STATUS_CHANNEL, []),
+      },
       historyRemote: createHistoryRemoteDeps({
         listDevices: () => handleListDevices(deviceDirectoryDeps()),
         invoke: remoteInvoke,

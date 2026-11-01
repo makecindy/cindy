@@ -1,3 +1,7 @@
+import { hostname } from 'node:os';
+import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
+import { listMachines, type MachineDirectoryDeps } from '../machines/directory.js';
+import { readLocalMachineStatus } from '../machines/localStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { reportTaskDelivery } from '../bot-autonomy/hub.js';
@@ -157,6 +161,8 @@ export interface DesktopMcpProvidersDeps {
     options?: { preSend?: () => void },
   ) => ReturnType<ChatHistoryReaderDeps['invokeRemote']>;
   historyRemote?: import('@cindy/mcps').HistoryRemoteDeps;
+  /** list_machines：账号下的电脑从这里读，SSH 主机与本机资源在这个文件里接。 */
+  machineDirectory?: Pick<MachineDirectoryDeps, 'listDevices' | 'invokeStatus'>;
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
   getLiveSessionGrantState?: (
     sessionId: string,
@@ -1241,6 +1247,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return owned.botId;
         },
       },
+      ...(deps.machineDirectory ? { machines: {
+        list: async ({ callerSessionId }: { callerSessionId: string }) => {
+          // 共享任务里的访客不是账号本人，不能经 Agent 看到账号下的机器。
+          if (isSessionSharedTaskActive(callerSessionId)) {
+            return { ok: false as const, errorCode: 'PERMISSION_DENIED', message: 'Not available in a shared task' };
+          }
+          const machines = await listMachines({
+            ...deps.machineDirectory!,
+            readLocal: readLocalMachineStatus,
+            selfName: () => hostname(),
+            listSsh: async () => (await (await loadRemoteSsh()).getRemoteSshPoolHydrated()).list().map(({ config, status }) => ({
+              kind: 'ssh' as const, id: config.id, hostname: config.hostname, port: config.port, user: config.user, connection: status,
+            })),
+          });
+          return { ok: true as const, machines };
+        },
+      } } : {}),
       // 伙伴的主力电脑:与界面同一条路径(本机交出 / 请主力电脑交出 / 在这台电脑继续)。
       teammateHome: {
         get: async ({ teammateId }) => {
