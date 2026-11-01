@@ -235,6 +235,7 @@ export interface RemoteHandleDeps {
   onAutoReviewFallback?: () => void;
   /** 句柄关闭后释放本机资源(执行器、MCP 身份等)。 */
   dispose(): Promise<void>;
+  log?: { warn(message: string, meta?: Record<string, unknown>): void };
   /** 供应商组(分享的人)：这次发送要不要告诉对方开始新的一轮(用户亲自接手过)。 */
   takeGroupNewRound?(): boolean;
 }
@@ -274,6 +275,7 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   let state: Record<string, unknown> = { ...started.state };
   let resolver: InteractionResolver | null = null;
   let disposed = false;
+  let disposal: Promise<void> | null = null;
   const sendCallbacks = new Map<string, {
     onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
     onInteractionStateChange?: (state: 'waiting' | 'resolved' | 'cancelled') => void;
@@ -288,12 +290,37 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
   // A later transport teardown must close the handle without replacing that error.
   let terminalErrorDelivered = false;
 
-  const dispose = async () => {
-    if (disposed) return;
+  const dispose = (): Promise<void> => {
+    if (disposal) return disposal;
     disposed = true;
+    state = { ...state, turnRunning: false, preparing: false };
     for (const projected of projection.flush()) queue.push(projected);
     queue.end();
-    await deps.dispose().catch(() => undefined);
+    disposal = Promise.resolve().then(() => deps.dispose());
+    return disposal;
+  };
+
+  const teardown = async (mode: 'close' | 'detach', opts?: AgentSessionTeardownOptions) => {
+    deps.cancelPendingConfirmations?.();
+    const reason = opts?.reason ?? 'navigation';
+    if (reason === 'account-boundary') {
+      const [remote, local] = await Promise.allSettled([
+        Promise.resolve().then(() => link.close(mode, reason)),
+        dispose(),
+      ]);
+      if (remote.status === 'rejected') {
+        deps.log?.warn('remote agent: account-boundary close notification failed', {
+          error: String(remote.reason),
+        });
+      }
+      if (local.status === 'rejected') throw local.reason;
+      return;
+    }
+    try {
+      await link.close(mode, reason);
+    } finally {
+      await dispose();
+    }
   };
 
   /** 要对方 Agent 参与的调用：已让出名额就先连回来。 */
@@ -398,20 +425,10 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       await callIfLive('abort');
     },
     close: async (opts?: AgentSessionTeardownOptions) => {
-      deps.cancelPendingConfirmations?.();
-      try {
-        await link.close('close', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
+      await teardown('close', opts);
     },
     detach: async (opts?: AgentSessionTeardownOptions) => {
-      deps.cancelPendingConfirmations?.();
-      try {
-        await link.close('detach', opts?.reason ?? 'navigation');
-      } finally {
-        await dispose();
-      }
+      await teardown('detach', opts);
     },
     events: () => queue,
     getUsageSnapshot: () => (state.usage && typeof state.usage === 'object'

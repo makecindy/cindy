@@ -15,7 +15,7 @@ import type { createMediaIngest } from './mediaIngest.js';
 import type { createMediaRefCompensationJournal } from './mediaRefCompensationJournal.js';
 
 type ImageMessage = Pick<typeof messages.$inferSelect, 'id' | 'sessionId' | 'role' | 'content' | 'createdAt' | 'rewindAt'>;
-export function createTaskImageDelivery(host: { getCurrentDbClientSnapshot: ReturnType<typeof createCurrentDbClient>['getCurrentDbClientSnapshot']; ingestMedia: ReturnType<typeof createMediaIngest>['ingestMedia']; ledger: Pick<ReturnType<typeof createMediaLedger>, 'hasRef' | 'removeRefById' | 'withSessionMediaRefLock'>; journal: ReturnType<typeof createMediaRefCompensationJournal> }) {
+export function createTaskImageDelivery(host: { getCurrentDbClientSnapshot: ReturnType<typeof createCurrentDbClient>['getCurrentDbClientSnapshot']; ingestMedia: ReturnType<typeof createMediaIngest>['ingestMedia']; ledger: Pick<ReturnType<typeof createMediaLedger>, 'hasRef' | 'removeRefById' | 'withSessionMediaRefLock'>; journal: Pick<ReturnType<typeof createMediaRefCompensationJournal>, 'captureMediaRefCompensationScope' | 'withMediaRefCompensation'> }) {
 const { getCurrentDbClientSnapshot, ingestMedia, ledger: { hasRef, removeRefById, withSessionMediaRefLock }, journal: { captureMediaRefCompensationScope, withMediaRefCompensation } } = host;
 
 
