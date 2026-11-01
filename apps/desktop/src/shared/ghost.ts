@@ -9676,17 +9676,7 @@ export type GhostToolCallResult =
  * 更名 'cindy'(调用名更短);旧名保留用于匹配改名前持久化的历史消息
  * (召唤行/已召唤卡对老会话不失效)。
  */
-export const GHOST_CALL_TOOL_NAMES: readonly string[] = [
-  'mcp__cindy__ghost_call',
-  'mcp__cindy_ghosts__ghost_call',
-  'mcp:cindy:ghost_call',
-  'mcp:cindy_ghosts:ghost_call',
-];
-
-/** toolName 是否是 ghost_call(兼容新旧 server 名)。 */
-export function isGhostCallToolName(name: string | undefined | null): boolean {
-  return typeof name === 'string' && GHOST_CALL_TOOL_NAMES.includes(name);
-}
+export { GHOST_CALL_TOOL_NAMES, isGhostCallToolName } from '@cindy/maker-shared/ghost-command';
 
 /** Plugin-to-host routine protocol; source identity always comes from the authenticated pipe. */
 export type GhostPipeRoutineRequest =

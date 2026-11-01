@@ -1637,6 +1637,13 @@ Mobile 的「仅查看」改为纯本地开关：只停止转发输入、关闭�
 
 ### 可见历史优先读取
 
+工作组摘要可选携带 `ghostCalls`，只含顶层插件调用的 clientId、时间／rowid、
+replyToClientId、ghostId 与可选 namespace，供 Desktop 在未展开明细时恢复提及兑现状态。
+SQL outline 保留这些最小事实，不携带工具参数正文或结果。缺省 namespace 与显式 null
+继续区分。旧控制端忽略新字段；新控制端连旧 Host 时仍读取已有可见行／已展开明细，
+折叠状态的完整恢复需要 Host 更新。Mobile 不新增呈现；无数据库迁移、channel、权限、
+relay 帧或重连变化，官方与自建中转继续透传原 invoke 的业务 payload，无需升级中转。
+
 `local-db:messages:view` 的可选 `{ lazyDetails: true }` 启用轻量历史投影：
 被控 Desktop 先读取分组所需字段，再只按 ID 读取本页可见正文和卡片。
 隐藏子代理记录通过 `messages.deferred` 保存范围，展开后由既有

@@ -44,6 +44,7 @@ import {
   HistoryViewHandoff,
   type HistoryViewController,
   type HistoryViewSnapshot,
+  type HistoryWorkSummary,
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
@@ -803,8 +804,9 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
 
 /**
  * 意识"提及 → 兑现"关联(方案 2,渲染期从持久数据推导,重启幂等):
- * 逐条扫消息,维护"当前轮的 user 消息",遇到 assistant 的 ghost_call 工具
- * 调用就把其 ghost_id 记到当前 user 名下——即"这条 user 触发的那一轮里,
+ * 优先使用持久化的回复归属，旧记录按持久化时间与 rowid 定位 user；只有
+ * 缺少时间的旧记录才使用数组相邻关系，避免展示重排把历史调用挂给新消息。
+ * 即"这条 user 触发的那一轮里,
  * AI 真的召唤了哪些意识"。软提示徽章据此升级为召唤卡(徽章说'提到了',
  * 兑现后才敢说'召唤了')。turn 边界 = 下一条非 steer 的 user 消息。
  * 判据全取自会话历史(user 消息 + ghost_call tool_use 都已持久化),不落
@@ -812,26 +814,78 @@ function collectAssistantsWithFollowingUserBoundary(messages: readonly ChatMessa
  */
 export function collectGhostCallsByUserTurn(
   messages: readonly ChatMessage[],
+  summaries: readonly HistoryWorkSummary[] = [],
 ): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
-  let currentUserClientId: string | null = null;
+  const users = messages.filter(m => m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger);
+  const time = (m: ChatMessage) => Date.parse(m.createdAt ?? '');
+  const compare = (a: ChatMessage, b: ChatMessage) =>
+    time(a) - time(b) ||
+    (typeof a.rowid === 'number' && Number.isFinite(a.rowid) &&
+      typeof b.rowid === 'number' && Number.isFinite(b.rowid) ? a.rowid - b.rowid : 0);
+  // Remote optimistic/reserved rows use the controller clock, not persisted
+  // chronology. They can own explicit replies, but must not capture old calls.
+  const timedUsers = users.filter(m => !m.isPendingPersist &&
+    !m.localSendPrecedingClientIds && Number.isFinite(time(m))).sort(compare);
+  const timedOwner = (message: ChatMessage): string | null => {
+    // Upper bound in persisted order, independent of the display array.
+    let lo = 0;
+    let hi = timedUsers.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (compare(timedUsers[mid], message) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 ? timedUsers[lo - 1].clientId : null;
+  };
+  // Steers and synthetic inputs keep their own IDs in reply metadata, but
+  // belong to an existing visible turn. Missing inputs must remain unowned.
+  const userTurnOwners = new Map<string, string | null>();
+  let precedingUser: string | null = null;
+  let reservedUser: ChatMessage | undefined;
   for (const m of messages) {
+    if (m.role !== 'user') continue;
+    if (m.delivery !== 'steer' && !m.isSyntheticTrigger) {
+      precedingUser = m.clientId;
+      reservedUser = m.isPendingPersist || m.localSendPrecedingClientIds ? m : undefined;
+      userTurnOwners.set(m.clientId, m.clientId);
+    } else {
+      userTurnOwners.set(m.clientId,
+        reservedUser && !reservedUser.localSendPrecedingClientIds?.includes(m.clientId)
+          ? reservedUser.clientId
+          : Number.isFinite(time(m)) ? timedOwner(m) : precedingUser);
+    }
+  }
+  let currentUserClientId: string | null = null;
+  const summarizedCalls: ChatMessage[] = summaries.flatMap(summary => (summary.ghostCalls ?? []).map(call => ({
+    clientId: call.clientId, role: 'tool_use', content: '', isStreaming: false,
+    createdAt: call.createdAt, rowid: call.rowid, replyToClientId: call.replyToClientId,
+    toolName: 'mcp__cindy__ghost_call', toolInput: { ghost_id: call.ghostId,
+      ...(Object.hasOwn(call, 'namespace') ? { namespace: call.namespace } : {}) },
+  })));
+  for (const m of [...messages, ...summarizedCalls]) {
     if (m.role === 'user' && m.delivery !== 'steer' && !m.isSyntheticTrigger) {
       currentUserClientId = m.clientId;
       continue;
     }
     if (
-      currentUserClientId &&
       isGhostCallToolName(m.toolName) &&
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
+      let owner = currentUserClientId;
+      if (m.replyToClientId) {
+        owner = userTurnOwners.get(m.replyToClientId) ?? null;
+      } else if (Number.isFinite(time(m))) {
+        owner = timedOwner(m);
+      }
+      if (!owner) continue;
       const input = m.toolInput as Record<string, unknown>;
       const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
       if (!gid) continue;
-      const set = out.get(currentUserClientId) ?? new Set<string>();
+      const set = out.get(owner) ?? new Set<string>();
       set.add(gid);
-      out.set(currentUserClientId, set);
+      out.set(owner, set);
     }
   }
   return out;
@@ -6458,8 +6512,8 @@ export function MessageStream({
   // 走可见序列:归属键是**可见的**那条 user 消息(软提示卡挂在它上面),被隐藏的
   // 子代理 user 行不该成为归属键,否则该 turn 的召唤卡升级不到任何可见气泡上。
   const ghostCallsByUserTurnRaw = useMemo(
-    () => collectGhostCallsByUserTurn(visibleMetadataMessages),
-    [visibleMetadataMessages],
+    () => collectGhostCallsByUserTurn(visibleMetadataMessages, historyWorkSummaries(historySnapshot?.items ?? [])),
+    [visibleMetadataMessages, historySnapshot?.items],
   );
   const ghostCallsCacheRef = useRef(ghostCallsByUserTurnRaw);
   if (!ghostCallMapsEqual(ghostCallsCacheRef.current, ghostCallsByUserTurnRaw)) {
