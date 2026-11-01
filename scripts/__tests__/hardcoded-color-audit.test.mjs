@@ -413,7 +413,10 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
     assert.ok(shards.length>=2);
     assert.deepEqual(shards,shards.map((_,i)=>i+1));
     assert.equal(job.strategy['fail-fast'],false);
-    assert.ok(job.steps.some(s=>s.run==='pnpm run test:workspaces --tier unit'));
+    const command = name === 'windows-unit-shards'
+      ? 'pnpm run test:workspaces --tier unit ${{ matrix.group.args }}'
+      : 'pnpm run test:workspaces --tier unit';
+    assert.ok(job.steps.some(s=>s.run===command));
   }
   // Companion DB regressions run once per OS: on Linux shard 1, and on Windows
   // in the parallel one-off job instead of on a shard's critical path.
