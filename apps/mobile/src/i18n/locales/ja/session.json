@@ -88,6 +88,7 @@
     "context": "コンテキスト",
     "screenshot": "スクリーンショット",
     "photo": "写真",
+    "photosAndVideos": "写真と動画",
     "takePhoto": "写真を撮る",
     "file": "ファイル",
     "joinConversation": "会話に追加（{{num}} 枚）",

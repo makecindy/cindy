@@ -88,6 +88,7 @@
     "context": "Context",
     "screenshot": "Screenshot",
     "photo": "Photos",
+    "photosAndVideos": "Photos and videos",
     "takePhoto": "Take Photo",
     "file": "File",
     "joinConversation": "Add to chat ({{num}})",

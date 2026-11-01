@@ -66,7 +66,7 @@
     "pasteTimeout": "粘贴图片处理超时，请重试。",
     "clipboardReadFailed": "剪贴板图片读取失败，请重新复制后再粘贴。",
     "maxAttachments": "最多添加 {{count}} 个附件。",
-    "simulatorNoCamera": "模拟器没有相机，请用「照片」从相册选择。",
+    "simulatorNoCamera": "模拟器没有相机，请用「照片与视频」从相册选择。",
     "cameraPermission": "相机权限未开启，请在系统设置里允许 {{appName}} 使用相机。",
     "photoPermission": "照片权限未开启，请在系统设置里允许 {{appName}} 访问照片。",
     "noFileRead": "没有读取到可上传的文件。"

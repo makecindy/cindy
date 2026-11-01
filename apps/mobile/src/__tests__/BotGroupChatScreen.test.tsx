@@ -997,7 +997,9 @@ describe('group attachments', () => {
     for (const row of ['botGroup.contextSheetPhotos', 'botGroup.contextSheetPhotoRow', 'botGroup.contextSheetCameraRow', 'botGroup.contextSheetFileRow']) {
       expect(byId(row)).not.toBeNull();
     }
-    expect(node.textContent).toContain('session.common.photo');
+    expect(node.textContent).toContain('session.common.photosAndVideos');
+    await click('botGroup.contextSheetPhotoRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     await click('botGroup.contextSheetCameraRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
     await click('botGroup.contextSheetFileRow');

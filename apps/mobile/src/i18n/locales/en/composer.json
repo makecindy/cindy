@@ -66,7 +66,7 @@
     "pasteTimeout": "Pasting the image timed out. Try again.",
     "clipboardReadFailed": "Could not read the clipboard image. Copy it again and paste.",
     "maxAttachments": "Add up to {{count}} attachments.",
-    "simulatorNoCamera": "The simulator has no camera. Use \"Photos\" to pick from the library.",
+    "simulatorNoCamera": "The simulator has no camera. Use \"Photos and videos\" to pick from the library.",
     "cameraPermission": "Camera access is off. Allow {{appName}} to use the camera in system settings.",
     "photoPermission": "Photo access is off. Allow {{appName}} to access photos in system settings.",
     "noFileRead": "No uploadable file was read."

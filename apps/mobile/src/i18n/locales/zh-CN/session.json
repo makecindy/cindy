@@ -88,6 +88,7 @@
     "context": "上下文",
     "screenshot": "截图",
     "photo": "照片",
+    "photosAndVideos": "照片与视频",
     "takePhoto": "拍照",
     "file": "文件",
     "joinConversation": "加入对话（{{num}} 张）",
