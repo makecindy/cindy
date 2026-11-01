@@ -384,6 +384,11 @@ describe('group timeline', () => {
     await render(parseBotGroupChatData(deleted)!);
     expect(byId('botGroup.quote')!.textContent).toContain('groupChat.quote.deleted');
     expect(node.textContent).not.toContain('私密的原文');
+    // PR #8009: moving the quote into a bubble must preserve its locate action.
+    // A missing source with no older page must report unavailability, not silently do nothing.
+    await render({ ...deleted, hasMoreBefore: false, messages: [deleted.messages[1]] });
+    await click('botGroup.quote');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.quote.unavailable');
   });
 
   it('shows a task another owner\'s teammate started from the group as its posted title and state', async () => {
@@ -775,6 +780,11 @@ describe('group composer', () => {
     await click('botGroup.composer.send');
     expect(h.row.value).toBe('引用回复');
     expect(byId('botGroup.cancelReply')).not.toBeNull();
+    // PR #8009: replacing the cancel control must remove only the quote, not the draft.
+    await click('botGroup.cancelReply');
+    expect(byId('botGroup.quote')).toBeNull();
+    expect(h.row.value).toBe('引用回复');
+    await click(`botGroup.thread.context.${originalId}.action.quote`);
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
       text: '引用回复', quote: { messageId: originalId }, clientId: 'uuid-1',
