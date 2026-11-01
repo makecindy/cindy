@@ -37,6 +37,7 @@ import {
   AUTO_REVIEW_CONFIRM_UNDELIVERED_CODE,
   AUTO_REVIEW_UNAVAILABLE_METADATA_KEY,
   AUTO_REVIEW_UNAVAILABLE_PROMPT_TEXT,
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
   type AutoReviewDelegate,
   type AutoReviewRequest,
 } from '../shared/auto-review-decision.js';
@@ -16314,6 +16315,124 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(resolver).toHaveBeenCalledTimes(verdict === 'ask' ? 1 : 0);
       await handle.close();
     }
+  });
+
+  it('Auto MCP reviews the raw call once: the display copy of the arguments is not evidence', async () => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'raw-evidence-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'raw-evidence', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    const input = { ghost_id: 'worker', tool: 'delegate', args: { action: 'run' } };
+    const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'raw-evidence-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call', tool_params: input,
+        // codex sends the same arguments again as a display rendering.
+        tool_params_display: [{ name: 'args', value: input.args, display_name: 'args' }] },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    expect(result.action).toBe('accept');
+    expect(review).toHaveBeenCalledOnce();
+    const evidence = JSON.parse((review.mock.calls[0]?.[0].action as { description: string }).description);
+    expect(evidence.input.toolParams).toEqual(input);
+    expect(evidence.input.toolParamsDisplay).toBeUndefined();
+    await handle.close();
+  });
+
+  it('Auto MCP reviews a large call with a display copy instead of tripping the complete-budget handoff', async () => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'long-args-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'long-args', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    // A big-but-reviewable handoff (issue #7254, current budgets): the raw
+    // arguments alone fit MAX_AUTO_REVIEW_ACTION_TEXT_CHARS, but codex sends the
+    // same arguments again as a display rendering. Counting both copies pushed
+    // the evidence past the complete-review budget, so the call was handed off
+    // instead of reviewed. Counting one copy keeps it reviewable.
+    const args = { instruction: 'x'.repeat(90_000) };
+    const input = { ghost_id: 'worker', tool: 'delegate', args };
+    const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'long-args-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call', tool_params: input,
+        tool_params_display: [{ name: 'args', value: args, display_name: 'args' }] },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    expect(result.action).toBe('accept');
+    expect(review).toHaveBeenCalledOnce();
+    const action = review.mock.calls[0]?.[0].action as { description: string };
+    // Single-counted: under the budget and nowhere near the doubled ~180k size.
+    expect(action.description.length).toBeLessThan(MAX_AUTO_REVIEW_ACTION_TEXT_CHARS);
+    expect(action.description.length).toBeLessThan(100_000);
+    expect(JSON.parse(action.description).input.toolParams).toEqual(input);
+    await handle.close();
+  });
+
+  it('Auto MCP hands an over-budget call to the user instead of silently declining', async () => {
+    const review = vi.fn<AutoReviewDelegate>(async () => ({ verdict: 'allow' }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'over-budget-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'over-budget', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' }) as const);
+    handle.setInteractionResolver?.(resolver);
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    // Beyond MAX_AUTO_REVIEW_ACTION_TEXT_CHARS even with one copy: the reviewer
+    // must not run, and the call must reach the user's confirmation instead of
+    // being silently declined as if the user had rejected it (issue #7254 —
+    // oversized now hands off, it no longer blocks).
+    const result = await handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'over-budget-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call',
+        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { instruction: 'x'.repeat(132_000) } } },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    expect(result.action).toBe('decline'); // the test resolver denied the confirmation
+    expect(review).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
+
+  it('Auto MCP reports a freshness block with Cindy’s own reason', async () => {
+    // The review runs while the user keeps typing: the intent moves under the
+    // in-flight review, so the decision is replaced by Cindy’s deterministic
+    // freshness block. That reason is fixed copy without user data, so it may
+    // reach the diagnostic/UI channel — but only when it is marked as a policy
+    // reason. Unmarked, the notice falls back to a generic "blocked" line and
+    // the user never learns why.
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const review = vi.fn<AutoReviewDelegate>(async () => {
+      await gate;
+      return { verdict: 'allow' };
+    });
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: review, getMcpToolApprovalPolicy: () => 'prompt' }));
+    const host = installFakeHost(agent, (method) => method === Method.TurnStart ? { turn: { id: 'freshness-turn' } } : undefined);
+    const handle = await agent.startSession({ sessionId: 'freshness', model: 'gpt-5.5', providerId: 'xd', workingDir: '/repo', permissionMode: 'auto' });
+    const events: AgentEvent[] = [];
+    const collect = (async () => { for await (const event of handle.events()) events.push(event); })();
+    await handle.send({ type: 'user', content: 'Delegate the task to the worker.' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) throw new Error('missing elicitation handler');
+    const elicitation = handlers.mcpServerElicitation({ threadId: 'start-thread-id', turnId: 'freshness-turn', serverName: 'cindy', mode: 'form',
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: 'ghost_call',
+        tool_params: { ghost_id: 'worker', tool: 'delegate', args: { action: 'run' } } },
+      message: 'Allow tool call', requestedSchema: {},
+    });
+    // A new user message is a new request: the in-flight review no longer
+    // describes what the user asked for.
+    await handle.send({ type: 'user', content: 'Actually, do something else.' });
+    release?.();
+    const result = await elicitation;
+    expect(result.action).toBe('decline');
+    await handle.close();
+    await collect;
+    const notices = events.filter((event) => event.type === 'error'
+      && String((event.data as { message?: string }).message).includes('[MCP_APPROVAL_AUTO_BLOCKED]'));
+    expect(notices).toHaveLength(1);
+    expect(String((notices[0].data as { message?: string }).message)).toContain('User instructions changed');
   });
 
   it.each(['complete', 'missing-name', 'missing-arguments', 'missing-both', 'ambiguous', 'ambiguous-with-params', 'other-turn', 'other-server', 'ghost-call'] as const)(

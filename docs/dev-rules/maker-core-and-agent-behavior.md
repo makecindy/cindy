@@ -626,6 +626,18 @@ IM 与官方 Hook 确认卡统一显示为「自动审批需要你决定：…�
 `agents/shared/continuation-policy.ts`，真实模型配对比较入口为 `scripts/eval-auto-approval.mts`
 的 `--baseline-bundle`（隔离打包的旧审核器）；只审核合成操作，不执行副作用。
 
+审阅证据只算**一份**。MCP 工具调用的证据取原始调用（server、tool name、原始参数、工具标题
+与描述），不得再带确认卡那份渲染副本：codex 会把同一份 `tool_params` 再渲染一份
+`tool_params_display` 发给客户端（codex-rs `build_mcp_tool_approval_display_params` 是同一对象的
+逐字段副本，不是截断版），两份都进证据等于把同一个动作按 4096 字符预算数两遍，普通调用会凭空
+超预算被静默拦截 —— 用户从没被问过，Agent 还被告知「用户拒绝」。证据里不做截断：参数一字不删，
+审阅模型看到的内容与之前完全一致，变的只是同一份内容不再被计两次。
+拦截原因分两类：**Cindy 自己的确定性文案**（动作文本超限、证据不足、审阅器故障、授权范围变化）
+在决定里标 `policyReason`，可原样进 UI／日志／诊断通道；**模型自由文本**不带该标记，可能含参数、
+路径、片段，一律不得外泄。Codex 的 MCP 拦截通知只带 policy 原因。模型看到的拒绝文案由 codex
+app-server 决定（`user rejected MCP tool call`，客户端改不动），所以真实原因必须先在 Cindy 侧
+保住，别再让界面只显示一句通用文案。
+
 原生审批已接管的本地工具调用不叠加 Cindy 模型复审，以 Handle 的实时
 `getAutoReviewOwner()` 为准；Codex Guardian 故障切换后恢复 Cindy 负责。
 路径解析暴露不同目标时，由 Cindy 审核 canonical 路径；只有 canonical 路径、
