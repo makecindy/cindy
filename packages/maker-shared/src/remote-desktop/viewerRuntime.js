@@ -2643,6 +2643,21 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         fy = 0.5;
         render();
         break;
+      // Cover the viewport instead of fitting inside it (a device screen whose
+      // shape differs from the phone's); the overflow stays pannable.
+      case "fill": {
+        if (config.desktop) break;
+        stopPanAnimation();
+        const fit = Math.min(viewportWidth() / dw, viewportHeight() / dh);
+        const cover = Math.max(viewportWidth() / dw, viewportHeight() / dh);
+        manualViewMoved = false;
+        zoom = 1;
+        zoom = Math.max(1, Math.min(layout().maxZoom, cover / fit));
+        fx = 0.5;
+        fy = 0.5;
+        render();
+        break;
+      }
       case "rightClick":
         click(2);
         break;

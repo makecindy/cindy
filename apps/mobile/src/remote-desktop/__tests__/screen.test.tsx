@@ -39,6 +39,13 @@ const storage = vi.hoisted(() => {
     clear: async () => items.clear(),
   };
 });
+vi.mock("@/session/useLiquidGlassAvailable", () => ({
+  useLiquidGlassAvailable: () => false,
+}));
+vi.mock("@/session/BlurBackdrop", () => ({ BlurBackdrop: () => null }));
+vi.mock("expo-glass-effect", async () => ({
+  GlassView: (await import("react-native")).View,
+}));
 vi.mock("@react-native-async-storage/async-storage", () => ({
   default: storage,
 }));
@@ -125,6 +132,7 @@ const fixture = vi.hoisted(() => ({
   maybeUnlock: vi.fn(async (_beforeAuthentication?: () => Promise<void>) => {}),
   hostPlatform: "darwin" as string | undefined,
   deviceId: "computer",
+  liveScreen: undefined as string | undefined,
   getHost: (() => undefined) as () => string | undefined,
   platform: "ios",
   keyboardListeners: {} as Record<string, (event: unknown) => void>,
@@ -207,6 +215,20 @@ vi.mock("react-native", async () => {
           : fixture.size,
     },
     useWindowDimensions: () => fixture.size,
+    Animated: {
+      View: view("div"),
+      Value: class {
+        setValue() {}
+      },
+      ValueXY: class {
+        setValue() {}
+        getTranslateTransform() {
+          return [];
+        }
+      },
+      spring: () => ({ start() {} }),
+    },
+    PanResponder: { create: () => ({ panHandlers: {} }) },
     Platform: {
       get Version() {
         return fixture.iosVersion;
@@ -229,6 +251,7 @@ vi.mock("expo-router", () => ({
   useLocalSearchParams: () => ({
     deviceId: fixture.deviceId,
     deviceName: "My Mac",
+    liveScreen: fixture.liveScreen,
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
@@ -296,6 +319,8 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  Smartphone: () => null,
+  Tablet: () => null,
   createLucideIcon: () => () => null,
   Clipboard: () => null,
   ArrowLeft: () => null,
@@ -464,6 +489,7 @@ beforeEach(async () => {
   fixture.safe = { top: 59, bottom: 34, left: 0, right: 0 };
   fixture.hostPlatform = "darwin";
   fixture.deviceId = "computer";
+  fixture.liveScreen = undefined;
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
@@ -1042,7 +1068,8 @@ describe("remote desktop controls", () => {
   // Unit: a reserved PiP transition skips the initial background handler; all
   // failed exits must still lock and disable recovery when protection is on.
   it.each(["failure", "timeout", "reject", "close"])(
-    "locks after protected background PiP preparation ends with %s", async (outcome) => {
+    "locks after protected background PiP preparation ends with %s",
+    async (outcome) => {
       fixture.nativeMedia = true;
       fixture.idleSupported = true;
       act(() => root.render(<RemoteDesktopScreen />));
@@ -1055,7 +1082,10 @@ describe("remote desktop controls", () => {
       const original = fixture.invoke.getMockImplementation()!;
       fixture.invoke.mockImplementation((...args) =>
         args[2][0].op === "presentation" && args[2][0].enabled
-          ? new Promise((resolve, fail) => { grant = resolve; reject = fail; })
+          ? new Promise((resolve, fail) => {
+              grant = resolve;
+              reject = fail;
+            })
           : original(...args),
       );
       await nativePresentation("presentationStarting");
@@ -1066,9 +1096,12 @@ describe("remote desktop controls", () => {
       });
       expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
       if (outcome === "failure") await nativePresentation("presentationFailed");
-      if (outcome === "timeout") await act(async () => vi.advanceTimersByTimeAsync(4000));
-      if (outcome === "reject") await act(async () => reject(new Error("denied")));
-      if (outcome === "close") await nativePresentation("presentation", { active: false });
+      if (outcome === "timeout")
+        await act(async () => vi.advanceTimersByTimeAsync(4000));
+      if (outcome === "reject")
+        await act(async () => reject(new Error("denied")));
+      if (outcome === "close")
+        await nativePresentation("presentation", { active: false });
       expect(requests().filter((r) => r.op === "stop")).toEqual([
         { op: "stop", lease: "lease", lockScreen: true },
       ]);
@@ -1079,7 +1112,9 @@ describe("remote desktop controls", () => {
         await vi.advanceTimersByTimeAsync(30_000);
       });
       expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
-      expect(sent().filter((m) => m.type === "pipPolicy" && m.authorized)).toHaveLength(0);
+      expect(
+        sent().filter((m) => m.type === "pipPolicy" && m.authorized),
+      ).toHaveLength(0);
     },
   );
   it("prepares native video playback even when the host has no audio", async () => {
@@ -3572,16 +3607,30 @@ describe("remote desktop controls", () => {
     fixture.idleSupported = true;
     fixture.nativeMenus = true;
     await connect();
-    expect(requests().find((r) => r.op === "start")).toMatchObject({ idleTimeoutMinutes: 5 });
+    expect(requests().find((r) => r.op === "start")).toMatchObject({
+      idleTimeoutMinutes: 5,
+    });
     act(() => button("operations").click());
     act(() => button("security").click());
-    await act(async () => (host.querySelector('[data-testid="native-menu.1"]') as HTMLButtonElement).click());
-    expect(storage.items.get("cindy.mobile.remote-desktop.idle-timeout.v1.computer")).toBe("1");
-    expect(requests().filter((r) => r.op === "heartbeat").at(-1)).toMatchObject({ idleTimeoutMinutes: 1 });
+    await act(async () =>
+      (
+        host.querySelector('[data-testid="native-menu.1"]') as HTMLButtonElement
+      ).click(),
+    );
+    expect(
+      storage.items.get("cindy.mobile.remote-desktop.idle-timeout.v1.computer"),
+    ).toBe("1");
+    expect(
+      requests()
+        .filter((r) => r.op === "heartbeat")
+        .at(-1),
+    ).toMatchObject({ idleTimeoutMinutes: 1 });
     await act(async () => fixture.appState?.("inactive"));
     expect(requests().some((r) => r.lockScreen)).toBe(false);
     await act(async () => fixture.appState?.("background"));
-    expect(requests().filter((r) => r.op === "stop")).toEqual([{ op: "stop", lease: "lease", lockScreen: true }]);
+    expect(requests().filter((r) => r.op === "stop")).toEqual([
+      { op: "stop", lease: "lease", lockScreen: true },
+    ]);
     await act(async () => fixture.appState?.("active"));
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
@@ -3602,7 +3651,11 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     await act(async () => vi.advanceTimersByTimeAsync(3000));
-    expect(requests().filter((r) => r.op === "start").at(-1)).toMatchObject({ resume: true, idleTimeoutMinutes: 5 });
+    expect(
+      requests()
+        .filter((r) => r.op === "start")
+        .at(-1),
+    ).toMatchObject({ resume: true, idleTimeoutMinutes: 5 });
   });
   // Unit: backgrounding before start returns must retain the same lock intent
   // as a connected viewer; ordinary late-lease cleanup would disable host expiry.
@@ -3612,16 +3665,22 @@ describe("remote desktop controls", () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
       args[2][0].op === "start"
-        ? new Promise((resolve) => { finish = resolve; })
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
         : original(...args),
     );
-    await act(async () => fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } }));
+    await act(async () =>
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } }),
+    );
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     await act(async () => {
       AppState.currentState = "background";
       fixture.appState!("background");
     });
-    await act(async () => finish({ lease: "late", display, controlling: true }));
+    await act(async () =>
+      finish({ lease: "late", display, controlling: true }),
+    );
     expect(requests().filter((r) => r.op === "stop")).toEqual([
       { op: "stop", lease: "late", lockScreen: true },
     ]);
@@ -3634,31 +3693,44 @@ describe("remote desktop controls", () => {
   });
   // Unit: saved-password preparation previously preceded the host's resume
   // refusal and could unlock a host that had already ended the protected lease.
-  it.each(["linux", "darwin"])("does not auto-unlock %s while recovering a protected connection", async (platform) => {
-    fixture.hostPlatform = platform;
-    fixture.idleSupported = true;
-    await connect();
-    expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
-    const original = fixture.invoke.getMockImplementation()!;
-    fixture.invoke.mockImplementation((...args) => {
-      if (args[2][0].op === "heartbeat") return Promise.reject(new Error("DESKTOP_LEASE_EXPIRED"));
-      if (args[2][0].op === "start" && args[2][0].resume)
-        return Promise.reject(new Error("DESKTOP_STOPPED"));
-      return original(...args);
-    });
-    await act(async () => vi.advanceTimersByTimeAsync(6000));
-    expect(requests().filter((r) => r.op === "start").at(-1)).toMatchObject({ resume: true });
-    expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
-    expect(host.textContent).toContain("remoteDesktop.hostDisconnected");
-  });
+  it.each(["linux", "darwin"])(
+    "does not auto-unlock %s while recovering a protected connection",
+    async (platform) => {
+      fixture.hostPlatform = platform;
+      fixture.idleSupported = true;
+      await connect();
+      expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) => {
+        if (args[2][0].op === "heartbeat")
+          return Promise.reject(new Error("DESKTOP_LEASE_EXPIRED"));
+        if (args[2][0].op === "start" && args[2][0].resume)
+          return Promise.reject(new Error("DESKTOP_STOPPED"));
+        return original(...args);
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(6000));
+      expect(
+        requests()
+          .filter((r) => r.op === "start")
+          .at(-1),
+      ).toMatchObject({ resume: true });
+      expect(fixture.maybeUnlock).toHaveBeenCalledOnce();
+      expect(host.textContent).toContain("remoteDesktop.hostDisconnected");
+    },
+  );
   it("reads an explicit never override before starting a protected-capable host", async () => {
     act(() => root.unmount());
-    storage.items.set("cindy.mobile.remote-desktop.idle-timeout.v1.computer", "0");
+    storage.items.set(
+      "cindy.mobile.remote-desktop.idle-timeout.v1.computer",
+      "0",
+    );
     fixture.idleSupported = true;
     root = createRoot(host);
     await act(async () => root.render(<RemoteDesktopScreen />));
     await connect();
-    expect(requests().find((r) => r.op === "start")).toMatchObject({ idleTimeoutMinutes: 0 });
+    expect(requests().find((r) => r.op === "start")).toMatchObject({
+      idleTimeoutMinutes: 0,
+    });
   });
   it("does not lock for Face ID inactivity or background recovery", async () => {
     fixture.lockOnExit = true;
@@ -5616,34 +5688,56 @@ describe("remote desktop controls", () => {
     fixture.size = { width: 700, height: 900 };
     fixture.safe = { top: 24, bottom: 24, left: 0, right: 0 };
     const geometry: WindowGeometry = {
-      ...fixture.size, insets: fixture.safe, regularWidth: true, regularHeight: true,
-      barEdge: "none", reservedRegionsSupported: true,
+      ...fixture.size,
+      insets: fixture.safe,
+      regularWidth: true,
+      regularHeight: true,
+      barEdge: "none",
+      reservedRegionsSupported: true,
       regions: [{ kind: "division", x: 0, y: 450, width: 700, height: 0 }],
     };
-    const render = (g: WindowGeometry) => act(() => root.render(
-      <GeometryContext.Provider value={g}><RemoteDesktopScreen /></GeometryContext.Provider>,
-    ));
+    const render = (g: WindowGeometry) =>
+      act(() =>
+        root.render(
+          <GeometryContext.Provider value={g}>
+            <RemoteDesktopScreen />
+          </GeometryContext.Provider>,
+        ),
+      );
     render(geometry);
     await connect();
     const viewer = host.querySelector('[data-testid="remoteDesktop.viewer"]');
     const starts = requests().filter((r) => r.op === "start").length;
     const stops = requests().filter((r) => r.op === "stop").length;
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+    ).not.toBeNull();
     expect(fixture.views["remoteDesktop.skinSwitch"]).toBeDefined();
     const letter = fixture.views["remoteDesktop.retroKey.KeyA"];
     act(() => letter.onPressIn());
     act(() => letter.onPressOut());
-    expect(sent()).toContainEqual({ type: "events", events: [{ kind: "key", code: "KeyA", down: true }] });
+    expect(sent()).toContainEqual({
+      type: "events",
+      events: [{ kind: "key", code: "KeyA", down: true }],
+    });
     // Android IME resizes the window instead of adding an iOS keyboard inset.
     fixture.size = { width: 700, height: 550 };
     render({ ...geometry, ...fixture.size });
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+    ).toBeNull();
     fixture.size = { width: 700, height: 900 };
     render(geometry);
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).not.toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+    ).not.toBeNull();
     render({ ...geometry, regions: [] });
-    expect(host.querySelector('[data-testid="remoteDesktop.retroKeys"]')).toBeNull();
-    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(viewer);
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.retroKeys"]'),
+    ).toBeNull();
+    expect(host.querySelector('[data-testid="remoteDesktop.viewer"]')).toBe(
+      viewer,
+    );
     expect(requests().filter((r) => r.op === "start")).toHaveLength(starts);
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
   });
@@ -6243,5 +6337,105 @@ describe("remote desktop controls", () => {
         "remoteDesktop.hostDisconnected",
       );
     }
+  });
+});
+
+describe("live screen controls", () => {
+  const screen = {
+    plugin: "_root__baguette-simulator",
+    id: "device",
+    name: "Test iPhone",
+    platform: "ios",
+    cornerRadius: 0.1,
+    maxTouches: 2,
+    keyboard: true,
+    buttons: [
+      { id: "home", icon: "home", label: "Home" },
+      { id: "volume-down", icon: "volume-down", label: "Volume Down" },
+      { id: "volume-up", icon: "volume-up", label: "Volume Up" },
+      { id: "orientation-portrait", icon: "rotate-left", label: "Portrait" },
+      { id: "orientation-landscape", icon: "rotate-right", label: "Landscape" },
+      { id: "shake", icon: "shake", label: "Shake" },
+    ],
+  };
+  const open = async () => {
+    act(() => root.unmount());
+    fixture.liveScreen = `${screen.plugin}|${screen.id}`;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      const op = args[2][0].op;
+      if (op === "capabilities") return { ...result, liveScreens: true };
+      return op === "start" ? { ...result, screen } : result;
+    });
+    root = createRoot(host);
+    act(() => root.render(<RemoteDesktopScreen />));
+    await connect();
+    await act(async () => {});
+  };
+  const control = (testID: string) =>
+    host.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
+  const openPanel = () =>
+    act(() => fixture.views["liveScreen.controls"].onAccessibilityAction());
+  // DOM clicks bubble to the panel's backdrop (native touches do not), which
+  // closes it: open the panel again before each choice.
+  const choose = (label: string) => {
+    if (!control("liveScreen.panel")) openPanel();
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          `[aria-label="remoteDesktop.${label}"]`,
+        )!
+        .click(),
+    );
+  };
+
+  it("sizes the picture and pauses device touches while zooming", async () => {
+    await open();
+    expect(sent()).toContainEqual({
+      type: "deviceTouch",
+      enabled: true,
+      maxTouches: 2,
+    });
+    openPanel();
+    // Turning, shaking and volume never show as device actions.
+    expect(control("liveScreen.action.home")).not.toBeNull();
+    expect(control("liveScreen.action.shake")).toBeNull();
+    expect(control("liveScreen.action.volume-up")).toBeNull();
+    expect(control("liveScreen.volume-up")).not.toBeNull();
+
+    choose("pictureFill");
+    expect(sent().at(-1)).toEqual({ type: "fill" });
+
+    choose("pictureZoom");
+    expect(sent().slice(-2)).toEqual([
+      { type: "deviceTouch", enabled: false },
+      { type: "mode", mode: "pan" },
+    ]);
+
+    act(() => control("liveScreen.zoomDone")!.click());
+    expect(sent().slice(-2)).toEqual([
+      { type: "deviceTouch", enabled: true, maxTouches: 2 },
+      { type: "mode", mode: "touch" },
+    ]);
+  });
+
+  it("holds a chosen orientation whatever the phone does", async () => {
+    await open();
+    const presses = () =>
+      sent()
+        .filter((m) => m.type === "events")
+        .flatMap((m) => m.events)
+        .filter((e: any) => e.kind === "press")
+        .map((e: any) => e.button);
+    expect(presses()).toEqual(["orientation-portrait"]);
+    choose("orientationLandscape");
+    expect(presses()).toEqual([
+      "orientation-portrait",
+      "orientation-landscape",
+    ]);
+    expect(sent()).toContainEqual(
+      expect.objectContaining({ type: "displayGeometry", restore: true }),
+    );
   });
 });

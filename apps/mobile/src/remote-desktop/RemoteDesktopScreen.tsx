@@ -37,7 +37,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated from "react-native-reanimated";
-import { ArrowLeft, Monitor, SlidersHorizontal } from "lucide-react-native";
+import { Monitor } from "lucide-react-native";
 import { useReduceMotionEnabled } from "@/hooks/useReduceMotion";
 import { motionDuration } from "@/theme/tokens";
 import {
@@ -158,9 +158,11 @@ import {
   parseLiveScreenParam,
 } from "./liveScreen";
 import {
-  LiveScreenAssistiveTouch,
-  type LiveScreenMenuItem,
-} from "./LiveScreenAssistiveTouch";
+  LiveScreenControls,
+  type LiveScreenAction,
+  type LiveScreenOrientation,
+  type LiveScreenPicture,
+} from "./LiveScreenControls";
 
 type Mode = "pointer" | "touch" | "pan";
 /** How a data-channel request ended; "relay" means it was never executed. */
@@ -3340,17 +3342,26 @@ export function RemoteDesktopSession({
       </Text>
     </Pressable>
   );
-  // A device screen turns with the phone: hold the phone sideways and the
-  // device goes landscape; upright again, and it turns back. The pose is
-  // absolute, so it holds whatever the device was showing before.
+  // A device screen turns with the phone by default: hold the phone sideways
+  // and the device goes landscape; upright again, and it turns back. A fixed
+  // pose (an iPad on an iPhone, a landscape game) stays whatever the phone
+  // does. The pose is absolute, so it holds from any starting orientation.
+  const [deviceOrientation, setDeviceOrientation] =
+    useState<LiveScreenOrientation>("follow");
+  const [picture, setPicture] = useState<LiveScreenPicture>("fit");
+  const [zoomEditing, setZoomEditing] = useState(false);
   const deviceTurn = useRef<string | null>(null);
   const turnable = Boolean(
     lease?.screen?.buttons.some((b) => b.id === "orientation-portrait") &&
     lease.screen.buttons.some((b) => b.id === "orientation-landscape"),
   );
+  const deviceLandscape =
+    deviceOrientation === "follow"
+      ? landscape
+      : deviceOrientation === "landscape";
   useEffect(() => {
     if (!lease || !turnable || !frameReady || !canInput) return;
-    const turn = `${lease.lease}:${landscape}`;
+    const turn = `${lease.lease}:${deviceLandscape}`;
     if (deviceTurn.current === turn) return;
     deviceTurn.current = turn;
     send({
@@ -3358,7 +3369,9 @@ export function RemoteDesktopSession({
       events: [
         {
           kind: "press",
-          button: landscape ? "orientation-landscape" : "orientation-portrait",
+          button: deviceLandscape
+            ? "orientation-landscape"
+            : "orientation-portrait",
         },
       ],
     });
@@ -3366,21 +3379,49 @@ export function RemoteDesktopSession({
     // on the same stream, instead of fitting a landscape picture in a
     // portrait frame.
     const { width, height } = lease.display;
-    if (width > height === landscape) return;
+    if (width > height === deviceLandscape) return;
     const display = { ...lease.display, width: height, height: width };
     send({ type: "displayGeometry", ...display, restore: true });
     setLease({ ...lease, display });
-  }, [lease, turnable, frameReady, canInput, landscape, send]);
-  // Fingers on a live screen are device touches; the desktop viewer modes stay off.
+  }, [lease, turnable, frameReady, canInput, deviceLandscape, send]);
+  // Filling depends on both shapes: size it again whenever either one turns.
+  // A free zoom does not survive a new shape; the picture fits again.
+  const pictureShape = `${lease?.display.width}x${lease?.display.height}:${landscape}`;
+  useEffect(() => {
+    if (!frameReady || !lease?.screen) return;
+    if (picture === "fill") send({ type: "fill" });
+  }, [frameReady, lease?.screen, picture, pictureShape, send]);
+  const shapeRef = useRef(pictureShape);
+  useEffect(() => {
+    if (shapeRef.current === pictureShape) return;
+    shapeRef.current = pictureShape;
+    if (picture !== "zoom") return;
+    setPicture("fit");
+    setZoomEditing(false);
+  }, [picture, pictureShape]);
+  const changePicture = (next: LiveScreenPicture) => {
+    setPicture(next);
+    setZoomEditing(next === "zoom");
+    if (next === "fit") send({ type: "fit" });
+    if (next === "fill") send({ type: "fill" });
+  };
+  // Fingers on a live screen are device touches, except while zooming the
+  // picture: then they pan and pinch it, and nothing reaches the device.
   const liveScreenTouches = lease?.screen ? lease.screen.maxTouches : null;
   useEffect(() => {
     if (!frameReady) return;
     send(
-      liveScreenTouches === null
+      liveScreenTouches === null || zoomEditing
         ? { type: "deviceTouch", enabled: false }
         : { type: "deviceTouch", enabled: true, maxTouches: liveScreenTouches },
     );
-  }, [frameReady, liveScreenTouches, send]);
+  }, [frameReady, liveScreenTouches, zoomEditing, send]);
+  useEffect(() => {
+    if (zoomEditing) send({ type: "mode", mode: "pan" });
+    else if (frameReady) send({ type: "mode", mode });
+    // The desktop mode effect already sends `mode` on its own changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomEditing]);
   const selectKeyboardMode = (computer: boolean) => {
     send({ type: "events", events: [{ kind: "release" }] });
     heldKeys.current.clear();
@@ -3419,40 +3460,27 @@ export function RemoteDesktopSession({
     }
     setKeyboard(!keyboard);
   };
-  // A device screen fills the phone: everything else is in one movable menu.
-  const liveScreenMenu: LiveScreenMenuItem[] = [
-    {
-      key: "back",
-      icon: ArrowLeft,
-      label: t("remoteDesktop.back"),
-      onPress: () => void back(),
-    },
-    // Turning follows the phone itself, and the device's own keyboard types.
-    ...deviceButtons
-      .filter(
-        (button) =>
-          !LIVE_SCREEN_NOT_IN_MENU.has(button.key.slice("device-".length)),
-      )
-      .map((button) => ({
-        key: button.key,
+  // A device screen fills the phone: everything else is in one movable panel.
+  const shownButton = (id: string) => !LIVE_SCREEN_NOT_IN_MENU.has(id);
+  const liveScreenAction = (id: string): LiveScreenAction | undefined => {
+    const button = deviceButtons.find((b) => b.key === `device-${id}`);
+    return (
+      button && {
+        key: id,
         icon: button.icon,
         label: button.label,
-        disabled: !canInput,
         onPress: button.press,
-      })),
-    {
-      key: "settings",
-      icon: SlidersHorizontal,
-      label: t("remoteDesktop.settings"),
-      onPress: () => {
-        Keyboard.dismiss();
-        setKeyboard(false);
-        send({ type: "events", events: [{ kind: "release" }] });
-        setControlPage("controls");
-        setOperations(true);
-      },
-    },
-  ];
+      }
+    );
+  };
+  const volumeDown = liveScreenAction("volume-down");
+  const volumeUp = liveScreenAction("volume-up");
+  const liveScreenActions: LiveScreenAction[] = (liveScreen?.buttons ?? [])
+    .filter((b) => shownButton(b.id) && !b.id.startsWith("volume-"))
+    .slice(0, 4)
+    .map((b) => liveScreenAction(b.id)!)
+    .filter(Boolean);
+  const latency = network?.latencyMs;
   return (
     <KeyboardAvoidingView
       testID="remoteDesktop.layout"
@@ -4434,10 +4462,49 @@ export function RemoteDesktopSession({
         </View>
       )}
       {screenPlugin && (
-        <LiveScreenAssistiveTouch
-          items={liveScreenMenu}
-          caption={`${liveScreen?.name ?? deviceName} · ${showConnectionStatus ? connectionLabel : t(`remoteDesktop.${status}`)}`}
-          label={t("remoteDesktop.deviceMenu")}
+        <LiveScreenControls
+          platform={liveScreen?.platform}
+          name={liveScreen?.name ?? deviceName}
+          status={{
+            text: showConnectionStatus
+              ? connectionLabel
+              : status === "live" && typeof latency === "number"
+                ? `${t(`remoteDesktop.${status}`)} · ${Math.round(latency)} ms`
+                : t(`remoteDesktop.${status}`),
+            tone:
+              status === "live"
+                ? "live"
+                : status === "disconnected"
+                  ? "failed"
+                  : "connecting",
+          }}
+          actions={liveScreenActions}
+          volume={
+            volumeDown && volumeUp
+              ? { down: volumeDown, up: volumeUp }
+              : undefined
+          }
+          orientation={
+            turnable
+              ? { value: deviceOrientation, onChange: setDeviceOrientation }
+              : undefined
+          }
+          picture={{
+            value: picture,
+            editing: zoomEditing,
+            onChange: changePicture,
+            onDone: () => setZoomEditing(false),
+          }}
+          inputDisabled={!canInput}
+          onSettings={() => {
+            Keyboard.dismiss();
+            setKeyboard(false);
+            setZoomEditing(false);
+            send({ type: "events", events: [{ kind: "release" }] });
+            setControlPage("controls");
+            setOperations(true);
+          }}
+          onExit={() => void back()}
           insets={{
             top: insets.top,
             bottom: insets.bottom + (keyboard ? keyboardPanelHeight : 0),
@@ -4445,6 +4512,26 @@ export function RemoteDesktopSession({
             right: insets.right,
           }}
           hidden={operations}
+          labels={{
+            menu: t("remoteDesktop.deviceMenu"),
+            orientation: t("remoteDesktop.orientation"),
+            orientations: {
+              follow: t("remoteDesktop.orientationFollow"),
+              portrait: t("remoteDesktop.orientationPortrait"),
+              landscape: t("remoteDesktop.orientationLandscape"),
+            },
+            picture: t("remoteDesktop.picture"),
+            pictures: {
+              fit: t("remoteDesktop.pictureFit"),
+              fill: t("remoteDesktop.pictureFill"),
+              zoom: t("remoteDesktop.pictureZoom"),
+            },
+            zoomHint: t("remoteDesktop.zoomHint"),
+            zoomDone: t("remoteDesktop.zoomDone"),
+            volume: t("remoteDesktop.volume"),
+            settings: t("remoteDesktop.settings"),
+            exit: t("remoteDesktop.exit"),
+          }}
         />
       )}
     </KeyboardAvoidingView>
