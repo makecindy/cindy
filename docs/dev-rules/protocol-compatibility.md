@@ -1395,7 +1395,11 @@ Desktop 与 Mobile 的错误展示
 受信前台发送与队列编辑（`maker:input:update-content`）在单个源文件拒读后，允许一次原生
 单文件确认并重试同一份草稿；后台任务不弹确认。Windows 大小写不同的选择必须由文件系统
 文件身份（device/inode）证明为同一来源，不能仅忽略大小写接受。账号切换、代次变化、
-窗口销毁或主页面导航会取消直传与 OSS 上传；各异步读取、预签名与 PUT 边界重新核对发起作用域，失效不再派发。
+窗口销毁或主框架跨文档导航（`isMainFrame && !isInPlace`）会取消直传与 OSS 上传；
+同文档的任务切换和内部页面跳转不取消已发起的发送，仍使用原设备、原任务与原消息身份。
+各异步读取、预签名与 PUT 边界重新核对发起作用域，失效不再派发。实现与回归见
+[`ipc.ts`](../../apps/desktop/src/main/device-link/ipc.ts) 和
+[`mirrorCacheIpcBoundary.test.ts`](../../apps/desktop/src/main/device-link/__tests__/mirrorCacheIpcBoundary.test.ts)。
 派发前失败对本次新上传对象做 best-effort 删除（OSS 生命周期兜底）；开始派发后，结果可能
 不确定，保留对象供已接收消息读取。清理不改变服务端 ownership 校验。
 这不授予 macOS 文件权限，也不证明微信拖入的系统授权生命周期已修复。

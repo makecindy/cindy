@@ -266,6 +266,35 @@ describe('attachment access confirmation IPC', () => {
     expect(discard).not.toHaveBeenCalled();
   });
 
+  // #8322: preserve the original send during hash-router task switches.
+  // Existing unit coverage only exercised document replacement.
+  it.each([
+    { name: 'same-document task switch', inPlace: true, mainFrame: true },
+    { name: 'subframe navigation', inPlace: false, mainFrame: false },
+  ])('keeps the original attachment send during $name', async ({ inPlace, mainFrame }) => {
+    const discard = vi.fn();
+    const queued = {
+      deviceId: 'receiver', channel: 'maker:input:enqueue',
+      args: ['original-session', { clientId: 'original-message', files: [{ url: 'xdt-image://original.png' }] }],
+    };
+    vi.mocked(rewriteOutboundMedia).mockImplementationOnce(async (_channel, args) => {
+      onSourceFileAccessDiscard(discard);
+      const { assertCurrent } = sourceFileAccessTransferOptions();
+      senderEvents.emit('did-start-navigation', {}, 'file:///app/index.html#/cc-agent/other', inPlace, mainFrame);
+      assertCurrent?.();
+      return args;
+    });
+    vi.mocked(remoteInvoke).mockResolvedValueOnce({ ok: true, result: 'accepted' });
+
+    await expect(call(DEVICE_LINK_INVOKE.INVOKE, queued)).resolves.toBe('accepted');
+    expect(remoteInvoke).toHaveBeenCalledExactlyOnceWith('receiver', 'maker:input:enqueue', queued.args);
+    expect(discard).not.toHaveBeenCalled();
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.invalidations.size).toBe(0);
+    expect(senderEvents.listenerCount('did-start-navigation')).toBe(0);
+    expect(senderEvents.listenerCount('destroyed')).toBe(0);
+  });
+
   it.each([false, true])('queue content edits recover only in the foreground (background=%s)', async background => {
     const read = installReadFailure();
     h.selectFile.mockResolvedValueOnce({ canceled: false, filePaths: [source] });
