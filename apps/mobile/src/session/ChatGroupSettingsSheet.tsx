@@ -21,7 +21,7 @@ import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { chatMemberAvatar } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
-import { readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, readRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import type { RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { showConfirm } from '@/platform/chrome';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -210,7 +210,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
   } else if (page.kind === 'companion' && companion) {
     title = k('companionTitle', { name: companion.name });
     // The teammate's own tools live with it on its main computer; offer the way there only when it is known.
-    const hosted = companion.homeDeviceId ? readRemoteCollectionCache(`${user?.id ?? ''}:${accountGeneration}`, BOT_GROUP_TEAMMATES_COLLECTION_ID)
+    const hosted = companion.homeDeviceId ? readRemoteCollectionCache(remoteCollectionCacheOwner(user?.id ?? '', accountGeneration), BOT_GROUP_TEAMMATES_COLLECTION_ID)
       .find(row => row.host.deviceId === companion.homeDeviceId && row.item.ref.id === companion.botId) : undefined;
     content = <CompanionPage k={k} member={companion} identity={identityOf(companion)} avatar={avatar} editable={selfWritable && !busy}
       choose={access => void (async () => {

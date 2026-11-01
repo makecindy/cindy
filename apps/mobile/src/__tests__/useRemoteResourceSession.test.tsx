@@ -168,8 +168,8 @@ it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', "es", "fr", "de", "pt-PT", "pt-BR"]
 });
 
 it('shows the clicked identity immediately but waits for resource and session validation before read/control readiness', async () => {
-  const { readRemoteCollectionCache, writeRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');
-  const owner = 'owner:1';
+  const { readRemoteCollectionCache, writeRemoteCollectionCache, remoteCollectionCacheOwner } = await import('@/device-link/remoteResourceAvailability');
+  const owner = remoteCollectionCacheOwner('owner', 1);
   readRemoteCollectionCache(owner, 'teammates');
   writeRemoteCollectionCache(owner, 'teammates', [{ key: 'fixture', host: { deviceId: 'mac', deviceName: 'My Mac' }, item: {
     ref: { collectionId: 'teammates', id: 'bot-1', kind: 'bot' }, revision: 'cached', display: { title: 'Cached teammate' },
@@ -348,9 +348,9 @@ it('still leaves failed invitation history when the host revokes the resource', 
 });
 
 it('keeps local editing and durable queuing available offline, and reopens only the target on recovery', async () => {
-  const { readRemoteCollectionCache, writeRemoteCollectionCache } = await import('@/device-link/remoteResourceAvailability');
-  readRemoteCollectionCache('owner:1', 'teammates');
-  writeRemoteCollectionCache('owner:1', 'teammates', [{ key: 'offline', host: { deviceId: 'mac', deviceName: 'My Mac' }, item: {
+  const { readRemoteCollectionCache, writeRemoteCollectionCache, remoteCollectionCacheOwner } = await import('@/device-link/remoteResourceAvailability');
+  readRemoteCollectionCache(remoteCollectionCacheOwner('owner', 1), 'teammates');
+  writeRemoteCollectionCache(remoteCollectionCacheOwner('owner', 1), 'teammates', [{ key: 'offline', host: { deviceId: 'mac', deviceName: 'My Mac' }, item: {
     ref: { collectionId: 'teammates', kind: 'bot', id: 'bot-1' }, revision: 'cached', display: { title: 'Cached teammate' },
     links: [{ rel: 'conversation', target: { kind: 'session', sessionId: 'task-1' } }],
   } }]);

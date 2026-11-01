@@ -4,7 +4,6 @@ import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
-import { getSelfHostedRelayDataKey } from '@/device-link/selfHostedRelayRouting';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useRevokedDevices, revokedDevicesStore } from '@/device-link/revokedDevicesStore';
@@ -13,7 +12,7 @@ import {
   cacheRemoteResourceItems, peekRemoteResourceSnapshot, readRemoteResourceSnapshot,
   remoteResourceCacheRevision, subscribeRemoteResourceCache,
 } from '@/device-link/remoteResourceCache';
-import { REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, remoteResourceConnectionState, hasRemoteCollectionCache, isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
+import { remoteCollectionCacheOwner, REMOTE_RESOURCE_STARTUP_TIMEOUT_MS, remoteResourceConnectionState, hasRemoteCollectionCache, isRemoteResourceHostOnline, readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 import { listRemoteCollection, mergeRemoteCollectionHostShards, normalizeRemoteCollectionItems,
   type HostedRemoteCollectionItem, type RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { formatRemoteError, isAutoRecoveringRemoteError } from '@/device-link/remoteStatus';
@@ -30,13 +29,16 @@ export function useRemoteResourceList(collectionId: string, targets: readonly Re
   const { connectionEpoch, status, presenceVersion, getPresenceAvailability, invoke, openLink,
     onRemoteResourceChanged, subscribe, unsubscribe } = useDeviceLink();
   useSyncExternalStore(subscribeRemoteResourceCache, remoteResourceCacheRevision);
-  const owner = JSON.stringify([user?.id ?? '', accountGeneration, getSelfHostedRelayDataKey()]);
-  const binding = JSON.stringify([owner, collectionId]);
+  // Shared caches use global auth identity; the per-hook generation only cancels local reads.
+  const owner = remoteCollectionCacheOwner(user?.id ?? '', authGeneration);
+  const binding = JSON.stringify([owner, accountGeneration, collectionId]);
   const bindingRef = useRef(binding); bindingRef.current = binding;
   const freshHosts = useRef<{ binding: string; ids: Set<string> }>({ binding, ids: new Set() });
   if (freshHosts.current.binding !== binding) freshHosts.current = { binding, ids: new Set() };
-  const localItems = () => hasRemoteCollectionCache(owner, collectionId)
-    ? readRemoteCollectionCache(owner, collectionId) : peekRemoteResourceSnapshot(user?.id ?? '')?.items[collectionId] ?? [];
+  const localItems = () => {
+    const shared = readRemoteCollectionCache(owner, collectionId);
+    return hasRemoteCollectionCache(owner, collectionId) ? shared : peekRemoteResourceSnapshot(user?.id ?? '')?.items[collectionId] ?? [];
+  };
   const [hydrated, setHydrated] = useState('');
   const [state, setState] = useState<{
     binding: string; items: HostedRemoteCollectionItem[]; replies: Record<string, number>;

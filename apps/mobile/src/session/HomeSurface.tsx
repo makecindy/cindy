@@ -1,6 +1,5 @@
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { useRelayDataGeneration } from '@/device-link/useRelayDataGeneration';
-import { getSelfHostedRelayDataKey } from '@/device-link/selfHostedRelayRouting';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
 import { readTeammateTasks } from './readTeammateTasks';
@@ -554,7 +553,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const accountGeneration = useRelayDataGeneration(auth.accountGeneration);
   // 首页列表持久缓存按账号键控(401 掉线换号不串数据);首页仅登录后可达,user 理应非空。
   const homeCacheUserId = user?.id ?? '';
-  const resourceCacheUserId = homeCacheUserId ? JSON.stringify([homeCacheUserId, getSelfHostedRelayDataKey()]) : '';
+  const resourceCacheUserId = homeCacheUserId;
   const {
     connectionEpoch,
     connectionIssue,

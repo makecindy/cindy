@@ -287,8 +287,8 @@ it('resends the exact unconfirmed teammate and only unlocks edits after a host r
 
 it('blocks a duplicate name before submitting and keeps the form after a failed attempt', async () => {
   const cache = await import('@/device-link/remoteResourceAvailability');
-  cache.readRemoteCollectionCache(':1', 'teammates');
-  cache.writeRemoteCollectionCache(':1', 'teammates', [{ key: 'k', host: { deviceId: 'host', deviceName: 'Mac' },
+  cache.readRemoteCollectionCache(cache.remoteCollectionCacheOwner('', 1), 'teammates');
+  cache.writeRemoteCollectionCache(cache.remoteCollectionCacheOwner('', 1), 'teammates', [{ key: 'k', host: { deviceId: 'host', deviceName: 'Mac' },
     item: { ref: { collectionId: 'teammates', kind: 'bot', id: 'aster' }, revision: '1', links: [], display: { title: 'Ａster' } } } as any]);
   await renderCreate();
   await act(async () => h.create.onChange({ ...h.create.values, name: ' aster ' }));
@@ -302,7 +302,7 @@ it('blocks a duplicate name before submitting and keeps the form after a failed 
   // The host can still reject names this list does not show; the form stays for a new name.
   expect(h.create.nameTaken).toBe(true); expect(h.create.error).toBe(true);
   expect(h.create.panel).toBeDefined(); expect(h.create.values.name).toBe('Nova');
-  cache.writeRemoteCollectionCache(':1', 'teammates', []);
+  cache.writeRemoteCollectionCache(cache.remoteCollectionCacheOwner('', 1), 'teammates', []);
 });
 
 it('preserves creation drafts across the model picker and sends only an explicit route', async () => {
